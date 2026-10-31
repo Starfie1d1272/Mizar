@@ -916,6 +916,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   obsAdapter?.onProgramChanged(() => {
     sceneController.holdAutomatic();
+    production.invalidateObsExit();
   });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
@@ -1142,9 +1143,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const production = registerProductionRoutes(app, {
     previousObsExitUnconfirmed,
     recordObsExit: obsExitPath
-      ? (state) => {
+      ? (state, valid) => {
           const pending = obsExitWrites.then(async () => {
-            await replaceDurableJson(obsExitPath, { state });
+            await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
           });
           obsExitWrites = pending.catch(() => {});
           return pending;

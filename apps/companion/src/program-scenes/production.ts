@@ -29,7 +29,9 @@ export function registerProductionRoutes(
     beforeExit?: () => void;
     finishTrial?: () => Promise<void>;
     previousObsExitUnconfirmed?: boolean;
-    recordObsExit?: ((state: 'pending' | 'confirmed' | 'unconfirmed') => Promise<void>) | undefined;
+    recordObsExit?:
+      | ((state: 'pending' | 'confirmed' | 'unconfirmed', valid?: () => boolean) => Promise<void>)
+      | undefined;
   },
 ) {
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
@@ -49,6 +51,17 @@ export function registerProductionRoutes(
   let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' =
     options.previousObsExitUnconfirmed ? 'unconfirmed' : 'idle';
   let obsExitGeneration = 0;
+  let exitFrozen = false;
+  let obsExitStatusWrite: Promise<void> | undefined;
+  let obsExitTask:
+    | {
+        generation: number;
+        valid: () => boolean;
+        sceneRequired: boolean;
+        promise: Promise<void> | undefined;
+        completed: boolean;
+      }
+    | undefined;
   function startHandoff(): Promise<void> {
     if (!options.handoffRelease) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
@@ -81,10 +94,25 @@ export function registerProductionRoutes(
     }
   }
   function scheduleObsExit(controlValid: () => boolean, sceneRequired: boolean) {
-    const generation = ++obsExitGeneration;
-    const valid = () => generation === obsExitGeneration && controlValid();
+    let task = obsExitTask;
+    if (!task) {
+      const generation = ++obsExitGeneration;
+      task = {
+        generation,
+        valid: () => generation === obsExitGeneration && controlValid(),
+        sceneRequired,
+        promise: undefined,
+        completed: false,
+      };
+      obsExitTask = task;
+    }
+    if (task.promise || task.completed) return;
+    const { generation, valid } = task;
+    sceneRequired = task.sceneRequired;
     if (sceneRequired) obsExitState = 'pending';
-    void (async () => {
+    const current = task;
+    task.promise = (async () => {
+      if (!valid()) throw new Error('OBS 播出状态已变化。');
       await options.beforeFinish?.();
       if (!valid()) throw new Error('OBS 播出状态已变化。');
       if (sceneRequired) {
@@ -96,27 +124,51 @@ export function registerProductionRoutes(
       }
       if (!valid()) throw new Error('OBS 播出状态已变化。');
       await options.afterSafeScene?.(valid);
-    })().then(
-      () => {
-        if (valid()) {
-          if (sceneRequired) obsExitState = 'confirmed';
-          if (sceneRequired)
-            void options
-              .recordObsExit?.('confirmed')
-              .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
-        }
-      },
-      (error: unknown) => {
-        if (generation === obsExitGeneration) {
-          obsExitState = 'unconfirmed';
-          if (sceneRequired)
-            void options
-              .recordObsExit?.('unconfirmed')
-              .catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
-        }
-        app.log.warn({ stage: 'production_safe_scene', err: error }, 'OBS exit state unconfirmed');
-      },
-    );
+      if (!valid()) throw new Error('OBS 播出状态已变化。');
+    })()
+      .then(
+        async () => {
+          if (valid()) {
+            current.completed = true;
+            if (sceneRequired) obsExitState = 'confirmed';
+            if (sceneRequired)
+              await options.recordObsExit?.('confirmed', valid).catch((error: unknown) => {
+                if (valid()) {
+                  current.completed = false;
+                  obsExitState = 'unconfirmed';
+                }
+                app.log.warn({ err: error }, 'OBS exit status not saved');
+              });
+          }
+        },
+        async (error: unknown) => {
+          if (generation === obsExitGeneration) {
+            obsExitState = 'unconfirmed';
+            if (sceneRequired)
+              await options
+                .recordObsExit?.('unconfirmed', () => generation === obsExitGeneration)
+                .catch((error: unknown) =>
+                  app.log.warn({ err: error }, 'OBS exit status not saved'),
+                );
+          }
+          app.log.warn(
+            { stage: 'production_safe_scene', err: error },
+            'OBS exit state unconfirmed',
+          );
+        },
+      )
+      .finally(() => {
+        current.promise = undefined;
+      });
+  }
+  function invalidateObsExit() {
+    const task = obsExitTask;
+    if (!task || task.valid() || !task.sceneRequired) return;
+    obsExitState = 'unconfirmed';
+    const pending = Promise.resolve(
+      options.recordObsExit?.('unconfirmed', () => task.generation === obsExitGeneration),
+    ).catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+    obsExitStatusWrite = pending;
   }
   const view = () => {
     const current = {
@@ -177,8 +229,10 @@ export function registerProductionRoutes(
       };
     if (
       body?.expectedRevision === revision &&
+      !exitFrozen &&
       ['finish', 'shutdown', 'begin-exit'].includes(String(body.action))
     ) {
+      exitFrozen = true;
       preparationGeneration++;
       sessionGeneration++;
       options.scenes.holdAutomatic();
@@ -237,6 +291,8 @@ export function registerProductionRoutes(
           };
         options.beforeEnter?.();
         obsExitGeneration++;
+        obsExitTask = undefined;
+        exitFrozen = false;
         if (mode === 'preparation') {
           sessionId = randomUUID();
           handoffStarted = false;
@@ -254,12 +310,35 @@ export function registerProductionRoutes(
           await startHandoff();
         } else if (!shutdown) void startHandoff().catch(() => {});
         if (!trialPending && options.handoffRelease) {
-          if (mode !== 'preparation') {
+          if (obsExitTask && !obsExitTask.valid()) {
+            if (body?.action === 'finish') {
+              const required = obsExitTask.sceneRequired;
+              obsExitGeneration++;
+              obsExitTask = undefined;
+              if (required) obsExitState = 'unconfirmed';
+            } else if (obsExitTask.sceneRequired) {
+              invalidateObsExit();
+            }
+          }
+          if (
+            body?.action === 'finish' &&
+            obsExitState === 'unconfirmed' &&
+            obsExitTask?.completed &&
+            !obsExitTask.sceneRequired
+          ) {
+            obsExitTask = undefined;
+          }
+          const sceneRequired =
+            obsExitTask?.sceneRequired ??
+            (mode !== 'preparation' ||
+              (body?.action === 'finish' && obsExitState === 'unconfirmed'));
+          if (sceneRequired && !obsExitTask?.promise && !obsExitTask?.completed) {
+            const pendingSession = sessionId;
             try {
               let timer: ReturnType<typeof setTimeout> | undefined;
               try {
                 await Promise.race([
-                  options.recordObsExit?.('pending'),
+                  options.recordObsExit?.('pending', () => sessionId === pendingSession),
                   new Promise<never>((_, reject) => {
                     timer = setTimeout(() => reject(new Error('OBS exit status timeout')), 2000);
                   }),
@@ -271,7 +350,7 @@ export function registerProductionRoutes(
               app.log.warn({ err: error }, 'OBS exit status not saved');
             }
           }
-          scheduleObsExit(controlValid, mode !== 'preparation');
+          scheduleObsExit(controlValid, sceneRequired);
           mode = 'preparation';
           options.onFinish?.();
         } else {
@@ -387,6 +466,33 @@ export function registerProductionRoutes(
       busy = false;
     }
   }
+  let activeExitChange: Promise<Awaited<ReturnType<typeof change>>> | undefined;
+  async function dispatchChange(body: Parameters<typeof change>[0]) {
+    const isExit = body?.action === 'finish' || body?.action === 'shutdown';
+    if (!isExit) return change(body);
+    if (activeExitChange) {
+      if (body?.expectedRevision !== revision) return change(body);
+      const originalSession = sessionId;
+      const prior = await activeExitChange;
+      if (prior.code !== 200) return prior;
+      if (sessionId !== originalSession)
+        return {
+          code: lifecycleErrors.productionConflict.status,
+          value: {
+            ...lifecycleErrors.productionConflict,
+            message: '制作状态已变化，请刷新后重试。',
+          },
+        };
+      return dispatchChange({ ...body, expectedRevision: revision });
+    }
+    const pending = change(body);
+    activeExitChange = pending;
+    try {
+      return await pending;
+    } finally {
+      if (activeExitChange === pending) activeExitChange = undefined;
+    }
+  }
   app.post('/operator/preparation-cancel', { bodyLimit: 1024 }, async (request, reply) => {
     if (
       options.originPolicy.mode !== 'loopback' ||
@@ -413,7 +519,7 @@ export function registerProductionRoutes(
       return reply
         .code(lifecycleErrors.operatorForbidden.status)
         .send(lifecycleErrors.operatorForbidden);
-    const result = await change(
+    const result = await dispatchChange(
       request.body as {
         action?: unknown;
         expectedRevision?: unknown;
@@ -424,6 +530,14 @@ export function registerProductionRoutes(
   });
   return {
     get: view,
+    // Closing the service can join this task without making OBS a condition
+    // for the Host's local game cleanup or for accepting the exit command.
+    waitForObsExit: async () => {
+      await obsExitTask?.promise;
+      await obsExitStatusWrite;
+      return obsExitState;
+    },
+    invalidateObsExit,
     sessionId: () => sessionId,
     sessionValid: () => {
       const generation = sessionGeneration;
@@ -470,6 +584,9 @@ export function registerProductionRoutes(
       busy = false;
     },
     setTrialPlaying: () => {
+      obsExitGeneration++;
+      obsExitTask = undefined;
+      exitFrozen = false;
       sessionId = randomUUID();
       mode = 'live';
       revision = randomUUID();
@@ -532,6 +649,6 @@ export function registerProductionRoutes(
     releaseUpdate: () => {
       updatePending = false;
     },
-    shutdown: () => change({ action: 'shutdown', expectedRevision: revision }),
+    shutdown: () => dispatchChange({ action: 'shutdown', expectedRevision: revision }),
   };
 }
