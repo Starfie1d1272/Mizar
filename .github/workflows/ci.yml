@@ -95,6 +95,55 @@ jobs:
           path: ${{ runner.temp }}/workbench-build/*
           if-no-files-found: error
           retention-days: 7
+  temporary-workbench-package:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 690
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - uses: ./.github/actions/cargo-cache
+        with:
+          profile: ci
+      - name: Build exact temporary desktop host
+        run: cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Assemble and verify temporary portable bundle
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'mizar-temporary'
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          gh release download v1.10.2 --repo Starfie1d1272/Mizar --pattern 'Mizar-v1.10.2-Windows-x64.zip' --dir $dir
+          if ($LASTEXITCODE -ne 0) { throw 'Original release download failed' }
+          $zip = Join-Path $dir 'Mizar-v1.10.2-Windows-x64.zip'
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne 'ee3ba3879c424e25a8cde28bbd4badd8cfea51cef29a22bcda81c6d25e092ea0') { throw 'Original release digest differs' }
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $dir 'extracted')
+          $bundle = Join-Path $dir 'extracted/Mizar-v1.10.2-Windows-x64'
+          $exe = 'apps/desktop/src-tauri/target/ci/mizar-desktop.exe'
+          $version = & $exe --app-version
+          if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne '1.10.2') { throw 'Temporary executable version differs' }
+          node scripts/qualification/temporary-workbench-bundle.mjs $bundle $exe $env:PR_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Temporary bundle integrity verification failed' }
+          $out = Join-Path $env:RUNNER_TEMP 'temporary-output'
+          New-Item -ItemType Directory -Path $out | Out-Null
+          & ./scripts/qualification/create-windows-archive.ps1 -BundleRoot $bundle -ArchivePath (Join-Path $out 'Mizar-1.10.2-workbench-temporary.zip')
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'Mizar-1.10.2-workbench-temporary.zip')).Hash.ToLowerInvariant()
+          "SHA256=$digest`nPR_HEAD=$env:PR_HEAD`nPROFILE=ci`nUNSIGNED_TEMPORARY_BUILD=true`nORIGINAL_RELEASE_SHA256=ee3ba3879c424e25a8cde28bbd4badd8cfea51cef29a22bcda81c6d25e092ea0" | Set-Content -Encoding utf8 (Join-Path $out 'identity.txt')
+      - name: Preserve verified temporary portable bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workbench-temporary-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/temporary-output/*
+          if-no-files-found: error
+          retention-days: 7
   ci-gate:
     name: ci-gate
     if: always()
