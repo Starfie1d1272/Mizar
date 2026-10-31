@@ -16,6 +16,7 @@ export interface Cs2ConfigStatus {
   preserveSettings?: boolean;
   pending: boolean;
   mulnxLaunchResumable?: boolean;
+  cameraLeaseReady?: boolean;
   running: boolean;
   borrowed?: boolean;
   externalDetached?: boolean;

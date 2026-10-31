@@ -260,6 +260,7 @@ let lastPreparation: {
   id: string;
   since: number | null;
   obs: boolean;
+  obsOwned: boolean;
   gsi: boolean;
   capture: boolean;
   camera: boolean;
@@ -330,7 +331,7 @@ export function retryPendingPreparation(): Promise<void> {
       if (!entry.obs)
         await step(async () => {
           const obs = await readObsForEntry(controller.signal);
-          if (obs?.connection === 'connected' && obs.sceneAligned === false)
+          if (entry.obsOwned && obs?.connection === 'connected' && obs.sceneAligned === false)
             throw new Error('OBS 场景已由操作者接管，未自动切换。');
           await ensureEntryObs(controller.signal);
           await entryCommand(
@@ -344,6 +345,7 @@ export function retryPendingPreparation(): Promise<void> {
             controller.signal,
           );
           await prepareObs(production.revision, controller.signal, entry.id);
+          entry.obsOwned = true;
           entry.obs = true;
         });
       if (!entry.gsi)
@@ -396,12 +398,27 @@ export function retryPendingPreparation(): Promise<void> {
         });
       if (!entry.camera)
         await step(async () => {
-          if (entry.cameraUncertain) throw new Error('上次运镜准备结果未确认，请先核对当前状态。');
+          if (entry.cameraUncertain) {
+            const current = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+            if (current.cameraLeaseReady && current.preparationId === entry.id) {
+              entry.camera = true;
+              entry.cameraUncertain = false;
+              return;
+            }
+            throw new Error('上次运镜准备结果未确认，请退出并恢复后重试。');
+          }
           entry.cameraUncertain = true;
-          await desktopInvoke('begin_managed_camera', {
-            expectedRevision: production.revision,
-            preparationId: entry.id,
-          });
+          const result = await desktopInvoke<{ state: string; message?: string }>(
+            'begin_managed_camera',
+            {
+              expectedRevision: production.revision,
+              preparationId: entry.id,
+            },
+          );
+          if (result.state !== 'ready') {
+            entry.cameraUncertain = result.state !== 'not_started';
+            throw new Error(result.message ?? '运镜未准备完成。');
+          }
           entry.camera = true;
           entry.cameraUncertain = false;
         });
@@ -481,6 +498,7 @@ async function runProductionAction(
         lastPreparation = {
           ...intent,
           obs: false,
+          obsOwned: false,
           gsi: false,
           capture: false,
           camera: false,
@@ -769,6 +787,7 @@ async function performProductionAction(
       onVideoPrepared?.(video.transactionId);
       await current();
       await prepareObs(state.revision, entrySignal, entry.id);
+      if (lastPreparation?.id === entry.id) lastPreparation.obsOwned = true;
       const prepared = await readObsForEntry(entrySignal);
       if (prepared?.connection !== 'connected') throw new Error('OBS 连接已中断，请重试。');
       if (!prepared.readiness?.ready)
@@ -1006,20 +1025,21 @@ async function performProductionAction(
     state.mode === 'preparation' &&
     !mulnxFailed
   ) {
-    await desktopInvoke(
+    if (lastPreparation && entry && lastPreparation.id === entry.id)
+      lastPreparation.cameraUncertain = true;
+    await desktopInvoke<{ state: string; message?: string }>(
       'begin_managed_camera',
       { expectedRevision: state.revision, preparationId: entry?.id },
       task,
     )
-      .then(() => {
+      .then((result) => {
         if (lastPreparation && entry && lastPreparation.id === entry.id) {
-          lastPreparation.camera = true;
-          lastPreparation.cameraUncertain = false;
+          lastPreparation.camera = result.state === 'ready';
+          lastPreparation.cameraUncertain = result.state === 'unknown';
         }
+        if (result.state !== 'ready') throw new Error(result.message ?? '运镜未准备完成。');
       })
       .catch((error: unknown) => {
-        if (lastPreparation && entry && lastPreparation.id === entry.id)
-          lastPreparation.cameraUncertain = true;
         onWarning?.(error instanceof Error ? error.message : '运镜未准备完成。');
       });
     if (cancelled() || window.location.href !== entryLocation) {

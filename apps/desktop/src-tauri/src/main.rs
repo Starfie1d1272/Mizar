@@ -1374,52 +1374,68 @@ async fn begin_managed_camera(
     app: tauri::AppHandle,
     expected_revision: String,
     preparation_id: String,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
         return Err("请在准备中心打开工作台。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let ticket = preparation_ticket(&app, &preparation_id)?;
-        app.state::<production_exit::ExitGate>()
-            .check_ticket(ticket)?;
-        app.state::<preparation_gate::PreparationGate>()
-            .check(Some(&preparation_id))?;
-        app.state::<updates::PendingUpdate>().check()?;
-        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
-        let game = cs2
-            .workspace_process()?
-            .filter(|game| game.owned && game.is_running())
-            .ok_or("请先确认受管 CS2 已启动。")?;
-        let actual = cs2.mulnx_handoff_status()?;
-        let unique = actual["processes"].as_array().is_some_and(|processes| {
-            processes.len() == 1
-                && processes[0]["pid"] == game.pid
-                && processes[0]["created"].as_str() == Some(game.created.to_string().as_str())
-                && processes[0]["managed"] == true
-        });
-        if !unique {
-            return Err("受管游戏身份不唯一，未建立运镜会话。".into());
-        }
-        let log = app.state::<DesktopLog>();
-        let gate = app.state::<preparation_gate::PreparationGate>();
-        let exit = app.state::<production_exit::ExitGate>();
-        gate.commit(Some(&preparation_id), || {
-            exit.commit(ticket, || {
-                let value =
-                    production_exit::camera_session(&log, "begin", None, Some(&expected_revision))?;
-                let lease = value["lease"]
-                    .as_str()
-                    .ok_or("原生运镜会话未确认。")?
-                    .to_owned();
-                if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
-                    let _ = production_exit::camera_session(&log, "invalidate", Some(&lease), None);
-                    return Err(error);
-                }
-                Ok(())
-            })
-        })?;
-        Ok(())
+        let mut submitted = false;
+        let outcome = (|| -> Result<(), String> {
+            let ticket = preparation_ticket(&app, &preparation_id)?;
+            app.state::<production_exit::ExitGate>()
+                .check_ticket(ticket)?;
+            app.state::<preparation_gate::PreparationGate>()
+                .check(Some(&preparation_id))?;
+            app.state::<updates::PendingUpdate>().check()?;
+            let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+            let game = cs2
+                .workspace_process()?
+                .filter(|game| game.owned && game.is_running())
+                .ok_or("请先确认受管 CS2 已启动。")?;
+            let actual = cs2.mulnx_handoff_status()?;
+            let unique = actual["processes"].as_array().is_some_and(|processes| {
+                processes.len() == 1
+                    && processes[0]["pid"] == game.pid
+                    && processes[0]["created"].as_str() == Some(game.created.to_string().as_str())
+                    && processes[0]["managed"] == true
+            });
+            if !unique {
+                return Err("受管游戏身份不唯一，未建立运镜会话。".into());
+            }
+            let log = app.state::<DesktopLog>();
+            let gate = app.state::<preparation_gate::PreparationGate>();
+            let exit = app.state::<production_exit::ExitGate>();
+            gate.commit(Some(&preparation_id), || {
+                exit.commit(ticket, || {
+                    submitted = true;
+                    let value = production_exit::camera_session(
+                        &log,
+                        "begin",
+                        None,
+                        Some(&expected_revision),
+                    )?;
+                    let lease = value["lease"]
+                        .as_str()
+                        .ok_or("原生运镜会话未确认。")?
+                        .to_owned();
+                    if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
+                        let _ =
+                            production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+                        return Err(error);
+                    }
+                    Ok(())
+                })
+            })?;
+            Ok(())
+        })();
+        Ok(match outcome {
+            Ok(()) => serde_json::json!({"state":"ready"}),
+            Err(error) if !submitted || error.starts_with("camera_not_started:") => {
+                serde_json::json!({"state":"not_started", "message":error.strip_prefix("camera_not_started:").unwrap_or(&error)})
+            }
+            Err(error) => serde_json::json!({"state":"unknown", "message":error}),
+        })
     })
     .await
     .map_err(|_| "受管运镜会话未能准备。".to_string())?

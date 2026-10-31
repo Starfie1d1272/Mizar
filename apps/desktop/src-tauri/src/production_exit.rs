@@ -583,6 +583,9 @@ pub fn camera_session(
         Some(&token),
     )?;
     if code != 200 || value["ok"] != true {
+        if action == "begin" && code == 409 && value["notStarted"] == true {
+            return Err("camera_not_started:运镜准备条件已变化，请重试。".into());
+        }
         return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
     }
     Ok(value)
