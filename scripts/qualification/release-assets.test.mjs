@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { promisify } from 'node:util';
+import { setImmediate } from 'node:timers/promises';
 import { lookupCreatedDraft, lookupRelease } from './release-lookup.mjs';
 import { publishDraftAssets, reconcileAssets, stageDraftAssets } from './release-assets.mjs';
 
@@ -313,4 +314,99 @@ test('draft recovery checks existing bytes first, fills only missing files, and 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('draft uploads are bounded, wait for in-flight failures, and do not publish or start another batch', async () => {
+  const expected = Array.from({ length: 5 }, (_, index) => {
+    const name = `${index}.zip`,
+      bytes = Buffer.from(name);
+    return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
+  });
+  const box = draftApi(expected);
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  let started = 0;
+  let settled = false;
+  const api = async (args) => {
+    if (args.at(-1).startsWith('https://uploads.github.com/')) {
+      const index = started++;
+      if (index === 0) throw new Error('uncertain upload');
+      await pending;
+    }
+    return box.api(args);
+  };
+  const publication = publishDraftAssets('81', { tag, gitSha: sha }, expected, api).finally(() => {
+    settled = true;
+  });
+  await setImmediate();
+  assert.equal(started, 3);
+  assert.equal(settled, false);
+  assert.deepEqual(box.actions, []);
+  finish();
+  await assert.rejects(publication, /uncertain upload/);
+  assert.equal(started, 3);
+  assert.deepEqual(box.actions, []);
+});
+
+test('draft success fully reads each uploaded asset with at most three reads in flight before publication', async () => {
+  const expected = Array.from({ length: 5 }, (_, index) => {
+    const name = `${index}.zip`,
+      bytes = Buffer.from(name);
+    return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
+  });
+  const box = draftApi(expected);
+  let active = 0,
+    peak = 0,
+    reads = 0;
+  const api = async (args) => {
+    if (args.at(-1).includes('/releases/assets/')) {
+      active++;
+      peak = Math.max(peak, active);
+      await setImmediate();
+      const value = box.api(args);
+      reads++;
+      active--;
+      return value;
+    }
+    if (args[0] === '--method' && args[1] === 'PATCH') assert.equal(reads, expected.length);
+    return box.api(args);
+  };
+  await publishDraftAssets('81', { tag, gitSha: sha }, expected, api);
+  assert.equal(peak, 3);
+  assert.deepEqual(box.actions, ['publish']);
+});
+
+test('failed final draft readback waits for active reads and never publishes', async () => {
+  const expected = Array.from({ length: 5 }, (_, index) => {
+    const name = `${index}.zip`,
+      bytes = Buffer.from(name);
+    return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
+  });
+  const box = draftApi(expected);
+  let finish,
+    started = 0,
+    settled = false;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const api = async (args) => {
+    if (args.at(-1).includes('/releases/assets/')) {
+      const index = started++;
+      if (index === 0) throw new Error('readback failed');
+      await pending;
+    }
+    return box.api(args);
+  };
+  const publication = publishDraftAssets('81', { tag, gitSha: sha }, expected, api).finally(() => {
+    settled = true;
+  });
+  await setImmediate();
+  assert.equal(started, 3);
+  assert.equal(settled, false);
+  finish();
+  await assert.rejects(publication, /readback failed/);
+  assert.equal(started, 3);
+  assert.deepEqual(box.actions, []);
 });
