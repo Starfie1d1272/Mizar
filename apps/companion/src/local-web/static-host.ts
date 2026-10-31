@@ -37,6 +37,7 @@ const RESERVED_PREFIXES = [
   '/gsi',
   '/health',
   '/local/v1',
+  '/local/protocol',
   '/qualification',
 ] as const;
 

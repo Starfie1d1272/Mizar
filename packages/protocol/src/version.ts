@@ -7,6 +7,13 @@ export const ASSIST_SCHEMA_VERSION = 4 as const;
 
 export const LOCAL_PROTOCOL_SUBPROTOCOL = 'mizar.local.v1' as const;
 
+export const LOCAL_SNAPSHOT_VERSIONS = {
+  program: PROGRAM_SCHEMA_VERSION,
+  radar: RADAR_SCHEMA_VERSION,
+  operator: OPERATOR_SCHEMA_VERSION,
+  assist: ASSIST_SCHEMA_VERSION,
+} as const;
+
 export const LOCAL_SNAPSHOT_CHANNELS = ['program', 'radar', 'operator', 'assist'] as const;
 export const LOCAL_TRANSIENT_CHANNELS = ['program-cue'] as const;
 export const LOCAL_CHANNELS = [...LOCAL_SNAPSHOT_CHANNELS, ...LOCAL_TRANSIENT_CHANNELS] as const;
