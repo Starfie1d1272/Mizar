@@ -141,7 +141,7 @@ export function registerManagedSourceRoutes(
       };
     }
     if (body.action === 'resume') {
-      const currentMatch = binding()?.context.matchId;
+      const currentMatch = binding()?.context.matchId ?? null;
       const identity = JSON.stringify(body.managedSessionIdentity);
       if (active) {
         if (
@@ -153,13 +153,11 @@ export function registerManagedSourceRoutes(
           return { ok: true };
         return reply.code(409).send({ error: 'managed_source_identity_changed' });
       }
-      if (
-        pending ||
-        retirement ||
-        !currentMatch ||
-        !options.runtime.resumeManagedSource(body.sourceId, currentMatch)
-      )
-        return reply.code(409).send({ error: 'managed_source_resume_unproven' });
+      if (pending || retirement || retired)
+        return reply.code(409).send({ error: 'managed_source_resume_unavailable' });
+      // The authenticated Host independently verifies PID, creation time, executable and CFG.
+      // Map continuity qualifies result restoration, not whether fresh input may be received.
+      const executionRestored = options.runtime.resumeManagedSource(body.sourceId, currentMatch);
       active = {
         ticket: body.ticket,
         sourceId: body.sourceId,
@@ -172,7 +170,7 @@ export function registerManagedSourceRoutes(
       };
       activated = true;
       retired = false;
-      return { ok: true };
+      return { ok: true, executionRestored };
     }
     if (body.action === 'commit') {
       const item = active?.ticket === body.ticket ? active : pending;

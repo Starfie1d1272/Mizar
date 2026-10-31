@@ -311,7 +311,7 @@ export class ProgramRuntime {
       let checkpoint;
       if (!this.transientSession && effectiveOrigin !== 'fixture') {
         try {
-          checkpoint = this.seriesProgressCheckpointStore?.load();
+          checkpoint = this.seriesProgressCheckpointStore?.load(seriesCheckpointIdentity(context));
         } catch {
           this.reportSeriesDiagnostic('checkpoint_read_failed');
         }
@@ -704,7 +704,7 @@ export class ProgramRuntime {
     this.unknownNewExecution = true;
   }
 
-  resumeManagedSource(sourceId: string, matchId: string): boolean {
+  resumeManagedSource(sourceId: string, matchId: string | null): boolean {
     const proof = this.restoredExecutionProof;
     if (
       !this.executionOwnerUnknown ||
@@ -718,8 +718,13 @@ export class ProgramRuntime {
       proof.programSourceGeneration !== this.state.programSource.generation ||
       proof.mapEpoch !== this.state.map.epoch ||
       proof.mapName !== this.state.map.name
-    )
+    ) {
+      // Host has verified the process and installed source independently of map evidence.
+      // Receive its fresh frames, but do not infer which historical execution they complete.
+      this.managedSourceId = sourceId;
+      this.markUnverifiedNewExecution();
       return false;
+    }
     this.managedSourceId = sourceId;
     return true;
   }
@@ -881,12 +886,10 @@ export class ProgramRuntime {
               mapName: this.state.map.name,
               ...(this.managedSourceId ? { managedSourceId: this.managedSourceId } : {}),
             }
-          : !this.executionConflict &&
-              !this.unknownNewExecution &&
-              (this.executionOwnerUnknown ||
-                (this.state.runtimeSeq === 0 && !this.state.programTelemetry)) &&
-              this.restoredExecutionMatchId === this.seriesProgress.matchId
-            ? this.restoredExecutionProof
+          : this.restoredExecutionMatchId === this.seriesProgress.matchId
+            ? // This proves the saved historical facts, not ownership of the current input.
+              // Current execution restoration still checks all live/source/map identities.
+              this.restoredExecutionProof
             : undefined;
       const result = this.seriesProgressCheckpointStore.save({
         ...makeSeriesProgressCheckpoint(this.seriesProgress),

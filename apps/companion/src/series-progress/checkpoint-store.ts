@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, unlink, writeFile } from 'node:fs/promises';
 
@@ -19,23 +19,50 @@ export interface SeriesProgressCheckpointStoreOptions {
   ) => void;
 }
 
-/** Small, single-file checkpoint store for the Companion-owned SeriesProgress. */
+/** Current checkpoint plus per-match/plan history, owned by Companion alone. */
 export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpointStore {
   private readonly filePath: string;
   private readonly onDiagnostic: SeriesProgressCheckpointStoreOptions['onDiagnostic'];
   private readonly commitQueue = new SerialCommitQueue();
   private lastWriteFailure: unknown;
   private writeFailed = false;
+  private readonly pending = new Map<string, SeriesProgressCheckpoint>();
+
+  private historyPath(identity: SeriesProgressCheckpoint['identity']): string {
+    const key = createHash('sha256')
+      .update(
+        JSON.stringify([
+          identity.matchId,
+          identity.format,
+          identity.entryAId,
+          identity.entryBId,
+          identity.mapPlanFingerprint,
+        ]),
+      )
+      .digest('hex');
+    return `${this.filePath}.history-${key}.json`;
+  }
 
   constructor(options: SeriesProgressCheckpointStoreOptions) {
     this.filePath = options.filePath;
     this.onDiagnostic = options.onDiagnostic;
   }
 
-  load(): SeriesProgressCheckpoint | undefined {
+  load(identity?: SeriesProgressCheckpoint['identity']): SeriesProgressCheckpoint | undefined {
+    if (identity) {
+      const path = this.historyPath(identity);
+      const pending = this.pending.get(path);
+      if (pending) return structuredClone(pending);
+      const historical = this.read(path);
+      if (historical) return historical;
+    }
+    return this.read(this.filePath);
+  }
+
+  private read(path: string): SeriesProgressCheckpoint | undefined {
     let contents: string;
     try {
-      contents = readFileSync(this.filePath, 'utf8');
+      contents = readFileSync(path, 'utf8');
     } catch (error: unknown) {
       if (isNodeError(error) && error.code === 'ENOENT') return undefined;
       this.onDiagnostic?.('checkpoint_read_failed', error);
@@ -60,9 +87,18 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
   }
 
   save(checkpoint: SeriesProgressCheckpoint): Promise<void> {
+    checkpoint = structuredClone(checkpoint);
+    const historyPath = this.historyPath(checkpoint.identity);
+    this.pending.set(historyPath, checkpoint);
     return this.commitQueue.run(async () => {
       try {
-        const previous = this.load();
+        const previous = this.read(this.filePath);
+        if (
+          previous &&
+          this.historyPath(previous.identity) !== historyPath &&
+          !existsSync(this.historyPath(previous.identity))
+        )
+          await replaceDurableJson(this.historyPath(previous.identity), previous);
         if (
           previous &&
           previous.identity.matchId !== checkpoint.identity.matchId &&
@@ -114,7 +150,10 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
           )
             throw new Error('series_unverified_history_conflict');
         }
+        // Commit historical facts before changing the current-selection checkpoint.
+        await replaceDurableJson(historyPath, checkpoint);
         await replaceDurableJson(this.filePath, checkpoint);
+        if (this.pending.get(historyPath) === checkpoint) this.pending.delete(historyPath);
         this.lastWriteFailure = undefined;
         this.writeFailed = false;
       } catch (error: unknown) {
@@ -127,7 +166,9 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
 
   async flush(): Promise<void> {
     await this.commitQueue.flush();
-    if (this.writeFailed)
+    // Retain and retry the original accepted facts after a transient disk failure.
+    for (const checkpoint of [...this.pending.values()]) await this.save(checkpoint);
+    if (this.writeFailed || this.pending.size)
       throw this.lastWriteFailure ?? new Error('series_checkpoint_write_failed');
   }
 }
