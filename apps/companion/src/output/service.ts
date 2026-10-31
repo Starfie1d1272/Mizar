@@ -997,7 +997,10 @@ export class OutputService {
         const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
-          isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
+          // Closing suppresses new sends without converting retained work into
+          // superseded records while the last in-flight send settles.
+          isCurrent: (event, lineup) =>
+            this.closed || this.quarantined || this.isCurrentForRetry(event, lineup),
           canSend: (event, lineup) => {
             if (this.closed) return false;
             const allowed = this.canSend(event, lineup);

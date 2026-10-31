@@ -2145,10 +2145,43 @@ export class ReliableOutbox {
     });
   }
 
+  private deliveryIdentity(record: ReliableOutboxRecord): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          ...record,
+          status: undefined,
+          attempts: undefined,
+          updatedAt: undefined,
+          nextAttemptAt: undefined,
+          receiverOutcome: undefined,
+          rejection: undefined,
+        }),
+      )
+      .digest('hex');
+  }
+
   private statusWriteKey(record: ReliableOutboxRecord): string {
+    if (
+      record.status === 'pending' &&
+      record.attempts > 0 &&
+      record.receiverOutcome === undefined &&
+      record.rejection === undefined
+    )
+      return `pending-retry:${this.deliveryIdentity(record)}:${record.attempts}`;
     return `status:${createHash('sha256')
       .update(JSON.stringify({ ...record, updatedAt: undefined, nextAttemptAt: undefined }))
       .digest('hex')}`;
+  }
+
+  private acknowledgeStatusWrite(record: ReliableOutboxRecord): void {
+    this.unconfirmedWrites.delete(this.statusWriteKey(record));
+    if (record.status !== 'accepted' && record.status !== 'rejected') return;
+    const prefix = `pending-retry:${this.deliveryIdentity(record)}:`;
+    for (const key of this.unconfirmedWrites) {
+      if (key.startsWith(prefix) && Number(key.slice(prefix.length)) <= record.attempts)
+        this.unconfirmedWrites.delete(key);
+    }
   }
 
   private async commitStatusChanges(
@@ -2161,7 +2194,7 @@ export class ReliableOutbox {
     try {
       await this.commit(records);
       for (const record of changed) {
-        if (records.includes(record)) this.unconfirmedWrites.delete(this.statusWriteKey(record));
+        if (records.includes(record)) this.acknowledgeStatusWrite(record);
       }
     } catch (error) {
       if (this.unconfirmedWrites.delete(batch))

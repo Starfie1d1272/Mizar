@@ -221,7 +221,6 @@ export async function stopProduct(
   )
     throw new Error('本地运行记录无效，未停止任何进程');
   exitReceiptPath(stateRoot, state.instanceId);
-  const deadline = performance.now() + 35000;
   let receipt = await exitReceipt(stateRoot, state);
   const health = await healthAt(port);
   if (!receipt && sameRuntime(health, state, state.instanceId)) {
@@ -240,6 +239,9 @@ export async function stopProduct(
   } else if (!receipt && health !== null) {
     throw new Error('当前端口不是此目录启动的制播服务，未停止任何进程');
   }
+  // Give the matching process its full shutdown budget after the request;
+  // request preparation can itself take time before onClose starts.
+  const deadline = performance.now() + 35000;
   while (!receipt && performance.now() < deadline) {
     await delay(200);
     receipt = await exitReceipt(stateRoot, state);
