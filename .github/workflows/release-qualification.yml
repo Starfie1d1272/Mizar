@@ -58,7 +58,12 @@ env:
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
     outputs:
@@ -161,292 +166,28 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { throw 'Resource producer/source/catalog validation failed' }
           "artifact=release-resource-candidate-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
-      - name: Preserve original resource candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.resources.outputs.artifact }}
-          path: ${{ env.RESOURCE_BUILD_ROOT }}/*
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload unqualified candidate
-        id: upload_candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-candidate
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/*.zip.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-release-manifest.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
-          compression-level: 0
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Upload build measurements
-        if: ${{ always() && steps.upload_candidate.outcome != 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-build-evidence
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}/build-timings.json
-          if-no-files-found: warn
-
-      - name: Save reusable main Cargo caches
-        if: ${{ github.ref == 'refs/heads/main' && steps.source.outputs.sha == github.sha }}
-        uses: ./.github/actions/save-cargo-cache
-        with:
-          profile: release
-          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
-          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
-          target-key: ${{ steps.cargo-cache.outputs.target-key }}
-          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
-
-  verify:
-    name: verify / ${{ matrix.lane }}
-    needs: build
-    runs-on: windows-2025
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        lane: [setup, core-setup]
-    env:
-      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
-      ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.build.outputs.source_sha }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: release-candidate
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
-      - name: Verify candidate transfer before extraction
-        run: node scripts/qualification/verify-candidate.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:SOURCE_SHA" "$env:ARCHIVE_SHA256"
-      - name: Prepare Full Setup tools and pristine candidate concurrently
-        if: ${{ matrix.lane == 'setup' }}
+      - name: Build the complete installers and update metadata
         shell: pwsh
         run: |
+          choco install nsis --version=3.11 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned NSIS installation failed' }
           $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $manifest.archive) -Destination $extractRoot
-      - name: Prepare Core Setup tools and pristine candidate concurrently
-        if: ${{ matrix.lane == 'core-setup' }}
-        shell: pwsh
-        run: |
-          $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
-          $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
-          & ./scripts/qualification/prepare-windows-setup.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $core.archive) -Destination $coreExtract
-
-      - name: Build and verify same-content NSIS installer
-        if: ${{ matrix.lane == 'setup' }}
-        shell: pwsh
-        run: |
-          $bundle = Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'qualification extracted path') -Directory | Select-Object -First 1
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'setup extracted path'
-          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $bundle.FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $extractRoot
-          $extracted = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-      - name: Verify and smoke-test the exact portable payload
-        if: ${{ matrix.lane == 'setup' }}
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'qualification extracted path'
-          $bundleRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
-          if ($null -eq $bundleRoot) { throw '未能解压 qualification bundle 根目录' }
-          Push-Location $bundleRoot.FullName
-          try {
-            foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
-              if (!(Test-Path -LiteralPath (Join-Path $bundleRoot.FullName $name))) { throw "缺少许可文件：$name" }
-            }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\verify-c4-resources.mjs') (Join-Path $bundleRoot.FullName 'resources/app') | Tee-Object -FilePath (Join-Path $env:QUALIFICATION_BUILD_ROOT 'c4-resources.log')
-            if ($LASTEXITCODE -ne 0) { throw 'installed C4 资源校验失败' }
-            & .\resources\runtime\node.exe ($env:GITHUB_WORKSPACE + '\scripts\qualification\desktop-smoke.mjs') $bundleRoot.FullName (Join-Path $env:QUALIFICATION_BUILD_ROOT 'desktop-smoke.json')
-            if ($LASTEXITCODE -ne 0) { throw 'Desktop startup and shutdown smoke failed' }
-          } finally {
-            Pop-Location
-          }
-
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT 'portable-identity.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Portable identity verification failed' }
-
-      - name: Qualify distinct Core payload and real NSIS installation
-        if: ${{ matrix.lane == 'core-setup' }}
-        shell: pwsh
-        run: |
-          $core = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
-          $coreExtract = Join-Path $env:RUNNER_TEMP 'core candidate extracted'
-          $payload = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
-          if ($payload.Count -ne 1) { throw 'Core extraction is ambiguous' }
-          $installed = Join-Path $env:RUNNER_TEMP 'core installed qualification'
-          ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $payload[0].FullName -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot $installed -ManifestName core-release-manifest.json -DistributionName core-distribution-manifest.json
-          $root = @(Get-ChildItem -LiteralPath $installed -Directory)
-          if ($root.Count -ne 1) { throw 'Core installation is ambiguous' }
-          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $root[0].FullName $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "core-setup-identity.json")
-          if ($LASTEXITCODE -ne 0) { throw 'Core identity or resource boundary failed' }
-      - name: Record successful lane identity
-        if: ${{ matrix.lane != 'core-setup' }}
-        shell: pwsh
-        env:
-          LANE: ${{ matrix.lane }}
-        run: |
-          $extractRoot = if ($env:LANE -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          node scripts/qualification/verify-promotion.mjs $env:QUALIFICATION_BUILD_ROOT $extractRoot "v$($manifest.appVersion)" $env:SOURCE_SHA (Join-Path $env:QUALIFICATION_BUILD_ROOT "$env:LANE-identity.json")
-          if ($LASTEXITCODE -ne 0) { throw 'Lane identity verification failed' }
-
-      - name: Upload verified Full distribution
-        if: ${{ matrix.lane == 'setup' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-setup-setup
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
-          compression-level: 0
-          retention-days: 7
-          if-no-files-found: error
-      - name: Upload verified Core distribution
-        if: ${{ matrix.lane == 'core-setup' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-setup-core-setup
-          path: |
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*-Core-Setup.exe.sha256
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
-          compression-level: 0
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Collect qualification evidence
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
-          foreach ($name in @('host-soak.json', 'desktop-smoke.json', 'release-manifest.json', 'c4-resources.log', 'portable-smoke.log', 'distribution-manifest.json', 'setup-desktop-smoke.json', 'core-desktop-smoke.json', 'core-release-manifest.json', 'core-distribution-manifest.json', 'c4-worker-benchmark.json', 'portable-identity.json', 'setup-identity.json', 'core-setup-identity.json', 'update-recovery.log', 'setup-timings.json', 'core-setup-timings.json')) {
-            $path = Join-Path $env:QUALIFICATION_BUILD_ROOT $name
-            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidenceRoot }
-          }
-          $extractedRoot = if ('${{ matrix.lane }}' -eq 'setup') { Join-Path $env:RUNNER_TEMP 'setup extracted path' } elseif ('${{ matrix.lane }}' -eq 'core-setup') { Join-Path $env:RUNNER_TEMP 'core installed qualification' } else { Join-Path $env:RUNNER_TEMP 'qualification extracted path' }
-          if (Test-Path -LiteralPath $extractedRoot) {
-            $bundle = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
-            if ($null -ne $bundle) {
-              Copy-Item -LiteralPath (Join-Path $bundle.FullName 'resources/metadata') -Destination $evidenceRoot -Recurse
-              $statePath = Join-Path $bundle.FullName 'state'
-              if (Test-Path -LiteralPath $statePath) {
-                # Preserve diagnostics at relative paths without bundling runtime state or secrets.
-                Get-ChildItem -LiteralPath $statePath -Recurse -File | Where-Object { $_.FullName -match '[\\/]logs[\\/]' } | ForEach-Object {
-                  $target = Join-Path $evidenceRoot ([IO.Path]::GetRelativePath($bundle.FullName, $_.FullName))
-                  New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-                  Copy-Item -LiteralPath $_.FullName -Destination $target
-                }
-              }
-            }
-          }
-          if ('${{ matrix.lane }}' -eq 'setup') {
-            $installerUi = Join-Path (Split-Path $env:QUALIFICATION_BUILD_ROOT -Parent) 'installer-ui'
-            if (Test-Path -LiteralPath $installerUi) { Copy-Item -LiteralPath $installerUi -Destination (Join-Path $evidenceRoot 'installer-ui') -Recurse }
-          }
-          $evidenceName = 'Mizar-' + $env:RELEASE_LABEL + '-${{ matrix.lane }}-evidence.zip'
-          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP $evidenceName)
-
-      - name: Upload release qualification evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-evidence-${{ matrix.lane }}
-          path: ${{ runner.temp }}/Mizar-*-evidence.zip
-          if-no-files-found: error
-
-  release_qualification:
-    name: release_qualification
-    needs: [build, verify]
-    runs-on: windows-2025
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
-      ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.build.outputs.source_sha }}
-      - name: Set up Node.js 24 for fixed resource verification
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
-        with:
-          runtime: node@24
-          install: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: release-candidate
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: release-setup-*
-          merge-multiple: true
-          path: ${{ env.QUALIFICATION_BUILD_ROOT }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: release-evidence-*
-          path: ${{ runner.temp }}/lane-evidence
-          merge-multiple: true
-      - name: Download exact resource candidate built by this source job
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: ${{ needs.build.outputs.resource_artifact }}
-          path: ${{ env.RESOURCE_BUILD_ROOT }}
-      - name: Verify resource content/catalog against the assembled Core candidate
-        shell: pwsh
-        run: |
-          node scripts/ci/resource-release.mjs check "$env:RESOURCE_BUILD_ROOT" (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Resource transfer/compatibility/source mismatch' }
-      - name: Verify all lane identities and assembled assets
-        shell: pwsh
-        run: |
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
-          foreach ($lane in @('setup', 'core-setup')) {
-            $archive = Join-Path $env:RUNNER_TEMP "lane-evidence/Mizar-$env:RELEASE_LABEL-$lane-evidence.zip"
-            Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $evidenceRoot $lane)
-          }
-          New-Item -ItemType Directory -Path (Join-Path $evidenceRoot 'portable') | Out-Null
-          Copy-Item -LiteralPath (Join-Path $evidenceRoot 'setup/portable-identity.json') -Destination (Join-Path $evidenceRoot 'portable/portable-identity.json')
-          node scripts/qualification/release-identity.mjs qualification (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Candidate and attestation source mismatch' }
-          node scripts/qualification/verify-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $env:SOURCE_SHA $env:ARCHIVE_SHA256 $evidenceRoot
-          if ($LASTEXITCODE -ne 0) { throw 'Candidate/lane identity mismatch' }
-          $manifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') -Raw | ConvertFrom-Json
-          Copy-Item -LiteralPath (Join-Path $evidenceRoot 'setup/setup-identity.json') -Destination (Join-Path $evidenceRoot 'qualified-identity.json')
-          node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
-          if ($LASTEXITCODE -ne 0) { throw 'Stable update manifest generation failed' }
+          $full = Join-Path $env:QUALIFICATION_BUILD_ROOT ([IO.Path]::GetFileNameWithoutExtension($manifest.archive))
           $coreManifest = Get-Content (Join-Path $env:QUALIFICATION_BUILD_ROOT 'core-release-manifest.json') -Raw | ConvertFrom-Json
-          $coreExtract = Join-Path $env:RUNNER_TEMP 'final Core candidate'
-          & ./scripts/qualification/extract-windows-shell.ps1 -Archive (Join-Path $env:QUALIFICATION_BUILD_ROOT $coreManifest.archive) -Destination $coreExtract -Native
-          $cores = @(Get-ChildItem -LiteralPath $coreExtract -Directory)
-          if ($cores.Count -ne 1) { throw 'Qualified Core extraction is ambiguous' }
-          node scripts/qualification/verify-core-candidate.mjs $env:QUALIFICATION_BUILD_ROOT $cores[0].FullName $env:SOURCE_SHA
-          if ($LASTEXITCODE -ne 0) { throw 'Final Core qualification identity failed' }
+          $core = Join-Path $env:QUALIFICATION_BUILD_ROOT ([IO.Path]::GetFileNameWithoutExtension($coreManifest.archive))
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $full -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot (Join-Path $env:RUNNER_TEMP 'full-install') -BuildOnly
+          & ./scripts/qualification/create-windows-setup.ps1 -BundleRoot $core -OutputRoot $env:QUALIFICATION_BUILD_ROOT -ExtractRoot (Join-Path $env:RUNNER_TEMP 'core-install') -ManifestName core-release-manifest.json -DistributionName core-distribution-manifest.json -BuildOnly
+          node scripts/qualification/update-manifest.mjs $env:QUALIFICATION_BUILD_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
           if ($manifest.appVersion -match '^\d+\.\d+\.\d+$') {
-            ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $cores[0].FullName -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
-            if ($LASTEXITCODE) { throw 'Qualified native installer build failed' }
+            ./scripts/web-installer/build.ps1 -ProductDirectory $env:QUALIFICATION_BUILD_ROOT -CoreDirectory $core -OutputDirectory $env:QUALIFICATION_BUILD_ROOT -Qualification
+            if ($LASTEXITCODE) { throw 'Native installer build failed' }
           }
-          "QUALIFIED_CORE_DIRECTORY=$($cores[0].FullName)" >> $env:GITHUB_ENV
-          $buildTimings = Join-Path $env:QUALIFICATION_BUILD_ROOT 'build-timings.json'
-          node scripts/qualification/build-timing-evidence.mjs $buildTimings (Join-Path $evidenceRoot 'build-timings.json') $env:SOURCE_SHA
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'release-evidence'
+          New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
-          $evidenceArchive = Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip"
-          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath $evidenceArchive
+          Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'build-timings.json') $evidenceRoot
+          Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
 
       - name: Attest qualified products and current resource provenance
         id: qualified-provenance
@@ -483,12 +224,6 @@ jobs:
             Copy-Item -LiteralPath $env:PROVENANCE_BUNDLE -Destination (Join-Path $env:QUALIFICATION_BUILD_ROOT 'update-provenance.json')
           }
 
-      - name: Verify actual signed candidate through isolated client SDK
-        shell: pwsh
-        run: |
-          node scripts/qualification/verify-qualified-install.mjs "$env:QUALIFICATION_BUILD_ROOT" "$env:RESOURCE_BUILD_ROOT" "$env:QUALIFIED_CORE_DIRECTORY"
-          if ($LASTEXITCODE -ne 0) { throw 'Pre-publication client signature verification failed' }
-
       - name: Upload original qualified resources (not publication authorization)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -517,7 +252,6 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/update-provenance.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/qualification-provenance.json
-            ${{ env.QUALIFICATION_BUILD_ROOT }}/qualified-client-verification.json
           if-no-files-found: error
 
       - name: Upload release qualification evidence

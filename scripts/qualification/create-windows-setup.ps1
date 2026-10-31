@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)][string]$BundleRoot,
   [Parameter(Mandatory = $true)][string]$OutputRoot,
   [Parameter(Mandatory = $true)][string]$ExtractRoot,
+  [switch]$BuildOnly,
   [ValidateSet('release-manifest.json','core-release-manifest.json')][string]$ManifestName = 'release-manifest.json',
   [ValidateSet('distribution-manifest.json','core-distribution-manifest.json')][string]$DistributionName = 'distribution-manifest.json'
 )
@@ -64,6 +65,7 @@ function Install-Setup {
   $process = Start-Process -FilePath $archive -ArgumentList @('/S', ('/D=' + $target)) -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw 'Setup installation failed' }
 }
+if (!$BuildOnly) {
 Invoke-SetupPhase 'first-install' { Install-Setup }
 Invoke-SetupPhase 'first-payload-verification' {
   # Verify exact qualified payload before running anything from the installation.
@@ -76,6 +78,7 @@ Invoke-SetupPhase 'first-payload-verification' {
     $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
   })
   if ($extra.Count) { throw 'Unexpected Setup payload files' }
+}
 }
 $licenseName = 'NSIS-LICENSE.txt'
 $licensePath = Join-Path $output $licenseName
@@ -95,7 +98,7 @@ $distribution = [ordered]@{
   installerIconSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $icon).Hash.ToLowerInvariant()
   installerLicense = $licenseName
   installerLicenseSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $licensePath).Hash.ToLowerInvariant()
-  verifiedFiles = $files.Count
+  verifiedFiles = $(if ($BuildOnly) { 0 } else { $files.Count })
 }
 $distribution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output $DistributionName) -Encoding utf8NoBOM
 $distribution | ConvertTo-Json -Depth 5

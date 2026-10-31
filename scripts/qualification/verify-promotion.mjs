@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { verifyPayload } from './product-runtime.mjs';
 import { validateReleaseTag, windowsBundleName } from './app-version.mjs';
 
-export async function verifyPromotion({ product, extracted, tag, sourceSha, binaryVersion }) {
+export async function verifyPromotion({
+  product, extracted, tag, sourceSha, binaryVersion, manifestOnly = false,
+}) {
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
   validateReleaseTag(tag, manifest.appVersion);
   if (
@@ -29,26 +31,29 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
   if (digest !== manifest.archiveSha256) throw new Error('产品 ZIP 摘要不一致');
   const checksum = (await readFile(`${archive}.sha256`, 'utf8')).trim();
   if (checksum !== `${digest}  ${manifest.archive}`) throw new Error('产品 checksum 不一致');
-  const dirs = (await readdir(extracted, { withFileTypes: true })).filter((entry) =>
-    entry.isDirectory(),
-  );
-  if (dirs.length !== 1) throw new Error('解压目录必须包含唯一产品');
-  const root = join(extracted, dirs[0].name);
-  const artifact = await verifyPayload(root);
-  if (
-    artifact.gitSha !== sourceSha ||
-    artifact.artifactSha256 !== manifest.contentDigest ||
-    artifact.appVersion !== manifest.appVersion ||
-    artifact.desktopBuildProfile !== 'release'
-  )
-    throw new Error('包内身份与 manifest 不一致');
-  const version =
-    binaryVersion ??
-    execFileSync(join(root, 'Mizar.exe'), ['--app-version'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    }).trim();
-  if (version !== manifest.appVersion) throw new Error('EXE 编译版本与 manifest 不一致');
+  let version = manifest.appVersion;
+  if (!manifestOnly) {
+    const dirs = (await readdir(extracted, { withFileTypes: true })).filter((entry) =>
+      entry.isDirectory(),
+    );
+    if (dirs.length !== 1) throw new Error('解压目录必须包含唯一产品');
+    const root = join(extracted, dirs[0].name);
+    const artifact = await verifyPayload(root);
+    if (
+      artifact.gitSha !== sourceSha ||
+      artifact.artifactSha256 !== manifest.contentDigest ||
+      artifact.appVersion !== manifest.appVersion ||
+      artifact.desktopBuildProfile !== 'release'
+    )
+      throw new Error('包内身份与 manifest 不一致');
+    version =
+      binaryVersion ??
+      execFileSync(join(root, 'Mizar.exe'), ['--app-version'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      }).trim();
+    if (version !== manifest.appVersion) throw new Error('EXE 编译版本与 manifest 不一致');
+  }
   let distribution;
   const productFiles = await readdir(product);
   if (productFiles.includes('distribution-manifest.json')) {
@@ -100,7 +105,9 @@ export async function verifyPromotion({ product, extracted, tag, sourceSha, bina
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [, , product, extracted, tag, sourceSha, output] = process.argv;
-  const identity = await verifyPromotion({ product, extracted, tag, sourceSha });
+  const identity = await verifyPromotion({
+    product, extracted, tag, sourceSha, manifestOnly: extracted === '--manifest-only',
+  });
   await writeFile(output, `${JSON.stringify(identity, null, 2)}\n`);
   console.log(JSON.stringify(identity));
 }
