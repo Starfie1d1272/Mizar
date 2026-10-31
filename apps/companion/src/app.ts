@@ -1585,15 +1585,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           },
           withApplyGuard: (operation) => production.configureBroadcast(operation),
-          canApplyCamera: () => {
-            const state = cameraDirector?.get();
-            return (
-              !state ||
-              (state.current === null &&
-                state.request !== 'submitted' &&
-                state.preparation !== 'preparing')
-            );
-          },
+          canApplyCamera: () => cameraDirector?.canChangeConfiguration() ?? true,
           diagnostic: (error) =>
             app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
         })
