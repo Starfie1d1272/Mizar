@@ -1340,7 +1340,19 @@ export class RivalHubConnection {
       ) {
         throw new Error('断开连接失败，请稍后重试。');
       }
-      await this.sourceState.completeRevokedInstallation(installation);
+      const sameInstallation = (identity: ExactSource) =>
+        identity.baseUrl === installation.baseUrl &&
+        identity.competitionId === installation.competitionId &&
+        identity.installationId === installation.installationId;
+      const state = await this.sourceState.snapshot();
+      const archivePending =
+        state.records.some(
+          (record) =>
+            sameInstallation(record.identity) && record.lastFailureCode === 'archive_pending',
+        ) || [...this.confirmedReleases.values()].some(sameInstallation);
+      // Revocation is not an exact-source release receipt. Keep any confirmed
+      // source awaiting archive, even after credentials are removed.
+      if (!archivePending) await this.sourceState.completeRevokedInstallation(installation);
       await this.updateCleanupSummary();
     }
     await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
