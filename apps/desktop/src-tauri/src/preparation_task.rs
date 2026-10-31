@@ -647,9 +647,6 @@ pub(crate) async fn preparation_cancel(
     })
     .await
     .map_err(|_| "取消准备未完成。")??;
-    if let Ok(window) = main_window(&app) {
-        cancel_managed_camera(window, app.clone()).await?;
-    }
     match cancellation.and_then(|value| crate::lifecycle_contract::cancellation_entered(&value)) {
         Ok(true) => {
             update(&preparation_id, |task| task.entered = true);
@@ -657,6 +654,9 @@ pub(crate) async fn preparation_cancel(
             Err("制作已进入，请退出工作台。".into())
         }
         Ok(false) => {
+            if let Ok(window) = main_window(&app) {
+                cancel_managed_camera(window, app.clone()).await?;
+            }
             // Cancellation is acknowledged by the service before restoring: it
             // fences a delayed enter request for this same preparation ID.
             if let Some(transaction) = snapshot()?
