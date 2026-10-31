@@ -170,6 +170,12 @@ export interface SeriesProgressCheckpoint {
     readonly mapPlanFingerprint: string;
   };
   readonly progress: SeriesProgress;
+  readonly executionOwner?: {
+    readonly liveSessionId: string;
+    readonly programSourceGeneration: number;
+    readonly mapEpoch: number;
+    readonly mapName: string;
+  };
 }
 
 export interface SeriesProgressCheckpointStore {
@@ -190,6 +196,12 @@ export function isSeriesProgressCheckpoint(value: unknown): value is SeriesProgr
   const maps = progress.maps;
   const currentMapOrder = progress.currentMapOrder;
   return (
+    (value.executionOwner === undefined ||
+      (isRecord(value.executionOwner) &&
+        isNonEmptyString(value.executionOwner.liveSessionId) &&
+        isNonNegativeInteger(value.executionOwner.programSourceGeneration) &&
+        isPositiveInteger(value.executionOwner.mapEpoch) &&
+        isNonEmptyString(value.executionOwner.mapName))) &&
     isNonEmptyString(identity.matchId) &&
     isMatchFormat(identity.format) &&
     isNonEmptyString(identity.entryAId) &&

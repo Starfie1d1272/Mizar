@@ -376,6 +376,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
       return projectionCoordinator.refresh();
     },
+    isExecutionOwnedBy: (binding) =>
+      programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
+    executionOwnerMatchId: (runtimeSeq) => programRuntime.getExecutionOwnerMatchId(runtimeSeq),
     isActiveOnlineBinding: (binding) =>
       matchContextController !== null &&
       matchContextController.getActiveBinding() === binding &&
