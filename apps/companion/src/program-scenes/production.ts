@@ -32,6 +32,7 @@ export function registerProductionRoutes(
     recordObsExit?:
       | ((state: 'pending' | 'confirmed' | 'unconfirmed', valid?: () => boolean) => Promise<void>)
       | undefined;
+    waitForObsExitWrites?: (() => Promise<void>) | undefined;
   },
 ) {
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
@@ -163,7 +164,7 @@ export function registerProductionRoutes(
   }
   function invalidateObsExit() {
     const task = obsExitTask;
-    if (!task || task.valid() || !task.sceneRequired) return;
+    if (!task || task.valid() || !task.sceneRequired || obsExitState === 'unconfirmed') return;
     obsExitState = 'unconfirmed';
     const pending = Promise.resolve(
       options.recordObsExit?.('unconfirmed', () => task.generation === obsExitGeneration),
@@ -171,9 +172,11 @@ export function registerProductionRoutes(
     obsExitStatusWrite = pending;
   }
   const view = () => {
+    invalidateObsExit();
     const current = {
       mode,
       revision,
+      sessionId,
       releaseHandoffState,
       obsExitState,
       canEnter: !trialPending && !shuttingDown && !updatePending && options.hasContext(),
@@ -536,8 +539,10 @@ export function registerProductionRoutes(
     // Closing the service can join this task without making OBS a condition
     // for the Host's local game cleanup or for accepting the exit command.
     waitForObsExit: async () => {
+      invalidateObsExit();
       await obsExitTask?.promise;
       await obsExitStatusWrite;
+      await options.waitForObsExitWrites?.();
       return obsExitState;
     },
     invalidateObsExit,

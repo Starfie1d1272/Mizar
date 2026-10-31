@@ -139,6 +139,7 @@ export async function openRivalHubAuthorization(url: string, popup?: Window | nu
 export interface Production {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;
+  sessionId?: string;
   canEnter: boolean;
   releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
   obsExitState?: 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
@@ -146,10 +147,22 @@ export interface Production {
 
 /** Retry only the Companion OBS exit task; do not repeat Host game cleanup. */
 export async function retryObsExit(state: Production): Promise<void> {
+  const latest = await fetch('/local/v1/production', {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!latest.ok) throw new Error('OBS 收尾状态未确认，请检查后重试。');
+  const currentState = (await latest.json()) as Production;
+  if (state.mode !== 'preparation' || currentState.mode !== 'preparation')
+    throw new Error('制作状态已变化，请检查 OBS。');
+  if (!state.sessionId || currentState.sessionId !== state.sessionId)
+    throw new Error('制作状态已变化，请检查 OBS。');
+  if (currentState.obsExitState !== 'unconfirmed')
+    throw new Error('OBS 收尾状态已变化，请刷新后核对。');
   const response = await fetch('/operator/production', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'finish', expectedRevision: state.revision }),
+    body: JSON.stringify({ action: 'finish', expectedRevision: currentState.revision }),
     signal: AbortSignal.timeout(10000),
   });
   let current = (await response.json().catch(() => ({}))) as Partial<Production> & {

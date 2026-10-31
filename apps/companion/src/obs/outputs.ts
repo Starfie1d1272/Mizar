@@ -199,7 +199,8 @@ export class ObsOutputController {
     this.warmupExitStarted = false;
     const old = this.client;
     this.client = undefined;
-    if (this.ready) this.observeProgram('disconnected');
+    // Closing our own observer is not an external OBS disconnection.
+    if (this.ready && !this.closed) this.observeProgram('disconnected');
     this.ready = false;
     this.generation++;
     this.connecting = undefined;

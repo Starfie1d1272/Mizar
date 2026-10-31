@@ -1142,12 +1142,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let obsExitWrites = Promise.resolve();
   const production = registerProductionRoutes(app, {
     previousObsExitUnconfirmed,
+    waitForObsExitWrites: async () => {
+      while (true) {
+        const pending = obsExitWrites;
+        await pending;
+        if (pending === obsExitWrites) return;
+      }
+    },
     recordObsExit: obsExitPath
       ? (state, valid) => {
           const pending = obsExitWrites.then(async () => {
             await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
           });
-          obsExitWrites = pending.catch(() => {});
+          obsExitWrites = pending.catch((error: unknown) => {
+            app.log.warn({ err: error }, 'OBS exit status not saved');
+          });
           return pending;
         }
       : undefined,
