@@ -139,13 +139,14 @@ export function createCameraConfigPersistence(
     };
   }
   return {
+    canChange: () => store.canChangeCamera(),
     get available() {
       return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
     },
     initialize: () => read(),
     read: () => read(),
     readApplied: () => {
-      const active = store.appliedSnapshot('camera');
+      const active = store.fallbackSnapshot('camera');
       if (!active) throw new Error('camera_storage_unavailable');
       return read(active);
     },

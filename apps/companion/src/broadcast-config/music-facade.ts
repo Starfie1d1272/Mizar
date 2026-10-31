@@ -63,7 +63,7 @@ export function createMusicConfigPersistence(
     initialize: () => read(),
     read,
     readApplied: () => {
-      const active = store.appliedSnapshot('music');
+      const active = store.fallbackSnapshot('music');
       if (!active) throw new Error('music_state_invalid');
       return read(active);
     },

@@ -34,6 +34,7 @@ interface CameraPersistenceState {
   confirmApplied?: (() => Promise<void>) | undefined;
 }
 export interface CameraConfigPersistence {
+  canChange?(): boolean;
   initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
   read(): Promise<CameraPersistenceState>;
   readApplied?(): Promise<CameraPersistenceState>;
@@ -199,10 +200,17 @@ export class OrchestrationStore {
     return { activePresetId: this.activePresetId, preset: this.preset, presets: this.presets };
   }
   private writeCatalog(change: (catalog: Catalog) => Catalog, activate = false) {
-    if (activate) this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const next = catalogSchema.parse(change(this.catalog()));
+      if (activate && JSON.stringify(next) === JSON.stringify(this.catalog())) return;
+      if (activate) {
+        if (this.persistence?.canChange && !this.persistence.canChange())
+          throw new Error('camera_busy');
+        this.pendingWrites++;
+        reserved = true;
+      }
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
       const committed = await this.persistCatalog(next, this.automaticEnabled);
@@ -227,7 +235,7 @@ export class OrchestrationStore {
       this.diagnostic('camera_configure', { result: 'failure', error });
     });
     return result.finally(() => {
-      if (activate) this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   save(input: unknown) {
@@ -272,12 +280,18 @@ export class OrchestrationStore {
     id: string,
     validate: (preset: OrchestrationPreset) => Promise<void>,
   ) {
-    this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const item = this.presets.find((entry) => entry.id === id);
       if (!item) throw new Error('camera_preset_missing');
+      if (id === this.activePresetId && JSON.stringify(item.preset) === JSON.stringify(this.preset))
+        return;
       await validate(item.preset);
+      if (this.persistence?.canChange && !this.persistence.canChange())
+        throw new Error('camera_busy');
+      this.pendingWrites++;
+      reserved = true;
       const next = { ...this.catalog(), activePresetId: id, preset: item.preset };
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
@@ -301,13 +315,18 @@ export class OrchestrationStore {
       this.diagnostic('camera_configure', { result: 'failure', error }),
     );
     return result.finally(() => {
-      this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   saveAutomaticEnabled(automaticEnabled: boolean) {
-    this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
+      if (automaticEnabled === this.automaticEnabled) return;
+      if (this.persistence?.canChange && !this.persistence.canChange())
+        throw new Error('camera_busy');
+      this.pendingWrites++;
+      reserved = true;
       if (this.persistence) {
         const previousRevision = this.persistedRevision;
         const previousAutomatic = this.automaticEnabled;
@@ -328,7 +347,7 @@ export class OrchestrationStore {
     });
     this.queue = result.catch(() => {});
     return result.finally(() => {
-      this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   map(name: string | null): OrchestrationPreset['maps'][number] | undefined {

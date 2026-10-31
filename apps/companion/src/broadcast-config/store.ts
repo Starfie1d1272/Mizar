@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import {
   canonicalJson,
@@ -46,15 +46,74 @@ import { hudDocumentFromBroadcast } from './hud-facade.js';
 
 interface Receipt {
   fingerprint: string;
-  active: ActiveBroadcastSnapshot;
+  activeRevision: Revision;
   failed?: ModuleKind[];
 }
+const receiptFingerprint = (value: string) =>
+  `sha256:${createHash('sha256').update(value).digest('hex')}`;
 type ConsumerKind = 'hud' | 'music' | 'camera' | 'program';
+type ConsumerApplied = {
+  revision: Revision;
+  moduleRevision: Revision;
+  sourceModuleId: string | null;
+  sourceModuleRevision: Revision | null;
+  value: ActiveBroadcastSnapshot['resolved'][ConsumerKind];
+  lock: ActiveBroadcastSnapshot['lock'];
+};
 type ConsumerState = {
-  applied: ActiveBroadcastSnapshot | null;
+  applied: ConsumerApplied | null;
+  rollback?: ConsumerApplied;
   error: string | null;
   desired?: string;
 };
+function compactConsumer(kind: ConsumerKind, active: ActiveBroadcastSnapshot): ConsumerApplied {
+  const resources = new Map<string, ResourceRef>();
+  const add = (ref: ResourceRef) => resources.set(canonicalJson(ref), ref);
+  if (kind === 'hud' && active.resolved.hud.renderer === 'web-hud') {
+    add(active.resolved.hud.config.renderer.resource);
+    for (const asset of Object.values(active.resolved.hud.config.panelAssets)) add(asset.resource);
+  } else if (kind === 'program') {
+    for (const scene of Object.values(active.resolved.program.scenes))
+      if (scene.kind === 'declarative') add(scene.resource);
+    for (const asset of Object.values(active.resolved.program.assets)) add(asset.resource);
+  } else if (kind === 'music' && active.resolved.music) {
+    for (const group of MUSIC_GROUPS)
+      for (const track of active.resolved.music.groups[group].tracks) add(track.asset.resource);
+  } else if (kind === 'camera' && active.resolved.camera) {
+    for (const map of active.resolved.camera.maps)
+      if (map.openingSound) add(map.openingSound.asset.resource);
+  }
+  return {
+    revision: active.revision,
+    moduleRevision: active.moduleRevisions[kind],
+    sourceModuleId: active.sourceModuleIds?.[kind] ?? null,
+    sourceModuleRevision: active.sourceModuleRevisions?.[kind] ?? null,
+    value: structuredClone(active.resolved[kind]),
+    lock: {
+      resources: [...resources.values()],
+      tools: kind === 'camera' ? structuredClone(active.lock.tools) : [],
+    },
+  };
+}
+function expandConsumer(
+  kind: ConsumerKind,
+  applied: ConsumerApplied,
+  active: ActiveBroadcastSnapshot,
+): ActiveBroadcastSnapshot {
+  const snapshot = structuredClone(active);
+  snapshot.revision = applied.revision;
+  snapshot.moduleRevisions[kind] = applied.moduleRevision;
+  snapshot.sourceModuleIds = { ...snapshot.sourceModuleIds, [kind]: applied.sourceModuleId };
+  snapshot.sourceModuleRevisions = {
+    ...snapshot.sourceModuleRevisions,
+    [kind]: applied.sourceModuleRevision,
+  };
+  (snapshot.resolved as Record<ConsumerKind, ConsumerApplied['value']>)[kind] = structuredClone(
+    applied.value,
+  );
+  snapshot.lock = structuredClone(applied.lock);
+  return snapshot;
+}
 const importEntry = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 const importMappingSchema = z.strictObject({
   source: resourceRefSchema,
@@ -75,12 +134,46 @@ interface Envelope {
   version: 1;
   document: BroadcastConfigDocument;
   receipts: Record<string, Receipt>;
+  pendingReceipt?: { requestId: string; receipt: Receipt };
+  receiptFormat?: 2;
+  consumerFormat?: 2;
   imports: BroadcastImportMapping[];
   consumers?: Partial<Record<ConsumerKind, ConsumerState>>;
   builtinsNormalized?: boolean | undefined;
   pendingLegacyCamera?: PendingLegacyCamera | undefined;
   restoredLegacyCamera?:
     Array<{ legacyId: string; moduleId: string; activeSnapshot: boolean }> | undefined;
+}
+function receiptFor(envelope: Envelope, requestId: string): Receipt | undefined {
+  return envelope.pendingReceipt?.requestId === requestId
+    ? envelope.pendingReceipt.receipt
+    : envelope.receipts[requestId];
+}
+function setPendingReceipt(envelope: Envelope, requestId: string, receipt: Receipt): void {
+  if (envelope.pendingReceipt && envelope.pendingReceipt.requestId !== requestId)
+    envelope.receipts[envelope.pendingReceipt.requestId] = envelope.pendingReceipt.receipt;
+  delete envelope.receipts[requestId];
+  envelope.pendingReceipt = { requestId, receipt };
+}
+function archivePendingReceipt(envelope: Envelope): void {
+  if (!envelope.pendingReceipt) return;
+  envelope.receipts[envelope.pendingReceipt.requestId] = envelope.pendingReceipt.receipt;
+  delete envelope.pendingReceipt;
+}
+function releaseSettledRollback(envelope: Envelope): void {
+  if (!envelope.document.previousActive) return;
+  const active = envelope.document.active;
+  for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
+    const state = envelope.consumers?.[kind];
+    if (!state || (!state.error && !state.applied)) return;
+    if (!state.error && state.applied?.moduleRevision !== active.moduleRevisions[kind]) return;
+  }
+  for (const kind of ['hud', 'program', 'music', 'camera'] as const) {
+    const state = envelope.consumers![kind]!;
+    if (state.error && !state.applied && !state.rollback)
+      state.rollback = compactConsumer(kind, envelope.document.previousActive);
+  }
+  envelope.document.previousActive = null;
 }
 const pendingLegacyCameraSchema = z.strictObject({
   catalog: cameraCatalogSchema,
@@ -123,6 +216,7 @@ export interface BroadcastConfigStoreOptions {
     kind: ModuleKind,
     value: ActiveBroadcastSnapshot['resolved'][ModuleKind],
   ): boolean;
+  canChangeCamera?(): boolean;
   validateHudDraft?(document: BroadcastConfigDocument): void;
 }
 
@@ -138,11 +232,19 @@ export class BroadcastConfigStore {
   }
   private envelope: Envelope | null = null;
   constructor(private readonly options: BroadcastConfigStoreOptions) {}
+  canChangeCamera(): boolean {
+    return this.options.canChangeCamera?.() ?? true;
+  }
 
   private parseEnvelope(input: unknown): Envelope {
     if (!input || typeof input !== 'object' || Array.isArray(input))
       throw new Error('broadcast_config_invalid');
     const value = input as Record<string, unknown>;
+    if (
+      (value.receiptFormat !== undefined && value.receiptFormat !== 2) ||
+      (value.consumerFormat !== undefined && value.consumerFormat !== 2)
+    )
+      throw new Error('broadcast_config_invalid');
     if (
       value.version !== 1 ||
       !value.receipts ||
@@ -154,8 +256,11 @@ export class BroadcastConfigStore {
             'version',
             'document',
             'receipts',
+            'pendingReceipt',
+            'receiptFormat',
             'imports',
             'consumers',
+            'consumerFormat',
             'builtinsNormalized',
             'pendingLegacyCamera',
             'restoredLegacyCamera',
@@ -173,41 +278,94 @@ export class BroadcastConfigStore {
         const entry = z
           .strictObject({
             applied: z.unknown(),
+            rollback: z.unknown().optional(),
             error: z.string().nullable(),
             desired: z.string().optional(),
           })
           .parse(raw);
-        consumers[key as ConsumerKind] = {
-          applied:
-            entry.applied === null
-              ? null
-              : parseBroadcastConfigDocument({ ...document, active: entry.applied }).active,
+        const kind = key as ConsumerKind;
+        const parseApplied = (input: unknown): ConsumerApplied => {
+          const raw = z.record(z.string(), z.unknown()).parse(input);
+          if (raw.schemaVersion === 1) {
+            return compactConsumer(
+              kind,
+              parseBroadcastConfigDocument({ ...document, active: raw }).active,
+            );
+          } else {
+            const value = z
+              .strictObject({
+                revision: z.string().min(1).max(200),
+                moduleRevision: z.string().min(1).max(200),
+                sourceModuleId: z.string().uuid().nullable(),
+                sourceModuleRevision: z.string().min(1).max(200).nullable(),
+                value: z.unknown(),
+                lock: z.unknown(),
+              })
+              .parse(raw);
+            const expanded = expandConsumer(kind, value as ConsumerApplied, document.active);
+            return compactConsumer(
+              kind,
+              parseBroadcastConfigDocument({ ...document, active: expanded }).active,
+            );
+          }
+        };
+        const applied = entry.applied === null ? null : parseApplied(entry.applied);
+        const rollback = entry.rollback === undefined ? undefined : parseApplied(entry.rollback);
+        consumers[kind] = {
+          applied,
+          ...(rollback ? { rollback } : {}),
           error: entry.error,
           ...(entry.desired ? { desired: entry.desired } : {}),
         };
       }
     }
     const receipts: Record<string, Receipt> = Object.create(null) as Record<string, Receipt>;
-    for (const [id, raw] of Object.entries(value.receipts)) {
+    const parseReceipt = (raw: unknown): Receipt => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw))
         throw new Error('broadcast_config_invalid');
       const receipt = raw as Record<string, unknown>;
       if (
         typeof receipt.fingerprint !== 'string' ||
-        Object.keys(receipt).some((key) => !['fingerprint', 'active', 'failed'].includes(key))
+        (receipt.fingerprint.startsWith('sha256:') &&
+          !/^sha256:[0-9a-f]{64}$/.test(receipt.fingerprint)) ||
+        (receipt.active !== undefined && receipt.activeRevision !== undefined) ||
+        Object.keys(receipt).some(
+          (key) => !['fingerprint', 'active', 'activeRevision', 'failed'].includes(key),
+        )
       )
         throw new Error('broadcast_config_invalid');
-      // Reuse the same domain parser for the persisted receipt's resolved snapshot.
-      const checked = parseBroadcastConfigDocument({ ...document, active: receipt.active });
+      const activeRevision =
+        receipt.active === undefined
+          ? z.string().min(1).max(200).parse(receipt.activeRevision)
+          : parseBroadcastConfigDocument({ ...document, active: receipt.active }).active.revision;
       const failed = z
         .array(z.enum(['hud', 'program', 'music', 'camera']))
         .optional()
         .parse(receipt.failed);
-      receipts[id] = {
-        fingerprint: receipt.fingerprint,
-        active: checked.active,
+      return {
+        fingerprint: receipt.fingerprint.startsWith('sha256:')
+          ? receipt.fingerprint
+          : receiptFingerprint(receipt.fingerprint),
+        activeRevision,
         ...(failed?.length ? { failed } : {}),
       };
+    };
+    for (const [id, raw] of Object.entries(value.receipts)) receipts[id] = parseReceipt(raw);
+    let pendingReceipt: Envelope['pendingReceipt'];
+    if (value.pendingReceipt !== undefined) {
+      const pending = z
+        .strictObject({ requestId: z.string().uuid(), receipt: z.unknown() })
+        .parse(value.pendingReceipt);
+      if (Object.hasOwn(receipts, pending.requestId)) throw new Error('broadcast_config_invalid');
+      pendingReceipt = { requestId: pending.requestId, receipt: parseReceipt(pending.receipt) };
+    } else if (value.receiptFormat !== 2) {
+      const current = Object.entries(receipts).find(
+        ([, receipt]) => receipt.activeRevision === document.active.revision,
+      );
+      if (current) {
+        pendingReceipt = { requestId: current[0], receipt: current[1] };
+        delete receipts[current[0]];
+      }
     }
     const imports = z
       .array(importMappingSchema)
@@ -267,6 +425,9 @@ export class BroadcastConfigStore {
       version: 1,
       document,
       receipts,
+      ...(pendingReceipt ? { pendingReceipt } : {}),
+      ...(value.receiptFormat === 2 ? { receiptFormat: 2 as const } : {}),
+      ...(value.consumerFormat === 2 ? { consumerFormat: 2 as const } : {}),
       imports,
       consumers,
       ...(builtinsNormalized !== undefined ? { builtinsNormalized } : {}),
@@ -292,6 +453,8 @@ export class BroadcastConfigStore {
           version: 1,
           document,
           receipts: {},
+          receiptFormat: 2,
+          consumerFormat: 2,
           imports: [],
           ...(pendingLegacyCamera ? { pendingLegacyCamera } : {}),
         };
@@ -301,6 +464,11 @@ export class BroadcastConfigStore {
         this.envelope = await this.read();
       }
       const next = structuredClone(this.envelope);
+      if (next.receiptFormat !== 2 || next.consumerFormat !== 2) {
+        next.receiptFormat = 2;
+        next.consumerFormat = 2;
+        await this.commit(next);
+      }
       if (!next.builtinsNormalized) {
         addMissingBuiltinModules(next.document);
         next.builtinsNormalized = true;
@@ -319,10 +487,10 @@ export class BroadcastConfigStore {
     });
   }
   hasReceipt(requestId: string): boolean {
-    return Object.hasOwn(this.envelope?.receipts ?? {}, requestId);
+    return this.envelope !== null && receiptFor(this.envelope, requestId) !== undefined;
   }
   receiptFailures(requestId: string): ModuleKind[] {
-    return [...(this.envelope?.receipts[requestId]?.failed ?? [])];
+    return this.envelope ? [...(receiptFor(this.envelope, requestId)?.failed ?? [])] : [];
   }
   get snapshot(): BroadcastConfigDocument {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
@@ -338,7 +506,7 @@ export class BroadcastConfigStore {
           kind,
           {
             desired: state?.desired ?? active.moduleRevisions[kind],
-            applied: state?.applied?.moduleRevisions[kind] ?? null,
+            applied: state?.applied?.moduleRevision ?? null,
             error: state?.error ?? null,
           },
         ];
@@ -347,7 +515,14 @@ export class BroadcastConfigStore {
   }
   appliedSnapshot(kind: ConsumerKind): ActiveBroadcastSnapshot | null {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
-    return structuredClone(this.envelope.consumers?.[kind]?.applied ?? null);
+    const applied = this.envelope.consumers?.[kind]?.applied;
+    return applied ? expandConsumer(kind, applied, this.envelope.document.active) : null;
+  }
+  fallbackSnapshot(kind: ConsumerKind): ActiveBroadcastSnapshot | null {
+    if (!this.envelope) throw new Error('broadcast_config_unavailable');
+    const state = this.envelope.consumers?.[kind];
+    const fallback = state?.applied ?? state?.rollback;
+    return fallback ? expandConsumer(kind, fallback, this.envelope.document.active) : null;
   }
   get appliedDisplay(): ActiveBroadcastSnapshot {
     if (!this.envelope) throw new Error('broadcast_config_unavailable');
@@ -356,8 +531,8 @@ export class BroadcastConfigStore {
       const state = this.envelope.consumers?.[kind];
       const applied = state?.applied;
       if (applied) {
-        active.resolved[kind] = structuredClone(applied.resolved[kind]) as never;
-        active.moduleRevisions[kind] = applied.moduleRevisions[kind];
+        active.resolved[kind] = structuredClone(applied.value) as never;
+        active.moduleRevisions[kind] = applied.moduleRevision;
       } else if (state?.error && kind === 'program') {
         const fallback = createBuiltinModules().find(
           (module) => module.id === BUILTIN_MODULE_IDS.pulse,
@@ -374,6 +549,7 @@ export class BroadcastConfigStore {
     active: ActiveBroadcastSnapshot,
     error: string | null,
     reset = false,
+    restored = false,
   ) {
     await this.queue.run(async () => {
       if (!this.envelope) throw new Error('broadcast_config_unavailable');
@@ -382,11 +558,25 @@ export class BroadcastConfigStore {
       const next = structuredClone(this.envelope);
       next.consumers ??= {};
       const previous = next.consumers[kind];
+      const rollback =
+        previous?.applied ??
+        previous?.rollback ??
+        (next.document.previousActive
+          ? compactConsumer(kind, next.document.previousActive)
+          : undefined);
       next.consumers[kind] = {
-        applied: error ? (reset ? null : (previous?.applied ?? null)) : active,
+        applied: error
+          ? restored
+            ? (rollback ?? null)
+            : reset
+              ? null
+              : (previous?.applied ?? null)
+          : compactConsumer(kind, active),
+        ...(error && !restored && (reset || !previous?.applied) && rollback ? { rollback } : {}),
         error,
         ...(error && previous?.desired ? { desired: previous.desired } : {}),
       };
+      releaseSettledRollback(next);
       await this.commit(next);
     });
   }
@@ -396,10 +586,10 @@ export class BroadcastConfigStore {
     const refs = new Map(
       broadcastResourceReferences(this.envelope.document).map((ref) => [canonicalJson(ref), ref]),
     );
-    for (const receipt of Object.values(this.envelope.receipts))
-      for (const ref of receipt.active.lock.resources) refs.set(canonicalJson(ref), ref);
     for (const state of Object.values(this.envelope.consumers ?? {}))
       for (const ref of state.applied?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
+    for (const state of Object.values(this.envelope.consumers ?? {}))
+      for (const ref of state.rollback?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
     return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
@@ -883,24 +1073,25 @@ export class BroadcastConfigStore {
         const result = await this.queue.run(async () => {
           if (!this.envelope || !this.options.resolveModule)
             throw new Error('broadcast_config_unavailable');
-          const fingerprint = canonicalJson({ action: 'module', ...input });
-          const receipt = this.envelope.receipts[input.requestId];
+          const fingerprint = receiptFingerprint(canonicalJson({ action: 'module', ...input }));
+          const receipt = receiptFor(this.envelope, input.requestId);
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
-            if (receipt.active.revision !== this.envelope.document.active.revision)
+            if (receipt.activeRevision !== this.envelope.document.active.revision)
               throw new Error('revision_conflict');
+            const active = this.envelope.document.active;
             const module = this.envelope.document.modules.find(
               (item) => item.id === input.moduleId,
             );
             const kind =
               module?.kind ??
-              (Object.entries(receipt.active.sourceModuleIds ?? {}).find(
+              (Object.entries(active.sourceModuleIds ?? {}).find(
                 ([, id]) => id === input.moduleId,
               )?.[0] as ModuleKind | undefined);
             if (!kind) throw new Error('module_missing');
             return {
-              active: structuredClone(receipt.active),
-              previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
+              active: structuredClone(active),
+              previous: structuredClone(this.envelope.document.previousActive ?? active),
               kind,
             };
           }
@@ -974,7 +1165,10 @@ export class BroadcastConfigStore {
               const next = structuredClone(this.envelope);
               next.document.previousActive = previous;
               next.document.active = active;
-              next.receipts[input.requestId] = { fingerprint, active };
+              setPendingReceipt(next, input.requestId, {
+                fingerprint,
+                activeRevision: active.revision,
+              });
               await this.options.assertReferenceCommitAllowed(
                 this.envelope.document,
                 next.document,
@@ -1161,81 +1355,100 @@ export class BroadcastConfigStore {
       lock: ActiveBroadcastSnapshot['lock'];
     };
   }): Promise<BroadcastConfigDocument> {
-    return this.queue.run(() =>
-      this.options.withReferenceGuard(async () => {
-        if (!this.envelope) throw new Error('broadcast_config_unavailable');
-        const next = structuredClone(this.envelope);
-        const previous = structuredClone(next.document.active);
-        const previousRecovery = canonicalJson(next.document.previousActive);
-        input.updateDraft(next.document);
-        for (const original of this.envelope.document.modules.filter((item) =>
-          isBuiltinModuleId(item.id),
-        )) {
-          const current = next.document.modules.find((item) => item.id === original.id);
-          if (!current || canonicalJson(current) !== canonicalJson(original))
-            throw new Error('builtin_immutable');
-        }
-        for (const module of next.document.modules) {
-          const old = this.envelope.document.modules.find((item) => item.id === module.id);
-          if (old && old.kind !== module.kind) throw new Error('invalid_request');
-          if (
-            !old ||
-            canonicalJson({ ...old, revision: '' }) !== canonicalJson({ ...module, revision: '' })
-          )
-            assertSupportedHudModule(module);
-          module.revision =
-            old &&
-            canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...module, revision: '' })
-              ? old.revision
-              : randomUUID();
-        }
-        for (const preset of next.document.presets) {
-          const old = this.envelope.document.presets.find((item) => item.id === preset.id);
-          preset.revision =
-            old &&
-            canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...preset, revision: '' })
-              ? old.revision
-              : randomUUID();
-        }
+    const execute = (canCommit: () => boolean) =>
+      this.queue.run(() =>
+        this.options.withReferenceGuard(async () => {
+          if (!this.envelope) throw new Error('broadcast_config_unavailable');
+          const next = structuredClone(this.envelope);
+          const previous = structuredClone(next.document.active);
+          const previousRecovery = canonicalJson(next.document.previousActive);
+          input.updateDraft(next.document);
+          for (const original of this.envelope.document.modules.filter((item) =>
+            isBuiltinModuleId(item.id),
+          )) {
+            const current = next.document.modules.find((item) => item.id === original.id);
+            if (!current || canonicalJson(current) !== canonicalJson(original))
+              throw new Error('builtin_immutable');
+          }
+          for (const module of next.document.modules) {
+            const old = this.envelope.document.modules.find((item) => item.id === module.id);
+            if (old && old.kind !== module.kind) throw new Error('invalid_request');
+            if (
+              !old ||
+              canonicalJson({ ...old, revision: '' }) !== canonicalJson({ ...module, revision: '' })
+            )
+              assertSupportedHudModule(module);
+            module.revision =
+              old &&
+              canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...module, revision: '' })
+                ? old.revision
+                : randomUUID();
+          }
+          for (const preset of next.document.presets) {
+            const old = this.envelope.document.presets.find((item) => item.id === preset.id);
+            preset.revision =
+              old &&
+              canonicalJson({ ...old, revision: '' }) === canonicalJson({ ...preset, revision: '' })
+                ? old.revision
+                : randomUUID();
+          }
 
-        if (
-          canonicalJson(next.document.active) !== canonicalJson(previous) ||
-          canonicalJson(next.document.previousActive) !== previousRecovery
-        )
-          throw new Error('active_mutation_forbidden');
-        if (input.active) {
-          const { kind, value, lock } = input.active;
           if (
-            kind === 'hud' &&
-            value &&
-            'renderer' in value &&
-            value.renderer === 'native' &&
-            !isSupportedHudPauseVisual(value.overlays.pause.visual)
+            canonicalJson(next.document.active) !== canonicalJson(previous) ||
+            canonicalJson(next.document.previousActive) !== previousRecovery
           )
-            throw new Error('capability_unsupported');
-          const active = structuredClone(previous);
-          if (!sameEffectiveModule(kind, previous.resolved[kind], value))
-            active.moduleRevisions[kind] = randomUUID();
-          active.resolved[kind] = structuredClone(value);
-          active.sourceModuleIds = {
-            ...active.sourceModuleIds,
-            [kind]: input.active.moduleId ?? null,
-          };
-          active.lock = structuredClone(lock);
-          active.revision = randomUUID();
-          active.adjusted = true;
-          next.document.previousActive = previous;
-          next.document.active = active;
-          await this.options.verifyLegacyActive(
-            parseBroadcastConfigDocument(next.document).active,
-            kind,
+            throw new Error('active_mutation_forbidden');
+          if (input.active) {
+            const { kind, value, lock } = input.active;
+            if (
+              kind === 'camera' &&
+              this.options.canApplyModule &&
+              !this.options.canApplyModule(kind, value)
+            )
+              throw new Error('camera_busy');
+            if (
+              kind === 'hud' &&
+              value &&
+              'renderer' in value &&
+              value.renderer === 'native' &&
+              !isSupportedHudPauseVisual(value.overlays.pause.visual)
+            )
+              throw new Error('capability_unsupported');
+            const active = structuredClone(previous);
+            if (!sameEffectiveModule(kind, previous.resolved[kind], value))
+              active.moduleRevisions[kind] = randomUUID();
+            active.resolved[kind] = structuredClone(value);
+            active.sourceModuleIds = {
+              ...active.sourceModuleIds,
+              [kind]: input.active.moduleId ?? null,
+            };
+            active.lock = structuredClone(lock);
+            active.revision = randomUUID();
+            active.adjusted = true;
+            next.document.previousActive = previous;
+            next.document.active = active;
+            archivePendingReceipt(next);
+            await this.options.verifyLegacyActive(
+              parseBroadcastConfigDocument(next.document).active,
+              kind,
+            );
+          }
+          await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
+          await this.commit(
+            next,
+            () =>
+              canCommit() &&
+              (!input.active ||
+                input.active.kind !== 'camera' ||
+                !this.options.canApplyModule ||
+                this.options.canApplyModule(input.active.kind, input.active.value)),
           );
-        }
-        await this.options.assertReferenceCommitAllowed(this.envelope.document, next.document);
-        await this.commit(next);
-        return this.snapshot;
-      }),
-    );
+          return this.snapshot;
+        }),
+      );
+    return input.active?.kind === 'camera'
+      ? this.options.withApplyGuard(execute)
+      : execute(() => true);
   }
   async preview(request: ApplyPresetRequest): Promise<ActiveBroadcastSnapshot> {
     return this.queue.run(async () =>
@@ -1254,16 +1467,18 @@ export class BroadcastConfigStore {
             )
           )
             throw new Error('invalid_request');
-          const fingerprint = canonicalJson(request);
-          const receipt = this.envelope.receipts[request.requestId];
+          const fingerprint = receiptFingerprint(canonicalJson(request));
+          const receipt = receiptFor(this.envelope, request.requestId);
           if (receipt) {
             if (receipt.fingerprint !== fingerprint) throw new Error('request_conflict');
-            if (receipt.active.revision !== this.envelope.document.active.revision)
+            if (receipt.activeRevision !== this.envelope.document.active.revision)
               throw new Error('revision_conflict');
             if (!receipt.failed?.length)
               return {
-                active: structuredClone(receipt.active),
-                previous: structuredClone(this.envelope.document.previousActive ?? receipt.active),
+                active: structuredClone(this.envelope.document.active),
+                previous: structuredClone(
+                  this.envelope.document.previousActive ?? this.envelope.document.active,
+                ),
                 failed: [] as ModuleKind[],
               };
           }
@@ -1389,19 +1604,23 @@ export class BroadcastConfigStore {
               const next = structuredClone(this.envelope);
               next.document.previousActive = structuredClone(previous);
               next.document.active = active;
-              next.receipts[request.requestId] = {
+              setPendingReceipt(next, request.requestId, {
                 fingerprint,
-                active,
+                activeRevision: active.revision,
                 ...(failed.length ? { failed } : {}),
-              };
+              });
               next.consumers ??= {};
               for (const kind of failed) {
                 next.consumers[kind] = {
                   applied: next.consumers[kind]?.applied ?? null,
+                  ...(next.consumers[kind]?.rollback
+                    ? { rollback: next.consumers[kind]!.rollback }
+                    : {}),
                   error: failedReasons[kind] ?? 'dependency_unavailable',
                   ...(failedDesired[kind] ? { desired: failedDesired[kind] } : {}),
                 };
               }
+              releaseSettledRollback(next);
               await this.options.assertReferenceCommitAllowed(
                 this.envelope.document,
                 next.document,
@@ -1410,12 +1629,12 @@ export class BroadcastConfigStore {
                 await this.commit(next, canCommit);
               } catch (error) {
                 const disk = await this.read().catch(() => null);
-                const committed = disk?.receipts[request.requestId];
+                const committed = disk && receiptFor(disk, request.requestId);
                 if (
                   !disk ||
                   !committed ||
                   committed.fingerprint !== fingerprint ||
-                  committed.active.revision !== active.revision
+                  committed.activeRevision !== active.revision
                 )
                   throw error;
                 this.envelope = disk;
