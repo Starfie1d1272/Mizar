@@ -504,14 +504,15 @@ export class ReliableOutbox {
           )
           .some((item) => item.disposition === disposition);
   }
-  private isRevokedEvent(event: ReliableEventV1, source?: ExactSource): boolean {
-    return (
-      [...this.revoking.values()].some(({ source: pending }) =>
-        source ? sourceKey(source) === sourceKey(pending) : sourceMatchesEvent(pending, event),
-      ) || this.sourceHas('revoked', event, source)
+  private isRevokingEvent(event: ReliableEventV1, source?: ExactSource): boolean {
+    return [...this.revoking.values()].some(({ source: pending }) =>
+      source ? sourceKey(source) === sourceKey(pending) : sourceMatchesEvent(pending, event),
     );
   }
-  private assertSourceOpen(event: ReliableEventV1, source?: ExactSource): void {
+  private isRevokedEvent(event: ReliableEventV1, source?: ExactSource): boolean {
+    return this.sourceHas('revoked', event, source);
+  }
+  private assertSourceOpen(event: ReliableEventV1, source?: ExactSource, replaying = false): void {
     if (
       this.repository().isDamaged(
         scopeDigest(
@@ -524,7 +525,8 @@ export class ReliableOutbox {
     )
       throw new Error('outbox_archive_unreadable');
     if (source && !sourceMatchesEvent(source, event)) throw new Error('outbox_source_mismatch');
-    if (this.isRevokedEvent(event, source)) throw new Error('outbox_source_revoked');
+    if (this.isRevokedEvent(event, source) || (!replaying && this.isRevokingEvent(event, source)))
+      throw new Error('outbox_source_revoked');
     if (this.sourceHas('archived', event, source)) throw new Error('outbox_source_closed');
   }
 
@@ -998,7 +1000,7 @@ export class ReliableOutbox {
       await this.archiveLegacyTerminals();
       const valid = parseReliableEventV1(event);
       if (source) source = parseSource(source);
-      if (source !== null) this.assertSourceOpen(valid, source);
+      if (source !== null) this.assertSourceOpen(valid, source, replaying);
       if (
         this.records.some((record) => record.event.idempotencyKey === valid.idempotencyKey) ||
         this.repository().byKey(valid.idempotencyKey).length
@@ -1203,7 +1205,10 @@ export class ReliableOutbox {
             next.push(record);
             continue;
           }
-          if (this.isRevokedEvent(record.event, record.source)) {
+          if (
+            this.isRevokedEvent(record.event, record.source) ||
+            this.isRevokingEvent(record.event, record.source)
+          ) {
             if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
             next.push(record);
             continue;
@@ -1405,7 +1410,8 @@ export class ReliableOutbox {
           current.status !== 'pending' ||
           current.attempts !== record.attempts ||
           this.deliveryIdentity(current) !== this.deliveryIdentity(record) ||
-          this.isRevokedEvent(current.event, current.source)
+          this.isRevokedEvent(current.event, current.source) ||
+          this.isRevokingEvent(current.event, current.source)
         )
           return;
         const accepted =
