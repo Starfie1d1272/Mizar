@@ -53,6 +53,11 @@ async function profile(directory) {
     appVersion: '1.4.0',
     hostStartupSessionId: 'capacity-public-host',
   });
+  journal.subscribe((line) => {
+    const event = JSON.parse(line);
+    if (event.stage === 'native_source_failure')
+      console.error(JSON.stringify({ nativeSourceFailure: event.evidence }));
+  });
   await journal.flush();
   const sourceDirectory = join(root, 'host');
   await mkdir(sourceDirectory);
@@ -446,6 +451,7 @@ async function profile(directory) {
         max: durations.at(-1),
       },
     };
+    console.error(JSON.stringify({ profile: output }));
     assert.equal(frames, 144000);
     assert.equal(http, 14400);
     assert.equal(browser, 960);
@@ -1364,7 +1370,6 @@ try {
     upload: configuration.ratelimits.find((v) => v.name === 'UPLOAD_LIMITER').simple.limit,
   };
   const result = await profile(directory);
-  console.error(JSON.stringify({ profile: result.report }));
   const faultResult = await fault(directory);
   const sharedResult = await sharedIp(directory, [
     { name: 'previous', enroll: 5, upload: 30 },
