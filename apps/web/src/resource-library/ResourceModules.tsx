@@ -94,14 +94,15 @@ function SceneEditor({
   modules,
   busy,
   save,
+  cancel,
 }: {
   module: Extract<ModuleRecord, { kind: 'program' }>;
   modules: ModuleRecord[];
   busy: boolean;
   save: (value: ModuleRecord) => Promise<boolean>;
+  cancel: () => void;
 }) {
   const [value, setValue] = useState(module.value);
-  const [open, setOpen] = useState(false);
   const backgrounds = modules.flatMap((item) =>
     item.kind === 'program' && item.value.assets['pulse.background']
       ? [{ name: item.name, asset: item.value.assets['pulse.background'] }]
@@ -112,8 +113,8 @@ function SceneEditor({
   );
   const supported = pulseTokenStyle(value) !== null;
   return (
-    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>编辑场景</summary>
+    <div>
+      <h3>编辑场景</h3>
       <p>保存为草稿，不会改变当前播出。背景可选择已导入场景中的图片。</p>
       {sceneColors.map(([key, label]) => (
         <Field
@@ -150,10 +151,18 @@ function SceneEditor({
         ))}
       </Select>
       {!supported && <p>颜色须使用 #RRGGBB 或 #RRGGBBAA；不支持的场景字段需先修复。</p>}
-      <Button disabled={busy || !supported} onClick={() => void save({ ...module, value })}>
+      <Button
+        disabled={busy || !supported}
+        onClick={() =>
+          void save({ ...module, value }).then((ok) => {
+            if (ok) cancel();
+          })
+        }
+      >
         保存草稿
       </Button>
-    </details>
+      <Button onClick={cancel}>取消编辑</Button>
+    </div>
   );
 }
 
@@ -208,9 +217,7 @@ function ModuleDraftEditor({
           onSave={() => void finish()}
         />
       )}
-      <Button disabled={busy} onClick={cancel}>
-        取消编辑
-      </Button>
+      <Button onClick={cancel}>取消编辑</Button>
     </div>
   );
 }
@@ -308,7 +315,9 @@ export function ResourceModules({
     new URLSearchParams(window.location.search).get('resource'),
   );
   const [replacement, setReplacement] = useState('');
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<
+    ModuleRecord<'program'> | ModuleRecord<'music'> | ModuleRecord<'camera'> | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{
     tone: 'success' | 'danger' | 'warning';
@@ -358,6 +367,12 @@ export function ResourceModules({
           ),
         )
       : [];
+  const currentDraftModule = editing && snapshot?.modules.find((entry) => entry.id === editing.id);
+  const draftStale = !snapshot || !metadata;
+  const draftConflict =
+    !!editing &&
+    !draftStale &&
+    (!currentDraftModule || currentDraftModule.revision !== editing.revision);
   const referenceView = {
     active:
       !!module &&
@@ -594,6 +609,51 @@ export function ResourceModules({
         </Button>
       </div>
       {notice && <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner>}
+      {editing && (
+        <Panel aria-label={`编辑${editing.name}`}>
+          <h2>{editing.name}</h2>
+          {draftStale && (
+            <StatusBanner tone="warning">
+              资源目录暂不可用，草稿已保留；恢复连接后才能保存。
+            </StatusBanner>
+          )}
+          {draftConflict && (
+            <StatusBanner tone="warning">
+              资源已被修改或删除，草稿已保留。请复制需要的内容，再取消编辑并重新打开最新资源。
+            </StatusBanner>
+          )}
+          {editing.kind === 'program' ? (
+            <SceneEditor
+              module={editing}
+              modules={snapshot?.modules ?? []}
+              busy={busy || draftStale || draftConflict}
+              cancel={() => setEditing(null)}
+              save={(value) =>
+                perform(
+                  '/operator/broadcast-modules/save',
+                  { value, expectedRevision: editing.revision },
+                  '场景已保存，尚未使用。',
+                )
+              }
+            />
+          ) : (
+            <ModuleDraftEditor
+              module={editing}
+              modules={snapshot?.modules ?? []}
+              busy={busy || draftStale || draftConflict}
+              cancel={() => setEditing(null)}
+              save={(value, expectedRevision) =>
+                perform(
+                  '/operator/broadcast-modules/save',
+                  { value, expectedRevision },
+                  '资源已保存，尚未使用。',
+                )
+              }
+            />
+          )}
+        </Panel>
+      )}
+
       {inspection && importResults && (
         <Panel className="resource-library__import-results" aria-label="导入结果">
           <h3>导入结果</h3>
@@ -808,43 +868,17 @@ export function ResourceModules({
                     ))}
                   </dl>
                 )}
-                {entry.kind === 'program' && !builtin && (
-                  <SceneEditor
-                    key={`${entry.id}:${entry.revision}`}
-                    module={entry}
-                    modules={snapshot?.modules ?? []}
-                    busy={busy}
-                    save={(value) =>
-                      perform(
-                        '/operator/broadcast-modules/save',
-                        { value, expectedRevision: entry.revision },
-                        '场景已保存，尚未使用。',
-                      )
-                    }
-                  />
-                )}
                 {!builtin &&
-                  (entry.kind === 'music' || entry.kind === 'camera') &&
-                  (editing === entry.id ? (
-                    <ModuleDraftEditor
-                      key={entry.id}
-                      module={entry}
-                      modules={snapshot?.modules ?? []}
-                      busy={busy}
-                      cancel={() => setEditing(null)}
-                      save={(value, expectedRevision) =>
-                        perform(
-                          '/operator/broadcast-modules/save',
-                          { value, expectedRevision },
-                          '资源已保存，尚未使用。',
-                        )
-                      }
-                    />
-                  ) : (
-                    <Button disabled={busy} onClick={() => setEditing(entry.id)}>
+                  (entry.kind === 'program' ||
+                    entry.kind === 'music' ||
+                    entry.kind === 'camera') && (
+                    <Button
+                      disabled={busy || !!editing}
+                      onClick={() => setEditing(structuredClone(entry))}
+                    >
                       编辑{labels[entry.kind]}
                     </Button>
-                  ))}
+                  )}
                 <div className="resource-library__preset-actions">
                   <Button
                     disabled={
