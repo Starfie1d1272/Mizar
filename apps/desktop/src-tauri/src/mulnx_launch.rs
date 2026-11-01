@@ -9,11 +9,108 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, TryLockError},
     time::{Duration, Instant},
 };
 use tauri::Manager;
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
+
+// Once submitted, transient readers must not abort observation of the same launch.
+// Never resend the launch request while waiting for this process-local state.
+fn confirmation_lock<'a, T>(
+    state: &'a Mutex<T>,
+    deadline: Instant,
+    check: impl Fn() -> Result<(), String>,
+) -> Result<MutexGuard<'a, T>, String> {
+    loop {
+        check()?;
+        if Instant::now() >= deadline {
+            return Err("MulNX 启动确认等待超时；请检查游戏状态后重试准备。".into());
+        }
+        match state.try_lock() {
+            Ok(value) => return Ok(value),
+            Err(TryLockError::Poisoned(_)) => return Err("CS2 状态锁异常，启动结果待确认。".into()),
+            Err(TryLockError::WouldBlock) => {
+                std::thread::sleep(
+                    Duration::from_millis(50)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod confirmation_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    #[test]
+    fn temporary_readers_do_not_abort_confirmation_or_final_binding() {
+        let state = Mutex::new(0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        for expected in 0..2 {
+            let reader = RefCell::new(Some(state.lock().unwrap()));
+            let checks = Cell::new(0);
+            let mut confirmed = confirmation_lock(&state, deadline, || {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    reader.borrow_mut().take();
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(*confirmed, expected);
+            assert_eq!(checks.get(), 2);
+            *confirmed += 1;
+        }
+    }
+
+    #[test]
+    fn cancellation_during_contention_preserves_state() {
+        let state = Mutex::new(7);
+        let _reader = state.lock().unwrap();
+        let checks = Cell::new(0);
+        let error = confirmation_lock(&state, Instant::now() + Duration::from_secs(5), || {
+            checks.set(checks.get() + 1);
+            if checks.get() == 2 {
+                Err("cancelled".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "cancelled");
+        assert_eq!(checks.get(), 2);
+        assert_eq!(*_reader, 7);
+    }
+
+    #[test]
+    fn expired_deadline_cannot_bind_even_when_lock_is_free() {
+        let state = Mutex::new(7);
+        assert!(confirmation_lock(&state, Instant::now(), || Ok(()))
+            .unwrap_err()
+            .contains("超时"));
+        assert_eq!(*state.lock().unwrap(), 7);
+    }
+
+    #[test]
+    fn poisoned_state_is_not_retried_or_adopted() {
+        let state = Mutex::new(7);
+        let _ = std::panic::catch_unwind(|| {
+            let _held = state.lock().unwrap();
+            panic!("poison state");
+        });
+        let checks = Cell::new(0);
+        let error = confirmation_lock(&state, Instant::now() + Duration::from_secs(5), || {
+            checks.set(checks.get() + 1);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("锁异常"));
+        assert_eq!(checks.get(), 1);
+    }
+}
 
 #[repr(C)]
 struct StartupInfo {
@@ -620,11 +717,10 @@ fn launch_operation(
         );
         // No retry: an interrupted request can still have been queued.
         let deadline = Instant::now() + Duration::from_secs(120);
+        log.event("mulnx_launch_confirmation", "begin", None);
         let result = loop {
-            let actual = managed
-                .try_lock()
-                .map_err(|_| "CS2 正忙，请稍后重试。")?
-                .mulnx_handoff_status()?;
+            let actual =
+                confirmation_lock(&managed, deadline, || guard.check())?.mulnx_handoff_status()?;
             if let Some(processes) = actual["processes"].as_array() {
                 if processes.len() == 1 {
                     let process = &processes[0];
@@ -655,10 +751,9 @@ fn launch_operation(
             .as_str()
             .and_then(|s| s.parse::<u64>().ok())
             .ok_or("无法确认游戏，请稍后重试。")?;
-        managed
-            .try_lock()
-            .map_err(|_| "CS2 正忙，请稍后重试。")?
-            .bind_managed_mulnx(pid, created, &executable)?;
+        let cs2 = confirmation_lock(&managed, deadline, || guard.check())?;
+        guard.commit(|| cs2.bind_managed_mulnx(pid, created, &executable))?;
+        drop(cs2);
         let temporary = results.join(format!("current-{}.tmp", log.session_id));
         std::fs::write(&temporary, bytes.as_bytes())
             .and_then(|()| std::fs::rename(&temporary, results.join("current.json")))
@@ -670,8 +765,18 @@ fn launch_operation(
                     "无法保存游戏身份，启动结果待确认。",
                 )
             })?;
+        log.event(
+            "mulnx_launch_confirmation",
+            "success",
+            Some(&result.to_string()),
+        );
         Ok(result)
     })();
+    if submitted {
+        if let Err(error) = &outcome {
+            log.event("mulnx_launch_confirmation", "failure", Some(error));
+        }
+    }
     if !crate::preparation_gate::may_restore_launch_options(submitted, outcome.is_ok()) {
         log.event(
             "mulnx_launch_options",
