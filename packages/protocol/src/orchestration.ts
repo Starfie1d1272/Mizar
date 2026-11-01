@@ -105,6 +105,8 @@ export interface MulnxToolView {
     | 'error'
     | 'cancelled';
   checkedAt?: number | null;
+  confirmedAt?: number | null;
+  retryAt?: number | null;
   checkResult?: 'unchecked' | 'current' | 'available' | 'error';
   downloadedBytes?: number;
   totalBytes?: number;

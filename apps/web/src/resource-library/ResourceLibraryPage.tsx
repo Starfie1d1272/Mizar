@@ -190,7 +190,11 @@ export function ResourceLibraryPage() {
               ) : null}
               {view.tool.latest ? (
                 <div>
-                  <dt>最新版本</dt>
+                  <dt>
+                    {view.tool.checkResult === 'current' || view.tool.checkResult === 'available'
+                      ? '上次确认版本'
+                      : '已知可用版本'}
+                  </dt>
                   <dd>{view.tool.latest}</dd>
                 </div>
               ) : null}

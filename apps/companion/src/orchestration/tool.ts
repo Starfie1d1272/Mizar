@@ -31,6 +31,7 @@ import {
   fileSha256,
   latestMulnxRelease,
   publicJson,
+  metadataRetryAt,
   SEVEN_ZIP,
   upstreamNotice,
   type MulnxRelease,
@@ -91,6 +92,7 @@ export class MulnxTool {
   private message = '';
   private checkResult: 'unchecked' | 'current' | 'available' | 'error' = 'unchecked';
   private checkedAt: number | null = null;
+  private confirmedAt: number | null = null;
   private phase:
     | 'idle'
     | 'checking'
@@ -127,6 +129,8 @@ export class MulnxTool {
       message: this.message,
       phase: this.phase,
       checkedAt: this.checkedAt,
+      confirmedAt: this.confirmedAt,
+      retryAt: this.checkResult === 'error' ? metadataRetryAt() : null,
       checkResult: this.checkResult,
       downloadedBytes: this.downloadedBytes,
       totalBytes: this.downloadTotal,
@@ -367,24 +371,40 @@ export class MulnxTool {
     return task;
   }
   private async resolveRelease(fresh = false) {
-    const [mirrorResult, upstreamResult] = await Promise.allSettled([
-      readMulnxMirror(join(dirname(this.directory), 'updates', 'trust')),
-      latestMulnxRelease((url) => publicJson(url, fresh)),
-    ]);
-    const mirror = mirrorResult.status === 'fulfilled' ? mirrorResult.value : undefined;
-    if (mirrorResult.status === 'rejected')
-      this.diagnostic('mulnx_mirror_check', { result: 'failure', error: mirrorResult.reason });
-    if (
-      upstreamResult.status === 'rejected' &&
-      upstreamResult.reason instanceof Error &&
-      upstreamResult.reason.message === 'mulnx_latest_release_incomplete'
-    )
-      throw upstreamResult.reason;
-    const upstream = upstreamResult.status === 'fulfilled' ? upstreamResult.value : undefined;
-    if (!upstream && !mirror)
-      throw upstreamResult.status === 'rejected'
-        ? upstreamResult.reason
-        : new Error('mulnx_metadata_unavailable');
+    let mirror: MulnxMirror | undefined;
+    try {
+      mirror = await readMulnxMirror(join(dirname(this.directory), 'updates', 'trust'));
+      this.diagnostic('mulnx_mirror_check', {
+        result: 'success',
+        checkedAt: mirror.checkedAt,
+        fresh: Date.now() - Date.parse(mirror.checkedAt) <= 6 * 60 * 60_000,
+      });
+    } catch (error) {
+      this.diagnostic('mulnx_mirror_check', { result: 'failure', error });
+    }
+    const mirrorFresh = Boolean(
+      mirror && Date.now() - Date.parse(mirror.checkedAt) <= 6 * 60 * 60_000,
+    );
+    let upstream: MulnxRelease | undefined;
+    if (!mirrorFresh) {
+      try {
+        upstream = await latestMulnxRelease((url) => publicJson(url, fresh));
+        this.diagnostic('mulnx_upstream_check', { result: 'success', version: upstream.tag });
+      } catch (error) {
+        this.diagnostic('mulnx_upstream_check', {
+          result: 'failure',
+          error,
+          retryAt: metadataRetryAt(),
+        });
+        if (
+          !mirror ||
+          (error instanceof Error && error.message === 'mulnx_latest_release_incomplete')
+        )
+          throw error;
+      }
+    } else {
+      this.diagnostic('mulnx_upstream_check', { result: 'skipped', reason: 'fresh_signed_index' });
+    }
     if (
       upstream &&
       mirror &&
@@ -415,9 +435,8 @@ export class MulnxTool {
     if (!highest || !sameMulnxAsset(highest, release))
       await atomicJson(join(this.directory, 'highest.json'), release);
     this.mirror = mirror && sameMulnxAsset(release, mirror.release) ? mirror : undefined;
-    const recentlyChecked = Boolean(
-      upstream || (mirror && Date.now() - Date.parse(mirror.checkedAt) <= 2 * 60 * 60_000),
-    );
+    const recentlyChecked = Boolean(upstream || mirrorFresh);
+    this.confirmedAt = upstream ? Date.now() : Date.parse(mirror!.checkedAt);
     this.latest = release;
     this.checkedAt = Date.now();
     this.checkResult = !recentlyChecked
@@ -434,12 +453,7 @@ export class MulnxTool {
       this.phase = 'checking';
       try {
         const result = await this.resolveRelease();
-        this.latest = result.release;
-        this.checkResult = !result.recentlyChecked
-          ? 'error'
-          : this.installed && sameMulnxAsset(this.installed.release, this.latest)
-            ? 'current'
-            : 'available';
+        if (!result.recentlyChecked) throw new Error('mulnx_metadata_stale');
         this.phase = 'idle';
       } catch (error) {
         this.checkResult = 'error';
