@@ -322,7 +322,17 @@ pub(crate) fn present_production_inner_checked(
                                 .load(Ordering::Acquire);
                             let expected_page = expected_url.as_ref().map(|(url, _)| url.clone());
                             tauri::async_runtime::spawn_blocking(move || {
-                                let focused = attempt_game_focus(&focus_host, request);
+                                let same_document = document.is_some()
+                                    && focus_host.state::<EntryIntent>().try_generation()
+                                        == document;
+                                let same_page = expected_page.as_ref().is_none_or(|expected| {
+                                    focus_host.get_webview_window("main").is_some_and(|main| {
+                                        main.url().ok().is_some_and(|url| url.as_str() == expected)
+                                    })
+                                });
+                                let focused = same_document
+                                    && same_page
+                                    && attempt_game_focus(&focus_host, request);
                                 focus_host.state::<DesktopLog>().event(
                                     "workspace_entry_focus",
                                     if focused { "focused" } else { "not_focused" },
