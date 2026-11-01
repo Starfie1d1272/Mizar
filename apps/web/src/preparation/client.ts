@@ -283,10 +283,7 @@ export async function enterProductionManually(state: Production) {
   if (window.__TAURI_INTERNALS__) {
     const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
     try {
-      if (status?.running) await cancelProductionEntry();
-      else if (status && !status.cancelled) {
-        await command('/operator/preparation-cancel', { preparationId: status.id });
-      }
+      if (status) await cancelProductionEntry();
     } catch (error) {
       // Cancellation can race with a committed enter. Only display its actual result.
       current = await read();
@@ -308,7 +305,6 @@ export async function productionAction(
   preserveSettings = false,
   parentTask?: ControlTask,
   external?: ExternalGameIdentity,
-  onChecking?: (checking: boolean) => void,
 ) {
   const task = new ControlTask(
     `production_${action}`,
@@ -362,50 +358,14 @@ export async function productionAction(
         return task.result;
       }
     } else if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'preparation') {
-      onChecking?.(true);
-      try {
-        const response = await fetch('/operator/updates', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...task.headers() },
-          body: JSON.stringify({ action: 'entry-check' }),
-          signal: AbortSignal.any([entryAbort!.signal, AbortSignal.timeout(40_000)]),
-        });
-        if (response.ok) {
-          const updates = await response.json();
-          if (
-            updates.automatic &&
-            updates.notificationSafe &&
-            (updates.notificationPending || updates.mulnxNotificationPending)
-          ) {
-            const proceed = await new Promise<boolean>((resolve) => {
-              if (entryAbort!.signal.aborted) {
-                resolve(false);
-                return;
-              }
-              entryAbort!.signal.addEventListener('abort', () => resolve(false), { once: true });
-              const request = { updates, signal: entryAbort!.signal, resolve, handled: false };
-              window.dispatchEvent(new CustomEvent('mizar:entry-update', { detail: request }));
-              if (!request.handled) resolve(false);
-            });
-            if (!proceed) {
-              task.finish('cancelled', { reason: 'update_selected' });
-              return task.result;
-            }
-          }
-        }
-      } catch {
-        if (entryAbort?.signal.aborted) {
-          task.finish('cancelled', { reason: 'entry_cancelled' });
-          return task.result;
-        }
-        /* Update checks do not block a local installation. */
-      } finally {
-        onChecking?.(false);
-      }
-      if (entryAbort?.signal.aborted) {
-        task.finish('cancelled', { reason: 'entry_cancelled' });
-        return task.result;
-      }
+      // The existing notification observes the result; checking never gates entry.
+      void fetch('/operator/updates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...task.headers() },
+        body: JSON.stringify({ action: 'entry-check' }),
+        keepalive: true,
+        signal: AbortSignal.timeout(40_000),
+      }).catch(() => {});
       const response = await fetch('/local/v1/demo-test', {
         cache: 'no-store',
         signal: AbortSignal.any([entryAbort!.signal, AbortSignal.timeout(5000)]),
