@@ -260,3 +260,12 @@ jobs:
           name: release-qualification-evidence
           path: ${{ runner.temp }}/Mizar-*-evidence.zip
           if-no-files-found: error
+
+      - name: Save Cargo caches after successful qualification
+        uses: ./.github/actions/save-cargo-cache
+        with:
+          profile: release
+          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
+          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
+          target-key: ${{ steps.cargo-cache.outputs.target-key }}
+          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}

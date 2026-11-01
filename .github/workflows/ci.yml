@@ -62,7 +62,7 @@ jobs:
         run: |
           native=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri apps/web/src/workspace/desktop-commands.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
             else
               result=$?
@@ -72,11 +72,21 @@ jobs:
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "Native build required: $native"
       - uses: ./.github/actions/cargo-cache
+        id: cargo-cache
         if: steps.select.outputs.native == 'true'
         with:
           profile: ci
       - if: steps.select.outputs.native == 'true'
         run: cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Save Cargo caches on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.select.outputs.native == 'true'
+        uses: ./.github/actions/save-cargo-cache
+        with:
+          profile: ci
+          registry-key: ${{ steps.cargo-cache.outputs.registry-key }}
+          registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
+          target-key: ${{ steps.cargo-cache.outputs.target-key }}
+          target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
   ci-gate:
     name: ci-gate
     if: always()
@@ -93,4 +103,8 @@ jobs:
           created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
           elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
           echo "CI created to gate: ${elapsed}s"
+          if [ "$elapsed" -lt 0 ]; then
+            echo "Runner and GitHub timestamps are inconsistent; cannot verify CI budget" >&2
+            exit 1
+          fi
           test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success && test "$elapsed" -le 180
