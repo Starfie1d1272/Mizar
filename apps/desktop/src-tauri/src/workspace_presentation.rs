@@ -836,3 +836,210 @@ pub(crate) fn ensure_live_windows(app: &tauri::AppHandle, overlay: bool) -> Resu
 
     result
 }
+
+pub(crate) fn refresh_finished_window_feedback(
+    app: &tauri::AppHandle,
+    cs2: &managed_cs2::ManagedCs2,
+) {
+    let log = app.state::<DesktopLog>();
+    log.event("workspace_exit_feedback", "begin", None);
+    // Optional feedback retirement cannot be used as proof of game/production cleanup.
+    let result = app
+        .state::<HostState>()
+        .tracker
+        .lock()
+        .map_err(|_| "窗口反馈状态锁不可用。".to_owned())
+        .and_then(|mut tracker| tracker.finish_session_feedback(cs2));
+    match result {
+        Ok(retired) => log.event("workspace_exit_feedback", if retired { "success" } else { "skipped" }, Some(&serde_json::json!({"retired":retired,"reason":if retired {"finished"} else {"no_feedback_or_no_stop_proof"}}).to_string())),
+        Err(error) => log.event("workspace_exit_feedback", "failure", Some(&error)),
+    }
+}
+
+pub(crate) fn present_review(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let monitor = app
+        .get_webview_window("workspace-left")
+        .and_then(|panel| panel.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "无法确定工作台所在屏幕。".to_string())?;
+    let size = monitor.size();
+    let origin = monitor.position();
+    let scale = (size.width as f64 / 2560.0).min(size.height as f64 / 1440.0);
+    let width = (1000.0 * scale).round() as u32;
+    let height = (1160.0 * scale).round() as u32;
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    let outer = window.outer_size().map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(
+            origin.x + (size.width as i32 - outer.width as i32) / 2,
+            origin.y + (size.height as i32 - outer.height as i32) / 2,
+        ))
+        .map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window_presentation::set_visible(window, true).map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+pub(crate) async fn open_tool(
+    app: tauri::AppHandle,
+    tool: String,
+    preset_id: Option<String>,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), String> = async move {
+    // Diagnostics must remain available while an exit is blocked or in progress.
+    let exit_review = tool == "review" && preset_id.as_deref() == Some("exit");
+    if exit_review && app.state::<production_exit::WorkspaceExit>().status().message.is_none() {
+        return Err("当前没有待处理的退出异常。".into());
+    }
+    if tool != "diagnostics" && !exit_review {
+        app.state::<production_exit::ExitGate>().check()?;
+    }
+    app.state::<updates::PendingUpdate>().check()?;
+    let (label, title, path) = match tool.as_str() {
+        "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
+        "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
+        "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
+        "review" => ("tool-review", "本场核对", "/workspace/review"),
+        _ => return Err("工具无法识别。".into()),
+    };
+    let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
+        .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?;
+    if tool == "review" {
+        if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
+        let kind = preset_id.as_deref().unwrap_or("preflight");
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection" | "next-connection") { return Err("核对页面无法识别。".into()); }
+        target.query_pairs_mut().append_pair("kind", kind);
+    }
+    if tool == "hud" {
+        if let Some(id) = preset_id.as_deref() {
+            if id.is_empty() || id.len() > 256 { return Err("HUD 预设标识无效。".into()); }
+            target.query_pairs_mut().append_pair("preset", id);
+        }
+    }
+    if let Some(window) = app.get_webview_window(label) {
+        if tool == "hud" {
+            if let Some(id) = preset_id.as_deref() {
+                let detail = serde_json::to_string(id)
+                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设标识无效。"))?;
+                window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
+                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
+            }
+        } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
+            return Err("请先完成或关闭当前任务，再打开其他任务。".into());
+        } else if tool != "review" {
+            window.navigate(target.clone())
+                .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
+        }
+        if tool == "review" { return present_review(&app, &window); }
+        let _ = window.unminimize();
+        let _ = window_presentation::set_visible(&window, true);
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
+        .visible(tool != "review")
+        .title(format!("Mizar · {title}"))
+        .inner_size(1280.0, 800.0)
+        .on_navigation(trusted_navigation)
+        .build()
+        .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能打开。"))?;
+    if tool == "review" { present_review(&app, &window)?; }
+    Ok(())
+
+    }.await;
+    diagnostic_log.native_outcome(
+        "open_tool",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) fn restore_layout(
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), serde_json::Value> {
+    let state = app.state::<HostState>();
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), serde_json::Value> = (|| {
+        if state.panels_only.load(Ordering::Acquire) {
+            let main = app
+                .get_webview_window("main")
+                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
+            let monitor = main
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| main.primary_monitor().ok().flatten())
+                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
+            let position = monitor.position();
+            let size = monitor.size();
+            apply_layout(
+                &app,
+                geometry::workspace_layout(Rect {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width as i32,
+                    height: size.height as i32,
+                }),
+            );
+            return Ok(());
+        }
+        let layout = state
+            .tracker
+            .lock()
+            .map_err(|error| {
+                command_log.preserve_error(
+                    "restore_layout",
+                    native_operation_id.as_deref(),
+                    &error,
+                    serde_json::json!("桌面窗口状态不可用。"),
+                )
+            })?
+            .restore_layout()
+            .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
+        apply_layout(&app, layout);
+        update_overlay(&app, &state);
+        let tracker = state.tracker.lock().map_err(|error| {
+            command_log.preserve_error(
+                "restore_layout",
+                native_operation_id.as_deref(),
+                &error,
+                serde_json::json!("桌面窗口状态不可用。"),
+            )
+        })?;
+        if tracker.window.is_none() {
+            return Err(serde_json::json!(
+                "工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"
+            ));
+        }
+        if !tracker.managed {
+            return Err(if tracker.preserve_settings {
+                serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
+            } else {
+                match tracker.window_message() {
+                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
+                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
+            }
+            });
+        }
+        Ok(())
+    })();
+    diagnostic_log.native_outcome(
+        "restore_layout",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}

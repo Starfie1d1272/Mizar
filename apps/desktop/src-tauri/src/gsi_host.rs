@@ -4,6 +4,7 @@ use crate::{
 };
 use std::{path::Path, sync::Mutex, time::Duration};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 pub(crate) static GSI_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
@@ -129,6 +130,75 @@ pub(crate) async fn ensure(
     .await;
     diagnostic_log.native_outcome(
         "ensure_gsi",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn configure(
+    app: tauri::AppHandle,
+    restore: bool,
+    choose: bool,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), String> = async move {
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            move || {
+                let _guard = GSI_OPERATION_LOCK.lock().map_err(|error| {
+                    command_log.preserve_error(
+                        "configure_gsi",
+                        native_operation_id.as_deref(),
+                        &error,
+                        "GSI 操作状态不可用。",
+                    )
+                })?;
+                let root = if choose {
+                    let Some(file) = app.dialog().file().blocking_pick_folder() else {
+                        return Ok(());
+                    };
+                    Some(file.into_path().map_err(|error| {
+                        command_log.preserve_error(
+                            "configure_gsi",
+                            native_operation_id.as_deref(),
+                            &error,
+                            "安装目录无效。",
+                        )
+                    })?)
+                } else {
+                    None
+                };
+                gsi_script(
+                    if restore {
+                        "restore-gsi.ps1"
+                    } else {
+                        "install-gsi.ps1"
+                    },
+                    root.as_deref(),
+                    Duration::from_secs(45),
+                    &app.state::<DesktopLog>(),
+                )?;
+                Ok(())
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "configure_gsi",
+                native_operation_id.as_deref(),
+                &error,
+                "GSI 配置工具未能启动。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "configure_gsi",
         diagnostic_operation_id.as_deref(),
         &diagnostic_result,
     );

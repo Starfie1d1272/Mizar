@@ -2,7 +2,7 @@
 use crate::host_state::HostState;
 use crate::{
     cs2_activity, managed_cs2, mulnx_launch, observer_hud, preparation_gate, production_exit,
-    startup_log::DesktopLog, updates,
+    startup_log::DesktopLog, updates, workspace_presentation,
 };
 use std::sync::Mutex;
 use tauri::Manager;
@@ -338,6 +338,82 @@ pub(crate) async fn start(
         || {
             diagnostic_log.native_outcome(
                 "start_managed_cs2",
+                diagnostic_operation_id.as_deref(),
+                &diagnostic_result,
+            )
+        },
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn finish_managed_cs2(
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
+    let diagnostic_result: Result<(), String> = async move {
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            let native_task_id = native_task_id.clone();
+            let native_trigger = native_trigger.clone();
+            move || {
+                command_log.with_task(
+                    native_task_id.as_deref(),
+                    native_operation_id.as_deref(),
+                    native_trigger.as_deref(),
+                    || {
+                        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                        let mut cs2 = state.lock().map_err(|error| {
+                            command_log.preserve_error(
+                                "finish_managed_cs2",
+                                native_operation_id.as_deref(),
+                                &error,
+                                "CS2 配置状态不可用。",
+                            )
+                        })?;
+                        let activity = app.state::<cs2_activity::Activity>();
+                        let _activity = activity.begin(2);
+                        production_exit::finish_managed_game(
+                            &app.state::<DesktopLog>(),
+                            |requires_proof| {
+                                cs2.finish()?;
+                                if requires_proof {
+                                    cs2.confirm_game_stopped()?;
+                                }
+                                Ok(())
+                            },
+                        )?;
+                        workspace_presentation::refresh_finished_window_feedback(&app, &cs2);
+                        Ok(())
+                    },
+                )
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "finish_managed_cs2",
+                native_operation_id.as_deref(),
+                &error,
+                "CS2 原配置恢复未完成。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.with_task(
+        diagnostic_task_id.as_deref(),
+        diagnostic_operation_id.as_deref(),
+        diagnostic_trigger.as_deref(),
+        || {
+            diagnostic_log.native_outcome(
+                "finish_managed_cs2",
                 diagnostic_operation_id.as_deref(),
                 &diagnostic_result,
             )

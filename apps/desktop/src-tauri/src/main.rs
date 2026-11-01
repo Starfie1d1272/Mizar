@@ -54,7 +54,6 @@ mod workspace_shell;
 
 use desktop_worker::DesktopWorker;
 use entry_intent::EntryIntent;
-use geometry::Rect;
 use host_state::HostState;
 use startup_log::DesktopLog;
 use std::{
@@ -74,7 +73,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, WebviewUrl, WebviewWindowBuilder,
+    Manager, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::DialogExt;
 use windows_host::GameTracker;
@@ -427,82 +426,9 @@ fn webview_preflight() -> Result<String, String> {
 #[tauri::command]
 fn restore_layout(
     app: tauri::AppHandle,
-    state: tauri::State<'_, HostState>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), serde_json::Value> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), serde_json::Value> = (|| {
-        if state.panels_only.load(Ordering::Acquire) {
-            let main = app
-                .get_webview_window("main")
-                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-            let monitor = main
-                .current_monitor()
-                .ok()
-                .flatten()
-                .or_else(|| main.primary_monitor().ok().flatten())
-                .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-            let position = monitor.position();
-            let size = monitor.size();
-            workspace_presentation::apply_layout(
-                &app,
-                geometry::workspace_layout(Rect {
-                    x: position.x,
-                    y: position.y,
-                    width: size.width as i32,
-                    height: size.height as i32,
-                }),
-            );
-            return Ok(());
-        }
-        let layout = state
-            .tracker
-            .lock()
-            .map_err(|error| {
-                command_log.preserve_error(
-                    "restore_layout",
-                    native_operation_id.as_deref(),
-                    &error,
-                    serde_json::json!("桌面窗口状态不可用。"),
-                )
-            })?
-            .restore_layout()
-            .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-        workspace_presentation::apply_layout(&app, layout);
-        workspace_presentation::update_overlay(&app, &state);
-        let tracker = state.tracker.lock().map_err(|error| {
-            command_log.preserve_error(
-                "restore_layout",
-                native_operation_id.as_deref(),
-                &error,
-                serde_json::json!("桌面窗口状态不可用。"),
-            )
-        })?;
-        if tracker.window.is_none() {
-            return Err(serde_json::json!(
-                "工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"
-            ));
-        }
-        if !tracker.managed {
-            return Err(if tracker.preserve_settings {
-                serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
-            } else {
-                match tracker.window_message() {
-                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
-                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
-            }
-            });
-        }
-        Ok(())
-    })();
-    diagnostic_log.native_outcome(
-        "restore_layout",
-        diagnostic_operation_id.as_deref(),
-        &diagnostic_result,
-    );
-    diagnostic_result
+    workspace_presentation::restore_layout(app, diagnostic_operation_id)
 }
 
 #[tauri::command]
@@ -913,22 +839,6 @@ async fn cancel_managed_camera(
     cs2_host::cancel_camera(app).await
 }
 
-fn refresh_finished_window_feedback(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
-    let log = app.state::<DesktopLog>();
-    log.event("workspace_exit_feedback", "begin", None);
-    // Optional feedback retirement cannot be used as proof of game/production cleanup.
-    let result = app
-        .state::<HostState>()
-        .tracker
-        .lock()
-        .map_err(|_| "窗口反馈状态锁不可用。".to_owned())
-        .and_then(|mut tracker| tracker.finish_session_feedback(cs2));
-    match result {
-        Ok(retired) => log.event("workspace_exit_feedback", if retired { "success" } else { "skipped" }, Some(&serde_json::json!({"retired":retired,"reason":if retired {"finished"} else {"no_feedback_or_no_stop_proof"}}).to_string())),
-        Err(error) => log.event("workspace_exit_feedback", "failure", Some(&error)),
-    }
-}
-
 #[tauri::command]
 async fn finish_managed_cs2(
     app: tauri::AppHandle,
@@ -936,74 +846,13 @@ async fn finish_managed_cs2(
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let native_task_id = diagnostic_task_id.clone();
-    let native_trigger = diagnostic_trigger.clone();
-    let diagnostic_result: Result<(), String> = async move {
-        tauri::async_runtime::spawn_blocking({
-            let command_log = command_log.clone();
-            let native_operation_id = native_operation_id.clone();
-            let native_task_id = native_task_id.clone();
-            let native_trigger = native_trigger.clone();
-            move || {
-                command_log.with_task(
-                    native_task_id.as_deref(),
-                    native_operation_id.as_deref(),
-                    native_trigger.as_deref(),
-                    || {
-                        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                        let mut cs2 = state.lock().map_err(|error| {
-                            command_log.preserve_error(
-                                "finish_managed_cs2",
-                                native_operation_id.as_deref(),
-                                &error,
-                                "CS2 配置状态不可用。",
-                            )
-                        })?;
-                        let activity = app.state::<cs2_activity::Activity>();
-                        let _activity = activity.begin(2);
-                        production_exit::finish_managed_game(
-                            &app.state::<DesktopLog>(),
-                            |requires_proof| {
-                                cs2.finish()?;
-                                if requires_proof {
-                                    cs2.confirm_game_stopped()?;
-                                }
-                                Ok(())
-                            },
-                        )?;
-                        refresh_finished_window_feedback(&app, &cs2);
-                        Ok(())
-                    },
-                )
-            }
-        })
-        .await
-        .map_err(|error| {
-            command_log.preserve_error(
-                "finish_managed_cs2",
-                native_operation_id.as_deref(),
-                &error,
-                "CS2 原配置恢复未完成。".to_string(),
-            )
-        })?
-    }
-    .await;
-    diagnostic_log.with_task(
-        diagnostic_task_id.as_deref(),
-        diagnostic_operation_id.as_deref(),
-        diagnostic_trigger.as_deref(),
-        || {
-            diagnostic_log.native_outcome(
-                "finish_managed_cs2",
-                diagnostic_operation_id.as_deref(),
-                &diagnostic_result,
-            )
-        },
-    );
-    diagnostic_result
+    cs2_host::finish_managed_cs2(
+        app,
+        diagnostic_operation_id,
+        diagnostic_task_id,
+        diagnostic_trigger,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1027,152 +876,16 @@ async fn finish_workspace(
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let native_task_id = diagnostic_task_id.clone();
-    let native_trigger = diagnostic_trigger.clone();
-    let diagnostic_result: Result<(), String> = async move {
-    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
-        return Err("请在准备中心或工作台退出本次制作。".into());
-    }
-    let gate = app.state::<production_exit::ExitGate>();
-    if !gate.begin() {
-        return Err("正在退出，请等待收尾结果。".into());
-    }
-    let _gate = production_exit::WorkspaceExitGuard(&gate);
-    let feedback = app.state::<production_exit::WorkspaceExit>();
-    feedback.stage("checking");
-    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string())));
-    // Keep a visible waiting record if a native lock, process or presentation call stalls.
-    let (waiting_done, waiting) = std::sync::mpsc::channel::<()>();
-    let waiting_host = app.clone();
-    let waiting_log = command_log.clone();
-    let waiting_task = native_task_id.clone();
-    let waiting_trigger = native_trigger.clone();
-    let waiting_operation = native_operation_id.clone();
-    std::thread::spawn(move || waiting_log.with_task(waiting_task.as_deref(), waiting_operation.as_deref(), waiting_trigger.as_deref(), || {
-        let started = std::time::Instant::now();
-        while waiting.recv_timeout(Duration::from_secs(5)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-            let phase = waiting_host.state::<production_exit::WorkspaceExit>().status().stage;
-            waiting_host.state::<DesktopLog>().event("workspace_exit", "waiting", Some(&serde_json::json!({"phase":phase,"elapsedMs":started.elapsed().as_millis()}).to_string()));
-        }
-    }));
-    // This task belongs to Host, so hiding or closing a WebView cannot lose it.
-    let host = app.clone();
-    let result = tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || -> Result<(), String> {
-        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
-        let feedback = host.state::<production_exit::WorkspaceExit>();
-        let log = host.state::<DesktopLog>();
-        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
-        // Companion freeze and scene/remote work have their own owner. Never
-        // serialize the exact local process cleanup behind their HTTP response.
-        let exit_intent = production_exit::set_exit_intent(&log, "begin-exit");
-        let production_log = log.inner().clone();
-        let production_task = std::thread::spawn(move || {
-            production_exit::finish_workspace_production(&production_log)
-        });
-        let activity = host.state::<cs2_activity::Activity>();
-        // Open the visible recovery owner before any potentially slow cleanup.
-        // A presentation failure cannot skip safe production or game cleanup.
-        if let Err(error) = open_main(host.clone(), None, None) {
-            log.event(
-                "production_finish",
-                "failure",
-                Some(&format!("phase=workspace_recovery_window; cause={error}")),
-            );
-        }
-        feedback.stage("restoration");
-        let game = production_exit::restore_then_cleanup(
-        || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
-        || -> Result<(), String> {
-        // Host-owned recovery evidence determines local work even when Companion is offline.
-        if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {
-            feedback.stage("restoration");
-            let _activity = activity.begin(2);
-            if confirm_steam_cancelled == Some(true) {
-                log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
-            }
-            log.step("workspace_exit_game_finish", || cs2.finish())?;
-        } else {
-            feedback.stage("restoration");
-            let _activity = activity.begin(2);
-            production_exit::finish_managed_game(&log, |requires_proof| {
-                if confirm_steam_cancelled == Some(true) {
-                    log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
-                }
-                log.step("workspace_exit_game_finish", || cs2.finish())?;
-                if requires_proof {
-                    log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
-                }
-                Ok(())
-            })?;
-        }
-        Ok(())
-        });
-        refresh_finished_window_feedback(&host, &cs2);
-        drop(cs2);
-        feedback.stage("presentation");
-        // Retry presentation after cleanup; an earlier transient window failure
-        // must not prevent returning to preparation once the game is finished.
-        let presentation = log.step("workspace_exit_presentation", || present_production_inner(&host, false));
-        let production = production_task.join().unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-        production_exit::cleanup_results(production_exit::cleanup_results(exit_intent, production), production_exit::cleanup_results(game, presentation))
-        })
-    } })
+    production_exit::finish_workspace(
+        window,
+        app,
+        confirm_steam_cancelled,
+        diagnostic_operation_id,
+        diagnostic_task_id,
+        diagnostic_trigger,
+        preparation_task::retire_after_exit,
+    )
     .await
-    .unwrap_or_else(|error| {
-        app.state::<DesktopLog>().event(
-            "production_finish",
-            "failure",
-            Some(&format!("phase=workspace_task; cause={error}")),
-        );
-        Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
-    });
-    let intent_host = app.clone();
-    let intent_result = tauri::async_runtime::spawn_blocking(move || {
-        production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
-    }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
-    let result = production_exit::cleanup_results(result, intent_result);
-    if result.is_ok() { preparation_task::retire_after_exit(); }
-    if let Err(error) = &result {
-        app.state::<DesktopLog>().event(
-            "production_finish",
-            "failure",
-            Some(&format!(
-                "phase=workspace_{}; cause={error}",
-                feedback.status().stage
-            )),
-        );
-    }
-    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", if result.is_ok() { "success" } else { "failure" }, Some(&serde_json::json!({"phase":feedback.status().stage,"error":result.as_ref().err()}).to_string())));
-    let _ = waiting_done.send(());
-    feedback.complete(&result);
-    if result.is_err() {
-        // Keep the original local failure; never replace it with window errors.
-        let _ = open_main(app.clone(), None, None);
-        if let Err(window_error) = open_tool(app.clone(), "review".into(), Some("exit".into()), None).await {
-            command_log.event("workspace_exit_alert", "failure", Some(&window_error));
-        }
-    }
-    // Preserve the command result too; callers must not announce false success.
-    result
-
-    }.await;
-    diagnostic_log.with_task(
-        diagnostic_task_id.as_deref(),
-        diagnostic_operation_id.as_deref(),
-        diagnostic_trigger.as_deref(),
-        || {
-            diagnostic_log.native_outcome(
-                "finish_workspace",
-                diagnostic_operation_id.as_deref(),
-                &diagnostic_result,
-            )
-        },
-    );
-    diagnostic_result
 }
 
 #[tauri::command]
@@ -1252,125 +965,17 @@ async fn start_demo_test(
     camera_trial: Option<bool>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<serde_json::Value, String> = async move {
-        window_presentation::check_demo_main(&window)?;
-        app.state::<production_exit::ExitGate>().check()?;
-        tauri::async_runtime::spawn_blocking({
-            let command_log = command_log.clone();
-            let native_operation_id = native_operation_id.clone();
-            move || {
-                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let mut cs2 = managed.lock().map_err(|error| {
-                    command_log.preserve_error(
-                        "start_demo_test",
-                        native_operation_id.as_deref(),
-                        &error,
-                        "CS2 配置状态不可用。",
-                    )
-                })?;
-                let activity = app.state::<cs2_activity::Activity>();
-                let _activity = activity.begin(1);
-                app.state::<production_exit::ExitGate>().check()?;
-                app.state::<updates::PendingUpdate>().check()?;
-                let path = app
-                    .state::<Mutex<demo_test::Selection>>()
-                    .lock()
-                    .map_err(|error| {
-                        command_log.preserve_error(
-                            "start_demo_test",
-                            native_operation_id.as_deref(),
-                            &error,
-                            "Demo 选择状态不可用。",
-                        )
-                    })?
-                    .resolve(&token, &app.state::<DesktopLog>())?;
-                cs2.ensure_demo_available()?;
-                let log = app.state::<DesktopLog>();
-                let launch_guard = if camera_trial.unwrap_or(false) {
-                    let guard = mulnx_launch::demo_launch_guard()?;
-                    if log
-                        .state_root
-                        .join("data/mulnx-launch/pending.json")
-                        .exists()
-                        || cs2.mulnx_launcher_running()?
-                    {
-                        return Err("请先完成上次 MulNX 启动的恢复。".into());
-                    }
-                    Some(guard)
-                } else {
-                    None
-                };
-                let id = demo_test::new_request_id(&log)?;
-                let starting =
-                    demo_test::request(&log, "begin", &id, Some((&team_a_name, &team_b_name)))?;
-                if camera_trial.unwrap_or(false) {
-                    drop(cs2);
-                    let result = mulnx_launch::launch_demo(
-                        &app,
-                        &log,
-                        &path,
-                        &id,
-                        preserve_settings.unwrap_or(false),
-                        launch_guard.as_ref().unwrap(),
-                    );
-                    let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用，请恢复试播。")?;
-                    return match result {
-                        Ok(_) => {
-                            if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                                tracker.preserve_settings = cs2.preserve_settings();
-                            }
-                            Ok(starting)
-                        }
-                        Err(error) => {
-                            if !cs2.demo_launch_attempted()? {
-                                if let Err(recovery) = cs2.cancel_unsubmitted_mulnx_demo() {
-                                    return Err(format!("{error}；恢复未完成：{recovery}"));
-                                }
-                            }
-                            Err(error)
-                        }
-                    };
-                }
-                match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
-                    Ok(true) => {
-                        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                            tracker.preserve_settings = cs2.preserve_settings();
-                        }
-                        Ok(starting)
-                    }
-                    Ok(false) => Err("Demo 启动请求未提交，请结束试播后重试。".into()),
-                    Err(error) => {
-                        // A durable attempted launch can still arrive late through
-                        // Steam. Only a proven pre-launch failure permits cancel.
-                        if !cs2.demo_launch_attempted()? {
-                            demo_test::request(&log, "cancel", &id, None)?;
-                            cs2.recover(false)?;
-                        }
-                        Err(error)
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|error| {
-            command_log.preserve_error(
-                "start_demo_test",
-                native_operation_id.as_deref(),
-                &error,
-                "Demo 试播启动未完成。".to_string(),
-            )
-        })?
-    }
-    .await;
-    diagnostic_log.native_outcome(
-        "start_demo_test",
-        diagnostic_operation_id.as_deref(),
-        &diagnostic_result,
-    );
-    diagnostic_result
+    demo_host::start(
+        window,
+        app,
+        token,
+        team_a_name,
+        team_b_name,
+        preserve_settings,
+        camera_trial,
+        diagnostic_operation_id,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1379,13 +984,7 @@ async fn resume_demo_test(
     app: tauri::AppHandle,
     request_id: String,
 ) -> Result<serde_json::Value, String> {
-    window_presentation::check_demo_main(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let log = app.state::<DesktopLog>();
-        mulnx_launch::resume_demo(&app, &log, &request_id)
-    })
-    .await
-    .map_err(|_| "Demo 启动状态未能确认。".to_string())?
+    demo_host::resume(window, app, request_id).await
 }
 
 #[tauri::command]
@@ -1420,91 +1019,15 @@ async fn finish_demo_test(
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
 ) -> Result<(), String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let native_task_id = diagnostic_task_id.clone();
-    let native_trigger = diagnostic_trigger.clone();
-    let diagnostic_result: Result<(), String> = async move {
-        if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
-            return Err("请在制作中心或试播工作台结束 Demo 试播。".into());
-        }
-        let host = app.clone();
-        tauri::async_runtime::spawn_blocking({
-            let command_log = command_log.clone();
-            let native_operation_id = native_operation_id.clone();
-            let native_task_id = native_task_id.clone();
-            let native_trigger = native_trigger.clone();
-            move || {
-                command_log.with_task(
-                    native_task_id.as_deref(),
-                    native_operation_id.as_deref(),
-                    native_trigger.as_deref(),
-                    || {
-                        host.state::<EntryIntent>().cancel_all();
-                        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-                        let mut cs2 = managed.lock().map_err(|error| {
-                            command_log.preserve_error(
-                                "finish_demo_test",
-                                native_operation_id.as_deref(),
-                                &error,
-                                "CS2 配置状态不可用。",
-                            )
-                        })?;
-                        let activity = host.state::<cs2_activity::Activity>();
-                        let _activity = activity.begin(2);
-                        let state = match demo_test::status(&host.state::<DesktopLog>()) {
-                            Ok(state) => state,
-                            Err(_) if cs2.has_demo_journal()? => serde_json::Value::Null,
-                            Err(error) => return Err(error),
-                        };
-                        if state["active"] != true && !cs2.has_demo_journal()? {
-                            // A retry after completion must not finish a later normal game.
-                            return Ok(());
-                        }
-                        // Recovery may replace a corrupt marker's UUID. The fresh Companion
-                        // identity controls completion; native process ownership controls exit.
-                        if state["active"] == true
-                            && state["phase"] != "recovery"
-                            && request_id
-                                .as_deref()
-                                .is_some_and(|id| state["requestId"].as_str() != Some(id))
-                        {
-                            return Err("Demo 试播状态已变化，请刷新后重试。".into());
-                        }
-                        let cleanup = cs2.finish();
-                        refresh_finished_window_feedback(&host, &cs2);
-                        let presentation = present_production_inner(&host, false);
-                        production_exit::cleanup_results(cleanup, presentation)
-                    },
-                )
-            }
-        })
-        .await
-        .map_err(|error| {
-            command_log.preserve_error(
-                "finish_demo_test",
-                native_operation_id.as_deref(),
-                &error,
-                "Demo 试播恢复未完成。".to_string(),
-            )
-        })??;
-        Ok(())
-    }
-    .await;
-    diagnostic_log.with_task(
-        diagnostic_task_id.as_deref(),
-        diagnostic_operation_id.as_deref(),
-        diagnostic_trigger.as_deref(),
-        || {
-            diagnostic_log.native_outcome(
-                "finish_demo_test",
-                diagnostic_operation_id.as_deref(),
-                &diagnostic_result,
-            )
-        },
-    );
-    diagnostic_result
+    demo_host::finish(
+        window,
+        app,
+        request_id,
+        diagnostic_operation_id,
+        diagnostic_task_id,
+        diagnostic_trigger,
+    )
+    .await
 }
 
 async fn console_settings_request(
@@ -1676,7 +1199,7 @@ async fn restore_cs2_backup(
                         let activity = app.state::<cs2_activity::Activity>();
                         let _activity = activity.begin(2);
                         cs2.restore_backup(confirm_steam_cancelled)?;
-                        refresh_finished_window_feedback(&app, &cs2);
+                        workspace_presentation::refresh_finished_window_feedback(&app, &cs2);
                         Ok(())
                     },
                 )
@@ -1884,10 +1407,6 @@ async fn present_production(
         diagnostic_trigger,
     )
     .await
-}
-
-fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), String> {
-    workspace_presentation::present_production_inner_checked(app, live, None, None)
 }
 
 // Only the fixed Program surface is constructed here. Both paths use the same options.
@@ -2120,31 +1639,6 @@ fn workbench_status(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 // Review windows are centered on the workspace monitor, independently of the left panel.
-fn present_review(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
-    let monitor = app
-        .get_webview_window("workspace-left")
-        .and_then(|panel| panel.current_monitor().ok().flatten())
-        .or_else(|| window.primary_monitor().ok().flatten())
-        .ok_or_else(|| "无法确定工作台所在屏幕。".to_string())?;
-    let size = monitor.size();
-    let origin = monitor.position();
-    let scale = (size.width as f64 / 2560.0).min(size.height as f64 / 1440.0);
-    let width = (1000.0 * scale).round() as u32;
-    let height = (1160.0 * scale).round() as u32;
-    window
-        .set_size(tauri::PhysicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    let outer = window.outer_size().map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(
-            origin.x + (size.width as i32 - outer.width as i32) / 2,
-            origin.y + (size.height as i32 - outer.height as i32) / 2,
-        ))
-        .map_err(|e| e.to_string())?;
-    window.unminimize().map_err(|e| e.to_string())?;
-    window_presentation::set_visible(window, true).map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
-}
 
 #[tauri::command]
 fn close_review(window: tauri::WebviewWindow) -> Result<(), String> {
@@ -2161,77 +1655,7 @@ async fn open_tool(
     preset_id: Option<String>,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), String> = async move {
-    // Diagnostics must remain available while an exit is blocked or in progress.
-    let exit_review = tool == "review" && preset_id.as_deref() == Some("exit");
-    if exit_review && app.state::<production_exit::WorkspaceExit>().status().message.is_none() {
-        return Err("当前没有待处理的退出异常。".into());
-    }
-    if tool != "diagnostics" && !exit_review {
-        app.state::<production_exit::ExitGate>().check()?;
-    }
-    app.state::<updates::PendingUpdate>().check()?;
-    let (label, title, path) = match tool.as_str() {
-        "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
-        "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
-        "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
-        "review" => ("tool-review", "本场核对", "/workspace/review"),
-        _ => return Err("工具无法识别。".into()),
-    };
-    let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
-        .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具地址无法识别。"))?;
-    if tool == "review" {
-        if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
-        let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection" | "next-connection") { return Err("核对页面无法识别。".into()); }
-        target.query_pairs_mut().append_pair("kind", kind);
-    }
-    if tool == "hud" {
-        if let Some(id) = preset_id.as_deref() {
-            if id.is_empty() || id.len() > 256 { return Err("HUD 预设标识无效。".into()); }
-            target.query_pairs_mut().append_pair("preset", id);
-        }
-    }
-    if let Some(window) = app.get_webview_window(label) {
-        if tool == "hud" {
-            if let Some(id) = preset_id.as_deref() {
-                let detail = serde_json::to_string(id)
-                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设标识无效。"))?;
-                window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
-                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
-            }
-        } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
-            return Err("请先完成或关闭当前任务，再打开其他任务。".into());
-        } else if tool != "review" {
-            window.navigate(target.clone())
-                .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
-        }
-        if tool == "review" { return present_review(&app, &window); }
-        let _ = window.unminimize();
-        let _ = window_presentation::set_visible(&window, true);
-        let _ = window.set_focus();
-        return Ok(());
-    }
-    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
-        .visible(tool != "review")
-        .title(format!("Mizar · {title}"))
-        .inner_size(1280.0, 800.0)
-        .on_navigation(workspace_presentation::trusted_navigation)
-        .build()
-        .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能打开。"))?;
-    if tool == "review" { present_review(&app, &window)?; }
-    Ok(())
-
-    }.await;
-    diagnostic_log.native_outcome(
-        "open_tool",
-        diagnostic_operation_id.as_deref(),
-        &diagnostic_result,
-    );
-    diagnostic_result
+    workspace_presentation::open_tool(app, tool, preset_id, diagnostic_operation_id).await
 }
 
 #[tauri::command]
@@ -2779,67 +2203,7 @@ async fn configure_gsi(
     choose: bool,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), String> = async move {
-        tauri::async_runtime::spawn_blocking({
-            let command_log = command_log.clone();
-            let native_operation_id = native_operation_id.clone();
-            move || {
-                let _guard = GSI_OPERATION_LOCK.lock().map_err(|error| {
-                    command_log.preserve_error(
-                        "configure_gsi",
-                        native_operation_id.as_deref(),
-                        &error,
-                        "GSI 操作状态不可用。",
-                    )
-                })?;
-                let root = if choose {
-                    let Some(file) = app.dialog().file().blocking_pick_folder() else {
-                        return Ok(());
-                    };
-                    Some(file.into_path().map_err(|error| {
-                        command_log.preserve_error(
-                            "configure_gsi",
-                            native_operation_id.as_deref(),
-                            &error,
-                            "安装目录无效。",
-                        )
-                    })?)
-                } else {
-                    None
-                };
-                gsi_script(
-                    if restore {
-                        "restore-gsi.ps1"
-                    } else {
-                        "install-gsi.ps1"
-                    },
-                    root.as_deref(),
-                    Duration::from_secs(45),
-                    &app.state::<DesktopLog>(),
-                )?;
-                Ok(())
-            }
-        })
-        .await
-        .map_err(|error| {
-            command_log.preserve_error(
-                "configure_gsi",
-                native_operation_id.as_deref(),
-                &error,
-                "GSI 配置工具未能启动。".to_string(),
-            )
-        })?
-    }
-    .await;
-    diagnostic_log.native_outcome(
-        "configure_gsi",
-        diagnostic_operation_id.as_deref(),
-        &diagnostic_result,
-    );
-    diagnostic_result
+    gsi_host::configure(app, restore, choose, diagnostic_operation_id).await
 }
 
 fn run_desktop(
@@ -2982,7 +2346,7 @@ fn run_desktop(
                             }
                         }
                         "open_operator" => {
-                            let _ = open_main(app.clone(), None, None);
+                            let _ = workspace_presentation::open_main(app.clone(), None, None);
                         }
                         "exit" => {
                             // ExitRequested can reject cleanup. Keep tracking until RunEvent::Exit.
@@ -3033,7 +2397,7 @@ fn run_desktop(
                                     }
                                 }
                             }
-                            refresh_finished_window_feedback(&host, &cs2);
+                            workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
                                 tracker.set_owner(cs2.workspace_process().ok().flatten());
@@ -3155,7 +2519,7 @@ fn run_desktop(
                                         }
                                     } else {
                                         if activate {
-                                            let _ = open_main(tick_host.clone(), None, None);
+                                            let _ = workspace_presentation::open_main(tick_host.clone(), None, None);
                                         }
                                         if tick_host
                                             .state::<HostState>()
@@ -3367,7 +2731,8 @@ fn run_desktop(
                             let _ = window.destroy();
                         }
                     } else {
-                        let _ = open_main(host.clone(), Some("/".into()), None);
+                        let _ =
+                            workspace_presentation::open_main(host.clone(), Some("/".into()), None);
                     }
                     host.dialog()
                         .message(format!(
