@@ -11,8 +11,6 @@ import type { ProgramSceneController } from './controller.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 import type { ObsAdapter } from '../obs/adapter.js';
-import type { MusicDirector } from '../music/director.js';
-import type { GameAudioController } from '../obs/audio-policy-controller.js';
 import type { CameraDirector } from '../orchestration/director.js';
 import type { ObserverSettingsStore } from '../telemetry/observer-settings.js';
 import type { DemoTestController } from '../demo-test/controller.js';
@@ -20,7 +18,14 @@ import type { MatchContextBinding } from '../match-context/index.js';
 import { statsTarget, type RivalHubConnection } from '../match-context/rivalhub-connection.js';
 
 export type ProductionDependencies = {
-  scenes: ProgramSceneController;
+  scenes: Pick<
+    ProgramSceneController,
+    | 'holdAutomatic'
+    | 'selectWaitingForExit'
+    | 'controlValid'
+    | 'get'
+    | 'setResourceActivationPending'
+  >;
   obs?:
     | Pick<
         ObsAdapter,
@@ -33,11 +38,11 @@ export type ProductionDependencies = {
         | 'startBrowserRecovery'
       >
     | undefined;
-  music: () => MusicDirector | undefined;
-  gameAudio?: GameAudioController | undefined;
-  camera: () => CameraDirector | undefined;
-  demo: () => DemoTestController | undefined;
-  observer: ObserverSettingsStore;
+  music: () => Parameters<ObsAdapter['startCommentaryRecovery']>[0];
+  gameAudio?: Parameters<ObsAdapter['startCommentaryRecovery']>[1];
+  camera: () => Pick<CameraDirector, 'beginProduction' | 'finishProduction'> | undefined;
+  demo: () => Pick<DemoTestController, 'openFormalBoundary' | 'finish'> | undefined;
+  observer: Pick<ObserverSettingsStore, 'endProduction'>;
   source?:
     | (Pick<RivalHubConnection, 'handoffForExit' | 'release' | 'clearStats'> & {
         stats: (
@@ -57,6 +62,14 @@ export type ProductionDependencies = {
   };
   warn: (details: object, message: string) => void;
   error: (details: object, message: string) => void;
+};
+
+type ProductionAction =
+  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'invalid';
+type ProductionCommand = {
+  action: ProductionAction;
+  expectedRevision: string | null;
+  preparationId: string | null;
 };
 
 /** Owns presentation lifecycle, exclusion and exit recovery. */
@@ -213,38 +226,36 @@ export function createProduction(options: ProductionDependencies) {
     productionViewSchema.parse(current);
     return current;
   };
-  async function change(
-    body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
-  ) {
+  async function change(body: ProductionCommand) {
     const obsOnlyRetry =
       body?.action === 'finish' && mode === 'preparation' && obsExitState === 'unconfirmed';
-    const entryId = typeof body?.preparationId === 'string' ? body.preparationId : null;
+    const entryId = body.preparationId;
     if (entryId && preparationCancelled(entryId))
       return {
-        code: lifecycleErrors.preparationCancelled.status,
-        value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
+        ok: false as const,
+        failure: 'preparationCancelled' as const,
+        message: '准备已取消。',
       };
     // A lost response must not turn an already committed entry into a new entry.
     if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
-      return { code: 200, value: view() };
+      return { ok: true as const, value: view() };
     if (body?.action === 'enter') {
       try {
         await options.waitForBroadcast?.();
       } catch (error) {
         options.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
         return {
-          code: lifecycleErrors.broadcastSyncFailure.status,
-          value: {
-            ...lifecycleErrors.broadcastSyncFailure,
-            message: '播出配置同步失败，请重试使用方案。',
-          },
+          ok: false as const,
+          failure: 'broadcastSyncFailure' as const,
+          message: '播出配置同步失败，请重试使用方案。',
         };
       }
     }
     if (entryId && preparationCancelled(entryId))
       return {
-        code: lifecycleErrors.preparationCancelled.status,
-        value: { ...lifecycleErrors.preparationCancelled, message: '准备已取消。' },
+        ok: false as const,
+        failure: 'preparationCancelled' as const,
+        message: '准备已取消。',
       };
     if (
       body?.expectedRevision === revision &&
@@ -264,21 +275,19 @@ export function createProduction(options: ProductionDependencies) {
       shuttingDown = true;
       try {
         await startHandoff();
-        return { code: 200, value: view() };
+        return { ok: true as const, value: view() };
       } catch {
         return {
-          code: lifecycleErrors.handoffUnconfirmed.status,
-          value: {
-            ...view(),
-            ...lifecycleErrors.handoffUnconfirmed,
-            message: '数据源本地交接未确认。',
-          },
+          ok: false as const,
+          failure: 'handoffUnconfirmed' as const,
+          state: view(),
+          message: '数据源本地交接未确认。',
         };
       }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
       shuttingDown = false;
-      return { code: 200, value: view() };
+      return { ok: true as const, value: view() };
     }
     if (
       busy ||
@@ -288,13 +297,15 @@ export function createProduction(options: ProductionDependencies) {
       body?.expectedRevision !== revision
     )
       return {
-        code: lifecycleErrors.productionConflict.status,
-        value: { ...lifecycleErrors.productionConflict, message: '制作状态已变化，请刷新后重试。' },
+        ok: false as const,
+        failure: 'productionConflict' as const,
+        message: '制作状态已变化，请刷新后重试。',
       };
     if (!['enter', 'hide', 'finish', 'shutdown'].includes(String(body?.action)))
       return {
-        code: lifecycleErrors.productionActionInvalid.status,
-        value: { ...lifecycleErrors.productionActionInvalid, message: '制作操作无法识别。' },
+        ok: false as const,
+        failure: 'productionActionInvalid' as const,
+        message: '制作操作无法识别。',
       };
     busy = true;
     const shutdown = body?.action === 'shutdown';
@@ -432,20 +443,16 @@ export function createProduction(options: ProductionDependencies) {
           if (shutdown) {
             if (!controlValid())
               return {
-                code: lifecycleErrors.obsStateChanged.status,
-                value: {
-                  ...lifecycleErrors.obsStateChanged,
-                  message: 'OBS 播出状态已变化，请核对后重试。',
-                },
+                ok: false as const,
+                failure: 'obsStateChanged' as const,
+                message: 'OBS 播出状态已变化，请核对后重试。',
               };
             await options.source?.release();
             if (!controlValid())
               return {
-                code: lifecycleErrors.obsStateChanged.status,
-                value: {
-                  ...lifecycleErrors.obsStateChanged,
-                  message: 'OBS 播出状态已变化，请核对后重试。',
-                },
+                ok: false as const,
+                failure: 'obsStateChanged' as const,
+                message: 'OBS 播出状态已变化，请核对后重试。',
               };
             releaseHandoffState = 'confirmed';
           } else if (!options.source?.handoffForExit) {
@@ -465,7 +472,7 @@ export function createProduction(options: ProductionDependencies) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
       }
-      return { code: 200, value: view() };
+      return { ok: true as const, value: view() };
     } catch (error) {
       options.error(
         {
@@ -489,13 +496,13 @@ export function createProduction(options: ProductionDependencies) {
               : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';
       const failure =
         error instanceof Error && error.message === 'camera_settings_saving'
-          ? lifecycleErrors.cameraSettingsBusy
+          ? ('cameraSettingsBusy' as const)
           : stage === 'production_release'
-            ? lifecycleErrors.releaseUnconfirmed
+            ? ('releaseUnconfirmed' as const)
             : stage === 'production_safe_scene'
-              ? lifecycleErrors.safeSceneUnconfirmed
-              : lifecycleErrors.productionFailure;
-      return { code: failure.status, value: { ...failure, message } };
+              ? ('safeSceneUnconfirmed' as const)
+              : ('productionFailure' as const);
+      return { ok: false as const, failure, message };
     } finally {
       if (shutdown && !committed) shuttingDown = false;
       busy = false;
@@ -509,14 +516,12 @@ export function createProduction(options: ProductionDependencies) {
       if (body?.expectedRevision !== revision) return change(body);
       const originalSession = sessionId;
       const prior = await activeExitChange;
-      if (prior.code !== 200) return prior;
+      if (!prior.ok) return prior;
       if (sessionId !== originalSession)
         return {
-          code: lifecycleErrors.productionConflict.status,
-          value: {
-            ...lifecycleErrors.productionConflict,
-            message: '制作状态已变化，请刷新后重试。',
-          },
+          ok: false as const,
+          failure: 'productionConflict' as const,
+          message: '制作状态已变化，请刷新后重试。',
         };
       return dispatchChange({ ...body, expectedRevision: revision });
     }
@@ -532,6 +537,10 @@ export function createProduction(options: ProductionDependencies) {
     get: view,
     statsActive: () => statsActive,
     entered: (id: string) => lastEnteredId === id && mode !== 'preparation',
+    cancelPreparation: (id: string) => {
+      cancelPreparation(id);
+      return { entered: lastEnteredId === id && mode !== 'preparation' };
+    },
     change: dispatchChange,
     // Closing the service can join this task without making OBS a condition
     // for the Host's local game cleanup or for accepting the exit command.
@@ -654,9 +663,21 @@ export function createProduction(options: ProductionDependencies) {
     releaseUpdate: () => {
       updatePending = false;
     },
-    shutdown: () => dispatchChange({ action: 'shutdown', expectedRevision: revision }),
+    shutdown: () =>
+      dispatchChange({ action: 'shutdown', expectedRevision: revision, preparationId: null }),
   };
   return production;
+}
+
+export function productionHttpResponse(
+  result: Awaited<ReturnType<ReturnType<typeof createProduction>['change']>>,
+) {
+  if (result.ok) return { code: 200, value: result.value };
+  const failure = lifecycleErrors[result.failure];
+  return {
+    code: failure.status,
+    value: { ...('state' in result ? result.state : {}), ...failure, message: result.message },
+  };
 }
 
 export function registerProductionRoutes(
@@ -692,8 +713,7 @@ export function registerProductionRoutes(
       return reply
         .code(lifecycleErrors.preparationIdInvalid.status)
         .send({ ...lifecycleErrors.preparationIdInvalid, message: '启动事务标识无效。' });
-    cancelPreparation(id);
-    return reply.send(cancellationResponseSchema.parse({ entered: production.entered(id) }));
+    return reply.send(cancellationResponseSchema.parse(production.cancelPreparation(id)));
   });
   app.post('/operator/production', { bodyLimit: 1024 }, async (request, reply) => {
     if (
@@ -703,14 +723,26 @@ export function registerProductionRoutes(
       return reply
         .code(lifecycleErrors.operatorForbidden.status)
         .send(lifecycleErrors.operatorForbidden);
-    const result = await production.change(
-      request.body as {
-        action?: unknown;
-        expectedRevision?: unknown;
-        preparationId?: unknown;
-      } | null,
-    );
-    return reply.code(result.code).send(result.value);
+    const body = request.body as {
+      action?: unknown;
+      expectedRevision?: unknown;
+      preparationId?: unknown;
+    } | null;
+    const action = body?.action;
+    const validAction =
+      action === 'enter' ||
+      action === 'hide' ||
+      action === 'finish' ||
+      action === 'shutdown' ||
+      action === 'begin-exit' ||
+      action === 'cancel-exit';
+    // Keep conflict and cancellation precedence for malformed actions.
+    const result = await production.change({
+      action: validAction ? action : 'invalid',
+      expectedRevision: typeof body?.expectedRevision === 'string' ? body.expectedRevision : null,
+      preparationId: typeof body?.preparationId === 'string' ? body.preparationId : null,
+    });
+    const response = productionHttpResponse(result);
+    return reply.code(response.code).send(response.value);
   });
-  return production;
 }

@@ -60,7 +60,11 @@ import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
-import { createProduction, registerProductionRoutes } from './program-scenes/production.js';
+import {
+  createProduction,
+  productionHttpResponse,
+  registerProductionRoutes,
+} from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
@@ -2084,7 +2088,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
-      const result = await production.shutdown();
+      const result = productionHttpResponse(await production.shutdown());
       if (result.code !== 200) return reply.code(result.code).send(result.value);
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
