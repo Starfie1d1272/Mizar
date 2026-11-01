@@ -433,12 +433,13 @@ fn set_program_overlay_enabled(
 }
 
 #[tauri::command]
-fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
-    match state.tracker.lock() {
+fn cs2_host_status(state: tauri::State<'_, HostState>) -> Result<serde_json::Value, String> {
+    match state.tracker.try_lock() {
         Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() })
+            Ok(serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() }))
         }
-        Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
+        Err(std::sync::TryLockError::WouldBlock) => Err("游戏窗口操作正在进行，请稍后重试。".into()),
+        Err(std::sync::TryLockError::Poisoned(_)) => Err("桌面窗口状态不可用。".into()),
     }
 }
 
