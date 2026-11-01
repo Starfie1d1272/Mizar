@@ -1,48 +1,62 @@
-import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
 import { StableSource, installerUrl } from '../updates/source.js';
 import { updateJson } from '../updates/network.js';
-import {
-  downloadResourceOriginal,
-  downloadResourceArchive,
-  logBootstrapFallback,
-} from './resource-mirror.mjs';
+import { logBootstrapFallback } from './resource-mirror.mjs';
+import { authenticatePublishedResource } from '../distribution/resources.js';
 import { createActivePolicyVerifier } from '../resource-store/runtime-adapter.js';
 import { PACK_ID } from '@mizar/resource-pack-contract';
 import {
-  RESOURCE_ASSET_NAMES as resourceNames,
   getResourceAuthorization,
-  verifyCatalogResourceMetadata,
-  verifyResourceCatalogBytes,
   verifyResourceCatalogReceipt,
 } from '@mizar/resource-pack-contract/runtime';
 
 const repository = 'Starfie1d1272/Mizar';
-const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const names = {
-  ...resourceNames,
-  descriptorProof: resourceNames.descriptorQualification,
-  catalogProof: resourceNames.catalogPromotion,
-  publicationProof: resourceNames.publicationPromotion,
-  archiveProof: resourceNames.archiveQualification,
-};
 /** Authenticate the existing Core update chain, then both original resource directory proofs. */
 export async function authenticatePublishedBootstrap(options) {
+  const signal = globalThis.AbortSignal.any([
+    options.signal ?? new globalThis.AbortController().signal,
+    globalThis.AbortSignal.timeout(600000),
+  ]);
+  let manifest;
+  let sourceMode = 'auto';
   try {
-    return await authenticateBootstrapSource({ ...options, sourceMode: 'auto' });
+    manifest = await authenticateBootstrapSource({ ...options, signal, sourceMode });
   } catch (mirrorError) {
     logBootstrapFallback('bootstrap authentication fallback', mirrorError);
-    options.signal?.throwIfAborted();
+    signal.throwIfAborted();
+    sourceMode = 'github';
     try {
-      return await authenticateBootstrapSource({ ...options, sourceMode: 'github' });
+      manifest = await authenticateBootstrapSource({ ...options, signal, sourceMode });
     } catch (githubError) {
-      throw new AggregateError(
-        [mirrorError, githubError],
-        'Bootstrap mirror and canonical authentication both failed',
-        { cause: githubError },
-      );
+      throw new AggregateError([mirrorError, githubError], 'Bootstrap core authentication failed', {
+        cause: githubError,
+      });
     }
   }
+  const { authorization, loadVerified } = await authenticatePublishedResource(
+    {
+      core: { appVersion: manifest.version, gitSha: manifest.gitSha },
+      tufCachePath: options.tufCachePath,
+      signal,
+      fetcher: options.fetcher,
+    },
+    sourceMode,
+  );
+  const identity = getResourceAuthorization(authorization);
+  if (options.expectedCore && identity.core.archiveSha256 !== options.expectedCore.coreSha256)
+    throw new Error('Published Core archive differs from the fixed native qualification identity');
+  return {
+    corePlan: Object.freeze({
+      version: manifest.version,
+      gitSha: manifest.gitSha,
+      contentDigest: manifest.installer.contentDigest,
+      name: manifest.installer.name,
+      bytes: manifest.installer.bytes,
+      sha256: manifest.installer.sha256,
+      url: installerUrl(manifest),
+    }),
+    authorization,
+    loadVerified,
+  };
 }
 async function authenticateBootstrapSource({
   version,
@@ -81,84 +95,9 @@ async function authenticateBootstrapSource({
       manifest.installer.bytes !== expectedCore.bytes)
   )
     throw new Error('Published NSIS differs from the fixed native qualification identity');
-  const prefix = `https://github.com/${repository}/releases/download/v${manifest.version}/`;
-  const original = {};
-  for (const name of [names.descriptor, names.descriptorProof, names.catalog, names.catalogProof]) {
-    const maximum = name.endsWith('provenance.json') ? 2097152 : 65536;
-    original[name] = await downloadResourceOriginal({
-      version: manifest.version,
-      name,
-      maximum,
-      signal,
-      fetcher,
-      sourceMode,
-    });
-  }
-  const authorization = await verifyResourceCatalogBytes({
-    descriptorBytes: original[names.descriptor],
-    descriptorBundleBytes: original[names.descriptorProof],
-    catalogBytes: original[names.catalog],
-    catalogBundleBytes: original[names.catalogProof],
-    expectedCore: { appVersion: manifest.version, gitSha: manifest.gitSha },
-    tufCachePath,
-    signal,
-  });
-  const identity = getResourceAuthorization(authorization);
-  if (expectedCore && identity.core.archiveSha256 !== expectedCore.coreSha256)
-    throw new Error('Published Core archive differs from the fixed native qualification identity');
-  // Core metadata and its NSIS are authenticated by the same-run Qualification
-  // proof before the resource catalog is consumed. Legacy Full remains supported.
-  const loadInputs = async (downloadSignal = signal) => {
-    const inputs = {};
-    for (const [field, name, maximum, digest] of [
-      ['archiveBundleBytes', names.archiveProof, 2097152],
-      ['statementBytes', names.publication, 65536, identity.publication.sha256],
-      ['publicationBundleBytes', names.publicationProof, 2097152],
-    ]) {
-      if (identity.assets[name] !== prefix + name)
-        throw new Error('Canonical resource origin changed');
-      const bytes = await downloadResourceOriginal({
-        version: manifest.version,
-        name,
-        maximum,
-        signal: downloadSignal,
-        fetcher,
-        sourceMode,
-      });
-      if (digest && hash(bytes) !== digest)
-        throw new Error('Authenticated resource asset bytes changed');
-      inputs[field] = Buffer.from(bytes);
-    }
-    await verifyCatalogResourceMetadata({
-      authorization,
-      ...inputs,
-      tufCachePath,
-      signal: downloadSignal,
-    });
-    const archiveBytes = await downloadResourceArchive({
-      version: manifest.version,
-      archive: identity.archive,
-      signal: downloadSignal,
-      fetcher,
-      sourceMode,
-    });
-    inputs.archiveBytes = Buffer.from(archiveBytes);
-    return inputs;
-  };
-  return {
-    corePlan: Object.freeze({
-      version: manifest.version,
-      gitSha: manifest.gitSha,
-      contentDigest: manifest.installer.contentDigest,
-      name: manifest.installer.name,
-      bytes: manifest.installer.bytes,
-      sha256: manifest.installer.sha256,
-      url: installerUrl(manifest),
-    }),
-    authorization,
-    loadInputs,
-  };
+  return manifest;
 }
+
 /** Read dual-proof policy from the unique Store's receipt without any network or extra cache. */
 export async function restoreResourceAuthorization({ store, expectedCore, signal }) {
   let authorization;
