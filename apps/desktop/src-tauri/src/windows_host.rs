@@ -711,17 +711,25 @@ impl GameTracker {
         )
         .then_some(client)
     }
-    pub fn restore_focus(&self, source: isize) -> bool {
-        self.owned_window().is_some_and(|window| unsafe {
-            let mut pid = 0;
-            GetWindowThreadProcessId(window.hwnd, &mut pid);
-            pid == window.pid
-                && IsWindow(window.hwnd) != 0
-                && source != 0
-                && GetForegroundWindow() == source
-                && SetForegroundWindow(window.hwnd) != 0
-                && GetForegroundWindow() == window.hwnd
-        })
+}
+
+/// Focus only the verified live game; the tracker is not held across this call.
+pub fn restore_focus(
+    window: Cs2Window,
+    owner: &crate::managed_cs2::WorkspaceProcess,
+    source: isize,
+) -> bool {
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(window.hwnd, &mut pid);
+        owner.is_running()
+            && owner.pid == window.pid
+            && pid == window.pid
+            && IsWindow(window.hwnd) != 0
+            && source != 0
+            && GetForegroundWindow() == source
+            && SetForegroundWindow(window.hwnd) != 0
+            && GetForegroundWindow() == window.hwnd
     }
 }
 

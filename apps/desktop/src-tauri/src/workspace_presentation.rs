@@ -626,10 +626,11 @@ pub(crate) fn attempt_game_focus(
             return Err("process_stopped");
         }
         let tracker = state.tracker.try_lock().map_err(|_| "tracker_busy")?;
-        let window = tracker.window.ok_or("game_window_missing")?;
+        let window = tracker.owned_window().ok_or("game_window_missing")?;
         if window.pid != process.pid {
             return Err("game_window_mismatch");
         }
+        drop(tracker);
         let mut invoked = false;
         let focused = request.attempt(
             focus_session(&process),
@@ -637,7 +638,7 @@ pub(crate) fn attempt_game_focus(
             true,
             |source| {
                 invoked = true;
-                tracker.restore_focus(source)
+                windows_host::restore_focus(window, &process, source)
             },
         );
         if focused {
