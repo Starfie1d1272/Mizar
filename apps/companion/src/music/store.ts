@@ -312,7 +312,10 @@ export class MusicStore {
   }
 
   /** Refresh the in-memory configuration after the coordinator commits a preset. */
-  async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
+  async synchronizeFromPersistence(
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
+  ): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.persistence || !this.runtimeAvailable) throw new Error('music_state_invalid');
       const current = await this.persistence.read();
@@ -326,6 +329,7 @@ export class MusicStore {
       this.automaticEnabled = automaticEnabled;
       this.failure = false;
       this.ready = true;
+      await confirm();
     });
     this.queue = result.catch(() => undefined);
     return result;

@@ -239,13 +239,15 @@ export class HudConfigStore {
   /** Refresh the facade after the coordinator has committed an active configuration. */
   async synchronizeFromPersistence(
     document: HudConfigDocument,
-    canApply: () => boolean = () => true,
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
   ): Promise<void> {
-    await this.commits.run(() => {
+    await this.commits.run(async () => {
       if (!this.persistence) throw new Error('hud_persistence_unavailable');
       if (!canApply()) throw new Error('revision_conflict');
       this.document = parseHudConfigDocument(document);
       this.persistenceError = null;
+      await confirm();
     });
   }
 
@@ -407,7 +409,8 @@ export class HudConfigStore {
       } catch (error: unknown) {
         if (error instanceof Error && error.message === 'capability_unsupported')
           throw new HudConfigPersistenceError(error);
-        this.persistenceError = error instanceof Error ? error.message : String(error);
+        if (!(error instanceof Error && error.message === 'broadcast_receipt_unconfirmed'))
+          this.persistenceError = error instanceof Error ? error.message : String(error);
         this.onDiagnostic('hud_config_persist_failed', error);
         throw new HudConfigPersistenceError(error);
       }

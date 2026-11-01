@@ -231,6 +231,8 @@ export class BroadcastConfigStore {
     return this.applyQueue.flush();
   }
   private envelope: Envelope | null = null;
+  private protectedReceiptResources: ResourceRef[] = [];
+  private readonly unconfirmedConsumers = new Set<ConsumerKind>();
   constructor(private readonly options: BroadcastConfigStoreOptions) {}
   canChangeCamera(): boolean {
     return this.options.canChangeCamera?.() ?? true;
@@ -508,6 +510,7 @@ export class BroadcastConfigStore {
             desired: state?.desired ?? active.moduleRevisions[kind],
             applied: state?.applied?.moduleRevision ?? null,
             error: state?.error ?? null,
+            persistence: this.unconfirmedConsumers.has(kind) ? 'unconfirmed' : 'confirmed',
           },
         ];
       }),
@@ -585,7 +588,29 @@ export class BroadcastConfigStore {
         ...(error && previous?.desired ? { desired: previous.desired } : {}),
       };
       releaseSettledRollback(next);
-      await this.commit(next);
+      // Keep the durable fallback protected until the new receipts are confirmed.
+      if (!this.unconfirmedConsumers.size)
+        this.protectedReceiptResources = this.referencedResources();
+      this.envelope = next;
+      this.unconfirmedConsumers.add(kind);
+      try {
+        await this.commit(next);
+      } catch (error) {
+        throw new Error('broadcast_receipt_unconfirmed', { cause: error });
+      }
+    });
+  }
+  get hasUnconfirmedConsumers(): boolean {
+    return this.unconfirmedConsumers.size > 0;
+  }
+  async retryConsumerReceipts(): Promise<void> {
+    await this.queue.run(async () => {
+      if (!this.envelope || !this.unconfirmedConsumers.size) return;
+      try {
+        await this.commit(structuredClone(this.envelope));
+      } catch (error) {
+        throw new Error('broadcast_receipt_unconfirmed', { cause: error });
+      }
     });
   }
   /** Include resources exposed by durable apply receipts as well as the current document. */
@@ -598,6 +623,7 @@ export class BroadcastConfigStore {
       for (const ref of state.applied?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
     for (const state of Object.values(this.envelope.consumers ?? {}))
       for (const ref of state.rollback?.lock.resources ?? []) refs.set(canonicalJson(ref), ref);
+    for (const ref of this.protectedReceiptResources) refs.set(canonicalJson(ref), ref);
     return structuredClone([...refs.values()]);
   }
   get pendingLegacyCamera(): PendingLegacyCamera | undefined {
@@ -725,6 +751,8 @@ export class BroadcastConfigStore {
     );
     if (!committed) throw new Error('production_busy');
     this.envelope = checked;
+    this.unconfirmedConsumers.clear();
+    this.protectedReceiptResources = [];
   }
   async clone(request: ClonePresetRequest): Promise<{ presetId: string }> {
     const result = await this.queue.run(() =>
@@ -1652,6 +1680,8 @@ export class BroadcastConfigStore {
                 )
                   throw error;
                 this.envelope = disk;
+                this.unconfirmedConsumers.clear();
+                this.protectedReceiptResources = [];
               }
               return {
                 active: structuredClone(active),

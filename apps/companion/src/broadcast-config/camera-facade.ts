@@ -33,7 +33,7 @@ function virtualActiveId(value: CameraModuleV2): string {
 export function createCameraConfigPersistence(
   store: BroadcastConfigStore,
   dependencies: CameraFacadeDependencies,
-): CameraConfigPersistence & { readonly available: boolean } {
+): CameraConfigPersistence {
   async function toLocal(value: CameraModuleV2): Promise<OrchestrationPreset> {
     return orchestrationPresetSchema.parse({
       format: 'mizar.orchestration',
@@ -140,9 +140,6 @@ export function createCameraConfigPersistence(
   }
   return {
     canChange: () => store.canChangeCamera(),
-    get available() {
-      return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
-    },
     read: () => read(),
     readApplied: () => {
       const active = store.fallbackSnapshot('camera');

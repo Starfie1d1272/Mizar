@@ -185,7 +185,8 @@ export function registerBroadcastConfigRoutes(
       return { status: 409, code };
     if (['preset_missing', 'module_missing'].includes(code)) return { status: 404, code };
     if (code === 'capability_unsupported') return { status: 422, code };
-    if (code === 'broadcast_owner_sync_failed') return { status: 503, code };
+    if (code === 'broadcast_owner_sync_failed' || code === 'broadcast_receipt_unconfirmed')
+      return { status: 503, code };
     if (
       [
         'incomplete_preset',
