@@ -103,17 +103,14 @@ test('retries corrupt source with verified bytes and permits bounded gzip text o
   }
 });
 
-test('shares an in-flight MulNX check rather than issuing a second request', async () => {
+test('shares a running MulNX mirror check and never falls back to the anonymous API', async () => {
   const { MulnxTool } = await import('../src/orchestration/tool.js');
   const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-check-'));
   const previousFetch = globalThis.fetch;
-  let githubCalls = 0;
+  const hosts: string[] = [];
   let finish!: (response: Response) => void;
   globalThis.fetch = ((input: Parameters<typeof fetch>[0]) => {
-    const address = new URL(input instanceof Request ? input.url : input.toString());
-    if (address.hostname === 'box.nju.edu.cn')
-      return Promise.resolve(new Response(null, { status: 503 }));
-    githubCalls++;
+    hosts.push(new URL(input instanceof Request ? input.url : input.toString()).hostname);
     return new Promise((resolve) => {
       finish = resolve;
     });
@@ -123,39 +120,38 @@ test('shares an in-flight MulNX check rather than issuing a second request', asy
     await tool.load();
     const first = tool.check(),
       second = tool.check();
+    const completion = Promise.allSettled([first, second]);
     assert.equal(first, second);
-    // The signed index is tried before falling back to upstream metadata.
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(githubCalls, 1);
-    const tag = 'Fixture1';
-    finish(
-      new Response(
-        JSON.stringify([
-          {
-            id: 1,
-            draft: false,
-            published_at: '2026-01-01T00:00:00Z',
-            tag_name: tag,
-            assets: [
-              {
-                id: 2,
-                name: 'MulNX.7z',
-                digest: 'sha256:' + 'a'.repeat(64),
-                size: 1,
-                browser_download_url: `https://github.com/Co1Swet/MulNX_CS2/releases/download/${tag}/MulNX.7z`,
-              },
-            ],
-          },
-        ]),
-      ),
-    );
-    await Promise.all([first, second]);
-    assert.equal(tool.view().latest, tag);
-    assert.equal(githubCalls, 1);
+    finish(new Response(null, { status: 503 }));
+    const results = await completion;
+    assert.ok(results.every((result) => result.status === 'rejected'));
+    assert.deepEqual(hosts, ['box.nju.edu.cn']);
+    assert.equal(tool.view().checkResult, 'error');
   } finally {
     globalThis.fetch = previousFetch;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('rejects anonymous GitHub APIs before transport and does not fall back after mirror failure', async () => {
+  const { StableSource } = await import('../src/updates/source.js');
+  const hosts: string[] = [];
+  const fetcher: typeof fetch = async (input) => {
+    hosts.push(new URL(input instanceof Request ? input.url : input.toString()).hostname);
+    return new Response(null, { status: 503 });
+  };
+  const signal = new AbortController().signal;
+  for (const path of ['releases', 'git/ref/tags/v1.2.0', 'attestations/sha256:abc']) {
+    await assert.rejects(
+      updateRequest('https://api.github.com/repos/Starfie1d1272/Mizar/' + path, signal, fetcher),
+      /update_url_forbidden/,
+    );
+  }
+  assert.deepEqual(hosts, []);
+  const source = new StableSource('unused-trust-cache', fetcher);
+  await assert.rejects(source.latest(signal), /update_network_failed/);
+  await assert.rejects(source.authenticateVersion('1.10.1', signal), /update_network_failed/);
+  assert.deepEqual(hosts, ['box.nju.edu.cn', 'box.nju.edu.cn']);
 });
 
 test('entry checks respect the saved preference while manual checks query both products', async () => {

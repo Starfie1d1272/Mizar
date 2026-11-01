@@ -26,71 +26,10 @@ const execute = promisify(execFile);
 const MAX_ARCHIVE = 64 * 1024 * 1024;
 const MAX_EXPANDED = 512 * 1024 * 1024;
 
-const metadataCache = new Map<string, { value: unknown; until: number }>();
-const metadataPending = new Map<string, Promise<unknown>>();
-let metadataRetry: { until: number; status: number } | undefined;
-
-export function metadataRetryAt(): number | null {
-  return metadataRetry && metadataRetry.until > Date.now() ? metadataRetry.until : null;
-}
-
-export function publicJson(url: string, fresh = false): Promise<unknown> {
-  const cached = metadataCache.get(url);
-  if (!fresh && cached && cached.until > Date.now()) return Promise.resolve(cached.value);
-  if (metadataRetry && metadataRetry.until > Date.now())
-    return Promise.reject(new Error(`mulnx_metadata_http_${metadataRetry.status}`));
-  const pending = metadataPending.get(url);
-  if (pending) return pending;
-  const task = fetchPublicJson(url).finally(() => metadataPending.delete(url));
-  metadataPending.set(url, task);
-  return task;
-}
-
-async function fetchPublicJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    headers: { accept: 'application/vnd.github+json', 'user-agent': 'Mizar-MulNX' },
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!response.ok) {
-    if (
-      response.status === 429 ||
-      (response.status === 403 &&
-        (response.headers.get('x-ratelimit-remaining') === '0' ||
-          response.headers.has('retry-after')))
-    ) {
-      const now = Date.now();
-      const retry = response.headers.get('retry-after');
-      const seconds = retry && /^\d+$/.test(retry) ? Number(retry) * 1000 : 0;
-      const retryDate = retry ? Date.parse(retry) : NaN;
-      const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000;
-      metadataRetry = {
-        status: response.status,
-        until: Math.max(
-          metadataRetry?.until ?? 0,
-          now + 60_000,
-          now + seconds,
-          Number.isFinite(retryDate) ? retryDate : 0,
-          Number.isFinite(reset) ? reset : 0,
-        ),
-      };
-    }
-    throw new Error(`mulnx_metadata_http_${response.status}`);
-  }
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  if (!response.body) throw new Error('mulnx_metadata_empty');
-  for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-    size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw new Error('mulnx_metadata_too_large');
-    chunks.push(chunk);
-  }
-  const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  metadataCache.set(url, { value, until: Date.now() + 5 * 60_000 });
-  return value;
-}
-
-/** Latest published upstream build, including public beta releases; no Mizar-version pin. */
-export async function latestMulnxRelease(readMetadata = publicJson): Promise<MulnxRelease> {
+/** Build/sync only: callers supply their authenticated metadata reader; no client fallback. */
+export async function latestMulnxRelease(
+  readMetadata: (url: string) => Promise<unknown>,
+): Promise<MulnxRelease> {
   const data = await readMetadata(
     `https://api.github.com/repos/${MULNX_REPOSITORY}/releases?per_page=20`,
   );
@@ -351,7 +290,11 @@ export async function extractMulnx(extractor: string, archive: string, destinati
   return { root, files: count, bytes };
 }
 
-export async function upstreamNotice(path: string, tag: string, readMetadata = publicJson) {
+export async function upstreamNotice(
+  path: string,
+  tag: string,
+  readMetadata: (url: string) => Promise<unknown>,
+) {
   const data = (await readMetadata(
     `https://api.github.com/repos/${MULNX_REPOSITORY}/contents/${path}?ref=${encodeURIComponent(tag)}`,
   )) as { encoding?: string; content?: string };

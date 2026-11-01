@@ -50,80 +50,24 @@ namespace Mizar.WebInstaller {
           plan.urls.Length != 1 || plan.urls[0] != "https://github.com/Starfie1d1272/Mizar/releases/download/v" + plan.version + "/" + plan.name)
         throw new InvalidDataException("正式安装身份不完整。");
     }
-    internal static void Check(string json, Plan plan) {
-      ValidatePlan(plan);
-      var serializer=new JavaScriptSerializer {MaxJsonLength=2*1024*1024};
-      var release=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
-      DateTimeOffset published;
-      if (release==null || !release.ContainsKey("draft") || !(release["draft"] is bool) || (bool)release["draft"] ||
-          !release.ContainsKey("prerelease") || !(release["prerelease"] is bool) || (bool)release["prerelease"] ||
-          !release.ContainsKey("tag_name") || !Object.Equals(release["tag_name"],"v"+plan.version) ||
-          !release.ContainsKey("published_at") || !(release["published_at"] is string) ||
-          !DateTimeOffset.TryParse((string)release["published_at"],System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out published) || published> DateTimeOffset.UtcNow ||
-          !release.ContainsKey("assets") || !(release["assets"] is System.Collections.ArrayList))
-        throw new InvalidDataException("对应版本尚未正式公开发布。");
-      var assets=(System.Collections.ArrayList)release["assets"];
-      CheckAsset(assets,plan.name,plan.bytes,plan.sha256,plan.version);
-      if(plan.updateManifestSha256==null) CheckAsset(assets,plan.coreName,plan.coreBytes,plan.coreSha256,plan.version);
-    }
-    static void CheckAsset(System.Collections.ArrayList assets,string name,long bytes,string sha,string version) {
-      int matches=0;
-      foreach(object item in assets) {
-        var asset=item as System.Collections.Generic.Dictionary<string,object>;
-        if(asset==null || !asset.ContainsKey("name") || !Object.Equals(asset["name"],name)) continue;
-        matches++;
-        if(!asset.ContainsKey("size") || !(asset["size"] is int || asset["size"] is long) || Convert.ToInt64(asset["size"])!=bytes ||
-           !asset.ContainsKey("digest") || !Object.Equals(asset["digest"],"sha256:"+sha) ||
-           !asset.ContainsKey("browser_download_url") || !Object.Equals(asset["browser_download_url"],"https://github.com/Starfie1d1272/Mizar/releases/download/v"+version+"/"+name))
-          throw new InvalidDataException("公开资产与固定资格身份不一致。");
-      }
-      if(matches!=1) throw new InvalidDataException("公开资产缺失或重复。");
-    }
     internal static async Task Verify(Plan plan,CancellationToken token) {
       using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
       using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan}) await Verify(plan,client,token);
     }
     internal static async Task Verify(Plan plan,HttpClient client,CancellationToken token) {
       ValidatePlan(plan);
-      try {
-        using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
-          deadline.CancelAfter(15000); await Mirror.Resolve(plan,client,deadline.Token);
-        }
-        return;
-      } catch(Exception error) {Window.SaveDiagnostic(new IOException("Core mirror lookup failed; trying authenticated canonical source.",error));token.ThrowIfCancellationRequested();}
-      await VerifyGithub(plan,client,token);
-    }
-    static async Task VerifyGithub(Plan plan,HttpClient client,CancellationToken token) {
-      ValidatePlan(plan);
       using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
-        deadline.CancelAfter(45000);
-        using(var request=new HttpRequestMessage(HttpMethod.Get,"https://api.github.com/repos/Starfie1d1272/Mizar/releases/tags/v"+plan.version)) {
-          request.Headers.TryAddWithoutValidation("User-Agent","Mizar-WebInstaller");
-          request.Headers.TryAddWithoutValidation("Accept","application/vnd.github+json");
-          using(var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,deadline.Token).ConfigureAwait(false)) {
-            response.EnsureSuccessStatusCode();
-            using(var input=await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-            using(var output=new MemoryStream()) {
-              var buffer=new byte[16384];
-              for(;;) {
-                int count=await input.ReadAsync(buffer,0,buffer.Length,deadline.Token).ConfigureAwait(false);
-                if(count==0) break;
-                if(output.Length+count>2*1024*1024) throw new InvalidDataException("公开版本响应过大。");
-                output.Write(buffer,0,count);
-              }
-              deadline.Token.ThrowIfCancellationRequested();
-              Check(new System.Text.UTF8Encoding(false,true).GetString(output.ToArray()),plan);
-            }
-          }
-        }
+        deadline.CancelAfter(15000);
+        await Mirror.Resolve(plan,client,deadline.Token);
       }
     }
   }
+
   // Box public-state checks compare only immutable Qualification pins. The
   // installed original SDK alone authenticates the dual-signed publication.
   static class Mirror {
     static JavaScriptSerializer Serializer() { return new JavaScriptSerializer {MaxJsonLength=2*1024*1024}; }
-    static async Task<string> Read(HttpClient client,string url,string token,CancellationToken cancel) {
+    static async Task<string> Read(HttpClient client,string url,string token,CancellationToken cancel,int maximum=2*1024*1024) {
       using(var request=new HttpRequestMessage(HttpMethod.Get,url)) {
         if(token!=null) request.Headers.TryAddWithoutValidation("Authorization","Token "+token);
         using(var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false)) {
@@ -131,7 +75,7 @@ namespace Mizar.WebInstaller {
           using(var input=await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
           using(var output=new MemoryStream()) {
             var buffer=new byte[16384];
-            for(;;) {int count=await input.ReadAsync(buffer,0,buffer.Length,cancel).ConfigureAwait(false);if(count==0) break;if(output.Length+count>2*1024*1024) throw new InvalidDataException("镜像响应超限。");output.Write(buffer,0,count);}
+            for(;;) {int count=await input.ReadAsync(buffer,0,buffer.Length,cancel).ConfigureAwait(false);if(count==0) break;if(output.Length+count>maximum) throw new InvalidDataException("镜像响应超限。");output.Write(buffer,0,count);}
             return new System.Text.UTF8Encoding(false,true).GetString(output.ToArray());
           }
         }
@@ -160,12 +104,38 @@ namespace Mizar.WebInstaller {
       DateTimeOffset time;
       if(!Object.Equals(manifest["repository"],"Starfie1d1272/Mizar") || !Object.Equals(manifest["schemaVersion"],"mizar.update.v1") || !Object.Equals(manifest["channel"],"stable") || !Object.Equals(manifest["version"],plan.version) || !Object.Equals(manifest["gitSha"],plan.gitSha) || (corePlan ? !Object.Equals(plan.updateManifestSha256,digest) : !Object.Equals(installer["name"],plan.name) || Convert.ToInt64(installer["bytes"])!=plan.bytes || !Object.Equals(installer["sha256"],plan.sha256) || !Object.Equals(installer["contentDigest"],plan.contentDigest)) || !Object.Equals(publication["schemaVersion"],"mizar.update-publication.v1") || !Object.Equals(publication["repository"],"Starfie1d1272/Mizar") || !Object.Equals(publication["version"],plan.version) || !Object.Equals(publication["gitSha"],plan.gitSha) || !Object.Equals(publication["manifestSha256"],digest) || Convert.ToInt64(publication["releaseId"])<1 || !DateTimeOffset.TryParse((string)publication["publishedAt"],out time) || time>DateTimeOffset.UtcNow) throw new InvalidDataException("镜像与固定资格版本不一致。");
     }
+    internal static string IndexFromMachine(string json) {
+      var carrier=new JavaScriptSerializer {MaxJsonLength=16*1024*1024}.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
+      if(carrier==null || !carrier.ContainsKey("schemaVersion") || !Object.Equals(carrier["schemaVersion"],"mizar.machine-metadata.v1") || !carrier.ContainsKey("files")) throw new InvalidDataException("版本元数据无效。");
+      var files=carrier["files"] as System.Collections.ArrayList;
+      if(files==null || files.Count>32) throw new InvalidDataException("版本元数据超限。");
+      string encoded=null;
+      foreach(object item in files) {
+        var file=item as System.Collections.Generic.Dictionary<string,object>;
+        if(file==null || !file.ContainsKey("name") || !file.ContainsKey("bytesBase64")) throw new InvalidDataException("版本元数据项无效。");
+        if(Object.Equals(file["name"],"update-index.json")) {
+          if(encoded!=null) throw new InvalidDataException("发布索引重复。");
+          encoded=file["bytesBase64"] as string;
+          if(encoded==null || encoded.Length>2800000) throw new InvalidDataException("发布索引无效。");
+        }
+      }
+      if(encoded==null) throw new InvalidDataException("该版本缺少发布索引。");
+      byte[] bytes=Convert.FromBase64String(encoded);
+      if(bytes.Length>2*1024*1024 || Convert.ToBase64String(bytes)!=encoded) throw new InvalidDataException("发布索引编码无效。");
+      return new System.Text.UTF8Encoding(false,true).GetString(bytes);
+    }
     internal static async Task<string> Resolve(Plan plan,HttpClient client,CancellationToken token) {
       if(String.IsNullOrEmpty(plan.boxReadToken)) throw new IOException("镜像只读合同缺失。");
-      await Directory(client,plan,"/Updates",token);
-      string index=await Link(client,plan,"/Updates/latest.json",token);
-      CheckIndex(await Read(client,index,null,token),plan);
       string folder=plan.updateManifestSha256!=null ? "/Runtime/v"+plan.version : "/Stable";
+      if(plan.updateManifestSha256!=null) {
+        await Directory(client,plan,folder,token);
+        string carrierUrl=await Link(client,plan,folder+"/machine-metadata.json",token);
+        CheckIndex(IndexFromMachine(await Read(client,carrierUrl,null,token,16*1024*1024)),plan);
+      } else {
+        await Directory(client,plan,"/Updates",token);
+        string index=await Link(client,plan,"/Updates/latest.json",token);
+        CheckIndex(await Read(client,index,null,token),plan);
+      }
       var entries=await Directory(client,plan,folder,token);int count=0;
       foreach(var item in (System.Collections.ArrayList)entries["dirent_list"]) {
         var entry=(System.Collections.Generic.Dictionary<string,object>)item;

@@ -98,19 +98,14 @@ export class UpdateManager {
     this.root = join(options.stateRoot, 'updates');
     this.source =
       options.source ??
-      new StableSource(
-        join(this.root, 'trust'),
-        options.fetcher,
-        'auto',
-        (stage, error, durationMs) => {
-          if (error === undefined)
-            this.options.log?.(stage, 'update_phase_completed', this.candidate?.version, {
-              operationId: this.operationId,
-              durationMs,
-            });
-          else this.failure(stage, error, durationMs);
-        },
-      );
+      new StableSource(join(this.root, 'trust'), options.fetcher, (stage, error, durationMs) => {
+        if (error === undefined)
+          this.options.log?.(stage, 'update_phase_completed', this.candidate?.version, {
+            operationId: this.operationId,
+            durationMs,
+          });
+        else this.failure(stage, error, durationMs);
+      });
   }
   private now() {
     return this.options.now?.() ?? Date.now();
