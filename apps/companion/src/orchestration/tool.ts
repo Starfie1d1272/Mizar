@@ -81,6 +81,7 @@ export function firstDemoOptions(source: string): string {
 export class MulnxTool {
   private installed: InstalledTool | undefined;
   private latest: MulnxRelease | undefined;
+  private bundled: MulnxRelease | undefined;
   private mirror: MulnxMirror | undefined;
   private sourceName: string | null = null;
   private sourceMessage = '';
@@ -96,6 +97,7 @@ export class MulnxTool {
     | 'downloading'
     | 'verifying'
     | 'installing'
+    | 'preparing-bundle'
     | 'complete'
     | 'error'
     | 'cancelled' = 'idle';
@@ -119,6 +121,7 @@ export class MulnxTool {
   view() {
     return {
       installed: this.installed?.release.tag ?? null,
+      bundled: this.bundled?.tag ?? null,
       latest: this.latest?.tag ?? null,
       busy: Boolean(this.pending),
       message: this.message,
@@ -309,6 +312,15 @@ export class MulnxTool {
   }
   async load() {
     await ensureDirectory(this.directory);
+    // Availability metadata is local; archive integrity is still checked during preparation.
+    try {
+      this.bundled = z
+        .object({ release: releaseSchema })
+        .parse(await readJson(this.bundle, 'release.json')).release;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        this.diagnostic('mulnx_bundle_load', { result: 'failure', error });
+    }
     try {
       const data = z
         .object({
@@ -343,6 +355,7 @@ export class MulnxTool {
         return result;
       })
       .catch((error: unknown) => {
+        if (action === 'mulnx_prepare' && this.phase !== 'cancelled') this.phase = 'error';
         this.message = error instanceof Error ? error.message : String(error);
         this.diagnostic(action, { result: 'failure', error });
         throw error;
@@ -478,24 +491,33 @@ export class MulnxTool {
             throw error;
           if (!update)
             throw new Error(
-              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件；文件已删除时，可在“设置 → 运镜”点击更新 MulNX 重新安装。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
+              'MulNX 启动程序缺失或无法读取。请核对官方来源及 Windows 安全中心的检测记录；处理后重新进入工作台以检查文件；文件已删除时，可在“资源管理”检查更新并重新安装 MulNX。旧版本文件和设置已保留。仍无法使用时，可在“设置 → 游戏与观战 → CS2 启动设置”选择标准启动并保存。',
               { cause: error },
             );
           launcherUnavailable = true;
         }
       }
-      const release = update
-        ? (await this.resolveRelease(true)).release
-        : (this.installed?.release ??
-          z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
-            .release);
-      if (
-        update ||
-        launcherUnavailable ||
-        !this.installed ||
-        this.installed.release.sha256 !== release.sha256
-      )
-        await this.install(release);
+      const preparingBundle = !update && !this.installed;
+      try {
+        const release = update
+          ? (await this.resolveRelease(true)).release
+          : (this.installed?.release ??
+            z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
+              .release);
+        if (
+          update ||
+          launcherUnavailable ||
+          !this.installed ||
+          this.installed.release.sha256 !== release.sha256
+        )
+          await this.install(release);
+      } catch (error) {
+        if (!preparingBundle) throw error;
+        throw new Error(
+          '内置 MulNX 准备失败。请在“资源管理”检查更新并重新安装，或重新安装 Full 完整包；可在“游戏与观战”选择标准启动继续使用。',
+          { cause: error },
+        );
+      }
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(
         root,
@@ -737,6 +759,7 @@ export class MulnxTool {
       const bundled = (await readJson(this.bundle, 'release.json')) as { release?: MulnxRelease };
       const usingBundle = Boolean(bundled?.release && sameMulnxAsset(bundled.release, release));
       if (usingBundle) {
+        this.phase = 'preparing-bundle';
         const source = await safePath(this.bundle, 'MulNX.7z');
         await copyFile(source, archive);
         if (
@@ -783,7 +806,7 @@ export class MulnxTool {
           this.downloadAbort = undefined;
         }
       }
-      this.phase = 'installing';
+      this.phase = usingBundle ? 'preparing-bundle' : 'installing';
       const unpacked = join(stage, 'unpacked');
       await extractMulnx(extractor, archive, unpacked);
       const notices = join(stage, 'Mizar-Upstream-Notices');

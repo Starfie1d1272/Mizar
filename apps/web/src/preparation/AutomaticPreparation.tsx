@@ -1,9 +1,14 @@
+import type { OrchestrationView } from '@mizar/protocol/orchestration';
+import { useLocalRead } from './client';
 import { useEffect, useState } from 'react';
 import { readObsConfigurationContext } from '../workspace/obs-client';
 import { StatusBanner } from '../ui';
 
 /** Show the Host's existing OBS configuration outcome. */
 export function AutomaticPreparation() {
+  const camera = useLocalRead<OrchestrationView>(
+    window.__TAURI_INTERNALS__ ? '/local/v1/orchestration' : null,
+  );
   const [configurationMessage, setConfigurationMessage] = useState('');
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -32,6 +37,9 @@ export function AutomaticPreparation() {
   }, []);
   return (
     <>
+      {camera?.tool?.phase === 'preparing-bundle' && camera.tool.busy ? (
+        <StatusBanner tone="info">正在准备内置 MulNX，完成后将继续启动工作台…</StatusBanner>
+      ) : null}
       {configurationMessage ? (
         <StatusBanner tone="info">{configurationMessage}</StatusBanner>
       ) : null}
