@@ -11,12 +11,14 @@ export interface RadarProps {
   readonly appearance?: 'default' | 'shanghai' | 'esl';
   readonly source?: RadarViewSource | undefined;
   readonly snapshot?: RadarSnapshot | null | undefined;
+  readonly staticFrame?: boolean | undefined;
   readonly zoomMode?: 'full-map' | 'auto' | undefined;
   readonly presentationRevision?: number | undefined;
 }
 
 export function Radar({
   source,
+  staticFrame = false,
   snapshot,
   zoomMode,
   presentationRevision,
@@ -26,6 +28,7 @@ export function Radar({
   const frame = useMemo(() => toRadarViewFrame(snapshot ?? null), [snapshot]);
   return (
     <RadarView
+      staticFrame={staticFrame}
       appearance={appearance}
       client={source}
       snapshot={frame}
@@ -40,12 +43,14 @@ export function Radar({
 
 export function RadarWidget({
   radarSource,
+  staticFrame,
   radarSnapshot,
   settings,
   presentationRevision,
 }: RadarHudWidgetRendererProps) {
   return (
     <Radar
+      staticFrame={staticFrame}
       appearance={
         hudDesignForVariant(settings.variant) === 'perfectworld'
           ? 'shanghai'

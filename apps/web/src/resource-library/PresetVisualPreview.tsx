@@ -32,10 +32,12 @@ export function PresetVisualPreview({
   bindings,
   modules,
   mode = 'preset',
+  staticFrame = false,
 }: {
   bindings: Binding[];
   modules: Entry[];
   mode?: 'preset' | 'hud' | 'program';
+  staticFrame?: boolean;
 }) {
   const [scene, setScene] = useState<ProgramSceneId>(mode === 'program' ? 'waiting' : 'gameplay');
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
@@ -98,8 +100,12 @@ export function PresetVisualPreview({
       : visuals.program !== null && supportsProgramScene(visuals.program, scene);
 
   return (
-    <section className="resource-library__preview" aria-label="方案画面预览">
-      <div className="resource-library__preview-heading">
+    <section
+      className="resource-library__preview"
+      aria-label="方案画面预览"
+      data-static-preview={staticFrame}
+    >
+      <div className="resource-library__preview-heading" hidden={staticFrame}>
         <div>
           <h3>画面预览</h3>
           <p>模拟画面 · 示例比赛数据</p>
@@ -141,6 +147,7 @@ export function PresetVisualPreview({
         <div className="resource-library__preview-frame" aria-label="示例画面" data-scene={scene}>
           {scene === 'gameplay' ? (
             <HudCanvasPreview
+              staticFrame={staticFrame}
               resolvedPreset={visuals.hud!.config}
               overlays={visuals.hud!.overlays}
               accent={visuals.hud!.accent}
@@ -184,7 +191,7 @@ export function PresetVisualPreview({
                   preview
                   shortIntro={false}
                   previewBackground={!backgroundUrl}
-                  reducedMotion={reducedMotion}
+                  reducedMotion={staticFrame || reducedMotion}
                 />
               )}
             </div>

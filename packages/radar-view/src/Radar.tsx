@@ -34,6 +34,8 @@ export interface RadarViewProps {
   /** Freeze the current trusted image; the host owns staleness. Null input still clears. */
   readonly paused?: boolean;
   readonly reducedMotion?: boolean;
+  /** Draw a fixed snapshot on input, asset or surface changes, without a frame loop. */
+  readonly staticFrame?: boolean;
   readonly assetBaseUrl: string;
   readonly resolveAssetUrl?: ((url: string) => string) | undefined;
   readonly className?: string;
@@ -50,10 +52,12 @@ export function RadarView({
   className,
   paused = false,
   reducedMotion,
+  staticFrame = false,
   zoomMode = 'full-map',
   presentationRevision = 0,
 }: RadarViewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const redraw = useRef<(() => void) | null>(null);
   const currentPaused = useRef(paused);
   const currentReducedMotion = useRef(reducedMotion);
   const currentSnapshot = useRef(snapshot);
@@ -63,7 +67,8 @@ export function RadarView({
     currentReducedMotion.current = reducedMotion;
     currentSnapshot.current = snapshot;
     currentPresentationRevision.current = presentationRevision;
-  }, [presentationRevision, snapshot, paused, reducedMotion]);
+    if (staticFrame) redraw.current?.();
+  }, [presentationRevision, snapshot, paused, reducedMotion, staticFrame]);
   useEffect(() => {
     const element = canvas.current;
     const context = element?.getContext('2d');
@@ -84,7 +89,9 @@ export function RadarView({
     let cacheBoundary: string | null = null;
     const invalidateSurface = () => {
       surfaceDirty = true;
+      if (staticFrame && !disposed && !frame) frame = requestAnimationFrame(render);
     };
+    redraw.current = invalidateSurface;
     const resizeObserver =
       typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(invalidateSurface);
     resizeObserver?.observe(element);
@@ -120,6 +127,7 @@ export function RadarView({
       if (!image) {
         image = new Image();
         const assetUrl = radarAssetUrl(url, assetBaseUrl);
+        if (staticFrame) image.onload = invalidateSurface;
         image.src = resolveAssetUrl ? resolveAssetUrl(assetUrl) : assetUrl;
         images.set(url, image);
       }
@@ -150,6 +158,7 @@ export function RadarView({
     accept();
     const render = () => {
       if (disposed) return;
+      frame = 0;
       if (lastPresentationRevision !== currentPresentationRevision.current) {
         lastPresentationRevision = currentPresentationRevision.current;
         lastStatic = undefined;
@@ -169,14 +178,16 @@ export function RadarView({
         (!currentPaused.current || currentSnapshot.current == null)
       ) {
         lastStatic = currentSnapshot.current;
+        if (staticFrame) frozenAt = now;
         model.accept(lastStatic ?? null, now, restoreStaticBoundary);
         restoreStaticBoundary = false;
         updateUtilityPhaseDataset();
       }
-      if (currentPaused.current) frozenAt ??= now;
+      if (currentPaused.current || staticFrame) frozenAt ??= now;
       else frozenAt = null;
       now = frozenAt ?? now;
-      const reduceMotion = currentReducedMotion.current ?? motionPreference?.matches ?? false;
+      const reduceMotion =
+        staticFrame || (currentReducedMotion.current ?? motionPreference?.matches ?? false);
       model.tick(now, zoomMode === 'auto', reduceMotion);
       if (reduceMotion) {
         for (const marker of model.grenades.values())
@@ -869,11 +880,12 @@ export function RadarView({
       if (!payload) {
         // Safe fail-closed presentation without disruptive center placeholder
       }
-      frame = requestAnimationFrame(render);
+      if (!staticFrame) frame = requestAnimationFrame(render);
     };
     frame = requestAnimationFrame(render);
     return () => {
       disposed = true;
+      redraw.current = null;
       cancelAnimationFrame(frame);
       unsubscribe?.();
       resizeObserver?.disconnect();
@@ -883,12 +895,13 @@ export function RadarView({
       model.reset();
       images.clear();
     };
-  }, [client, zoomMode, assetBaseUrl, resolveAssetUrl, appearance]);
+  }, [client, zoomMode, assetBaseUrl, resolveAssetUrl, appearance, staticFrame]);
   return (
     <canvas
       aria-label="比赛雷达"
       className={['mizar-radar-view', className].filter(Boolean).join(' ')}
       ref={canvas}
+      data-radar-static={staticFrame}
       data-radar-paused={paused}
       data-radar-source={client ? 'client' : 'snapshot'}
     />

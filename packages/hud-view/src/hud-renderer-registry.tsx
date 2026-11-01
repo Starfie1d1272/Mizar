@@ -39,6 +39,7 @@ export interface HudWidgetRendererProps extends HudWidgetRendererBaseProps {
 
 /** Radar owns an independent source contract and does not require ProgramSnapshot. */
 export interface RadarHudWidgetRendererProps extends HudWidgetRendererBaseProps {
+  readonly staticFrame?: boolean | undefined;
   readonly radarSnapshot?: RadarSnapshot | null | undefined;
   readonly radarSource?: RadarViewSource | undefined;
 }
