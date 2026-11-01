@@ -452,11 +452,10 @@ pub(crate) fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
     let epoch = state.overlay_epoch.load(Ordering::Acquire);
     let workspace_windows = overlay_workspace_windows(app);
     let rect = if state.visible.load(Ordering::Acquire) {
-        state
-            .tracker
-            .lock()
-            .ok()
-            .and_then(|tracker| tracker.overlay_rect(&workspace_windows))
+        let Ok(tracker) = state.tracker.try_lock() else {
+            return;
+        };
+        tracker.overlay_rect(&workspace_windows)
     } else {
         None
     };

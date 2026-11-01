@@ -424,12 +424,16 @@ fn restore_cs2_focus(
 }
 
 #[tauri::command]
-fn set_program_overlay_enabled(
+async fn set_program_overlay_enabled(
     app: tauri::AppHandle,
     enabled: bool,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
-    workspace_presentation::set_overlay_enabled(app, enabled, diagnostic_operation_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace_presentation::set_overlay_enabled(app, enabled, diagnostic_operation_id)
+    })
+    .await
+    .map_err(|error| format!("HUD 状态操作失败：{error}"))?
 }
 
 #[tauri::command]
@@ -679,7 +683,8 @@ async fn finish_managed_cs2(
 }
 
 #[tauri::command]
-fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
+async fn workspace_exit_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
     let state = app.state::<production_exit::WorkspaceExit>().status();
     let window_message = app
         .state::<HostState>()
@@ -688,6 +693,7 @@ fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
         .ok()
         .and_then(|tracker| tracker.window_message());
     serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message, "windowMessage": window_message })
+    }).await.map_err(|error| format!("退出状态不可用：{error}"))
 }
 
 #[tauri::command]
