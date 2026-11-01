@@ -755,7 +755,12 @@ function WorkspaceDockContent() {
                       ) {
                         setMessage('');
                         setErrorMessage(
-                          status.message || '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。',
+                          status.geometry?.preserveSettings
+                            ? '本次启动保留原游戏设置，未接管游戏窗口布局。需要自动布局时请先正常退出游戏，在准备中心完成恢复后选择自动设置启动。'
+                            : status.message ||
+                                (!status.found
+                                  ? '尚未找到 CS2。打开游戏后再恢复布局。'
+                                  : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
                         );
                         return;
                       }
