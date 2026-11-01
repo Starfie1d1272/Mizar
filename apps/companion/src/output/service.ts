@@ -1478,7 +1478,19 @@ export class OutputService {
     );
   }
 
+  private stopping: Promise<void> | undefined;
+  stopDelivery(): Promise<void> {
+    this.stopping ??= this.stopDeliveryOnce();
+    return this.stopping;
+  }
   async close(): Promise<void> {
+    try {
+      await this.stopDelivery();
+    } finally {
+      await this.outbox?.close();
+    }
+  }
+  private async stopDeliveryOnce(): Promise<void> {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     if (this.outboundTimer !== undefined) clearInterval(this.outboundTimer);
