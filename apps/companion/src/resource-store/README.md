@@ -4,7 +4,7 @@
 
 Companion 的 App 在启动钩子打开唯一 Store，安装器桥通过 `app.getDecorator<() => ResourceStore | undefined>('getResourceStore')()` 获取同一实例。关闭 App 取消并等待安装后释放写入租约。状态与只读路由注册到现有 Fastify 服务，不创建监听器。
 
-Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bundle 内可选 `resource-policy.json` 读取固定策略；`coreVersion` 必须匹配当前 Core，不能用镜像 receipt 推导策略。缺少固定策略时拒绝缓存授权，保留旧 Full 随包 URL。该文件可携带经同一 Core/bootstrap 授权的 `cacheHistory`，供离线旧版恢复；未批准的历史版本不能仅凭 receipt 自报身份进入允许列表。独立素材更新的策略必须由认证的 bootstrap/catalog 提供，不能写入未签镜像字段。
+Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bundle 内可选 `resource-policy.json` 读取固定策略；`coreVersion` 必须匹配当前 Core，不能用镜像 receipt 推导策略。缺少固定策略时，仅允许由当前 Core 绑定的签名目录离线恢复授权；没有对应证据则保留 Full 随包 URL。该文件可携带经同一 Core/bootstrap 授权的 `cacheHistory`，供离线旧版恢复；未批准的历史版本不能仅凭 receipt 自报身份进入允许列表。独立素材更新的策略必须由认证的 bootstrap/catalog 提供，不能写入未签镜像字段。
 
 原 `fixtures/epl-*` 和 `fixture-media/epl-s24` URL 在有活动缓存时通过 Store 验证读取；活动缓存的错误或缺失成员明确失败，不混入 Full 的另一个版本。没有活动缓存时继续使用原 Full 随包素材。制作中的下载只准备；激活与 production 的 enter/hide/finish/shutdown、Host 更新共用互斥区，并在提交期间阻断场景切换。内部演练的强制场景请求保留最后一个目标，在提交结束后应用，避免绕过安全场景或丢失正常演练操作。
 
@@ -28,13 +28,23 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 
 `reuseLegacy(packId, {directory, receipt}, options)` 仅复制经外部授权及逐文件校验的旧内容，不修改原随包文件。集成层提供已有 v1.1 素材的授权证据，不能用旧目录自算摘要冒充来源验证。
 
+## 升级后的恢复
+
+启动仍离线验证。目录没有当前 Core 授权时返回 `resource_authorization_required`，不将其判为文件损坏，也不信任旧 receipt 的自报身份。共享获取入口失败以 `resource_preparation_failed` 保留完整 cause，不从非结构化异常猜测下载或签名失败；Store 文件完整性错误仍独立保留。诊断和原版本目录、receipt 不清除。
+
+资源卡片的「重新准备素材」调用 `POST /local/v1/resources/official:epl-default/repair`。Companion 将已认证 productRuntime 的版本和源码身份传给 `distribution/resources.ts` 的 `fetchPublishedResource`，与安装器共用目录获取、来源选择、传输和 SDK 验证入口。恢复适配器只将已验证成员写入 Store 准备目录并返回原 receipt，不另行编排目录或 ZIP 获取。该动作不查询最新应用版本，不更新 Core，不续签或改写旧 receipt。不能取得合法当前授权时明确失败，不根据内容相同放行。
+
+下载和准备均在同一 Store 的 `repair` 操作内，状态、字节数、取消和互斥继续由 Store 持有。验证通过后按既有生命周期锁激活；制作中只准备，结束制作后通过 `POST /local/v1/resources/official:epl-default/activate` 启用。失败保留最后有效活动资源，旧版本目录和证据仍保留。这里选择重新准备受信资源，避免把安装器专用的直接活动缓存复用入口暴露给运行中的页面。
+
+Full 可用且无活动独立缓存时，卡片以「内置素材可用」为主状态，旧缓存原因和恢复操作收在默认折叠的「独立缓存维护（可选）」中，用户可直接忽略并继续使用。卡片分别显示独立缓存与 Full 随包来源；随包存在性来自同一 Web 根目录的 EPL 清单。无活动缓存时沿原静态 URL 使用 Full；有活动缓存时严格读取该版本，成员错误不能混入 Full。Core 缺素材只影响 EPL 示例预览，不阻止无关开播。当前错误在卡片详情中按资源身份、错误码和日志阶段定位，完整诊断仍使用既有入口。
+
 ## 只读资源
 
 `read(packId, relativePath, range?)` 返回独立字节快照，限定 manifest 中的相对路径及数据媒体类型。文件以只读 fd 打开；同一次读取核对完整摘要、尺寸及变化，并收集请求的 Range 字节。全部校验完成前没有响应字节离开 Store，避免验证后重新打开路径的竞态。最多八个读取、合计 128 MiB 返回缓冲区；视频 Range 仍复验完整文件，性能应在真实素材上测量。
 
 `resolveReadOnlyPath` 仅供原生集成检查已验证路径；路径返回后仍可能被本机其它进程改动，HTTP 必须用 `read`，不能将此路径重新交给静态服务打开。
 
-路由为 `GET /local/v1/resources`、`GET /local/v1/resources/:packId`、`GET /local/v1/resources/:packId/files/*`。只提供查询和读取；没有 renderer 下载/删除控制面。视频支持单 Range、后缀 Range、HEAD；多 Range 或越界请求返回 416。资源类型允许列表、`nosniff` 和禁止执行的 CSP 共同约束数据资源，不支持脚本、HTML 或可执行程序。SVG 必须经过外部 manifest 契约的固定路径与摘要授权；Store 不复制另一套 SVG 发布身份规则。
+路由为 `GET /local/v1/resources`、`GET /local/v1/resources/:packId`、`GET /local/v1/resources/:packId/files/*`。查询和读取保持原有边界。产品运行环境另提供本机受信任页面的固定 EPL 恢复动作，不能指定 URL、Core 身份或本机路径；不提供删除控制面。视频支持单 Range、后缀 Range、HEAD；多 Range 或越界请求返回 416。资源类型允许列表、`nosniff` 和禁止执行的 CSP 共同约束数据资源，不支持脚本、HTML 或可执行程序。SVG 必须经过外部 manifest 契约的固定路径与摘要授权；Store 不复制另一套 SVG 发布身份规则。
 
 ## 验证边界
 

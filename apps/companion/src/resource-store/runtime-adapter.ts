@@ -64,7 +64,16 @@ export function createRuntimeVerifier(
       '1.1.0',
   );
   return async (input) => {
-    const descriptor = await verify(input);
+    let descriptor;
+    try {
+      descriptor = await verify(input);
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'resource_authorization_required')
+        throw new ResourceStoreError('resource_authorization_required', undefined, {
+          cause: error,
+        });
+      throw error;
+    }
     const encoded = (input.receipt as { manifestBase64?: unknown } | null)?.manifestBase64;
     if (typeof encoded !== 'string') throw new ResourceStoreError('resource_receipt_invalid');
     return {

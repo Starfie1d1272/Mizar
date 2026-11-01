@@ -165,6 +165,10 @@ export async function verifyResourceReceipt({
         descriptor.core?.gitSha === corePin.gitSha
       );
     });
+    if (matching.length === 0)
+      throw Object.assign(new Error('缓存没有当前 Core 授权；需要重新准备受信素材'), {
+        code: 'resource_authorization_required',
+      });
     requireValue(
       matching.length >= 1 &&
         matching.length <= 2 &&

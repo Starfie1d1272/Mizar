@@ -562,6 +562,15 @@ export class UpdateManager {
         manifest.installer.bytes,
         signal,
         sources.map((source) => source.request),
+        ({ error, source, order, ...diagnostic }) =>
+          this.options.log?.('download_sources', 'source_response_probe', manifest.version, {
+            operationId: this.operationId,
+            ...diagnostic,
+            candidates: sources.map((entry) => entry.name),
+            source: source === undefined ? undefined : sources[source]!.name,
+            order: order?.map((index) => sources[index]!.name),
+            ...(error === undefined ? {} : { error: diagnosticValue(error) }),
+          }),
       );
       this.sourceMessage = '';
       try {
@@ -592,7 +601,10 @@ export class UpdateManager {
         if (!signal.aborted) forgetSourceOrder(key);
         throw error;
       }
-      this.event('download', 'verified');
+      this.options.log?.('download', 'verified', manifest.version, {
+        operationId: this.operationId,
+        source: this.downloadSource,
+      });
       signal.throwIfAborted();
       this.ready = { directory: directory.slice(this.root.length + 1), manifest };
       await writeFile(join(this.root, 'ready.tmp'), JSON.stringify(this.ready), { mode: 0o600 });

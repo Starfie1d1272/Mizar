@@ -1,5 +1,5 @@
 import { lstat, readFile } from 'node:fs/promises';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { replaceDurableJson } from './match-context/durable-json.js';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
@@ -67,6 +67,7 @@ import {
 } from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
+import { REPLAY_IDS } from '@mizar/resource-pack-contract';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
 import { ResourceStore } from './resource-store/store.js';
 import {
@@ -1274,7 +1275,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   }
   if (options.resources) {
     app.decorate('getResourceStore', () => resources);
-    registerResourceRoutes(app, () => resources);
+    registerResourceRoutes(
+      app,
+      () => resources,
+      options.productRuntime?.appVersion
+        ? {
+            core: {
+              appVersion: options.productRuntime.appVersion,
+              gitSha: options.productRuntime.gitSha,
+            },
+            root: options.resources.root,
+            originPolicy: () => localWebTransport.getOriginPolicy(),
+          }
+        : undefined,
+    );
     app.addHook('onReady', async () => {
       try {
         resources = await ResourceStore.open({
@@ -1781,6 +1795,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const tool = catalogToolLoaded ? catalogTool?.view() : undefined;
     return reply.header('cache-control', 'no-store').send({
       resources: resources?.list() ?? null,
+      resourceRecoveryAvailable: Boolean(resources && options.productRuntime?.appVersion),
+      bundledEplAvailable: REPLAY_IDS.every((id) =>
+        existsSync(
+          join(options.webRoot ?? defaultWebRoot(), 'fixtures', id, 'replay/manifest.json'),
+        ),
+      ),
       tool: tool
         ? {
             ...tool,

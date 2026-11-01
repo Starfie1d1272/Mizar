@@ -111,6 +111,7 @@ export function Cs2LaunchSettings() {
           </div>
           {preferences?.preferMulnx ? (
             <p>
+              Full 完整包已包含 MulNX，首次启动工作台时自动准备，无需先检查更新或安装。
               进入工作台时由 MulNX 自动检查环境并启动
               CS2，无需操作启动器页面。检测到完美世界竞技平台等冲突时，先退出提示的程序再重试。需要支持一键启动的
               MulNX 版本；仅用于离线 Demo 或已授权观战。

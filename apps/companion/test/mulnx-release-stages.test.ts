@@ -29,6 +29,7 @@ vi.mock('../src/orchestration/tool-mirror.js', () => ({
 }));
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
+  metadataRetryAt: () => null,
   latestMulnxRelease: () =>
     fixture.fail
       ? Promise.reject(new Error('upstream unavailable'))
