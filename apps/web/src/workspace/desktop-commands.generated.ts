@@ -23,7 +23,6 @@ export type DesktopCommand =
   | 'cancel_cs2_preparation'
   | 'begin_managed_camera'
   | 'cancel_managed_camera'
-  | 'attach_external_cs2'
   | 'finish_managed_cs2'
   | 'finish_workspace'
   | 'workspace_exit_status'

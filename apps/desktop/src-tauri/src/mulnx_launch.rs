@@ -894,7 +894,7 @@ fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), Str
             "failure",
             Some(&json!({"expectedPid":pid,"owners":owners}).to_string()),
         );
-        Err("MulNX 网关不属于当前借用的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
+        Err("MulNX 网关不属于当前受管的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
     }
 }
 
@@ -904,7 +904,7 @@ fn controlled_game(
 ) -> Result<managed_cs2::WorkspaceProcess, String> {
     let (context, game) = cs2
         .console_source()?
-        .ok_or("当前借用游戏已失效或实例不唯一，请重新检查。")?;
+        .ok_or("当前受管游戏已失效或实例不唯一，请重新检查。")?;
     if !game.is_running() {
         return Err("当前游戏控制归属未确认，未发送停止命令。".into());
     }
@@ -916,20 +916,18 @@ fn controlled_game(
         &json!({"pid":game.pid,"created":game.created.to_string()}),
         Path::new(executable),
     )?;
-    if game.owned {
-        verify_managed_launch(
-            log,
-            &cs2.mulnx_handoff_status()?,
-            game.pid,
-            game.created,
-            Path::new(executable),
-        )?;
-    }
+    verify_managed_launch(
+        log,
+        &cs2.mulnx_handoff_status()?,
+        game.pid,
+        game.created,
+        Path::new(executable),
+    )?;
     Ok(game)
 }
 
 /// Automation requires the verified game instance to own the live gateway.
-/// Standard and ordinary borrowed games keep the manual connection route.
+/// Standard games keep the manual connection route.
 pub fn observer_control_available(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) -> bool {
     let Ok(game) = controlled_game(cs2, log) else {
         return false;
@@ -950,9 +948,6 @@ pub fn stop_managed_for_exit(
     let Some((context, game)) = cs2.console_source()? else {
         return Ok(());
     };
-    if !game.owned {
-        return Ok(());
-    }
     let executable = PathBuf::from(
         context["executable"]
             .as_str()
@@ -1020,208 +1015,4 @@ pub fn stop_managed_for_exit(
         Some(&format!("pid={} created={}", game.pid, game.created)),
     );
     Ok(())
-}
-
-/// Explicit end of MulNX control. Workbench exit intentionally never calls this.
-pub fn stop_control(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
-    let _launch = LAUNCH_GATE
-        .try_lock()
-        .map_err(|_| "MulNX 正忙，请稍后重试。")?;
-    let gate = app.state::<production_exit::ExitGate>();
-    if !gate.begin() {
-        return Err("正在退出，请等待收尾结果。".into());
-    }
-    let _gate = production_exit::WorkspaceExitGuard(&gate);
-    app.state::<updates::PendingUpdate>().check()?;
-    let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    let mut cs2 = managed.lock().map_err(|_| "CS2 正忙，请稍后重试。")?;
-    if let Some((context, game)) = cs2.pending_mulnx_stop() {
-        let borrowed = cs2.has_external();
-        if borrowed && !cs2.external_matches(&game) {
-            return Err("游戏状态已变化，请检查后重试。".into());
-        }
-        if !borrowed && cs2.workspace_process()?.is_some() {
-            return Err("已有其他游戏，请结束当前工作台后重试。".into());
-        }
-        let exited = game.has_exited()?;
-        let mut submitted = false;
-        if !exited {
-            let executable = PathBuf::from(
-                context["executable"]
-                    .as_str()
-                    .ok_or("无法确认游戏位置，请检查游戏状态。")?,
-            );
-            validate_game_identity(
-                &cs2.mulnx_handoff_status()?,
-                &json!({"pid":game.pid,"created":game.created.to_string()}),
-                &executable,
-            )?;
-            let identity = crate::mulnx_stop::Identity {
-                pid: game.pid,
-                created: game.created,
-                executable,
-            };
-            submitted = crate::mulnx_stop::blocked(log, &identity)?;
-            if submitted {
-                crate::mulnx_stop::verify_absent(&game)?;
-                crate::mulnx_stop::mark_confirmed(log, &identity)?;
-            }
-        }
-        let observer = crate::observer_workspace::finish(log);
-        let detached = if borrowed {
-            // The same borrowed handle may already be invalidated by a failed Demo cleanup.
-            cs2.finish()
-        } else {
-            Ok(())
-        };
-        crate::refresh_finished_window_feedback(app, &cs2);
-        drop(cs2);
-        let preparation = crate::open_main(app.clone(), None, None);
-        let hidden = crate::hide_workspace(app);
-        production_exit::cleanup_results(
-            observer,
-            production_exit::cleanup_results(
-                detached,
-                production_exit::cleanup_results(preparation, hidden),
-            ),
-        )?;
-        managed
-            .lock()
-            .map_err(|_| "CS2 正忙，请稍后重试。")?
-            .clear_mulnx_stop();
-        return Ok(if exited {
-            json!({"result":"game-exited", "execution":"unconfirmed"})
-        } else if !submitted {
-            json!({"result":"not-submitted", "execution":"unconfirmed"})
-        } else {
-            json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"})
-        });
-    }
-    let game = controlled_game(&cs2, log)?;
-    if game.owned {
-        return Err("请结束工作台后再停止游戏。".into());
-    }
-    let (context, _) = cs2
-        .console_source()?
-        .ok_or("当前借用游戏身份未确认，未发送停止命令。")?;
-    let identity = crate::mulnx_stop::Identity {
-        pid: game.pid,
-        created: game.created,
-        executable: PathBuf::from(
-            context["executable"]
-                .as_str()
-                .ok_or("当前游戏安装位置未确认。")?,
-        ),
-    };
-    if crate::mulnx_stop::blocked(log, &identity)? {
-        crate::mulnx_stop::verify_absent(&game)?;
-        crate::mulnx_stop::mark_confirmed(log, &identity)?;
-        production_exit::finish_workspace_production(log)?;
-        crate::observer_workspace::finish(log)?;
-        cs2.remember_mulnx_stop(context, game);
-        let detached = cs2.finish();
-        crate::refresh_finished_window_feedback(app, &cs2);
-        drop(cs2);
-        let preparation = crate::open_main(app.clone(), None, None);
-        let hidden = crate::hide_workspace(app);
-        production_exit::cleanup_results(
-            detached,
-            production_exit::cleanup_results(preparation, hidden),
-        )?;
-        managed
-            .lock()
-            .map_err(|_| "CS2 正忙，请稍后重试。")?
-            .clear_mulnx_stop();
-        return Ok(
-            json!({"result":"unknown", "execution":"confirmed", "stopGuard":"already-submitted"}),
-        );
-    }
-    verify_gateway_owner(log, 55202, game.pid)?;
-    crate::mulnx_stop::verify_present(&game)?;
-    let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
-    crate::mulnx_stop::verify_present(&game)?;
-    verify_gateway_owner(log, 55202, game.pid)?;
-    production_exit::finish_workspace_production(log)?;
-    let stopped = crate::mulnx_stop::submit(
-        log,
-        &identity,
-        || {
-            // Restoration failure keeps the journal and does not submit unload.
-            crate::observer_workspace::finish(log)?;
-            let current = controlled_game(&cs2, log)?;
-            if current.pid != game.pid || current.created != game.created || !game.is_running() {
-                return Err("游戏实例已变化，未发送停止命令。".into());
-            }
-            crate::mulnx_stop::verify_present(&game)?;
-            verify_gateway_owner(log, 55202, game.pid)?;
-            let receipt = log.state_root.join("data/mulnx-launch/current.json");
-            match std::fs::remove_file(receipt) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => {
-                    return Err(log.preserve_error(
-                        "mulnx_stop_receipt",
-                        None,
-                        &error,
-                        "旧启动记录未能失效，已保留 MulNX 供重试。".to_string(),
-                    ))
-                }
-            }
-            let root = crate::bundle_root()?;
-            let mut command = Command::new(root.join("resources/runtime/node.exe"));
-            command
-                .arg(root.join("resources/app/dist/orchestration/provider.js"))
-                .arg("--stop-mulnx")
-                .env_remove("NODE_OPTIONS")
-                .env_remove("NODE_PATH")
-                .creation_flags(0x08000000);
-            Ok(command)
-        },
-        |command| {
-            let output = powershell::run(command, log, "停止 MulNX 控制", Duration::from_secs(8))?;
-            let result = powershell::parse(log, "停止 MulNX 控制", &output)?;
-            log.event("mulnx_stop", "result", Some(&result.to_string()));
-            Ok(result) // queued is only submission; the reservation also covers unknown/rejected outcomes.
-        },
-    );
-    let stopped = stopped.and_then(|mut value| {
-        proof.confirm(&game)?;
-        crate::mulnx_stop::mark_confirmed(log, &identity)?;
-        value["execution"] = "confirmed".into();
-        Ok(value)
-    });
-    // The verified borrowed game remains alive. Safe production finish has already succeeded;
-    // even HUD/transport failure must not leave the borrowed lease or workbench active.
-    let reserved = !matches!(crate::mulnx_stop::blocked(log, &identity), Ok(false));
-    if reserved || stopped.is_err() {
-        cs2.remember_mulnx_stop(context, game);
-    }
-    let detached = cs2.finish();
-    crate::refresh_finished_window_feedback(app, &cs2);
-    drop(cs2);
-    let preparation = crate::open_main(app.clone(), None, None);
-    let hidden = crate::hide_workspace(app);
-    let cleanup = production_exit::cleanup_results(
-        detached,
-        production_exit::cleanup_results(preparation, hidden),
-    );
-    if reserved && stopped.is_ok() && cleanup.is_ok() {
-        managed
-            .lock()
-            .map_err(|_| "CS2 正忙，请稍后重试。")?
-            .clear_mulnx_stop();
-    }
-    if let (Ok(value), Err(error)) = (&stopped, &cleanup) {
-        if value["stopGuard"].is_string() {
-            log.event("mulnx_stop_cleanup", "failure", Some(error));
-            let mut value = value.clone();
-            value["cleanupPending"] = true.into();
-            return Ok(value);
-        }
-    }
-    match (stopped, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(stop), Err(cleanup)) => Err(format!("{stop}\n{cleanup}")),
-    }
 }
