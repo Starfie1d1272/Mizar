@@ -101,13 +101,22 @@ export function MulnxToolControls({
           </Button>
         </p>
       ) : null}
+      {tool.phase === 'preparing-bundle' ? <p role="status">正在准备内置 MulNX…</p> : null}
       {tool.phase === 'installing' ? <p>正在准备版本…</p> : null}
       {!runtimeOnly ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('check')}>
           检查更新
         </Button>
       ) : null}
-      {maintenanceOnly && !tool.latest ? <span>检查后可选择安装或更新。</span> : null}
+      {maintenanceOnly ? (
+        <p>
+          {tool.installed
+            ? '启动时使用已选版本；检查更新是可选操作。'
+            : tool.bundled
+              ? '内置 MulNX 可直接使用。选择 MulNX 后启动工作台，首次自动校验并准备，无需先检查更新或手动安装。'
+              : '尚无本地版本，请检查更新并安装，或安装 Full 完整包。'}
+        </p>
+      ) : null}
       {!runtimeOnly && window.__TAURI_INTERNALS__ && (!maintenanceOnly || tool.latest) ? (
         <Button disabled={busy || tool.busy} onClick={() => void run('update')}>
           {maintenanceOnly
