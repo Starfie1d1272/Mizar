@@ -97,6 +97,7 @@ export function registerLocalTournamentRoutes(
         body.candidateRevision !== current.revision
       )
         return reply.code(409).send({ message: '服务器名单已变化，请重新识别。' });
+      const canCommit = () => candidate()?.revision === current.revision;
       const continuityRevision = () =>
         rosterCandidate(
           options.projections?.getRosterEvidence() ?? null,
@@ -104,9 +105,8 @@ export function registerLocalTournamentRoutes(
           controller.getActiveRevision(),
         )?.revision;
       const expectedContinuity = continuityRevision();
-      const canCommit = () => candidate()?.revision === current.revision;
-      // The commit itself updates Team templates; post-commit activation checks observation only.
       const canActivate = () => continuityRevision() === expectedContinuity;
+
       try {
         if (operation === 'create-from-server') {
           if (controller.getActiveBinding() || !['bo1', 'bo3', 'bo5'].includes(String(body.format)))
@@ -126,7 +126,8 @@ export function registerLocalTournamentRoutes(
             store.getSnapshot().teams.find((team) => team.teamId === id)?.players ?? [];
           const existingName = (id: string | undefined) =>
             store.getSnapshot().teams.find((team) => team.teamId === id)?.name;
-          const document = await store.createMatch(
+          await controller.createLocalTournamentMatch(
+            store,
             {
               teamA: current.ctName ?? (typeof body.teamA === 'string' ? body.teamA : ''),
               teamB: current.tName ?? (typeof body.teamB === 'string' ? body.teamB : ''),
@@ -144,8 +145,8 @@ export function registerLocalTournamentRoutes(
               ]),
             },
             canCommit,
+            canActivate,
           );
-          if (canActivate()) controller.activateLocalDocument(document);
         } else {
           const active = controller.getActiveBinding();
           if (active?.origin !== 'local' || active.localAuthoringMode !== 'standalone')
@@ -156,7 +157,8 @@ export function registerLocalTournamentRoutes(
           const ct = current.ctEntrant ?? body.ctEntrant;
           if (!document || (ct !== 'a' && ct !== 'b'))
             return reply.code(400).send({ message: '请确认当前 CT 对应哪支队伍。' });
-          const updated = await store.saveMatch(
+          await controller.saveCurrentLocalMatch(
+            store,
             {
               ...document,
               entrants: {
@@ -178,9 +180,9 @@ export function registerLocalTournamentRoutes(
                 },
               },
             },
-            canCommit,
+            current.contextRevision,
+            { canCommit, canActivate },
           );
-          if (canActivate()) controller.activateLocalDocument(updated);
         }
         return { ok: true };
       } catch (error) {
@@ -211,7 +213,7 @@ export function registerLocalTournamentRoutes(
     )
       return reply.code(400).send({ error: 'local_match_invalid' });
     try {
-      const document = await store.createMatch({
+      const document = await controller.createLocalTournamentMatch(store, {
         teamA: body.teamA,
         teamB: body.teamB,
         ...(body.teamAId === undefined ? {} : { teamAId: body.teamAId }),
@@ -221,13 +223,14 @@ export function registerLocalTournamentRoutes(
         ...(body.eventName === undefined ? {} : { eventName: body.eventName }),
         mapPool: DEFAULT_LOCAL_BP_MAP_POOL,
       });
-      controller.activateLocalDocument(document);
       return { ok: true, matchId: document.matchId };
     } catch (error) {
       request.log.warn(
         { stage: 'control_failure', error: diagnosticValue(error) },
         'Product control failed',
       );
+      if (error instanceof Error && error.message === 'local_context_conflict')
+        return reply.code(409).send({ error: 'local_context_conflict' });
       return reply.code(400).send({ error: 'local_match_create_failed' });
     }
   });
@@ -239,14 +242,15 @@ export function registerLocalTournamentRoutes(
     if (typeof body?.matchId !== 'string')
       return reply.code(400).send({ error: 'local_match_id_invalid' });
     try {
-      const document = await store.selectMatch(body.matchId);
-      controller.activateLocalDocument(document);
+      await controller.selectLocalTournamentMatch(store, body.matchId);
       return { ok: true };
     } catch (error) {
       request.log.warn(
         { stage: 'control_failure', error: diagnosticValue(error) },
         'Product control failed',
       );
+      if (error instanceof Error && error.message === 'local_context_conflict')
+        return reply.code(409).send({ error: 'local_context_conflict' });
       return reply.code(404).send({ error: 'local_match_not_found' });
     }
   });
@@ -331,24 +335,23 @@ export function registerLocalTournamentRoutes(
     if (!canMutate(originPolicy, request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const body = object(request.body);
-    if (body === null || body.expectedContextRevision !== controller.getActiveRevision())
+    if (body === null || typeof body.expectedContextRevision !== 'string')
       return reply.code(409).send({ error: 'local_context_conflict' });
-    const current = controller.getActiveBinding();
-    if (current?.origin !== 'local' || current.localAuthoringMode !== 'standalone')
-      return reply.code(409).send({ error: 'local_match_not_selected' });
     try {
-      const proposed = object(body.document);
-      if (proposed?.matchId !== current.context.matchId)
-        return reply.code(409).send({ error: 'local_match_mismatch' });
-      localDocumentBindingManifest(body.document);
-      const document = await store.saveMatch(body.document);
-      controller.activateLocalDocument(document);
+      await controller.saveCurrentLocalMatch(store, body.document, body.expectedContextRevision);
       return { ok: true };
     } catch (error) {
       request.log.warn(
         { stage: 'control_failure', error: diagnosticValue(error) },
         'Product control failed',
       );
+      const code = error instanceof Error ? error.message : '';
+      if (
+        ['local_context_conflict', 'local_match_not_selected', 'local_match_mismatch'].includes(
+          code,
+        )
+      )
+        return reply.code(409).send({ error: code });
       return reply.code(400).send({ error: 'local_match_save_failed' });
     }
   });
@@ -418,7 +421,7 @@ export function registerLocalTournamentRoutes(
     if (rules !== undefined && !rules.success)
       return reply.code(400).send({ error: 'local_event_invalid' });
     try {
-      await store.saveEvent({
+      await controller.saveLocalEvent(store, {
         eventId: body.eventId,
         name: body.name,
         logoUrl: body.logoUrl,
@@ -426,21 +429,14 @@ export function registerLocalTournamentRoutes(
         mapPool: body.mapPool,
         ...(rules === undefined ? {} : { bo3Rules: rules.data }),
       });
-      const selected = store
-        .getSnapshot()
-        .matches.find((match) => match.matchId === store.getSnapshot().selectedMatchId);
-      if (
-        selected !== undefined &&
-        selected.competition?.competitionId === body.eventId &&
-        controller.getActiveBinding()?.origin === 'local'
-      )
-        controller.activateLocalDocument(selected);
       return { ok: true };
     } catch (error) {
       request.log.warn(
         { stage: 'control_failure', error: diagnosticValue(error) },
         'Product control failed',
       );
+      if (error instanceof Error && error.message === 'local_context_conflict')
+        return reply.code(409).send({ error: 'local_context_conflict' });
       return reply.code(400).send({ error: 'local_event_save_failed' });
     }
   });

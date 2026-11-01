@@ -11,6 +11,8 @@ import {
 import type { ContextEnvelope, MatchDocumentV1 } from '@mizar/core/match-context';
 import { parseMatchDocumentV1 } from '@mizar/protocol/context';
 import { localDocumentBindingManifest } from './local-document-adapter.js';
+import type { LocalTournamentStore } from './local-tournament-store.js';
+import type { LocalBo3BpRules } from '@mizar/protocol/bp';
 
 import { SerialCommitQueue } from './serial-commit.js';
 import { sameManifestPlan } from './manifest-plan.js';
@@ -268,6 +270,132 @@ export class MatchContextController {
     };
     this.setActive(binding);
     return binding;
+  }
+
+  /** Save a current local match, or create and select the first BP match, as one guarded operation. */
+  async saveCurrentLocalMatch(
+    store: LocalTournamentStore,
+    input: unknown,
+    expectedRevision: string,
+    options: {
+      create?: boolean;
+      bo3Rules?: LocalBo3BpRules;
+      canCommit?: () => boolean;
+      canActivate?: () => boolean;
+    } = {},
+  ): Promise<MatchContextBinding> {
+    this.requireFormal();
+    const document = parseMatchDocumentV1(input);
+    localDocumentBindingManifest(document);
+    const generation = this.activeSelectionGeneration;
+    const isCurrent = () =>
+      !this.temporary &&
+      generation === this.activeSelectionGeneration &&
+      expectedRevision === this.getActiveRevision();
+    const canCommit = () => isCurrent() && (options.canCommit?.() ?? true);
+    return this.commitQueue.run(async () => {
+      if (!canCommit()) throw new Error('local_context_conflict');
+      const current = this.activeBinding;
+      if (
+        options.create
+          ? current !== undefined
+          : current?.origin !== 'local' || current.localAuthoringMode !== 'standalone'
+      )
+        throw new Error('local_match_not_selected');
+      if (current && current.context.matchId !== document.matchId)
+        throw new Error('local_match_mismatch');
+      let saved: MatchDocumentV1;
+      try {
+        saved = options.create
+          ? await store.importLegacyMatch(document, options.bo3Rules, canCommit)
+          : await store.saveMatch(document, canCommit);
+      } catch (error) {
+        if (!canCommit()) throw new Error('local_context_conflict', { cause: error });
+        throw error;
+      }
+      if (!isCurrent() || !(options.canActivate?.() ?? true))
+        throw new Error('local_context_conflict');
+      return this.activateLocalDocument(saved);
+    });
+  }
+
+  /** Explicit selection invalidates older in-flight saves before its first await. */
+  async selectLocalTournamentMatch(store: LocalTournamentStore, matchId: string): Promise<void> {
+    this.requireFormal();
+    const generation = ++this.activeSelectionGeneration;
+    const canCommit = () => !this.temporary && generation === this.activeSelectionGeneration;
+    await this.commitQueue.run(async () => {
+      if (!canCommit()) throw new Error('local_context_conflict');
+      let document: MatchDocumentV1;
+      try {
+        document = await store.selectMatch(matchId, canCommit);
+      } catch (error) {
+        if (!canCommit()) throw new Error('local_context_conflict', { cause: error });
+        throw error;
+      }
+      if (!canCommit()) throw new Error('local_context_conflict');
+      this.activateLocalDocument(document);
+    });
+  }
+
+  /** Creating a match is also an explicit selection. */
+  async createLocalTournamentMatch(
+    store: LocalTournamentStore,
+    input: Parameters<LocalTournamentStore['createMatch']>[0],
+    guard: () => boolean = () => true,
+    canActivate: () => boolean = () => true,
+  ): Promise<MatchDocumentV1> {
+    this.requireFormal();
+    const generation = ++this.activeSelectionGeneration;
+    const isCurrent = () => !this.temporary && generation === this.activeSelectionGeneration;
+    const canCommit = () => isCurrent() && guard();
+    return this.commitQueue.run(async () => {
+      if (!canCommit()) throw new Error('local_context_conflict');
+      let document: MatchDocumentV1;
+      try {
+        document = await store.createMatch(input, canCommit);
+      } catch (error) {
+        if (!canCommit()) throw new Error('local_context_conflict', { cause: error });
+        throw error;
+      }
+      if (!isCurrent() || !canActivate()) throw new Error('local_context_conflict');
+      this.activateLocalDocument(document);
+      return document;
+    });
+  }
+
+  /** Event edits remain library operations; refresh the same active local match if still current. */
+  async saveLocalEvent(
+    store: LocalTournamentStore,
+    input: Parameters<LocalTournamentStore['saveEvent']>[0],
+  ): Promise<void> {
+    this.requireFormal();
+    const generation = this.activeSelectionGeneration;
+    const revision = this.getActiveRevision();
+    const active = this.activeBinding;
+    const affected =
+      active?.origin === 'local' &&
+      active.localAuthoringMode === 'standalone' &&
+      active.context.competition?.competitionId === input.eventId;
+    const canCommit = () =>
+      !this.temporary &&
+      generation === this.activeSelectionGeneration &&
+      revision === this.getActiveRevision();
+    await this.commitQueue.run(async () => {
+      if (affected && !canCommit()) throw new Error('local_context_conflict');
+      try {
+        await store.saveEvent(input, affected ? canCommit : undefined);
+      } catch (error) {
+        if (affected && !canCommit()) throw new Error('local_context_conflict', { cause: error });
+        throw error;
+      }
+      if (!affected) return;
+      if (!canCommit()) throw new Error('local_context_conflict');
+      const updated = store
+        .getSnapshot()
+        .matches.find((match) => match.matchId === active!.context.matchId);
+      if (updated) this.activateLocalDocument(updated);
+    });
   }
 
   /** Development rehearsal uses the production conversion path without persisting a fake authority. */
