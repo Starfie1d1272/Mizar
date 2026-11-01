@@ -5,7 +5,7 @@ import type { ObsStatus } from '../obs/adapter.js';
 import { isObsProcessRunning } from '../obs/config.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
-import type { registerProductionRoutes } from '../program-scenes/production.js';
+import type { createProduction } from '../program-scenes/production.js';
 import { UpdateManager, safeCode, updateFailure } from './manager.js';
 import type { MulnxTool } from '../orchestration/tool.js';
 
@@ -31,7 +31,7 @@ export function registerUpdateRoutes(
     manager: UpdateManager;
     originPolicy: LocalWebOriginPolicy;
     controlToken: string;
-    production: ReturnType<typeof registerProductionRoutes>;
+    production: ReturnType<typeof createProduction>;
     scenes: ProgramSceneController;
     obs: () => Promise<ObsStatus | undefined>;
     obsProcessRunning?: () => Promise<boolean>;

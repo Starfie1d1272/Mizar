@@ -5,6 +5,15 @@ import {
   type ProgramSceneState,
 } from '@mizar/protocol/program-scenes';
 import type { BpSession } from '../bp/controller.js';
+import {
+  sceneExecutionScope,
+  sceneMatchScope,
+  sceneRequestScope,
+  sceneResultScope,
+  type SceneMatchScope,
+  type SceneExecutionScope,
+  type SceneResultScope,
+} from '../scope/identities.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
 import { isRegulationHalftime } from './presentation.js';
@@ -40,13 +49,13 @@ export class ProgramDirector {
   private failure: string | null = null;
   private inFlight: ProgramSceneId | null = null;
   private warmupChoice: 'waiting' | 'gameplay' = 'waiting';
-  private warmupChoiceKey = '';
+  private warmupChoiceKey: SceneMatchScope | '' = '';
   private lastTime: number | null = null;
   private elapsed = 0;
   private scene: ProgramSceneId = 'waiting';
   private predictionKey = '';
-  private matchKey = '';
-  private mapKey = '';
+  private matchKey: SceneMatchScope | '' = '';
+  private mapKey: SceneExecutionScope | '' = '';
   private warmupPlayed = false;
   private warmupFinalElapsed = 0;
   private introStarted = false;
@@ -55,9 +64,9 @@ export class ProgramDirector {
   private resultShown = false;
   private wasProduction = false;
   private generation = 0;
-  private observedLiveMap: string | null = null;
+  private observedLiveMap: SceneResultScope | null = null;
   private ggStartedAt: number | null = null;
-  private ggConsumedMap: string | null = null;
+  private ggConsumedMap: SceneResultScope | null = null;
   constructor(
     private readonly projections: ProjectionCoordinator,
     private readonly scenes: ProgramSceneController,
@@ -71,7 +80,7 @@ export class ProgramDirector {
   }
   setWarmupScene(scene: 'waiting' | 'gameplay'): void {
     this.warmupChoice = scene;
-    this.warmupChoiceKey = this.contextKey(this.projections.getCurrent().program);
+    this.warmupChoiceKey = sceneMatchScope(this.projections.getCurrent().program);
     this.generation++;
   }
   private takeBudget(from: ProgramSceneId, to: ProgramSceneId): number {
@@ -114,23 +123,8 @@ export class ProgramDirector {
       p.series?.bindingState === 'bound'
     );
   }
-  private contextKey(p: ProgramProjection): string {
-    return JSON.stringify([
-      p.match?.matchId,
-      p.series?.entrants.a.entryId,
-      p.series?.entrants.b.entryId,
-      p.series?.format,
-      p.series?.maps.map((map) => [map.mapOrder, map.mapName]),
-    ]);
-  }
-  private executionKey(p: ProgramProjection): string {
-    return `${this.contextKey(p)}:${p.cursor.producerInstanceId}:${p.cursor.liveSessionId}:${p.cursor.mapEpoch}:${p.series?.currentMapOrder}`;
-  }
-  private requestKey(p: ProgramProjection): string {
-    return `${this.executionKey(p)}:${p.cursor.programSourceGeneration}`;
-  }
   private predict(p: ProgramProjection, active: ProgramSceneId): void {
-    const key = `${this.requestKey(p)}:${active}`;
+    const key = `${sceneRequestScope(p)}:${active}`;
     const previous = key === this.predictionKey ? this.view.next : null;
     this.predictionKey = key;
     this.view.next = null;
@@ -219,7 +213,7 @@ export class ProgramDirector {
     const delta = this.lastTime === null ? 0 : Math.min(1000, Math.max(0, time - this.lastTime));
     this.lastTime = time;
     const { program: p, operator } = this.projections.getCurrent();
-    const choiceKey = this.contextKey(p);
+    const choiceKey = sceneMatchScope(p);
     if (choiceKey !== this.warmupChoiceKey) {
       this.warmupChoiceKey = choiceKey;
       this.warmupChoice = 'waiting';
@@ -249,14 +243,14 @@ export class ProgramDirector {
       this.view = { ...this.view, mode: 'blocked', reason: this.failure, blockCause: null };
       return;
     }
-    const matchKey = this.contextKey(p);
+    const matchKey = sceneMatchScope(p);
     if (matchKey !== this.matchKey) {
       this.matchKey = matchKey;
       this.mapKey = '';
       this.warmupPlayed = false;
       this.warmupFinalElapsed = 0;
     }
-    const mapKey = this.executionKey(p);
+    const mapKey = sceneExecutionScope(p);
     if (mapKey !== this.mapKey) {
       this.mapKey = mapKey;
       this.introStarted = false;
@@ -314,7 +308,7 @@ export class ProgramDirector {
     const remaining = seconds === null ? 0 : seconds * 1000;
     let target: ProgramSceneId | null = null;
     let finalBp = false;
-    const cueMap = `${matchKey}:${p.cursor.liveSessionId}:${p.cursor.mapEpoch}`;
+    const cueMap = sceneResultScope(p);
     if (p.map.phase === 'live') this.observedLiveMap = cueMap;
     if (
       p.map.phase === 'gameover' &&
@@ -449,7 +443,7 @@ export class ProgramDirector {
     }
     this.inFlight = target;
     const generation = this.generation;
-    const key = this.requestKey(p);
+    const key = sceneRequestScope(p);
     try {
       const result = await this.scenes.selectAutomatic(
         target,
@@ -467,7 +461,7 @@ export class ProgramDirector {
                   this.takeBudget(this.scenes.get().active, 'matchup') +
                   this.takeBudget('matchup', 'gameplay') +
                   this.timings.shortIntroMs)) &&
-          key === this.requestKey(this.projections.getCurrent().program),
+          key === sceneRequestScope(this.projections.getCurrent().program),
         finalBp,
       );
       if (!result.ok) {
@@ -477,7 +471,7 @@ export class ProgramDirector {
         const current = this.projections.getCurrent().program;
         if (
           generation !== this.generation ||
-          (key === this.requestKey(current) &&
+          (key === sceneRequestScope(current) &&
             target !== 'gameplay' &&
             this.safe(current) &&
             (this.hudDue(current, this.scenes.get().active) ||

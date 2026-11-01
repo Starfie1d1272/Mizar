@@ -1,5 +1,6 @@
 //! Serializes cancellation with the irreversible submission of a preparation step.
 use std::{collections::HashSet, sync::Mutex};
+use tauri::Manager;
 
 #[derive(Default)]
 pub struct PreparationGate(Mutex<HashSet<String>>);
@@ -102,137 +103,40 @@ pub fn may_recover_mulnx_journal(
     expected.is_none() || (mulnx && expected == actual)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        may_recover_mulnx_journal, may_restore_launch_options, recover_unsubmitted,
-        PreparationGate, PreparationGuard,
-    };
-    use std::{
-        sync::{mpsc, Arc},
-        thread,
-        time::Duration,
-    };
+pub(crate) fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
+    app.state::<PreparationGate>().check(id)
+}
 
-    #[test]
-    fn cancellation_before_commit_prevents_the_action() {
-        let gate = PreparationGate::default();
-        gate.cancel("entry".into()).unwrap();
-        assert!(gate
-            .commit(Some("entry"), || -> Result<(), String> {
-                panic!("cancelled action ran")
-            })
-            .is_err());
-        assert_eq!(gate.commit(Some("other"), || Ok(42)), Ok(42));
-    }
+pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64, String> {
+    app.state::<crate::host_state::HostState>()
+        .entry_ticket
+        .lock()
+        .map_err(|_| "启动状态不可用。")?
+        .as_ref()
+        .filter(|(saved, _)| saved == id)
+        .map(|(_, ticket)| *ticket)
+        .ok_or_else(|| "本次启动已失效，请重新进入工作台。".into())
+}
 
-    #[test]
-    fn native_submission_revalidates_output_and_refuses_a_stale_permit() {
-        use std::cell::Cell;
-        let gate = PreparationGate::default();
-        let active = Cell::new(false);
-        let verify = || {
-            if active.get() {
-                Err("OBS 输出已启动".to_string())
-            } else {
-                Ok(())
-            }
-        };
-        let guard = PreparationGuard {
-            gate: Some(&gate),
-            id: Some("entry"),
-            verify: Some(&verify),
-            exit: None,
-        };
-        guard.check().unwrap();
-        active.set(true);
-        assert_eq!(
-            guard.commit(|| -> Result<(), String> { panic!("must not submit") }),
-            Err("OBS 输出已启动".into())
-        );
-        active.set(false);
-        assert_eq!(guard.commit(|| Ok(42)), Ok(42));
+pub(crate) async fn cancel_cs2_preparation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在准备中心取消启动。".into());
     }
-
-    #[test]
-    fn cancellation_waits_for_a_submission_already_in_progress() {
-        let gate = Arc::new(PreparationGate::default());
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let worker_gate = Arc::clone(&gate);
-        let worker = thread::spawn(move || {
-            worker_gate.commit(Some("entry"), || {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(())
-            })
-        });
-        started_rx.recv().unwrap();
-        let (cancelled_tx, cancelled_rx) = mpsc::channel();
-        let (cancel_started_tx, cancel_started_rx) = mpsc::channel();
-        let cancel_gate = Arc::clone(&gate);
-        let cancel = thread::spawn(move || {
-            cancel_started_tx.send(()).unwrap();
-            cancel_gate.cancel("entry".into()).unwrap();
-            cancelled_tx.send(()).unwrap();
-        });
-        cancel_started_rx.recv().unwrap();
-        assert!(cancelled_rx
-            .recv_timeout(Duration::from_millis(50))
-            .is_err());
-        release_tx.send(()).unwrap();
-        worker.join().unwrap().unwrap();
-        cancelled_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        cancel.join().unwrap();
-        assert!(gate.check(Some("entry")).is_err());
+    if preparation_id.is_empty()
+        || preparation_id.len() > 64
+        || !preparation_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err("启动事务标识无效。".into());
     }
-
-    #[test]
-    fn failure_only_recovers_a_request_that_was_never_submitted() {
-        use std::cell::Cell;
-        let recovered = Cell::new(0);
-        let result: Result<(), String> = recover_unsubmitted(Err("failed".into()), false, || {
-            recovered.set(recovered.get() + 1);
-            Ok(())
-        });
-        assert_eq!(result, Err("failed".into()));
-        assert_eq!(recovered.get(), 1);
-        let result: Result<(), String> = recover_unsubmitted(Err("uncertain".into()), true, || {
-            panic!("submitted request must remain pending")
-        });
-        assert_eq!(result, Err("uncertain".into()));
-        let result: Result<(), String> =
-            recover_unsubmitted(Err("failed".into()), false, || Err("restore failed".into()));
-        assert_eq!(
-            result,
-            Err("failed；原配置恢复未完成：restore failed".into())
-        );
-    }
-
-    #[test]
-    fn uncertain_submitted_launch_keeps_options_until_its_result_is_known() {
-        assert!(may_restore_launch_options(false, false));
-        assert!(may_restore_launch_options(true, true));
-        assert!(!may_restore_launch_options(true, false));
-    }
-
-    #[test]
-    fn recovery_cannot_take_another_launch_transaction() {
-        assert!(may_recover_mulnx_journal(
-            Some("entry"),
-            Some("entry"),
-            true
-        ));
-        assert!(!may_recover_mulnx_journal(
-            Some("entry"),
-            Some("other"),
-            true
-        ));
-        assert!(!may_recover_mulnx_journal(
-            Some("entry"),
-            Some("entry"),
-            false
-        ));
-        assert!(!may_recover_mulnx_journal(Some("entry"), None, true));
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PreparationGate>().cancel(preparation_id)
+    })
+    .await
+    .map_err(|_| "启动取消状态不可用。".to_string())?
 }

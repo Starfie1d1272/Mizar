@@ -90,7 +90,7 @@ export function MusicControls({
     </Button>
   );
   const resume =
-    status.held || (!compact && status.intent === 'manual') ? (
+    status.held || status.intent === 'manual' || status.stingerHeld ? (
       <Button
         aria-label="恢复自动音乐"
         className={compact ? undefined : 'music-player__resume'}
@@ -104,6 +104,7 @@ export function MusicControls({
     <>
       {error ? <span role="alert">{error}</span> : null}
       {status.message ? <span role="status">{status.message}</span> : null}
+      {status.stingerHeld && !status.held ? <span role="status">音效由 OBS 人工控制</span> : null}
     </>
   );
   if (compact)
@@ -220,7 +221,7 @@ export function MusicControls({
         >
           <option value="">选择已保存曲目</option>
           {Object.entries(view.config.groups).flatMap(([group, spec]) =>
-            group !== 'opening' && spec.enabled
+            group !== 'opening'
               ? spec.tracks
                   .filter((track) => track.entryId)
                   .map((track) => (

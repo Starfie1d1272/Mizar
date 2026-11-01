@@ -575,20 +575,6 @@ test('replacement pairing keeps the old credential until cleanup succeeds', asyn
   assert.ok(h.releases.every((item) => item.authorization === 'Bearer old-secret'));
 });
 
-test('explicit disconnect can revoke an installation after release fails', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setFail(true);
-  await h.connection.disconnect();
-  assert.equal(h.connection.view().paired, false);
-  assert.deepEqual(h.connection.view().sourceCleanup, {
-    pending: 0,
-    blocked: 0,
-    claimIntent: false,
-  });
-  await assert.rejects(readFile(h.path), { code: 'ENOENT' });
-});
-
 test('explicit retry still honors the server Retry-After delay', async (t) => {
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);

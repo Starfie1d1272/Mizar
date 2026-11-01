@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { canonicalJson } from '@mizar/hud-config';
 import {
   defaultMusicConfig,
@@ -14,7 +14,6 @@ import type {
 import type { MusicConfigPersistence, MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
 import { portableMusicConfig, readMusicAsset } from './music-assets.js';
-import { isBuiltinModuleId } from './builtin-modules.js';
 
 function musicRevision(revision: string): string {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(revision))
@@ -53,8 +52,7 @@ export function createMusicConfigPersistence(
     }
     return musicConfigSchema.parse(config);
   }
-  async function read() {
-    const active = store.snapshot.active;
+  async function read(active = store.snapshot.active) {
     return {
       config: await toLocal(active.resolved.music),
       revision: musicRevision(active.moduleRevisions.music),
@@ -62,8 +60,12 @@ export function createMusicConfigPersistence(
     };
   }
   return {
-    initialize: () => read(),
     read,
+    readApplied: () => {
+      const active = store.fallbackSnapshot('music');
+      if (!active) throw new Error('music_state_invalid');
+      return read(active);
+    },
     async commit(config, previous) {
       const document = store.snapshot;
       const active = document.active;
@@ -75,46 +77,15 @@ export function createMusicConfigPersistence(
         active.resolved.music?.automaticEnabled ?? false,
       );
       const lock = await lockFor(value, active);
-      const captured = document.modules.find(
-        (item) => item.id === active.sourceModuleIds?.music && item.kind === 'music',
-      );
-      const usages = captured
-        ? document.presets.filter((preset) =>
-            preset.bindings.some(
-              (binding) => binding.mode === 'use' && binding.moduleId === captured.id,
-            ),
-          ).length
-        : 0;
-      const reusable =
-        captured?.kind === 'music' &&
-        !isBuiltinModuleId(captured.id) &&
-        usages <= 1 &&
-        canonicalJson(captured.value) === canonicalJson(active.resolved.music);
-      const moduleId = reusable ? captured.id : randomUUID();
-      await store.updateFromLegacy({
-        updateDraft(next) {
-          if (next.active.revision !== active.revision) throw new Error('revision_conflict');
-          const existing = next.modules.find((item) => item.id === moduleId);
-          if (reusable) {
-            if (!existing || existing.kind !== 'music' || existing.revision !== captured.revision)
-              throw new Error('revision_conflict');
-            existing.value = value;
-          } else {
-            if (existing) throw new Error('revision_conflict');
-            next.modules.push({
-              id: moduleId,
-              kind: 'music',
-              schemaVersion: 1,
-              revision: randomUUID(),
-              name: '音乐',
-              value,
-              origin: null,
-            });
-          }
-        },
-        active: { kind: 'music', value, lock, moduleId },
+      const committed = await store.applyMusicEdit({
+        expectedActiveRevision: active.revision,
+        value,
+        lock,
       });
-      return read();
+      return {
+        ...(await read()),
+        confirmApplied: () => store.recordConsumer('music', committed.active, null),
+      };
     },
   };
 }

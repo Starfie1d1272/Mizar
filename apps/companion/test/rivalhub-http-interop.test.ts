@@ -15,7 +15,11 @@ import { OutputService } from '../src/output/service.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { buildApp } from '../src/app.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
-import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import {
+  createProduction,
+  registerProductionRoutes,
+  type ProductionDependencies,
+} from '../src/program-scenes/production.js';
 
 const fixturePath = process.env.MIZAR_INTEROP_FIXTURE;
 const databaseUrl = process.env.MIZAR_INTEROP_DATABASE;
@@ -257,16 +261,35 @@ test(
           selectWaitingForExit: async () => ({ ok: true }),
         } as unknown as ProgramSceneController;
         let restorationAttempts = 0;
-        const production = registerProductionRoutes(app, {
-          originPolicy: createLocalWebOriginPolicy(),
-          hasContext: () => true,
+        const production = createProduction({
           scenes,
-          afterSafeScene: () => {
-            restorationAttempts++;
-            throw new Error('synthetic video restoration deferred');
-          },
-          release: () => connection.release(),
+          music: () => undefined,
+          camera: () => undefined,
+          demo: () => undefined,
+          observer: { endProduction: () => {} } as ProductionDependencies['observer'],
+          binding: () => undefined,
+          waitForBroadcast: async () => {},
+          obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
+          warn: () => {},
+          error: () => {},
+          obs: {
+            pauseAutomatic: () => {},
+            resumeAutomatic: () => {},
+            startCommentaryRecovery: () => {},
+            hasCurrentPreparation: () => false,
+            settleAutomatic: async () => {},
+            startBrowserRecovery: () => {},
+            restoreVideo: () => {
+              restorationAttempts++;
+              throw new Error('synthetic video restoration deferred');
+            },
+          } as ProductionDependencies['obs'],
+          source: {
+            clearStats: () => {},
+            release: () => connection.release(),
+          } as ProductionDependencies['source'],
         });
+        registerProductionRoutes(app, { originPolicy: createLocalWebOriginPolicy(), production });
         await app.listen({ host: '127.0.0.1', port: 0 });
         try {
           const base = app.addresses()[0];

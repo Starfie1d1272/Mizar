@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { cp, readFile, writeFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import react from '@vitejs/plugin-react';
+import { LOCAL_PROTOCOL_SUBPROTOCOL, LOCAL_CHANNEL_VERSIONS } from '@mizar/protocol/version';
 
 const resourceMode = process.env.MIZAR_WEB_RESOURCE_MODE ?? 'full';
 if (!['full', 'core-only'].includes(resourceMode)) {
@@ -324,6 +325,24 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      name: 'mizar-local-protocol-identity',
+      transformIndexHtml() {
+        return [
+          {
+            tag: 'meta',
+            attrs: {
+              name: 'mizar-local-protocol',
+              content: JSON.stringify({
+                subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL,
+                channels: LOCAL_CHANNEL_VERSIONS,
+              }),
+            },
+            injectTo: 'head',
+          },
+        ];
+      },
+    },
+    {
       name: 'mizar-lhm-export-runtime',
       async closeBundle() {
         await cp(
@@ -373,6 +392,7 @@ export default defineConfig({
       '/operator/program-director': 'http://127.0.0.1:3000',
       '/operator/rivals-rehearsal/': 'http://127.0.0.1:3000',
       '/operator/production': 'http://127.0.0.1:3000',
+      '/operator/preparation-cancel': 'http://127.0.0.1:3000',
       '/operator/desktop-overlay': 'http://127.0.0.1:3000',
       '/operator/hud-config': 'http://127.0.0.1:3000',
       '/operator/broadcast-presets': 'http://127.0.0.1:3000',
@@ -388,6 +408,7 @@ export default defineConfig({
       '/operator/series': 'http://127.0.0.1:3000',
       '/debug/runtime': 'http://127.0.0.1:3000',
       '/debug/support-bundle': 'http://127.0.0.1:3000',
+      '/local/protocol': 'http://127.0.0.1:3000',
       '/local/v1': {
         target: 'http://127.0.0.1:3000',
         ws: true,

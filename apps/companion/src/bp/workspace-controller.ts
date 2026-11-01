@@ -169,16 +169,24 @@ export function registerBpWorkspaceRoutes(
           matchLabel: prior?.matchLabel ?? null,
           stakesLabel: prior?.stakesLabel ?? null,
         };
-        if (active === undefined)
-          await options.localTournamentStore.importLegacyMatch(document, draft.bo3Rules);
-        else await options.localTournamentStore.saveMatch(document);
-        options.controller.activateLocalDocument(document);
+        await options.controller.saveCurrentLocalMatch(
+          options.localTournamentStore,
+          document,
+          body.expectedContextRevision,
+          active === undefined
+            ? { create: true, ...(draft.bo3Rules ? { bo3Rules: draft.bo3Rules } : {}) }
+            : {},
+        );
         return { ok: true, message: '本地 BP 已保存。' };
       } catch (error) {
         request.log.warn(
           { stage: 'control_failure', error: diagnosticValue(error) },
           'Product control failed',
         );
+        if (error instanceof Error && error.message === 'local_context_conflict')
+          return reply
+            .code(409)
+            .send({ error: 'bp_context_conflict', message: '比赛上下文已更新，请核对后再保存。' });
         return reply.code(400).send({ error: 'bp_save_failed', message: '本地 BP 保存失败。' });
       }
     }

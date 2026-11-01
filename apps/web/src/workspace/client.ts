@@ -1,3 +1,4 @@
+import { invokeDesktopCommand, type DesktopCommand } from './desktop-commands.generated';
 import { browserErrorEvidence, controlEvidence, nativeSnapshot } from '../debug/control-journal';
 import type { ControlTask } from '../debug/control-task';
 import { useEffect, useState } from 'react';
@@ -70,7 +71,7 @@ declare global {
 export class HostWindowControlError extends Error {}
 
 export async function desktopInvoke<T>(
-  command: string,
+  command: DesktopCommand,
   args?: Record<string, unknown>,
   task?: ControlTask,
 ): Promise<T> {
@@ -89,17 +90,21 @@ export async function desktopInvoke<T>(
       args,
     });
   try {
-    const result = await window.__TAURI_INTERNALS__.invoke<T>(command, {
-      ...args,
-      diagnosticOperationId: operationId,
-      ...(task
-        ? {
-            diagnosticTaskId: task.taskId,
-            diagnosticParentOperationId: task.operationId,
-            diagnosticTrigger: task.trigger,
-          }
-        : {}),
-    });
+    const result = await invokeDesktopCommand<T>(
+      (name, payload) => window.__TAURI_INTERNALS__!.invoke<T>(name, payload),
+      command,
+      {
+        ...args,
+        diagnosticOperationId: operationId,
+        ...(task
+          ? {
+              diagnosticTaskId: task.taskId,
+              diagnosticParentOperationId: task.operationId,
+              diagnosticTrigger: task.trigger,
+            }
+          : {}),
+      },
+    );
     if (observe)
       controlEvidence(command, 'result', {
         taskId: task?.taskId ?? null,

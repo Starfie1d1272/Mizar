@@ -475,13 +475,6 @@ pub fn complete(log: &DesktopLog, request_id: Option<&str>) -> Result<(), String
     Ok(())
 }
 
-pub fn begin_external(log: &DesktopLog, request_id: &str) -> Result<Value, String> {
-    rpc(
-        log,
-        Some(json!({"action":"begin","requestId":request_id,"gameOwnership":"external"})),
-    )
-}
-
 pub fn request(
     log: &DesktopLog,
     action: &str,

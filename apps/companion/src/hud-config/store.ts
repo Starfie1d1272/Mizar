@@ -34,12 +34,14 @@ export interface HudConfigStoreOptions {
 
 /** A coordinator becomes the only writer after initialize succeeds. */
 export interface HudConfigPersistence {
-  initialize(document: HudConfigDocument): Promise<HudConfigDocument>;
+  read(): Promise<HudConfigDocument>;
+  readApplied?(): Promise<HudConfigDocument>;
+  readDraft?(current: HudConfigDocument): HudConfigDocument;
   commit(
     candidate: HudConfigDocument,
     previous: HudConfigDocument,
     command: HudConfigCommandResult,
-  ): Promise<void>;
+  ): Promise<void | (() => Promise<void>)>;
 }
 
 export class HudConfigEditorConflictError extends Error {
@@ -187,9 +189,7 @@ export class HudConfigStore {
     if (this.persistence) {
       await this.commits.run(async () => {
         if (!this.persistence) throw new Error('hud_persistence_unavailable');
-        this.document = parseHudConfigDocument(
-          await this.persistence.initialize(clone(this.document)),
-        );
+        this.document = parseHudConfigDocument(await this.persistence.read());
         this.persistenceError = null;
         this.loaded = true;
       });
@@ -224,41 +224,48 @@ export class HudConfigStore {
     }
   }
 
-  /** Swap writers while the legacy command queue is held; failure leaves the old writer active. */
-  async adoptPersistence(persistence: HudConfigPersistence): Promise<void> {
-    await this.commits.run(async () => {
-      if (!this.loaded || this.loadFailure || this.persistence)
-        throw new Error('hud_persistence_unavailable');
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
-      this.persistence = persistence;
-    });
-  }
-
-  /** Recover an existing coordinator without treating the legacy file as authoritative. */
-  async restorePersistence(persistence: HudConfigPersistence): Promise<void> {
+  /** Bind once after legacy import; the coordinator owns config on both first start and restart. */
+  async bindPersistence(persistence: HudConfigPersistence): Promise<void> {
     await this.commits.run(async () => {
       if (this.persistence) throw new Error('hud_persistence_unavailable');
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
+      this.persistence = persistence;
+      this.document = parseHudConfigDocument(await persistence.read());
       this.persistenceError = null;
       this.loadFailure = false;
       this.loaded = true;
-      this.persistence = persistence;
     });
   }
 
   /** Refresh the facade after the coordinator has committed an active configuration. */
-  async synchronizeFromPersistence(document: HudConfigDocument): Promise<void> {
-    await this.commits.run(() => {
+  async synchronizeFromPersistence(
+    document: HudConfigDocument,
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
+  ): Promise<void> {
+    await this.commits.run(async () => {
       if (!this.persistence) throw new Error('hud_persistence_unavailable');
+      if (!canApply()) throw new Error('revision_conflict');
       this.document = parseHudConfigDocument(document);
       this.persistenceError = null;
+      await confirm();
+    });
+  }
+
+  async restoreAppliedFromPersistence(): Promise<void> {
+    await this.commits.run(async () => {
+      if (!this.persistence?.readApplied) throw new Error('hud_persistence_unavailable');
+      this.document = parseHudConfigDocument(await this.persistence.readApplied());
+      this.persistenceError = null;
+      this.loadFailure = false;
+      this.loaded = true;
     });
   }
 
   getState(): HudConfigState {
-    return createState(this.document, this.persistenceError);
+    return createState(
+      this.persistence?.readDraft?.(this.document) ?? this.document,
+      this.persistenceError,
+    );
   }
 
   async importPresetPack(
@@ -375,6 +382,7 @@ export class HudConfigStore {
     expectedEditorRevision?: string,
   ): Promise<HudConfigMutationState> {
     return this.commits.run(async () => {
+      if (this.persistence?.readDraft) this.document = this.persistence.readDraft(this.document);
       if (expectedEditorRevision !== undefined) {
         const actualRevision = createState(this.document, this.persistenceError).editorRevision;
         if (actualRevision !== expectedEditorRevision) {
@@ -388,18 +396,21 @@ export class HudConfigStore {
         throw new HudConfigCommandError(error instanceof Error ? error.message : 'HUD 配置无效');
       }
       try {
+        let confirm: void | (() => Promise<void>) = undefined;
         if (this.persistence) {
-          await this.persistence.commit(clone(candidate), clone(this.document), command);
+          confirm = await this.persistence.commit(clone(candidate), clone(this.document), command);
         } else if (this.filePath !== undefined) {
           const committed = await replaceDurableJson(this.filePath, candidate);
           if (!committed) throw new Error('HUD 配置提交已取消');
         }
         this.document = candidate;
         this.persistenceError = null;
+        await confirm?.();
       } catch (error: unknown) {
         if (error instanceof Error && error.message === 'capability_unsupported')
           throw new HudConfigPersistenceError(error);
-        this.persistenceError = error instanceof Error ? error.message : String(error);
+        if (!(error instanceof Error && error.message === 'broadcast_receipt_unconfirmed'))
+          this.persistenceError = error instanceof Error ? error.message : String(error);
         this.onDiagnostic('hud_config_persist_failed', error);
         throw new HudConfigPersistenceError(error);
       }

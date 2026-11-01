@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm, rename, readdir, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -176,26 +176,83 @@ async function writeJson(path, data) {
   await writeFile(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
 }
 
+function exitReceiptPath(stateRoot, instanceId) {
+  if (typeof instanceId !== 'string' || !/^[a-f0-9-]{36}$/.test(instanceId))
+    throw new Error('本地运行实例身份无效');
+  return join(stateRoot, 'data', `runtime-exit-${instanceId}.json`);
+}
+
+async function exitReceipt(stateRoot, state) {
+  try {
+    const receipt = JSON.parse(
+      await readFile(exitReceiptPath(stateRoot, state.instanceId), 'utf8'),
+    );
+    if (
+      receipt.instanceId !== state.instanceId ||
+      receipt.pid !== state.pid ||
+      receipt.artifactSha256 !== state.artifactSha256
+    )
+      throw new Error('运行实例退出记录不匹配');
+    return receipt;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export async function stopProduct(
   root,
-  { port = PRODUCT_PORT, stateRoot = writableRoot(root, process.env.MIZAR_STATE_ROOT) } = {},
+  {
+    port = PRODUCT_PORT,
+    stateRoot = writableRoot(root, process.env.MIZAR_STATE_ROOT),
+    artifact,
+    expectedInstance,
+  } = {},
 ) {
   const state = JSON.parse(await readFile(join(stateRoot, 'data/runtime.json'), 'utf8'));
+  if (
+    state.repository !== PRODUCT_REPOSITORY ||
+    !/^[a-f0-9]{64}$/.test(state.artifactSha256) ||
+    !/^[a-f0-9]{64}$/.test(state.controlToken) ||
+    !Number.isSafeInteger(state.pid) ||
+    state.pid <= 0 ||
+    (artifact && state.artifactSha256 !== artifact.artifactSha256) ||
+    (expectedInstance && state.instanceId !== expectedInstance)
+  )
+    throw new Error('本地运行记录无效，未停止任何进程');
+  exitReceiptPath(stateRoot, state.instanceId);
+  let receipt = await exitReceipt(stateRoot, state);
   const health = await healthAt(port);
-  if (!sameRuntime(health, state, state.instanceId))
+  if (!receipt && sameRuntime(health, state, state.instanceId)) {
+    try {
+      const response = await globalThis.fetch(`http://127.0.0.1:${port}/operator/runtime/stop`, {
+        method: 'POST',
+        headers: { 'x-runtime-token': state.controlToken },
+        signal: globalThis.AbortSignal.timeout(15000),
+      });
+      if (!response.ok && sameRuntime(await healthAt(port), state, state.instanceId))
+        throw new Error('停止请求未被接受，请检查运行日志');
+    } catch (error) {
+      if (sameRuntime(await healthAt(port), state, state.instanceId)) throw error;
+      // A concurrent stop may already have closed HTTP; wait for the original instance.
+    }
+  } else if (!receipt && health !== null) {
     throw new Error('当前端口不是此目录启动的制播服务，未停止任何进程');
-  const response = await globalThis.fetch(`http://127.0.0.1:${port}/operator/runtime/stop`, {
-    method: 'POST',
-    headers: { 'x-runtime-token': state.controlToken },
-    signal: globalThis.AbortSignal.timeout(15000),
-  });
-  if (!response.ok) throw new Error('停止请求未被接受，请检查运行日志');
-  const deadline = performance.now() + 35000;
-  while (performance.now() < deadline) {
-    if (!sameRuntime(await healthAt(port), state, state.instanceId)) return;
-    await delay(200);
   }
-  throw new Error('服务未能在 35 秒内停止，请检查运行日志');
+  // Give the matching process its full shutdown budget after the request;
+  // request preparation can itself take time before onClose starts.
+  const deadline = performance.now() + 35000;
+  while (!receipt && performance.now() < deadline) {
+    await delay(200);
+    receipt = await exitReceipt(stateRoot, state);
+  }
+  if (!receipt) {
+    const error = new Error('未能确认制播进程在 35 秒内完成退出，请检查运行日志');
+    error.code = 'RUNTIME_STOP_TIMEOUT';
+    throw error;
+  }
+  if (receipt.code !== 0 || receipt.signal !== null || receipt.error || !receipt.localComplete)
+    throw new Error('制播进程异常退出，本地收尾未确认，请检查运行日志');
 }
 
 /** Packaging-only supervisor. Runtime remains entirely inside Companion. */
@@ -262,6 +319,22 @@ export async function runProduct({
   }
   if (!/^[a-f0-9]{64}$/.test(gsiToken))
     throw new Error('本地 GSI 令牌文件无效，请检查 state/data/gsi-token.txt');
+  // Keep receipts long enough for every concurrent stop waiter, then remove
+  // old instances at the next start so normal use does not grow indefinitely.
+  const dataDir = join(stateRoot, 'data');
+  for (const name of await readdir(dataDir)) {
+    if (
+      !/^runtime-(?:exit|host-exit|flush)-[a-f0-9-]{36}\.json$/.test(name) &&
+      !/^runtime-host-exit-[a-f0-9-]{36}\.\d+-\d+\.tmp$/.test(name)
+    )
+      continue;
+    const path = join(dataDir, name);
+    try {
+      if (Date.now() - (await stat(path)).mtimeMs > 600000) await rm(path, { force: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') log('runtime_receipt_cleanup_failed', { code: error.code });
+    }
+  }
   const instanceId = randomUUID();
   const controlToken = randomBytes(32).toString('hex');
   const statePath = join(stateRoot, 'data/runtime.json');
@@ -321,7 +394,37 @@ export async function runProduct({
       log('companion_exit', { code, signal });
     });
     child.once('close', (code, signal) => {
-      done({ code, signal });
+      void (async () => {
+        try {
+          const receipt = exitReceiptPath(stateRoot, instanceId);
+          const temporary = `${receipt}.${process.pid}.tmp`;
+          let localComplete = false;
+          try {
+            const marker = JSON.parse(
+              await readFile(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), 'utf8'),
+            );
+            localComplete =
+              marker.instanceId === instanceId &&
+              marker.pid === child.pid &&
+              marker.artifactSha256 === artifact.artifactSha256;
+          } catch (error) {
+            if (error.code !== 'ENOENT') log('runtime_flush_marker_invalid', { code: error.code });
+          }
+          await writeJson(temporary, {
+            instanceId,
+            pid: child.pid,
+            artifactSha256: artifact.artifactSha256,
+            code: code ?? null,
+            signal: signal ?? null,
+            error: false,
+            localComplete,
+          });
+          await rename(temporary, receipt);
+          done({ code, signal, localComplete });
+        } catch (error) {
+          done({ error });
+        }
+      })();
     });
   });
   try {
@@ -348,7 +451,7 @@ export async function runProduct({
     log('runtime_ready', { instanceId });
     await open();
     const result = await completion;
-    if (result.error || result.code !== 0)
+    if (result.error || result.code !== 0 || !result.localComplete)
       throw new Error('本地制播服务意外退出，请查看 state/logs 后重新启动');
     return { reused: false };
   } catch (error) {
@@ -358,16 +461,6 @@ export async function runProduct({
     if (!exited) {
       log('companion_rollback');
       child.kill();
-    }
-    try {
-      const state = JSON.parse(await readFile(statePath, 'utf8'));
-      if (state.instanceId === instanceId && state.controlToken === controlToken)
-        await rm(statePath, { force: true });
-    } catch (error) {
-      if (error.code !== 'ENOENT')
-        log('runtime_state_cleanup_failed', {
-          error: safeLogText(error.message, logOptions.secrets),
-        });
     }
     log('supervisor_complete');
   }
@@ -395,7 +488,11 @@ async function main() {
     log('artifact_verified', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
     if (args.has('--stop')) {
       log('product_stop_begin');
-      await stopProduct(bundleRoot, { stateRoot });
+      await stopProduct(bundleRoot, {
+        stateRoot,
+        artifact,
+        expectedInstance: process.env.MIZAR_EXPECTED_RUNTIME_INSTANCE,
+      });
       log('product_stopped');
       return;
     }
@@ -417,5 +514,5 @@ async function main() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main().catch((error) => {
     console.error(error.message);
-    process.exitCode = 1;
+    process.exitCode = error.code === 'RUNTIME_STOP_TIMEOUT' ? 2 : 1;
   });

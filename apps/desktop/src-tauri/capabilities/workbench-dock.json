@@ -1,7 +1,0 @@
-{
-  "identifier": "workbench-dock",
-  "description": "The workbench dock may read preparation status and request retry or cancellation.",
-  "windows": ["workspace-dock"],
-  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
-  "permissions": ["allow-workbench-message", "allow-workbench-status"]
-}

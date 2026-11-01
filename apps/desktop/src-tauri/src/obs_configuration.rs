@@ -11,6 +11,8 @@ use std::{
     },
     time::Duration,
 };
+use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 struct State {
     child: Option<Child>,
@@ -147,13 +149,13 @@ pub fn launch(path: &str, session: Option<(&str, &str)>, log: &DesktopLog) -> Re
     synchronize_request(&mut state, session, log)?;
     reap(&mut state, log)?;
     let path = Path::new(path);
-    if !crate::obs_executable_allowed(path) || !path.is_file() {
+    if !obs_executable_allowed(path) || !path.is_file() {
         return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
     }
     let already_running = if state.child.is_some() {
         true
     } else {
-        let mut probe = crate::background_powershell();
+        let mut probe = crate::powershell::background();
         probe.args([
             "-NoProfile",
             "-NonInteractive",
@@ -271,7 +273,7 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
     if state.child.is_none() {
         return Ok(outcome("not_owned"));
     }
-    let mut probe = crate::background_powershell();
+    let mut probe = crate::powershell::background();
     probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
     let reason =
         match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8)) {
@@ -290,4 +292,172 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
         };
     log.event("obs_configuration", "preserved", Some(reason));
     Ok(outcome(reason))
+}
+
+pub(crate) async fn launch_managed(
+    executable_path: String,
+    log: DesktopLog,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    let diagnostic_log = log.clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<bool, String> = async move {
+        let log = log.clone();
+        tauri::async_runtime::spawn_blocking(move || launch(&executable_path, None, &log))
+            .await
+            .map_err(|error| {
+                command_log.preserve_error(
+                    "launch_obs",
+                    native_operation_id.as_deref(),
+                    &error,
+                    "OBS 程序未能打开。".to_string(),
+                )
+            })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "launch_obs",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+fn obs_executable_allowed(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
+}
+
+pub(crate) async fn select_executable(
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<Option<String>, String> = async move {
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .add_filter("OBS Studio", &["exe"])
+                .blocking_pick_file()
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "select_obs_executable",
+                native_operation_id.as_deref(),
+                &error,
+                "文件选择器未能打开。".to_string(),
+            )
+        })?;
+        let Some(file) = picked else {
+            return Ok(None);
+        };
+        let path = file.into_path().map_err(|error| {
+            command_log.preserve_error(
+                "select_obs_executable",
+                native_operation_id.as_deref(),
+                &error,
+                "无法读取所选文件路径。".to_string(),
+            )
+        })?;
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_none_or(|name| !name.eq_ignore_ascii_case("obs64.exe"))
+            || !path.is_file()
+        {
+            return Err("请选择 OBS Studio 的 obs64.exe。".into());
+        }
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "select_obs_executable",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn begin_configuration(
+    executable_path: String,
+    session_id: String,
+    document_generation: String,
+    log: DesktopLog,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    let diagnostic_log = log.clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<bool, String> = async move {
+        let log = log.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            launch(
+                &executable_path,
+                Some((&session_id, &document_generation)),
+                &log,
+            )
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "begin_obs_configuration",
+                native_operation_id.as_deref(),
+                &error,
+                "OBS 程序未能打开。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "begin_obs_configuration",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn finish_configuration(
+    session_id: String,
+    log: DesktopLog,
+    diagnostic_operation_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let diagnostic_log = log.clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<serde_json::Value, String> = async move {
+        let log = log.clone();
+        tauri::async_runtime::spawn_blocking(move || finish(&session_id, &log))
+            .await
+            .map_err(|error| {
+                command_log.preserve_error(
+                    "finish_obs_configuration",
+                    native_operation_id.as_deref(),
+                    &error,
+                    "OBS 配置状态未能确认，请在 OBS 中手动核对。".to_string(),
+                )
+            })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "finish_obs_configuration",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn read_configuration_context(
+    log: DesktopLog,
+) -> Result<serde_json::Value, String> {
+    let log = log.clone();
+    tauri::async_runtime::spawn_blocking(move || context(&log))
+        .await
+        .map_err(|_| "OBS 配置状态未能确认。".to_string())?
 }

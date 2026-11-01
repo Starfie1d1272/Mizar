@@ -1,3 +1,4 @@
+import { preparationCancelled } from '../program-scenes/preparation-cancellation.js';
 import { z } from 'zod';
 import { timingSafeEqual } from 'node:crypto';
 import { createObsCaptureDiagnosticReader } from './capture-diagnostic.js';
@@ -538,7 +539,9 @@ export function registerObsRoutes(
               : z.string().uuid().safeParse(body.preparationId);
           if (entryId && !entryId.success)
             return reply.code(400).send({ error: 'preparation_invalid' });
-          const valid = options.preparationValid(body?.expectedRevision);
+          const productionValid = options.preparationValid(body?.expectedRevision);
+          const valid = () =>
+            productionValid() && !(entryId?.success && preparationCancelled(entryId.data));
           const connected = () => !request.raw.aborted && !reply.raw.destroyed;
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });

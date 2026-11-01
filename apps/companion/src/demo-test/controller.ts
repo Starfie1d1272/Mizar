@@ -9,7 +9,7 @@ import { replaceDurableJson } from '../match-context/durable-json.js';
 import type { MatchContextController } from '../match-context/controller.js';
 import type { ProgramRuntime } from '../runtime/program-runtime.js';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
-import type { registerProductionRoutes } from '../program-scenes/production.js';
+import type { createProduction } from '../program-scenes/production.js';
 import type { ObsStatus } from '../obs/adapter.js';
 
 const markerSchema = z.object({
@@ -88,7 +88,6 @@ const commandSchema = z.discriminatedUnion('action', [
       requestId: z.uuid(),
       teamAName: z.string().trim().min(1).max(128).optional(),
       teamBName: z.string().trim().min(1).max(128).optional(),
-      gameOwnership: z.literal('external').optional(),
     })
     .strict(),
   z
@@ -117,7 +116,7 @@ export class DemoTestController {
       context: MatchContextController | null;
       runtime: ProgramRuntime;
       scenes: ProgramSceneController;
-      production: ReturnType<typeof registerProductionRoutes>;
+      production: ReturnType<typeof createProduction>;
       obs: () => Promise<ObsStatus | undefined>;
       quarantineOutput: (value: boolean) => void | Promise<void>;
       refresh: () => void;
@@ -230,7 +229,6 @@ export class DemoTestController {
           requestId: body.requestId,
           teamAName: body.teamAName ?? 'A',
           teamBName: body.teamBName ?? 'B',
-          ...(body.gameOwnership ? { gameOwnership: body.gameOwnership } : {}),
         };
         const document = trialDocument(marker);
         if (this.options.canBegin?.() === false)

@@ -260,6 +260,15 @@ export function ResourceModules({
     onRefresh?.();
   };
   const metadata = useLocalRead<{
+    consumers?: Record<
+      string,
+      {
+        desired: string;
+        applied: string | null;
+        error: string | null;
+        persistence: 'confirmed' | 'unconfirmed';
+      }
+    >;
     builtinMusicAvailable?: boolean;
     modules: {
       id: string;
@@ -653,6 +662,25 @@ export function ResourceModules({
 
       {(!snapshot || !directory) && (
         <StatusBanner tone="warning">资源目录暂不可用，请检查本地制播服务。</StatusBanner>
+      )}
+      {(migration?.reason === 'persistence_unconfirmed' ||
+        Object.values(metadata?.consumers ?? {}).some(
+          (state) => state.persistence === 'unconfirmed',
+        )) && (
+        <StatusBanner tone="warning">
+          部分配置的应用结果尚未保存。请检查存储空间和权限；关闭时会再次尝试保存。
+        </StatusBanner>
+      )}
+      {Object.entries(metadata?.consumers ?? {}).map(([kind, state]) =>
+        state.error ? (
+          <StatusBanner key={kind} tone="warning">
+            {labels[kind as keyof typeof labels] ?? kind}配置未能应用；
+            {state.applied ? '保留上一份可用配置。' : '当前没有可用配置。'}
+            {state.error === 'camera_busy'
+              ? '请等待当前镜头操作结束后重试。'
+              : '请恢复相关资源后重新使用。'}
+          </StatusBanner>
+        ) : null,
       )}
       {migration?.state === 'pending' && migration.reason === 'program_dependency_unavailable' && (
         <StatusBanner tone="danger">

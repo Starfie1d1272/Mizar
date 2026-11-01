@@ -1,14 +1,10 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { lifecycleErrors, qualificationSchema } from './lifecycle-contract.js';
 import type { MatchContextController } from './controller.js';
 import type { ProgramRuntime } from '../runtime/program-runtime.js';
 
-const qualificationSchema = z.strictObject({
-  ticket: z.uuid(),
-  matchId: z.string().min(1).max(128),
-  contextRevision: z.string().min(1).max(256),
-});
 const commandSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('prepare') }),
   z.strictObject({ action: z.literal('invalidate') }),
@@ -19,7 +15,7 @@ const commandSchema = z.discriminatedUnion('action', [
 interface ExitWitness {
   readonly matchId: string;
   readonly contextRevision: string;
-  readonly productionRevision: string;
+  readonly productionSession: string;
   readonly sourceGeneration: number;
   readonly receiveSequence: number | null;
   readonly receivedMonotonicMs: number | null;
@@ -33,8 +29,9 @@ export function registerLocalMatchExitRoutes(
     readonly loopback: boolean;
     readonly controller: MatchContextController;
     readonly runtime: ProgramRuntime;
-    readonly isPreparationWaiting: () => boolean;
-    readonly productionRevision: () => string;
+    readonly eligibleSession: () => boolean;
+    readonly isPreparation: () => boolean;
+    readonly productionSession: () => string;
   },
 ) {
   let hostConfirmationRequired = false;
@@ -45,7 +42,7 @@ export function registerLocalMatchExitRoutes(
   const witness = (): ExitWitness | undefined => {
     const binding = options.controller.getActiveBinding();
     if (
-      !options.isPreparationWaiting() ||
+      !options.eligibleSession() ||
       binding?.origin !== 'local' ||
       binding.localAuthoringMode !== 'standalone'
     )
@@ -54,7 +51,7 @@ export function registerLocalMatchExitRoutes(
     return {
       matchId: binding.context.matchId,
       contextRevision: options.controller.getActiveRevision(),
-      productionRevision: options.productionRevision(),
+      productionSession: options.productionSession(),
       sourceGeneration: source.generation,
       receiveSequence: source.lastAccepted?.sequence ?? null,
       receivedMonotonicMs: source.lastAccepted?.receivedMonotonicMs ?? null,
@@ -64,7 +61,7 @@ export function registerLocalMatchExitRoutes(
     current !== undefined &&
     expected.matchId === current.matchId &&
     expected.contextRevision === current.contextRevision &&
-    expected.productionRevision === current.productionRevision &&
+    expected.productionSession === current.productionSession &&
     expected.sourceGeneration === current.sourceGeneration;
   const matches = (expected: ExitWitness, current: ExitWitness | undefined) =>
     matchesIdentity(expected, current) &&
@@ -88,10 +85,15 @@ export function registerLocalMatchExitRoutes(
       supplied.length !== expected.length ||
       !timingSafeEqual(expected, supplied)
     )
-      return reply.code(403).send({ error: 'runtime-control-denied' });
+      return reply
+        .code(lifecycleErrors.runtimeControlDenied.status)
+        .send(lifecycleErrors.runtimeControlDenied);
     const parsed = commandSchema.safeParse(request.body);
     if (!parsed.success)
-      return reply.code(400).send({ message: '游戏退出确认请求无效，请通过桌面重新确认。' });
+      return reply.code(lifecycleErrors.exitQualificationInvalid.status).send({
+        ...lifecycleErrors.exitQualificationInvalid,
+        message: '游戏退出确认请求无效，请通过桌面重新确认。',
+      });
     const body = parsed.data;
     if (body.action === 'invalidate') {
       requireHostConfirmation();
@@ -128,9 +130,10 @@ export function registerLocalMatchExitRoutes(
               current.receivedMonotonicMs >= pending.witness.receivedMonotonicMs))
         : matches(pending.witness, current))
     )
-      return reply
-        .code(409)
-        .send({ message: '比赛或制作状态已变化，退出资格未确认。请通过桌面重新关闭游戏并确认。' });
+      return reply.code(lifecycleErrors.exitQualificationChanged.status).send({
+        ...lifecycleErrors.exitQualificationChanged,
+        message: '比赛或制作状态已变化，退出资格未确认。请通过桌面重新关闭游戏并确认。',
+      });
     if (body.action === 'settle') {
       pending = { ticket: pending.ticket, witness: current!, settled: true };
       return { ok: true };
@@ -144,6 +147,7 @@ export function registerLocalMatchExitRoutes(
     requireHostConfirmation,
     canConfirmLocalExit: () => Boolean(options.controlToken) && witness() !== undefined,
     canReleaseLocalSelection: () => {
+      if (!options.isPreparation()) return false;
       const current = witness();
       if (!current) return false;
       return (

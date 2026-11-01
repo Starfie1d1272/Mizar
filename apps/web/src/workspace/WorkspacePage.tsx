@@ -1,3 +1,4 @@
+import { cancelProductionEntry, retryPendingPreparation } from '../preparation/client';
 import { useRadarViewSource } from '../realtime/radar-view-source';
 import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
@@ -18,7 +19,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
-import type { OperatorPayload } from '@mizar/protocol/operator';
+import type { OperatorPayload, SeriesBindingView } from '@mizar/protocol/operator';
 import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { getRadarArtwork } from '@mizar-hud/radar-view';
 import { useBpSession } from '../bp/client';
@@ -92,6 +93,10 @@ function ContextPanel({
     operator?.matchContext.rosterAuthority === 'rivalhub' ? '/local/v1/rivalhub-connection' : null,
     3000,
   );
+  const seriesBinding = useLocalRead<{ binding: SeriesBindingView | null }>(
+    match ? '/local/v1/series-binding' : null,
+    3000,
+  )?.binding;
   const rosterAlert = workspaceLiveRosterAlert(
     operator,
     program,
@@ -190,6 +195,31 @@ function ContextPanel({
           )}
           onOpen={openPreparation}
         />
+      ) : null}
+      {seriesBinding?.ownership?.status === 'attention' ? (
+        <StatusBanner tone="warning">
+          {seriesBinding.ownership.reason === 'previous_execution'
+            ? '当前游戏执行属于上一场，本场结果与同步待确认。'
+            : seriesBinding.ownership.reason === 'recovery_unverified'
+              ? '恢复记录缺少当前执行的归属证明，本场结果与同步待确认。'
+              : '新地图执行的比赛归属待确认。'}{' '}
+          <Button
+            onClick={() => {
+              setIssueError(null);
+              void openPreparation('/matches#series-binding').catch((error: unknown) =>
+                setIssueError({
+                  key: issueKey,
+                  message: error instanceof Error ? error.message : '处理页面无法打开，请重试。',
+                }),
+              );
+            }}
+          >
+            查看处理方式
+          </Button>
+          {visibleIssueError ? <span role="alert">{visibleIssueError}</span> : null}
+        </StatusBanner>
+      ) : seriesBinding?.ownership?.status === 'associated' ? (
+        <StatusPill tone="success">地图执行已关联本场</StatusPill>
       ) : null}
       {program?.map.phase !== 'warmup' ? (
         <LiveRosterAlert
@@ -638,12 +668,8 @@ function WorkspaceDockContent() {
         {entryNotice ? (
           <StatusBanner tone="warning">
             {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
-            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'retry' })}>
-              重试准备
-            </Button>{' '}
-            <Button onClick={() => void desktopInvoke('workbench_message', { action: 'cancel' })}>
-              取消准备
-            </Button>
+            <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>{' '}
+            <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
           </StatusBanner>
         ) : null}
         <div className="workspace-section-heading">
@@ -757,7 +783,7 @@ function WorkspaceDockContent() {
             onClick={() =>
               production &&
               void action(async () => {
-                await desktopInvoke('workbench_message', { action: 'cancel' }).catch(() => {});
+                await cancelProductionEntry().catch(() => {});
                 await productionAction('finish', production);
               }, true)
             }

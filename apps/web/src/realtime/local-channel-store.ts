@@ -35,7 +35,7 @@ export class LocalChannelStore<TSnapshot extends SnapshotEnvelopeLike> {
   };
 
   setState(state: LocalChannelConnectionState, error: string | null = null): void {
-    this.update({ state, error });
+    this.update(state === 'live' ? { state, error } : { state, error, current: null, reset: null });
   }
 
   accept(snapshot: TSnapshot, reset: SnapshotResetSignals): void {

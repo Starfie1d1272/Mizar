@@ -3,10 +3,12 @@ import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
+import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 import { manifestPlanFingerprint } from '../match-context/manifest-plan.js';
 import { hasLineupMismatchOnly } from './lineup-mismatch.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
+import { sameMapExecution, sameMatchIdentity, sameSourceSession } from '../scope/identities.js';
 import {
   ReliableOutbox,
   type DeliveryContinuity,
@@ -34,8 +36,13 @@ export interface OutputServiceOptions {
   readonly liveSink?: LiveSnapshotConsumer;
   readonly now?: () => Date;
   readonly authorityScope?: () => string | null;
+  readonly exactSource?: () => ExactSource | undefined;
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
+  readonly isExecutionOwnedBy?: (binding: MatchContextBinding) => boolean;
+  readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
+  readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
+  readonly onOutboxLoadError?: (error: unknown) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
     event: ReliableEventV1,
@@ -57,6 +64,7 @@ export class OutputService {
   private closed = false;
   private readonly retiringScopes = new Set<string>();
   private quarantined = false;
+  private outboxUnavailable = false;
   async setQuarantined(value: boolean): Promise<void> {
     this.quarantined = value;
     if (value) await this.outbox?.flushPending();
@@ -120,6 +128,17 @@ export class OutputService {
       : undefined;
   }
 
+  private sourceFor(
+    matchId: string | undefined,
+    cursor: ReliableEventV1['cursor'],
+  ): ExactSource | null | undefined {
+    if (!this.options.exactSource) return undefined;
+    const source = this.options.exactSource?.();
+    return source && source.matchId === matchId && sameSourceSession(source, cursor)
+      ? source
+      : null;
+  }
+
   private async materializeIntents(): Promise<void> {
     const binding = this.binding;
     const bundle = this.bundle;
@@ -145,12 +164,11 @@ export class OutputService {
         intent.expired ||
         intent.authorityFingerprint !== authority ||
         intent.planFingerprint !== manifestPlanFingerprint(binding.manifest) ||
-        binding.context.matchId !== intent.event.matchId ||
+        !sameMatchIdentity(binding.context, intent.event) ||
         binding.context.competition?.competitionId !== intent.event.competitionId ||
         binding.context.entrants.a.entryId !== intent.event.entryAId ||
         binding.context.entrants.b.entryId !== intent.event.entryBId ||
-        c.producerInstanceId !== e.producerInstanceId ||
-        c.liveSessionId !== e.liveSessionId ||
+        !sameSourceSession(c, e) ||
         c.programSourceGeneration !== e.programSourceGeneration ||
         c.mapEpoch < e.mapEpoch
       )
@@ -192,7 +210,7 @@ export class OutputService {
       bundle.program.status.identity !== 'matched' ||
       bundle.program.map.phase !== 'live' ||
       bundle.program.match?.matchId !== event.matchId ||
-      binding.context.matchId !== event.matchId ||
+      !sameMatchIdentity(binding.context, event) ||
       bundle.program.map.name !== event.mapName ||
       !this.mapStartScope
     )
@@ -201,10 +219,8 @@ export class OutputService {
     const e = event.cursor;
     if (
       !e.liveSessionId ||
-      c.producerInstanceId !== e.producerInstanceId ||
-      c.liveSessionId !== e.liveSessionId ||
-      c.programSourceGeneration !== e.programSourceGeneration ||
-      c.mapEpoch !== e.mapEpoch
+      !sameMapExecution(c, e) ||
+      c.programSourceGeneration !== e.programSourceGeneration
     )
       return undefined;
     const current = bundle.program.players
@@ -281,11 +297,9 @@ export class OutputService {
       const c = e.cursor;
       if (
         item.status !== 'pending' ||
-        e.matchId !== record.event.matchId ||
-        c.producerInstanceId !== target.producerInstanceId ||
-        c.liveSessionId !== target.liveSessionId ||
+        !sameMatchIdentity(e, record.event) ||
+        !sameMapExecution(c, target) ||
         c.programSourceGeneration !== target.programSourceGeneration ||
-        c.mapEpoch !== target.mapEpoch ||
         c.runtimeSeq > target.runtimeSeq
       )
         return false;
@@ -405,7 +419,14 @@ export class OutputService {
   }
 
   async start(): Promise<void> {
-    await this.outbox?.load();
+    try {
+      await this.outbox?.load();
+    } catch (error) {
+      this.outboxUnavailable = true;
+      this.options.onOutboxLoadError?.(error);
+      this.onDiagnostic?.('outbox_unavailable');
+      return;
+    }
     const continuity = this.outbox?.getContinuity();
     if (
       continuity !== undefined &&
@@ -423,7 +444,8 @@ export class OutputService {
         id: 'cloud-live',
         send: (snapshot) => {
           const current = this.current(true);
-          return this.getBoundaryStatus() === null &&
+          return this.executionEligible(this.binding) &&
+            this.getBoundaryStatus() === null &&
             current !== null &&
             current.cursor.liveSessionId === snapshot.cursor.liveSessionId
             ? this.options.liveSink!.send(current)
@@ -455,6 +477,10 @@ export class OutputService {
     this.binding = binding;
   }
 
+  private executionEligible(binding: MatchContextBinding | undefined): boolean {
+    return binding !== undefined && (this.options.isExecutionOwnedBy?.(binding) ?? true);
+  }
+
   setCurrent(bundle: ProjectionBundle, binding: MatchContextBinding | undefined): void {
     if (this.closed) return;
     this.bundle = bundle;
@@ -467,6 +493,7 @@ export class OutputService {
     const players = bundle.program.players.filter((p) => p.lineupEvidence === 'current');
     if (
       scope &&
+      this.executionEligible(binding) &&
       bundle.program.status.context === 'fresh' &&
       bundle.program.status.telemetry === 'fresh' &&
       bundle.program.status.identity === 'matched' &&
@@ -634,10 +661,44 @@ export class OutputService {
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
 
-    if (this.quarantined || binding?.origin === 'fixture') {
+    if (this.quarantined || this.outboxUnavailable || binding?.origin === 'fixture') {
       return;
     }
     const cursor = bundle.program.cursor;
+    if (binding && !this.executionEligible(binding)) {
+      if (
+        this.outbox &&
+        (result.disposition.reason === 'source-generation-advanced' ||
+          result.transitions.some((transition) => transition.kind === 'map_execution_changed'))
+      ) {
+        const priorScope = this.boundaryScope(
+          this.options.executionOwnerMatchId?.(cursor.runtimeSeq),
+          cursor,
+        );
+        // Current binding authority may belong to a different match than this execution.
+        let scope: BoundaryScope | undefined;
+        if (priorScope) {
+          const { authorityFingerprint, ...rest } = priorScope;
+          void authorityFingerprint;
+          scope = rest;
+        }
+        const key = this.boundaryScopeKey(scope);
+        this.boundaryCommits.set(key, (this.boundaryCommits.get(key) ?? 0) + 1);
+        void this.outbox
+          .captureBoundaries([], [], undefined, true, this.now(), scope)
+          .then(() => this.onDiagnostic?.('outbox_boundary_gap'))
+          .catch(() => {
+            this.quarantined = true;
+            this.onDiagnostic?.('outbox_boundary_capture_failed');
+          })
+          .finally(() => {
+            const remaining = (this.boundaryCommits.get(key) ?? 1) - 1;
+            if (remaining) this.boundaryCommits.set(key, remaining);
+            else this.boundaryCommits.delete(key);
+          });
+      }
+      return;
+    }
     if (
       binding &&
       cursor.liveSessionId &&
@@ -647,6 +708,7 @@ export class OutputService {
     )
       return;
 
+    const managedSourceId = this.options.managedSourceId?.();
     const continuity: DeliveryContinuity | undefined =
       binding === undefined
         ? undefined
@@ -656,6 +718,7 @@ export class OutputService {
             cursor: bundle.program.cursor,
             mapName: result.state.map.name ?? null,
             savedAt: now,
+            ...(managedSourceId ? { managedSourceId } : {}),
           };
     const transitions = result.transitions.filter(
       (transition) => transition.kind === 'map_execution_changed',
@@ -777,7 +840,15 @@ export class OutputService {
       const pendingKey = this.boundaryScopeKey(outputScope);
       this.boundaryCommits.set(pendingKey, (this.boundaryCommits.get(pendingKey) ?? 0) + 1);
       void this.outbox
-        .captureBoundaries(events, intents, continuity, missing, this.now(), outputScope)
+        .captureBoundaries(
+          events,
+          intents,
+          continuity,
+          missing,
+          this.now(),
+          outputScope,
+          this.sourceFor(binding?.context.matchId, cursor),
+        )
         .then(() => {
           if (this.outbox?.hasBoundaryOverflow(outputScope))
             this.onDiagnostic?.('outbox_boundary_overflow');
@@ -926,6 +997,7 @@ export class OutputService {
           event.kind === 'map_started' ? retainedLineup : undefined,
           start?.recovery,
           this.boundaryScope(event.matchId, event.cursor),
+          this.sourceFor(event.matchId, event.cursor),
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
@@ -933,25 +1005,24 @@ export class OutputService {
           if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         })
         .catch(() => {
-          if (boundary) this.quarantined = true;
+          if (boundary && !this.outbox?.hasPendingEnqueue(event.idempotencyKey))
+            this.quarantined = true;
           this.onDiagnostic?.('outbox_enqueue_failed');
         })
         .finally(() => {
           if (boundary) this.boundaryEnqueues.delete(event);
-          if (start !== undefined && this.pendingMapStart === start)
+          if (
+            start !== undefined &&
+            this.pendingMapStart === start &&
+            !this.outbox?.hasPendingEnqueue(start.key)
+          )
             this.pendingMapStart = undefined;
         });
     }
   }
 
   async retry(): Promise<void> {
-    if (
-      this.closed ||
-      this.quarantined ||
-      this.outbox === undefined ||
-      this.retryPending ||
-      this.binding?.origin === 'fixture'
-    ) {
+    if (this.closed || this.outboxUnavailable || this.outbox === undefined || this.retryPending) {
       return;
     }
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
@@ -961,20 +1032,42 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
+      await this.outbox.retryPendingEnqueues();
+      const start = this.pendingMapStart;
+      if (
+        start &&
+        !this.outbox.hasPendingEnqueue(start.key) &&
+        this.outbox.getRecords().some((record) => record.event.idempotencyKey === start.key)
+      ) {
+        if (start.revision === this.mapStartRevision) this.publishedMapStart = start;
+        if (start.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
+        this.pendingMapStart = undefined;
+      }
+      if (this.quarantined || this.binding?.origin === 'fixture') return;
       await this.outbox.expireBoundaryIntents(this.now());
+      if (this.closed) return;
       await this.materializeIntents();
+      if (this.closed) return;
       await this.reconcileFence();
+      if (this.closed) return;
       if (this.sink === undefined)
         await this.outbox.sweep(
           (event, lineup) => this.isCurrentForRetry(event, lineup),
           this.now(),
         );
       else {
+        const source = this.options.exactSource?.();
+        if (source) await this.outbox.bindUnsentSource(source);
+        if (this.closed) return;
         const invalidatedStarts = await this.outbox.flush({
           sink: this.sink,
           now: this.now(),
-          isCurrent: (event, lineup) => this.quarantined || this.isCurrentForRetry(event, lineup),
+          // Closing suppresses new sends without converting retained work into
+          // superseded records while the last in-flight send settles.
+          isCurrent: (event, lineup) =>
+            this.closed || this.quarantined || this.isCurrentForRetry(event, lineup),
           canSend: (event, lineup) => {
+            if (this.closed) return false;
             const allowed = this.canSend(event, lineup);
             if (!allowed) {
               try {
@@ -1051,9 +1144,11 @@ export class OutputService {
             return allowed;
           },
         });
+        if (this.closed) return;
         if (this.publishedMapStart && invalidatedStarts.includes(this.publishedMapStart.key))
           this.publishedMapStart = undefined;
         await this.reconcileFence();
+        if (this.closed) return;
         await this.recoverRejectedStart();
       }
     } catch {
@@ -1066,7 +1161,7 @@ export class OutputService {
   }
 
   getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
-    if (this.quarantined) return 'continuity_chain_missing';
+    if (this.quarantined || this.outboxUnavailable) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
     if (!scope) return null;
     if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
@@ -1097,12 +1192,35 @@ export class OutputService {
     return null;
   }
 
+  isReliableAvailable(): boolean {
+    return !this.outboxUnavailable;
+  }
+
   getReliableRecovery() {
     return this.outbox?.getRecovery();
   }
 
   getReliableScopeDisposition(scope: ReliableDeliveryScope) {
-    return this.outbox?.getScopeDisposition(scope);
+    return this.outboxUnavailable ? undefined : this.outbox?.getScopeDisposition(scope);
+  }
+
+  getRevokedIsolationSummary() {
+    return this.outboxUnavailable ? undefined : this.outbox?.getRevokedIsolationSummary();
+  }
+
+  getReliableActiveSources(): readonly ExactSource[] {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
+    return this.outbox?.getActiveSources() ?? [];
+  }
+
+  async archiveConfirmedSource(identity: ExactSource): Promise<void> {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
+    await this.outbox?.archiveConfirmedSource(identity);
+  }
+
+  async isolateRevokedSource(identity: ExactSource): Promise<void> {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
+    await this.outbox?.isolateRevokedSource(identity);
   }
 
   /** Stop producing this scope, then wait for the existing owner to settle its queue. */
@@ -1110,6 +1228,7 @@ export class OutputService {
     this.retiringScopes.add(
       JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
     );
+    if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
@@ -1138,7 +1257,9 @@ export class OutputService {
     await this.retry();
     await this.retryCompletion;
     await this.outbox.flushPending();
-    return this.outbox.getScopeDisposition(scope).pending === 0;
+    return (
+      !this.outbox.hasPendingEnqueues(scope) && this.outbox.getScopeDisposition(scope).pending === 0
+    );
   }
 
   resumeSource(scope: ReliableDeliveryScope): void {
@@ -1148,13 +1269,23 @@ export class OutputService {
   }
 
   getReliableRecords() {
-    return this.outbox?.getRecords() ?? [];
+    return this.outboxUnavailable ? [] : (this.outbox?.getRecords() ?? []);
   }
 
   private isCurrentForRetry(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
     const binding = this.binding;
     if (bundle === undefined || binding === undefined) return true;
+    const retained = this.outbox
+      ?.getRecords()
+      .find((record) => record.event.idempotencyKey === event.idempotencyKey);
+    if (
+      retained &&
+      (binding.context.matchId !== event.matchId ||
+        bundle.program.cursor.producerInstanceId !== event.cursor.producerInstanceId ||
+        bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId)
+    )
+      return true;
     if (
       event.kind === 'map_started' &&
       bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
@@ -1220,6 +1351,40 @@ export class OutputService {
 
   private canSend(event: ReliableEventV1, lineup?: readonly string[]): boolean {
     const bundle = this.bundle;
+    const recorded = this.outbox
+      ?.getRecords()
+      .find((record) => record.event.idempotencyKey === event.idempotencyKey);
+    if (recorded?.awaitingSource) return false;
+    const recordedSource = recorded?.source;
+    const detached =
+      recorded &&
+      (this.binding?.context.matchId !== event.matchId ||
+        bundle?.program.cursor.producerInstanceId !== event.cursor.producerInstanceId ||
+        bundle?.program.cursor.liveSessionId !== event.cursor.liveSessionId);
+    if (detached && this.options.exactSource && !recordedSource) return false;
+    if (
+      (recordedSource &&
+        JSON.stringify(recordedSource) !==
+          JSON.stringify(this.sourceFor(event.matchId, event.cursor))) ||
+      (detached && !this.options.exactSource)
+    ) {
+      // The sink revalidates this exact durable authority, never the current selection's claim.
+      // Missing authority pauses delivery; changing selection does not cancel accepted work.
+      return (
+        !this.quarantined &&
+        (event.kind !== 'map_started' || recorded.lineupSteam64?.length === 10) &&
+        !this.outbox?.hasUnconfirmedBoundary(event) &&
+        !this.outbox
+          ?.getBoundaryIntents()
+          .some(
+            (intent) =>
+              intent.event.matchId === event.matchId &&
+              sameSourceSession(intent.event.cursor, event.cursor),
+          )
+      );
+    }
+    if (this.binding?.context.matchId === event.matchId && !this.executionEligible(this.binding))
+      return false;
     const scope = this.boundaryScope(event.matchId, event.cursor);
     if (this.boundaryCommitIsPending(scope) || this.outbox?.hasBoundaryGap(scope)) return false;
     if (
@@ -1330,13 +1495,44 @@ export class OutputService {
     );
   }
 
+  private stopping: Promise<void> | undefined;
+  stopDelivery(): Promise<void> {
+    this.stopping ??= this.stopDeliveryOnce();
+    return this.stopping;
+  }
   async close(): Promise<void> {
+    try {
+      await this.stopDelivery();
+    } finally {
+      await this.outbox?.close();
+    }
+  }
+  private async stopDeliveryOnce(): Promise<void> {
     this.closed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     if (this.outboundTimer !== undefined) clearInterval(this.outboundTimer);
-    await this.outboundUnsubscribe?.();
-    await Promise.all([...this.consumers.keys()].map((consumer) => consumer.close()));
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => this.outboundUnsubscribe?.()),
+    ]);
+    results.push(
+      ...(await Promise.allSettled(
+        [...this.consumers.keys()].map((consumer) =>
+          Promise.resolve().then(() => consumer.close()),
+        ),
+      )),
+    );
     this.consumers.clear();
-    await this.outbox?.flushPending();
+    // retry() can enqueue more durable work after its current queue operation.
+    // closed prevents a new retry, but an already running retry must settle.
+    await this.retryCompletion;
+    try {
+      await this.outbox?.flushForShutdown();
+    } catch (error) {
+      results.push({ status: 'rejected', reason: error });
+    }
+    const failures = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (failures.length) throw new AggregateError(failures, 'output_local_shutdown_failed');
   }
 }

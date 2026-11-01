@@ -1,14 +1,7 @@
 import { useRef, useState } from 'react';
 import type { MulnxToolView } from '@mizar/protocol/orchestration';
 import { Button, Dialog, StatusBanner } from '../ui';
-import {
-  command,
-  checkObsBeforeLaunch,
-  productionAction,
-  useLocalRead,
-  type Production,
-  type ExternalGameIdentity,
-} from '../preparation/client';
+import { command, productionAction, useLocalRead, type Production } from '../preparation/client';
 import { desktopInvoke } from '../workspace/client';
 
 export function MulnxToolControls({
@@ -30,41 +23,26 @@ export function MulnxToolControls({
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
-  const [stopSubmitted, setStopSubmitted] = useState(false);
   const running = useRef(false);
   if (!tool) return null;
-  async function run(action: 'check' | 'open' | 'update' | 'stop') {
+  async function run(action: 'check' | 'update' | 'stop') {
     if (running.current) return;
     running.current = true;
     setBusy(true);
     setMessage('');
     setFailed(false);
     try {
-      if (action === 'open') {
-        if (!production || !(await checkObsBeforeLaunch(true))) return;
-        const game = await desktopInvoke<ExternalGameIdentity>('launch_mulnx', { automatic: true });
-        await productionAction('enter', production, false, undefined, game);
-        setStopSubmitted(false);
-        setMessage('已由 Mizar 启动 MulNX 游戏并进入工作台。');
-      } else if (action === 'update') {
+      if (action === 'update') {
         await desktopInvoke('mulnx_control', { action: 'update' });
         setMessage('MulNX 版本准备已完成；确认支持自动启动后，从 Mizar 启动工作台。');
       } else if (action === 'stop') {
-        const result = await desktopInvoke<{
-          result?: string;
-          execution?: string;
-          cleanupPending?: boolean;
-        } | null>('mulnx_control', {
-          action: 'stop',
-        });
-        setStopSubmitted(true);
+        if (!production) throw new Error('制作状态尚未读取，请稍后重试。');
+        const result = await productionAction('finish', production);
         setMessage(
-          result?.execution === 'confirmed'
-            ? 'MulNX 控制已停止，CS2 保持运行。'
-            : '停止控制正在确认，请检查游戏状态。',
+          result === 'unconfirmed'
+            ? '本机收尾已完成，部分后台收尾仍待确认。'
+            : '本次工作台已结束。',
         );
-        if (result?.cleanupPending)
-          setMessage((value) => `${value} 工作台收尾尚未完成，请检查退出状态。`);
       } else await command('/operator/updates', { action: 'check' }, undefined, 60_000);
     } catch (error) {
       setFailed(true);
@@ -87,18 +65,6 @@ export function MulnxToolControls({
   }
   return (
     <div>
-      {!runtimeOnly && !maintenanceOnly ? (
-        <p>
-          启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
-          完成环境检查。仅用于离线 Demo 或已授权观战。
-        </p>
-      ) : null}
-      {!runtimeOnly && !maintenanceOnly ? (
-        <p>
-          MulNX · {tool.installed ?? '首次启动时准备'}
-          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
-        </p>
-      ) : null}
       {!runtimeOnly && tool.checkResult === 'error' ? (
         <p>未能确认最新版，请稍后重新检查。</p>
       ) : null}
@@ -145,36 +111,22 @@ export function MulnxToolControls({
             : '更新或重新准备 MulNX'}
         </Button>
       ) : null}
-      {!runtimeOnly && !maintenanceOnly && window.__TAURI_INTERNALS__ ? (
-        <Button
-          disabled={busy || tool.busy || !production?.canEnter || production.mode !== 'preparation'}
-          onClick={() => void run('open')}
-        >
-          启动 MulNX 工作台
-        </Button>
-      ) : null}
       {!maintenanceOnly && window.__TAURI_INTERNALS__ && allowStop ? (
         <details>
-          <summary>停止控制</summary>
-          <Button
-            disabled={busy || tool.busy || stopSubmitted}
-            onClick={() => setConfirmStop(true)}
-          >
-            停止 MulNX 控制
+          <summary>结束工作台</summary>
+          <Button disabled={busy || tool.busy} onClick={() => setConfirmStop(true)}>
+            结束 MulNX 工作台
           </Button>
         </details>
       ) : null}
       {!maintenanceOnly ? (
         <Dialog
           open={confirmStop}
-          title="停止 MulNX 控制"
+          title="结束 MulNX 工作台"
           onClose={() => setConfirmStop(false)}
           canClose={() => !busy}
         >
-          <p>
-            将结束本场制作、恢复游戏 HUD，并解除 MulNX 控制；CS2
-            保持运行。停止结果需要在游戏内核对。
-          </p>
+          <p>将结束本场制作，正常关闭本次 CS2，并恢复 Mizar 修改的游戏配置。</p>
           <Button disabled={busy} onClick={() => setConfirmStop(false)}>
             取消
           </Button>
@@ -184,7 +136,7 @@ export function MulnxToolControls({
             aria-busy={busy}
             onClick={() => void run('stop')}
           >
-            {busy ? '正在请求停止…' : '结束制作并停止控制'}
+            {busy ? '正在请求停止…' : '结束制作并关闭游戏'}
           </Button>
         </Dialog>
       ) : null}

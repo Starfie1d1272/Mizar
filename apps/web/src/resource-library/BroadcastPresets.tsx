@@ -1,6 +1,4 @@
 import { PresetVisualPreview } from './PresetVisualPreview';
-import { parseModuleRecord } from '@mizar/broadcast-config';
-import { pulseTokenStyle } from '../program/broadcast-display';
 import { exportFailure } from './export-error';
 import { useEffect, useRef, useState } from 'react';
 import { useLocalRead } from '../preparation/client';
@@ -183,9 +181,10 @@ export function BroadcastPresets({
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
-    null,
-  );
+  const [notice, setNotice] = useState<{
+    tone: 'success' | 'danger' | 'warning';
+    message: string;
+  } | null>(null);
   const focusedPreset = useRef<string | null>(null);
   useEffect(() => {
     if (!focusPreset) {
@@ -435,24 +434,6 @@ export function BroadcastPresets({
     if (!view || busy) return;
     const revisions = moduleRevisions(preset);
     if (!revisions) return;
-    const binding = preset.bindings.find((item) => item.kind === 'program');
-    const program =
-      binding?.mode === 'use'
-        ? view.modules.find((item) => item.id === binding.moduleId)
-        : undefined;
-    if (program) {
-      try {
-        const parsed = parseModuleRecord(program);
-        if (parsed.kind === 'program' && pulseTokenStyle(parsed.value) === null) {
-          setMissing([{ id: parsed.id, name: parsed.name, kind: 'program' }]);
-          setNotice({ tone: 'danger', message: '方案未使用：场景包含不支持的颜色或图片槽。' });
-          return;
-        }
-      } catch {
-        setNotice({ tone: 'danger', message: '方案未使用：场景配置损坏。' });
-        return;
-      }
-    }
     setBusy(true);
     setNotice(null);
     setMissing([]);
@@ -495,10 +476,16 @@ export function BroadcastPresets({
         throw new Error(
           response.status === 409
             ? '配置已变化或当前无法切换，请刷新后重试。'
-            : '方案未使用。请检查列出的资源；如没有列出资源，请检查本地制播服务。',
+            : '部分配置可能已应用。请检查各模块状态和资源后重试。',
         );
       }
-      setNotice({ tone: 'success', message: `已使用「${preset.name}」。` });
+      const result = (await response.json()) as { failedModules?: Kind[] };
+      if (result.failedModules?.length) {
+        setNotice({
+          tone: 'warning',
+          message: `「${preset.name}」已部分应用；${result.failedModules.map((kind) => labels[kind] ?? kind).join('、')}保留原配置，请检查资源或等待当前操作结束后重试。`,
+        });
+      } else setNotice({ tone: 'success', message: `已使用「${preset.name}」。` });
     } catch (error) {
       setNotice({
         tone: 'danger',

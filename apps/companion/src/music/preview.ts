@@ -24,6 +24,7 @@ export class MusicPreview {
   private epoch = 0;
   private stopping = false;
   private stopSent = false;
+  private forceStop = false;
   private failureMessage: string | null = null;
   constructor(
     private readonly store: MusicStore,
@@ -92,6 +93,7 @@ export class MusicPreview {
     this.revision++;
     this.stopping = false;
     this.stopSent = false;
+    this.forceStop = false;
     this.lease = now + 3000;
     this.deadline = now + 15_000;
     this.status = {
@@ -115,6 +117,19 @@ export class MusicPreview {
   cancel(reason: string) {
     if (!this.request) return;
     this.revision++;
+    if (reason === 'explicit_stop') this.forceStop = true;
+    if (reason === 'manual_control') {
+      this.event('stopped', reason);
+      this.request = null;
+      this.uuid = null;
+      this.stopping = false;
+      this.status = {
+        ...this.status!,
+        phase: 'stopped',
+        message: 'OBS 已人工接管试听，请在 OBS 检查或停止音效来源。',
+      };
+      return;
+    }
     this.stopping = true;
     this.event(reason === 'deadline' || reason === 'lease' ? 'expired' : 'stop_requested', reason);
     this.status = {
@@ -130,6 +145,14 @@ export class MusicPreview {
       this.event('stopped', 'not_started');
       this.request = null;
     }
+  }
+  confirmStopped(uuid: string): void {
+    if (!this.stopping || this.uuid !== uuid) return;
+    this.event('stopped', 'obs_stopped');
+    this.uuid = null;
+    this.request = null;
+    this.stopping = false;
+    this.status = { ...this.status!, phase: 'stopped', message: '试听已停止。' };
   }
   unavailable() {
     if (
@@ -165,10 +188,37 @@ export class MusicPreview {
     // A new OBS connection is cleanup only, never a queued audition start.
     if (this.uuid && epoch !== this.epoch && !this.stopping) this.cancel('obs_reconnected');
     if (this.stopping) {
-      const name = await ownedMusicInput(obs, this.store, 'stinger', false, () => true, false);
+      const revision = this.revision;
+      const current = () => valid() && this.stopping && this.revision === revision;
+      const name = await ownedMusicInput(
+        obs,
+        this.store,
+        'stinger',
+        false,
+        current,
+        false,
+        false,
+        false,
+      );
+      if (!current()) return;
       if (name && this.store.state.sources.stinger === this.uuid) {
-        const settings = await obs.call('GetInputSettings', { inputUuid: this.uuid });
-        if ((settings.inputSettings as Record<string, unknown>)?.local_file !== this.path) {
+        const args = { inputUuid: this.uuid };
+        const [settings, before, mute, volume] = await Promise.all([
+          obs.call('GetInputSettings', args),
+          obs.call('GetMediaInputStatus', args),
+          obs.call('GetInputMute', args),
+          obs.call('GetInputVolume', args),
+        ]);
+        if (!current()) return;
+        if (
+          !this.forceStop &&
+          ((settings.inputSettings as Record<string, unknown>)?.local_file !== this.path ||
+            mute.inputMuted === true ||
+            before.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
+            (!this.stopSent && before.mediaState === 'OBS_MEDIA_STATE_STOPPED') ||
+            (active(before.mediaState) &&
+              Math.abs(Number(volume.inputVolumeMul) - this.expectedVolume) > 0.015))
+        ) {
           this.uuid = null;
           this.request = null;
           this.status = {
@@ -186,6 +236,7 @@ export class MusicPreview {
             inputUuid: this.uuid,
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
           });
+          if (!current()) return;
           this.stopSent = true;
         }
         const stopped = (state: unknown) =>
@@ -196,16 +247,20 @@ export class MusicPreview {
             'OBS_MEDIA_STATE_NONE',
           ].includes(String(state));
         let media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+        if (!current()) return;
         if (!stopped(media.mediaState) && stopAlreadySent) {
           stopExpected(this.uuid!);
           await obs.call('TriggerMediaInputAction', {
             inputUuid: this.uuid,
             mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
           });
+          if (!current()) return;
           media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+          if (!current()) return;
         }
         if (!stopped(media.mediaState)) return;
       }
+      if (!current()) return;
       this.event('stopped', 'obs_stopped');
       this.uuid = null;
       this.request = null;

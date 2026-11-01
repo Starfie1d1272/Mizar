@@ -1,4 +1,6 @@
 import { lstat, readFile } from 'node:fs/promises';
+import { readFileSync, statSync } from 'node:fs';
+import { replaceDurableJson } from './match-context/durable-json.js';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
 import {
@@ -58,7 +60,11 @@ import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
-import { registerProductionRoutes } from './program-scenes/production.js';
+import {
+  createProduction,
+  productionHttpResponse,
+  registerProductionRoutes,
+} from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
@@ -73,8 +79,9 @@ import { MatchContextController, MatchManifestLkgStore } from './match-context/i
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
 import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.js';
+import { registerManagedSourceRoutes } from './match-context/managed-source.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
 import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
 import { OutputService, type OutputServiceOptions } from './output/service.js';
@@ -322,23 +329,33 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.rivalhubConnection !== undefined
       ? {
           authorityScope: () => options.rivalhubConnection!.reliableAuthorityScope(),
+          exactSource: () => options.rivalhubConnection!.reliableExactSource(),
           sink: {
             send: (
               event: Parameters<NonNullable<OutputServiceOptions['sink']>['send']>[0],
               signal?: AbortSignal,
               retainedLineup?: readonly string[],
+              retainedSource?: import('./match-context/rivalhub-source-state.js').ExactSource,
             ) =>
-              options.rivalhubConnection!.view().paired &&
-              outputBinding?.origin === 'online' &&
-              outputBinding.context.matchId === event.matchId
-                ? options.rivalhubConnection!.sendReliable(
+              retainedSource
+                ? options.rivalhubConnection!.sendRetainedReliable(
                     event,
+                    retainedSource,
                     outputService.current(true),
                     signal,
                     retainedLineup,
                   )
-                : (options.reliableSink?.send(event, signal) ??
-                  Promise.resolve('rejected' as const)),
+                : options.rivalhubConnection!.view().paired &&
+                    outputBinding?.origin === 'online' &&
+                    outputBinding.context.matchId === event.matchId
+                  ? options.rivalhubConnection!.sendReliable(
+                      event,
+                      outputService.current(true),
+                      signal,
+                      retainedLineup,
+                    )
+                  : (options.reliableSink?.send(event, signal) ??
+                    Promise.resolve('retry' as const)),
           },
         }
       : options.reliableSink === undefined
@@ -367,12 +384,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programRuntime.getCurrentState().runtimeSeq !== 0
       )
         return undefined;
-      programRuntime.restoreDeliveryContinuity({
+      const committed = programRuntime.restoreDeliveryContinuity({
         ...checkpoint.cursor,
         mapName: checkpoint.mapName,
+        ...(checkpoint.managedSourceId ? { managedSourceId: checkpoint.managedSourceId } : {}),
       });
-      return projectionCoordinator.refresh();
+      return projectionCoordinator.refresh(false, committed);
     },
+    isExecutionOwnedBy: (binding) =>
+      programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
+    executionOwnerMatchId: (runtimeSeq) => programRuntime.getExecutionOwnerMatchId(runtimeSeq),
+    managedSourceId: () => programRuntime.getManagedSourceId(),
     isActiveOnlineBinding: (binding) =>
       matchContextController !== null &&
       matchContextController.getActiveBinding() === binding &&
@@ -384,6 +406,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.rivalhubConnection?.view().stoppedMatchId !== binding.context.matchId &&
       !options.rivalhubConnection?.view().activeDeviceName,
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
+    onOutboxLoadError: (error) =>
+      app.log.error(
+        { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
+        '发送队列无法打开，网站同步不可用；原始数据保留。',
+      ),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
       const connection = options.rivalhubConnection;
@@ -674,6 +701,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let waitingObserverMap: string | undefined;
   let observerDiagnosticKey = '';
   let observerDiagnosticLoggedAt = -Infinity;
+  programRuntime.bindContext(
+    demoRecovery ? undefined : outputBinding?.context,
+    demoRecovery ? undefined : outputBinding?.origin,
+  );
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
@@ -778,6 +809,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
   let waitForBroadcast: (() => Promise<void>) | undefined;
+  let flushBroadcastReceipts: (() => Promise<void>) | undefined;
   let getExportBroadcastDocument:
     (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
   let isExportBroadcastReady = () => false;
@@ -913,6 +945,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
   obsAdapter?.onProgramChanged(() => {
     sceneController.holdAutomatic();
+    production.invalidateObsExit();
   });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
@@ -959,7 +992,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
-  let statsProductionActive = false;
   // The binding listener must retire fixture state on the way out, but it is created
   // before the rehearsal exists; this slot carries the later-constructed instance.
   const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
@@ -975,22 +1007,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             options.rivalhubConnection?.bindingChanged?.(binding?.context.matchId ?? null);
             const previousOrigin = previousBindingOrigin;
             previousBindingOrigin = binding?.origin;
+            // Retire fixture state before committing the new binding.
+            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
+              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
+            }
             outputBinding = binding;
             outputService.setBinding(binding);
-            projectionCoordinator.setMatchContextBinding(binding);
+            const committed = programRuntime.bindContext(binding?.context, binding?.origin);
+            projectionCoordinator.setMatchContextBinding(binding, committed);
             if (
-              statsProductionActive &&
+              production.statsActive() &&
               (binding?.origin === 'online' ||
                 (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
             )
               void options.rivalhubConnection?.stats(statsTarget(binding.context));
             else options.rivalhubConnection?.clearStats();
-
-            // Leaving the Rivals sample by any route retires fixture runtime state
-            // without waiting for an explicit "stop rehearsal" action.
-            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
-              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
-            }
 
             programCueCoordinator.afterRuntimeMutation();
           },
@@ -1002,16 +1033,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     null;
   let slowProcessingCount = 0;
   const slowProcessing: { time: string; sequence: number; durationMs: number }[] = [];
+  const publishRuntimeCommit = (
+    result: Parameters<typeof projectionCoordinator.afterRuntimeMutation>[0],
+  ) => {
+    const bundle = projectionCoordinator.afterRuntimeMutation(result);
+    outputService.afterRuntimeMutation(result, bundle, outputBinding);
+    programCueCoordinator.afterRuntimeMutation(result);
+    return bundle;
+  };
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
-  ): void => {
+    managedBoundary?: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>['boundary'],
+    managedSourceId?: string,
+    managedActivation = false,
+  ): boolean => {
     const processingStarted = performance.now();
     latestInput = observation.receive;
     try {
       const source = programRuntime.getCurrentState().programSource;
       const lastAccepted = source.lastAccepted;
       if (
+        !managedActivation &&
         lastAccepted !== undefined &&
         observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
           programRuntime.getSnapshot().continuityPolicy.staleAfterMs
@@ -1021,30 +1064,39 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           monotonicMs: observation.receive.receivedMonotonicMs,
           utc: observation.receive.receivedAt,
         });
-        const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-        outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(changed);
+        publishRuntimeCommit(changed);
       }
       outputService.beforeRuntimeMutation();
-      const result = programRuntime.acceptObservation(observation);
+      const accepted = programRuntime.acceptObservation(
+        observation,
+        Boolean(
+          managedSourceId &&
+          !managedActivation &&
+          !managedSource.sourceMatchesSelection(managedSourceId),
+        ),
+      );
+      let result =
+        managedBoundary && accepted.disposition.kind === 'accepted'
+          ? { ...accepted, transitions: [...managedBoundary.transitions, ...accepted.transitions] }
+          : accepted;
       if (result.disposition.kind === 'ignored')
         performanceContext?.trigger('observation_ignored', {
           receive: observation.receive,
           disposition: result.disposition,
         });
       if (sampleStageBinding) {
-        programRuntime.executeOperatorCommand({
+        const command = programRuntime.executeOperatorCommand({
           kind: 'bind-current-map-execution-to-series-map',
           mapOrder: sampleStageBinding.mapOrder,
           reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
         });
+        result = { ...result, snapshot: command.snapshot };
       }
-      const bundle = projectionCoordinator.afterRuntimeMutation(result);
-      outputService.afterRuntimeMutation(result, bundle, outputBinding);
-      programCueCoordinator.afterRuntimeMutation(result);
+      publishRuntimeCommit(result);
       debugEvidenceStore.recordNormalizedObservation(observation);
       debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
       demoTest?.observationAccepted();
+      return accepted.disposition.kind === 'accepted';
     } catch (error) {
       sessionJournal?.record('observation_failure', { error, receive: observation.receive });
       performanceContext?.trigger('observation_failure', {
@@ -1117,55 +1169,69 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  const production = registerProductionRoutes(app, {
-    originPolicy: localWebTransport.getOriginPolicy(),
-    hasContext: () =>
-      matchContextController?.getActiveBinding() !== undefined &&
-      matchContextController?.getActiveBinding() != null,
+  const obsExitPath = options.obsConfigPath
+    ? `${options.obsConfigPath}.exit-status.json`
+    : undefined;
+  let previousObsExitUnconfirmed = false;
+  if (obsExitPath) {
+    try {
+      previousObsExitUnconfirmed = true;
+      if (statSync(obsExitPath).size <= 4096) {
+        const saved: unknown = JSON.parse(readFileSync(obsExitPath, 'utf8'));
+        previousObsExitUnconfirmed =
+          typeof saved !== 'object' ||
+          saved === null ||
+          (saved as { state?: unknown }).state !== 'confirmed';
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') previousObsExitUnconfirmed = false;
+    }
+  }
+  let obsExitWrites = Promise.resolve();
+  const production = createProduction({
     scenes: sceneController,
+    obs: obsAdapter,
+    music: () => musicDirector,
+    gameAudio,
+    camera: () => cameraDirector,
+    demo: () => demoTest,
+    observer: observerSettings,
+    binding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    source: {
+      handoffForExit: async () => {
+        await options.rivalhubConnection?.handoffForExit();
+      },
+      release: async () => {
+        await options.rivalhubConnection?.release();
+      },
+      stats: (target) => options.rivalhubConnection?.stats(target),
+      clearStats: () => options.rivalhubConnection?.clearStats(),
+    },
     waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
-    beforeEnter: () => {
-      if (cameraDirector?.store.saving) throw new Error('camera_settings_saving');
-      demoTest?.openFormalBoundary();
-      sceneController.holdAutomatic();
+    obsExit: {
+      previousUnconfirmed: previousObsExitUnconfirmed,
+      wait: async () => {
+        while (true) {
+          const pending = obsExitWrites;
+          await pending;
+          if (pending === obsExitWrites) return;
+        }
+      },
+      record: async (state, valid) => {
+        if (!obsExitPath) return;
+        const pending = obsExitWrites.then(async () => {
+          await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
+        });
+        obsExitWrites = pending.catch((error: unknown) => {
+          app.log.warn({ err: error }, 'OBS exit status not saved');
+        });
+        return pending;
+      },
     },
-    onEnter: () => {
-      obsAdapter?.resumeAutomatic();
-      obsAdapter?.startCommentaryRecovery(
-        musicDirector,
-        gameAudio,
-        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
-      );
-      cameraDirector?.beginProduction();
-      statsProductionActive = true;
-      const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
-      if (
-        binding?.origin === 'online' ||
-        (binding?.origin === 'cache' && binding.cachedFrom === 'online')
-      )
-        void options.rivalhubConnection?.stats(statsTarget(binding.context));
-    },
-    onEntered: () => {
-      obsAdapter?.startBrowserRecovery(production.sessionValid());
-    },
-    onFinish: () => {
-      statsProductionActive = false;
-      options.rivalhubConnection?.clearStats();
-    },
-    beforeExit: () => {
-      obsAdapter?.pauseAutomatic();
-      cameraDirector?.finishProduction();
-      observerSettings.endProduction();
-    },
-    beforeFinish: () => obsAdapter?.settleAutomatic(),
-    afterSafeScene: () => obsAdapter?.restoreVideo(),
-    finishTrial: async () => {
-      await demoTest?.finish();
-    },
-    release: async () => {
-      await options.rivalhubConnection?.release();
-    },
+    warn: (details, message) => app.log.warn(details, message),
+    error: (details, message) => app.log.error(details, message),
   });
+  registerProductionRoutes(app, { originPolicy: localWebTransport.getOriginPolicy(), production });
   const localMatchExit =
     matchContextController === null
       ? undefined
@@ -1174,14 +1240,22 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           loopback: localWebTransport.getOriginPolicy().mode === 'loopback',
           controller: matchContextController,
           runtime: programRuntime,
-          isPreparationWaiting: () =>
-            !production.isTrialPending() &&
-            !matchContextController.isTemporary() &&
-            production.get().mode === 'preparation' &&
-            sceneController.get().active === 'waiting' &&
-            sceneController.get().preparing === undefined,
-          productionRevision: () => production.get().revision,
+          eligibleSession: () =>
+            !production.isTrialPending() && !matchContextController.isTemporary(),
+          isPreparation: () => production.get().mode === 'preparation',
+          productionSession: production.sessionId,
         });
+  const managedSource = registerManagedSourceRoutes(app, {
+    controlToken: options.productRuntime?.controlToken,
+    loopback: localWebTransport.getOriginPolicy().mode === 'loopback',
+    controller: matchContextController,
+    runtime: programRuntime,
+    productionSession: production.sessionId,
+    onRuntimeCommit: (snapshot) => {
+      projectionCoordinator.refresh(false, snapshot);
+      programCueCoordinator.afterRuntimeMutation();
+    },
+  });
   if (localTournamentStore !== null && matchContextController !== null) {
     registerLocalTournamentRoutes(app, {
       store: localTournamentStore,
@@ -1407,6 +1481,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               throw error;
             },
           );
+        if (broadcastConfig && !(await missing(broadcastConfig.path))) return;
         const fresh =
           options.builtinMusicPack &&
           broadcastConfig &&
@@ -1552,13 +1627,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             },
           },
           withApplyGuard: (operation) => production.configureBroadcast(operation),
+          canApplyCamera: () => cameraDirector?.canChangeConfiguration() ?? true,
           diagnostic: (error) =>
             app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
         })
       : undefined;
     if (broadcastRuntime) {
-      getExportBroadcastDocument = () => broadcastRuntime.store.snapshot;
+      getExportBroadcastDocument = () => {
+        const document = broadcastRuntime.store.snapshot;
+        document.active = broadcastRuntime.store.appliedDisplay;
+        return document;
+      };
       waitForBroadcast = () => broadcastRuntime.waitForApply();
+      flushBroadcastReceipts = () => broadcastRuntime.flushConsumerReceipts();
       isExportBroadcastReady = () => broadcastRuntime.ready;
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
@@ -1611,6 +1692,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           production.automaticAllowed() &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
+        mapConfirmed: !waitingObserverMap,
         demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
@@ -1638,14 +1720,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
         }
       }
-      await cameraStore
-        .load()
-        .catch((error) =>
-          app.log.error(
-            { stage: 'camera_load', err: error, result: 'failure' },
-            '运镜预设加载失败',
-          ),
-        );
+      const broadcastStoreExists =
+        broadcastConfig &&
+        (await lstat(broadcastConfig.path).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
+        ));
+      if (!broadcastStoreExists)
+        await cameraStore
+          .load()
+          .catch((error) =>
+            app.log.error(
+              { stage: 'camera_load', err: error, result: 'failure' },
+              '运镜预设加载失败',
+            ),
+          );
       if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
         const hasCameraSources =
           cameraStore.preset.maps.length > 0 ||
@@ -1740,7 +1829,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       connection: options.rivalhubConnection,
       canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
-      canFetchStats: () => statsProductionActive,
+      canFetchStats: () => production.statsActive(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
@@ -1908,6 +1997,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     options.rivalhubConnection?.setSourceSettlement?.(
       (scope) => outputService.settleSourceForRelease(scope),
       (scope) => outputService.resumeSource(scope),
+      (identity, disposition) =>
+        disposition === 'revoked'
+          ? outputService.isolateRevokedSource(identity)
+          : outputService.archiveConfirmedSource(identity),
+      () => outputService.getReliableActiveSources(),
     );
     options.rivalhubConnection?.startSourceCleanup?.();
     businessJournal?.runtime(
@@ -1938,14 +2032,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   app.get('/local/v1/reliable-output-status', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
+      available: outputService.isReliableAvailable(),
       recovery: outputService.getReliableRecovery() ?? null,
-      records: outputService.getReliableRecords().map((record) => ({
-        idempotencyKey: record.event.idempotencyKey,
-        kind: record.event.kind,
-        status: record.status,
-        attempts: record.attempts,
-        updatedAt: record.updatedAt,
-      })),
+      revokedIsolation: outputService.getRevokedIsolationSummary() ?? null,
+      records: !outputService.isReliableAvailable()
+        ? null
+        : outputService.getReliableRecords().map((record) => ({
+            idempotencyKey: record.event.idempotencyKey,
+            kind: record.event.kind,
+            status: record.status,
+            attempts: record.attempts,
+            updatedAt: record.updatedAt,
+          })),
     }),
   );
   const qualificationMode = options.qualificationMode ?? false;
@@ -2002,7 +2100,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
-      const result = await production.shutdown();
+      const result = productionHttpResponse(await production.shutdown());
       if (result.code !== 200) return reply.code(result.code).send(result.value);
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
@@ -2187,8 +2285,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   if (options.gsiToken !== undefined) {
+    let pendingManagedBoundary:
+      | {
+          sourceId: string;
+          result: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>;
+        }
+      | undefined;
     registerGsiIngress(app, {
       gsiToken: options.gsiToken,
+      classifySource: (sourceId) => managedSource.classify(sourceId),
       canAccept: () => demoTest?.canAcceptGsi() ?? true,
       canRecord: () => demoTest?.get().active !== true,
       recorder: currentRecorder,
@@ -2230,8 +2335,39 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         options.onAcceptedRaw?.(input);
       },
       ...(options.clock === undefined ? {} : { clock: options.clock }),
-      onObservation: (observation) => {
-        dispatchObservation(observation);
+      onObservation: (observation, sourceId) => {
+        if (
+          (sourceId &&
+            !managedSource.sourceMatchesSelection(sourceId) &&
+            (!outputBinding ||
+              !programRuntime.isExplicitSourceOwner(sourceId, outputBinding.context.matchId))) ||
+          (!sourceId && managedSource.unverifiedExternal())
+        )
+          programRuntime.markSourceUnverified();
+        if (pendingManagedBoundary && pendingManagedBoundary.sourceId !== sourceId)
+          pendingManagedBoundary = undefined;
+        const owner = managedSource.ownerForFirstObservation(sourceId);
+        if (owner && sourceId && observation.telemetry.map?.name && !pendingManagedBoundary) {
+          const activation = programRuntime.activateManagedSource(
+            owner.matchId,
+            sourceId,
+            observation,
+          );
+          if (activation) pendingManagedBoundary = { sourceId, result: activation };
+        }
+        const boundary =
+          pendingManagedBoundary && pendingManagedBoundary.sourceId === sourceId
+            ? pendingManagedBoundary.result.boundary
+            : undefined;
+        const activating = Boolean(sourceId && pendingManagedBoundary?.sourceId === sourceId);
+        if (
+          dispatchObservation(observation, undefined, boundary, sourceId, activating) &&
+          activating &&
+          sourceId
+        ) {
+          managedSource.confirmFirstObservation(sourceId);
+          pendingManagedBoundary = undefined;
+        }
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {
@@ -2312,13 +2448,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 throw new Error('接收链路代际推进失败。');
               }
               outputService.beforeRuntimeMutation();
-              projectionCoordinator.afterRuntimeMutation(generationAdvance);
-              outputService.afterRuntimeMutation(
-                generationAdvance,
-                projectionCoordinator.getCurrent(),
-                outputBinding,
-              );
-              programCueCoordinator.afterRuntimeMutation(generationAdvance);
+              publishRuntimeCommit(generationAdvance);
               debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
               recorder = result.nextRecorder;
               await previous.finalize();
@@ -2332,9 +2462,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         outputService.beforeRuntimeMutation();
         debugEvidenceStore.clearCurrentTelemetry();
         debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-        const bundle = projectionCoordinator.afterRuntimeMutation(result);
-        outputService.afterRuntimeMutation(result, bundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(result);
+        publishRuntimeCommit(result);
       },
       ...(options.onQualificationFinish === undefined
         ? {}
@@ -2345,53 +2473,157 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   registerOperatorCommandRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
-    execute: (command) => projectionCoordinator.executeOperatorCommand(command),
+    execute: (command) => {
+      const result = programRuntime.executeOperatorCommand(command);
+      projectionCoordinator.refresh(false, result.snapshot);
+      programCueCoordinator.afterRuntimeMutation();
+      return result;
+    },
     getBindingState: () =>
       matchContextController?.getActiveBinding()
         ? {
             contextRevision: matchContextController.getActiveRevision(),
             operator: projectionCoordinator.getCurrent().operator,
+            ownership: programRuntime.getExecutionOwnership(
+              matchContextController.getActiveBinding()!.context.matchId,
+            ),
           }
         : null,
   });
 
   app.addHook('onClose', async () => {
+    const failures: unknown[] = [];
+    const closeStep = async (action: () => unknown | Promise<unknown>) => {
+      try {
+        await action();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     clearInterval(performanceTimer);
     clearInterval(contextTimer);
-    recordPerformanceWindow('close');
     clearInterval(directorTimer);
-    presentationUnsubscribe();
-    objectiveReferenceUnsubscribe?.();
-    cameraDirector?.close();
-    await musicDirector?.close();
-    gameAudio?.close();
-    await obsAdapter?.close();
-    const sourceCleanup = await Promise.allSettled([
-      cstvSources.program.stop(),
-      cstvSources.lookahead.stop(),
-      ...deliveryConsumers.map((consumer) => consumer.close()),
-    ]);
-    const releaseCleanup = await Promise.allSettled([
-      options.rivalhubConnection?.shutdownSource?.(),
-    ]);
-    sourceCleanup.push(...releaseCleanup);
-    sourceCleanup.push(...(await Promise.allSettled([outputService.close()])));
-    await Promise.all([projectionCoordinator.close(), programCueCoordinator.close()]);
-    await programRuntime.close();
-    await localWebTransport.close();
-    await hudConfigStore.flush();
-    await currentRecorder().finalize();
-    await businessJournal?.close();
-    await nativeSource?.close();
-    await performanceContext?.close();
-    unsubscribeObserverEvidence?.();
-    await sessionJournal?.close();
-    await diagnosticDelivery.close();
-    const sourceFailures = sourceCleanup
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map((result) => result.reason as unknown);
-    if (sourceFailures.length > 0)
-      throw new AggregateError(sourceFailures, 'Companion source or consumer shutdown failed');
+    await closeStep(() => recordPerformanceWindow('close'));
+    await closeStep(() => presentationUnsubscribe());
+    await closeStep(() => objectiveReferenceUnsubscribe?.());
+    await closeStep(() => cameraDirector?.close());
+    await closeStep(() => musicDirector?.close());
+    await closeStep(() => gameAudio?.close());
+    // Both waits share one deadline; adapter closure may itself enqueue a new
+    // unconfirmed status after the first wait has already finished.
+    const obsExitDeadline = performance.now() + 4000;
+    const waitForObsExit = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          production.waitForObsExit(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('OBS 收尾尚未确认')),
+              Math.max(0, obsExitDeadline - performance.now()),
+            );
+          }),
+        ]);
+      } catch (error) {
+        app.log.warn({ err: error }, 'OBS 收尾未确认');
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    await waitForObsExit();
+    await closeStep(() => obsAdapter?.close());
+    await waitForObsExit();
+    for (const result of await Promise.allSettled([
+      Promise.resolve().then(() => cstvSources.program.stop()),
+      Promise.resolve().then(() => cstvSources.lookahead.stop()),
+      ...deliveryConsumers.map((consumer) => Promise.resolve().then(() => consumer.close())),
+    ])) {
+      if (result.status === 'rejected') failures.push(result.reason);
+    }
+    // Stop producers before flushing each local owner. One failed close must
+    // not prevent the remaining owners from attempting their own flush.
+    await closeStep(() => projectionCoordinator.close());
+    await closeStep(() => programCueCoordinator.close());
+    await closeStep(() => outputService.stopDelivery());
+    await closeStep(() => programRuntime.close());
+    await closeStep(() => localWebTransport.close());
+    await closeStep(async () => {
+      await hudConfigStore.flush();
+      if (hudConfigStore.getState().persistenceError)
+        throw new Error('hud_config_close_unconfirmed');
+    });
+    await closeStep(() => flushBroadcastReceipts?.());
+    await closeStep(async () => {
+      const recorder = currentRecorder();
+      await recorder.finalize();
+      recorder.assertDurableFinalized?.();
+    });
+    await closeStep(async () => {
+      await businessJournal?.close();
+      if (
+        businessJournal &&
+        (businessJournal.getStatus() === 'write_failed' ||
+          businessJournal.getHealth().uncommittedChanges)
+      )
+        throw new Error('business_journal_close_unconfirmed');
+    });
+    await closeStep(() => nativeSource?.close());
+    await closeStep(async () => {
+      await performanceContext?.close();
+      if (performanceContext) {
+        const health = performanceContext.health();
+        if (health.pendingRecords > 0 || health.writeError !== null)
+          throw new Error('performance_context_close_unconfirmed');
+      }
+    });
+    await closeStep(() => unsubscribeObserverEvidence?.());
+    await closeStep(async () => {
+      await sessionJournal?.close();
+      if (sessionJournal) {
+        const health = sessionJournal.health();
+        if (health.pendingRecords > 0 || health.writeError !== null)
+          throw new Error('session_journal_close_unconfirmed');
+      }
+    });
+    await closeStep(() => diagnosticDelivery.close());
+
+    // Remote release is best effort after local persistence; its uncertainty is
+    // retained by the connection for reconciliation on the next start.
+    if (options.rivalhubConnection?.shutdownSource) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          options.rivalhubConnection
+            .shutdownSource()
+            .finally(() => closeStep(() => outputService.close())),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('数据源远端收尾超时')), 9000);
+          }),
+        ]);
+      } catch (error) {
+        app.log.warn({ err: error }, '远端数据源收尾待重试');
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    if (!options.rivalhubConnection?.shutdownSource) await closeStep(() => outputService.close());
+    if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
+    if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
+      const stateRoot = process.env.MIZAR_STATE_ROOT;
+      const { instanceId, artifactSha256 } = options.productRuntime;
+      if (
+        !stateRoot ||
+        !isAbsolute(stateRoot) ||
+        !/^[a-f0-9-]{36}$/.test(instanceId) ||
+        process.env.MIZAR_PRODUCT_INSTANCE !== instanceId
+      )
+        throw new Error('本地收尾实例身份无效');
+      await replaceDurableJson(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), {
+        instanceId,
+        artifactSha256,
+        pid: process.pid,
+      });
+    }
   });
 
   return app;

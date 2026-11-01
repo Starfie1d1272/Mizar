@@ -1,10 +1,14 @@
 //! Host exit and managed CS2 cleanup preserve Companion production safety boundaries.
-use crate::startup_log::DesktopLog;
+use crate::{
+    cs2_activity, demo_test, managed_cs2, observer_workspace, startup_log::DesktopLog,
+    workspace_presentation,
+};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 #[derive(Default)]
 pub struct VerifiedStop(AtomicBool);
@@ -188,6 +192,18 @@ pub(crate) fn request_with_identity(
     deadline: Instant,
     token: Option<&str>,
 ) -> Result<(u16, serde_json::Value), String> {
+    request_with_stream(log, method, path, body, deadline, token, |_| Ok(()))
+}
+
+pub(crate) fn request_with_stream(
+    log: &DesktopLog,
+    method: &str,
+    path: &str,
+    body: &str,
+    deadline: Instant,
+    token: Option<&str>,
+    connected: impl FnOnce(&TcpStream) -> Result<(), String>,
+) -> Result<(u16, serde_json::Value), String> {
     let timeout = deadline
         .checked_duration_since(Instant::now())
         .ok_or(request_failure(token, "制作收尾超时，请重试。"))?;
@@ -201,6 +217,7 @@ pub(crate) fn request_with_identity(
                 request_failure(token, "无法连接制作服务，游戏与备份仍保留。"),
             )
         })?;
+    connected(&stream)?;
     stream.set_write_timeout(Some(timeout)).map_err(|error| {
         io_failure(
             log,
@@ -380,36 +397,44 @@ fn exit_request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json:
     Ok(response)
 }
 
-fn prepare_local_match_exit(log: &DesktopLog) -> Result<Option<serde_json::Value>, String> {
-    let response = exit_request(log, serde_json::json!({"action": "prepare"}))?;
-    match response.get("qualification") {
-        Some(serde_json::Value::Null) => Ok(None),
-        Some(value)
-            if value.as_object().is_some_and(|fields| {
-                fields.len() == 3
-                    && ["ticket", "matchId", "contextRevision"]
-                        .iter()
-                        .all(|field| {
-                            fields
-                                .get(*field)
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|value| !value.is_empty())
-                        })
-            }) =>
-        {
-            Ok(Some(value.clone()))
-        }
-        _ => Err("本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
+pub(crate) fn managed_source_request(
+    log: &DesktopLog,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    let (status, response) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/managed-source",
+        &body.to_string(),
+        Instant::now() + Duration::from_secs(5),
+        Some(&token),
+    )?;
+    if status != 200 {
+        log.event(
+            "managed_source",
+            "failure",
+            Some(&format!("status={status}")),
+        );
+        return Err("受管游戏来源未能确认，请重试。".into());
     }
+    Ok(response)
+}
+
+fn prepare_local_match_exit(
+    log: &DesktopLog,
+) -> Result<Option<crate::lifecycle_contract::Qualification>, String> {
+    let response = exit_request(log, serde_json::json!({"action": "prepare"}))?;
+    crate::lifecycle_contract::Qualification::from_response(&response)
 }
 
 fn confirm_local_match_exit(
     log: &DesktopLog,
-    qualification: serde_json::Value,
+    qualification: crate::lifecycle_contract::Qualification,
 ) -> Result<(), String> {
     let response = exit_request(
         log,
-        serde_json::json!({"action": "confirm", "qualification": qualification}),
+        serde_json::json!({"action": "confirm", "qualification": qualification.as_value()}),
     )?;
     if response["ok"] == true {
         Ok(())
@@ -420,11 +445,11 @@ fn confirm_local_match_exit(
 
 fn settle_local_match_exit(
     log: &DesktopLog,
-    qualification: &serde_json::Value,
+    qualification: &crate::lifecycle_contract::Qualification,
 ) -> Result<(), String> {
     let response = exit_request(
         log,
-        serde_json::json!({"action": "settle", "qualification": qualification}),
+        serde_json::json!({"action": "settle", "qualification": qualification.as_value()}),
     )?;
     if response["ok"] == true {
         Ok(())
@@ -446,10 +471,10 @@ pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
 }
 
 fn finish_with_qualification(
-    prepare: impl FnOnce() -> Result<Option<serde_json::Value>, String>,
+    prepare: impl FnOnce() -> Result<Option<crate::lifecycle_contract::Qualification>, String>,
     finish: impl FnOnce(bool) -> Result<(), String>,
-    settle: impl FnOnce(&serde_json::Value) -> Result<(), String>,
-    confirm: impl FnOnce(serde_json::Value) -> Result<(), String>,
+    settle: impl FnOnce(&crate::lifecycle_contract::Qualification) -> Result<(), String>,
+    confirm: impl FnOnce(crate::lifecycle_contract::Qualification) -> Result<(), String>,
 ) -> Result<(), String> {
     let qualification = prepare();
     // Cleanup is required even if the private Companion handshake is unavailable.
@@ -469,22 +494,46 @@ pub fn finish_managed_game(
     log: &DesktopLog,
     finish: impl FnOnce(bool) -> Result<(), String>,
 ) -> Result<(), String> {
-    finish_with_qualification(
+    let retirement = managed_source_request(
+        log,
+        serde_json::json!({"action":"retire","phase":"prepare"}),
+    );
+    let mut stopped = false;
+    let local = finish_with_qualification(
         || prepare_local_match_exit(log),
-        finish,
+        |_| {
+            let result = finish(true);
+            stopped = result.is_ok();
+            result
+        },
         |qualification| settle_local_match_exit(log, qualification),
         |qualification| confirm_local_match_exit(log, qualification),
-    )
+    );
+    if !stopped {
+        return local;
+    }
+    let source = (|| -> Result<(), String> {
+        let retirement = retirement?;
+        let ticket = retirement["ticket"].as_str().ok_or("来源退出资格无效。")?;
+        managed_source_request(
+            log,
+            serde_json::json!({"action":"retire","phase":"settle","ticket":ticket}),
+        )?;
+        managed_source_request(
+            log,
+            serde_json::json!({"action":"retire","phase":"confirm","ticket":ticket}),
+        )?;
+        Ok(())
+    })();
+    cleanup_results(local, source)
 }
 
 /// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.
 pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
-    if code != 200
-        || view["mode"] != "preparation"
-        || view["revision"].as_str() != Some(expected_revision)
-    {
+    let view = crate::lifecycle_contract::production_view(&view)?;
+    if code != 200 || view.mode != "preparation" || view.revision != expected_revision {
         return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
     }
     disconnect_camera(log)?;
@@ -619,10 +668,14 @@ pub fn set_exit_intent(log: &DesktopLog, action: &str) -> Result<(), String> {
     if status != 200 {
         return Err("无法读取制作状态，游戏仍保留。".into());
     }
-    let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-    let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
-    let (status, _) = request(log, "POST", "/operator/production", &body, deadline)?;
+    let view = crate::lifecycle_contract::production_view(&state)?;
+    let body = serde_json::json!({"action": action, "expectedRevision": view.revision}).to_string();
+    let (status, response) = request(log, "POST", "/operator/production", &body, deadline)?;
     if status != 200 {
+        return Err("无法确认退出准备，请重试。".into());
+    }
+    let actual = crate::lifecycle_contract::production_view(&response)?;
+    if actual.revision != view.revision || actual.mode != view.mode {
         return Err("无法确认退出准备，请重试。".into());
     }
     Ok(())
@@ -640,13 +693,16 @@ fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
             );
             return Err("无法读取制作状态，游戏仍保留。".into());
         }
-        let revision = state["revision"].as_str().ok_or("制作状态无效。")?;
-        let body = serde_json::json!({"action": action, "expectedRevision": revision}).to_string();
+        let view = crate::lifecycle_contract::production_view(&state)?;
+        let body =
+            serde_json::json!({"action": action, "expectedRevision": view.revision}).to_string();
         let (status, result) = request(log, "POST", "/operator/production", &body, deadline)?;
-        if status == 200 && result["mode"] == "preparation" {
+        if status == 200
+            && crate::lifecycle_contract::production_view(&result)?.mode == "preparation"
+        {
             return Ok(());
         }
-        if status == 409 && result["message"] == "制作状态已变化，请刷新后重试。" {
+        if crate::lifecycle_contract::is_retryable(status, &result, "productionConflict") {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
@@ -661,4 +717,161 @@ fn finish_production(log: &DesktopLog, action: &str) -> Result<(), String> {
             .into());
     }
     Err("制作仍在处理操作，请稍后重试退出。".into())
+}
+
+pub(crate) async fn finish_workspace(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    confirm_steam_cancelled: Option<bool>,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+    retire_preparation: fn(),
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
+    let diagnostic_result: Result<(), String> = async move {
+    if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
+        return Err("请在准备中心或工作台退出本次制作。".into());
+    }
+    let gate = app.state::<crate::production_exit::ExitGate>();
+    if !gate.begin() {
+        return Err("正在退出，请等待收尾结果。".into());
+    }
+    let _gate = crate::production_exit::WorkspaceExitGuard(&gate);
+    let feedback = app.state::<crate::production_exit::WorkspaceExit>();
+    feedback.stage("checking");
+    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string())));
+    // Keep a visible waiting record if a native lock, process or presentation call stalls.
+    let (waiting_done, waiting) = std::sync::mpsc::channel::<()>();
+    let waiting_host = app.clone();
+    let waiting_log = command_log.clone();
+    let waiting_task = native_task_id.clone();
+    let waiting_trigger = native_trigger.clone();
+    let waiting_operation = native_operation_id.clone();
+    std::thread::spawn(move || waiting_log.with_task(waiting_task.as_deref(), waiting_operation.as_deref(), waiting_trigger.as_deref(), || {
+        let started = std::time::Instant::now();
+        while waiting.recv_timeout(Duration::from_secs(5)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            let phase = waiting_host.state::<crate::production_exit::WorkspaceExit>().status().stage;
+            waiting_host.state::<DesktopLog>().event("workspace_exit", "waiting", Some(&serde_json::json!({"phase":phase,"elapsedMs":started.elapsed().as_millis()}).to_string()));
+        }
+    }));
+    // This task belongs to Host, so hiding or closing a WebView cannot lose it.
+    let host = app.clone();
+    let result = tauri::async_runtime::spawn_blocking({ let command_log = command_log.clone(); let native_operation_id = native_operation_id.clone(); let native_task_id = native_task_id.clone(); let native_trigger = native_trigger.clone(); move || -> Result<(), String> {
+        command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
+        let feedback = host.state::<crate::production_exit::WorkspaceExit>();
+        let log = host.state::<DesktopLog>();
+        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
+        // Companion freeze and scene/remote work have their own owner. Never
+        // serialize the exact local process cleanup behind their HTTP response.
+        let exit_intent = crate::production_exit::set_exit_intent(&log, "begin-exit");
+        let production_log = log.inner().clone();
+        let production_task = std::thread::spawn(move || {
+            crate::production_exit::finish_workspace_production(&production_log)
+        });
+        let activity = host.state::<cs2_activity::Activity>();
+        // Open the visible recovery owner before any potentially slow cleanup.
+        // A presentation failure cannot skip safe production or game cleanup.
+        if let Err(error) = workspace_presentation::open_main(host.clone(), None, None) {
+            log.event(
+                "production_finish",
+                "failure",
+                Some(&format!("phase=workspace_recovery_window; cause={error}")),
+            );
+        }
+        feedback.stage("restoration");
+        let game = crate::production_exit::restore_then_cleanup(
+        || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
+        || -> Result<(), String> {
+        // Host-owned recovery evidence determines local work even when Companion is offline.
+        if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {
+            feedback.stage("restoration");
+            let _activity = activity.begin(2);
+            if confirm_steam_cancelled == Some(true) {
+                log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
+            }
+            log.step("workspace_exit_game_finish", || cs2.finish())?;
+        } else {
+            feedback.stage("restoration");
+            let _activity = activity.begin(2);
+            crate::production_exit::finish_managed_game(&log, |requires_proof| {
+                if confirm_steam_cancelled == Some(true) {
+                    log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
+                }
+                log.step("workspace_exit_game_finish", || cs2.finish())?;
+                if requires_proof {
+                    log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+        });
+        workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
+        drop(cs2);
+        feedback.stage("presentation");
+        // Retry presentation after cleanup; an earlier transient window failure
+        // must not prevent returning to preparation once the game is finished.
+        let presentation = log.step("workspace_exit_presentation", || workspace_presentation::present_production_inner_checked(&host, false, None, None));
+        let production = production_task.join().unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
+        crate::production_exit::cleanup_results(crate::production_exit::cleanup_results(exit_intent, production), crate::production_exit::cleanup_results(game, presentation))
+        })
+    } })
+    .await
+    .unwrap_or_else(|error| {
+        app.state::<DesktopLog>().event(
+            "production_finish",
+            "failure",
+            Some(&format!("phase=workspace_task; cause={error}")),
+        );
+        Err("退出任务中断，收尾结果待确认。请重试退出；再次失败时导出诊断。".into())
+    });
+    let intent_host = app.clone();
+    let intent_result = tauri::async_runtime::spawn_blocking(move || {
+        crate::production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
+    }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
+    let result = crate::production_exit::cleanup_results(result, intent_result);
+    if result.is_ok() { retire_preparation(); }
+    if let Err(error) = &result {
+        app.state::<DesktopLog>().event(
+            "production_finish",
+            "failure",
+            Some(&format!(
+                "phase=workspace_{}; cause={error}",
+                feedback.status().stage
+            )),
+        );
+    }
+    command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", if result.is_ok() { "success" } else { "failure" }, Some(&serde_json::json!({"phase":feedback.status().stage,"error":result.as_ref().err()}).to_string())));
+    let _ = waiting_done.send(());
+    feedback.complete(&result);
+    if result.is_err() {
+        // Keep the original local failure; never replace it with window errors.
+        let _ = workspace_presentation::open_main(app.clone(), None, None);
+        if let Err(window_error) = workspace_presentation::open_tool(app.clone(), "review".into(), Some("exit".into()), None).await {
+            command_log.event("workspace_exit_alert", "failure", Some(&window_error));
+        }
+    }
+    // Preserve the command result too; callers must not announce false success.
+    result
+
+    }.await;
+    diagnostic_log.with_task(
+        diagnostic_task_id.as_deref(),
+        diagnostic_operation_id.as_deref(),
+        diagnostic_trigger.as_deref(),
+        || {
+            diagnostic_log.native_outcome(
+                "finish_workspace",
+                diagnostic_operation_id.as_deref(),
+                &diagnostic_result,
+            )
+        },
+    );
+    diagnostic_result
 }

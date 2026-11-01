@@ -1,4 +1,6 @@
-export const LOCAL_WEB_SUBPROTOCOL = 'mizar.local.v1' as const;
+import { LOCAL_PROTOCOL_SUBPROTOCOL } from '@mizar/protocol/version';
+
+export const LOCAL_WEB_SUBPROTOCOL = LOCAL_PROTOCOL_SUBPROTOCOL;
 
 export const LOCAL_WEB_WS_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const MAX_LOCAL_WS_BUFFER_BYTES = 256 * 1024;

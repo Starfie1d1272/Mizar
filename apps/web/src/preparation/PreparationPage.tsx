@@ -14,7 +14,7 @@ import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -28,7 +28,8 @@ import {
   cancelProductionEntry,
   openTool,
   productionAction,
-  retryPendingPreparation,
+  retryObsExit,
+  enterProductionManually,
   useLocalRead,
   type Production,
 } from './client';
@@ -103,19 +104,39 @@ export function PreparationPage() {
   const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
-  const rivalhub = useLocalRead<{ paired: boolean; displayName?: string | null }>(
-    '/local/v1/rivalhub-connection',
-  );
+  const rivalhub = useLocalRead<{
+    paired: boolean;
+    displayName?: string | null;
+    sourceCleanup?: {
+      pending: number;
+      blocked: number;
+      claimIntent: boolean;
+      handoffPending?: number;
+    };
+  }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [obsRetrying, setObsRetrying] = useState(false);
+  const [obsRetryMessage, setObsRetryMessage] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
   const [entering, setEntering] = useState(false);
-  const [checkingEntry, setCheckingEntry] = useState(false);
+  const [submittingEntry, setSubmittingEntry] = useState(false);
+  const [cancellingEntry, setCancellingEntry] = useState(false);
+  const [cancelFailed, setCancelFailed] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const entryGeneration = useRef(0);
+  const cancelling = useRef(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
   const [librarySource, setLibrarySource] = useState<'local' | 'website'>(() =>
     new URLSearchParams(window.location.search).get('source') === 'website' ? 'website' : 'local',
   );
+
+  function reportActionError(error: unknown) {
+    setMessage(error instanceof Error ? error.message : '操作未完成。');
+  }
 
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
@@ -124,25 +145,40 @@ export function PreparationPage() {
     try {
       await run();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作未完成。');
+      reportActionError(error);
     } finally {
       setBusy(false);
     }
   }
 
   useEffect(() => {
-    const cancel = () => cancelProductionEntry();
-    window.addEventListener('mizar-entry-cancel', cancel);
-    const retry = () => {
-      void retryPendingPreparation().catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : '重试未完成。';
-        setMessage(message);
-        void desktopInvoke('workbench_message', { action: 'status', message }).catch(
-          () => undefined,
+    if (!window.__TAURI_INTERNALS__) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const generation = entryGeneration.current;
+      try {
+        const status = await desktopInvoke<{ running: boolean; message: string } | null>(
+          'preparation_status',
         );
-      });
+        if (active && generation === entryGeneration.current) {
+          setEntering(status?.running ?? false);
+          if (!status) setCancelFailed(false);
+          if (status && !status.running && status.message) setMessage(status.message);
+        }
+      } catch {
+        /* The desktop may still be starting. */
+      }
+      if (active) timer = setTimeout(() => void poll(), 1000);
     };
-    window.addEventListener('mizar-entry-retry', retry);
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     const enter = () => {
       void fetch('/local/v1/production', { cache: 'no-store' })
         .then((response) => response.json() as Promise<Production>)
@@ -154,8 +190,6 @@ export function PreparationPage() {
     window.addEventListener('mizar-enter', enter);
     return () => {
       window.removeEventListener('mizar-enter', enter);
-      window.removeEventListener('mizar-entry-cancel', cancel);
-      window.removeEventListener('mizar-entry-retry', retry);
     };
   }, []);
 
@@ -199,6 +233,47 @@ export function PreparationPage() {
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
         <UpdateNotification />
+        {production?.mode === 'preparation' && production.obsExitState === 'pending' ? (
+          <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
+        ) : null}
+        {production?.mode === 'preparation' && production.obsExitState === 'unconfirmed' ? (
+          <StatusBanner tone="warning">
+            <span>OBS 等待画面尚未确认，请检查 OBS。</span>{' '}
+            <Button
+              disabled={obsRetrying || Boolean(exit?.busy)}
+              onClick={() => {
+                setObsRetrying(true);
+                setObsRetryMessage(null);
+                void retryObsExit(production)
+                  .then(
+                    () => setObsRetryMessage({ ok: true, text: 'OBS 等待画面已确认。' }),
+                    (error: unknown) =>
+                      setObsRetryMessage({
+                        ok: false,
+                        text: error instanceof Error ? error.message : 'OBS 收尾重试未完成。',
+                      }),
+                  )
+                  .finally(() => setObsRetrying(false));
+              }}
+            >
+              {obsRetrying ? '正在重试…' : '重试 OBS 收尾'}
+            </Button>
+          </StatusBanner>
+        ) : null}
+        {obsRetryMessage && (!obsRetryMessage.ok || production?.obsExitState === 'confirmed') ? (
+          <StatusBanner tone={obsRetryMessage.ok ? 'success' : 'danger'}>
+            {obsRetryMessage.text}
+          </StatusBanner>
+        ) : null}
+        {production?.mode === 'preparation' &&
+        (production.releaseHandoffState === 'pending' ||
+          (production.releaseHandoffState === 'unconfirmed' && !rivalhub?.sourceCleanup) ||
+          (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ||
+          (rivalhub?.sourceCleanup?.pending ?? 0) > 0 ||
+          (rivalhub?.sourceCleanup?.blocked ?? 0) > 0 ||
+          rivalhub?.sourceCleanup?.claimIntent) ? (
+          <StatusBanner tone="warning">网站数据源收尾尚未确认，请查看连接状态。</StatusBanner>
+        ) : null}
         <header className="preparation-heading">
           <div>
             <h1>
@@ -215,44 +290,85 @@ export function PreparationPage() {
           </div>
           <Button
             variant={match ? 'primary' : 'secondary'}
-            disabled={busy || Boolean(exit?.busy) || !production}
+            disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
             onClick={() =>
               production &&
               void action(async () => {
-                setEntering(true);
+                entryGeneration.current += 1;
+                setSubmittingEntry(true);
                 try {
-                  await productionAction(
-                    'enter',
-                    production,
-                    false,
-                    undefined,
-                    undefined,
-                    setCheckingEntry,
-                  );
+                  const result = await productionAction('enter', production);
+                  if (
+                    result === 'confirmed' &&
+                    production.mode === 'preparation' &&
+                    window.__TAURI_INTERNALS__
+                  )
+                    setEntering(true);
                 } finally {
-                  setEntering(false);
+                  entryGeneration.current += 1;
+                  setSubmittingEntry(false);
                 }
               })
             }
           >
-            {entering
-              ? checkingEntry
-                ? '正在检查更新…'
-                : '正在自动准备工作台…'
+            {entering || submittingEntry
+              ? '正在自动准备工作台…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
                 : '启动并进入工作台'}
           </Button>
         </header>
         {production?.mode === 'preparation' ? (
-          <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
+          <>
+            <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
+            {window.__TAURI_INTERNALS__ ? (
+              <Button
+                disabled={
+                  busy || cancellingEntry || entering || submittingEntry || Boolean(exit?.busy)
+                }
+                onClick={() =>
+                  void action(async () => {
+                    await enterProductionManually(production);
+                  })
+                }
+              >
+                手动进入工作台
+              </Button>
+            ) : null}
+            {window.__TAURI_INTERNALS__ ? <p>手动进入不会自动启动游戏或配置 OBS。</p> : null}
+          </>
         ) : null}
-        {entering ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
+        {entering || submittingEntry || cancellingEntry || cancelFailed ? (
+          <Button
+            disabled={cancellingEntry}
+            onClick={() => {
+              if (cancelling.current) return;
+              cancelling.current = true;
+              entryGeneration.current += 1;
+              setCancellingEntry(true);
+              setCancelError('');
+              void cancelProductionEntry()
+                .then(() => setCancelFailed(false))
+                .catch((error: unknown) => {
+                  setCancelFailed(true);
+                  setCancelError(error instanceof Error ? error.message : '操作未完成。');
+                })
+                .finally(() => {
+                  entryGeneration.current += 1;
+                  cancelling.current = false;
+                  setCancellingEntry(false);
+                });
+            }}
+          >
+            {cancellingEntry ? '正在取消…' : cancelFailed ? '重试取消' : '取消进入'}
+          </Button>
+        ) : null}
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
           <DiagnosticDeliveryNotice />
         ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
+        {cancelError ? <StatusBanner tone="danger">{cancelError}</StatusBanner> : null}
         {message ? (
           <StatusBanner tone="danger">
             {message}
@@ -705,8 +821,15 @@ export function PreparationPage() {
                 contextRevision={view?.contextRevision}
               />
             ) : null}
-            {tab === 'details' && production && production.mode !== 'preparation' ? (
-              <details>
+            {tab === 'details' && match ? (
+              <details
+                id="series-binding"
+                open={
+                  window.location.hash === '#series-binding' ||
+                  query.get('tab') === 'maps' ||
+                  undefined
+                }
+              >
                 <summary>现场地图对应（异常时处理）</summary>
                 <SeriesBindingControls />
               </details>

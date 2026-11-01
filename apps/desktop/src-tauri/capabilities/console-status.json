@@ -1,7 +1,0 @@
-{
-  "identifier": "console-status",
-  "description": "Preparation and diagnostics windows may read managed CS2 console capture status.",
-  "windows": ["main", "tool-diagnostics"],
-  "remote": { "urls": ["http://127.0.0.1:3000/*"] },
-  "permissions": ["allow-cs2-console-status"]
-}

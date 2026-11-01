@@ -62,6 +62,14 @@ describe('program statistics integration', () => {
     for (const [index, phase] of (['freezetime', 'live', 'over'] as const).entries()) {
       coordinator.afterRuntimeMutation(runtime.acceptObservation(frame(index + 1, phase)));
     }
+    const acceptTrustedRoundEvents = (
+      input: Parameters<typeof runtime.acceptTrustedRoundEvents>[0],
+    ) => {
+      const result = runtime.acceptTrustedRoundEvents(input, sources.program.getHealth());
+      if (!result) return false;
+      coordinator.afterRuntimeMutation(result);
+      return true;
+    };
     const before = coordinator.getPublisher('program').getCurrent()!;
     expect(
       before.payload.players.find((p) => p.sourcePlayerId === ids[0])?.statistics.completed
@@ -98,21 +106,21 @@ describe('program statistics integration', () => {
       ],
     };
     expect(
-      coordinator.acceptTrustedRoundEvents({
+      acceptTrustedRoundEvents({
         programSourceGeneration: 1,
         mapName: 'de_mirage',
         events,
       }),
     ).toBe(false);
     expect(
-      coordinator.acceptTrustedRoundEvents({
+      acceptTrustedRoundEvents({
         programSourceGeneration: 0,
         mapName: 'de_nuke',
         events,
       }),
     ).toBe(false);
     expect(
-      coordinator.acceptTrustedRoundEvents({
+      acceptTrustedRoundEvents({
         programSourceGeneration: 0,
         mapName: 'de_mirage',
         events,
@@ -127,7 +135,7 @@ describe('program statistics integration', () => {
     expect(player.equipment.primary).toBe('weapon_0');
     expect(after.payload.teamEconomy.ct.equipmentValue).toBe(12500);
     expect(
-      coordinator.acceptTrustedRoundEvents({
+      acceptTrustedRoundEvents({
         programSourceGeneration: 0,
         mapName: 'de_mirage',
         events,
@@ -135,7 +143,7 @@ describe('program statistics integration', () => {
     ).toBe(false);
     runtime.advanceProgramSourceGeneration({ utc: '2026-01-01T00:00:00Z', monotonicMs: 11 });
     expect(
-      coordinator.acceptTrustedRoundEvents({
+      acceptTrustedRoundEvents({
         programSourceGeneration: 0,
         mapName: 'de_mirage',
         events,

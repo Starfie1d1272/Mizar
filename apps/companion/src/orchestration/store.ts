@@ -31,10 +31,12 @@ interface CameraPersistenceState {
   catalog: CameraCatalog;
   automaticEnabled: boolean;
   revision?: string | undefined;
+  confirmApplied?: (() => Promise<void>) | undefined;
 }
 export interface CameraConfigPersistence {
-  initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
+  canChange?(): boolean;
   read(): Promise<CameraPersistenceState>;
+  readApplied?(): Promise<CameraPersistenceState>;
   commit(
     catalog: CameraCatalog,
     automaticEnabled: boolean,
@@ -133,34 +135,31 @@ export class OrchestrationStore {
     this.automaticEnabled = value.automaticEnabled;
     this.persistedRevision = value.revision;
   }
-  async loadWithPersistence(persistence: CameraConfigPersistence): Promise<void> {
-    if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
-    await ensureDirectory(this.directory);
-    const state = await persistence.read();
-    this.usePersisted(state);
-    this.persistence = persistence;
-    this.ready = true;
-  }
-  async adoptPersistence(persistence: CameraConfigPersistence): Promise<void> {
+  /** Bind to the single config owner after any legacy import, without a second migration mode. */
+  async bindPersistence(persistence: CameraConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
-      const value = await persistence.initialize(
-        structuredClone(this.catalog()),
-        this.automaticEnabled,
-      );
-      this.usePersisted(value);
+      if (this.persistence) throw new Error('camera_storage_unavailable');
+      await ensureDirectory(this.directory);
       this.persistence = persistence;
+      this.usePersisted(await persistence.read());
+      this.ready = true;
     });
     this.queue = result.catch(() => undefined);
     return result;
   }
-  async synchronizeFromPersistence(): Promise<void> {
+  async synchronizeFromPersistence(
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
+  ): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.ready || !this.persistence) throw new Error('camera_storage_unavailable');
+      if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
       const automatic = this.automaticEnabled;
       const revision = this.persistedRevision;
-      this.usePersisted(await this.persistence.read());
+      const current = await this.persistence.read();
+      if (!canApply()) throw new Error('revision_conflict');
+      this.usePersisted(current);
+      this.ready = true;
       if (
         this.persistedRevision !== undefined
           ? revision !== this.persistedRevision
@@ -168,9 +167,15 @@ export class OrchestrationStore {
             automatic !== this.automaticEnabled
       )
         this.revision++;
+      await confirm();
     });
     this.queue = result.catch(() => undefined);
     return result;
+  }
+  async restoreAppliedFromPersistence(): Promise<void> {
+    if (!this.persistence?.readApplied) throw new Error('camera_storage_unavailable');
+    this.usePersisted(await this.persistence.readApplied());
+    this.ready = true;
   }
   private async persistCatalog(
     next: CameraCatalog,
@@ -186,13 +191,22 @@ export class OrchestrationStore {
     return { activePresetId: this.activePresetId, preset: this.preset, presets: this.presets };
   }
   private writeCatalog(change: (catalog: Catalog) => Catalog, activate = false) {
-    if (activate) this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const next = catalogSchema.parse(change(this.catalog()));
+      if (activate && JSON.stringify(next) === JSON.stringify(this.catalog())) return;
+      if (activate) {
+        if (this.persistence?.canChange && !this.persistence.canChange())
+          throw new Error('camera_busy');
+        this.pendingWrites++;
+        reserved = true;
+      }
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
-      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
+      const committed = await this.persistCatalog(next, this.automaticEnabled);
+      this.usePersisted(committed);
+      await committed.confirmApplied?.();
       if (activate) {
         if (
           !this.persistence ||
@@ -212,7 +226,7 @@ export class OrchestrationStore {
       this.diagnostic('camera_configure', { result: 'failure', error });
     });
     return result.finally(() => {
-      if (activate) this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   save(input: unknown) {
@@ -257,16 +271,24 @@ export class OrchestrationStore {
     id: string,
     validate: (preset: OrchestrationPreset) => Promise<void>,
   ) {
-    this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
       const item = this.presets.find((entry) => entry.id === id);
       if (!item) throw new Error('camera_preset_missing');
+      if (id === this.activePresetId && JSON.stringify(item.preset) === JSON.stringify(this.preset))
+        return;
       await validate(item.preset);
+      if (this.persistence?.canChange && !this.persistence.canChange())
+        throw new Error('camera_busy');
+      this.pendingWrites++;
+      reserved = true;
       const next = { ...this.catalog(), activePresetId: id, preset: item.preset };
       const previousRevision = this.persistedRevision;
       const previousPreset = JSON.stringify({ ...this.preset, name: '' });
-      this.usePersisted(await this.persistCatalog(next, this.automaticEnabled));
+      const committed = await this.persistCatalog(next, this.automaticEnabled);
+      this.usePersisted(committed);
+      await committed.confirmApplied?.();
       if (
         !this.persistence ||
         (this.persistedRevision !== undefined
@@ -284,17 +306,24 @@ export class OrchestrationStore {
       this.diagnostic('camera_configure', { result: 'failure', error }),
     );
     return result.finally(() => {
-      this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   saveAutomaticEnabled(automaticEnabled: boolean) {
-    this.pendingWrites++;
+    let reserved = false;
     const result = this.queue.then(async () => {
       if (!this.ready) throw new Error('camera_storage_unavailable');
+      if (automaticEnabled === this.automaticEnabled) return;
+      if (this.persistence?.canChange && !this.persistence.canChange())
+        throw new Error('camera_busy');
+      this.pendingWrites++;
+      reserved = true;
       if (this.persistence) {
         const previousRevision = this.persistedRevision;
         const previousAutomatic = this.automaticEnabled;
-        this.usePersisted(await this.persistCatalog(this.catalog(), automaticEnabled));
+        const committed = await this.persistCatalog(this.catalog(), automaticEnabled);
+        this.usePersisted(committed);
+        await committed.confirmApplied?.();
         if (
           this.persistedRevision !== undefined
             ? previousRevision !== this.persistedRevision
@@ -309,7 +338,7 @@ export class OrchestrationStore {
     });
     this.queue = result.catch(() => {});
     return result.finally(() => {
-      this.pendingWrites--;
+      if (reserved) this.pendingWrites--;
     });
   }
   map(name: string | null): OrchestrationPreset['maps'][number] | undefined {

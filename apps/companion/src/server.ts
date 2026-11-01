@@ -2,7 +2,7 @@ import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, lstat } from 'node:fs/promises';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
 import { installedWorkspaceObserver } from './telemetry/observer-workspace.js';
 import { defaultResourceRoot } from './resource-store/store.js';
@@ -212,7 +212,11 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
         }),
       ),
   });
-  await hudConfigStore.load();
+  const broadcastStoreExists = await lstat(join(captureDir, '..', 'broadcast-config.json')).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
+  );
+  if (!broadcastStoreExists) await hudConfigStore.load();
   const programRuntime = createProgramRuntime(producerInstanceId, {
     liveSession: { kind: 'bound', liveSessionId: randomUUID() },
     seriesProgressCheckpointStore,

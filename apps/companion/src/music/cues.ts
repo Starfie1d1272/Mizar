@@ -1,6 +1,7 @@
 import type { ProgramProjection } from '@mizar/core/projection';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { MusicGroup, MusicTrack } from '@mizar/protocol/music';
+import { musicMapScope } from '../scope/identities.js';
 import { isRegulationHalftime } from '../program-scenes/presentation.js';
 
 export interface MusicTruth {
@@ -14,16 +15,7 @@ export interface MusicCue {
   track?: MusicTrack;
   scope?: string;
 }
-export function musicMapKey(p: ProgramProjection) {
-  return JSON.stringify([
-    p.match?.matchId,
-    p.series?.entrants.a.entryId,
-    p.series?.entrants.b.entryId,
-    p.series?.currentMapOrder,
-    p.map.name,
-    p.cursor.mapEpoch,
-  ]);
-}
+export const musicMapKey = musicMapScope;
 export function musicPause(p: ProgramProjection) {
   return ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '');
 }

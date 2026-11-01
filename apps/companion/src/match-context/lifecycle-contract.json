@@ -1,0 +1,113 @@
+{
+  "patterns": {
+    "uuid": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+  },
+  "qualification": {
+    "ticket": {
+      "format": "uuid"
+    },
+    "matchId": {
+      "min": 1,
+      "max": 128
+    },
+    "contextRevision": {
+      "min": 1,
+      "max": 256
+    }
+  },
+  "productionView": {
+    "mode": {
+      "values": ["preparation", "live", "hidden"]
+    },
+    "revision": {
+      "format": "uuid"
+    }
+  },
+  "errors": {
+    "productionConflict": {
+      "error": "production_conflict",
+      "retryable": true,
+      "status": 409
+    },
+    "preparationCancelled": {
+      "error": "preparation_cancelled",
+      "retryable": false,
+      "status": 409
+    },
+    "handoffUnconfirmed": {
+      "error": "source_handoff_unconfirmed",
+      "retryable": false,
+      "status": 503
+    },
+    "exitQualificationInvalid": {
+      "error": "exit_qualification_invalid",
+      "retryable": false,
+      "status": 400
+    },
+    "exitQualificationChanged": {
+      "error": "exit_qualification_changed",
+      "retryable": false,
+      "status": 409
+    },
+    "broadcastSyncFailure": {
+      "error": "broadcast_sync_failure",
+      "retryable": false,
+      "status": 409
+    },
+    "productionActionInvalid": {
+      "error": "production_action_invalid",
+      "retryable": false,
+      "status": 400
+    },
+    "contextMissing": {
+      "error": "production_context_missing",
+      "retryable": false,
+      "status": 409
+    },
+    "obsStateChanged": {
+      "error": "obs_state_changed",
+      "retryable": false,
+      "status": 409
+    },
+    "cameraSettingsBusy": {
+      "error": "camera_settings_busy",
+      "retryable": false,
+      "status": 409
+    },
+    "releaseUnconfirmed": {
+      "error": "source_release_unconfirmed",
+      "retryable": false,
+      "status": 409
+    },
+    "safeSceneUnconfirmed": {
+      "error": "safe_scene_unconfirmed",
+      "retryable": false,
+      "status": 409
+    },
+    "productionFailure": {
+      "error": "production_failure",
+      "retryable": false,
+      "status": 409
+    },
+    "preparationIdInvalid": {
+      "error": "preparation_id_invalid",
+      "retryable": false,
+      "status": 400
+    },
+    "operatorForbidden": {
+      "error": "operator_origin_forbidden",
+      "retryable": false,
+      "status": 403
+    },
+    "runtimeControlDenied": {
+      "error": "runtime-control-denied",
+      "retryable": false,
+      "status": 403
+    }
+  },
+  "cancellationResponse": {
+    "entered": {
+      "type": "boolean"
+    }
+  }
+}

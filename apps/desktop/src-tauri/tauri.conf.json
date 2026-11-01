@@ -1,28 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mizar",
-  "version": "1.10.3",
+  "version": "1.11.0-rc.1",
   "identifier": "top.starfie1d.mizar",
   "build": {
     "frontendDist": "http://127.0.0.1:3000"
   },
   "app": {
-    "windows": [],
-    "security": {
-      "capabilities": [
-        "workspace",
-        "workbench-main",
-        "workbench-dock",
-        "review",
-        "demo-test",
-        "demo-test-workspace",
-        "workspace-exit",
-        "mulnx-control",
-        "obs-configuration",
-        "console-status",
-        "console-settings"
-      ]
-    }
+    "windows": []
   },
   "bundle": {
     "active": false,

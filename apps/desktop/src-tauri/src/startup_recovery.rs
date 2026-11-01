@@ -36,8 +36,8 @@ fn status_message(status: &Result<StartupRecoveryStatus, String>) -> String {
     match status {
         Err(error) => format!("恢复状态无法确认，未修改配置。{error} 请重新检查，或查看本机日志。"),
         Ok(status) if status.running => "CS2 正在运行，本次仅检查。可以继续当前游戏；正常退出游戏后再重新检查配置恢复。".into(),
-        Ok(status) if status.requires_service => "Demo 试播隔离状态需要制播服务确认，本次不恢复配置。请修复制播服务启动问题后，再在准备中心恢复。".into(),
         Ok(status) if status.uncertain => "启动结果待确认。先取消启动请求并确认 CS2 与 MulNX 启动器已关闭，再明确确认恢复；Mizar 不会在此关闭游戏。".into(),
+        Ok(status) if status.requires_service => "可以先恢复本机游戏配置；Demo 资料继续保持隔离，待制播服务恢复后单独确认。".into(),
         Ok(status) if status.pending => "发现待恢复配置，原始备份仍保留。恢复只写回备份，不会启动或关闭游戏。".into(),
         Ok(_) => "未发现待恢复记录。可以重试启动，或查看本机日志定位服务启动失败。".into(),
     }

@@ -19,6 +19,12 @@ import {
 } from '@mizar/core/runtime';
 import type { MatchContext } from '@mizar/core/match-context';
 import {
+  createIdentityResolver,
+  identityEvidenceFromObservation,
+  hasObservedLineupDifference,
+  type IdentityResolution,
+} from '@mizar/core/identity';
+import {
   addSeriesProgressIssue,
   createSeriesProgress,
   isSeriesProgressCheckpointCompatible,
@@ -30,18 +36,33 @@ import {
   type OperatorCommand,
   type SeriesMapObservation,
   type SeriesProgress,
+  type SeriesProgressCheckpoint,
   type SeriesProgressCheckpointStore,
   type SeriesProgressEvent,
   type SeriesSideProof,
 } from '@mizar/core/series-progress';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { ContextOrigin } from '../match-context/index.js';
+import type { CstvSourceHealth } from '../telemetry/cstv-source-manager.js';
 
 export const PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX = 32;
 export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Object.freeze({
   staleAfterMs: 20_000,
   objectiveClockLeaseMs: DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
 });
+
+function hasSeriesFacts(progress: SeriesProgress): boolean {
+  return (
+    progress.currentMapOrder !== null ||
+    progress.maps.some(
+      (map) =>
+        map.executionMapEpoch !== null ||
+        map.status !== 'pending' ||
+        map.finalScore !== null ||
+        map.roundHistory.rounds.length > 0,
+    )
+  );
+}
 
 export interface ProgramRuntimeOptions {
   readonly producerInstanceId: string;
@@ -57,14 +78,20 @@ export interface ProgramRuntimeSnapshot {
   readonly continuityPolicy: RuntimeContinuityPolicy;
   readonly current: RuntimeState;
   readonly seriesProgress: SeriesProgress | null;
+  readonly identity: IdentityResolution;
   readonly lastDisposition?: RuntimeDisposition;
   readonly recentTransitions: readonly RuntimeTransition[];
 }
+
+export type ProgramCommitResult = RuntimeReduceResult & {
+  readonly snapshot: ProgramRuntimeSnapshot;
+};
 
 export interface SeriesOperatorCommandResult {
   readonly ok: boolean;
   readonly progress: SeriesProgress | null;
   readonly code: 'series_unbound' | 'operator_bind_applied' | 'operator_bind_rejected';
+  readonly snapshot: ProgramRuntimeSnapshot;
 }
 
 /** The sole Companion composition owner for the mutable Core RuntimeState. */
@@ -76,6 +103,11 @@ export class ProgramRuntime {
   private readonly seriesProgressCheckpointStore: SeriesProgressCheckpointStore | undefined;
   private readonly onSeriesProgressDiagnostic:
     ((diagnostic: { readonly code: string }) => void) | undefined;
+  private readonly identityResolver = createIdentityResolver();
+  private identityContext: MatchContext | undefined;
+  private identityOrigin: ContextOrigin | undefined;
+  private lastIdentityEvidence: { sourceGeneration: number; receiveSequence: number } | undefined;
+  private identity: IdentityResolution = this.identityResolver.getResolution();
   private seriesContext: MatchContext | undefined;
   private seriesOrigin: ContextOrigin | undefined;
   private fixtureSeriesProgressActive = false;
@@ -86,6 +118,21 @@ export class ProgramRuntime {
   private restorePending = false;
   private deliveryRestoreAwaitingTelemetry = false;
   private fixtureTelemetrySuppressed = false;
+  // An execution remains owned even while its context is temporarily absent.
+  private executionOwner: { matchId: string; fixture: boolean } | undefined;
+  private executionAwaitingObservation = false;
+  private executionOwnerUnknown = false;
+  private managedSourceId: string | undefined;
+  private restoredManagedSourceId: string | undefined;
+  private explicitSourceOwner: { sourceId?: string; matchId: string; mapEpoch: number } | undefined;
+  private executionConflict = false;
+  private unknownNewExecution = false;
+  private suspendedProduction:
+    { owner: { matchId: string; fixture: boolean } | undefined; unknown: boolean } | undefined;
+  private previousBoundaryOwner: { runtimeSeq: number; matchId: string } | undefined;
+  private restoredExecutionProof: SeriesProgressCheckpoint['executionOwner'];
+  private restoredExecutionMatchId: string | undefined;
+  private unverifiedSeriesProgress: SeriesProgress | undefined;
 
   constructor(options: ProgramRuntimeOptions | string) {
     const normalizedOptions: ProgramRuntimeOptions =
@@ -100,9 +147,82 @@ export class ProgramRuntime {
     );
   }
 
+  bindContext(context: MatchContext | undefined, origin?: ContextOrigin): ProgramRuntimeSnapshot {
+    if (this.identityContext !== context) {
+      this.identityContext = context;
+      this.lastIdentityEvidence = undefined;
+      if (context) this.identityResolver.bind(context);
+      else this.identityResolver.unbind();
+    }
+    this.identityOrigin = origin;
+    this.commitFacts();
+    return this.getSnapshot();
+  }
+
+  private commitFacts(): void {
+    const context = this.identityContext;
+    const cursor = this.state.programSource.lastAccepted;
+    const generation = this.state.programSource.generation;
+    const observation = this.state.programTelemetry;
+    if (!context) this.identity = this.identityResolver.unbind();
+    else if (!observation || !cursor || cursor.generation !== generation) {
+      this.identityResolver.bind(context);
+      this.identity = this.identityResolver.getResolution();
+    } else {
+      const isNew =
+        !this.lastIdentityEvidence ||
+        this.lastIdentityEvidence.sourceGeneration !== generation ||
+        this.lastIdentityEvidence.receiveSequence !== cursor.sequence;
+      const current = this.identityResolver.getResolution();
+      if (
+        (current.sourceGeneration !== generation || current.mapEpoch !== this.state.map.epoch) &&
+        !isNew
+      ) {
+        this.identityResolver.bind(context);
+        this.identity = this.identityResolver.getResolution();
+      } else {
+        this.identity = this.identityResolver.resolve(
+          identityEvidenceFromObservation(observation, generation, this.state.map.epoch),
+        );
+        this.lastIdentityEvidence = {
+          sourceGeneration: generation,
+          receiveSequence: cursor.sequence,
+        };
+      }
+    }
+    const i = this.identity;
+    const valid =
+      (i.capabilities.identityDependentResult || hasObservedLineupDifference(i)) &&
+      i.sourceGeneration === generation &&
+      i.mapEpoch === this.state.map.epoch &&
+      i.sideMapping.a !== 'unknown' &&
+      i.sideMapping.b !== 'unknown' &&
+      i.sideMapping.a !== i.sideMapping.b;
+    const proof: SeriesSideProof | null = valid
+      ? {
+          sourceGeneration: generation,
+          mapEpoch: this.state.map.epoch,
+          ...(hasObservedLineupDifference(i) ? { displayOnly: true } : {}),
+          a: i.sideMapping.a as 'CT' | 'T',
+          b: i.sideMapping.b as 'CT' | 'T',
+        }
+      : null;
+    this.synchronizeSeriesProgress(context, proof, this.identityOrigin);
+  }
+
   /** Switch the sole runtime to a fresh isolated session; no telemetry survives. */
-  resetSession(transient: boolean): void {
+  resetSession(transient: boolean): ProgramRuntimeSnapshot {
     const previous = this.state;
+    const wasTransient = this.transientSession;
+    const priorOwner = this.executionOwner;
+    const priorConflict = this.executionConflict;
+    const priorUnknown = this.executionOwnerUnknown;
+    if (transient && !wasTransient)
+      this.suspendedProduction = {
+        owner: this.executionOwner,
+        unknown: this.executionOwnerUnknown,
+      };
+    const suspended = !transient && wasTransient ? this.suspendedProduction : undefined;
     this.transientSession = transient;
     this.state = {
       ...createInitialRuntimeState(previous.producerInstanceId, {
@@ -118,6 +238,33 @@ export class ProgramRuntime {
     this.clearFixtureSeriesProgress();
     this.deliveryRestoreAwaitingTelemetry = false;
     this.restorePending = false;
+    this.executionOwner = undefined;
+    this.executionAwaitingObservation = false;
+    this.executionOwnerUnknown = false;
+    this.managedSourceId = undefined;
+    this.restoredManagedSourceId = undefined;
+    this.explicitSourceOwner = undefined;
+    this.executionConflict = false;
+    this.unknownNewExecution = false;
+    if (!transient && wasTransient) {
+      this.executionOwner = suspended?.owner;
+      this.executionConflict = Boolean(suspended?.owner);
+      this.executionOwnerUnknown = Boolean(
+        suspended?.unknown || (!suspended?.owner && previous.programTelemetry),
+      );
+      this.suspendedProduction = undefined;
+    } else if (!transient) {
+      this.executionOwner = priorOwner;
+      this.executionConflict = priorConflict;
+      this.executionOwnerUnknown = priorUnknown;
+    }
+    this.previousBoundaryOwner = undefined;
+    this.restoredExecutionProof = undefined;
+    this.restoredExecutionMatchId = undefined;
+    this.unverifiedSeriesProgress = undefined;
+    this.lastIdentityEvidence = undefined;
+    this.commitFacts();
+    return this.getSnapshot();
   }
 
   /** Restore identities only before the first observation; never restore telemetry or clocks. */
@@ -126,9 +273,15 @@ export class ProgramRuntime {
     readonly programSourceGeneration: number;
     readonly mapEpoch: number;
     readonly mapName: string | null;
-  }): void {
+    readonly managedSourceId?: string;
+  }): ProgramRuntimeSnapshot {
     if (this.state.runtimeSeq !== 0) throw new Error('runtime_already_started');
     this.deliveryRestoreAwaitingTelemetry = true;
+    this.executionAwaitingObservation = true;
+    // Legacy continuity records carry no proof of map-execution ownership.
+    this.executionOwnerUnknown = true;
+    this.restoredManagedSourceId = input.managedSourceId;
+    this.unknownNewExecution = false;
     this.state = {
       ...this.state,
       liveSession:
@@ -140,23 +293,49 @@ export class ProgramRuntime {
       playerStats: createMapPlayerStatsAccumulator(input.mapEpoch),
       objectiveTiming: createObjectiveTimingState(input.programSourceGeneration, input.mapEpoch),
     };
+    this.commitFacts();
+    return this.getSnapshot();
   }
 
-  acceptObservation(observation: TelemetryObservation): RuntimeReduceResult {
+  acceptObservation(
+    observation: TelemetryObservation,
+    unverifiedNewExecution = false,
+  ): ProgramCommitResult {
     this.fixtureTelemetrySuppressed = false;
-    return this.apply({
-      kind: 'program-telemetry',
-      sourceGeneration: this.state.programSource.generation,
-      observation,
-    });
+    return this.apply(
+      {
+        kind: 'program-telemetry',
+        sourceGeneration: this.state.programSource.generation,
+        observation,
+      },
+      unverifiedNewExecution,
+    );
   }
 
-  /** Accept only batches already sealed by a source that proves round coverage. */
-  acceptTrustedRoundEvents(events: TrustedProgramRoundEvents): RuntimeReduceResult {
-    return this.apply({ kind: 'program-round-events', events });
+  /** Accept only covered program events bound to the current GSI execution. */
+  acceptTrustedRoundEvents(
+    input: {
+      readonly programSourceGeneration: number;
+      readonly mapName: string;
+      readonly events: TrustedProgramRoundEvents;
+    },
+    source: CstvSourceHealth<'program'>,
+  ): ProgramCommitResult | undefined {
+    if (
+      this.state.programSource.lastAccepted?.generation !== this.state.programSource.generation ||
+      this.state.programSource.generation !== input.programSourceGeneration ||
+      this.state.map.epoch !== input.events.mapEpoch ||
+      this.state.map.name !== input.mapName ||
+      source.role !== 'program' ||
+      source.generation !== input.events.source.generation ||
+      source.mapName !== input.mapName
+    )
+      return undefined;
+    const result = this.apply({ kind: 'program-round-events', events: input.events });
+    return result.disposition.kind === 'accepted' ? result : undefined;
   }
 
-  advanceProgramSourceGeneration(at: RuntimeTime): RuntimeReduceResult {
+  advanceProgramSourceGeneration(at: RuntimeTime): ProgramCommitResult {
     return this.apply({
       kind: 'advance-program-source-generation',
       nextGeneration: this.state.programSource.generation + 1,
@@ -164,7 +343,7 @@ export class ProgramRuntime {
     });
   }
 
-  resetMapExecution(reason: MapExecutionResetReason, at: RuntimeTime): RuntimeReduceResult {
+  resetMapExecution(reason: MapExecutionResetReason, at: RuntimeTime): ProgramCommitResult {
     return this.apply({
       kind: 'reset-map-execution',
       reason,
@@ -181,11 +360,10 @@ export class ProgramRuntime {
   }
 
   /**
-   * Feeds the current MatchContext and already-proven side mapping into the
-   * single Companion-owned SeriesProgress state. The identity/lineup owners
-   * remain outside this class; they provide evidence only.
+   * Advances SeriesProgress using the context and side proof resolved by this
+   * runtime's fact commit.
    */
-  synchronizeSeriesProgress(
+  private synchronizeSeriesProgress(
     context: MatchContext | undefined,
     sideProof: SeriesSideProof | null,
     origin?: ContextOrigin,
@@ -210,6 +388,12 @@ export class ProgramRuntime {
     const matchChanged =
       this.seriesContext !== undefined &&
       (this.seriesContext.matchId !== context.matchId || this.seriesOrigin !== effectiveOrigin);
+    if (
+      this.executionOwner &&
+      (this.executionOwner.matchId !== context.matchId ||
+        this.executionOwner.fixture !== (effectiveOrigin === 'fixture'))
+    )
+      this.executionConflict = true;
     if (matchChanged) {
       this.pendingSeriesEvents.length = 0;
       if (
@@ -230,19 +414,40 @@ export class ProgramRuntime {
     let shouldPersist = false;
     if (this.seriesProgress === undefined || matchChanged) {
       let initial = createSeriesProgress(context);
+      this.unverifiedSeriesProgress = undefined;
+      this.restoredExecutionProof = undefined;
+      this.restoredExecutionMatchId = undefined;
       let checkpoint;
       if (!this.transientSession && effectiveOrigin !== 'fixture') {
         try {
-          checkpoint = this.seriesProgressCheckpointStore?.load();
+          checkpoint = this.seriesProgressCheckpointStore?.load(seriesCheckpointIdentity(context));
         } catch {
           this.reportSeriesDiagnostic('checkpoint_read_failed');
         }
       }
       if (checkpoint !== undefined) {
         if (isSeriesProgressCheckpointCompatible(checkpoint, context)) {
-          initial = checkpoint.progress;
-          this.restorePending = true;
+          if (checkpoint.executionOwner) {
+            initial = checkpoint.progress;
+            this.restorePending = true;
+            this.unverifiedSeriesProgress = checkpoint.unverifiedProgress;
+            if (!this.executionOwner) this.executionOwnerUnknown = true;
+          } else {
+            const unverified = checkpoint.unverifiedProgress ?? checkpoint.progress;
+            this.unverifiedSeriesProgress = hasSeriesFacts(unverified) ? unverified : undefined;
+            this.restorePending = false;
+            if (hasSeriesFacts(checkpoint.progress)) {
+              this.executionOwnerUnknown = true;
+              this.unknownNewExecution = false;
+            }
+          }
+          this.restoredExecutionProof = checkpoint.executionOwner;
+          this.restoredExecutionMatchId = checkpoint.identity.matchId;
         } else {
+          if (checkpoint.executionOwner || hasSeriesFacts(checkpoint.progress)) {
+            this.executionOwnerUnknown = true;
+            this.unknownNewExecution = false;
+          }
           initial = addSeriesProgressIssue(initial, {
             code: 'checkpoint_incompatible',
             severity: 'warning',
@@ -299,6 +504,49 @@ export class ProgramRuntime {
       }
     }
     this.seriesSideProof = sideProof;
+    const proof = this.restoredExecutionProof;
+    if (
+      this.executionOwnerUnknown &&
+      !this.executionConflict &&
+      !this.executionAwaitingObservation &&
+      proof &&
+      this.restoredExecutionMatchId === context.matchId &&
+      effectiveOrigin !== 'fixture' &&
+      this.state.liveSession.kind === 'bound' &&
+      proof.liveSessionId === this.state.liveSession.liveSessionId &&
+      proof.programSourceGeneration === this.state.programSource.generation &&
+      proof.mapEpoch === this.state.map.epoch &&
+      proof.mapName === this.state.map.name &&
+      proof.mapName === this.state.programTelemetry?.telemetry.map?.name &&
+      proof.managedSourceId !== undefined &&
+      proof.managedSourceId === this.managedSourceId
+    ) {
+      this.executionOwner = { matchId: context.matchId, fixture: false };
+      this.executionOwnerUnknown = false;
+      this.executionConflict = false;
+    }
+    if (
+      this.executionAwaitingObservation ||
+      this.executionOwnerUnknown ||
+      this.fixtureTelemetrySuppressed
+    ) {
+      if (shouldPersist && !this.transientSession && effectiveOrigin !== 'fixture')
+        this.persistSeriesProgress();
+      return this.seriesProgress;
+    }
+    const executionMatches =
+      !this.executionConflict &&
+      this.executionOwner?.matchId === context.matchId &&
+      this.executionOwner.fixture === (effectiveOrigin === 'fixture');
+    if (!this.executionOwner && this.state.programTelemetry?.telemetry.map?.name) {
+      this.executionOwner = { matchId: context.matchId, fixture: effectiveOrigin === 'fixture' };
+      shouldPersist = true;
+    } else if (!executionMatches) {
+      this.pendingSeriesEvents.length = 0;
+      if (shouldPersist && !this.transientSession && effectiveOrigin !== 'fixture')
+        this.persistSeriesProgress();
+      return this.seriesProgress;
+    }
     const before = this.seriesProgress;
     const events = this.pendingSeriesEvents.splice(0, this.pendingSeriesEvents.length);
     const observation = this.seriesObservation();
@@ -339,17 +587,45 @@ export class ProgramRuntime {
     return this.seriesProgress ?? null;
   }
 
-  async flushSeriesProgressCheckpoint(): Promise<void> {
+  getExecutionOwnership(matchId: string): {
+    status: 'associated' | 'waiting' | 'attention';
+    reason: 'previous_execution' | 'new_execution_unverified' | 'recovery_unverified' | null;
+    canConfirm: boolean;
+  } {
+    if (this.executionOwner && this.executionOwner.matchId !== matchId)
+      return { status: 'attention', reason: 'previous_execution', canConfirm: false };
+    if (this.executionOwnerUnknown)
+      return {
+        status: 'attention',
+        reason: this.unknownNewExecution ? 'new_execution_unverified' : 'recovery_unverified',
+        canConfirm: this.unknownNewExecution && !this.executionAwaitingObservation,
+      };
+    if (this.executionConflict)
+      return { status: 'attention', reason: 'recovery_unverified', canConfirm: false };
+    if (this.executionOwner?.matchId === matchId && !this.executionAwaitingObservation)
+      return { status: 'associated', reason: null, canConfirm: false };
+    return { status: 'waiting', reason: null, canConfirm: false };
+  }
+
+  async flushSeriesProgressCheckpoint(strict = false): Promise<void> {
     if (this.seriesProgressCheckpointStore === undefined) return;
     try {
       await this.seriesProgressCheckpointStore.flush();
-    } catch {
+    } catch (error) {
       this.reportSeriesDiagnostic('checkpoint_write_failed');
+      if (strict) throw error;
     }
   }
 
   executeOperatorCommand(command: OperatorCommand): SeriesOperatorCommandResult {
-    this.synchronizeSeriesProgress(this.seriesContext, this.seriesSideProof, this.seriesOrigin);
+    const result = this.applyOperatorCommand(command);
+    return { ...result, snapshot: this.getSnapshot() };
+  }
+
+  private applyOperatorCommand(
+    command: OperatorCommand,
+  ): Omit<SeriesOperatorCommandResult, 'snapshot'> {
+    this.commitFacts();
     if (this.seriesContext === undefined || this.seriesProgress === undefined) {
       return { ok: false, progress: null, code: 'series_unbound' };
     }
@@ -360,6 +636,16 @@ export class ProgramRuntime {
         progress: this.seriesProgress,
         code: 'operator_bind_rejected',
       };
+    }
+
+    if (
+      this.executionAwaitingObservation ||
+      (this.executionOwnerUnknown && !this.unknownNewExecution) ||
+      (!this.executionOwnerUnknown &&
+        (this.executionOwner?.matchId !== this.seriesContext.matchId ||
+          this.executionOwner.fixture !== (this.seriesOrigin === 'fixture')))
+    ) {
+      return { ok: false, progress: this.seriesProgress, code: 'operator_bind_rejected' };
     }
 
     const event: SeriesProgressEvent = {
@@ -376,16 +662,30 @@ export class ProgramRuntime {
       sideProof: this.seriesSideProof,
     });
     this.seriesProgress = reduced.progress;
-    if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
-      this.persistSeriesProgress();
-    }
-
     const target = this.seriesProgress.maps.find((map) => map.mapOrder === command.mapOrder);
     const ok =
       target?.status === 'current' &&
       target.executionMapEpoch === this.state.map.epoch &&
       this.seriesProgress.currentMapOrder === command.mapOrder &&
       this.seriesProgress.bindingState === 'bound';
+    if (ok && this.executionOwnerUnknown && this.unknownNewExecution) {
+      this.executionOwner = {
+        matchId: this.seriesContext.matchId,
+        fixture: this.seriesOrigin === 'fixture',
+      };
+      this.executionOwnerUnknown = false;
+      this.unknownNewExecution = false;
+      this.executionConflict = false;
+      this.pendingSeriesEvents.length = 0;
+      this.explicitSourceOwner = {
+        ...(this.managedSourceId ? { sourceId: this.managedSourceId } : {}),
+        matchId: this.seriesContext.matchId,
+        mapEpoch: this.state.map.epoch,
+      };
+    }
+    if (reduced.changed && !this.fixtureSeriesProgressActive && this.seriesOrigin !== 'fixture') {
+      this.persistSeriesProgress();
+    }
     return {
       ok,
       progress: this.seriesProgress,
@@ -408,6 +708,11 @@ export class ProgramRuntime {
     this.seriesProgress = createSeriesProgress(context);
     this.fixtureTelemetrySuppressed = true;
     this.pendingSeriesEvents.length = 0;
+    // Preserve fixture ownership even if the fixture exits before another frame.
+    this.executionOwner = { matchId: context.matchId, fixture: true };
+    this.executionConflict = false;
+    this.executionAwaitingObservation = true;
+    this.executionOwnerUnknown = false;
     return this.seriesProgress;
   }
 
@@ -425,11 +730,141 @@ export class ProgramRuntime {
   }
 
   async close(): Promise<void> {
-    await this.flushSeriesProgressCheckpoint();
+    await this.flushSeriesProgressCheckpoint(true);
   }
 
   getSourceFreshness(nowMonotonicMs: number): ProgramSourceFreshness {
     return getProgramSourceFreshness(this.state, nowMonotonicMs, this.continuityPolicy);
+  }
+
+  isExecutionOwnedBy(matchId: string, origin: ContextOrigin | undefined): boolean {
+    return (
+      !this.executionAwaitingObservation &&
+      !this.executionOwnerUnknown &&
+      !this.executionConflict &&
+      !this.fixtureTelemetrySuppressed &&
+      this.executionOwner?.matchId === matchId &&
+      this.executionOwner.fixture === (origin === 'fixture')
+    );
+  }
+
+  getManagedSourceId(): string | undefined {
+    return this.managedSourceId;
+  }
+
+  getExecutionOwnerMatchId(runtimeSeq: number): string | undefined {
+    if (this.executionOwner && !this.executionOwner.fixture) return this.executionOwner.matchId;
+    return this.previousBoundaryOwner?.runtimeSeq === runtimeSeq
+      ? this.previousBoundaryOwner.matchId
+      : undefined;
+  }
+
+  /** Called only for the first frame of a committed Host-verified managed source. */
+  activateManagedSource(
+    matchId: string,
+    sourceId: string,
+    observation: TelemetryObservation,
+  ): { boundary?: ProgramCommitResult } | undefined {
+    const preview = reduceRuntime(
+      this.state,
+      {
+        kind: 'program-telemetry',
+        sourceGeneration: this.state.programSource.generation,
+        observation,
+      },
+      this.continuityPolicy,
+    );
+    if (preview.disposition.kind !== 'accepted') return undefined;
+    this.pendingSeriesEvents.length = 0;
+    const boundary =
+      this.state.map.epoch > 0 &&
+      this.state.map.name === observation.telemetry.map?.name &&
+      !preview.transitions.some((transition) => transition.kind === 'map_execution_changed')
+        ? this.apply(
+            {
+              kind: 'reset-map-execution',
+              reason: 'restore',
+              at: {
+                utc: observation.receive.receivedAt,
+                monotonicMs: observation.receive.receivedMonotonicMs,
+              },
+            },
+            false,
+            true,
+          )
+        : undefined;
+    this.executionOwner = { matchId, fixture: false };
+    this.executionConflict = false;
+    this.executionOwnerUnknown = false;
+    this.unknownNewExecution = false;
+    this.executionAwaitingObservation = true;
+    this.managedSourceId = sourceId;
+    this.commitFacts();
+    return boundary ? { boundary: { ...boundary, snapshot: this.getSnapshot() } } : {};
+  }
+
+  private setSourceUnverified(): void {
+    if (this.executionOwner) this.executionConflict = true;
+    else this.executionOwnerUnknown = true;
+  }
+
+  markSourceUnverified(): ProgramRuntimeSnapshot {
+    this.setSourceUnverified();
+    this.commitFacts();
+    return this.getSnapshot();
+  }
+
+  retireManagedSource(): ProgramRuntimeSnapshot {
+    this.setSourceUnverified();
+    this.managedSourceId = undefined;
+    this.explicitSourceOwner = undefined;
+    this.commitFacts();
+    return this.getSnapshot();
+  }
+
+  isExplicitSourceOwner(sourceId: string, matchId: string): boolean {
+    return (
+      this.explicitSourceOwner?.sourceId === sourceId &&
+      this.explicitSourceOwner.matchId === matchId &&
+      this.explicitSourceOwner.mapEpoch === this.state.map.epoch
+    );
+  }
+
+  private markUnverifiedNewExecution(): void {
+    this.executionOwner = undefined;
+    this.executionOwnerUnknown = true;
+    this.executionConflict = true;
+    this.unknownNewExecution = true;
+  }
+
+  resumeManagedSource(
+    sourceId: string,
+    matchId: string | null,
+  ): { restored: boolean; snapshot: ProgramRuntimeSnapshot } {
+    const proof = this.restoredExecutionProof;
+    if (
+      !this.executionOwnerUnknown ||
+      this.executionConflict ||
+      this.restoredExecutionMatchId !== matchId ||
+      !proof ||
+      proof.managedSourceId !== sourceId ||
+      this.restoredManagedSourceId !== sourceId ||
+      this.state.liveSession.kind !== 'bound' ||
+      proof.liveSessionId !== this.state.liveSession.liveSessionId ||
+      proof.programSourceGeneration !== this.state.programSource.generation ||
+      proof.mapEpoch !== this.state.map.epoch ||
+      proof.mapName !== this.state.map.name
+    ) {
+      // Host has verified the process and installed source independently of map evidence.
+      // Receive its fresh frames, but do not infer which historical execution they complete.
+      this.managedSourceId = sourceId;
+      this.markUnverifiedNewExecution();
+      this.commitFacts();
+      return { restored: false, snapshot: this.getSnapshot() };
+    }
+    this.managedSourceId = sourceId;
+    this.commitFacts();
+    return { restored: true, snapshot: this.getSnapshot() };
   }
 
   getSnapshot(): ProgramRuntimeSnapshot {
@@ -439,14 +874,39 @@ export class ProgramRuntime {
       continuityPolicy: this.continuityPolicy,
       current: this.state,
       seriesProgress: this.seriesProgress ?? null,
+      identity: this.identity,
       ...(this.lastDisposition === undefined ? {} : { lastDisposition: this.lastDisposition }),
       recentTransitions: this.recentTransitions.slice(),
     };
   }
 
-  private apply(input: Parameters<typeof reduceRuntime>[1]): RuntimeReduceResult {
+  private apply(
+    input: Parameters<typeof reduceRuntime>[1],
+    unverifiedNewExecution = false,
+    deferFacts = false,
+  ): ProgramCommitResult {
     const result = reduceRuntime(this.state, input, this.continuityPolicy);
     this.state = result.state;
+    if (result.transitions.some((transition) => transition.kind === 'map_execution_changed')) {
+      if (this.explicitSourceOwner) this.executionConflict = true;
+      this.explicitSourceOwner = undefined;
+      this.previousBoundaryOwner =
+        this.executionOwner && !this.executionOwner.fixture
+          ? { runtimeSeq: result.state.runtimeSeq, matchId: this.executionOwner.matchId }
+          : undefined;
+      if (this.executionConflict || this.executionOwnerUnknown) {
+        this.executionOwner = undefined;
+        this.executionOwnerUnknown = true;
+        this.unknownNewExecution = true;
+      }
+      this.executionAwaitingObservation = input.kind !== 'program-telemetry';
+    }
+    if (
+      input.kind === 'program-telemetry' &&
+      result.disposition.kind === 'accepted' &&
+      input.observation.telemetry.map?.name
+    )
+      this.executionAwaitingObservation = false;
     if (input.kind === 'program-telemetry' && result.disposition.kind === 'accepted')
       this.deliveryRestoreAwaitingTelemetry = false;
     this.lastDisposition = result.disposition;
@@ -456,7 +916,13 @@ export class ProgramRuntime {
       const overflow = this.recentTransitions.length - PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX;
       if (overflow > 0) this.recentTransitions.splice(0, overflow);
     }
-    return result;
+    if (
+      unverifiedNewExecution &&
+      result.transitions.some((transition) => transition.kind === 'map_execution_changed')
+    )
+      this.markUnverifiedNewExecution();
+    if (!deferFacts && result.disposition.kind === 'accepted') this.commitFacts();
+    return { ...result, snapshot: this.getSnapshot() };
   }
 
   private queueSeriesEvents(transitions: readonly RuntimeTransition[]): void {
@@ -553,9 +1019,34 @@ export class ProgramRuntime {
       return;
     }
     try {
-      const result = this.seriesProgressCheckpointStore.save(
-        makeSeriesProgressCheckpoint(this.seriesProgress),
-      );
+      const executionOwner =
+        this.executionOwner?.matchId === this.seriesProgress.matchId &&
+        !this.executionOwner.fixture &&
+        !this.executionOwnerUnknown &&
+        !this.executionConflict &&
+        !this.executionAwaitingObservation &&
+        this.state.liveSession.kind === 'bound' &&
+        this.state.map.epoch > 0 &&
+        this.state.map.name
+          ? {
+              liveSessionId: this.state.liveSession.liveSessionId,
+              programSourceGeneration: this.state.programSource.generation,
+              mapEpoch: this.state.map.epoch,
+              mapName: this.state.map.name,
+              ...(this.managedSourceId ? { managedSourceId: this.managedSourceId } : {}),
+            }
+          : this.restoredExecutionMatchId === this.seriesProgress.matchId
+            ? // This proves the saved historical facts, not ownership of the current input.
+              // Current execution restoration still checks all live/source/map identities.
+              this.restoredExecutionProof
+            : undefined;
+      const result = this.seriesProgressCheckpointStore.save({
+        ...makeSeriesProgressCheckpoint(this.seriesProgress),
+        ...(executionOwner ? { executionOwner } : {}),
+        ...(this.unverifiedSeriesProgress
+          ? { unverifiedProgress: this.unverifiedSeriesProgress }
+          : {}),
+      });
       if (result instanceof Promise) {
         void result.catch(() => this.reportSeriesDiagnostic('checkpoint_write_failed'));
       }

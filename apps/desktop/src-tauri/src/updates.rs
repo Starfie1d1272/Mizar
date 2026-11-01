@@ -413,7 +413,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             return Err("更新已经在等待退出。".into());
         }
         let log = host.state::<DesktopLog>();
-        let root = crate::bundle_root()?
+        let root = crate::host_runtime::bundle_root()?
             .canonicalize()
             .map_err(|error| io_failure(&log, "root_canonicalize", &error, "安装目录无法读取，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。"))?;
         let plan = match request(&log, "prepare") {
@@ -453,7 +453,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 }
                 return Err("安装准备记录未能保存，升级未启动。旧版仍可用，请检查用户资料目录权限与剩余空间并导出诊断。".into());
             }
-            let mut command = crate::background_powershell();
+            let mut command = crate::powershell::background();
             command
                 .arg("-ExecutionPolicy")
                 .arg("Bypass")
@@ -519,12 +519,12 @@ pub fn cancel(app: &tauri::AppHandle) {
     }
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
-    if crate::health_matches(&crate::bundle_root()?) {
+    if crate::host_runtime::health_matches(&crate::host_runtime::bundle_root()?) {
         return Err("制播服务尚未停止，安装未启动。".into());
     }
     let handoff = crate::windows_startup::UpdateHandoff::new()
         .map_err(|error| io_failure(log, "helper_handoff_event", &error, "更新工具接力未建立。"))?;
-    let mut command: Command = crate::background_powershell();
+    let mut command: Command = crate::powershell::background();
     command
         .arg("-ExecutionPolicy")
         .arg("Bypass")

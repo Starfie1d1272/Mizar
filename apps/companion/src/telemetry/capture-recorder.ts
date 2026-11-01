@@ -68,6 +68,7 @@ export interface CaptureRecorder {
   captureElapsedUsAt?(monotonicMs: number): number | undefined;
   getHealth(): RecorderHealth;
   finalize(): Promise<void>;
+  assertDurableFinalized?(): void;
 }
 
 export type CaptureRecorderSource = CaptureRecorder | (() => CaptureRecorder);
@@ -129,6 +130,7 @@ class ProductionCaptureRecorder implements CaptureRecorder {
   private readonly objectiveReferencesPath: string;
   private objectiveReferenceWriteChain: Promise<void> = Promise.resolve();
   private objectiveReferenceWriteFailed = false;
+  private durableFailure = false;
   private readonly hash = createHash('sha256');
   private readonly queue: Buffer[] = [];
   private readonly emittedDiagnostics = new Set<RecorderErrorCode>();
@@ -306,6 +308,11 @@ class ProductionCaptureRecorder implements CaptureRecorder {
     return this.finalizePromise;
   }
 
+  assertDurableFinalized(): void {
+    if (this.lifecycle !== 'closed' || this.durableFailure)
+      throw new Error('capture_durable_finalize_failed');
+  }
+
   private elapsedUs(receivedMonotonicMs: number): number {
     const elapsedDelta = (receivedMonotonicMs - this.startedMonotonicMs) * 1000;
     const candidateElapsedUs = Number.isFinite(elapsedDelta)
@@ -398,6 +405,12 @@ class ProductionCaptureRecorder implements CaptureRecorder {
     error?: unknown,
   ): void {
     this.lastErrorCode = code;
+    if (
+      ['recorder_writer_failed', 'recorder_finalize_timeout', 'recorder_finalize_failed'].includes(
+        code,
+      )
+    )
+      this.durableFailure = true;
     const causeCode = getCauseCode(error);
     this.emitDiagnostic({
       code,
