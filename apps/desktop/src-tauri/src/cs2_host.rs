@@ -48,6 +48,7 @@ pub(crate) async fn begin_camera(
         let mut submitted = false;
         let outcome = (|| -> Result<(), String> {
             let ticket = preparation_gate::preparation_ticket(&app, &preparation_id)?;
+            let _operation = crate::observer_workspace::operation()?;
             app.state::<production_exit::ExitGate>()
                 .check_ticket(ticket)?;
             app.state::<preparation_gate::PreparationGate>()
@@ -137,7 +138,13 @@ pub(crate) async fn launch_mulnx(
 ) -> Result<serde_json::Value, String> {
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
+    let operation_ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation = crate::observer_workspace::operation()?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(operation_ticket)?;
         preparation_gate::check_preparation(&app, preparation_id.as_deref())?;
         if let Some(id) = preparation_id.as_deref() {
             let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
@@ -185,7 +192,13 @@ pub(crate) async fn replace(
 ) -> Result<bool, String> {
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
+    let operation_ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation = crate::observer_workspace::operation()?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(operation_ticket)?;
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
         let created = expected_created
@@ -257,6 +270,9 @@ pub(crate) async fn start(
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<bool, String> = async move {
+        let operation_ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
         app.state::<production_exit::ExitGate>().check()?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
@@ -269,6 +285,9 @@ pub(crate) async fn start(
                     native_operation_id.as_deref(),
                     native_trigger.as_deref(),
                     || {
+                        let _operation = crate::observer_workspace::operation()?;
+                        app.state::<production_exit::ExitGate>()
+                            .check_ticket(operation_ticket)?;
                         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                         let mut cs2 = state.lock().map_err(|error| {
                             command_log.preserve_error(
@@ -359,6 +378,9 @@ pub(crate) async fn finish_managed_cs2(
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
+        let operation_ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
             let native_operation_id = native_operation_id.clone();
@@ -370,6 +392,9 @@ pub(crate) async fn finish_managed_cs2(
                     native_operation_id.as_deref(),
                     native_trigger.as_deref(),
                     || {
+                        let _operation = crate::observer_workspace::operation()?;
+                        app.state::<production_exit::ExitGate>()
+                            .check_ticket(operation_ticket)?;
                         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                         let mut cs2 = state.lock().map_err(|error| {
                             command_log.preserve_error(
@@ -487,6 +512,9 @@ pub(crate) async fn restore_backup(
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<(), String> = async move {
+        let operation_ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
             let native_operation_id = native_operation_id.clone();
@@ -498,6 +526,9 @@ pub(crate) async fn restore_backup(
                     native_operation_id.as_deref(),
                     native_trigger.as_deref(),
                     || {
+                        let _operation = crate::observer_workspace::operation()?;
+                        app.state::<production_exit::ExitGate>()
+                            .check_ticket(operation_ticket)?;
                         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                         let mut cs2 = state.lock().map_err(|error| {
                             command_log.preserve_error(
@@ -555,6 +586,9 @@ pub(crate) async fn manage_backup(
     let log = app.state::<DesktopLog>().inner().clone();
     let command_log = log.clone();
     let operation = diagnostic_operation_id.clone();
+    let operation_ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
@@ -589,6 +623,9 @@ pub(crate) async fn manage_backup(
                 .select_backup(&path)
                 .map(Some);
         }
+        let _operation = crate::observer_workspace::operation()?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(operation_ticket)?;
         let mut cs2 = state.lock().map_err(|_| "恢复状态不可用。")?;
         match action.as_str() {
             "cancel" => cs2.cancel_selected_backup(),
@@ -741,9 +778,17 @@ pub(crate) async fn mulnx_control(
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
-    let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
-        "update" => mulnx_launch::update(&app, &log),
-        _ => Err("请选择更新 MulNX。".into()),
+    let operation_ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation = crate::observer_workspace::operation()?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(operation_ticket)?;
+        match action.as_str() {
+            "update" => mulnx_launch::update(&app, &log),
+            _ => Err("请选择更新 MulNX。".into()),
+        }
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));

@@ -237,7 +237,9 @@ pub(crate) fn present_production_inner_checked(
         app.state::<updates::PendingUpdate>().check()?;
         let (mut request, process) = {
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-            let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+            let cs2 = managed
+                .try_lock()
+                .map_err(|_| "CS2 正忙，请稍后重试进入工作台。")?;
             let process = cs2.workspace_process()?;
             let request = process.as_ref().and_then(|process| {
                 app.state::<HostState>()
@@ -308,19 +310,76 @@ pub(crate) fn present_production_inner_checked(
             let result = host
                 .state::<production_exit::ExitGate>()
                 .publish(ticket, || {
-                    let show = || {
+                    let show = |document: Option<u64>| {
                         host.state::<production_exit::WorkspaceExit>()
                             .complete(&Ok(()));
                         show_workspace(&host);
                         if let Some(request) = request {
-                            let focused = attempt_game_focus(&host, request);
-                            host.state::<DesktopLog>().event(
-                                "workspace_entry_focus",
-                                if focused { "focused" } else { "not_focused" },
-                                None,
-                            );
-                        }
-                        if let Some(main) = host.get_webview_window("main") {
+                            let focus_host = host.clone();
+                            let epoch = host
+                                .state::<HostState>()
+                                .workspace_epoch
+                                .load(Ordering::Acquire);
+                            let expected_page = expected_url.as_ref().map(|(url, _)| url.clone());
+                            tauri::async_runtime::spawn_blocking(move || {
+                                let same_document = document.is_some()
+                                    && focus_host
+                                        .state::<EntryIntent>()
+                                        .generation()
+                                        .ok()
+                                        .and_then(|value| value.parse::<u64>().ok())
+                                        == document;
+                                let same_page = expected_page.as_ref().is_none_or(|expected| {
+                                    focus_host.get_webview_window("main").is_some_and(|main| {
+                                        main.url().ok().is_some_and(|url| url.as_str() == expected)
+                                    })
+                                });
+                                let focused = same_document
+                                    && same_page
+                                    && attempt_game_focus(&focus_host, request);
+                                focus_host.state::<DesktopLog>().event(
+                                    "workspace_entry_focus",
+                                    if focused { "focused" } else { "not_focused" },
+                                    None,
+                                );
+                                let published_host = focus_host.clone();
+                                if let Err(error) = focus_host.run_on_main_thread(move || {
+                                    let gate = published_host.state::<production_exit::ExitGate>();
+                                    let _ = gate.publish(ticket, || {
+                                        let state = published_host.state::<HostState>();
+                                        if state.visible.load(Ordering::Acquire)
+                                            && state.workspace_epoch.load(Ordering::Acquire)
+                                                == epoch
+                                            && document.is_some()
+                                            && published_host
+                                                .state::<EntryIntent>()
+                                                .try_generation()
+                                                == document
+                                        {
+                                            if let Some(main) =
+                                                published_host.get_webview_window("main")
+                                            {
+                                                if expected_page.as_ref().is_none_or(|expected| {
+                                                    main.url()
+                                                        .ok()
+                                                        .is_some_and(|url| url.as_str() == expected)
+                                                }) {
+                                                    let _ = window_presentation::set_visible(
+                                                        &main, false,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    });
+                                }) {
+                                    focus_host.state::<DesktopLog>().event(
+                                        "workspace_entry_focus",
+                                        "failure",
+                                        Some(&error.to_string()),
+                                    );
+                                }
+                            });
+                        } else if let Some(main) = host.get_webview_window("main") {
                             let _ = window_presentation::set_visible(&main, false);
                         }
                     };
@@ -336,10 +395,10 @@ pub(crate) fn present_production_inner_checked(
                                             .is_some_and(|url| url.as_str() == expected)
                                 })
                             },
-                            show,
+                            |document| show(Some(document)),
                         );
                     } else {
-                        show();
+                        show(host.state::<EntryIntent>().try_generation());
                     }
                 });
             let result = result.and_then(|()| {
@@ -420,18 +479,20 @@ pub(crate) fn sync_workspace_shell(app: &tauri::AppHandle) {
             }
         }
         if !state.panels_only.load(Ordering::Acquire) {
-            if let Ok(tracker) = state.tracker.lock() {
-                if let Some(game) = tracker.owned_window() {
-                    windows.push(game.hwnd);
-                }
+            let Ok(tracker) = state.tracker.try_lock() else {
+                return;
+            };
+            if let Some(game) = tracker.owned_window() {
+                windows.push(game.hwnd);
             }
         }
     }
-    let marked = state
-        .fullscreen_scope
-        .lock()
-        .is_ok_and(|mut scope| scope.synchronize(&windows));
-    if let Ok(mut tracker) = state.tracker.lock() {
+    let Ok(mut scope) = state.fullscreen_scope.try_lock() else {
+        return;
+    };
+    let marked = scope.synchronize(&windows);
+    drop(scope);
+    if let Ok(mut tracker) = state.tracker.try_lock() {
         tracker.fullscreen_layout = visible && marked;
     };
 }
@@ -451,11 +512,10 @@ pub(crate) fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
     let epoch = state.overlay_epoch.load(Ordering::Acquire);
     let workspace_windows = overlay_workspace_windows(app);
     let rect = if state.visible.load(Ordering::Acquire) {
-        state
-            .tracker
-            .lock()
-            .ok()
-            .and_then(|tracker| tracker.overlay_rect(&workspace_windows))
+        let Ok(tracker) = state.tracker.try_lock() else {
+            return;
+        };
+        tracker.overlay_rect(&workspace_windows)
     } else {
         None
     };
@@ -580,10 +640,11 @@ pub(crate) fn attempt_game_focus(
             return Err("process_stopped");
         }
         let tracker = state.tracker.try_lock().map_err(|_| "tracker_busy")?;
-        let window = tracker.window.ok_or("game_window_missing")?;
+        let window = tracker.owned_window().ok_or("game_window_missing")?;
         if window.pid != process.pid {
             return Err("game_window_mismatch");
         }
+        drop(tracker);
         let mut invoked = false;
         let focused = request.attempt(
             focus_session(&process),
@@ -591,7 +652,7 @@ pub(crate) fn attempt_game_focus(
             true,
             |source| {
                 invoked = true;
-                tracker.restore_focus(source)
+                windows_host::restore_focus(window, &process, source)
             },
         );
         if focused {
@@ -635,16 +696,11 @@ pub(crate) fn show_workspace(app: &tauri::AppHandle) {
         state.visible.store(true, Ordering::Release);
     }
     sync_workspace_shell(app);
-    // Native window calls can synchronously dispatch window events. Release
-    // the tracker before presenting any WebView or posting HUD visibility.
-    let layout = state
-        .tracker
-        .lock()
-        .ok()
-        .and_then(|mut tracker| tracker.restore_layout());
-    if let Some(layout) = layout {
-        apply_layout(app, layout);
-    }
+    state.layout_request_generation.store(
+        app.state::<production_exit::ExitGate>().generation(),
+        Ordering::Release,
+    );
+    state.layout_dirty.store(true, Ordering::Release);
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window_presentation::show_without_activation(&window);
@@ -664,7 +720,7 @@ pub(crate) fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
         state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
         state.visible.store(false, Ordering::Release);
     }
-    if let Ok(mut group) = state.window_group.lock() {
+    if let Ok(mut group) = state.window_group.try_lock() {
         *group = workspace_group::Group::default();
     }
     sync_workspace_shell(app);
@@ -967,12 +1023,10 @@ pub(crate) async fn open_tool(
 pub(crate) fn restore_layout(
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
-) -> Result<(), serde_json::Value> {
+) -> Result<&'static str, serde_json::Value> {
     let state = app.state::<HostState>();
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), serde_json::Value> = (|| {
+    let diagnostic_result: Result<&'static str, serde_json::Value> = (|| {
         if state.panels_only.load(Ordering::Acquire) {
             let main = app
                 .get_webview_window("main")
@@ -994,47 +1048,21 @@ pub(crate) fn restore_layout(
                     height: size.height as i32,
                 }),
             );
-            return Ok(());
+            return Ok("panels");
         }
-        let layout = state
-            .tracker
-            .lock()
-            .map_err(|error| {
-                command_log.preserve_error(
-                    "restore_layout",
-                    native_operation_id.as_deref(),
-                    &error,
-                    serde_json::json!("桌面窗口状态不可用。"),
-                )
-            })?
-            .restore_layout()
-            .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-        apply_layout(&app, layout);
-        update_overlay(&app, &state);
-        let tracker = state.tracker.lock().map_err(|error| {
-            command_log.preserve_error(
-                "restore_layout",
-                native_operation_id.as_deref(),
-                &error,
-                serde_json::json!("桌面窗口状态不可用。"),
-            )
-        })?;
-        if tracker.window.is_none() {
-            return Err(serde_json::json!(
-                "工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"
-            ));
+        if !state.visible.load(Ordering::Acquire) {
+            return Err(serde_json::json!("请打开工作区后恢复布局。"));
         }
-        if !tracker.managed {
-            return Err(if tracker.preserve_settings {
-                serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
-            } else {
-                match tracker.window_message() {
-                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
-                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
-            }
-            });
-        }
-        Ok(())
+        app.state::<production_exit::ExitGate>()
+            .check()
+            .map_err(|error| serde_json::json!(error))?;
+        state.layout_request_generation.store(
+            app.state::<production_exit::ExitGate>().generation(),
+            Ordering::Release,
+        );
+        state.layout_request.fetch_add(1, Ordering::AcqRel);
+        state.layout_dirty.store(true, Ordering::Release);
+        Ok("queued")
     })();
     diagnostic_log.native_outcome(
         "restore_layout",

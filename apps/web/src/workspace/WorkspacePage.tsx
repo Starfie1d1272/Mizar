@@ -15,7 +15,7 @@ import type {
 } from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
@@ -463,6 +463,7 @@ function WorkspaceDockContent() {
   }, []);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const layoutRequest = useRef(0);
   const [overlayRecovering, setOverlayRecovering] = useState(false);
   useEffect(() => {
     if (!message) return;
@@ -720,7 +721,55 @@ function WorkspaceDockContent() {
             </Button>
             <Button
               disabled={busy || !window.__TAURI_INTERNALS__}
-              onClick={() => void action(() => desktopInvoke('restore_layout'))}
+              onClick={() =>
+                void action(async () => {
+                  const request = ++layoutRequest.current;
+                  const result = await desktopInvoke<string>('restore_layout');
+                  if (result === 'panels') {
+                    setMessage('工作台面板布局请求已提交。');
+                    return;
+                  }
+                  setMessage('布局请求已提交，游戏窗口对齐结果仍待确认。');
+                  void (async () => {
+                    for (let attempt = 0; attempt < 32; attempt++) {
+                      await new Promise((resolve) => setTimeout(resolve, 1000));
+                      const status = await desktopInvoke<{
+                        layoutPending: boolean;
+                        visible: boolean;
+                        found: boolean;
+                        managed: boolean;
+                        message?: string | null;
+                        geometry?: { preserveSettings?: boolean; alignmentRetries?: number };
+                      }>('cs2_host_status').catch(() => null);
+                      if (request !== layoutRequest.current) return;
+                      if (!status || status.layoutPending) continue;
+                      if (!status.visible) return;
+                      if (status.managed) {
+                        setMessage('已确认 CS2 窗口对齐；工作台面板布局请求已提交。');
+                        return;
+                      }
+                      if (
+                        !status.found ||
+                        status.geometry?.preserveSettings ||
+                        status.geometry?.alignmentRetries === 0
+                      ) {
+                        setMessage('');
+                        setErrorMessage(
+                          status.geometry?.preserveSettings
+                            ? '本次启动保留原游戏设置，未接管游戏窗口布局。需要自动布局时请先正常退出游戏，在准备中心完成恢复后选择自动设置启动。'
+                            : status.message ||
+                                (!status.found
+                                  ? '尚未找到 CS2。打开游戏后再恢复布局。'
+                                  : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
+                        );
+                        return;
+                      }
+                    }
+                    if (request === layoutRequest.current)
+                      setMessage('布局请求已提交，CS2 窗口对齐尚未确认。');
+                  })();
+                })
+              }
             >
               恢复布局
             </Button>

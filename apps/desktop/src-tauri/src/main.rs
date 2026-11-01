@@ -410,35 +410,58 @@ fn webview_preflight() -> Result<String, String> {
 fn restore_layout(
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
-) -> Result<(), serde_json::Value> {
+) -> Result<&'static str, serde_json::Value> {
     workspace_presentation::restore_layout(app, diagnostic_operation_id)
 }
 
 #[tauri::command]
-fn restore_cs2_focus(
+async fn restore_cs2_focus(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
 ) -> bool {
-    workspace_presentation::restore_cs2_focus(window, app, diagnostic_operation_id)
+    let log = app.state::<DesktopLog>().inner().clone();
+    let operation = diagnostic_operation_id.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        workspace_presentation::restore_cs2_focus(window, app, diagnostic_operation_id)
+    })
+    .await
+    {
+        Ok(focused) => focused,
+        Err(error) => {
+            log.event(
+                "restore_cs2_focus",
+                "failure",
+                Some(&format!("operation={operation:?}; task={error}")),
+            );
+            false
+        }
+    }
 }
 
 #[tauri::command]
-fn set_program_overlay_enabled(
+async fn set_program_overlay_enabled(
     app: tauri::AppHandle,
     enabled: bool,
     diagnostic_operation_id: Option<String>,
 ) -> Result<(), String> {
-    workspace_presentation::set_overlay_enabled(app, enabled, diagnostic_operation_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace_presentation::set_overlay_enabled(app, enabled, diagnostic_operation_id)
+    })
+    .await
+    .map_err(|error| format!("HUD 状态操作失败：{error}"))?
 }
 
 #[tauri::command]
-fn cs2_host_status(state: tauri::State<'_, HostState>) -> serde_json::Value {
-    match state.tracker.lock() {
-        Ok(tracker) => {
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() })
+fn cs2_host_status(state: tauri::State<'_, HostState>) -> Result<serde_json::Value, String> {
+    match state.tracker.try_lock() {
+        Ok(tracker) => Ok(
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
+        ),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            Err("游戏窗口操作正在进行，请稍后重试。".into())
         }
-        Err(_) => serde_json::json!({ "found": false, "managed": false, "generation": 0 }),
+        Err(std::sync::TryLockError::Poisoned(_)) => Err("桌面窗口状态不可用。".into()),
     }
 }
 
@@ -676,7 +699,8 @@ async fn finish_managed_cs2(
 }
 
 #[tauri::command]
-fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
+async fn workspace_exit_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
     let state = app.state::<production_exit::WorkspaceExit>().status();
     let window_message = app
         .state::<HostState>()
@@ -685,6 +709,7 @@ fn workspace_exit_status(app: tauri::AppHandle) -> serde_json::Value {
         .ok()
         .and_then(|tracker| tracker.window_message());
     serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message, "windowMessage": window_message })
+    }).await.map_err(|error| format!("退出状态不可用：{error}"))
 }
 
 #[tauri::command]
@@ -1407,6 +1432,7 @@ fn run_desktop(
     // A retained Companion must revoke the previous Host before any UI can reconnect.
     production_exit::camera_session(&log, "host-start", None, None)?;
     let managed = managed_cs2::ManagedCs2::new(log.clone());
+    let camera_state = managed.camera_state();
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
     tracker.preserve_settings = managed.preserve_settings();
@@ -1424,6 +1450,9 @@ fn run_desktop(
         entry_ticket: Mutex::new(None),
         entry_message: Mutex::new(String::new()),
         layout_dirty: Arc::new(AtomicBool::new(false)),
+        layout_request: AtomicU64::new(0),
+        layout_request_generation: AtomicU64::new(0),
+        layout_completed: AtomicU64::new(0),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
         overlay_generation: AtomicU64::new(0),
@@ -1553,6 +1582,14 @@ fn run_desktop(
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
+            let camera_running = worker_running.clone();
+            let camera_log = setup_log.clone();
+            thread::spawn(move || {
+                while camera_running.load(Ordering::Acquire) {
+                    managed_cs2::pulse_camera(&camera_state, &camera_log);
+                    thread::sleep(Duration::from_secs(2));
+                }
+            });
             let console_running = worker_running.clone();
             let console_log = setup_log.clone();
             let console_host = host.clone();
@@ -1564,30 +1601,43 @@ fn run_desktop(
             let pending = Arc::new(AtomicBool::new(false));
             let worker = thread::spawn(move || {
                 let mut cs2_check = Instant::now() - Duration::from_secs(2);
+                let mut exit_generation = host.state::<production_exit::ExitGate>().generation();
+                let mut retired_workspace = None;
                 while worker_running.load(Ordering::Relaxed) {
-                    if cs2_check.elapsed() >= Duration::from_secs(2) {
-                        if let Ok(mut cs2) =
-                            host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
-                        {
-                            cs2.poll();
-                            observer_workspace::pulse(&host, &cs2);
-                            if let Some((lease, invalid)) = cs2.managed_camera_lease() {
-                                let log = host.state::<DesktopLog>();
-                                let action = if invalid { "invalidate" } else { "pulse" };
-                                match production_exit::camera_session(&log, action, Some(&lease), None) {
-                                    Ok(_) if invalid => cs2.clear_managed_camera(),
-                                    Ok(_) => (),
-                                    Err(error) => {
-                                        cs2.invalidate_managed_camera();
-                                        log.event("managed_camera_isolation", "failure", Some(&error));
-                                    }
+                    let next_exit = host.state::<production_exit::ExitGate>().generation();
+                    if next_exit != exit_generation {
+                        if let Ok(mut tracker) = worker_tracker.lock() {
+                            if let Err(error) = tracker.retire_layout() {
+                                host.state::<DesktopLog>().event("cs2_window_retire", "failure", Some(&format!("SetWindowPos: {error}")));
+                            }
+                            exit_generation = next_exit;
+                            retired_workspace = Some(host.state::<HostState>().workspace_epoch.load(Ordering::Acquire));
+                            if host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) != next_exit {
+                                worker_layout_dirty.store(false, Ordering::Release);
+                                if host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) == next_exit {
+                                    worker_layout_dirty.store(true, Ordering::Release);
                                 }
                             }
+                        }
+                    }
+                    if retired_workspace.is_some_and(|epoch| epoch != host.state::<HostState>().workspace_epoch.load(Ordering::Acquire))
+                        || (worker_layout_dirty.load(Ordering::Acquire)
+                            && host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) == exit_generation
+                            && host.state::<production_exit::ExitGate>().check().is_ok())
+                    {
+                        retired_workspace = None;
+                    }
+                    if cs2_check.elapsed() >= Duration::from_secs(2) {
+                        if let Some(_operation) = observer_workspace::try_operation() {
+                          if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
+                            cs2.poll();
+                            observer_workspace::pulse_locked(&host, &cs2);
                             workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
                                 tracker.set_owner(cs2.workspace_process().ok().flatten());
                             }
+                          }
                         }
                         cs2_check = Instant::now();
                     }
@@ -1601,6 +1651,7 @@ fn run_desktop(
                             && !exit_signal.requested()
                             && host.state::<production_exit::ExitGate>().check().is_ok()
                             && host.state::<cs2_activity::Activity>().phase() == "idle"
+                            && retired_workspace.is_none()
                     };
                     let process = if allowed() {
                         host.state::<Mutex<managed_cs2::ManagedCs2>>()
@@ -1632,11 +1683,13 @@ fn run_desktop(
                     }
 
                     // Cross-process CS2 calls stay off the Tauri main loop.
+                    let workspace_epoch = host.state::<HostState>().workspace_epoch.load(Ordering::Acquire);
                     let overlay_epoch = host.state::<HostState>().overlay_epoch.load(Ordering::Acquire);
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
                         && !host.state::<HostState>().panels_only.load(Ordering::Acquire)
                         && !exit_signal.requested()
+                        && allowed()
                     {
                         let workspace_windows = workspace_presentation::overlay_workspace_windows(&host);
                         worker_tracker
@@ -1646,8 +1699,13 @@ fn run_desktop(
                                 // A DPI change can resize a WebView without changing CS2's
                                 // physical client or DPI. Reapply the shared physical layout
                                 // after the native suggested-size handler has completed.
+                                let request = host.state::<HostState>().layout_request.load(Ordering::Acquire);
                                 let layout = if worker_layout_dirty.swap(false, Ordering::AcqRel) {
-                                    tracker.restore_layout()
+                                    let result = tracker.restore_layout();
+                                    if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
+                                        host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                    }
+                                    result
                                 } else {
                                     tracker.tick()
                                 };
@@ -1707,12 +1765,11 @@ fn run_desktop(
                                         if activate {
                                             let _ = workspace_presentation::open_main(tick_host.clone(), None, None);
                                         }
-                                        if tick_host
-                                            .state::<HostState>()
-                                            .visible
-                                            .load(Ordering::Relaxed)
+                                        workspace_presentation::sync_workspace_shell(&tick_host);
+                                        if tick_host.state::<HostState>().visible.load(Ordering::Acquire)
+                                            && tick_host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch
+                                            && tick_host.state::<production_exit::ExitGate>().check().is_ok()
                                         {
-                                            workspace_presentation::sync_workspace_shell(&tick_host);
                                             if let Some(layout) = layout {
                                                 workspace_presentation::apply_layout(&tick_host, layout);
                                             }
@@ -1817,17 +1874,36 @@ fn run_desktop(
             if code.unwrap_or(0) == 0 && !exit_cleanup_done.load(Ordering::Acquire) =>
         {
             api.prevent_exit();
-            if !app.state::<production_exit::ExitGate>().begin() {
-                return;
-            }
             let done = exit_cleanup_done.clone();
             let host = app.clone();
-            // Serialize with an in-flight launch; keep the UI loop responsive.
+            // Gate acquisition can wait for an accepted publication. Never wait on the UI loop.
             tauri::async_runtime::spawn(async move {
+                let gate_host = host.clone();
+                match tauri::async_runtime::spawn_blocking(move || {
+                    gate_host.state::<production_exit::ExitGate>().begin()
+                })
+                .await
+                {
+                    Ok(true) => (),
+                    Ok(false) => return,
+                    Err(error) => {
+                        host.state::<DesktopLog>().event(
+                            "workspace_exit",
+                            "failure",
+                            Some(&format!("gate task: {error}")),
+                        );
+                        host.dialog()
+                            .message("退出任务未能开始，请重试并查看运行日志。")
+                            .title("Mizar 退出未完成")
+                            .show(|_| {});
+                        return;
+                    }
+                }
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
+                    let _operation = observer_workspace::cleanup_operation();
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let service_stopped = cleanup_host
@@ -1861,7 +1937,9 @@ fn run_desktop(
                             {
                                 observer_hud::restore(&cleanup_host.state::<DesktopLog>())
                             } else {
-                                observer_workspace::finish(&cleanup_host.state::<DesktopLog>())
+                                observer_workspace::finish_locked(
+                                    &cleanup_host.state::<DesktopLog>(),
+                                )
                             }
                         },
                         || {

@@ -36,6 +36,9 @@ impl ExitGate {
         self.generation.fetch_add(1, Ordering::AcqRel);
         true
     }
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.active.load(Ordering::Acquire) {
             Err("Mizar 正在退出，请完成收尾后再启动。".into())
@@ -765,6 +768,7 @@ pub(crate) async fn finish_workspace(
         command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || {
         let feedback = host.state::<crate::production_exit::WorkspaceExit>();
         let log = host.state::<DesktopLog>();
+        let _operation = observer_workspace::cleanup_operation();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         // Companion freeze and scene/remote work have their own owner. Never
@@ -786,7 +790,7 @@ pub(crate) async fn finish_workspace(
         }
         feedback.stage("restoration");
         let game = crate::production_exit::restore_then_cleanup(
-        || log.step("workspace_exit_observer", || observer_workspace::finish(&log)),
+        || log.step("workspace_exit_observer", || observer_workspace::finish_locked(&log)),
         || -> Result<(), String> {
         // Host-owned recovery evidence determines local work even when Companion is offline.
         if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {

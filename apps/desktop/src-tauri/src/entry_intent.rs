@@ -20,6 +20,9 @@ impl EntryIntent {
             .document
             .to_string())
     }
+    pub(crate) fn try_generation(&self) -> Option<u64> {
+        self.0.try_lock().ok().map(|state| state.document)
+    }
     fn begin(&self, id: String, document: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
         if document != state.document.to_string() {
@@ -106,7 +109,7 @@ impl EntryIntent {
         &self,
         id: &str,
         valid_page: impl FnOnce() -> bool,
-        show: impl FnOnce(),
+        show: impl FnOnce(u64),
     ) -> bool {
         let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if !state
@@ -117,7 +120,7 @@ impl EntryIntent {
         {
             return false;
         }
-        show();
+        show(state.document);
         true
     }
 }

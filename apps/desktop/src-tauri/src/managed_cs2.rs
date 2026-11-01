@@ -609,7 +609,7 @@ pub struct ManagedCs2 {
     launch_observation: Option<Value>,
     can_preserve: bool,
     selected_backup: Option<Value>,
-    camera: Option<CameraLease>,
+    camera: Arc<Mutex<Option<CameraLease>>>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
     source_resume: Mutex<Option<(String, std::time::Instant, bool)>>,
 }
@@ -622,10 +622,48 @@ pub struct WorkspaceProcess {
     pub pid: u32,
     pub created: u64,
 }
-struct CameraLease {
+pub(crate) struct CameraLease {
     process: WorkspaceProcess,
     lease: String,
     invalidated: bool,
+}
+/// Serialize renewal with revocation. This lock never acquires ManagedCs2.
+pub(crate) fn pulse_camera(
+    state: &Mutex<Option<CameraLease>>,
+    log: &crate::startup_log::DesktopLog,
+) {
+    let mut state = match state.lock() {
+        Ok(state) => state,
+        Err(error) => {
+            if let Some(camera) = error.into_inner().as_mut() {
+                camera.invalidated = true;
+            }
+            return;
+        }
+    };
+    let Some(camera) = state.as_mut() else {
+        return;
+    };
+    if camera.invalidated {
+        return;
+    }
+    let valid = camera.process.is_running()
+        && cs2_pids(log).is_ok_and(|pids| pids == vec![camera.process.pid]);
+    let result = if valid {
+        crate::production_exit::camera_session(log, "pulse", Some(&camera.lease), None)
+    } else {
+        Err("受管游戏身份已变化。".into())
+    };
+    if let Err(error) = result {
+        camera.invalidated = true;
+        let retired =
+            crate::production_exit::camera_session(log, "invalidate", Some(&camera.lease), None)
+                .is_ok();
+        if retired {
+            *state = None;
+        }
+        log.event("managed_camera_isolation", "failure", Some(&error));
+    }
 }
 struct ReplacementTarget {
     process: Process,
@@ -683,7 +721,7 @@ impl ManagedCs2 {
             launch_observation: None,
             can_preserve: false,
             selected_backup: None,
-            camera: None,
+            camera: Arc::new(Mutex::new(None)),
             mulnx_launcher: None,
             source_resume: Mutex::new(None),
         }
@@ -1037,7 +1075,7 @@ impl ManagedCs2 {
             false
         };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1368,15 +1406,22 @@ impl ManagedCs2 {
         if !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
             return Err("受管游戏身份已变化，运镜会话未绑定。".into());
         }
-        self.camera = Some(CameraLease {
+        *self.camera.lock().map_err(|_| "运镜会话状态不可用。")? = Some(CameraLease {
             process,
             lease,
             invalidated: false,
         });
         Ok(())
     }
+    pub(crate) fn camera_state(&self) -> Arc<Mutex<Option<CameraLease>>> {
+        self.camera.clone()
+    }
     pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
-        let camera = self.camera.as_mut()?;
+        let mut state = self
+            .camera
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let camera = state.as_mut()?;
         if !camera.process.is_running()
             || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid])
         {
@@ -1385,12 +1430,19 @@ impl ManagedCs2 {
         Some((camera.lease.clone(), camera.invalidated))
     }
     pub fn invalidate_managed_camera(&mut self) {
-        if let Some(camera) = &mut self.camera {
+        let mut state = self
+            .camera
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(camera) = state.as_mut() {
             camera.invalidated = true;
         }
     }
     pub fn clear_managed_camera(&mut self) {
-        self.camera = None;
+        *self
+            .camera
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
     }
     pub fn preserve_settings(&self) -> bool {
         // Corrupt/unreadable journals must also prevent automatic game layout.
@@ -2336,8 +2388,7 @@ impl ManagedCs2 {
             return Ok(());
         }
         if let Some((lease, _)) = self.managed_camera_lease() {
-            // The caller holds the CS2 mutex, so the heartbeat cannot renew while
-            // the revoke is attempted or while an unknown outcome expires.
+            // Mark under the camera lock after any in-flight pulse, before revocation.
             self.invalidate_managed_camera();
             let outcome = retire_camera_before_cleanup(
                 service_stopped,

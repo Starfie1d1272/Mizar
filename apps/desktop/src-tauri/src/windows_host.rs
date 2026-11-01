@@ -122,6 +122,7 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
 
 // The tracker runs both on the Host worker and command dispatcher. Win32
 // otherwise virtualizes coordinates differently from Tauri's physical pixels.
@@ -302,6 +303,7 @@ impl AlignmentFailure {
             return format!("CS2 窗口{phase}被系统拒绝。请核对 Mizar 与 Steam／CS2 的运行权限，再点恢复布局；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。");
         }
         match self.stage {
+            "pending" => "布局请求已提交，正在等待 CS2 窗口对齐。".into(),
             "client_mismatch" => "CS2 窗口已接受定位，但实际画面范围与工作台不一致。请先点恢复布局；仍不一致时正常退出本次游戏，在准备中心完成恢复后按当前屏幕重新启动。".into(),
             "minimized" => "CS2 已最小化，尚未对齐。请还原游戏窗口，再点恢复布局。".into(),
             _ => format!("CS2 窗口{phase}未完成。请确认游戏窗口可见，再点恢复布局；仍失败时正常退出本次游戏，在准备中心重试恢复，备份与错误记录会保留。"),
@@ -335,7 +337,7 @@ fn measured_client(hwnd: Hwnd) -> Result<Rect, AlignmentFailure> {
     }
 }
 
-fn align_cs2(window: Cs2Window, target: Rect) -> Result<(), AlignmentFailure> {
+fn align_cs2(window: Cs2Window, target: Rect, correcting: bool) -> Result<(), AlignmentFailure> {
     unsafe {
         if IsIconic(window.hwnd) != 0 {
             return Err(AlignmentFailure {
@@ -366,7 +368,23 @@ fn align_cs2(window: Cs2Window, target: Rect) -> Result<(), AlignmentFailure> {
             width: border.right - border.left - target.width,
             height: border.bottom - border.top - target.height,
         };
-        let outer = outer_from_client(target, frame);
+        let actual = measured_client(window.hwnd)?;
+        if actual == target {
+            return Ok(());
+        }
+        let mut outer = outer_from_client(target, frame);
+        if correcting && (frame.width != 0 || frame.height != 0) {
+            let mut current = WinRect::default();
+            if GetWindowRect(window.hwnd, &mut current) != 0 {
+                let current = rect(current);
+                outer = Rect {
+                    x: current.x + target.x - actual.x,
+                    y: current.y + target.y - actual.y,
+                    width: current.width + target.width - actual.width,
+                    height: current.height + target.height - actual.height,
+                };
+            }
+        }
         if SetWindowPos(
             window.hwnd,
             0,
@@ -374,50 +392,18 @@ fn align_cs2(window: Cs2Window, target: Rect) -> Result<(), AlignmentFailure> {
             outer.y,
             outer.width,
             outer.height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
         ) == 0
         {
             return Err(AlignmentFailure::win32("position", "SetWindowPos"));
         }
-        let actual = measured_client(window.hwnd)?;
-        if actual == target {
-            return Ok(());
-        }
-        // A borderless resize cannot change the engine's video mode by cropping.
-        if frame.width == 0 && frame.height == 0 {
-            return Err(AlignmentFailure {
-                stage: "client_mismatch",
-                api: None,
-                last_error: None,
-            });
-        }
-        let correction = Rect {
-            x: outer.x + target.x - actual.x,
-            y: outer.y + target.y - actual.y,
-            width: outer.width + target.width - actual.width,
-            height: outer.height + target.height - actual.height,
-        };
-        if SetWindowPos(
-            window.hwnd,
-            0,
-            correction.x,
-            correction.y,
-            correction.width,
-            correction.height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        ) == 0
-        {
-            return Err(AlignmentFailure::win32("correction", "SetWindowPos"));
-        }
-        if measured_client(window.hwnd)? == target {
-            Ok(())
-        } else {
-            Err(AlignmentFailure {
-                stage: "client_mismatch",
-                api: None,
-                last_error: None,
-            })
-        }
+        // The target thread may not have processed the request yet. Only a
+        // later measurement can establish that the game actually aligned.
+        Err(AlignmentFailure {
+            stage: "pending",
+            api: None,
+            last_error: None,
+        })
     }
 }
 
@@ -451,6 +437,20 @@ impl GameTracker {
             GetWindowThreadProcessId(window.hwnd, &mut pid);
         }
         (owner.is_running() && owner.pid == window.pid && pid == window.pid).then_some(window)
+    }
+    pub fn retire_layout(&mut self) -> Result<(), std::io::Error> {
+        let submitted = self.frame.as_mut().map_or(Ok(()), |frame| frame.retire());
+        self.frame = None;
+        self.managed = false;
+        self.alignment_retries = 0;
+        if let Err(error) = &submitted {
+            self.alignment_failure = Some(AlignmentFailure {
+                stage: "frame_restore",
+                api: Some("SetWindowPos"),
+                last_error: error.raw_os_error().map(|code| code as u32),
+            });
+        }
+        submitted
     }
     pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
         self.owner = owner.filter(|process| process.is_running());
@@ -566,6 +566,10 @@ impl GameTracker {
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
+        let correcting = self.last_work_area == Some(work)
+            && self
+                .alignment_failure
+                .is_some_and(|failure| failure.stage == "pending");
         self.last_work_area = Some(work);
         let mut layout = workspace_layout(work);
         if self.preserve_settings {
@@ -577,13 +581,29 @@ impl GameTracker {
         }
         if let Some(window) = self.window {
             if self.frame.is_none() {
-                self.frame = crate::window_frame::GameFrame::capture(window.hwnd, window.pid);
+                self.frame = self
+                    .owner
+                    .as_ref()
+                    .filter(|owner| owner.pid == window.pid && owner.is_running())
+                    .and_then(|owner| {
+                        crate::window_frame::GameFrame::capture(window.hwnd, owner.clone())
+                    });
             }
             if let Some(frame) = &self.frame {
                 frame.apply();
             }
         }
-        let alignment = self.window.map(|window| align_cs2(window, layout.game));
+        let alignment = self.window.map(|window| {
+            if self.frame.is_none() {
+                Err(AlignmentFailure {
+                    stage: "frame_capture",
+                    api: None,
+                    last_error: None,
+                })
+            } else {
+                align_cs2(window, layout.game, correcting)
+            }
+        });
         self.managed = matches!(alignment, Some(Ok(())));
         self.alignment_failure = alignment.and_then(Result::err);
         if let Some(window) = self.window.filter(|_| self.managed) {
@@ -593,6 +613,17 @@ impl GameTracker {
             }
         }
         self.alignment_retries = self.alignment_retries.saturating_sub(1);
+        if self.alignment_retries == 0
+            && self
+                .alignment_failure
+                .is_some_and(|failure| failure.stage == "pending")
+        {
+            self.alignment_failure = Some(AlignmentFailure {
+                stage: "client_mismatch",
+                api: None,
+                last_error: None,
+            });
+        }
         self.last_alignment = Some(std::time::Instant::now());
         self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
         self.last_dpi = self
@@ -680,17 +711,25 @@ impl GameTracker {
         )
         .then_some(client)
     }
-    pub fn restore_focus(&self, source: isize) -> bool {
-        self.owned_window().is_some_and(|window| unsafe {
-            let mut pid = 0;
-            GetWindowThreadProcessId(window.hwnd, &mut pid);
-            pid == window.pid
-                && IsWindow(window.hwnd) != 0
-                && source != 0
-                && GetForegroundWindow() == source
-                && SetForegroundWindow(window.hwnd) != 0
-                && GetForegroundWindow() == window.hwnd
-        })
+}
+
+/// Focus only the verified live game; the tracker is not held across this call.
+pub fn restore_focus(
+    window: Cs2Window,
+    owner: &crate::managed_cs2::WorkspaceProcess,
+    source: isize,
+) -> bool {
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(window.hwnd, &mut pid);
+        owner.is_running()
+            && owner.pid == window.pid
+            && pid == window.pid
+            && IsWindow(window.hwnd) != 0
+            && source != 0
+            && GetForegroundWindow() == source
+            && SetForegroundWindow(window.hwnd) != 0
+            && GetForegroundWindow() == window.hwnd
     }
 }
 

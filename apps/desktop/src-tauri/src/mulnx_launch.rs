@@ -928,15 +928,26 @@ fn controlled_game(
 
 /// Automation requires the verified game instance to own the live gateway.
 /// Standard games keep the manual connection route.
-pub fn observer_control_available(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) -> bool {
-    let Ok(game) = controlled_game(cs2, log) else {
-        return false;
-    };
+pub(crate) fn observer_control_snapshot(
+    cs2: &managed_cs2::ManagedCs2,
+    log: &DesktopLog,
+) -> Option<managed_cs2::WorkspaceProcess> {
+    controlled_game(cs2, log).ok()
+}
+
+pub(crate) fn observer_gateway_available(
+    game: &managed_cs2::WorkspaceProcess,
+    log: &DesktopLog,
+) -> bool {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], 55202));
-    if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_err() {
-        return false;
-    }
-    verify_gateway_owner(log, 55202, game.pid).is_ok()
+    game.is_running()
+        && std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
+        && verify_gateway_owner(log, 55202, game.pid).is_ok()
+        && game.is_running()
+}
+
+pub fn observer_control_available(cs2: &managed_cs2::ManagedCs2, log: &DesktopLog) -> bool {
+    observer_control_snapshot(cs2, log).is_some_and(|game| observer_gateway_available(&game, log))
 }
 
 /// Stop this owned MulNX injection before closing its game. An uncertain result
