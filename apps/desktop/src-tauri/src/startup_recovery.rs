@@ -186,6 +186,11 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
                         Err(error) => { feedback = error; continue; }
                     }
                 }
+                let Some(_operation) = crate::observer_workspace::try_operation() else {
+                    feedback = "此前游戏操作仍在收尾，请稍后重新检查。".into();
+                    log.event("cs2_startup_recovery", "failure", Some(&feedback));
+                    continue;
+                };
                 match managed.restore_at_startup(choice == Action::ConfirmSteam) {
                     Ok(message) => {
                         let status = managed.startup_recovery_status();
