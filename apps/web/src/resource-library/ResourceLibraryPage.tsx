@@ -71,38 +71,51 @@ export function ResourceLibraryPage() {
   );
   const refreshBroadcast = () => setBroadcastRefresh((value) => value + 1);
   const [query, setQuery] = useState('');
+  const [section, setSection] = useState(() =>
+    new URLSearchParams(window.location.search).get('section') === 'dependencies'
+      ? 'dependencies'
+      : 'content',
+  );
   const [focusPreset, setFocusPreset] = useState<{ id: string; request: number } | null>(null);
   const [category, setCategory] = useState<
-    'all' | 'media' | 'tool' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
-  >('all');
+    'all' | 'music' | 'presets' | 'hud' | 'program' | 'camera'
+  >(() => (new URLSearchParams(window.location.search).has('resource') ? 'all' : 'hud'));
   const matches = (name: string) =>
     name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const resources = view?.resources?.filter((resource) =>
     matches(resource.packId === 'official:epl-default' ? 'EPL 官方示例 素材' : resource.packId),
   );
-  const showMedia = category === 'all' || category === 'media';
+  const showMedia = section === 'dependencies';
   const showPresets = category === 'all' || category === 'presets';
-  const showModules =
-    category === 'all' || ['hud', 'program', 'music', 'camera'].includes(category);
-  const showTool = (category === 'all' || category === 'tool') && matches('MulNX 运镜 工具');
+  const showTool = section === 'dependencies' && matches('MulNX 运镜 工具');
   return (
     <OperatorShell active="/packages">
       <main className="resource-library">
         <header className="resource-library__heading">
           <div>
             <h1>资源管理</h1>
-            <p>查看播出方案、音乐配置、素材和运镜工具。</p>
           </div>
+          <nav className="resource-library__categories" aria-label="资源任务">
+            {(
+              [
+                ['content', '播出内容'],
+                ['dependencies', '工具与素材'],
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                key={value}
+                aria-pressed={section === value}
+                variant={section === value ? 'primary' : 'secondary'}
+                onClick={() => {
+                  setSection(value);
+                  setQuery('');
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </nav>
         </header>
-        <details>
-          <summary>创建和制作</summary>
-          <p>在制作入口创建或编辑内容，保存后返回资源管理。</p>
-          <div className="resource-library__actions">
-            <a href="/operator/hud">HUD 编辑器</a>
-            <a href="/settings?tab=music">音乐制作</a>
-            <a href="/settings?tab=camera">运镜制作</a>
-          </div>
-        </details>
         <div className="resource-library__filters">
           <Field
             label="搜索资源"
@@ -111,52 +124,61 @@ export function ResourceLibraryPage() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <div className="resource-library__categories" aria-label="资源分类">
-            {(
-              [
-                ['all', '全部'],
-                ['hud', 'HUD'],
-                ['program', '场景'],
-                ['music', '音乐'],
-                ['camera', '运镜'],
-                ['presets', '方案'],
-                ['media', '素材'],
-                ['tool', '工具'],
-              ] as const
-            ).map(([value, label]) => (
-              <Button
-                key={value}
-                variant={category === value ? 'primary' : 'secondary'}
-                aria-pressed={category === value}
-                onClick={() => setCategory(value)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
+          {section === 'content' && (
+            <div className="resource-library__categories" aria-label="内容分类">
+              {(
+                [
+                  ['all', '全部'],
+                  ['hud', 'HUD'],
+                  ['program', '场景'],
+                  ['music', '音乐'],
+                  ['camera', '运镜'],
+                  ['presets', '方案'],
+                ] as const
+              ).map(([value, label]) => (
+                <Button
+                  key={value}
+                  variant={category === value ? 'primary' : 'secondary'}
+                  aria-pressed={category === value}
+                  onClick={() => setCategory(value)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
-        <ResourceModules
-          query={query}
-          sharedSnapshot={broadcastSnapshot}
-          onRefresh={refreshBroadcast}
-          category={category}
-          onImported={(presetId) => {
-            setCategory('all');
-            setQuery('');
-            setFocusPreset((previous) =>
-              presetId ? { id: presetId, request: (previous?.request ?? 0) + 1 } : null,
-            );
-          }}
-        />
-        {showPresets ? (
-          <BroadcastPresets
+        <div hidden={section !== 'content'}>
+          <ResourceModules
+            previewsEnabled={section === 'content'}
             query={query}
-            focusPreset={focusPreset}
             sharedSnapshot={broadcastSnapshot}
             onRefresh={refreshBroadcast}
+            category={category}
+            onImported={(presetId) => {
+              setCategory('all');
+              setQuery('');
+              setFocusPreset((previous) =>
+                presetId ? { id: presetId, request: (previous?.request ?? 0) + 1 } : null,
+              );
+            }}
           />
-        ) : null}
-        {!view ? (
+          {showPresets ? (
+            <BroadcastPresets
+              previewsEnabled={section === 'content'}
+              query={query}
+              focusPreset={focusPreset}
+              sharedSnapshot={broadcastSnapshot}
+              onRefresh={refreshBroadcast}
+            />
+          ) : null}
+        </div>
+        {section === 'dependencies' && (
+          <p>
+            查看工具与官方素材的版本和维护状态。<a href="/settings?tab=advanced">应用更新</a>
+          </p>
+        )}
+        {section === 'dependencies' && !view ? (
           <StatusBanner tone="warning">
             正在连接资源状态；如果持续无法连接，请检查本地制播服务。
           </StatusBanner>
@@ -316,11 +338,10 @@ export function ResourceLibraryPage() {
         {view && showTool && !view.tool ? (
           <StatusBanner tone="warning">运镜工具状态暂不可用。</StatusBanner>
         ) : null}
-        {view &&
+        {section === 'dependencies' &&
+        view &&
         !(showMedia && (resources?.length || view.resources === null)) &&
-        !showTool &&
-        !showModules &&
-        !showPresets ? (
+        !showTool ? (
           <p>没有找到匹配的资源。</p>
         ) : null}
       </main>

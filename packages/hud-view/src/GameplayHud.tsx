@@ -41,6 +41,7 @@ export interface GameplayHudProps {
   readonly overlays?: NativeHud['overlays'] | undefined;
   readonly accent?: NativeHud['accent'] | undefined;
   readonly eventAccent?: string | null | undefined;
+  readonly staticFrame?: boolean | undefined;
   readonly radarSource?: RadarProps['source'];
   readonly radarSnapshot?: RadarProps['snapshot'];
   readonly snapshot: ProgramSnapshot | null;
@@ -85,6 +86,7 @@ export function GameplayHud({
   accent,
   eventAccent,
   radarSource,
+  staticFrame,
   radarSnapshot,
   resolvedPreset,
   presentationRevision = 0,
@@ -213,6 +215,7 @@ export function GameplayHud({
             <Renderer
               box={box}
               placement={placement}
+              staticFrame={staticFrame}
               radarSource={radarSource}
               radarSnapshot={radarSnapshot}
               presentationRevision={presentationRevision}

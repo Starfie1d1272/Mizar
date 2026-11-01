@@ -19,6 +19,7 @@ import type { ReactNode } from 'react';
 
 export interface HudCanvasPreviewProps {
   readonly gg?: boolean;
+  readonly staticFrame?: boolean;
   readonly overlays?: GameplayHudProps['overlays'];
   readonly accent?: GameplayHudProps['accent'];
   readonly mapBackground?: boolean;
@@ -45,6 +46,7 @@ export interface HudCanvasPreviewProps {
 
 export function HudCanvasPreview({
   gg = false,
+  staticFrame = false,
   overlays,
   accent,
   mapBackground = false,
@@ -115,6 +117,7 @@ export function HudCanvasPreview({
         ) : null}
         <ProgramView
           kind="hud"
+          staticFrame={staticFrame}
           gg={gg}
           overlays={overlays}
           accent={accent}
