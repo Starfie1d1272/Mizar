@@ -171,7 +171,7 @@ export interface BoundaryIntent {
   readonly expired?: true;
 }
 
-interface OutboxFile {
+export interface OutboxFile {
   readonly version: typeof RELIABLE_OUTBOX_VERSION;
   readonly records: readonly ReliableOutboxRecord[];
   readonly archivedSources?: readonly ArchivedSource[];
@@ -185,19 +185,19 @@ interface OutboxFile {
   readonly unconfirmedRecovery?: true;
 }
 
-interface ArchivedSource {
+export interface ArchivedSource {
   readonly identity: ExactSource;
   readonly records: readonly ReliableOutboxRecord[];
 }
 
-interface RevokedSource {
+export interface RevokedSource {
   readonly disposition: 'revoked_unconfirmed';
   readonly identity: ExactSource;
   readonly records: readonly ReliableOutboxRecord[];
   readonly intents: readonly BoundaryIntent[];
 }
 
-function parseSource(input: unknown): ExactSource {
+export function parseSource(input: unknown): ExactSource {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new Error('outbox_source_invalid');
   const value = input as Record<string, unknown>;
@@ -249,7 +249,7 @@ function parseSource(input: unknown): ExactSource {
   };
 }
 
-function sourceKey(source: ExactSource): string {
+export function sourceKey(source: ExactSource): string {
   return JSON.stringify([
     source.baseUrl,
     source.competitionId,
@@ -261,7 +261,7 @@ function sourceKey(source: ExactSource): string {
   ]);
 }
 
-function scopeDigest(
+export function scopeDigest(
   competitionId: string,
   matchId: string,
   producer: string,
@@ -272,15 +272,15 @@ function scopeDigest(
     .digest('hex');
 }
 
-function archiveName(source: ExactSource): string {
+export function archiveName(source: ExactSource): string {
   return `${scopeDigest(source.competitionId, source.matchId, source.producerInstanceId, source.liveSessionId)}-${createHash('sha256').update(sourceKey(source)).digest('hex')}.json`;
 }
 
-function archiveDigest(archive: ArchivedSource): string {
+export function archiveDigest(archive: ArchivedSource): string {
   return createHash('sha256').update(JSON.stringify(archive)).digest('hex');
 }
 
-function sourceMatchesEvent(source: ExactSource, event: ReliableEventV1): boolean {
+export function sourceMatchesEvent(source: ExactSource, event: ReliableEventV1): boolean {
   return (
     source.competitionId === event.competitionId &&
     source.matchId === event.matchId &&
@@ -289,7 +289,7 @@ function sourceMatchesEvent(source: ExactSource, event: ReliableEventV1): boolea
   );
 }
 
-function parseRecord(input: unknown): ReliableOutboxRecord {
+export function parseRecord(input: unknown): ReliableOutboxRecord {
   if (typeof input !== 'object' || input === null || Array.isArray(input))
     throw new Error('outbox_record_invalid');
   const item = input as Record<string, unknown>;
@@ -429,7 +429,7 @@ function payloadDigest(value: Record<string, unknown> | OutboxFile): string {
     .digest('hex');
 }
 
-function parseCommit(value: unknown): NonNullable<OutboxFile['commit']> {
+export function parseCommit(value: unknown): NonNullable<OutboxFile['commit']> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     throw new Error('outbox_commit_invalid');
   const commit = value as Record<string, unknown>;
@@ -443,7 +443,7 @@ function parseCommit(value: unknown): NonNullable<OutboxFile['commit']> {
   return { id: commit.id, sha256: commit.sha256 };
 }
 
-function parseBoundaryIntent(raw: unknown): BoundaryIntent {
+export function parseBoundaryIntent(raw: unknown): BoundaryIntent {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     throw new Error('boundary_intent_invalid');
   const item = raw as Record<string, unknown>;
@@ -472,7 +472,7 @@ function parseBoundaryIntent(raw: unknown): BoundaryIntent {
   };
 }
 
-function parseOutbox(bytes: Buffer): OutboxFile {
+export function parseOutbox(bytes: Buffer): OutboxFile {
   if (bytes.length > 4_000_000) throw new Error('outbox_too_large');
   const raw: unknown = JSON.parse(bytes.toString('utf8'));
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
