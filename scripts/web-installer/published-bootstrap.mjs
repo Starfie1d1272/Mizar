@@ -2,9 +2,13 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { StableSource, installerUrl } from '../updates/source.js';
 import { updateJson } from '../updates/network.js';
-import { downloadResourceOriginal, logBootstrapFallback } from './resource-mirror.mjs';
+import {
+  downloadResourceOriginal,
+  downloadResourceArchive,
+  logBootstrapFallback,
+} from './resource-mirror.mjs';
 import { createActivePolicyVerifier } from '../resource-store/runtime-adapter.js';
-import { PACK_ID, LIMITS } from '@mizar/resource-pack-contract';
+import { PACK_ID } from '@mizar/resource-pack-contract';
 import {
   RESOURCE_ASSET_NAMES as resourceNames,
   getResourceAuthorization,
@@ -131,19 +135,13 @@ async function authenticateBootstrapSource({
       tufCachePath,
       signal: downloadSignal,
     });
-    const archiveBytes = await downloadResourceOriginal({
+    const archiveBytes = await downloadResourceArchive({
       version: manifest.version,
-      name: identity.archive.name,
-      maximum: LIMITS.archiveBytes,
+      archive: identity.archive,
       signal: downloadSignal,
       fetcher,
       sourceMode,
     });
-    if (
-      archiveBytes.length !== identity.archive.bytes ||
-      hash(archiveBytes) !== identity.archive.sha256
-    )
-      throw new Error('Authenticated resource archive bytes changed');
     inputs.archiveBytes = Buffer.from(archiveBytes);
     return inputs;
   };

@@ -1,4 +1,10 @@
 import { inspect } from 'node:util';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
+import { transfer } from '../distribution/transfer.js';
+import { errorEvidence } from '../updates/diagnostics.js';
 import { safeLogText } from '../../../scripts/product-logs.mjs';
 import {
   MACHINE_METADATA_NAME,
@@ -35,47 +41,21 @@ export async function downloadResourceOriginal({
   fetcher,
   sourceMode = 'auto',
 }) {
-  const originalPath = mirrorResourcePath(version, name);
-  const metadata = fixedNames.has(name);
-  const transportName = metadata ? MACHINE_METADATA_NAME : name;
-  const path = metadata ? `/Runtime/v${version}/${transportName}` : originalPath;
-  const bound = metadata ? MACHINE_METADATA_MAX_BYTES : maximum;
+  mirrorResourcePath(version, name);
+  if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
+  const transportName = MACHINE_METADATA_NAME;
+  const path = `/Runtime/v${version}/${transportName}`;
+  const bound = MACHINE_METADATA_MAX_BYTES;
   const extract = (bytes) => {
-    const original = metadata ? readMachineFile(bytes, name) : bytes;
+    const original = readMachineFile(bytes, name);
     if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
     return original;
   };
-  const deadline = globalThis.AbortSignal.any([
-    signal,
-    globalThis.AbortSignal.timeout(maximum > 2097152 ? 300000 : 60000),
-  ]);
+  const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(60000)]);
   try {
     if (sourceMode === 'github') throw new Error('resource_github_transport');
     const attempt = globalThis.AbortSignal.any([deadline, globalThis.AbortSignal.timeout(15000)]);
-    const directory = await updateJson(
-      `https://box.nju.edu.cn/api/v2.1/via-repo-token/dir/?path=${encodeURIComponent((metadata ? '/Runtime/v' : '/Resources/v') + version)}`,
-      attempt,
-      fetcher,
-    );
-    if (directory.repo_name !== 'Mizar' || directory.user_perm !== 'r')
-      throw new Error('resource_mirror_permission_invalid');
-    const link = await updateJson(
-      `https://box.nju.edu.cn/api/v2.1/via-repo-token/download-link/?path=${encodeURIComponent(path)}`,
-      attempt,
-      fetcher,
-      16384,
-    );
-    if (typeof link !== 'string' || link.length > 8192)
-      throw new Error('resource_mirror_link_invalid');
-    const url = new globalThis.URL(link);
-    if (
-      url.origin !== 'https://box.nju.edu.cn' ||
-      url.username ||
-      url.password ||
-      url.hash ||
-      !url.pathname.startsWith('/seafhttp/files/')
-    )
-      throw new Error('resource_mirror_link_invalid');
+    const url = await resourceMirrorUrl(path, attempt, fetcher);
     // Never fall back after bytes have arrived and failed publisher verification.
     return extract(await boundedBytes(await updateRequest(url.href, deadline, fetcher), bound));
   } catch (mirrorError) {
@@ -103,5 +83,127 @@ export async function downloadResourceOriginal({
         { cause: githubError },
       );
     }
+  }
+}
+
+async function resourceMirrorUrl(path, attempt, fetcher) {
+  const directory = await updateJson(
+    `https://box.nju.edu.cn/api/v2.1/via-repo-token/dir/?path=${encodeURIComponent(path.slice(0, path.lastIndexOf('/')))}`,
+    attempt,
+    fetcher,
+  );
+  if (directory.repo_name !== 'Mizar' || directory.user_perm !== 'r')
+    throw new Error('resource_mirror_permission_invalid');
+  const link = await updateJson(
+    `https://box.nju.edu.cn/api/v2.1/via-repo-token/download-link/?path=${encodeURIComponent(path)}`,
+    attempt,
+    fetcher,
+    16384,
+  );
+  if (typeof link !== 'string' || link.length > 8192)
+    throw new Error('resource_mirror_link_invalid');
+  const url = new globalThis.URL(link);
+  if (
+    url.origin !== 'https://box.nju.edu.cn' ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    !url.pathname.startsWith('/seafhttp/files/')
+  )
+    throw new Error('resource_mirror_link_invalid');
+  return url;
+}
+
+/** Only the already authenticated catalog identity can enter this archive transport. */
+export async function downloadResourceArchive({
+  version,
+  archive,
+  signal,
+  fetcher,
+  sourceMode = 'auto',
+}) {
+  const path = mirrorResourcePath(version, archive.name);
+  const origin = `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${archive.name}`;
+  const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(300000)]);
+  const sources = [
+    {
+      name: 'GitHub',
+      request: (attempt, end) => updateRequest(origin, attempt, fetcher, { rangeEnd: end }),
+    },
+    ...(sourceMode === 'github'
+      ? []
+      : [
+          {
+            name: 'GitHub 加速',
+            request: (attempt, end) =>
+              updateRequest(`https://gh-proxy.com/${origin}`, attempt, fetcher, {
+                proxyAsset: origin,
+                rangeEnd: end,
+              }),
+          },
+          {
+            name: '南大云盘',
+            request: async (attempt, end) =>
+              updateRequest(
+                (await resourceMirrorUrl(path, attempt, fetcher)).href,
+                attempt,
+                fetcher,
+                { rangeEnd: end },
+              ),
+          },
+        ]),
+  ];
+  const key = `epl:${origin}:${archive.sha256}:${archive.bytes}:${sources.map((source) => source.name).join(',')}`;
+  const log = (stage, fields = {}) =>
+    process.stderr.write(
+      `${JSON.stringify({
+        stage,
+        asset: archive.name,
+        ...fields,
+      })}\n`,
+    );
+  const order = await sourceOrder(
+    key,
+    archive.bytes,
+    deadline,
+    sources.map((source) => source.request),
+    ({ error, source, order, ...diagnostic }) =>
+      log('resource_sources', {
+        ...diagnostic,
+        candidates: sources.map((entry) => entry.name),
+        source: source === undefined ? undefined : sources[source].name,
+        order: order?.map((index) => sources[index].name),
+        ...(error === undefined ? {} : { error: errorEvidence(error) }),
+      }),
+  );
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-resource-download-'));
+  const target = join(directory, 'archive.zip');
+  let selected;
+  try {
+    await transfer({
+      target,
+      bytes: archive.bytes,
+      sha256: archive.sha256,
+      signal: deadline,
+      integrityError: 'resource_archive_integrity',
+      sources: order.map((index) => (attempt) => sources[index].request(attempt)),
+      progress: (bytes, index) => {
+        selected = sources[order[index]].name;
+        if (bytes === 0) log('resource_downloading', { source: selected });
+      },
+      verifying: () => log('resource_verifying', { source: selected }),
+      fallback: (error) => {
+        forgetSourceOrder(key);
+        log('resource_fallback', { source: selected, error: errorEvidence(error) });
+      },
+    });
+    log('resource_verified', { source: selected, bytes: archive.bytes, sha256: archive.sha256 });
+    return await readFile(target);
+  } catch (error) {
+    if (!signal.aborted) forgetSourceOrder(key);
+    log('resource_download_failed', { source: selected, error: errorEvidence(error) });
+    throw error;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
