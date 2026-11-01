@@ -859,6 +859,25 @@ function WorkspaceDockContent() {
         modal={false}
         title={exit?.message ? '退出工作台需要处理' : '操作未完成'}
         onClose={() => setDetailsOpen(false)}
+        showCloseButton={false}
+        actions={
+          <>
+            {exit?.message ? (
+              <Button
+                onClick={() =>
+                  void openPreparation('/').catch((reason: unknown) =>
+                    setErrorMessage(
+                      reason instanceof Error ? reason.message : '准备中心无法打开。',
+                    ),
+                  )
+                }
+              >
+                打开准备中心
+              </Button>
+            ) : null}
+            <Button onClick={() => setDetailsOpen(false)}>关闭详情</Button>
+          </>
+        }
       >
         <p>{visibleError}</p>
         <p>
@@ -868,18 +887,6 @@ function WorkspaceDockContent() {
               ? '按上面的窗口控制原因处理，再点恢复布局或切回工作台重试；正常退出本次游戏后，在准备中心完成恢复。'
               : sceneState?.director?.reason}
         </p>
-        {exit?.message ? (
-          <Button
-            onClick={() =>
-              void openPreparation('/').catch((reason: unknown) =>
-                setErrorMessage(reason instanceof Error ? reason.message : '准备中心无法打开。'),
-              )
-            }
-          >
-            打开准备中心
-          </Button>
-        ) : null}
-        <Button onClick={() => setDetailsOpen(false)}>关闭详情</Button>
       </Dialog>
     </main>
   );
@@ -924,6 +931,27 @@ function ExitReview() {
         title="退出工作台需要处理"
         className="workspace-review-dialog"
         onClose={() => void closeReviewWindow().catch((reason) => setError(String(reason)))}
+        actions={
+          <>
+            <Button
+              variant="primary"
+              onClick={() =>
+                void openPreparation('/')
+                  .then(() => closeReviewWindow())
+                  .catch((reason) => setError(String(reason)))
+              }
+            >
+              返回准备中心处理
+            </Button>
+            <Button
+              onClick={() =>
+                void openTool('diagnostics').catch((reason) => setError(String(reason)))
+              }
+            >
+              运行诊断
+            </Button>
+          </>
+        }
       >
         <p>
           {exit
@@ -938,23 +966,7 @@ function ExitReview() {
             {workspaceExitLabel(exit.stage)}尚未完成。请返回准备中心处理，备份和处理记录仍保留。
           </p>
         ) : null}
-        <div className="preparation-actions">
-          <Button
-            variant="primary"
-            onClick={() =>
-              void openPreparation('/')
-                .then(() => closeReviewWindow())
-                .catch((reason) => setError(String(reason)))
-            }
-          >
-            返回准备中心处理
-          </Button>
-          <Button
-            onClick={() => void openTool('diagnostics').catch((reason) => setError(String(reason)))}
-          >
-            运行诊断
-          </Button>
-        </div>
+
         {error ? <p role="alert">{error}</p> : null}
       </Dialog>
     </div>

@@ -51,12 +51,6 @@
   padding: var(--mizar-layout-compact);
   background: var(--mizar-bg-surface);
 }
-.workspace-preflight footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--mizar-layout-compact);
-}
 
 .mizar-dialog.workspace-review-dialog {
   position: fixed;

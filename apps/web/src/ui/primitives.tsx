@@ -190,19 +190,33 @@ export function Dialog({
   canClose,
   modal = true,
   showCloseButton = true,
+  actions,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
-  children: ReactNode;
+  children?: ReactNode;
   className?: string;
-  canClose?: () => boolean;
+  canClose?: () => boolean | Promise<boolean>;
   /** Passive operator alerts must not move focus from the game or lock the workspace. */
   modal?: boolean;
   showCloseButton?: boolean;
+  actions?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const programmaticCloses = useRef(0);
+  const closing = useRef(false);
+  const requestClose = async () => {
+    if (closing.current) return;
+    closing.current = true;
+    try {
+      if (canClose && !(await canClose())) return;
+      if (modal) ref.current?.close();
+      else onClose();
+    } finally {
+      closing.current = false;
+    }
+  };
   const id = useId();
   useEffect(() => {
     const dialog = ref.current;
@@ -219,12 +233,13 @@ export function Dialog({
       open={modal ? undefined : open}
       className={['mizar-dialog', className].filter(Boolean).join(' ')}
       onCancel={(event) => {
-        if (canClose && !canClose()) event.preventDefault();
+        event.preventDefault();
+        void requestClose();
       }}
       aria-labelledby={id}
       onKeyDown={(event) => {
         if (!modal) {
-          if (event.key === 'Escape' && (!canClose || canClose())) onClose();
+          if (event.key === 'Escape') void requestClose();
           return;
         }
         if (event.key !== 'Tab') return;
@@ -254,17 +269,11 @@ export function Dialog({
     >
       <h2 id={id}>{title}</h2>
       {children}
-      {showCloseButton ? (
-        <Button
-          onClick={() => {
-            if (!canClose || canClose()) {
-              if (modal) ref.current?.close();
-              else onClose();
-            }
-          }}
-        >
-          关闭
-        </Button>
+      {showCloseButton || actions ? (
+        <footer className="mizar-dialog__actions">
+          {showCloseButton ? <Button onClick={() => void requestClose()}>关闭</Button> : null}
+          {actions}
+        </footer>
       ) : null}
     </dialog>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode, type SetStateAction } from 'react';
-import { Button, Checkbox, StatusBanner, Select } from '../ui';
+import { Button, Checkbox, StatusBanner, Select, useConfirmation } from '../ui';
 import { LOCAL_BP_MAP_CATALOG, DEFAULT_BO3_BP_RULES } from '@mizar/core/projection';
 import type { Bo3BpRules } from '@mizar/core/projection';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
@@ -126,6 +126,7 @@ export function LocalTournamentEditor({
   readonly refresh: () => Promise<void>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
+  const confirmation = useConfirmation();
   const selected = document;
   const event = view?.events.find(
     (item) => item.eventId === (eventId ?? selected?.competition?.competitionId),
@@ -214,18 +215,19 @@ export function LocalTournamentEditor({
     );
   return (
     <div className="preparation-editor" data-section={section} data-scope={scope}>
+      {confirmation.dialog}
       {savedMessage ? <StatusBanner tone="info">{savedMessage}</StatusBanner> : null}
       {scope !== 'resources' && draft !== null && section !== 'maps' ? (
         <form
-          onSubmit={(submit) => {
+          onSubmit={async (submit) => {
             submit.preventDefault();
             if (!contextReady) return;
             if (
-              !window.confirm(
+              !(await confirmation.confirm(
                 scope === 'candidate'
                   ? '保存将更新这场比赛与队伍库，影响今后复用；不会载入本场或修改当前播出。确认保存？'
                   : '保存将更新本场资料，并同步队伍库中的队名、队标与名单，影响今后复用。当前节目可能刷新，确认保存？',
-              )
+              ))
             )
               return;
             setSavedMessage('');
@@ -470,15 +472,15 @@ export function LocalTournamentEditor({
       ) : null}
       {scope === 'resources' && event !== undefined && section !== 'roster' ? (
         <form
-          onSubmit={(submit) => {
+          onSubmit={async (submit) => {
             submit.preventDefault();
             if (!canSave) return;
             const affectsCurrent = event.matchIds.includes(view.activeLocalMatchId ?? '');
             if (
               affectsCurrent &&
-              !window.confirm(
+              !(await confirmation.confirm(
                 '保存将传播赛事品牌至所有同赛事比赛；仍沿用旧默认的地图池同步更新。包含当前本场，节目可能立即刷新。确认保存？',
-              )
+              ))
             )
               return;
             setSavedMessage('');

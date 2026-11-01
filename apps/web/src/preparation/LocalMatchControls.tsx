@@ -16,7 +16,7 @@ export function LocalMatchControls({
   readonly onSelected?: () => void;
   readonly onCancel?: () => void;
   readonly initialEventId?: string;
-  readonly beforeApply?: () => boolean;
+  readonly beforeApply?: () => boolean | Promise<boolean>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
   const { view, refresh, status } = useLocalTournament();
@@ -57,6 +57,23 @@ export function LocalMatchControls({
         onClose={() => setConfirmation(null)}
         canClose={() => !busy}
         showCloseButton={false}
+        actions={
+          <>
+            <Button autoFocus disabled={busy} onClick={() => setConfirmation(null)}>
+              取消
+            </Button>
+            <Button
+              className="local-match-trash-confirm"
+              loading={busy}
+              disabled={confirmation?.matchId === view?.inUseMatchId}
+              onClick={() => {
+                if (confirmation) void action(() => mutate('trash', confirmation.matchId));
+              }}
+            >
+              移入回收站
+            </Button>
+          </>
+        }
       >
         <p>{confirmation?.name}</p>
         {confirmation?.matchId === view?.activeLocalMatchId ? (
@@ -66,25 +83,12 @@ export function LocalMatchControls({
           比赛将移入回收站，并从本地赛程移除。可恢复比赛资料、名单、地图与
           BP；共享队伍、HUD、网站比赛及其他比赛保留。
         </p>
-        <Button autoFocus disabled={busy} onClick={() => setConfirmation(null)}>
-          取消
-        </Button>
-        <Button
-          className="local-match-trash-confirm"
-          loading={busy}
-          disabled={confirmation?.matchId === view?.inUseMatchId}
-          onClick={() => {
-            if (confirmation) void action(() => mutate('trash', confirmation.matchId));
-          }}
-        >
-          移入回收站
-        </Button>
       </Dialog>
       {mode !== 'select' ? (
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            if (status !== 'ready' || (beforeApply && !beforeApply())) return;
+            if (status !== 'ready' || (beforeApply && !(await beforeApply()))) return;
             void action(async () => {
               await command('/operator/local-match/create', {
                 teamA: a.name,

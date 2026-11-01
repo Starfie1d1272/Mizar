@@ -180,6 +180,26 @@ function SyncHealthIncident({
         className="workspace-live-roster-alert"
         title="本场网站同步需要处理"
         onClose={close}
+        actions={
+          <>
+            {' '}
+            {matchId ? (
+              <Button
+                onClick={() => {
+                  onSilence();
+                  close();
+                  void closeReviewWindow().catch((error) =>
+                    setFeedback(
+                      error instanceof Error ? error.message : '关闭核对窗口失败，请重试。',
+                    ),
+                  );
+                }}
+              >
+                本场不再弹出提示和警告
+              </Button>
+            ) : null}{' '}
+          </>
+        }
       >
         <p role="status">{text}</p>
         {reason === 'authorization_expired' || reason === 'permission_denied' ? (
@@ -227,19 +247,7 @@ function SyncHealthIncident({
             立即重试同步
           </Button>
         )}
-        {matchId ? (
-          <Button
-            onClick={() => {
-              onSilence();
-              close();
-              void closeReviewWindow().catch((error) =>
-                setFeedback(error instanceof Error ? error.message : '关闭核对窗口失败，请重试。'),
-              );
-            }}
-          >
-            本场不再弹出提示和警告
-          </Button>
-        ) : null}
+
         <RivalHubSyncControls />
         <details>
           <summary>详情与诊断导出</summary>
