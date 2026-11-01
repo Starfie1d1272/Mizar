@@ -1240,7 +1240,7 @@ async fn mulnx_control(
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
     let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "update" => mulnx_launch::update(&app, &log),
-        _ => Err("请选择更新或结束 MulNX 工作台。".into()),
+        _ => Err("请选择更新 MulNX。".into()),
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
