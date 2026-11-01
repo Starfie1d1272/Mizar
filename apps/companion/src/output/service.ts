@@ -42,6 +42,7 @@ export interface OutputServiceOptions {
   readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
   readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
+  readonly onOutboxLoadError?: (error: unknown) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
     event: ReliableEventV1,
@@ -63,6 +64,7 @@ export class OutputService {
   private closed = false;
   private readonly retiringScopes = new Set<string>();
   private quarantined = false;
+  private outboxUnavailable = false;
   async setQuarantined(value: boolean): Promise<void> {
     this.quarantined = value;
     if (value) await this.outbox?.flushPending();
@@ -417,7 +419,14 @@ export class OutputService {
   }
 
   async start(): Promise<void> {
-    await this.outbox?.load();
+    try {
+      await this.outbox?.load();
+    } catch (error) {
+      this.outboxUnavailable = true;
+      this.options.onOutboxLoadError?.(error);
+      this.onDiagnostic?.('outbox_unavailable');
+      return;
+    }
     const continuity = this.outbox?.getContinuity();
     if (
       continuity !== undefined &&
@@ -652,7 +661,7 @@ export class OutputService {
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
 
-    if (this.quarantined || binding?.origin === 'fixture') {
+    if (this.quarantined || this.outboxUnavailable || binding?.origin === 'fixture') {
       return;
     }
     const cursor = bundle.program.cursor;
@@ -1013,7 +1022,7 @@ export class OutputService {
   }
 
   async retry(): Promise<void> {
-    if (this.closed || this.outbox === undefined || this.retryPending) {
+    if (this.closed || this.outboxUnavailable || this.outbox === undefined || this.retryPending) {
       return;
     }
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
@@ -1152,7 +1161,7 @@ export class OutputService {
   }
 
   getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
-    if (this.quarantined) return 'continuity_chain_missing';
+    if (this.quarantined || this.outboxUnavailable) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
     if (!scope) return null;
     if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
@@ -1183,27 +1192,34 @@ export class OutputService {
     return null;
   }
 
+  isReliableAvailable(): boolean {
+    return !this.outboxUnavailable;
+  }
+
   getReliableRecovery() {
     return this.outbox?.getRecovery();
   }
 
   getReliableScopeDisposition(scope: ReliableDeliveryScope) {
-    return this.outbox?.getScopeDisposition(scope);
+    return this.outboxUnavailable ? undefined : this.outbox?.getScopeDisposition(scope);
   }
 
   getRevokedIsolationSummary() {
-    return this.outbox?.getRevokedIsolationSummary();
+    return this.outboxUnavailable ? undefined : this.outbox?.getRevokedIsolationSummary();
   }
 
   getReliableActiveSources(): readonly ExactSource[] {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     return this.outbox?.getActiveSources() ?? [];
   }
 
   async archiveConfirmedSource(identity: ExactSource): Promise<void> {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.archiveConfirmedSource(identity);
   }
 
   async isolateRevokedSource(identity: ExactSource): Promise<void> {
+    if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.isolateRevokedSource(identity);
   }
 
@@ -1212,6 +1228,7 @@ export class OutputService {
     this.retiringScopes.add(
       JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
     );
+    if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
@@ -1252,7 +1269,7 @@ export class OutputService {
   }
 
   getReliableRecords() {
-    return this.outbox?.getRecords() ?? [];
+    return this.outboxUnavailable ? [] : (this.outbox?.getRecords() ?? []);
   }
 
   private isCurrentForRetry(event: ReliableEventV1, lineup?: readonly string[]): boolean {
