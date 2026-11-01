@@ -57,13 +57,17 @@ export function createHudConfigPersistence(
   ) => Promise<ActiveBroadcastSnapshot['lock']>,
 ): HudConfigPersistence {
   return {
-    initialize: () => Promise.resolve(hudDocumentFromBroadcast(store.snapshot)),
+    read: () => Promise.resolve(hudDocumentFromBroadcast(store.snapshot)),
     readDraft: (current) => {
       const applied = store.appliedSnapshot('hud');
       const document = store.snapshot;
       if (applied) document.active = applied;
       const result = hudDocumentFromBroadcast(document);
-      return parseHudConfigDocument({ ...result, activePreset: current.activePreset });
+      // Applied selection belongs to the coordinator. Keep the local initial
+      // fallback only while no consumer snapshot has ever been confirmed.
+      return applied
+        ? result
+        : parseHudConfigDocument({ ...result, activePreset: current.activePreset });
     },
     readApplied: () => {
       const active = store.fallbackSnapshot('hud');

@@ -60,7 +60,6 @@ export function createMusicConfigPersistence(
     };
   }
   return {
-    initialize: () => read(),
     read,
     readApplied: () => {
       const active = store.fallbackSnapshot('music');

@@ -93,10 +93,6 @@ const stateSchema = z
 const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
 export type MusicState = z.infer<typeof stateSchema>;
 export interface MusicConfigPersistence {
-  initialize(
-    config: MusicConfig,
-    revision: string,
-  ): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   readApplied?(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   commit(
@@ -296,59 +292,25 @@ export class MusicStore {
     this.failure = false;
     this.ready = true;
   }
-  /** Restart using the coordinator and local runtime file, without reading legacy state.json. */
-  async loadWithPersistence(persistence: MusicConfigPersistence): Promise<void> {
-    await ensureDirectory(this.directory);
-    await ensureDirectory(join(this.directory, 'tracks'));
-    if (this.persistence || this.ready) throw new Error('music_state_invalid');
-    this.persistence = persistence;
-    try {
-      await this.loadDelegatedState();
-    } catch (error) {
-      this.failure = true;
-      this.ready = false;
-      throw error;
-    }
-  }
-  /** Switch only after the coordinator has accepted the current configuration. */
-  async adoptPersistence(persistence: MusicConfigPersistence): Promise<void> {
+  /** Legacy import is finished before binding; only runtime.json remains a local responsibility. */
+  async bindPersistence(persistence: MusicConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.ready || this.failure || this.persistence) throw new Error('music_state_invalid');
+      if (this.persistence) throw new Error('music_state_invalid');
+      await ensureDirectory(this.directory);
+      await ensureDirectory(join(this.directory, 'tracks'));
       this.persistence = persistence;
-      this.runtimeAvailable = false;
-      let runtime = runtimeState(this.state);
       try {
-        runtime = await this.readRuntime();
+        await this.loadDelegatedState();
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          this.failure = true;
-          this.ready = false;
-          throw error;
-        }
+        this.failure = true;
+        this.ready = false;
+        throw error;
       }
-      this.state = stateSchema.parse({
-        ...runtime,
-        config: this.state.config,
-        configRevision: this.state.configRevision,
-      });
-      this.runtimeAvailable = true;
-      const current = await persistence.initialize(
-        structuredClone(this.state.config),
-        this.state.configRevision,
-      );
-      const automaticEnabled = z.boolean().parse(current.automaticEnabled);
-      const next = stateSchema.parse({
-        ...runtime,
-        config: current.config,
-        configRevision: current.revision,
-      });
-      await atomicJson(join(this.directory, 'runtime.json'), runtimeState(next));
-      this.state = next;
-      this.automaticEnabled = automaticEnabled;
     });
     this.queue = result.catch(() => undefined);
     return result;
   }
+
   /** Refresh the in-memory configuration after the coordinator commits a preset. */
   async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
     const result = this.queue.then(async () => {
