@@ -2,17 +2,89 @@ import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { ResourceStoreError } from './contract.js';
 import type { ResourceStore } from './store.js';
+import type { ResourceCatalogCorePin } from '@mizar/resource-pack-contract/runtime';
+import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
+import { prepareCurrentResource } from './recovery.js';
+import { PACK_ID } from './runtime-adapter.js';
 
 /** Register on the existing local service. No listener and no renderer-controlled download/path API. */
 export function registerResourceRoutes(
   app: FastifyInstance,
   source: ResourceStore | (() => ResourceStore | undefined),
+  recovery?: {
+    core: ResourceCatalogCorePin;
+    root: string;
+    originPolicy: () => LocalWebOriginPolicy;
+  },
 ): void {
   const current = () => {
     const store = typeof source === 'function' ? source() : source;
     if (!store) throw new ResourceStoreError('resource_store_unavailable');
     return store;
   };
+  if (recovery) {
+    for (const action of ['repair', 'activate'] as const) {
+      app.post<{ Params: { packId: string } }>(
+        `/local/v1/resources/:packId/${action}`,
+        async (request, reply) => {
+          const policy = recovery.originPolicy();
+          if (
+            policy.mode !== 'loopback' ||
+            !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
+            request.headers['sec-fetch-site'] === 'cross-site' ||
+            (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+          )
+            return reply.code(403).send({ error: 'operator_origin_forbidden' });
+          if (request.params.packId !== PACK_ID)
+            return reply.code(404).send({ error: 'resource_pack_unknown' });
+          try {
+            const store = current();
+            if (action === 'activate' && !store.getStatus(PACK_ID).preparedVersion)
+              return reply
+                .code(409)
+                .send({
+                  error: 'resource_not_ready',
+                  message: '尚无已准备素材，请先准备当前素材。',
+                });
+            if (action === 'repair')
+              await store.repair(PACK_ID, prepareCurrentResource(recovery.core, recovery.root));
+            else if (!(await store.activatePrepared(PACK_ID)))
+              return reply.code(409).send({ message: '素材已准备；结束制作后可启用。' });
+            const status = store.getStatus(PACK_ID);
+            app.log.info(
+              {
+                event: 'resource',
+                stage: 'resource_cache_verify',
+                packId: PACK_ID,
+                action,
+                result: 'success',
+                activeVersion: status.activeVersion,
+                preparedVersion: status.preparedVersion,
+              },
+              '官方素材恢复完成。',
+            );
+            return reply.header('cache-control', 'no-store').send(status);
+          } catch (error) {
+            app.log.warn(
+              {
+                event: 'resource',
+                stage: 'resource_cache_verify',
+                packId: PACK_ID,
+                action,
+                result: 'failure',
+                diagnostic: { error: diagnosticValue(error) },
+              },
+              '官方素材恢复失败。',
+            );
+            return reply.code(409).send({
+              error: error instanceof ResourceStoreError ? error.code : 'resource_io_failed',
+              message: '素材恢复未完成；原资源保留，请查看当前原因后重试。',
+            });
+          }
+        },
+      );
+    }
+  }
   app.get('/local/v1/resources', async (_request, reply) => {
     try {
       return reply.header('cache-control', 'no-store').send({ resources: current().list() });

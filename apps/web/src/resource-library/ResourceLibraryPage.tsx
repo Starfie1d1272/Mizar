@@ -4,13 +4,14 @@ import { BroadcastPresets } from './BroadcastPresets';
 import { ResourceModules, type Snapshot } from './ResourceModules';
 import { OperatorShell } from '../operator/OperatorShell';
 import { MulnxToolControls } from '../orchestration/MulnxToolControls';
-import { openTool, useLocalRead } from '../preparation/client';
+import { command, openTool, useLocalRead } from '../preparation/client';
 import { Button, Field, Panel, StatusBanner } from '../ui';
 import './resource-library.css';
 
 type ResourceStatus = {
   packId: string;
   phase: 'missing' | 'downloading' | 'verifying' | 'ready' | 'failed' | 'incompatible';
+  downloadedBytes: number;
   activeVersion: string | null;
   preparedVersion: string | null;
   rollbackVersion: string | null;
@@ -18,6 +19,8 @@ type ResourceStatus = {
 };
 type LibraryView = {
   resources: ResourceStatus[] | null;
+  resourceRecoveryAvailable: boolean;
+  bundledEplAvailable: boolean;
   tool: (Omit<MulnxToolView, 'packs'> & { packs: string[] }) | null;
 };
 const phases: Record<ResourceStatus['phase'], string> = {
@@ -29,8 +32,37 @@ const phases: Record<ResourceStatus['phase'], string> = {
   incompatible: '素材不兼容',
 };
 
+const resourceFailures: Record<string, string> = {
+  resource_authorization_required: '旧缓存尚未获得当前版本授权，请重新准备素材。原缓存证据仍保留。',
+  resource_trust_failed: '素材授权验证未通过，不能启用该缓存。请重新准备受信素材。',
+  resource_download_failed: '素材下载未完成，请检查网络后重试。',
+  resource_incompatible: '缓存与当前版本不兼容，请重新准备素材。',
+  resource_integrity_failed: '缓存文件校验未通过，请重新准备素材。',
+  resource_size_mismatch: '缓存文件大小不符，请重新准备素材。',
+  resource_file_changed: '缓存文件已变化，请重新准备素材。',
+};
+
 export function ResourceLibraryPage() {
   const view = useLocalRead<LibraryView>('/local/v1/resource-library', 2000);
+  const [resourceBusy, setResourceBusy] = useState(false);
+  const [resourceResult, setResourceResult] = useState('');
+  const recoverResource = async (action: 'repair' | 'activate') => {
+    setResourceBusy(true);
+    setResourceResult('');
+    try {
+      const result = (await command(
+        `/local/v1/resources/official:epl-default/${action}`,
+        {},
+        undefined,
+        610000,
+      )) as ResourceStatus;
+      setResourceResult(result.preparedVersion ? '素材已准备；结束制作后可启用。' : '素材已启用。');
+    } catch (error) {
+      setResourceResult(error instanceof Error ? error.message : '操作未完成，请重试。');
+    } finally {
+      setResourceBusy(false);
+    }
+  };
   const [broadcastRefresh, setBroadcastRefresh] = useState(0);
   const broadcastSnapshot = useLocalRead<Snapshot>(
     '/local/v1/broadcast-presets',
@@ -145,8 +177,14 @@ export function ResourceLibraryPage() {
               </div>
               <dl>
                 <div>
-                  <dt>当前版本</dt>
-                  <dd>{resource.activeVersion ?? '未启用独立缓存'}</dd>
+                  <dt>当前来源</dt>
+                  <dd>
+                    {resource.activeVersion
+                      ? `独立缓存 ${resource.activeVersion}`
+                      : view.bundledEplAvailable
+                        ? 'Full 随包素材'
+                        : '示例素材缺失'}
+                  </dd>
                 </div>
                 {resource.preparedVersion ? (
                   <div>
@@ -161,11 +199,65 @@ export function ResourceLibraryPage() {
                   </div>
                 ) : null}
               </dl>
+              {!resource.activeVersion ? (
+                <p>
+                  {view.bundledEplAvailable
+                    ? '可继续使用内置 EPL 预览，无需先修复独立缓存。'
+                    : 'EPL 示例预览暂不可用；不影响真实比赛开播。'}
+                </p>
+              ) : null}
               {resource.failure ? (
-                <Button onClick={() => void openTool('diagnostics')}>查看诊断</Button>
-              ) : (
-                <a href="/picture">前往播出画面</a>
-              )}
+                <StatusBanner tone="warning">
+                  {resourceFailures[resource.failure] ?? '独立缓存操作未完成，请重新准备素材。'}
+                  <details>
+                    <summary>当前资源诊断</summary>
+                    <p>
+                      {resource.packId} · {resource.failure} · resource_cache_verify
+                    </p>
+                    <Button onClick={() => void openTool('diagnostics')}>打开完整诊断</Button>
+                  </details>
+                </StatusBanner>
+              ) : null}
+              {resource.phase === 'downloading' || resource.phase === 'verifying' ? (
+                <p role="status">
+                  {phases[resource.phase]} · 已接收{' '}
+                  {(resource.downloadedBytes / 1024 / 1024).toFixed(1)} MiB
+                </p>
+              ) : null}
+              <div className="resource-library__actions">
+                <div>
+                  {view.resourceRecoveryAvailable ? (
+                    <>
+                      <Button
+                        disabled={
+                          resourceBusy ||
+                          resource.phase === 'downloading' ||
+                          resource.phase === 'verifying'
+                        }
+                        onClick={() => void recoverResource('repair')}
+                      >
+                        {resourceBusy
+                          ? '正在处理…'
+                          : resource.failure
+                            ? '重新准备素材'
+                            : '准备当前素材'}
+                      </Button>
+                      {resource.preparedVersion ? (
+                        <Button
+                          disabled={resourceBusy}
+                          onClick={() => void recoverResource('activate')}
+                        >
+                          启用已准备素材
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p>当前运行环境不提供素材恢复，请使用完整发行包。</p>
+                  )}
+                  <a href="/picture">前往播出画面</a>
+                </div>
+              </div>
+              {resourceResult ? <p role="status">{resourceResult}</p> : null}
             </Panel>
           ))}
         {view && showTool && view.tool ? (
