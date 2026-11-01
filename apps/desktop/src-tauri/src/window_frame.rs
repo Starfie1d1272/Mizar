@@ -65,7 +65,7 @@ impl GameFrame {
         if style & FRAME_STYLE != 0 {
             unsafe {
                 SetWindowLongW(self.hwnd, -16, style & !FRAME_STYLE);
-                SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, 0x0037); // frame changed; no move/resize/activate/z-order
+                SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, 0x4037); // async frame changed; no move/resize/activate/z-order
             }
         }
         square_window(self.hwnd);
@@ -78,7 +78,7 @@ impl Drop for GameFrame {
         }
         unsafe {
             SetWindowLongW(self.hwnd, -16, self.style);
-            SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, 0x0037);
+            SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, 0x4037);
         }
         if let Some(value) = self.corner {
             set_attribute(self.hwnd, CORNER, value);

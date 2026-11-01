@@ -420,10 +420,11 @@ pub(crate) fn sync_workspace_shell(app: &tauri::AppHandle) {
             }
         }
         if !state.panels_only.load(Ordering::Acquire) {
-            if let Ok(tracker) = state.tracker.lock() {
-                if let Some(game) = tracker.owned_window() {
-                    windows.push(game.hwnd);
-                }
+            let Ok(tracker) = state.tracker.try_lock() else {
+                return;
+            };
+            if let Some(game) = tracker.owned_window() {
+                windows.push(game.hwnd);
             }
         }
     }
@@ -431,7 +432,7 @@ pub(crate) fn sync_workspace_shell(app: &tauri::AppHandle) {
         .fullscreen_scope
         .lock()
         .is_ok_and(|mut scope| scope.synchronize(&windows));
-    if let Ok(mut tracker) = state.tracker.lock() {
+    if let Ok(mut tracker) = state.tracker.try_lock() {
         tracker.fullscreen_layout = visible && marked;
     };
 }
@@ -635,16 +636,7 @@ pub(crate) fn show_workspace(app: &tauri::AppHandle) {
         state.visible.store(true, Ordering::Release);
     }
     sync_workspace_shell(app);
-    // Native window calls can synchronously dispatch window events. Release
-    // the tracker before presenting any WebView or posting HUD visibility.
-    let layout = state
-        .tracker
-        .lock()
-        .ok()
-        .and_then(|mut tracker| tracker.restore_layout());
-    if let Some(layout) = layout {
-        apply_layout(app, layout);
-    }
+    state.layout_dirty.store(true, Ordering::Release);
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window_presentation::show_without_activation(&window);
@@ -967,12 +959,10 @@ pub(crate) async fn open_tool(
 pub(crate) fn restore_layout(
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
-) -> Result<(), serde_json::Value> {
+) -> Result<&'static str, serde_json::Value> {
     let state = app.state::<HostState>();
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), serde_json::Value> = (|| {
+    let diagnostic_result: Result<&'static str, serde_json::Value> = (|| {
         if state.panels_only.load(Ordering::Acquire) {
             let main = app
                 .get_webview_window("main")
@@ -994,47 +984,17 @@ pub(crate) fn restore_layout(
                     height: size.height as i32,
                 }),
             );
-            return Ok(());
+            return Ok("panels");
         }
-        let layout = state
-            .tracker
-            .lock()
-            .map_err(|error| {
-                command_log.preserve_error(
-                    "restore_layout",
-                    native_operation_id.as_deref(),
-                    &error,
-                    serde_json::json!("桌面窗口状态不可用。"),
-                )
-            })?
-            .restore_layout()
-            .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-        apply_layout(&app, layout);
-        update_overlay(&app, &state);
-        let tracker = state.tracker.lock().map_err(|error| {
-            command_log.preserve_error(
-                "restore_layout",
-                native_operation_id.as_deref(),
-                &error,
-                serde_json::json!("桌面窗口状态不可用。"),
-            )
-        })?;
-        if tracker.window.is_none() {
-            return Err(serde_json::json!(
-                "工作区已恢复，尚未找到 CS2。打开游戏后再恢复布局。"
-            ));
+        if !state.visible.load(Ordering::Acquire) {
+            return Err(serde_json::json!("请打开工作区后恢复布局。"));
         }
-        if !tracker.managed {
-            return Err(if tracker.preserve_settings {
-                serde_json::json!("本次启动保留原游戏设置，未接管游戏窗口布局。请保持当前设置；需要自动布局时先正常退出本次游戏，在准备中心完成恢复后选择自动设置启动。")
-            } else {
-                match tracker.window_message() {
-                Some(message) => serde_json::json!({"kind": "window_control", "message": message}),
-                None => serde_json::json!("工作台面板已恢复，CS2 窗口对齐尚未确认。请确认游戏窗口可见后重试恢复布局。")
-            }
-            });
-        }
-        Ok(())
+        app.state::<production_exit::ExitGate>()
+            .check()
+            .map_err(|error| serde_json::json!(error))?;
+        state.layout_request.fetch_add(1, Ordering::AcqRel);
+        state.layout_dirty.store(true, Ordering::Release);
+        Ok("queued")
     })();
     diagnostic_log.native_outcome(
         "restore_layout",

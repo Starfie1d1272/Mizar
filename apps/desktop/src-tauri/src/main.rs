@@ -410,7 +410,7 @@ fn webview_preflight() -> Result<String, String> {
 fn restore_layout(
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
-) -> Result<(), serde_json::Value> {
+) -> Result<&'static str, serde_json::Value> {
     workspace_presentation::restore_layout(app, diagnostic_operation_id)
 }
 
@@ -436,7 +436,7 @@ fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> Result<serde_json::Value, String> {
     match state.tracker.try_lock() {
         Ok(tracker) => Ok(
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message() }),
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
         ),
         Err(std::sync::TryLockError::WouldBlock) => {
             Err("游戏窗口操作正在进行，请稍后重试。".into())
@@ -1410,6 +1410,7 @@ fn run_desktop(
     // A retained Companion must revoke the previous Host before any UI can reconnect.
     production_exit::camera_session(&log, "host-start", None, None)?;
     let managed = managed_cs2::ManagedCs2::new(log.clone());
+    let camera_state = managed.camera_state();
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
     tracker.preserve_settings = managed.preserve_settings();
@@ -1427,6 +1428,8 @@ fn run_desktop(
         entry_ticket: Mutex::new(None),
         entry_message: Mutex::new(String::new()),
         layout_dirty: Arc::new(AtomicBool::new(false)),
+        layout_request: AtomicU64::new(0),
+        layout_completed: AtomicU64::new(0),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
         overlay_generation: AtomicU64::new(0),
@@ -1556,6 +1559,14 @@ fn run_desktop(
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
+            let camera_running = worker_running.clone();
+            let camera_log = setup_log.clone();
+            thread::spawn(move || {
+                while camera_running.load(Ordering::Acquire) {
+                    managed_cs2::pulse_camera(&camera_state, &camera_log);
+                    thread::sleep(Duration::from_secs(2));
+                }
+            });
             let console_running = worker_running.clone();
             let console_log = setup_log.clone();
             let console_host = host.clone();
@@ -1574,18 +1585,6 @@ fn run_desktop(
                         {
                             cs2.poll();
                             observer_workspace::pulse(&host, &cs2);
-                            if let Some((lease, invalid)) = cs2.managed_camera_lease() {
-                                let log = host.state::<DesktopLog>();
-                                let action = if invalid { "invalidate" } else { "pulse" };
-                                match production_exit::camera_session(&log, action, Some(&lease), None) {
-                                    Ok(_) if invalid => cs2.clear_managed_camera(),
-                                    Ok(_) => (),
-                                    Err(error) => {
-                                        cs2.invalidate_managed_camera();
-                                        log.event("managed_camera_isolation", "failure", Some(&error));
-                                    }
-                                }
-                            }
                             workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
@@ -1635,11 +1634,13 @@ fn run_desktop(
                     }
 
                     // Cross-process CS2 calls stay off the Tauri main loop.
+                    let workspace_epoch = host.state::<HostState>().workspace_epoch.load(Ordering::Acquire);
                     let overlay_epoch = host.state::<HostState>().overlay_epoch.load(Ordering::Acquire);
                     let (layout, rect) = if !pending.load(Ordering::Relaxed)
                         && worker_visible.load(Ordering::Relaxed)
                         && !host.state::<HostState>().panels_only.load(Ordering::Acquire)
                         && !exit_signal.requested()
+                        && allowed()
                     {
                         let workspace_windows = workspace_presentation::overlay_workspace_windows(&host);
                         worker_tracker
@@ -1649,8 +1650,13 @@ fn run_desktop(
                                 // A DPI change can resize a WebView without changing CS2's
                                 // physical client or DPI. Reapply the shared physical layout
                                 // after the native suggested-size handler has completed.
+                                let request = host.state::<HostState>().layout_request.load(Ordering::Acquire);
                                 let layout = if worker_layout_dirty.swap(false, Ordering::AcqRel) {
-                                    tracker.restore_layout()
+                                    let result = tracker.restore_layout();
+                                    if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
+                                        host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                    }
+                                    result
                                 } else {
                                     tracker.tick()
                                 };
@@ -1710,10 +1716,9 @@ fn run_desktop(
                                         if activate {
                                             let _ = workspace_presentation::open_main(tick_host.clone(), None, None);
                                         }
-                                        if tick_host
-                                            .state::<HostState>()
-                                            .visible
-                                            .load(Ordering::Relaxed)
+                                        if tick_host.state::<HostState>().visible.load(Ordering::Acquire)
+                                            && tick_host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch
+                                            && tick_host.state::<production_exit::ExitGate>().check().is_ok()
                                         {
                                             workspace_presentation::sync_workspace_shell(&tick_host);
                                             if let Some(layout) = layout {
