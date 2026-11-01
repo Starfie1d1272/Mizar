@@ -279,6 +279,10 @@ export function registerRivalHubConnectionRoutes(
     }
     return reply.header('cache-control', 'no-store').send({
       ...options.connection.view(),
+      sourceCleanup:
+        options.connection.view().sourceState === 'ready'
+          ? options.connection.view().sourceCleanup
+          : null,
       syncHealth,
       activeMatchId: linkedBinding()?.context.matchId ?? null,
       activeDeviceName:
@@ -286,19 +290,23 @@ export function registerRivalHubConnectionRoutes(
           ? options.connection.view().activeDeviceName
           : null,
       sourceReady: Boolean(
+        options.connection.view().sourceState === 'ready' &&
         linkedBinding()?.origin === 'online' &&
         (!options.canClaim || options.canClaim()) &&
         observedLineupReady(),
       ),
-      sourceBlockedReason: !linkedBinding()
-        ? '请先选择并确认加载赛事比赛。'
-        : linkedBinding()?.origin !== 'online'
-          ? '本地 BP 尚未与网站一致，请刷新资料并确认加载网站版本后恢复推送。'
-          : options.canClaim && !options.canClaim()
-            ? '进入现场后可以成为本场数据源。'
-            : !observedLineupReady()
-              ? '等待当前比赛的十人首发数据；就绪后自动认领，也可手动重试。'
-              : null,
+      sourceBlockedReason:
+        options.connection.view().sourceState === 'unavailable'
+          ? '来源状态不可用，请保留原文件并恢复后重启。'
+          : !linkedBinding()
+            ? '请先选择并确认加载赛事比赛。'
+            : linkedBinding()?.origin !== 'online'
+              ? '本地 BP 尚未与网站一致，请刷新资料并确认加载网站版本后恢复推送。'
+              : options.canClaim && !options.canClaim()
+                ? '进入现场后可以成为本场数据源。'
+                : !observedLineupReady()
+                  ? '等待当前比赛的十人首发数据；就绪后自动认领，也可手动重试。'
+                  : null,
       lastRefreshAt,
       refreshError,
       websiteUrl: linkedBinding()?.manifest.match.competition?.slug
@@ -424,6 +432,8 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/claim', { bodyLimit: 128 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.connection.view().sourceState === 'unavailable')
+      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
     if (options.canClaim && !options.canClaim())
       return reply.code(409).send({ message: '请先进入现场。' });
     const binding = options.controller?.getActiveBinding();
@@ -456,6 +466,8 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/retry', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.connection.view().sourceState === 'unavailable')
+      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
     const view = options.connection.view();
     const snapshot = options.currentSnapshot();
     const binding = linkedBinding();
@@ -490,6 +502,8 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/release', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.connection.view().sourceState === 'unavailable')
+      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
     if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
       options.connection.stopSync(linkedBinding()?.context.matchId ?? null);
