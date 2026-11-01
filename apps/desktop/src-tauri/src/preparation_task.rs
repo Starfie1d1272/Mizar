@@ -770,8 +770,7 @@ fn preparation_start(
     spawn(app, preparation_id);
     Ok(())
 }
-#[tauri::command]
-pub(crate) fn preparation_status() -> Result<Value, String> {
+pub(crate) fn status() -> Result<Value, String> {
     Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message})).unwrap_or(Value::Null))
 }
 fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
@@ -875,8 +874,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
         .map_err(|_| "取消等待未完成。".to_string())?
 }
 
-#[tauri::command]
-pub(crate) async fn cancel_workspace_entry(
+pub(crate) async fn cancel_entry(
     app: tauri::AppHandle,
     entry_id: Option<String>,
 ) -> Result<(), String> {
@@ -902,8 +900,7 @@ pub(crate) async fn cancel_workspace_entry(
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) fn retry_workspace_entry(app: tauri::AppHandle) -> Result<(), String> {
+pub(crate) fn retry_entry(app: tauri::AppHandle) -> Result<(), String> {
     let task = snapshot()?.ok_or("本次准备任务不可用，请重新进入工作台。")?;
     preparation_retry(app, task.id)
 }
@@ -954,8 +951,7 @@ fn present_existing(
     present_entry(app, id, ticket, expected_url)
 }
 
-#[tauri::command]
-pub(crate) async fn enter_workspace(
+pub(crate) async fn enter(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,

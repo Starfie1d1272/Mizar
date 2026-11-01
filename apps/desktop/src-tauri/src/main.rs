@@ -29,6 +29,7 @@ mod observer_workspace;
 mod overlay_recovery;
 mod powershell;
 mod preparation_gate;
+mod preparation_ipc;
 mod preparation_task;
 mod production_exit;
 mod spectator_eligibility;
