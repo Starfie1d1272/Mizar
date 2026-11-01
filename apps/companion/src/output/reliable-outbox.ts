@@ -118,6 +118,8 @@ export class ReliableOutbox {
   private readonly continuityFailures = new Map<string, number>();
   private successfulDurableWrites = 0;
   private pendingReplay: Promise<void> | undefined;
+  private pendingFlush: Promise<readonly string[]> | undefined;
+  private closing = false;
   private readonly pendingEnqueues = new Map<
     string,
     { event: ReliableEventV1; retry: () => Promise<boolean> }
@@ -1115,221 +1117,280 @@ export class ReliableOutbox {
     readonly canSend?: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
     readonly now?: Date;
   }): Promise<readonly string[]> {
-    return this.queue.run(async () => {
-      if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
-      const now = input.now ?? new Date();
-      let changed = false;
-      const invalidatedStarts: string[] = [];
-      const unconfirmedBoundaries = [
-        ...this.records,
-        ...this.legacyRecords,
-        ...this.revokedSources.flatMap((archive) => archive.records),
-      ].filter(
-        (record) =>
-          isContinuityBoundary(record.event) &&
-          (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention'),
-      );
-      const rejectedStarts = this.getRecords()
-        .filter((record) => record.status === 'rejected' && record.event.kind === 'map_started')
-        .map((record) => record.event);
-      const next: ReliableOutboxRecord[] = [];
-      const blockedByMapEnd = new Set<string>();
-      const deliveryScope = (event: ReliableEventV1) =>
-        JSON.stringify([
-          event.matchId,
-          event.cursor.producerInstanceId,
-          event.cursor.liveSessionId,
-        ]);
-      // Terminal failures remain fences: a later event cannot turn a rejected or
-      // expired continuity transition into an implicit acknowledgement.
-      const blockedBoundaries = [
-        ...this.records,
-        ...this.legacyRecords,
-        ...this.revokedSources.flatMap((archive) => archive.records),
-      ]
-        .filter(
+    if (this.closing) return [];
+    if (this.pendingFlush) return this.pendingFlush;
+    const flush = this.flushOnce(input);
+    this.pendingFlush = flush;
+    try {
+      return await flush;
+    } finally {
+      if (this.pendingFlush === flush) this.pendingFlush = undefined;
+    }
+  }
+
+  private async flushOnce(input: {
+    readonly sink: ReliableEventSink;
+    readonly isCurrent: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
+    readonly canSend?: (event: ReliableEventV1, lineupSteam64?: readonly string[]) => boolean;
+    readonly now?: Date;
+  }): Promise<readonly string[]> {
+    const invalidatedStarts: string[] = [];
+    const attempted = new Set<string>();
+    const unconfirmedBoundaries = new Map<string, ReliableOutboxRecord>();
+    const responseBoundaries: ReliableEventV1[] = [];
+    const responseMapEnds = new Set<string>();
+    const deliveryScope = (event: ReliableEventV1) =>
+      JSON.stringify([event.matchId, event.cursor.producerInstanceId, event.cursor.liveSessionId]);
+    while (!this.closing) {
+      const selected = await this.queue.run(async () => {
+        if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
+        const now = input.now ?? new Date();
+        let changed = false;
+        for (const boundary of [
+          ...this.records,
+          ...this.legacyRecords,
+          ...this.revokedSources.flatMap((archive) => archive.records),
+        ].filter(
           (record) =>
             isContinuityBoundary(record.event) &&
-            (['rejected', 'expired', 'superseded'].includes(record.status) ||
-              record.receiverOutcome === 'needs_attention'),
-        )
-        .map((record) => record.event);
-      blockedBoundaries.push(
-        ...this.revokedSources
-          .flatMap((archive) => archive.records)
-          .filter((record) => record.status === 'pending' && isContinuityBoundary(record.event))
-          .map((record) => record.event),
-      );
-      for (const record of this.records) {
-        if (record.status !== 'pending') {
-          next.push(record);
-          continue;
-        }
-        if (this.isRevokedEvent(record.event, record.source)) {
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          next.push(record);
-          continue;
-        }
-        if (
-          this.repository().isDamaged(
-            scopeDigest(
-              record.event.competitionId,
-              record.event.matchId,
-              record.event.cursor.producerInstanceId,
-              record.event.cursor.liveSessionId,
-            ),
+            (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention'),
+        ))
+          unconfirmedBoundaries.set(boundary.event.idempotencyKey, boundary);
+        const rejectedStarts = this.getRecords()
+          .filter((record) => record.status === 'rejected' && record.event.kind === 'map_started')
+          .map((record) => record.event);
+        const next: ReliableOutboxRecord[] = [];
+        const blockedByMapEnd = new Set(responseMapEnds);
+        // Terminal failures remain fences: a later event cannot turn a rejected or
+        // expired continuity transition into an implicit acknowledgement.
+        const blockedBoundaries = [
+          ...this.records,
+          ...this.legacyRecords,
+          ...this.revokedSources.flatMap((archive) => archive.records),
+        ]
+          .filter(
+            (record) =>
+              isContinuityBoundary(record.event) &&
+              (['rejected', 'expired', 'superseded'].includes(record.status) ||
+                record.receiverOutcome === 'needs_attention'),
           )
-        ) {
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          next.push(record);
-          continue;
-        }
-        // A refused start never authorizes replay of a result that was already
-        // queued for that execution. Preserve the refusal and retire the result.
-        if (
-          ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
-          rejectedStarts.some((start) => {
-            const a = record.event.cursor;
-            const b = start.cursor;
-            return (
-              record.event.matchId === start.matchId &&
-              a.producerInstanceId === b.producerInstanceId &&
-              a.liveSessionId !== null &&
-              a.liveSessionId === b.liveSessionId &&
-              a.programSourceGeneration === b.programSourceGeneration &&
-              a.mapEpoch === b.mapEpoch &&
-              a.runtimeSeq >= b.runtimeSeq &&
-              ![
-                ...next,
-                ...this.records,
-                ...this.legacyRecords,
-                ...this.revokedSources.flatMap((archive) => archive.records),
-              ].some((proof) => {
-                const c = proof.event.cursor;
-                return (
-                  proof.status === 'accepted' &&
-                  proof.receiverOutcome !== 'needs_attention' &&
-                  proof.event.kind === 'map_started' &&
-                  proof.event.matchId === start.matchId &&
-                  c.producerInstanceId === b.producerInstanceId &&
-                  c.liveSessionId === b.liveSessionId &&
-                  c.programSourceGeneration === b.programSourceGeneration &&
-                  c.mapEpoch === b.mapEpoch &&
-                  c.runtimeSeq > b.runtimeSeq &&
-                  c.runtimeSeq < a.runtimeSeq
-                );
-              })
-            );
-          })
-        ) {
-          next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
-          changed = true;
-          continue;
-        }
-        // A start observed before a boundary ACK is not a post-ACK proof,
-        // including starts left in a queue written by an older version.
-        if (
-          record.event.kind === 'map_started' &&
-          unconfirmedBoundaries.some((boundary) => dependsOnBoundary(record.event, boundary.event))
-        ) {
-          invalidatedStarts.push(record.event.idempotencyKey);
-          next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
-          changed = true;
-          continue;
-        }
-        if (
-          blockedByMapEnd.has(deliveryScope(record.event)) ||
-          blockedBoundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
-        ) {
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          next.push(record);
-          continue;
-        }
-        const expired =
-          now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
-        if (expired || !input.isCurrent(record.event, record.lineupSteam64)) {
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          next.push({
-            ...record,
-            status: expired ? 'expired' : 'superseded',
-            updatedAt: now.toISOString(),
-          });
-          changed = true;
-          continue;
-        }
-        if (record.event.kind === 'map_player_snapshot') {
-          const mapEndedKey = record.event.payload.mapEndedKey;
-          const parent = [
-            ...next,
-            ...this.records,
-            ...this.legacyRecords,
-            ...this.revokedSources.flatMap((archive) => archive.records),
-          ].find((r) => r.event.idempotencyKey === mapEndedKey);
-          if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
+          .map((record) => record.event);
+        blockedBoundaries.push(
+          ...responseBoundaries,
+          ...this.revokedSources
+            .flatMap((archive) => archive.records)
+            .filter((record) => record.status === 'pending' && isContinuityBoundary(record.event))
+            .map((record) => record.event),
+        );
+        for (const record of this.records) {
+          if (record.status !== 'pending') {
+            next.push(record);
+            continue;
+          }
+          if (this.isRevokedEvent(record.event, record.source)) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
+            next.push(record);
+            continue;
+          }
+          if (
+            this.repository().isDamaged(
+              scopeDigest(
+                record.event.competitionId,
+                record.event.matchId,
+                record.event.cursor.producerInstanceId,
+                record.event.cursor.liveSessionId,
+              ),
+            )
+          ) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
+            next.push(record);
+            continue;
+          }
+          // A refused start never authorizes replay of a result that was already
+          // queued for that execution. Preserve the refusal and retire the result.
+          if (
+            ['map_ended', 'map_player_snapshot', 'series_ended'].includes(record.event.kind) &&
+            rejectedStarts.some((start) => {
+              const a = record.event.cursor;
+              const b = start.cursor;
+              return (
+                record.event.matchId === start.matchId &&
+                a.producerInstanceId === b.producerInstanceId &&
+                a.liveSessionId !== null &&
+                a.liveSessionId === b.liveSessionId &&
+                a.programSourceGeneration === b.programSourceGeneration &&
+                a.mapEpoch === b.mapEpoch &&
+                a.runtimeSeq >= b.runtimeSeq &&
+                ![
+                  ...next,
+                  ...this.records,
+                  ...this.legacyRecords,
+                  ...this.revokedSources.flatMap((archive) => archive.records),
+                ].some((proof) => {
+                  const c = proof.event.cursor;
+                  return (
+                    proof.status === 'accepted' &&
+                    proof.receiverOutcome !== 'needs_attention' &&
+                    proof.event.kind === 'map_started' &&
+                    proof.event.matchId === start.matchId &&
+                    c.producerInstanceId === b.producerInstanceId &&
+                    c.liveSessionId === b.liveSessionId &&
+                    c.programSourceGeneration === b.programSourceGeneration &&
+                    c.mapEpoch === b.mapEpoch &&
+                    c.runtimeSeq > b.runtimeSeq &&
+                    c.runtimeSeq < a.runtimeSeq
+                  );
+                })
+              );
+            })
+          ) {
             next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
             changed = true;
             continue;
           }
-          if (parent.status !== 'accepted') {
+          // A start observed before a boundary ACK is not a post-ACK proof,
+          // including starts left in a queue written by an older version.
+          if (
+            record.event.kind === 'map_started' &&
+            [...unconfirmedBoundaries.values()].some((boundary) =>
+              dependsOnBoundary(record.event, boundary.event),
+            )
+          ) {
+            invalidatedStarts.push(record.event.idempotencyKey);
+            next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+            changed = true;
+            continue;
+          }
+          if (
+            blockedByMapEnd.has(deliveryScope(record.event)) ||
+            blockedBoundaries.some((boundary) => dependsOnBoundary(record.event, boundary))
+          ) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
             next.push(record);
             continue;
           }
+          const expired =
+            now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
+          if (expired || !input.isCurrent(record.event, record.lineupSteam64)) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
+            next.push({
+              ...record,
+              status: expired ? 'expired' : 'superseded',
+              updatedAt: now.toISOString(),
+            });
+            changed = true;
+            continue;
+          }
+          if (record.event.kind === 'map_player_snapshot') {
+            const mapEndedKey = record.event.payload.mapEndedKey;
+            const parent = [
+              ...next,
+              ...this.records,
+              ...this.legacyRecords,
+              ...this.revokedSources.flatMap((archive) => archive.records),
+            ].find((r) => r.event.idempotencyKey === mapEndedKey);
+            if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
+              next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+              changed = true;
+              continue;
+            }
+            if (parent.status !== 'accepted') {
+              next.push(record);
+              continue;
+            }
+          }
+          if (input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64)) {
+            this.evidence(record, 'send_guard_blocked');
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
+            else if (['map_ended', 'map_started'].includes(record.event.kind))
+              blockedByMapEnd.add(deliveryScope(record.event));
+            next.push(record);
+            continue;
+          }
+          if (Date.parse(record.nextAttemptAt) > now.getTime()) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
+            else if (['map_ended', 'map_started'].includes(record.event.kind))
+              blockedByMapEnd.add(deliveryScope(record.event));
+            next.push(record);
+            continue;
+          }
+          if (attempted.has(record.event.idempotencyKey)) {
+            next.push(record);
+            continue;
+          }
+          // Persist decisions made before this record before releasing the queue.
+          next.push(...this.records.slice(next.length));
+          if (changed) {
+            const changedRecords = next.filter((item, index) => item !== this.records[index]);
+            await this.commitStatusChanges(changedRecords, this.trim(next));
+          }
+          return record;
         }
-        if (input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64)) {
-          this.evidence(record, 'send_guard_blocked');
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          else if (['map_ended', 'map_started'].includes(record.event.kind))
-            blockedByMapEnd.add(deliveryScope(record.event));
-          next.push(record);
-          continue;
+
+        if (changed) {
+          const changedRecords = next.filter((record, index) => record !== this.records[index]);
+          await this.commitStatusChanges(changedRecords, this.trim(next));
         }
-        if (Date.parse(record.nextAttemptAt) > now.getTime()) {
-          if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-          else if (['map_ended', 'map_started'].includes(record.event.kind))
-            blockedByMapEnd.add(deliveryScope(record.event));
-          next.push(record);
-          continue;
-        }
-        let outcome: ReliableDeliveryResult;
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const controller = new AbortController();
-        try {
-          outcome = await Promise.race([
-            input.sink.send(record.event, controller.signal, record.lineupSteam64, record.source),
-            new Promise<'retry'>((resolve) => {
-              timeout = setTimeout(() => {
-                controller.abort(new DOMException('Reliable delivery timed out', 'TimeoutError'));
-                resolve('retry');
-              }, RELIABLE_SEND_TIMEOUT_MS);
-              timeout.unref();
-            }),
-          ]);
-        } catch {
-          outcome = 'retry';
-        } finally {
-          if (timeout !== undefined) clearTimeout(timeout);
-        }
+        return undefined;
+      });
+      if (!selected) break;
+      attempted.add(selected.event.idempotencyKey);
+      let outcome: ReliableDeliveryResult;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const controller = new AbortController();
+      try {
+        outcome = await Promise.race([
+          input.sink.send(
+            selected.event,
+            controller.signal,
+            selected.lineupSteam64,
+            selected.source,
+          ),
+          new Promise<'retry'>((resolve) => {
+            timeout = setTimeout(() => {
+              controller.abort(new DOMException('Reliable delivery timed out', 'TimeoutError'));
+              resolve('retry');
+            }, RELIABLE_SEND_TIMEOUT_MS);
+            timeout.unref();
+          }),
+        ]);
+      } catch {
+        outcome = 'retry';
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+      const accepted =
+        outcome === 'accepted' || (typeof outcome === 'object' && outcome.status === 'accepted');
+      if ((!accepted || typeof outcome === 'object') && isContinuityBoundary(selected.event))
+        responseBoundaries.push(selected.event);
+      else if (
+        (outcome === 'retry' ||
+          (typeof outcome === 'object' &&
+            outcome.status === 'rejected' &&
+            ['generation_fence', 'epoch_fence'].includes(outcome.reason))) &&
+        ['map_ended', 'map_started'].includes(selected.event.kind)
+      )
+        responseMapEnds.add(deliveryScope(selected.event));
+      await this.queue.run(async () => {
+        const current = this.records.find(
+          (record) => record.event.idempotencyKey === selected.event.idempotencyKey,
+        );
+        // Revocation, archival, or another state change wins over a late response.
+        if (
+          !current ||
+          current.status !== 'pending' ||
+          current.attempts !== selected.attempts ||
+          this.deliveryIdentity(current) !== this.deliveryIdentity(selected) ||
+          this.isRevokedEvent(current.event, current.source)
+        )
+          return;
         const accepted =
           outcome === 'accepted' || (typeof outcome === 'object' && outcome.status === 'accepted');
-        if (
-          (!accepted || (typeof outcome === 'object' && outcome.status === 'accepted')) &&
-          isContinuityBoundary(record.event)
-        )
-          blockedBoundaries.push(record.event);
-        else if (
-          (outcome === 'retry' ||
-            (typeof outcome === 'object' &&
-              outcome.status === 'rejected' &&
-              ['generation_fence', 'epoch_fence'].includes(outcome.reason))) &&
-          ['map_ended', 'map_started'].includes(record.event.kind)
-        )
-          blockedByMapEnd.add(deliveryScope(record.event));
-        if (!accepted && outcome !== 'retry' && record.event.kind === 'map_started')
-          rejectedStarts.push(record.event);
-        const attempts = record.attempts + 1;
+        const attempts = current.attempts + 1;
         const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempts - 1, 6));
-        next.push({
-          ...record,
+        const now = input.now ?? new Date();
+        const updated: ReliableOutboxRecord = {
+          ...current,
           status: outcome === 'retry' ? 'pending' : accepted ? 'accepted' : 'rejected',
           ...(typeof outcome === 'object' && outcome.status === 'rejected'
             ? { rejection: outcome }
@@ -1340,15 +1401,14 @@ export class ReliableOutbox {
           attempts,
           nextAttemptAt: new Date(now.getTime() + delayMs).toISOString(),
           updatedAt: now.toISOString(),
-        });
-        changed = true;
-      }
-      if (changed) {
-        const changedRecords = next.filter((record, index) => record !== this.records[index]);
-        await this.commitStatusChanges(changedRecords, this.trim(next));
-      }
-      return invalidatedStarts;
-    });
+        };
+        await this.commitStatusChanges(
+          [updated],
+          this.trim(this.records.map((record) => (record === current ? updated : record))),
+        );
+      });
+    }
+    return invalidatedStarts;
   }
 
   private deliveryIdentity(record: ReliableOutboxRecord): string {
@@ -1448,6 +1508,7 @@ export class ReliableOutbox {
   }
 
   async flushPending(): Promise<void> {
+    await this.pendingFlush;
     await this.queue.flush();
   }
 
@@ -1459,7 +1520,9 @@ export class ReliableOutbox {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     try {
+      await this.pendingFlush;
       await this.flushForShutdown();
     } finally {
       this.database?.close();
