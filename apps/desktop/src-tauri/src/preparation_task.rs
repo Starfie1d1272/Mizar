@@ -670,9 +670,8 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
             Err("制作已进入，请退出工作台。".into())
         }
         Ok(false) => {
-            if let Ok(window) = main_window(&app) {
-                cancel_managed_camera(window, app.clone()).await?;
-            }
+            let window = main_window(&app)?;
+            cancel_managed_camera(window, app.clone()).await?;
             // Cancellation is acknowledged by the service before restoring: it
             // fences a delayed enter request for this same preparation ID.
             restore_video(&app, &preparation_id, true).await?;
