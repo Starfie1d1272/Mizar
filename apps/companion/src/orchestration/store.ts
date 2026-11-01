@@ -147,7 +147,10 @@ export class OrchestrationStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
-  async synchronizeFromPersistence(canApply: () => boolean = () => true): Promise<void> {
+  async synchronizeFromPersistence(
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
+  ): Promise<void> {
     const result = this.queue.then(async () => {
       if (!this.persistence) throw new Error('camera_storage_unavailable');
       const before = JSON.stringify({ ...this.preset, name: '' });
@@ -164,6 +167,7 @@ export class OrchestrationStore {
             automatic !== this.automaticEnabled
       )
         this.revision++;
+      await confirm();
     });
     this.queue = result.catch(() => undefined);
     return result;

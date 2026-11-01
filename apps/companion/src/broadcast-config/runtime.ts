@@ -145,18 +145,22 @@ export function createBroadcastRuntime(input: {
       const current = (item: 'hud' | 'music' | 'camera') => () =>
         sameSelection(store.snapshot.active, item);
       const operations = {
-        hud: () =>
+        hud: (confirm: () => Promise<void>) =>
           hud.synchronizeFromPersistence(
             hudDocumentFromBroadcast({ ...store.snapshot, active }),
             current('hud'),
+            confirm,
           ),
-        music: () => music.synchronizeFromPersistence(current('music')),
-        camera: () => camera.synchronizeFromPersistence(() => canSynchronizeCamera(active)),
-        program: async () => {
+        music: (confirm: () => Promise<void>) =>
+          music.synchronizeFromPersistence(current('music'), confirm),
+        camera: (confirm: () => Promise<void>) =>
+          camera.synchronizeFromPersistence(() => canSynchronizeCamera(active), confirm),
+        program: async (confirm: () => Promise<void>) => {
           await resolver.resolveModule({
             kind: 'program',
             value: active.resolved.program,
           } as import('@mizar/broadcast-config').ModuleRecord<'program'>);
+          await confirm();
         },
       };
       const kinds = (['hud', 'music', 'camera', 'program'] as const).filter(
@@ -198,14 +202,23 @@ export function createBroadcastRuntime(input: {
   async function consume(
     kind: 'hud' | 'music' | 'camera' | 'program',
     active: ActiveBroadcastSnapshot,
-    apply: () => Promise<void>,
+    apply: (confirm: () => Promise<void>) => Promise<void>,
     restore?: () => Promise<void>,
     inheritedError: string | null = null,
   ): Promise<{ failure?: unknown; receiptFailure?: unknown }> {
     let failure: unknown;
     let restored = false;
+    let receiptFailure: unknown;
+    const confirm = async () => {
+      try {
+        await store.recordConsumer(kind, active, inheritedError);
+      } catch (error) {
+        receiptFailure = error;
+        input.diagnostic(error);
+      }
+    };
     try {
-      await apply();
+      await apply(confirm);
     } catch (error) {
       failure = error;
       input.diagnostic(error);
@@ -218,24 +231,18 @@ export function createBroadcastRuntime(input: {
         }
       }
     }
-    const error = failure
-      ? kind === 'camera' && input.canApplyCamera && !input.canApplyCamera()
+    if (!failure) return { receiptFailure };
+    const error =
+      kind === 'camera' && input.canApplyCamera && !input.canApplyCamera()
         ? 'camera_busy'
-        : 'dependency_unavailable'
-      : inheritedError;
+        : 'dependency_unavailable';
     try {
-      await store.recordConsumer(
-        kind,
-        active,
-        error,
-        Boolean(restore && failure && !restored),
-        restored,
-      );
-      return { failure };
-    } catch (receiptFailure) {
-      input.diagnostic(receiptFailure);
-      return { failure, receiptFailure };
+      await store.recordConsumer(kind, active, error, Boolean(restore && !restored), restored);
+    } catch (error) {
+      receiptFailure = error;
+      input.diagnostic(error);
     }
+    return { failure, receiptFailure };
   }
   async function lockForEdit<K extends 'hud' | 'music' | 'camera'>(
     kind: K,
@@ -406,7 +413,16 @@ export function createBroadcastRuntime(input: {
         previousStatus[kind]?.desired !== initialActive.moduleRevisions[kind]
           ? 'dependency_unavailable'
           : null;
-      await consume(kind, initialActive, startupOperations[kind], restores[kind], inheritedError);
+      await consume(
+        kind,
+        initialActive,
+        async (confirm) => {
+          await startupOperations[kind]();
+          await confirm();
+        },
+        restores[kind],
+        inheritedError,
+      );
     }
     if (input.builtinMusicPack) {
       try {
@@ -455,8 +471,8 @@ export function createBroadcastRuntime(input: {
       const current = store.snapshot.active;
       const state = store.consumerStatus.camera;
       if (state?.error && state.desired !== current.moduleRevisions.camera) return false;
-      const result = await consume('camera', current, () =>
-        camera.synchronizeFromPersistence(() => canSynchronizeCamera(current)),
+      const result = await consume('camera', current, (confirm) =>
+        camera.synchronizeFromPersistence(() => canSynchronizeCamera(current), confirm),
       );
       if (result.failure || result.receiptFailure) return false;
       return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;

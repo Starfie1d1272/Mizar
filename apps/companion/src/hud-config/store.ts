@@ -239,13 +239,15 @@ export class HudConfigStore {
   /** Refresh the facade after the coordinator has committed an active configuration. */
   async synchronizeFromPersistence(
     document: HudConfigDocument,
-    canApply: () => boolean = () => true,
+    canApply: () => boolean,
+    confirm: () => Promise<void>,
   ): Promise<void> {
-    await this.commits.run(() => {
+    await this.commits.run(async () => {
       if (!this.persistence) throw new Error('hud_persistence_unavailable');
       if (!canApply()) throw new Error('revision_conflict');
       this.document = parseHudConfigDocument(document);
       this.persistenceError = null;
+      await confirm();
     });
   }
 
