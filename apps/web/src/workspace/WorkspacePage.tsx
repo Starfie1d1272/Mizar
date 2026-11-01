@@ -726,7 +726,7 @@ function WorkspaceDockContent() {
                   const request = ++layoutRequest.current;
                   const result = await desktopInvoke<string>('restore_layout');
                   if (result === 'panels') {
-                    setMessage('工作台面板已恢复。');
+                    setMessage('工作台面板布局请求已提交。');
                     return;
                   }
                   setMessage('布局请求已提交，游戏窗口对齐结果仍待确认。');
@@ -745,7 +745,7 @@ function WorkspaceDockContent() {
                       if (!status || status.layoutPending) continue;
                       if (!status.visible) return;
                       if (status.managed) {
-                        setMessage('工作台与 CS2 窗口已对齐。');
+                        setMessage('已确认 CS2 窗口对齐；工作台面板布局请求已提交。');
                         return;
                       }
                       if (
@@ -755,7 +755,7 @@ function WorkspaceDockContent() {
                       ) {
                         setMessage('');
                         setErrorMessage(
-                          status.message || '工作台面板已恢复，CS2 窗口对齐尚未确认。',
+                          status.message || '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。',
                         );
                         return;
                       }
