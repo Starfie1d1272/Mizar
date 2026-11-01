@@ -291,3 +291,33 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
     log.event("obs_configuration", "preserved", Some(reason));
     Ok(outcome(reason))
 }
+
+pub(crate) async fn launch_managed(
+    executable_path: String,
+    log: DesktopLog,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    let diagnostic_log = log.clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<bool, String> = async move {
+        let log = log.clone();
+        tauri::async_runtime::spawn_blocking(move || launch(&executable_path, None, &log))
+            .await
+            .map_err(|error| {
+                command_log.preserve_error(
+                    "launch_obs",
+                    native_operation_id.as_deref(),
+                    &error,
+                    "OBS 程序未能打开。".to_string(),
+                )
+            })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "launch_obs",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}

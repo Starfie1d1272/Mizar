@@ -1,6 +1,16 @@
 //! The desktop owns preparation independently of any webview lifetime.
-use super::*;
+use crate::{
+    check_preparation, entry_intent::EntryIntent, preparation_gate, preparation_ticket,
+    production_exit, startup_log::DesktopLog, HostState,
+};
 use serde_json::{json, Value};
+use std::{
+    net::TcpStream,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
+use tauri::Manager;
 
 #[derive(Clone)]
 struct Task {
@@ -340,18 +350,18 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let task = snapshot()?
         .filter(|t| t.id == id)
         .ok_or("准备任务不存在。")?;
-    let window = main_window(&app)?;
+    main_window(&app)?;
     if !task.entered {
-        present_workbench_panels(app.clone(), id.clone()).await?;
+        crate::workspace_presentation::panels(app.clone(), id.clone()).await?;
         publish(&app, &id, "正在准备游戏和 OBS…".into());
         check(&app, &id)?;
-        let status = cs2_config_status(app.clone()).await?;
+        let status = crate::cs2_host::status(app.clone()).await?;
         let resuming = status["preparationId"] == id
             && (status["running"] == true
                 || status["pending"] == true
                 || status["mulnxLaunchResumable"] == true);
         if !resuming {
-            let replacement = preflight_cs2_replacement(window.clone(), app.clone()).await?;
+            let replacement = crate::cs2_host::preflight(app.clone()).await?;
             let target = &replacement["target"];
             if let Some((pid, created)) = &task.external {
                 if target["pid"].as_u64() != Some(u64::from(*pid))
@@ -360,8 +370,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                     return Err("所选游戏实例已变化，请重试。".into());
                 }
             }
-            replace_external_cs2(
-                window.clone(),
+            crate::cs2_host::replace(
                 app.clone(),
                 target["pid"].as_u64().map(|v| v as u32),
                 target["created"].as_str().map(str::to_owned),
@@ -373,7 +382,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         }
     } else {
         check(&app, &id)?;
-        let game = cs2_config_status(app.clone()).await?;
+        let game = crate::cs2_host::status(app.clone()).await?;
         if game["preparationId"] != id || game["running"] != true {
             return Err("本次游戏尚未确认，请检查后重试。".into());
         }
@@ -398,7 +407,12 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                     .as_str()
                     .ok_or("未找到 OBS 可执行文件。")?
                     .to_owned();
-                launch_obs(path, app.state::<DesktopLog>(), None).await?;
+                crate::obs_configuration::launch_managed(
+                    path,
+                    app.state::<DesktopLog>().inner().clone(),
+                    None,
+                )
+                .await?;
                 for _ in 0..30 {
                     check(&app, &id)?;
                     tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
@@ -464,16 +478,16 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     if !task.gsi {
         let result: Result<(), String> = async {
             check(&app, &id)?;
-            let status = gsi_status(app.state::<DesktopLog>()).await?;
+            let status = crate::gsi_host::status(app.state::<DesktopLog>().inner().clone()).await?;
             if status["readFailed"] == true || status["detected"] != true {
                 return Err(status["issues"][0]["message"]
                     .as_str()
                     .unwrap_or("无法确认 CS2 安装或 GSI 配置。")
                     .into());
             }
-            let result = ensure_gsi(
+            let result = crate::gsi_host::ensure(
                 app.clone(),
-                app.state::<DesktopLog>(),
+                app.state::<DesktopLog>().inner().clone(),
                 Some(id.clone()),
                 None,
             )
@@ -493,11 +507,10 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         }
     }
     check(&app, &id)?;
-    let mut game = cs2_config_status(app.clone()).await?;
+    let mut game = crate::cs2_host::status(app.clone()).await?;
     let mut launched_mulnx = false;
     if game["mulnxLaunchResumable"] == true {
-        let receipt = launch_mulnx(
-            window.clone(),
+        let receipt = crate::cs2_host::launch_mulnx(
             app.clone(),
             None,
             None,
@@ -511,8 +524,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             return Err("原启动请求无法确认，请退出后重新准备。".into());
         }
     } else if game["preferMulnx"] == true && game["running"] != true && game["pending"] != true {
-        launch_mulnx(
-            window.clone(),
+        crate::cs2_host::launch_mulnx(
             app.clone(),
             Some(true),
             Some(task.preserve),
@@ -523,9 +535,9 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .await?;
         launched_mulnx = true;
     }
-    game = cs2_config_status(app.clone()).await?;
+    game = crate::cs2_host::status(app.clone()).await?;
     if (game["running"] != true && game["pending"] != true) || launched_mulnx {
-        start_managed_cs2(
+        crate::cs2_host::start(
             app.clone(),
             Some(task.preserve && !launched_mulnx),
             Some(id.clone()),
@@ -537,7 +549,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     }
     for _ in 0..60 {
         check(&app, &id)?;
-        game = cs2_config_status(app.clone()).await?;
+        game = crate::cs2_host::status(app.clone()).await?;
         if game["running"] == true && game["preparationId"] == id {
             break;
         }
@@ -580,7 +592,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         let result: Result<(), String> = async {
             check(&app, &id)?;
             if task.camera_uncertain {
-                let game = cs2_config_status(app.clone()).await?;
+                let game = crate::cs2_host::status(app.clone()).await?;
                 if game["cameraLeaseReady"] == true && game["preparationId"] == id {
                     return Ok(());
                 }
@@ -588,8 +600,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             }
             update(&id, |t| t.camera_uncertain = true);
             let result =
-                begin_managed_camera(window.clone(), app.clone(), revision.clone(), id.clone())
-                    .await?;
+                crate::cs2_host::begin_camera(app.clone(), revision.clone(), id.clone()).await?;
             if result["state"] != "ready" {
                 if result["state"] == "not_started" {
                     update(&id, |t| t.camera_uncertain = false);
@@ -625,7 +636,15 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         update(&id, |t| t.entered = true);
     }
     if !task.presented {
-        present_production(app.clone(), true, Some(id.clone()), None, None, None).await?;
+        crate::workspace_presentation::present(
+            app.clone(),
+            true,
+            Some(id.clone()),
+            None,
+            None,
+            None,
+        )
+        .await?;
         update(&id, |t| t.presented = true);
     }
     publish(&app, &id, errors.join("；"));
@@ -812,8 +831,8 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                             Err("制作已进入，请退出工作台。".into())
                         }
                         Ok(false) => {
-                            let window = main_window(&app)?;
-                            cancel_managed_camera(window, app.clone()).await?;
+                            main_window(&app)?;
+                            crate::cs2_host::cancel_camera(app.clone()).await?;
                             // Cancellation is acknowledged by the service before restoring: it
                             // fences a delayed enter request for this same preparation ID.
                             restore_video(&app, &preparation_id, true).await?;
@@ -897,7 +916,7 @@ fn present_entry(
 ) -> Result<(), String> {
     app.state::<preparation_gate::PreparationGate>()
         .commit(Some(id), || {
-            present_production_inner_checked(
+            crate::workspace_presentation::present_production_inner_checked(
                 app,
                 true,
                 Some((expected_url.to_owned(), id.to_owned())),
@@ -958,7 +977,7 @@ pub(crate) async fn enter_workspace(
         .url()
         .map_err(|_| "准备中心页面不可用。")?
         .to_string();
-    begin_entry(
+    crate::entry_intent::begin(
         window.clone(),
         app.clone(),
         preparation_id.clone(),
@@ -1015,7 +1034,7 @@ pub(crate) async fn enter_workspace(
                 let result = async {
                     app.state::<preparation_gate::PreparationGate>()
                         .check(Some(&preparation_id))?;
-                    let camera = enter_demo_test(
+                    let camera = crate::demo_host::enter(
                         window.clone(),
                         app.clone(),
                         request_id.clone(),
@@ -1028,7 +1047,7 @@ pub(crate) async fn enter_workspace(
                     .await?;
                     app.state::<production_exit::ExitGate>()
                         .check_ticket(ticket)?;
-                    present_demo_test(
+                    crate::workspace_presentation::present_demo(
                         window.clone(),
                         app.clone(),
                         request_id.clone(),
