@@ -656,8 +656,12 @@ pub(crate) fn pulse_camera(
     };
     if let Err(error) = result {
         camera.invalidated = true;
-        let _ =
-            crate::production_exit::camera_session(log, "invalidate", Some(&camera.lease), None);
+        let retired =
+            crate::production_exit::camera_session(log, "invalidate", Some(&camera.lease), None)
+                .is_ok();
+        if retired {
+            *state = None;
+        }
         log.event("managed_camera_isolation", "failure", Some(&error));
     }
 }
