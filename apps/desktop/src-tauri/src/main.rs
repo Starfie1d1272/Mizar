@@ -2103,7 +2103,7 @@ async fn enter_demo_test(
 #[derive(Default)]
 struct EntryIntentState {
     document: u64,
-    active: Option<String>,
+    active: Option<(String, bool)>,
     cancelled: std::collections::HashSet<String>,
 }
 #[derive(Default)]
@@ -2129,24 +2129,43 @@ impl EntryIntent {
         if state.active.is_some() {
             return Err("正在进入工作台，请稍候。".into());
         }
-        state.active = Some(id);
+        state.active = Some((id, false));
         Ok(())
     }
-    fn cancel(&self, id: &str) -> Result<(), String> {
+    fn cancel_with<T>(
+        &self,
+        id: &str,
+        read: impl FnOnce() -> Result<T, String>,
+    ) -> Result<(bool, T), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
-        if state.active.as_deref() == Some(id) {
-            state.active = None;
+        let matched = if let Some((active, cancelled)) = state.active.as_mut() {
+            if active == id {
+                *cancelled = true;
+                true
+            } else {
+                false
+            }
         } else {
+            false
+        };
+        if !matched {
             if state.cancelled.len() >= 1024 && !state.cancelled.contains(id) {
                 return Err("进入取消记录已满，请重新启动 Mizar。".into());
             }
             state.cancelled.insert(id.to_owned());
         }
-        Ok(())
+        Ok((matched, read()?))
+    }
+    fn cancel(&self, id: &str) -> Result<(), String> {
+        self.cancel_with(id, || Ok(())).map(|_| ())
     }
     fn finish(&self, id: &str) {
         if let Ok(mut state) = self.0.lock() {
-            if state.active.as_deref() == Some(id) {
+            if state
+                .active
+                .as_ref()
+                .is_some_and(|(active, _)| active == id)
+            {
                 state.active = None;
             }
             state.cancelled.remove(id);
@@ -2154,7 +2173,9 @@ impl EntryIntent {
     }
     fn cancel_all(&self) {
         let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        state.active = None;
+        if let Some((_, cancelled)) = state.active.as_mut() {
+            *cancelled = true;
+        }
         state.cancelled.clear();
         state.document = state.document.wrapping_add(1);
     }
@@ -2165,7 +2186,11 @@ impl EntryIntent {
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
-        if state.active.as_deref() != Some(id) {
+        if !state
+            .active
+            .as_ref()
+            .is_some_and(|(active, cancelled)| active == id && !cancelled)
+        {
             return Err("进入已取消。".into());
         }
         let result = action();
@@ -2175,11 +2200,15 @@ impl EntryIntent {
         result
     }
     fn publish(&self, id: &str, valid_page: impl FnOnce() -> bool, show: impl FnOnce()) -> bool {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        if state.active.as_deref() != Some(id) || !valid_page() {
+        let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if !state
+            .active
+            .as_ref()
+            .is_some_and(|(active, cancelled)| active == id && !cancelled)
+            || !valid_page()
+        {
             return false;
         }
-        state.active = None;
         show();
         true
     }

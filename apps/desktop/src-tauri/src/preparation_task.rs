@@ -695,12 +695,18 @@ pub(crate) async fn cancel_workspace_entry(
     app: tauri::AppHandle,
     entry_id: Option<String>,
 ) -> Result<(), String> {
-    if let Some(id) = &entry_id {
+    let task = if let Some(id) = &entry_id {
         app.state::<preparation_gate::PreparationGate>()
             .cancel(id.clone())?;
-        app.state::<EntryIntent>().cancel(id)?;
-    }
-    if let Some(task) = snapshot()? {
+        let (matched, task) = app.state::<EntryIntent>().cancel_with(id, snapshot)?;
+        if !matched && task.as_ref().is_some_and(|task| task.id != *id) {
+            return Err("准备任务已变化，请重新取消。".into());
+        }
+        task
+    } else {
+        snapshot()?
+    };
+    if let Some(task) = task {
         preparation_cancel(app, task.id).await?;
     } else if entry_id.is_some() {
         let production = http(&app, "GET", "/local/v1/production", json!({})).await?;
@@ -815,7 +821,11 @@ pub(crate) async fn enter_workspace(
                 if external_pid.is_some() || external_created.is_some() {
                     return Err("请先结束 Demo 试播，再选择游戏。".into());
                 }
-                if let Some(existing) = snapshot()?.filter(|task| !task.cancelled) {
+                if let Some(existing) = app
+                    .state::<EntryIntent>()
+                    .commit(&preparation_id, false, snapshot)?
+                    .filter(|task| !task.cancelled)
+                {
                     if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
                         let task_entered = entered(&app, &existing.id)
                             .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
@@ -901,7 +911,10 @@ pub(crate) async fn enter_workspace(
                 return Err("制作状态已变化，请刷新后重试。".into());
             }
             if manual {
-                if let Some(existing) = snapshot()? {
+                if let Some(existing) =
+                    app.state::<EntryIntent>()
+                        .commit(&preparation_id, false, snapshot)?
+                {
                     if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
                         let task_entered = entered(&app, &existing.id)
                             .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
