@@ -71,10 +71,10 @@ export function MulnxToolControls({
         <p>暂未确认最新版；已准备的本机版本仍可使用，请稍后重新检查。</p>
       ) : null}
       {!runtimeOnly && tool.checkedAt ? (
-        <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
+        <p>本次检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
       ) : null}
       {!runtimeOnly && tool.confirmedAt ? (
-        <p>最近确认：{new Date(tool.confirmedAt).toLocaleString()}</p>
+        <p>版本确认时间：{new Date(tool.confirmedAt).toLocaleString()}</p>
       ) : null}
       {!runtimeOnly && tool.retryAt ? (
         <p>GitHub 可重试时间：{new Date(tool.retryAt).toLocaleString()}；仍可检查签名索引。</p>

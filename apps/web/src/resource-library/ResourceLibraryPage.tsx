@@ -184,7 +184,7 @@ export function ResourceLibraryPage() {
                 <div>
                   <dt>
                     {view.tool.checkResult === 'current' || view.tool.checkResult === 'available'
-                      ? '已确认最新版本'
+                      ? '上次确认版本'
                       : '已知可用版本'}
                   </dt>
                   <dd>{view.tool.latest}</dd>
