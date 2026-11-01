@@ -278,7 +278,13 @@ export function createBroadcastRuntime(input: {
   }
   const lockFor = (resolved: ActiveBroadcastSnapshot['resolved']) => deps.lockForActive(resolved);
   async function initialize(): Promise<void> {
-    await deps.references.run(initializeUnderReferenceGuard);
+    try {
+      await deps.references.run(initializeUnderReferenceGuard);
+    } catch (error) {
+      ready = false;
+      status = { state: 'pending', reason: 'broadcast_config_unavailable' };
+      input.diagnostic(error);
+    }
   }
   async function initializeUnderReferenceGuard(): Promise<void> {
     let musicUnavailable = false;
@@ -468,6 +474,7 @@ export function createBroadcastRuntime(input: {
       await store.retryConsumerReceipts();
     },
     async reconcileCameraSelection(): Promise<boolean> {
+      if (!ready) return false;
       const current = store.snapshot.active;
       const state = store.consumerStatus.camera;
       if (state?.error && state.desired !== current.moduleRevisions.camera) return false;

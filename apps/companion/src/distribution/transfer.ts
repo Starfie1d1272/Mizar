@@ -31,17 +31,17 @@ export async function transfer(options: {
     let file: Awaited<ReturnType<typeof open>> | undefined;
     let localError = false;
     let created = false;
+    let response: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       arm(FIRST_BYTE_TIMEOUT);
-      const response = await source(signal);
+      response = await source(signal);
       if (!response.ok || !response.body) throw new Error(`transfer_http_${response.status}`);
       const length = response.headers.get('content-length');
       if (
         (length && options.bytes !== undefined && Number(length) !== options.bytes) ||
         response.headers.get('content-type')?.includes('text/html')
       ) {
-        await response.body.cancel();
         throw new Error(options.integrityError ?? 'transfer_integrity');
       }
       try {
@@ -112,7 +112,8 @@ export async function transfer(options: {
       options.fallback?.(lastError, index);
     } finally {
       clearTimeout(timer);
-      await reader?.cancel().catch(() => undefined);
+      if (reader) await reader.cancel().catch(() => undefined);
+      else await response?.body?.cancel().catch(() => undefined);
     }
   }
   throw lastError;
