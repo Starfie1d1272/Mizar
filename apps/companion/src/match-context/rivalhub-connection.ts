@@ -737,10 +737,22 @@ export class RivalHubConnection {
     this.sourceState = new RivalHubSourceState(join(dirname(path), 'rivalhub-source-state.json'));
   }
 
+  private sourceStateAvailable = false;
+
+  private requireSourceState(): void {
+    if (!this.sourceStateAvailable) throw new Error('rivalhub_source_state_unavailable');
+  }
+
   async load(): Promise<void> {
-    await this.sourceState.load();
-    await this.sourceState.recover();
-    await this.updateCleanupSummary();
+    try {
+      await this.sourceState.load();
+      await this.sourceState.recover();
+      await this.updateCleanupSummary();
+      this.sourceStateAvailable = true;
+    } catch (error) {
+      this.sourceState.invalidate();
+      this.onDiagnostic('source_state_load', error);
+    }
     let stage = 'connection_read';
     try {
       const raw = await readFile(this.path, 'utf8');
@@ -806,6 +818,7 @@ export class RivalHubConnection {
       activeDeviceMatchId: this.activeDeviceMatchId,
       pairing: this.pendingPairing === null ? 'idle' : 'pending',
       stoppedMatchId: this.stoppedMatchId,
+      sourceState: this.sourceStateAvailable ? 'ready' : 'unavailable',
       sourceCleanup: { ...this.cleanupSummary, handoffPending: this.exitHandoffs.size },
       liveDelivery:
         this.source === null
@@ -837,7 +850,7 @@ export class RivalHubConnection {
   }
 
   startSourceCleanup(): void {
-    if (this.cleanupTimer) return;
+    if (!this.sourceStateAvailable || this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
       void this.sourceCommands
         .run(() => this.cleanup(false))
@@ -1090,6 +1103,8 @@ export class RivalHubConnection {
 
   /** Freeze this exact source now; persist its handoff without waiting for delivery. */
   handoffForExit(): Promise<void> {
+    if (!this.sourceStateAvailable)
+      return Promise.reject(new Error('rivalhub_source_state_unavailable'));
     this.bindingGeneration++;
     const source = this.source;
     if (source) {
@@ -1371,6 +1386,7 @@ export class RivalHubConnection {
   }
 
   async disconnect(): Promise<void> {
+    this.requireSourceState();
     return this.sourceCommands.run(() => this.disconnectLocked());
   }
 
@@ -1759,6 +1775,7 @@ export class RivalHubConnection {
   }
 
   async claim(snapshot: LiveSnapshotV1, contextRevision: string, takeover: boolean) {
+    this.requireSourceState();
     const generation = this.bindingGeneration;
     return this.sourceCommands.run(() =>
       this.claimLocked(snapshot, contextRevision, takeover, generation),
@@ -1943,10 +1960,12 @@ export class RivalHubConnection {
   }
 
   async release(): Promise<void> {
+    this.requireSourceState();
     return this.sourceCommands.run(() => this.releaseLocked());
   }
 
   private async releaseLocked(): Promise<void> {
+    this.requireSourceState();
     const deadline = Date.now() + 8000;
     await this.retireCurrent('finish');
     await this.cleanup(true, deadline);
@@ -2081,6 +2100,7 @@ export class RivalHubConnection {
   }
 
   async sendLive(snapshot: LiveSnapshotV1): Promise<void> {
+    this.requireSourceState();
     const source = this.source;
     const pending = this.sendLiveOnce(snapshot);
     if (!source) return pending;
@@ -2338,6 +2358,7 @@ export class RivalHubConnection {
     signal?: AbortSignal,
     retainedLineup?: readonly string[],
   ): Promise<ReliableDeliveryResult> {
+    this.requireSourceState();
     if (
       identity.matchId !== event.matchId ||
       identity.competitionId !== event.competitionId ||
@@ -2383,6 +2404,7 @@ export class RivalHubConnection {
     retainedLineup?: readonly string[],
     retainedIdentity?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
+    this.requireSourceState();
     if (
       (this.stoppedMatchId === event.matchId || this.source?.paused) &&
       !this.source?.drainReliable

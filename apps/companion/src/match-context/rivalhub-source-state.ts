@@ -387,6 +387,10 @@ export class RivalHubSourceState {
     return changed;
   }
 
+  invalidate(): void {
+    this.state = undefined;
+  }
+
   async load(): Promise<SourceState> {
     return this.queue.run(async () => {
       if (this.state) return structuredClone(this.state);
@@ -424,7 +428,7 @@ export class RivalHubSourceState {
 
   private async change<T>(update: (state: SourceState) => T | Promise<T>): Promise<T> {
     return this.queue.run(async () => {
-      if (!this.state) throw new Error('source state not loaded');
+      if (!this.state) throw new Error('rivalhub_source_state_unavailable');
       const next = structuredClone(this.state);
       const result = await update(next);
       const validated = envelopeSchema.parse(next);
@@ -442,7 +446,7 @@ export class RivalHubSourceState {
 
   async snapshot(): Promise<SourceState> {
     return this.queue.run(() => {
-      if (!this.state) throw new Error('source state not loaded');
+      if (!this.state) throw new Error('rivalhub_source_state_unavailable');
       return structuredClone(this.state);
     });
   }
