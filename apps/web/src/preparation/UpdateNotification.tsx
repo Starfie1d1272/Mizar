@@ -5,12 +5,6 @@ import type { UpdateStatus } from './UpdateSettings';
 import './updates.css';
 
 type Notification = { version: string; notes: string };
-type EntryRequest = {
-  updates: UpdateStatus;
-  signal: AbortSignal;
-  resolve: (proceed: boolean) => void;
-  handled: boolean;
-};
 
 function canInterrupt() {
   return (
@@ -24,39 +18,6 @@ function canInterrupt() {
 function DesktopUpdateNotification() {
   const status = useLocalRead<UpdateStatus>('/local/v1/updates', 3000);
   const [notice, setNotice] = useState<Notification | null>(null);
-  const [entry, setEntry] = useState<EntryRequest | null>(null);
-  const activeEntry = useRef<EntryRequest | null>(null);
-  useEffect(() => {
-    const onEntry = (event: Event) => {
-      const request = (event as CustomEvent<EntryRequest>).detail;
-      if (activeEntry.current) return;
-      request.handled = true;
-      activeEntry.current = request;
-      request.signal.addEventListener(
-        'abort',
-        () => {
-          if (activeEntry.current !== request) return;
-          activeEntry.current = null;
-          setEntry(null);
-          request.resolve(false);
-        },
-        { once: true },
-      );
-      setEntry(request);
-    };
-    window.addEventListener('mizar:entry-update', onEntry);
-    return () => {
-      window.removeEventListener('mizar:entry-update', onEntry);
-      activeEntry.current?.resolve(false);
-      activeEntry.current = null;
-    };
-  }, []);
-  const finishEntry = (proceed: boolean) => {
-    const request = activeEntry.current;
-    activeEntry.current = null;
-    setEntry(null);
-    request?.resolve(proceed);
-  };
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [dismissedMulnx, setDismissedMulnx] = useState<string | null>(null);
   const [mulnxNotice, setMulnxNotice] = useState<{ identity: string; version: string } | null>(
@@ -178,28 +139,17 @@ function DesktopUpdateNotification() {
       };
     }
   }, [status, mulnxNotice, dismissedMulnx, notice]);
-  const shownMizar = entry?.updates.notificationPending ? entry.updates.candidate : notice;
-  const shownMulnx =
-    entry?.updates.mulnxNotificationPending &&
-    entry.updates.mulnx?.latest &&
-    entry.updates.mulnx.notificationIdentity
-      ? { identity: entry.updates.mulnx.notificationIdentity, version: entry.updates.mulnx.latest }
-      : mulnxNotice;
-  const mizarOpen = entry
-    ? Boolean(entry.updates.notificationPending && shownMizar)
-    : shownMizar !== null &&
-      shownMizar?.version === status?.candidate?.version &&
-      dismissed !== shownMizar?.version;
-  const mulnxOpen = entry
-    ? Boolean(entry.updates.mulnxNotificationPending && shownMulnx)
-    : shownMulnx !== null &&
-      status?.mulnxNotificationPending &&
-      shownMulnx?.identity === status.mulnx?.notificationIdentity;
-  const open = Boolean(
-    (mizarOpen || mulnxOpen) &&
-    (entry?.updates.notificationSafe ?? status?.notificationSafe) &&
-    canInterrupt(),
-  );
+  const shownMizar = notice;
+  const shownMulnx = mulnxNotice;
+  const mizarOpen =
+    shownMizar !== null &&
+    shownMizar.version === status?.candidate?.version &&
+    dismissed !== shownMizar.version;
+  const mulnxOpen =
+    shownMulnx !== null &&
+    status?.mulnxNotificationPending &&
+    shownMulnx.identity === status.mulnx?.notificationIdentity;
+  const open = Boolean((mizarOpen || mulnxOpen) && status?.notificationSafe && canInterrupt());
   const dismissMizar = () => {
     if (!shownMizar || !mizarOpen) return;
     setDismissed(shownMizar.version);
@@ -215,7 +165,6 @@ function DesktopUpdateNotification() {
   const dismiss = () => {
     dismissMizar();
     dismissMulnx();
-    if (entry) finishEntry(true);
   };
   return (
     <Dialog
@@ -239,7 +188,6 @@ function DesktopUpdateNotification() {
             variant="primary"
             onClick={() => {
               dismissMizar();
-              if (entry) finishEntry(false);
               window.location.assign('/settings?tab=advanced');
             }}
           >
@@ -251,7 +199,6 @@ function DesktopUpdateNotification() {
             variant="primary"
             onClick={() => {
               dismissMulnx();
-              if (entry) finishEntry(false);
               window.location.assign('/packages');
             }}
           >
@@ -259,7 +206,6 @@ function DesktopUpdateNotification() {
           </Button>
         ) : null}
         <Button onClick={dismiss}>稍后</Button>
-        {entry ? <Button onClick={() => finishEntry(false)}>取消进入</Button> : null}
       </div>
     </Dialog>
   );

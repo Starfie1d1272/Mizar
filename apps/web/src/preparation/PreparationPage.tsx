@@ -121,7 +121,6 @@ export function PreparationPage() {
     null,
   );
   const [entering, setEntering] = useState(false);
-  const [checkingEntry, setCheckingEntry] = useState(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
@@ -285,14 +284,7 @@ export function PreparationPage() {
               void action(async () => {
                 setEntering(true);
                 try {
-                  await productionAction(
-                    'enter',
-                    production,
-                    false,
-                    undefined,
-                    undefined,
-                    setCheckingEntry,
-                  );
+                  await productionAction('enter', production);
                 } finally {
                   setEntering(false);
                 }
@@ -300,9 +292,7 @@ export function PreparationPage() {
             }
           >
             {entering
-              ? checkingEntry
-                ? '正在检查更新…'
-                : '正在自动准备工作台…'
+              ? '正在自动准备工作台…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
                 : '启动并进入工作台'}
