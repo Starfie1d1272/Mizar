@@ -31,6 +31,7 @@ static TASK: Mutex<Option<Task>> = Mutex::new(None);
 struct CancellationFlight {
     result: Mutex<Option<Result<(), String>>>,
     completed: std::sync::Condvar,
+    run_finished: std::sync::Condvar,
 }
 impl CancellationFlight {
     fn wait(&self) -> Result<(), String> {
@@ -42,6 +43,21 @@ impl CancellationFlight {
                 .map_err(|_| "取消状态不可用。")?;
         }
         result.as_ref().expect("completed cancellation").clone()
+    }
+    fn wait_for_run(&self, id: &str) -> Result<(), String> {
+        let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+        loop {
+            match state.as_ref().filter(|task| task.id == id) {
+                Some(task) if task.running => {
+                    state = self
+                        .run_finished
+                        .wait(state)
+                        .map_err(|_| "准备状态不可用。")?;
+                }
+                Some(_) => return Ok(()),
+                None => return Err("本次准备任务不可用。".into()),
+            }
+        }
     }
     fn complete(&self, outcome: Result<(), String>) {
         let mut result = self
@@ -123,6 +139,9 @@ fn mark_run_finished(id: &str) {
     if let Ok(mut state) = TASK.lock() {
         if let Some(task) = state.as_mut().filter(|task| task.id == id) {
             task.running = false;
+            if let Some(flight) = &task.cancellation {
+                flight.run_finished.notify_all();
+            }
             if retire_ready(task) {
                 *state = None;
             }
@@ -798,7 +817,6 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                             // Cancellation is acknowledged by the service before restoring: it
                             // fences a delayed enter request for this same preparation ID.
                             restore_video(&app, &preparation_id, true).await?;
-                            publish(&app, &preparation_id, "准备已取消。".into());
                             Ok(())
                         }
                         Err(error) => {
@@ -812,6 +830,22 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                     }
                 }
                 .await;
+                let run_flight = owner.flight.as_ref().expect("cancellation owner").clone();
+                let run_id = preparation_id.clone();
+                let run_result =
+                    tauri::async_runtime::spawn_blocking(move || run_flight.wait_for_run(&run_id))
+                        .await
+                        .map_err(|_| "准备收尾等待未完成。".to_string())
+                        .and_then(|result| result);
+                let outcome = match (outcome, run_result) {
+                    (Ok(()), Ok(())) => restore_video(&app, &preparation_id, true).await,
+                    (Err(error), Ok(())) => Err(error),
+                    (Ok(()), Err(error)) => Err(error),
+                    (Err(error), Err(wait)) => Err(format!("{error} 准备收尾未确认：{wait}")),
+                };
+                if outcome.is_ok() {
+                    publish(&app, &preparation_id, "准备已取消。".into());
+                }
                 owner.complete(outcome);
             });
             flight
