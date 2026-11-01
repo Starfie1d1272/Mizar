@@ -11,6 +11,8 @@ struct Task {
     running: bool,
     cancelled: bool,
     cancellation_confirmed: bool,
+    cancellation: Option<Arc<CancellationFlight>>,
+    retire_requested: bool,
     obs: bool,
     obs_owned: bool,
     gsi: bool,
@@ -24,6 +26,128 @@ struct Task {
     message: String,
 }
 static TASK: Mutex<Option<Task>> = Mutex::new(None);
+// Cancellation belongs to the task; concurrent callers share its result.
+#[derive(Default)]
+struct CancellationFlight {
+    result: Mutex<Option<Result<(), String>>>,
+    completed: std::sync::Condvar,
+    run_finished: std::sync::Condvar,
+}
+impl CancellationFlight {
+    fn wait(&self) -> Result<(), String> {
+        let mut result = self.result.lock().map_err(|_| "取消状态不可用。")?;
+        while result.is_none() {
+            result = self
+                .completed
+                .wait(result)
+                .map_err(|_| "取消状态不可用。")?;
+        }
+        result.as_ref().expect("completed cancellation").clone()
+    }
+    fn wait_for_run(&self, id: &str) -> Result<(), String> {
+        let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+        loop {
+            match state.as_ref().filter(|task| task.id == id) {
+                Some(task) if task.running => {
+                    state = self
+                        .run_finished
+                        .wait(state)
+                        .map_err(|_| "准备状态不可用。")?;
+                }
+                Some(_) => return Ok(()),
+                None => return Err("本次准备任务不可用。".into()),
+            }
+        }
+    }
+    fn complete(&self, outcome: Result<(), String>) {
+        let mut result = self
+            .result
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *result = Some(outcome);
+        self.completed.notify_all();
+    }
+}
+fn retire_ready(task: &Task) -> bool {
+    task.retire_requested
+        && !task.running
+        && task.cancellation.is_none()
+        && (task.cancellation_confirmed || task.entered || !task.cancelled)
+        && (task.entered || task.video_transaction.is_none())
+}
+struct CancellationOwner {
+    id: String,
+    flight: Option<Arc<CancellationFlight>>,
+}
+impl CancellationOwner {
+    fn complete(&mut self, outcome: Result<(), String>) {
+        let Some(flight) = self.flight.take() else {
+            return;
+        };
+        if let Ok(mut state) = TASK.lock() {
+            if let Some(task) = state.as_mut().filter(|task| {
+                task.id == self.id
+                    && task
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &flight))
+            }) {
+                if outcome.is_ok() {
+                    task.cancellation_confirmed = true;
+                }
+                task.cancellation = None;
+                if retire_ready(task) {
+                    *state = None;
+                }
+            }
+        }
+        flight.complete(outcome);
+    }
+}
+impl Drop for CancellationOwner {
+    fn drop(&mut self) {
+        self.complete(Err("取消未完成，请重试。".into()));
+    }
+}
+enum CancellationClaim {
+    Complete,
+    Running(Arc<CancellationFlight>),
+    Start(Arc<CancellationFlight>),
+}
+fn claim_cancellation(id: &str) -> Result<CancellationClaim, String> {
+    let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+    let task = state
+        .as_mut()
+        .filter(|task| task.id == id)
+        .ok_or("本次准备任务不可用。")?;
+    if let Some(flight) = &task.cancellation {
+        return Ok(CancellationClaim::Running(flight.clone()));
+    }
+    if task.entered {
+        return Err("制作已进入，请退出工作台。".into());
+    }
+    if task.cancellation_confirmed && task.video_transaction.is_none() {
+        return Ok(CancellationClaim::Complete);
+    }
+    task.cancellation_confirmed = false;
+    task.cancelled = true;
+    let flight = Arc::new(CancellationFlight::default());
+    task.cancellation = Some(flight.clone());
+    Ok(CancellationClaim::Start(flight))
+}
+fn mark_run_finished(id: &str) {
+    if let Ok(mut state) = TASK.lock() {
+        if let Some(task) = state.as_mut().filter(|task| task.id == id) {
+            task.running = false;
+            if let Some(flight) = &task.cancellation {
+                flight.run_finished.notify_all();
+            }
+            if retire_ready(task) {
+                *state = None;
+            }
+        }
+    }
+}
 // Only the in-flight OBS ensure request is cancellable; cleanup requests must finish.
 static OBS_REQUEST: Mutex<Option<(String, TcpStream)>> = Mutex::new(None);
 
@@ -516,22 +640,29 @@ fn spawn(app: tauri::AppHandle, id: String) {
             }
             publish(&app, &id, error);
         }
-        update(&id, |t| t.running = false);
+        mark_run_finished(&id);
     });
+}
+fn request_retirement() {
+    if let Ok(mut state) = TASK.lock() {
+        if let Some(task) = state.as_mut() {
+            task.retire_requested = true;
+            if retire_ready(task) {
+                *state = None;
+            }
+        }
+    }
 }
 /// A successful native workspace exit retires its preparation owner for every caller.
 pub(crate) fn retire_after_exit() {
-    if let Ok(mut state) = TASK.lock() {
-        *state = None;
-    }
+    request_retirement();
     if let Ok(mut active) = OBS_REQUEST.lock() {
         if let Some((_, stream)) = active.take() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
     }
 }
-#[tauri::command]
-pub(crate) fn preparation_start(
+fn preparation_start(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,
@@ -539,6 +670,7 @@ pub(crate) fn preparation_start(
     preserve_settings: bool,
     external_pid: Option<u32>,
     external_created: Option<String>,
+    ticket: u64,
 ) -> Result<(), String> {
     if window.label() != "main" {
         return Err("请在准备中心启动工作台。".into());
@@ -558,6 +690,9 @@ pub(crate) fn preparation_start(
     };
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
     if let Some(existing) = state.as_mut() {
+        if existing.retire_requested || existing.cancellation.is_some() {
+            return Err("原准备任务正在收尾，请稍后重试。".into());
+        }
         if !existing.cancelled {
             if existing.revision != expected_revision
                 || (existing.preserve != preserve_settings
@@ -566,6 +701,8 @@ pub(crate) fn preparation_start(
             {
                 return Err("已有准备任务，请重试或取消原任务。".into());
             }
+            app.state::<production_exit::ExitGate>()
+                .check_ticket(preparation_ticket(&app, &existing.id)?)?;
             if existing.running {
                 return Ok(());
             }
@@ -580,7 +717,14 @@ pub(crate) fn preparation_start(
         if existing.running {
             return Err("原准备任务正在取消，请稍后重试。".into());
         }
+        if !existing.cancellation_confirmed || existing.video_transaction.is_some() {
+            return Err("原准备任务取消或恢复未确认，请重试取消。".into());
+        }
     }
+    *app.state::<HostState>()
+        .entry_ticket
+        .lock()
+        .map_err(|_| "启动状态不可用。")? = Some((preparation_id.clone(), ticket));
     *state = Some(Task {
         id: preparation_id.clone(),
         revision: expected_revision,
@@ -589,6 +733,8 @@ pub(crate) fn preparation_start(
         running: true,
         cancelled: false,
         cancellation_confirmed: false,
+        cancellation: None,
+        retire_requested: false,
         obs: false,
         obs_owned: false,
         gsi: false,
@@ -609,15 +755,11 @@ pub(crate) fn preparation_start(
 pub(crate) fn preparation_status() -> Result<Value, String> {
     Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message})).unwrap_or(Value::Null))
 }
-#[tauri::command]
-pub(crate) fn preparation_retry(
-    app: tauri::AppHandle,
-    preparation_id: String,
-) -> Result<(), String> {
+fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
     let task = state
         .as_mut()
-        .filter(|t| t.id == preparation_id && !t.cancelled)
+        .filter(|t| t.id == preparation_id && !t.cancelled && !t.retire_requested)
         .ok_or("本次准备任务不可用。")?;
     if task.running {
         return Ok(());
@@ -628,64 +770,392 @@ pub(crate) fn preparation_retry(
     spawn(app, preparation_id);
     Ok(())
 }
+async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
+    let flight = match claim_cancellation(&preparation_id)? {
+        CancellationClaim::Complete => return Ok(()),
+        CancellationClaim::Running(flight) => flight,
+        CancellationClaim::Start(flight) => {
+            let job_flight = flight.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut owner = CancellationOwner {
+                    id: preparation_id.clone(),
+                    flight: Some(job_flight),
+                };
+                let outcome: Result<(), String> = async {
+                    if let Ok(mut active) = OBS_REQUEST.lock() {
+                        if active.as_ref().is_some_and(|(id, _)| id == &preparation_id) {
+                            if let Some((_, stream)) = active.take() {
+                                let _ = stream.shutdown(std::net::Shutdown::Both);
+                            }
+                        }
+                    }
+                    let cancellation = http(
+                        &app,
+                        "POST",
+                        "/operator/preparation-cancel",
+                        json!({"preparationId":preparation_id}),
+                    )
+                    .await;
+                    let host = app.clone();
+                    let id = preparation_id.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        host.state::<preparation_gate::PreparationGate>().cancel(id)
+                    })
+                    .await
+                    .map_err(|_| "取消准备未完成。")??;
+                    match cancellation
+                        .and_then(|value| crate::lifecycle_contract::cancellation_entered(&value))
+                    {
+                        Ok(true) => {
+                            update(&preparation_id, |task| task.entered = true);
+                            publish(&app, &preparation_id, "制作已进入，请退出工作台。".into());
+                            Err("制作已进入，请退出工作台。".into())
+                        }
+                        Ok(false) => {
+                            let window = main_window(&app)?;
+                            cancel_managed_camera(window, app.clone()).await?;
+                            // Cancellation is acknowledged by the service before restoring: it
+                            // fences a delayed enter request for this same preparation ID.
+                            restore_video(&app, &preparation_id, true).await?;
+                            Ok(())
+                        }
+                        Err(error) => {
+                            publish(
+                                &app,
+                                &preparation_id,
+                                "取消结果未确认，请核对制作状态。".into(),
+                            );
+                            Err(error)
+                        }
+                    }
+                }
+                .await;
+                let run_flight = owner.flight.as_ref().expect("cancellation owner").clone();
+                let run_id = preparation_id.clone();
+                let run_result =
+                    tauri::async_runtime::spawn_blocking(move || run_flight.wait_for_run(&run_id))
+                        .await
+                        .map_err(|_| "准备收尾等待未完成。".to_string())
+                        .and_then(|result| result);
+                let outcome = match (outcome, run_result) {
+                    (Ok(()), Ok(())) => restore_video(&app, &preparation_id, true).await,
+                    (Err(error), Ok(())) => Err(error),
+                    (Ok(()), Err(error)) => Err(error),
+                    (Err(error), Err(wait)) => Err(format!("{error} 准备收尾未确认：{wait}")),
+                };
+                if outcome.is_ok() {
+                    publish(&app, &preparation_id, "准备已取消。".into());
+                }
+                owner.complete(outcome);
+            });
+            flight
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || flight.wait())
+        .await
+        .map_err(|_| "取消等待未完成。".to_string())?
+}
+
 #[tauri::command]
-pub(crate) async fn preparation_cancel(
+pub(crate) async fn cancel_workspace_entry(
+    app: tauri::AppHandle,
+    entry_id: Option<String>,
+) -> Result<(), String> {
+    let task = if let Some(id) = &entry_id {
+        app.state::<preparation_gate::PreparationGate>()
+            .cancel(id.clone())?;
+        let (matched, task) = app.state::<EntryIntent>().cancel_with(id, snapshot)?;
+        if !matched && task.as_ref().is_some_and(|task| task.id != *id) {
+            return Err("准备任务已变化，请重新取消。".into());
+        }
+        task
+    } else {
+        snapshot()?
+    };
+    if let Some(task) = task {
+        preparation_cancel(app, task.id).await?;
+    } else if entry_id.is_some() {
+        let production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+        if crate::lifecycle_contract::production_view(&production)?.mode != "preparation" {
+            return Err("制作已进入，请退出工作台。".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn retry_workspace_entry(app: tauri::AppHandle) -> Result<(), String> {
+    let task = snapshot()?.ok_or("本次准备任务不可用，请重新进入工作台。")?;
+    preparation_retry(app, task.id)
+}
+
+fn present_entry(
+    app: &tauri::AppHandle,
+    id: &str,
+    ticket: u64,
+    expected_url: &str,
+) -> Result<(), String> {
+    app.state::<preparation_gate::PreparationGate>()
+        .commit(Some(id), || {
+            present_production_inner_checked(
+                app,
+                true,
+                Some((expected_url.to_owned(), id.to_owned())),
+                Some(ticket),
+            )
+        })
+}
+
+fn present_existing(
+    app: &tauri::AppHandle,
+    id: &str,
+    ticket: u64,
+    expected_url: &str,
+    view: &crate::lifecycle_contract::ProductionView,
+) -> Result<(), String> {
+    if view.mode == "hidden" {
+        let resumed = app
+            .state::<preparation_gate::PreparationGate>()
+            .commit(Some(id), || {
+                app.state::<production_exit::ExitGate>().commit(ticket, || {
+                    app.state::<EntryIntent>().commit(id, false, || {
+                        request(
+                            app,
+                            "POST",
+                            "/operator/production",
+                            json!({"action":"enter","expectedRevision":view.revision}),
+                        )
+                    })
+                })
+            })?;
+        if crate::lifecycle_contract::production_view(&resumed)?.mode != "live" {
+            return Err("制作进入状态未确认。".into());
+        }
+    }
+    present_entry(app, id, ticket, expected_url)
+}
+
+#[tauri::command]
+pub(crate) async fn enter_workspace(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,
+    document: String,
+    expected_revision: Option<String>,
+    expected_demo_request: Option<String>,
+    manual: bool,
+    preserve_settings: bool,
+    external_pid: Option<u32>,
+    external_created: Option<String>,
 ) -> Result<(), String> {
-    {
-        let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
-        let task = state
-            .as_mut()
-            .filter(|t| t.id == preparation_id)
-            .ok_or("本次准备任务不可用。")?;
-        task.cancelled = true;
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
     }
-    if let Ok(mut active) = OBS_REQUEST.lock() {
-        if active.as_ref().is_some_and(|(id, _)| id == &preparation_id) {
-            if let Some((_, stream)) = active.take() {
-                let _ = stream.shutdown(std::net::Shutdown::Both);
+    let ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
+    let expected_url = window
+        .url()
+        .map_err(|_| "准备中心页面不可用。")?
+        .to_string();
+    begin_entry(
+        window.clone(),
+        app.clone(),
+        preparation_id.clone(),
+        document,
+    )?;
+    let intent_app = app.clone();
+    let intent_id = preparation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(async move {
+            app.state::<preparation_gate::PreparationGate>()
+                .check(Some(&preparation_id))?;
+            let mut production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+            let mut view = crate::lifecycle_contract::production_view(&production)?;
+            let demo = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
+            if demo["active"] == true {
+                let request_id = demo["requestId"]
+                    .as_str()
+                    .ok_or("试播状态未确认，请重试。")?
+                    .to_owned();
+                if expected_demo_request
+                    .as_deref()
+                    .is_some_and(|id| id != request_id)
+                {
+                    return Err("试播状态已变化，请重新进入。".into());
+                }
+                if external_pid.is_some() || external_created.is_some() {
+                    return Err("请先结束 Demo 试播，再选择游戏。".into());
+                }
+                if let Some(existing) = app
+                    .state::<EntryIntent>()
+                    .commit(&preparation_id, false, snapshot)?
+                    .filter(|task| !task.cancelled)
+                {
+                    if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
+                        let task_entered = entered(&app, &existing.id)
+                            .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
+                        let actual = http(&app, "GET", "/local/v1/production", json!({}))
+                            .await
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
+                        let actual_view = crate::lifecycle_contract::production_view(&actual)
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
+                        if task_entered && actual_view.mode != "preparation" {
+                            return present_existing(
+                                &app,
+                                &preparation_id,
+                                ticket,
+                                &expected_url,
+                                &actual_view,
+                            );
+                        }
+                        return Err(error);
+                    }
+                }
+                let result = async {
+                    app.state::<preparation_gate::PreparationGate>()
+                        .check(Some(&preparation_id))?;
+                    let camera = enter_demo_test(
+                        window.clone(),
+                        app.clone(),
+                        request_id.clone(),
+                        preparation_id.clone(),
+                        ticket,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    app.state::<production_exit::ExitGate>()
+                        .check_ticket(ticket)?;
+                    present_demo_test(
+                        window.clone(),
+                        app.clone(),
+                        request_id.clone(),
+                        expected_url.clone(),
+                        preparation_id.clone(),
+                        Some(ticket),
+                    )
+                    .await?;
+                    if camera {
+                        let state = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
+                        if state["active"] != true
+                            || state["phase"] != "playing"
+                            || state["requestId"] != request_id
+                        {
+                            return Err("试播状态已变化，请重新进入。".into());
+                        }
+                        app.state::<preparation_gate::PreparationGate>().commit(
+                            Some(&preparation_id),
+                            || {
+                                app.state::<production_exit::ExitGate>().commit(ticket, || {
+                                    request(
+                                        &app,
+                                        "POST",
+                                        "/operator/orchestration",
+                                        json!({"action":"connect"}),
+                                    )
+                                })
+                            },
+                        )?;
+                    }
+                    Ok(())
+                }
+                .await;
+                return result;
             }
-        }
-    }
-    let cancellation = http(
-        &app,
-        "POST",
-        "/operator/preparation-cancel",
-        json!({"preparationId":preparation_id}),
-    )
-    .await;
-    let host = app.clone();
-    let id = preparation_id.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        host.state::<preparation_gate::PreparationGate>().cancel(id)
+            if expected_demo_request.is_some() {
+                return Err("试播状态已变化，请重新进入。".into());
+            }
+            if view.mode != "preparation" {
+                return present_existing(&app, &preparation_id, ticket, &expected_url, &view);
+            }
+            if expected_revision
+                .as_deref()
+                .is_some_and(|revision| revision != view.revision)
+            {
+                return Err("制作状态已变化，请刷新后重试。".into());
+            }
+            if manual {
+                if let Some(existing) =
+                    app.state::<EntryIntent>()
+                        .commit(&preparation_id, false, snapshot)?
+                {
+                    if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
+                        let task_entered = entered(&app, &existing.id)
+                            .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
+                        production = http(&app, "GET", "/local/v1/production", json!({}))
+                            .await
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
+                        view = crate::lifecycle_contract::production_view(&production)
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
+                        if task_entered && view.mode != "preparation" {
+                            return present_existing(
+                                &app,
+                                &preparation_id,
+                                ticket,
+                                &expected_url,
+                                &view,
+                            );
+                        }
+                        return Err(error);
+                    }
+                }
+                production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+                view = crate::lifecycle_contract::production_view(&production)?;
+                if view.mode != "preparation" {
+                    return present_existing(&app, &preparation_id, ticket, &expected_url, &view);
+                }
+                if expected_revision
+                    .as_deref()
+                    .is_some_and(|revision| revision != view.revision)
+                {
+                    return Err("制作状态已变化，请刷新后重试。".into());
+                }
+                app.state::<production_exit::ExitGate>()
+                    .check_ticket(ticket)?;
+                let entered =
+                    app.state::<preparation_gate::PreparationGate>().commit(
+                        Some(&preparation_id),
+                        || {
+                            app.state::<production_exit::ExitGate>().commit(ticket, || {
+                            app.state::<EntryIntent>().commit(&preparation_id, false, || request(
+                                &app,
+                                "POST",
+                                "/operator/production",
+                                json!({"action":"enter","expectedRevision":view.revision}),
+                            ))
+                        })
+                        },
+                    )?;
+                if crate::lifecycle_contract::production_view(&entered)?.mode != "live" {
+                    return Err("制作进入状态未确认。".into());
+                }
+                return present_entry(&app, &preparation_id, ticket, &expected_url);
+            }
+            app.state::<preparation_gate::PreparationGate>()
+                .commit(Some(&preparation_id), || {
+                    app.state::<production_exit::ExitGate>().commit(ticket, || {
+                        app.state::<EntryIntent>()
+                            .commit(&preparation_id, true, || {
+                                preparation_start(
+                                    window,
+                                    app.clone(),
+                                    preparation_id.clone(),
+                                    view.revision,
+                                    preserve_settings,
+                                    external_pid,
+                                    external_created,
+                                    ticket,
+                                )
+                            })
+                    })
+                })
+        })
     })
     .await
-    .map_err(|_| "取消准备未完成。")??;
-    match cancellation.and_then(|value| crate::lifecycle_contract::cancellation_entered(&value)) {
-        Ok(true) => {
-            update(&preparation_id, |task| task.entered = true);
-            publish(&app, &preparation_id, "制作已进入，请退出工作台。".into());
-            Err("制作已进入，请退出工作台。".into())
-        }
-        Ok(false) => {
-            update(&preparation_id, |task| task.cancellation_confirmed = true);
-            if let Ok(window) = main_window(&app) {
-                cancel_managed_camera(window, app.clone()).await?;
-            }
-            // Cancellation is acknowledged by the service before restoring: it
-            // fences a delayed enter request for this same preparation ID.
-            restore_video(&app, &preparation_id, true).await?;
-            publish(&app, &preparation_id, "准备已取消。".into());
-            Ok(())
-        }
-        Err(error) => {
-            publish(
-                &app,
-                &preparation_id,
-                "取消结果未确认，请核对制作状态。".into(),
-            );
-            Err(error)
-        }
-    }
+    .map_err(|_| "进入工作台未完成。".to_string())
+    .and_then(|result| result);
+    intent_app.state::<EntryIntent>().finish(&intent_id);
+    result
 }
