@@ -19,6 +19,12 @@ import {
 } from '@mizar/core/runtime';
 import type { MatchContext } from '@mizar/core/match-context';
 import {
+  createIdentityResolver,
+  identityEvidenceFromObservation,
+  hasObservedLineupDifference,
+  type IdentityResolution,
+} from '@mizar/core/identity';
+import {
   addSeriesProgressIssue,
   createSeriesProgress,
   isSeriesProgressCheckpointCompatible,
@@ -37,6 +43,7 @@ import {
 } from '@mizar/core/series-progress';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { ContextOrigin } from '../match-context/index.js';
+import type { CstvSourceHealth } from '../telemetry/cstv-source-manager.js';
 
 export const PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX = 32;
 export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Object.freeze({
@@ -71,14 +78,20 @@ export interface ProgramRuntimeSnapshot {
   readonly continuityPolicy: RuntimeContinuityPolicy;
   readonly current: RuntimeState;
   readonly seriesProgress: SeriesProgress | null;
+  readonly identity: IdentityResolution;
   readonly lastDisposition?: RuntimeDisposition;
   readonly recentTransitions: readonly RuntimeTransition[];
 }
+
+export type ProgramCommitResult = RuntimeReduceResult & {
+  readonly snapshot: ProgramRuntimeSnapshot;
+};
 
 export interface SeriesOperatorCommandResult {
   readonly ok: boolean;
   readonly progress: SeriesProgress | null;
   readonly code: 'series_unbound' | 'operator_bind_applied' | 'operator_bind_rejected';
+  readonly snapshot: ProgramRuntimeSnapshot;
 }
 
 /** The sole Companion composition owner for the mutable Core RuntimeState. */
@@ -90,6 +103,11 @@ export class ProgramRuntime {
   private readonly seriesProgressCheckpointStore: SeriesProgressCheckpointStore | undefined;
   private readonly onSeriesProgressDiagnostic:
     ((diagnostic: { readonly code: string }) => void) | undefined;
+  private readonly identityResolver = createIdentityResolver();
+  private identityContext: MatchContext | undefined;
+  private identityOrigin: ContextOrigin | undefined;
+  private lastIdentityEvidence: { sourceGeneration: number; receiveSequence: number } | undefined;
+  private identity: IdentityResolution = this.identityResolver.getResolution();
   private seriesContext: MatchContext | undefined;
   private seriesOrigin: ContextOrigin | undefined;
   private fixtureSeriesProgressActive = false;
@@ -129,8 +147,71 @@ export class ProgramRuntime {
     );
   }
 
+  bindContext(context: MatchContext | undefined, origin?: ContextOrigin): ProgramRuntimeSnapshot {
+    if (this.identityContext !== context) {
+      this.identityContext = context;
+      this.lastIdentityEvidence = undefined;
+      if (context) this.identityResolver.bind(context);
+      else this.identityResolver.unbind();
+    }
+    this.identityOrigin = origin;
+    this.commitFacts();
+    return this.getSnapshot();
+  }
+
+  private commitFacts(): void {
+    const context = this.identityContext;
+    const cursor = this.state.programSource.lastAccepted;
+    const generation = this.state.programSource.generation;
+    const observation = this.state.programTelemetry;
+    if (!context) this.identity = this.identityResolver.unbind();
+    else if (!observation || !cursor || cursor.generation !== generation) {
+      this.identityResolver.bind(context);
+      this.identity = this.identityResolver.getResolution();
+    } else {
+      const isNew =
+        !this.lastIdentityEvidence ||
+        this.lastIdentityEvidence.sourceGeneration !== generation ||
+        this.lastIdentityEvidence.receiveSequence !== cursor.sequence;
+      const current = this.identityResolver.getResolution();
+      if (
+        (current.sourceGeneration !== generation || current.mapEpoch !== this.state.map.epoch) &&
+        !isNew
+      ) {
+        this.identityResolver.bind(context);
+        this.identity = this.identityResolver.getResolution();
+      } else {
+        this.identity = this.identityResolver.resolve(
+          identityEvidenceFromObservation(observation, generation, this.state.map.epoch),
+        );
+        this.lastIdentityEvidence = {
+          sourceGeneration: generation,
+          receiveSequence: cursor.sequence,
+        };
+      }
+    }
+    const i = this.identity;
+    const valid =
+      (i.capabilities.identityDependentResult || hasObservedLineupDifference(i)) &&
+      i.sourceGeneration === generation &&
+      i.mapEpoch === this.state.map.epoch &&
+      i.sideMapping.a !== 'unknown' &&
+      i.sideMapping.b !== 'unknown' &&
+      i.sideMapping.a !== i.sideMapping.b;
+    const proof: SeriesSideProof | null = valid
+      ? {
+          sourceGeneration: generation,
+          mapEpoch: this.state.map.epoch,
+          ...(hasObservedLineupDifference(i) ? { displayOnly: true } : {}),
+          a: i.sideMapping.a as 'CT' | 'T',
+          b: i.sideMapping.b as 'CT' | 'T',
+        }
+      : null;
+    this.synchronizeSeriesProgress(context, proof, this.identityOrigin);
+  }
+
   /** Switch the sole runtime to a fresh isolated session; no telemetry survives. */
-  resetSession(transient: boolean): void {
+  resetSession(transient: boolean): ProgramRuntimeSnapshot {
     const previous = this.state;
     const wasTransient = this.transientSession;
     const priorOwner = this.executionOwner;
@@ -181,6 +262,9 @@ export class ProgramRuntime {
     this.restoredExecutionProof = undefined;
     this.restoredExecutionMatchId = undefined;
     this.unverifiedSeriesProgress = undefined;
+    this.lastIdentityEvidence = undefined;
+    this.commitFacts();
+    return this.getSnapshot();
   }
 
   /** Restore identities only before the first observation; never restore telemetry or clocks. */
@@ -209,23 +293,48 @@ export class ProgramRuntime {
       playerStats: createMapPlayerStatsAccumulator(input.mapEpoch),
       objectiveTiming: createObjectiveTimingState(input.programSourceGeneration, input.mapEpoch),
     };
+    this.commitFacts();
   }
 
-  acceptObservation(observation: TelemetryObservation): RuntimeReduceResult {
+  acceptObservation(
+    observation: TelemetryObservation,
+    unverifiedNewExecution = false,
+  ): ProgramCommitResult {
     this.fixtureTelemetrySuppressed = false;
-    return this.apply({
-      kind: 'program-telemetry',
-      sourceGeneration: this.state.programSource.generation,
-      observation,
-    });
+    return this.apply(
+      {
+        kind: 'program-telemetry',
+        sourceGeneration: this.state.programSource.generation,
+        observation,
+      },
+      unverifiedNewExecution,
+    );
   }
 
-  /** Accept only batches already sealed by a source that proves round coverage. */
-  acceptTrustedRoundEvents(events: TrustedProgramRoundEvents): RuntimeReduceResult {
-    return this.apply({ kind: 'program-round-events', events });
+  /** Accept only covered program events bound to the current GSI execution. */
+  acceptTrustedRoundEvents(
+    input: {
+      readonly programSourceGeneration: number;
+      readonly mapName: string;
+      readonly events: TrustedProgramRoundEvents;
+    },
+    source: CstvSourceHealth<'program'>,
+  ): ProgramCommitResult | undefined {
+    if (
+      this.state.programSource.lastAccepted?.generation !== this.state.programSource.generation ||
+      this.state.programSource.generation !== input.programSourceGeneration ||
+      this.state.map.epoch !== input.events.mapEpoch ||
+      this.state.map.name !== input.mapName ||
+      source.role !== 'program' ||
+      source.generation !== input.events.source.generation ||
+      source.mapName !== input.mapName
+    )
+      return undefined;
+    const result = this.apply({ kind: 'program-round-events', events: input.events });
+    return result.disposition.kind === 'accepted' ? result : undefined;
   }
 
-  advanceProgramSourceGeneration(at: RuntimeTime): RuntimeReduceResult {
+  advanceProgramSourceGeneration(at: RuntimeTime): ProgramCommitResult {
     return this.apply({
       kind: 'advance-program-source-generation',
       nextGeneration: this.state.programSource.generation + 1,
@@ -233,7 +342,7 @@ export class ProgramRuntime {
     });
   }
 
-  resetMapExecution(reason: MapExecutionResetReason, at: RuntimeTime): RuntimeReduceResult {
+  resetMapExecution(reason: MapExecutionResetReason, at: RuntimeTime): ProgramCommitResult {
     return this.apply({
       kind: 'reset-map-execution',
       reason,
@@ -254,7 +363,7 @@ export class ProgramRuntime {
    * single Companion-owned SeriesProgress state. The identity/lineup owners
    * remain outside this class; they provide evidence only.
    */
-  synchronizeSeriesProgress(
+  private synchronizeSeriesProgress(
     context: MatchContext | undefined,
     sideProof: SeriesSideProof | null,
     origin?: ContextOrigin,
@@ -509,7 +618,14 @@ export class ProgramRuntime {
   }
 
   executeOperatorCommand(command: OperatorCommand): SeriesOperatorCommandResult {
-    this.synchronizeSeriesProgress(this.seriesContext, this.seriesSideProof, this.seriesOrigin);
+    const result = this.applyOperatorCommand(command);
+    return { ...result, snapshot: this.getSnapshot() };
+  }
+
+  private applyOperatorCommand(
+    command: OperatorCommand,
+  ): Omit<SeriesOperatorCommandResult, 'snapshot'> {
+    this.commitFacts();
     if (this.seriesContext === undefined || this.seriesProgress === undefined) {
       return { ok: false, progress: null, code: 'series_unbound' };
     }
@@ -648,7 +764,7 @@ export class ProgramRuntime {
     matchId: string,
     sourceId: string,
     observation: TelemetryObservation,
-  ): { boundary?: RuntimeReduceResult } | undefined {
+  ): { boundary?: ProgramCommitResult } | undefined {
     const preview = reduceRuntime(
       this.state,
       {
@@ -664,10 +780,18 @@ export class ProgramRuntime {
       this.state.map.epoch > 0 &&
       this.state.map.name === observation.telemetry.map?.name &&
       !preview.transitions.some((transition) => transition.kind === 'map_execution_changed')
-        ? this.resetMapExecution('restore', {
-            utc: observation.receive.receivedAt,
-            monotonicMs: observation.receive.receivedMonotonicMs,
-          })
+        ? this.apply(
+            {
+              kind: 'reset-map-execution',
+              reason: 'restore',
+              at: {
+                utc: observation.receive.receivedAt,
+                monotonicMs: observation.receive.receivedMonotonicMs,
+              },
+            },
+            false,
+            true,
+          )
         : undefined;
     this.executionOwner = { matchId, fixture: false };
     this.executionConflict = false;
@@ -675,7 +799,8 @@ export class ProgramRuntime {
     this.unknownNewExecution = false;
     this.executionAwaitingObservation = true;
     this.managedSourceId = sourceId;
-    return boundary ? { boundary } : {};
+    this.commitFacts();
+    return boundary ? { boundary: { ...boundary, snapshot: this.getSnapshot() } } : {};
   }
 
   markSourceUnverified(): void {
@@ -736,12 +861,17 @@ export class ProgramRuntime {
       continuityPolicy: this.continuityPolicy,
       current: this.state,
       seriesProgress: this.seriesProgress ?? null,
+      identity: this.identity,
       ...(this.lastDisposition === undefined ? {} : { lastDisposition: this.lastDisposition }),
       recentTransitions: this.recentTransitions.slice(),
     };
   }
 
-  private apply(input: Parameters<typeof reduceRuntime>[1]): RuntimeReduceResult {
+  private apply(
+    input: Parameters<typeof reduceRuntime>[1],
+    unverifiedNewExecution = false,
+    deferFacts = false,
+  ): ProgramCommitResult {
     const result = reduceRuntime(this.state, input, this.continuityPolicy);
     this.state = result.state;
     if (result.transitions.some((transition) => transition.kind === 'map_execution_changed')) {
@@ -773,7 +903,13 @@ export class ProgramRuntime {
       const overflow = this.recentTransitions.length - PROGRAM_RUNTIME_RECENT_TRANSITIONS_MAX;
       if (overflow > 0) this.recentTransitions.splice(0, overflow);
     }
-    return result;
+    if (
+      unverifiedNewExecution &&
+      result.transitions.some((transition) => transition.kind === 'map_execution_changed')
+    )
+      this.markUnverifiedNewExecution();
+    if (!deferFacts && result.disposition.kind === 'accepted') this.commitFacts();
+    return { ...result, snapshot: this.getSnapshot() };
   }
 
   private queueSeriesEvents(transitions: readonly RuntimeTransition[]): void {

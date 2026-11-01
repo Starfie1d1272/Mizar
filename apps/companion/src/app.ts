@@ -697,6 +697,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   let waitingObserverMap: string | undefined;
   let observerDiagnosticKey = '';
   let observerDiagnosticLoggedAt = -Infinity;
+  programRuntime.bindContext(
+    demoRecovery ? undefined : outputBinding?.context,
+    demoRecovery ? undefined : outputBinding?.origin,
+  );
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
@@ -1000,9 +1004,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             options.rivalhubConnection?.bindingChanged?.(binding?.context.matchId ?? null);
             const previousOrigin = previousBindingOrigin;
             previousBindingOrigin = binding?.origin;
+            // Retire fixture state before committing the new binding.
+            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
+              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
+            }
             outputBinding = binding;
             outputService.setBinding(binding);
-            projectionCoordinator.setMatchContextBinding(binding);
+            const committed = programRuntime.bindContext(binding?.context, binding?.origin);
+            projectionCoordinator.setMatchContextBinding(binding, committed);
             if (
               statsProductionActive &&
               (binding?.origin === 'online' ||
@@ -1010,12 +1019,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             )
               void options.rivalhubConnection?.stats(statsTarget(binding.context));
             else options.rivalhubConnection?.clearStats();
-
-            // Leaving the Rivals sample by any route retires fixture runtime state
-            // without waiting for an explicit "stop rehearsal" action.
-            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
-              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
-            }
 
             programCueCoordinator.afterRuntimeMutation();
           },
@@ -1027,6 +1030,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     null;
   let slowProcessingCount = 0;
   const slowProcessing: { time: string; sequence: number; durationMs: number }[] = [];
+  const publishRuntimeCommit = (
+    result: Parameters<typeof projectionCoordinator.afterRuntimeMutation>[0],
+  ) => {
+    const bundle = projectionCoordinator.afterRuntimeMutation(result);
+    if (result) outputService.afterRuntimeMutation(result, bundle, outputBinding);
+    programCueCoordinator.afterRuntimeMutation(result);
+    return bundle;
+  };
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
@@ -1050,20 +1061,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           monotonicMs: observation.receive.receivedMonotonicMs,
           utc: observation.receive.receivedAt,
         });
-        const continuityBundle = projectionCoordinator.afterRuntimeMutation(changed);
-        outputService.afterRuntimeMutation(changed, continuityBundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(changed);
+        publishRuntimeCommit(changed);
       }
       outputService.beforeRuntimeMutation();
-      const accepted = programRuntime.acceptObservation(observation);
-      if (
-        managedSourceId &&
-        !managedActivation &&
-        !managedSource.sourceMatchesSelection(managedSourceId) &&
-        accepted.transitions.some((transition) => transition.kind === 'map_execution_changed')
-      )
-        programRuntime.markUnverifiedNewExecution();
-      const result =
+      const accepted = programRuntime.acceptObservation(
+        observation,
+        Boolean(
+          managedSourceId &&
+          !managedActivation &&
+          !managedSource.sourceMatchesSelection(managedSourceId),
+        ),
+      );
+      let result =
         managedBoundary && accepted.disposition.kind === 'accepted'
           ? { ...accepted, transitions: [...managedBoundary.transitions, ...accepted.transitions] }
           : accepted;
@@ -1073,15 +1082,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           disposition: result.disposition,
         });
       if (sampleStageBinding) {
-        programRuntime.executeOperatorCommand({
+        const command = programRuntime.executeOperatorCommand({
           kind: 'bind-current-map-execution-to-series-map',
           mapOrder: sampleStageBinding.mapOrder,
           reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
         });
+        result = { ...result, snapshot: command.snapshot };
       }
-      const bundle = projectionCoordinator.afterRuntimeMutation(result);
-      outputService.afterRuntimeMutation(result, bundle, outputBinding);
-      programCueCoordinator.afterRuntimeMutation(result);
+      publishRuntimeCommit(result);
       debugEvidenceStore.recordNormalizedObservation(observation);
       debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
       demoTest?.observationAccepted();
@@ -2456,13 +2464,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 throw new Error('接收链路代际推进失败。');
               }
               outputService.beforeRuntimeMutation();
-              projectionCoordinator.afterRuntimeMutation(generationAdvance);
-              outputService.afterRuntimeMutation(
-                generationAdvance,
-                projectionCoordinator.getCurrent(),
-                outputBinding,
-              );
-              programCueCoordinator.afterRuntimeMutation(generationAdvance);
+              publishRuntimeCommit(generationAdvance);
               debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
               recorder = result.nextRecorder;
               await previous.finalize();
@@ -2476,9 +2478,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         outputService.beforeRuntimeMutation();
         debugEvidenceStore.clearCurrentTelemetry();
         debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-        const bundle = projectionCoordinator.afterRuntimeMutation(result);
-        outputService.afterRuntimeMutation(result, bundle, outputBinding);
-        programCueCoordinator.afterRuntimeMutation(result);
+        publishRuntimeCommit(result);
       },
       ...(options.onQualificationFinish === undefined
         ? {}
@@ -2489,7 +2489,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
 
   registerOperatorCommandRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
-    execute: (command) => projectionCoordinator.executeOperatorCommand(command),
+    execute: (command) => {
+      const result = programRuntime.executeOperatorCommand(command);
+      projectionCoordinator.refresh(false, result.snapshot);
+      programCueCoordinator.afterRuntimeMutation();
+      return result;
+    },
     getBindingState: () =>
       matchContextController?.getActiveBinding()
         ? {

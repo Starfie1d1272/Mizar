@@ -91,6 +91,7 @@ export function createProductionReplayComposition(options: ProductionReplayCompo
   const runtime = createProgramRuntime(options.producerInstanceId, {
     continuityPolicy: { staleAfterMs: 1_000_000_000 },
   });
+  runtime.bindContext(options.context, 'fixture');
   const coordinator = createProjectionCoordinator({
     predictionPublishCoalescing: false,
     programRuntime: runtime,

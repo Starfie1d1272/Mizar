@@ -1,14 +1,10 @@
 import { BombDamageResources } from './bomb-damage-resources.js';
 import {
-  hasObservedLineupDifference,
   emptyActiveLineup,
-  identityEvidenceFromObservation,
-  createIdentityResolver,
   resolveActiveLineup,
   type ActiveLineupOverride,
   type ActiveLineupResolution,
   type IdentityResolution,
-  type IdentityResolver,
 } from '@mizar/core/identity';
 import {
   projectObserverAssist,
@@ -19,12 +15,7 @@ import {
   type ObserverAssistProjection,
   type ProgramProjection,
 } from '@mizar/core/projection';
-import type { OperatorCommand, SeriesSideProof } from '@mizar/core/series-progress';
-import {
-  getObjectiveClockLeaseMs,
-  type RuntimeReduceResult,
-  type TrustedProgramRoundEvents,
-} from '@mizar/core/runtime';
+import { getObjectiveClockLeaseMs, type RuntimeReduceResult } from '@mizar/core/runtime';
 import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
 import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
@@ -40,9 +31,8 @@ import { projectRadarFrame, type RadarFrame } from '@mizar/radar';
 import { CS2_ITEM_CATALOG } from '@mizar/cs2-assets';
 
 import type { MatchContextBinding } from '../match-context/index.js';
-import type { MatchContext } from '@mizar/core/match-context';
 import type { CstvSourceManagers } from '../telemetry/cstv-source-manager.js';
-import type { ProgramRuntime, SeriesOperatorCommandResult } from '../runtime/program-runtime.js';
+import type { ProgramRuntime, ProgramRuntimeSnapshot } from '../runtime/program-runtime.js';
 import {
   createLocalChannelPublisher,
   type LocalChannelPublisher,
@@ -86,7 +76,6 @@ export interface ProjectionCoordinatorOptions {
   readonly avatars?: { get(id: string): string | null; request(ids: readonly string[]): void };
   readonly programRuntime: ProgramRuntime;
   readonly cstvSources: CstvSourceManagers;
-  readonly identityResolver?: IdentityResolver;
   readonly activeLineupOverride?: ActiveLineupOverride;
   readonly matchContextBinding?: MatchContextBinding;
   readonly nowMonotonicMs?: () => number;
@@ -191,7 +180,6 @@ export class ProjectionCoordinator {
 
   private readonly programRuntime: ProgramRuntime;
   private readonly cstvSources: CstvSourceManagers;
-  private readonly identityResolver: IdentityResolver;
   private readonly activeLineupOverride: ActiveLineupOverride | undefined;
   private readonly nowMonotonicMs: () => number;
   private readonly scheduler: ProjectionScheduler;
@@ -200,10 +188,6 @@ export class ProjectionCoordinator {
   private readonly onProjection: ((bundle: ProjectionBundle) => void) | undefined;
   private readonly sourceUnsubscribers: readonly (() => void)[];
   private contextBinding: MatchContextBinding | undefined;
-  private boundContext: MatchContext | undefined;
-  private boundMatchId: string | undefined;
-  private lastIdentityEvidence:
-    { readonly sourceGeneration: number; readonly receiveSequence: number } | undefined;
   private current: ProjectionBundle;
   private lastPublishedProgram: ProgramProjection | undefined;
   private predictionPublishTimer: unknown;
@@ -225,7 +209,6 @@ export class ProjectionCoordinator {
     this.avatars = options.avatars;
     this.programRuntime = options.programRuntime;
     this.cstvSources = options.cstvSources;
-    this.identityResolver = options.identityResolver ?? createIdentityResolver();
     this.activeLineupOverride = options.activeLineupOverride;
     this.nowMonotonicMs = options.nowMonotonicMs ?? defaultNowMonotonicMs;
     this.scheduler = options.scheduler ?? defaultScheduler;
@@ -234,11 +217,6 @@ export class ProjectionCoordinator {
     this.onObserverDiagnostics = options.onObserverDiagnostics;
     this.publishers = mergePublishers(options.publishers, options.onDiagnostic);
     this.contextBinding = options.matchContextBinding;
-    if (this.contextBinding !== undefined) {
-      this.boundContext = this.contextBinding.context;
-      this.identityResolver.bind(this.contextBinding.context);
-      this.boundMatchId = this.contextBinding.context.matchId;
-    }
     this.activeLineup = emptyActiveLineup();
     this.current = this.refresh();
     this.assistTimer = options.observerSettings
@@ -261,38 +239,18 @@ export class ProjectionCoordinator {
     ];
   }
 
-  setMatchContextBinding(binding: MatchContextBinding | undefined): ProjectionBundle {
+  setMatchContextBinding(
+    binding: MatchContextBinding | undefined,
+    committed?: ProgramRuntimeSnapshot,
+  ): ProjectionBundle {
     if (this.closed) return this.current;
+    const previousMatch = this.contextBinding?.context.matchId;
     this.contextBinding = binding;
-    if (binding === undefined) {
-      this.boundContext = undefined;
-      this.boundMatchId = undefined;
-      this.lastIdentityEvidence = undefined;
-      this.identityResolver.unbind();
-      this.activeLineup = emptyActiveLineup(
-        this.programRuntime.getSnapshot().current.programSource.generation,
-        this.programRuntime.getSnapshot().current.map.epoch,
-      );
-    } else {
-      const matchChanged =
-        this.boundMatchId !== undefined && this.boundMatchId !== binding.context.matchId;
-      const contextChanged =
-        this.boundContext !== binding.context || this.boundMatchId !== binding.context.matchId;
-      this.boundContext = binding.context;
-      this.boundMatchId = binding.context.matchId;
-      if (contextChanged) {
-        this.identityResolver.bind(binding.context);
-        this.lastIdentityEvidence = undefined;
-        if (matchChanged) {
-          const runtime = this.programRuntime.getSnapshot().current;
-          this.activeLineup = emptyActiveLineup(
-            runtime.programSource.generation,
-            runtime.map.epoch,
-          );
-        }
-      }
+    if (!binding || (previousMatch !== undefined && previousMatch !== binding.context.matchId)) {
+      const runtime = this.programRuntime.getSnapshot().current;
+      this.activeLineup = emptyActiveLineup(runtime.programSource.generation, runtime.map.epoch);
     }
-    return this.refresh();
+    return this.refresh(false, committed);
   }
 
   afterRuntimeMutation(result?: RuntimeReduceResult): ProjectionBundle {
@@ -310,42 +268,19 @@ export class ProjectionCoordinator {
         this.staleSuppressedUntilNewFrame = false;
       }
     }
-    return this.refresh(result?.disposition.reason === 'program-round-events');
+    const snapshot =
+      result && 'snapshot' in result ? (result.snapshot as ProgramRuntimeSnapshot) : undefined;
+    return this.refresh(result?.disposition.reason === 'program-round-events', snapshot);
   }
 
-  /** Called only by a source adapter after proving full coverage and GSI binding. */
-  acceptTrustedRoundEvents(input: {
-    readonly programSourceGeneration: number;
-    readonly mapName: string;
-    readonly events: TrustedProgramRoundEvents;
-  }): boolean {
-    if (this.closed) return false;
-    const runtime = this.programRuntime.getCurrentState();
-    const source = this.cstvSources.program.getHealth();
-    if (
-      runtime.programSource.lastAccepted?.generation !== runtime.programSource.generation ||
-      runtime.programSource.generation !== input.programSourceGeneration ||
-      runtime.map.epoch !== input.events.mapEpoch ||
-      runtime.map.name !== input.mapName ||
-      source.role !== 'program' ||
-      source.generation !== input.events.source.generation ||
-      source.mapName !== input.mapName
-    )
-      return false;
-    const result = this.programRuntime.acceptTrustedRoundEvents(input.events);
-    if (result.disposition.kind !== 'accepted') return false;
-    this.afterRuntimeMutation(result);
-    return true;
-  }
-
-  refresh(publishWaiting = false): ProjectionBundle {
+  refresh(publishWaiting = false, committed?: ProgramRuntimeSnapshot): ProjectionBundle {
     if (this.closed || this.refreshing) return this.current;
     this.refreshing = true;
     try {
-      const runtimeSnapshot = this.programRuntime.getSnapshot();
+      const runtimeSnapshot = committed ?? this.programRuntime.getSnapshot();
       const runtimeState = runtimeSnapshot.current;
       const runtimeView = selectProgramSafeRuntimeView(runtimeState);
-      const identity = this.resolveIdentity(runtimeSnapshot);
+      const identity = runtimeSnapshot.identity;
       const activeLineup = this.resolveActiveLineup(runtimeSnapshot, identity);
       const context = this.contextBinding?.context;
       const preferCanonicalPlayerNames =
@@ -355,11 +290,6 @@ export class ProjectionCoordinator {
         (this.contextBinding.origin === 'online' ||
           this.contextBinding.cachedFrom === 'online' ||
           this.contextBinding.localAuthoringMode === 'bound-overlay');
-      const seriesProgress = this.programRuntime.synchronizeSeriesProgress(
-        context,
-        seriesSideProofFor(runtimeSnapshot, identity),
-        this.contextBinding?.origin,
-      );
       const nowMonotonicMs = this.nowMonotonicMs();
       const programInput = {
         preferCanonicalPlayerNames,
@@ -375,7 +305,7 @@ export class ProjectionCoordinator {
           : { contextFreshness: this.contextBinding.freshness }),
         identity,
         activeLineup,
-        seriesProgress,
+        seriesProgress: runtimeSnapshot.seriesProgress,
         nowMonotonicMs,
         continuityPolicy: runtimeSnapshot.continuityPolicy,
       };
@@ -551,12 +481,6 @@ export class ProjectionCoordinator {
     return this.current;
   }
 
-  executeOperatorCommand(command: OperatorCommand): SeriesOperatorCommandResult {
-    const result = this.programRuntime.executeOperatorCommand(command);
-    if (!this.closed) this.refresh();
-    return result;
-  }
-
   getPublisher(channel: 'program'): LocalChannelPublisher<ProgramSnapshot>;
   getPublisher(channel: 'radar'): LocalChannelPublisher<RadarSnapshot>;
   getPublisher(channel: 'operator'): LocalChannelPublisher<OperatorSnapshot>;
@@ -589,70 +513,6 @@ export class ProjectionCoordinator {
       this.publishers.operator.close(),
       this.publishers.assist.close(),
     ]);
-  }
-
-  private resolveIdentity(
-    runtimeSnapshot: ReturnType<ProgramRuntime['getSnapshot']>,
-  ): IdentityResolution {
-    if (this.contextBinding === undefined) {
-      this.boundContext = undefined;
-      this.boundMatchId = undefined;
-      return this.identityResolver.unbind();
-    }
-
-    if (
-      this.boundContext !== this.contextBinding.context ||
-      this.boundMatchId !== this.contextBinding.context.matchId
-    ) {
-      this.identityResolver.bind(this.contextBinding.context);
-      this.boundContext = this.contextBinding.context;
-      this.boundMatchId = this.contextBinding.context.matchId;
-      this.lastIdentityEvidence = undefined;
-    }
-
-    const observation = runtimeSnapshot.current.programTelemetry;
-    const cursor = runtimeSnapshot.current.programSource.lastAccepted;
-    const currentGeneration = runtimeSnapshot.current.programSource.generation;
-    const currentReceiveSequence =
-      cursor?.generation === currentGeneration ? cursor.sequence : undefined;
-    if (
-      observation === undefined ||
-      cursor === undefined ||
-      cursor.generation !== currentGeneration
-    ) {
-      this.identityResolver.bind(this.contextBinding.context);
-      return this.identityResolver.getResolution();
-    }
-
-    const currentResolution = this.identityResolver.getResolution();
-    const evidenceIsNew =
-      currentReceiveSequence !== undefined &&
-      (this.lastIdentityEvidence === undefined ||
-        this.lastIdentityEvidence.sourceGeneration !== currentGeneration ||
-        this.lastIdentityEvidence.receiveSequence !== currentReceiveSequence);
-    if (
-      (currentResolution.sourceGeneration !== currentGeneration ||
-        currentResolution.mapEpoch !== runtimeSnapshot.current.map.epoch) &&
-      !evidenceIsNew
-    ) {
-      this.identityResolver.bind(this.contextBinding.context);
-      return this.identityResolver.getResolution();
-    }
-
-    const resolution = this.identityResolver.resolve(
-      identityEvidenceFromObservation(
-        observation,
-        currentGeneration,
-        runtimeSnapshot.current.map.epoch,
-      ),
-    );
-    if (currentReceiveSequence !== undefined) {
-      this.lastIdentityEvidence = {
-        sourceGeneration: currentGeneration,
-        receiveSequence: currentReceiveSequence,
-      };
-    }
-    return resolution;
   }
 
   private resolveActiveLineup(
@@ -992,30 +852,6 @@ export class ProjectionCoordinator {
     this.staleTimerKey = undefined;
     this.staleDeadline = undefined;
   }
-}
-
-function seriesSideProofFor(
-  runtimeSnapshot: ReturnType<ProgramRuntime['getSnapshot']>,
-  identity: IdentityResolution,
-): SeriesSideProof | null {
-  const runtime = runtimeSnapshot.current;
-  if (
-    (!identity.capabilities.identityDependentResult && !hasObservedLineupDifference(identity)) ||
-    identity.sourceGeneration !== runtime.programSource.generation ||
-    identity.mapEpoch !== runtime.map.epoch ||
-    identity.sideMapping.a === 'unknown' ||
-    identity.sideMapping.b === 'unknown' ||
-    identity.sideMapping.a === identity.sideMapping.b
-  ) {
-    return null;
-  }
-  return {
-    sourceGeneration: runtime.programSource.generation,
-    mapEpoch: runtime.map.epoch,
-    ...(hasObservedLineupDifference(identity) ? { displayOnly: true } : {}),
-    a: identity.sideMapping.a,
-    b: identity.sideMapping.b,
-  };
 }
 
 function sameStaleKey(
