@@ -116,6 +116,8 @@ export function stringValue(value: unknown, key: string): string | undefined {
 }
 
 export function explainRuntimeDiagnostic(code: string): string | undefined {
+  if (code === 'output-outbox_unavailable')
+    return '发送队列无法打开，网站同步不可用；本机制作可继续。请检查数据目录和磁盘，保留原数据并导出诊断。';
   if (code === 'output-outbox_boundary_overflow')
     return '发送队列的连续性记录已满，本次运行的相关同步已暂停；请保留诊断并核对接收端。';
   if (code === 'output-outbox_boundary_capture_failed')

@@ -402,6 +402,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.rivalhubConnection?.view().stoppedMatchId !== binding.context.matchId &&
       !options.rivalhubConnection?.view().activeDeviceName,
     onDiagnostic: (code) => recordRuntimeDiagnostic(`output-${code}`, 'projection', false),
+    onOutboxLoadError: (error) =>
+      app.log.error(
+        { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
+        '发送队列无法打开，网站同步不可用；原始数据保留。',
+      ),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
       const connection = options.rivalhubConnection;
@@ -2035,15 +2040,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   app.get('/local/v1/reliable-output-status', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
+      available: outputService.isReliableAvailable(),
       recovery: outputService.getReliableRecovery() ?? null,
       revokedIsolation: outputService.getRevokedIsolationSummary() ?? null,
-      records: outputService.getReliableRecords().map((record) => ({
-        idempotencyKey: record.event.idempotencyKey,
-        kind: record.event.kind,
-        status: record.status,
-        attempts: record.attempts,
-        updatedAt: record.updatedAt,
-      })),
+      records: !outputService.isReliableAvailable()
+        ? null
+        : outputService.getReliableRecords().map((record) => ({
+            idempotencyKey: record.event.idempotencyKey,
+            kind: record.event.kind,
+            status: record.status,
+            attempts: record.attempts,
+            updatedAt: record.updatedAt,
+          })),
     }),
   );
   const qualificationMode = options.qualificationMode ?? false;
