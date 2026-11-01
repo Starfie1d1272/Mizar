@@ -274,7 +274,7 @@ export class ProgramRuntime {
     readonly mapEpoch: number;
     readonly mapName: string | null;
     readonly managedSourceId?: string;
-  }): void {
+  }): ProgramRuntimeSnapshot {
     if (this.state.runtimeSeq !== 0) throw new Error('runtime_already_started');
     this.deliveryRestoreAwaitingTelemetry = true;
     this.executionAwaitingObservation = true;
@@ -294,6 +294,7 @@ export class ProgramRuntime {
       objectiveTiming: createObjectiveTimingState(input.programSourceGeneration, input.mapEpoch),
     };
     this.commitFacts();
+    return this.getSnapshot();
   }
 
   acceptObservation(
@@ -359,9 +360,8 @@ export class ProgramRuntime {
   }
 
   /**
-   * Feeds the current MatchContext and already-proven side mapping into the
-   * single Companion-owned SeriesProgress state. The identity/lineup owners
-   * remain outside this class; they provide evidence only.
+   * Advances SeriesProgress using the context and side proof resolved by this
+   * runtime's fact commit.
    */
   private synchronizeSeriesProgress(
     context: MatchContext | undefined,
@@ -803,15 +803,23 @@ export class ProgramRuntime {
     return boundary ? { boundary: { ...boundary, snapshot: this.getSnapshot() } } : {};
   }
 
-  markSourceUnverified(): void {
+  private setSourceUnverified(): void {
     if (this.executionOwner) this.executionConflict = true;
     else this.executionOwnerUnknown = true;
   }
 
-  retireManagedSource(): void {
-    this.markSourceUnverified();
+  markSourceUnverified(): ProgramRuntimeSnapshot {
+    this.setSourceUnverified();
+    this.commitFacts();
+    return this.getSnapshot();
+  }
+
+  retireManagedSource(): ProgramRuntimeSnapshot {
+    this.setSourceUnverified();
     this.managedSourceId = undefined;
     this.explicitSourceOwner = undefined;
+    this.commitFacts();
+    return this.getSnapshot();
   }
 
   isExplicitSourceOwner(sourceId: string, matchId: string): boolean {
@@ -822,14 +830,17 @@ export class ProgramRuntime {
     );
   }
 
-  markUnverifiedNewExecution(): void {
+  private markUnverifiedNewExecution(): void {
     this.executionOwner = undefined;
     this.executionOwnerUnknown = true;
     this.executionConflict = true;
     this.unknownNewExecution = true;
   }
 
-  resumeManagedSource(sourceId: string, matchId: string | null): boolean {
+  resumeManagedSource(
+    sourceId: string,
+    matchId: string | null,
+  ): { restored: boolean; snapshot: ProgramRuntimeSnapshot } {
     const proof = this.restoredExecutionProof;
     if (
       !this.executionOwnerUnknown ||
@@ -848,10 +859,12 @@ export class ProgramRuntime {
       // Receive its fresh frames, but do not infer which historical execution they complete.
       this.managedSourceId = sourceId;
       this.markUnverifiedNewExecution();
-      return false;
+      this.commitFacts();
+      return { restored: false, snapshot: this.getSnapshot() };
     }
     this.managedSourceId = sourceId;
-    return true;
+    this.commitFacts();
+    return { restored: true, snapshot: this.getSnapshot() };
   }
 
   getSnapshot(): ProgramRuntimeSnapshot {

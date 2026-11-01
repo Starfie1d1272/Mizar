@@ -384,12 +384,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         programRuntime.getCurrentState().runtimeSeq !== 0
       )
         return undefined;
-      programRuntime.restoreDeliveryContinuity({
+      const committed = programRuntime.restoreDeliveryContinuity({
         ...checkpoint.cursor,
         mapName: checkpoint.mapName,
         ...(checkpoint.managedSourceId ? { managedSourceId: checkpoint.managedSourceId } : {}),
       });
-      return projectionCoordinator.refresh();
+      return projectionCoordinator.refresh(false, committed);
     },
     isExecutionOwnedBy: (binding) =>
       programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
@@ -1037,7 +1037,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     result: Parameters<typeof projectionCoordinator.afterRuntimeMutation>[0],
   ) => {
     const bundle = projectionCoordinator.afterRuntimeMutation(result);
-    if (result) outputService.afterRuntimeMutation(result, bundle, outputBinding);
+    outputService.afterRuntimeMutation(result, bundle, outputBinding);
     programCueCoordinator.afterRuntimeMutation(result);
     return bundle;
   };
@@ -1251,6 +1251,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     controller: matchContextController,
     runtime: programRuntime,
     productionSession: production.sessionId,
+    onRuntimeCommit: (snapshot) => {
+      projectionCoordinator.refresh(false, snapshot);
+      programCueCoordinator.afterRuntimeMutation();
+    },
   });
   if (localTournamentStore !== null && matchContextController !== null) {
     registerLocalTournamentRoutes(app, {

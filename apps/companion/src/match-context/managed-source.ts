@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { seriesCheckpointIdentity } from '@mizar/core/series-progress';
 import { preparationCancelled } from '../program-scenes/preparation-cancellation.js';
 import type { MatchContextController } from './controller.js';
-import type { ProgramRuntime } from '../runtime/program-runtime.js';
+import type { ProgramRuntime, ProgramRuntimeSnapshot } from '../runtime/program-runtime.js';
 
 const sourceRequest = z.discriminatedUnion('action', [
   z.strictObject({
@@ -77,6 +77,7 @@ export function registerManagedSourceRoutes(
     controller: MatchContextController | null;
     runtime: ProgramRuntime;
     productionSession: () => string;
+    onRuntimeCommit: (snapshot: ProgramRuntimeSnapshot) => void;
   },
 ) {
   let pending: Prepared | undefined;
@@ -152,7 +153,7 @@ export function registerManagedSourceRoutes(
         return reply.code(409).send({ error: 'managed_source_resume_unavailable' });
       // The authenticated Host independently verifies PID, creation time, executable and CFG.
       // Map continuity qualifies result restoration, not whether fresh input may be received.
-      const executionRestored = options.runtime.resumeManagedSource(body.sourceId, currentMatch);
+      const execution = options.runtime.resumeManagedSource(body.sourceId, currentMatch);
       active = {
         ticket: body.ticket,
         sourceId: body.sourceId,
@@ -164,7 +165,8 @@ export function registerManagedSourceRoutes(
       };
       activated = true;
       retired = false;
-      return { ok: true, executionRestored };
+      options.onRuntimeCommit(execution.snapshot);
+      return { ok: true, executionRestored: execution.restored };
     }
     if (body.action === 'commit') {
       const item = active?.ticket === body.ticket ? active : pending;
@@ -245,13 +247,14 @@ export function registerManagedSourceRoutes(
       retirement.sequence !== (current.lastAccepted?.sequence ?? null)
     )
       return reply.code(409).send({ error: 'managed_retirement_changed' });
-    options.runtime.retireManagedSource();
+    const committed = options.runtime.retireManagedSource();
     active = undefined;
     pending = undefined;
     retirement = undefined;
     retired = true;
     activated = false;
     completedRetirement = body.ticket;
+    options.onRuntimeCommit(committed);
     return { ok: true };
   });
   return {

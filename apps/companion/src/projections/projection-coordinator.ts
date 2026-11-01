@@ -15,7 +15,7 @@ import {
   type ObserverAssistProjection,
   type ProgramProjection,
 } from '@mizar/core/projection';
-import { getObjectiveClockLeaseMs, type RuntimeReduceResult } from '@mizar/core/runtime';
+import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
 import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
 import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
@@ -32,7 +32,11 @@ import { CS2_ITEM_CATALOG } from '@mizar/cs2-assets';
 
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { CstvSourceManagers } from '../telemetry/cstv-source-manager.js';
-import type { ProgramRuntime, ProgramRuntimeSnapshot } from '../runtime/program-runtime.js';
+import type {
+  ProgramRuntime,
+  ProgramRuntimeSnapshot,
+  ProgramCommitResult,
+} from '../runtime/program-runtime.js';
 import {
   createLocalChannelPublisher,
   type LocalChannelPublisher,
@@ -241,36 +245,31 @@ export class ProjectionCoordinator {
 
   setMatchContextBinding(
     binding: MatchContextBinding | undefined,
-    committed?: ProgramRuntimeSnapshot,
+    committed: ProgramRuntimeSnapshot,
   ): ProjectionBundle {
     if (this.closed) return this.current;
     const previousMatch = this.contextBinding?.context.matchId;
     this.contextBinding = binding;
     if (!binding || (previousMatch !== undefined && previousMatch !== binding.context.matchId)) {
-      const runtime = this.programRuntime.getSnapshot().current;
+      const runtime = committed.current;
       this.activeLineup = emptyActiveLineup(runtime.programSource.generation, runtime.map.epoch);
     }
     return this.refresh(false, committed);
   }
 
-  afterRuntimeMutation(result?: RuntimeReduceResult): ProjectionBundle {
-    if (this.closed) return this.current;
-    if (result !== undefined) {
-      if (result.disposition.kind !== 'accepted') return this.current;
-      if (
-        result.disposition.reason === 'map-execution-reset' ||
-        result.disposition.reason === 'source-generation-advanced'
-      ) {
-        this.cancelStaleTimer();
-        this.stalePublishedKey = undefined;
-        this.staleSuppressedUntilNewFrame = true;
-      } else {
-        this.staleSuppressedUntilNewFrame = false;
-      }
+  afterRuntimeMutation(result: ProgramCommitResult): ProjectionBundle {
+    if (this.closed || result.disposition.kind !== 'accepted') return this.current;
+    if (
+      result.disposition.reason === 'map-execution-reset' ||
+      result.disposition.reason === 'source-generation-advanced'
+    ) {
+      this.cancelStaleTimer();
+      this.stalePublishedKey = undefined;
+      this.staleSuppressedUntilNewFrame = true;
+    } else {
+      this.staleSuppressedUntilNewFrame = false;
     }
-    const snapshot =
-      result && 'snapshot' in result ? (result.snapshot as ProgramRuntimeSnapshot) : undefined;
-    return this.refresh(result?.disposition.reason === 'program-round-events', snapshot);
+    return this.refresh(result.disposition.reason === 'program-round-events', result.snapshot);
   }
 
   refresh(publishWaiting = false, committed?: ProgramRuntimeSnapshot): ProjectionBundle {

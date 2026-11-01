@@ -2,18 +2,18 @@ import { timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type {
-  MapExecutionResetReason,
-  RuntimeReduceResult,
-  RuntimeTime,
-} from '@mizar/core/runtime';
+import type { MapExecutionResetReason, RuntimeTime } from '@mizar/core/runtime';
 
 import type {
   LocalWebHostDiagnostics,
   LocalWebHostEvent,
 } from '../local-web/websocket-transport.js';
 import type { DebugRuntimeResponse } from '../runtime/debug-state.js';
-import type { ProgramRuntime, ProgramRuntimeSnapshot } from '../runtime/program-runtime.js';
+import type {
+  ProgramRuntime,
+  ProgramRuntimeSnapshot,
+  ProgramCommitResult,
+} from '../runtime/program-runtime.js';
 import {
   resolveCaptureRecorder,
   type CaptureRecorderSource,
@@ -58,7 +58,7 @@ export interface QualificationControllerOptions {
     readonly captureId: string;
   }>;
   readonly getHostDiagnostics?: () => LocalWebHostDiagnostics;
-  readonly onAcceptedMapReset?: (result: RuntimeReduceResult) => void;
+  readonly onAcceptedMapReset?: (result: ProgramCommitResult) => void;
   readonly onRestart?: () => void | Promise<void>;
   readonly onFinish?: (input: QualificationFinishInput) => void | Promise<void>;
 }
