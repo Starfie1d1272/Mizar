@@ -154,6 +154,17 @@ pub async fn observer_command(
     {
         return Err("请在制播工作台操作观察辅助。".into());
     }
+    let action_ticket = if matches!(
+        action.as_str(),
+        "stop" | "restore-hud" | "start" | "start-configured"
+    ) {
+        Some(
+            app.state::<production_exit::ExitGate>()
+                .presentation_ticket()?,
+        )
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let log = app.state::<DesktopLog>();
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
@@ -166,13 +177,13 @@ pub async fn observer_command(
                 return Ok(());
             }
             if action == "stop" {
-                let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
+                let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;
                 let _operation = cleanup_operation();
                 app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
                 return stop_inner(&log, true);
             }
             if action == "restore-hud" {
-                let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
+                let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;
                 app.state::<crate::updates::PendingUpdate>().check()?;
                 let _operation = operation()?;
                 app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
@@ -188,7 +199,7 @@ pub async fn observer_command(
                 return Ok(());
             }
             if action != "start" && action != "start-configured" { return Err("请选择连接或停止观察辅助。".into()); }
-            let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
+            let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;
             app.state::<crate::updates::PendingUpdate>().check()?;
             if !app.state::<crate::host_state::HostState>().visible.load(Ordering::Acquire) {
                 return Err("请打开制播工作台后连接早源。".into());
