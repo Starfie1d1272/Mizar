@@ -470,7 +470,6 @@ export function createBroadcastRuntime(input: {
       await store.waitForApply();
     },
     async flushConsumerReceipts() {
-      if (!ready) return;
       await store.waitForApply();
       await store.retryConsumerReceipts();
     },

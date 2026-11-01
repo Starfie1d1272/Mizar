@@ -744,6 +744,7 @@ export class RivalHubConnection {
   }
 
   async load(): Promise<void> {
+    this.sourceStateAvailable = false;
     try {
       await this.sourceState.load();
       await this.sourceState.recover();
