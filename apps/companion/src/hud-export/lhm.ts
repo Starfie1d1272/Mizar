@@ -94,5 +94,5 @@ export async function exportLhmHud(webRoot: string, value: unknown): Promise<Buf
       needsBinding: ['lhm-or-jt-host', 'host-match-and-media'],
     }),
   );
-  return Buffer.from(zipSync(files, { level: 6, mtime: new Date('1980-01-01T00:00:00Z') }));
+  return Buffer.from(zipSync(files, { level: 6, mtime: new Date(1980, 0, 1) }));
 }
