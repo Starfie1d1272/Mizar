@@ -456,6 +456,31 @@ pub(crate) fn placement(window: &tauri::WebviewWindow, rect: Rect) {
     let _ = window_presentation::place(window, rect);
 }
 
+/// Called by the launch worker while the game gateway is still starting.
+/// Use the same tracker/frame lease as the live workspace so exit can restore it.
+pub(crate) fn position_starting_game(
+    app: &tauri::AppHandle,
+    process: managed_cs2::WorkspaceProcess,
+    preserve: bool,
+) -> Result<bool, String> {
+    let state = app.state::<HostState>();
+    if !state.visible.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    let mut tracker = state.tracker.lock().map_err(|_| "游戏窗口状态不可用。")?;
+    tracker.set_owner(Some(process));
+    tracker.preserve_settings = preserve;
+    tracker.tick();
+    if let Some(failure) = tracker.alignment_event() {
+        app.state::<DesktopLog>().event(
+            "cs2_window_alignment",
+            "failure",
+            Some(&failure.diagnostic().to_string()),
+        );
+    }
+    Ok(tracker.managed)
+}
+
 pub(crate) fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
     if let Some(left) = app.get_webview_window("workspace-left") {
         placement(&left, layout.left);
