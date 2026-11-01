@@ -84,7 +84,7 @@ fn query(log: &DesktopLog, executable: &Path, value: Option<u8>) -> Result<u8, S
             .map_err(|e| e.to_string())?
             .as_nanos()
     );
-    let root = crate::bundle_root()?;
+    let root = crate::host_runtime::bundle_root()?;
     let mut command = Command::new(root.join("resources/runtime/node.exe"));
     command
         .arg(root.join("resources/app/dist/telemetry/observer-game-control.js"))

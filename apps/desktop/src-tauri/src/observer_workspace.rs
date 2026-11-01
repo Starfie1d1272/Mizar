@@ -130,7 +130,7 @@ pub async fn observer_command(
             if action != "start" && action != "start-configured" { return Err("请选择连接或停止观察辅助。".into()); }
             app.state::<production_exit::ExitGate>().check()?;
             app.state::<crate::updates::PendingUpdate>().check()?;
-            if !app.state::<crate::HostState>().visible.load(Ordering::Acquire) {
+            if !app.state::<crate::host_state::HostState>().visible.load(Ordering::Acquire) {
                 return Err("请打开制播工作台后连接早源。".into());
             }
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
