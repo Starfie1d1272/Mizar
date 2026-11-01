@@ -243,12 +243,14 @@ function download(blob: Blob, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 export function ResourceModules({
+  previewsEnabled = true,
   query,
   category,
   onImported,
   sharedSnapshot,
   onRefresh,
 }: {
+  previewsEnabled?: boolean;
   query: string;
   category: string;
   onImported: (presetId?: string) => void;
@@ -814,246 +816,246 @@ export function ResourceModules({
           <p>没有找到匹配的资源，可导入资源包。</p>
         )}
       {showList &&
-        entries.map(({ module: entry, builtin, availability }) => (
-          <Panel
-            className="resource-library__item resource-library__module"
-            key={entry.id}
-            id={`resource-${entry.id}`}
-          >
-            <div>
-              <span className="resource-library__kind">
-                {labels[entry.kind]} · {builtin ? '内置' : entry.origin ? '导入' : '自建'}
-              </span>
-              <h3>{entry.name}</h3>
-              <p>
-                {snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id
-                  ? snapshot.active.sourceModuleRevisions?.[entry.kind] === entry.revision
-                    ? '当前使用'
-                    : '已修改，尚未使用'
-                  : '尚未使用'}
-              </p>
-            </div>
-            <Button
-              aria-expanded={selected === entry.id}
-              aria-controls={`resource-detail-${entry.id}`}
-              onClick={() => {
-                selectionEpoch.current++;
-                setSelected(selected === entry.id ? null : entry.id);
-                setReplacement('');
-              }}
+        entries.map(({ module: entry, builtin, availability }) => {
+          const current =
+            snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id &&
+            snapshot.active.sourceModuleRevisions?.[entry.kind] === entry.revision;
+          const retryNeeded = !!metadata?.consumers?.[entry.kind]?.error;
+          return (
+            <Panel
+              className="resource-library__item resource-library__module"
+              key={entry.id}
+              id={`resource-${entry.id}`}
             >
-              {selected === entry.id ? '关闭详情' : '查看详情'}
-            </Button>
-            {selected !== entry.id && (entry.kind === 'hud' || entry.kind === 'program') && (
-              <div className="resource-library__thumbnail">
-                <PresetVisualPreview
-                  mode={entry.kind}
-                  compact
-                  bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
-                  modules={[entry]}
-                />
+              <div>
+                <span className="resource-library__kind">
+                  {labels[entry.kind]} · {builtin ? '内置' : entry.origin ? '导入' : '自建'}
+                </span>
+                <h3>{entry.name}</h3>
+                <p>
+                  {snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id
+                    ? snapshot.active.sourceModuleRevisions?.[entry.kind] === entry.revision
+                      ? '当前使用'
+                      : '已修改，尚未使用'
+                    : '尚未使用'}
+                </p>
               </div>
-            )}
-            {selected === entry.id && (
-              <div className="resource-library__detail" id={`resource-detail-${entry.id}`}>
-                <div className="resource-library__preset-actions">
-                  <Button
-                    variant="primary"
-                    disabled={
-                      busy || !snapshot || (entry.kind === 'program' && programUnsupported(entry))
-                    }
-                    onClick={() =>
-                      snapshot &&
-                      void perform(
-                        '/operator/broadcast-modules/apply',
-                        {
-                          moduleId: entry.id,
-                          expectedRevision: entry.revision,
-                          expectedActiveRevision: snapshot.active.revision,
-                          requestId: crypto.randomUUID(),
-                        },
-                        `已使用「${entry.name}」。`,
-                      )
-                    }
-                  >
-                    {snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id &&
-                    snapshot.active.sourceModuleRevisions?.[entry.kind] === entry.revision &&
-                    !metadata?.consumers?.[entry.kind]?.error
-                      ? '重新使用'
-                      : '使用'}
-                  </Button>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void perform(
-                        '/operator/broadcast-modules/clone',
-                        {
-                          moduleId: entry.id,
-                          expectedRevision: entry.revision,
-                          name: `${entry.name.slice(0, 117)} 副本`,
-                        },
-                        '已复制，尚未使用。',
-                      )
-                    }
-                  >
-                    复制
-                  </Button>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void perform(
-                        '/operator/resource-library/export-pack',
-                        {
-                          modules: [{ moduleId: entry.id, expectedRevision: entry.revision }],
-                          presets: [],
-                        },
-                        '资源包已生成。',
-                        `${entry.name}.mizarpack`,
-                      )
-                    }
-                  >
-                    导出
-                  </Button>
-                  {entry.kind === 'hud' && !builtin && 'preset' in entry.value && (
-                    <a href={`/operator/hud?preset=${encodeURIComponent(entry.value.preset.id)}`}>
-                      编辑 HUD
-                    </a>
-                  )}
-                  {entry.kind === 'hud' && (
+              <Button
+                aria-expanded={selected === entry.id}
+                aria-controls={`resource-detail-${entry.id}`}
+                onClick={() => {
+                  selectionEpoch.current++;
+                  setSelected(selected === entry.id ? null : entry.id);
+                  setReplacement('');
+                }}
+              >
+                {selected === entry.id
+                  ? '关闭详情'
+                  : entry.kind === 'hud' || entry.kind === 'program'
+                    ? '预览与详情'
+                    : '查看详情'}
+              </Button>
+              {selected === entry.id && (
+                <div className="resource-library__detail" id={`resource-detail-${entry.id}`}>
+                  <div className="resource-library__preset-actions">
+                    <Button
+                      variant={current && !retryNeeded ? 'secondary' : 'primary'}
+                      disabled={
+                        busy || !snapshot || (entry.kind === 'program' && programUnsupported(entry))
+                      }
+                      onClick={() =>
+                        snapshot &&
+                        void perform(
+                          '/operator/broadcast-modules/apply',
+                          {
+                            moduleId: entry.id,
+                            expectedRevision: entry.revision,
+                            expectedActiveRevision: snapshot.active.revision,
+                            requestId: crypto.randomUUID(),
+                          },
+                          `已使用「${entry.name}」。`,
+                        )
+                      }
+                    >
+                      {current && !retryNeeded ? '重新使用' : '使用'}
+                    </Button>
                     <Button
                       disabled={busy}
                       onClick={() =>
                         void perform(
-                          '/operator/hud-config/export-lhm',
-                          { moduleId: entry.id, moduleRevision: entry.revision },
-                          'LHM 文件已生成。',
-                          `${entry.name}.zip`,
+                          '/operator/broadcast-modules/clone',
+                          {
+                            moduleId: entry.id,
+                            expectedRevision: entry.revision,
+                            name: `${entry.name.slice(0, 117)} 副本`,
+                          },
+                          '已复制，尚未使用。',
                         )
                       }
                     >
-                      导出为 LHM
+                      复制
                     </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void perform(
+                          '/operator/resource-library/export-pack',
+                          {
+                            modules: [{ moduleId: entry.id, expectedRevision: entry.revision }],
+                            presets: [],
+                          },
+                          '资源包已生成。',
+                          `${entry.name}.mizarpack`,
+                        )
+                      }
+                    >
+                      导出
+                    </Button>
+                    {entry.kind === 'hud' && !builtin && 'preset' in entry.value && (
+                      <a href={`/operator/hud?preset=${encodeURIComponent(entry.value.preset.id)}`}>
+                        编辑 HUD
+                      </a>
+                    )}
+                    {entry.kind === 'hud' && (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void perform(
+                            '/operator/hud-config/export-lhm',
+                            { moduleId: entry.id, moduleRevision: entry.revision },
+                            'LHM 文件已生成。',
+                            `${entry.name}.zip`,
+                          )
+                        }
+                      >
+                        导出为 LHM
+                      </Button>
+                    )}
+                  </div>
+                  {availability?.state === 'dependency_missing' && (
+                    <StatusBanner tone="warning">
+                      {entry.kind === 'camera'
+                        ? '运镜来源不可用，请准备对应的 MulNX 镜头内容后重试。'
+                        : '所需资源不可用，请重新导入或恢复资源后重试。'}
+                    </StatusBanner>
+                  )}
+                  {previewsEnabled && (entry.kind === 'hud' || entry.kind === 'program') && (
+                    <PresetVisualPreview
+                      key={entry.id}
+                      mode={entry.kind}
+                      bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
+                      modules={[entry]}
+                    />
+                  )}
+                  {entry.kind === 'music' && (
+                    <dl>
+                      {Object.entries(entry.value.groups).map(([name, group]) => (
+                        <div key={name}>
+                          <dt>{MUSIC_LABELS[name as MusicGroup]}</dt>
+                          <dd>{group.tracks.map((track) => track.name).join('、') || '无曲目'}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                  {entry.kind === 'camera' && (
+                    <dl>
+                      {entry.value.maps.map((map, index) => (
+                        <div key={index}>
+                          <dt>{map.map}</dt>
+                          <dd>
+                            {map.source.sourceName} · {map.openingSound?.name ?? '无开场音效'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                  {!builtin &&
+                    (entry.kind === 'program' ||
+                      entry.kind === 'music' ||
+                      entry.kind === 'camera') && (
+                      <Button
+                        disabled={busy || !!editing}
+                        onClick={() => setEditing(structuredClone(entry))}
+                      >
+                        编辑{labels[entry.kind]}
+                      </Button>
+                    )}
+                  {!builtin && (
+                    <details>
+                      <summary>删除资源</summary>
+                      {!referencesReady ? (
+                        <p>正在检查方案引用，请等待；若持续不可用，请检查本地制播服务。</p>
+                      ) : referenceView.active ? (
+                        <p>请先使用同类替代资源，再删除此资源。</p>
+                      ) : (
+                        <>
+                          <p>
+                            {references.length
+                              ? `以下方案引用此资源：${references.map((preset) => preset.name).join('、')}。请选择替代资源。`
+                              : '删除后可重新导入。'}
+                          </p>
+                          {references.length > 0 && (
+                            <Select
+                              label="替代资源"
+                              value={replacement}
+                              onChange={(event) => setReplacement(event.currentTarget.value)}
+                            >
+                              <option value="">请选择</option>
+                              {(entry.kind === 'music' || entry.kind === 'camera') && (
+                                <option value="off">关闭</option>
+                              )}
+                              {directory?.modules
+                                .filter(
+                                  (other) =>
+                                    other.module.kind === entry.kind &&
+                                    other.module.id !== entry.id,
+                                )
+                                .map((other) => (
+                                  <option key={other.module.id} value={other.module.id}>
+                                    {other.module.name}
+                                  </option>
+                                ))}
+                            </Select>
+                          )}
+                          <Button
+                            disabled={busy || (references.length > 0 && !replacement)}
+                            onClick={() =>
+                              void perform(
+                                '/operator/broadcast-modules/delete',
+                                {
+                                  moduleId: entry.id,
+                                  expectedRevision: entry.revision,
+                                  ...(references.length
+                                    ? {
+                                        replacement: {
+                                          moduleId: replacement === 'off' ? null : replacement,
+                                          expectedPresetRevisions: Object.fromEntries(
+                                            references.map((preset) => [
+                                              preset.id,
+                                              preset.revision,
+                                            ]),
+                                          ),
+                                        },
+                                      }
+                                    : {}),
+                                },
+                                '资源已删除。',
+                              ).then((ok) => {
+                                if (ok) setSelected(null);
+                              })
+                            }
+                          >
+                            确认删除
+                          </Button>
+                        </>
+                      )}
+                    </details>
                   )}
                 </div>
-                {availability?.state === 'dependency_missing' && (
-                  <StatusBanner tone="warning">
-                    {entry.kind === 'camera'
-                      ? '运镜来源不可用，请准备对应的 MulNX 镜头内容后重试。'
-                      : '所需资源不可用，请重新导入或恢复资源后重试。'}
-                  </StatusBanner>
-                )}
-                {(entry.kind === 'hud' || entry.kind === 'program') && (
-                  <PresetVisualPreview
-                    key={entry.id}
-                    mode={entry.kind}
-                    bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
-                    modules={[entry]}
-                  />
-                )}
-                {entry.kind === 'music' && (
-                  <dl>
-                    {Object.entries(entry.value.groups).map(([name, group]) => (
-                      <div key={name}>
-                        <dt>{MUSIC_LABELS[name as MusicGroup]}</dt>
-                        <dd>{group.tracks.map((track) => track.name).join('、') || '无曲目'}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                )}
-                {entry.kind === 'camera' && (
-                  <dl>
-                    {entry.value.maps.map((map, index) => (
-                      <div key={index}>
-                        <dt>{map.map}</dt>
-                        <dd>
-                          {map.source.sourceName} · {map.openingSound?.name ?? '无开场音效'}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                )}
-                {!builtin &&
-                  (entry.kind === 'program' ||
-                    entry.kind === 'music' ||
-                    entry.kind === 'camera') && (
-                    <Button
-                      disabled={busy || !!editing}
-                      onClick={() => setEditing(structuredClone(entry))}
-                    >
-                      编辑{labels[entry.kind]}
-                    </Button>
-                  )}
-                {!builtin && (
-                  <details>
-                    <summary>删除资源</summary>
-                    {!referencesReady ? (
-                      <p>正在检查方案引用，请等待；若持续不可用，请检查本地制播服务。</p>
-                    ) : referenceView.active ? (
-                      <p>请先使用同类替代资源，再删除此资源。</p>
-                    ) : (
-                      <>
-                        <p>
-                          {references.length
-                            ? `以下方案引用此资源：${references.map((preset) => preset.name).join('、')}。请选择替代资源。`
-                            : '删除后可重新导入。'}
-                        </p>
-                        {references.length > 0 && (
-                          <Select
-                            label="替代资源"
-                            value={replacement}
-                            onChange={(event) => setReplacement(event.currentTarget.value)}
-                          >
-                            <option value="">请选择</option>
-                            {(entry.kind === 'music' || entry.kind === 'camera') && (
-                              <option value="off">关闭</option>
-                            )}
-                            {directory?.modules
-                              .filter(
-                                (other) =>
-                                  other.module.kind === entry.kind && other.module.id !== entry.id,
-                              )
-                              .map((other) => (
-                                <option key={other.module.id} value={other.module.id}>
-                                  {other.module.name}
-                                </option>
-                              ))}
-                          </Select>
-                        )}
-                        <Button
-                          disabled={busy || (references.length > 0 && !replacement)}
-                          onClick={() =>
-                            void perform(
-                              '/operator/broadcast-modules/delete',
-                              {
-                                moduleId: entry.id,
-                                expectedRevision: entry.revision,
-                                ...(references.length
-                                  ? {
-                                      replacement: {
-                                        moduleId: replacement === 'off' ? null : replacement,
-                                        expectedPresetRevisions: Object.fromEntries(
-                                          references.map((preset) => [preset.id, preset.revision]),
-                                        ),
-                                      },
-                                    }
-                                  : {}),
-                              },
-                              '资源已删除。',
-                            ).then((ok) => {
-                              if (ok) setSelected(null);
-                            })
-                          }
-                        >
-                          确认删除
-                        </Button>
-                      </>
-                    )}
-                  </details>
-                )}
-              </div>
-            )}
-          </Panel>
-        ))}
+              )}
+            </Panel>
+          );
+        })}
     </section>
   );
 }

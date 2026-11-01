@@ -155,11 +155,13 @@ function CreatePreset({
 }
 
 export function BroadcastPresets({
+  previewsEnabled = true,
   query,
   focusPreset,
   sharedSnapshot,
   onRefresh,
 }: {
+  previewsEnabled?: boolean;
   query: string;
   focusPreset?: { id: string; request: number } | null;
   sharedSnapshot?: View | null;
@@ -627,7 +629,7 @@ export function BroadcastPresets({
                   </div>
                 ))}
               </dl>
-              {view && expanded.has(preset.id) ? (
+              {previewsEnabled && view && expanded.has(preset.id) ? (
                 <PresetVisualPreview bindings={preset.bindings} modules={view.modules} />
               ) : null}
               {view ? (
@@ -655,7 +657,11 @@ export function BroadcastPresets({
               <Button disabled={busy} onClick={() => void exportFile(preset)}>
                 分享
               </Button>
-              <Button variant="primary" disabled={busy} onClick={() => void applyPreset(preset)}>
+              <Button
+                variant={current && !changed && !active.adjusted ? 'secondary' : 'primary'}
+                disabled={busy}
+                onClick={() => void applyPreset(preset)}
+              >
                 {current && known && !changed && !active.adjusted ? '重新使用方案' : '使用方案'}
               </Button>
             </div>

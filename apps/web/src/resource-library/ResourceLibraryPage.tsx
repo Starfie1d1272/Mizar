@@ -118,6 +118,7 @@ export function ResourceLibraryPage() {
         </div>
         <div hidden={section !== 'content'}>
           <ResourceModules
+            previewsEnabled={section === 'content'}
             query={query}
             sharedSnapshot={broadcastSnapshot}
             onRefresh={refreshBroadcast}
@@ -132,6 +133,7 @@ export function ResourceLibraryPage() {
           />
           {showPresets ? (
             <BroadcastPresets
+              previewsEnabled={section === 'content'}
               query={query}
               focusPreset={focusPreset}
               sharedSnapshot={broadcastSnapshot}

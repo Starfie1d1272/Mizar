@@ -32,12 +32,10 @@ export function PresetVisualPreview({
   bindings,
   modules,
   mode = 'preset',
-  compact = false,
 }: {
   bindings: Binding[];
   modules: Entry[];
   mode?: 'preset' | 'hud' | 'program';
-  compact?: boolean;
 }) {
   const [scene, setScene] = useState<ProgramSceneId>(mode === 'program' ? 'waiting' : 'gameplay');
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
@@ -101,7 +99,7 @@ export function PresetVisualPreview({
 
   return (
     <section className="resource-library__preview" aria-label="方案画面预览">
-      <div className="resource-library__preview-heading" hidden={compact}>
+      <div className="resource-library__preview-heading">
         <div>
           <h3>画面预览</h3>
           <p>模拟画面 · 示例比赛数据</p>

@@ -160,7 +160,7 @@
   display: none;
 }
 .resource-library__module {
-  grid-template-columns: minmax(0, 1fr) auto minmax(200px, 320px);
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 .resource-library__module > div,
 .resource-library__preset > div {
@@ -175,24 +175,9 @@
   display: grid;
   gap: var(--mizar-layout-padding);
 }
-.resource-library__thumbnail .resource-library__preview {
-  margin: 0;
-}
 .resource-library__music-heading > div:first-child {
   flex: 1;
 }
 .resource-library__music-heading p {
   margin: 0;
-}
-@media (max-width: 800px) {
-  .resource-library__module {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .resource-library__thumbnail {
-    grid-column: 1 / -1;
-  }
-}
-
-.resource-library__module:has(.resource-library__detail) {
-  grid-template-columns: minmax(0, 1fr) auto;
 }
