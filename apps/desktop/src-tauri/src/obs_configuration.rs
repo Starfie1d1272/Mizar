@@ -147,13 +147,13 @@ pub fn launch(path: &str, session: Option<(&str, &str)>, log: &DesktopLog) -> Re
     synchronize_request(&mut state, session, log)?;
     reap(&mut state, log)?;
     let path = Path::new(path);
-    if !crate::obs_executable_allowed(path) || !path.is_file() {
+    if !obs_executable_allowed(path) || !path.is_file() {
         return Err("未找到 OBS，请在设置中选择 obs64.exe。".into());
     }
     let already_running = if state.child.is_some() {
         true
     } else {
-        let mut probe = crate::background_powershell();
+        let mut probe = crate::powershell::background();
         probe.args([
             "-NoProfile",
             "-NonInteractive",
@@ -271,7 +271,7 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
     if state.child.is_none() {
         return Ok(outcome("not_owned"));
     }
-    let mut probe = crate::background_powershell();
+    let mut probe = crate::powershell::background();
     probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
     let reason =
         match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8)) {
@@ -320,4 +320,12 @@ pub(crate) async fn launch_managed(
         &diagnostic_result,
     );
     diagnostic_result
+}
+
+fn obs_executable_allowed(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
 }

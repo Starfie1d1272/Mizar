@@ -1,7 +1,6 @@
 //! Host ownership of GSI script execution and preparation guards.
 use crate::{
-    background_powershell, bundle_root, cs2_diagnostics, powershell, preparation_gate,
-    preparation_ticket, production_exit, startup_log::DesktopLog,
+    cs2_diagnostics, powershell, preparation_gate, production_exit, startup_log::DesktopLog,
 };
 use std::{path::Path, sync::Mutex, time::Duration};
 use tauri::Manager;
@@ -14,8 +13,8 @@ pub(crate) fn gsi_script(
     timeout: Duration,
     log: &DesktopLog,
 ) -> Result<String, String> {
-    let bundle = bundle_root()?;
-    let mut command = background_powershell();
+    let bundle = crate::host_runtime::bundle_root()?;
+    let mut command = powershell::background();
     command
         .args([
             "-NoProfile",
@@ -79,7 +78,7 @@ pub(crate) async fn ensure(
                 })?;
                 let gate = app.state::<preparation_gate::PreparationGate>();
                 let exit_ticket = match preparation_id.as_deref() {
-                    Some(id) => preparation_ticket(&app, id)?,
+                    Some(id) => preparation_gate::preparation_ticket(&app, id)?,
                     None => app
                         .state::<production_exit::ExitGate>()
                         .presentation_ticket()?,

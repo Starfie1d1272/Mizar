@@ -80,12 +80,12 @@ fn dispatch_visibility(
     let force_snapshot = completed.is_some();
     let generation = (window.label() == "program-overlay").then(|| {
         window
-            .state::<crate::HostState>()
+            .state::<crate::host_state::HostState>()
             .overlay_generation
             .load(std::sync::atomic::Ordering::Acquire)
     });
     window.with_webview(move |platform| {
-        if generation.is_some_and(|generation| current.state::<crate::HostState>().overlay_generation.load(std::sync::atomic::Ordering::Acquire) != generation) {
+        if generation.is_some_and(|generation| current.state::<crate::host_state::HostState>().overlay_generation.load(std::sync::atomic::Ordering::Acquire) != generation) {
             if let Some(sender) = completed { let _ = sender.send(()); }
             return;
         }
@@ -143,7 +143,7 @@ pub fn observe_process_failure(window: &WebviewWindow, generation: u64) -> Resul
             let webview = platform.controller().CoreWebView2()?;
             let host = current.app_handle().clone();
             let handler = webview2_com::ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
-                let state = host.state::<crate::HostState>();
+                let state = host.state::<crate::host_state::HostState>();
                 let mut kind = Default::default();
                 let result = args.as_ref().map(|args| args.ProcessFailedKind(&mut kind));
                 let document = (state.overlay_generation.load(std::sync::atomic::Ordering::Acquire) == generation).then(|| state.overlay_document.load(std::sync::atomic::Ordering::Acquire));
@@ -359,4 +359,11 @@ pub fn sync_all(app: &tauri::AppHandle) {
     for window in app.webview_windows().values() {
         let _ = sync_visibility(window);
     }
+}
+
+pub(crate) fn check_demo_main(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在制作中心操作 Demo 试播。".into());
+    }
+    Ok(())
 }

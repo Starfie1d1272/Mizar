@@ -1,7 +1,7 @@
 //! Demo entry operations shared by the workspace entry owner.
 use crate::{
-    demo_main_window, demo_test, entry_intent::EntryIntent, managed_cs2, mulnx_launch,
-    production_exit, startup_log::DesktopLog, updates,
+    demo_test, entry_intent::EntryIntent, managed_cs2, mulnx_launch, production_exit,
+    startup_log::DesktopLog, updates,
 };
 use std::sync::Mutex;
 use tauri::Manager;
@@ -22,7 +22,7 @@ pub(crate) async fn enter(
     let native_task_id = diagnostic_task_id.clone();
     let native_trigger = diagnostic_trigger.clone();
     let diagnostic_result: Result<bool, String> = async move {
-        demo_main_window(&window)?;
+        crate::window_presentation::check_demo_main(&window)?;
         let host = app.clone();
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();

@@ -1,7 +1,8 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
+use crate::host_state::HostState;
 use crate::{
-    check_preparation, cs2_activity, managed_cs2, mulnx_launch, observer_hud, preparation_gate,
-    preparation_ticket, production_exit, startup_log::DesktopLog, updates, HostState,
+    cs2_activity, managed_cs2, mulnx_launch, observer_hud, preparation_gate, production_exit,
+    startup_log::DesktopLog, updates,
 };
 use std::sync::Mutex;
 use tauri::Manager;
@@ -45,7 +46,7 @@ pub(crate) async fn begin_camera(
     tauri::async_runtime::spawn_blocking(move || {
         let mut submitted = false;
         let outcome = (|| -> Result<(), String> {
-            let ticket = preparation_ticket(&app, &preparation_id)?;
+            let ticket = preparation_gate::preparation_ticket(&app, &preparation_id)?;
             app.state::<production_exit::ExitGate>()
                 .check_ticket(ticket)?;
             app.state::<preparation_gate::PreparationGate>()
@@ -136,7 +137,7 @@ pub(crate) async fn launch_mulnx(
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        check_preparation(&app, preparation_id.as_deref())?;
+        preparation_gate::check_preparation(&app, preparation_id.as_deref())?;
         if let Some(id) = preparation_id.as_deref() {
             let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
@@ -148,7 +149,7 @@ pub(crate) async fn launch_mulnx(
         if resume_only.unwrap_or(false) {
             match preparation_id.as_deref() {
                 Some(id) => {
-                    let ticket = preparation_ticket(&app, id)?;
+                    let ticket = preparation_gate::preparation_ticket(&app, id)?;
                     app.state::<preparation_gate::PreparationGate>()
                         .commit(Some(id), || {
                             app.state::<production_exit::ExitGate>()
@@ -196,7 +197,7 @@ pub(crate) async fn replace(
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
         let gate = app.state::<preparation_gate::PreparationGate>();
-        let exit_ticket = preparation_ticket(&app, &preparation_id)?;
+        let exit_ticket = preparation_gate::preparation_ticket(&app, &preparation_id)?;
         let verify_exit = || {
             app.state::<production_exit::ExitGate>()
                 .check_ticket(exit_ticket)
@@ -283,7 +284,7 @@ pub(crate) async fn start(
                         production_exit::invalidate_local_match_exit(&app.state::<DesktopLog>())?;
                         let gate = app.state::<preparation_gate::PreparationGate>();
                         let exit_ticket = match preparation_id.as_deref() {
-                            Some(id) => preparation_ticket(&app, id)?,
+                            Some(id) => preparation_gate::preparation_ticket(&app, id)?,
                             None => app
                                 .state::<production_exit::ExitGate>()
                                 .presentation_ticket()?,

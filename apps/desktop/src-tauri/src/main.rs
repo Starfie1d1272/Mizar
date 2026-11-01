@@ -18,6 +18,8 @@ mod desktop_worker;
 mod entry_intent;
 mod geometry;
 mod gsi_host;
+mod host_runtime;
+mod host_state;
 mod lifecycle_contract;
 mod managed_cs2;
 mod mulnx_launch;
@@ -52,13 +54,13 @@ mod workspace_shell;
 
 use desktop_worker::DesktopWorker;
 use entry_intent::EntryIntent;
-use geometry::{Layout, Rect};
+use geometry::Rect;
+use host_state::HostState;
 use startup_log::DesktopLog;
 use std::{
     fs,
     hash::{Hash, Hasher},
-    io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    io::Write,
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -78,12 +80,8 @@ use tauri_plugin_dialog::DialogExt;
 use windows_host::GameTracker;
 use windows_startup::{failure_dialog, DesktopMutex, ExitRequest, ExitSignal, RuntimeJob};
 
-const BASE: &str = "http://127.0.0.1:3000";
 use gsi_host::{gsi_script, GSI_OPERATION_LOCK};
-
-fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
-    app.state::<preparation_gate::PreparationGate>().check(id)
-}
+use host_runtime::BASE;
 
 #[tauri::command]
 async fn cancel_cs2_preparation(
@@ -120,47 +118,6 @@ extern "system" {
         directory: *const u16,
         show: i32,
     ) -> isize;
-}
-
-struct HostState {
-    tracker: Arc<Mutex<GameTracker>>,
-    visible: Arc<AtomicBool>,
-    panels_only: AtomicBool,
-    entry_ticket: Mutex<Option<(String, u64)>>,
-    entry_message: Mutex<String>,
-    layout_dirty: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
-    live_window_lock: Mutex<()>,
-    overlay_generation: AtomicU64,
-    overlay_ready: AtomicU64,
-    overlay_epoch: AtomicU64,
-    overlay_recovering: AtomicBool,
-    overlay_presentation: Mutex<()>,
-    workspace_epoch: AtomicU64,
-    overlay_observation: Mutex<String>,
-    overlay_document: AtomicU64,
-    fullscreen_scope: Mutex<workspace_shell::FullscreenScope>,
-    window_group: Mutex<workspace_group::Group>,
-    entry_focus: Mutex<workspace_focus::Entry>,
-}
-
-pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64, String> {
-    app.state::<HostState>()
-        .entry_ticket
-        .lock()
-        .map_err(|_| "启动状态不可用。")?
-        .as_ref()
-        .filter(|(saved, _)| saved == id)
-        .map(|(_, ticket)| *ticket)
-        .ok_or_else(|| "本次启动已失效，请重新进入工作台。".into())
-}
-
-fn bundle_root() -> Result<PathBuf, String> {
-    std::env::current_exe()
-        .map_err(|error| format!("无法定位产品安装目录：{error}"))?
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "无法定位产品安装目录。".to_string())
 }
 
 fn supervisor(
@@ -211,43 +168,6 @@ fn supervisor(
         .map_err(|error| format!("制播服务未能启动：{error:?}"))
 }
 
-fn health_matches(root: &Path) -> bool {
-    let Ok(bytes) = fs::read(root.join("resources/metadata/artifact.json")) else {
-        return false;
-    };
-    let Ok(artifact) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    let address: SocketAddr = "127.0.0.1:3000".parse().expect("fixed loopback address");
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(700)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
-    if stream
-        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
-        return false;
-    }
-    let mut response = String::new();
-    if stream
-        .take(64 * 1024)
-        .read_to_string(&mut response)
-        .is_err()
-    {
-        return false;
-    }
-    let Some(body) = response.split("\r\n\r\n").nth(1) else {
-        return false;
-    };
-    let Ok(health) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
-    health["product"]["repository"] == "Starfie1d1272/Mizar"
-        && health["product"]["mode"] == "product"
-        && health["product"]["artifactSha256"] == artifact["artifactSha256"]
-}
-
 fn wait_for_runtime(
     root: &Path,
     child: &mut Child,
@@ -255,7 +175,7 @@ fn wait_for_runtime(
 ) -> Result<(), String> {
     let mut wait = startup_wait::StartupWait::new(Instant::now());
     loop {
-        if health_matches(root) {
+        if host_runtime::health_matches(root) {
             return Ok(());
         }
         let progress = log
@@ -504,164 +424,6 @@ fn webview_preflight() -> Result<String, String> {
     tauri::webview_version().map_err(|error| format!("Microsoft Edge WebView2 Runtime 不可用，请安装或修复 Evergreen Runtime 后重试。\n{error}\n{error:?}"))
 }
 
-fn placement(window: &tauri::WebviewWindow, rect: Rect) {
-    let _ = window_presentation::place(window, rect);
-}
-
-fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
-    if let Some(left) = app.get_webview_window("workspace-left") {
-        placement(&left, layout.left);
-    }
-    if let Some(dock) = app.get_webview_window("workspace-dock") {
-        placement(&dock, layout.dock);
-    }
-}
-
-fn sync_workspace_shell(app: &tauri::AppHandle) {
-    let state = app.state::<HostState>();
-    let visible = state.visible.load(Ordering::Relaxed);
-    let mut windows = Vec::new();
-    if visible {
-        for label in ["workspace-left", "workspace-dock"] {
-            if let Some(hwnd) = app
-                .get_webview_window(label)
-                .and_then(|window| window.hwnd().ok())
-            {
-                windows.push(hwnd.0 as isize);
-            }
-        }
-        if !state.panels_only.load(Ordering::Acquire) {
-            if let Ok(tracker) = state.tracker.lock() {
-                if let Some(game) = tracker.owned_window() {
-                    windows.push(game.hwnd);
-                }
-            }
-        }
-    }
-    let marked = state
-        .fullscreen_scope
-        .lock()
-        .is_ok_and(|mut scope| scope.synchronize(&windows));
-    if let Ok(mut tracker) = state.tracker.lock() {
-        tracker.fullscreen_layout = visible && marked;
-    };
-}
-
-fn overlay_workspace_windows(app: &tauri::AppHandle) -> Vec<isize> {
-    ["workspace-left", "workspace-dock"]
-        .iter()
-        .filter_map(|label| {
-            app.get_webview_window(label)
-                .and_then(|window| window.hwnd().ok())
-                .map(|hwnd| hwnd.0 as isize)
-        })
-        .collect()
-}
-
-fn update_overlay(app: &tauri::AppHandle, state: &HostState) {
-    let epoch = state.overlay_epoch.load(Ordering::Acquire);
-    let workspace_windows = overlay_workspace_windows(app);
-    let rect = if state.visible.load(Ordering::Acquire) {
-        state
-            .tracker
-            .lock()
-            .ok()
-            .and_then(|tracker| tracker.overlay_rect(&workspace_windows))
-    } else {
-        None
-    };
-    present_overlay(app, rect, epoch);
-}
-
-fn observe_overlay(
-    app: &tauri::AppHandle,
-    overlay: &tauri::WebviewWindow,
-    desired: Option<Rect>,
-    phase: &str,
-) {
-    let state = app.state::<HostState>();
-    let game = state
-        .tracker
-        .try_lock()
-        .ok()
-        .and_then(|tracker| tracker.window.map(|window| window.hwnd));
-    let Ok(hwnd) = overlay.hwnd() else {
-        return;
-    };
-    let mut detail =
-        windows_host::overlay_diagnostic(hwnd.0 as isize, game, &overlay_workspace_windows(app));
-    detail["generation"] = state.overlay_generation.load(Ordering::Acquire).into();
-    detail["desiredRect"] = desired
-        .map(|rect| [rect.x, rect.y, rect.width, rect.height])
-        .into();
-    detail["desiredVisible"] = desired.is_some().into();
-    detail["documentReady"] = (state.overlay_ready.load(Ordering::Acquire)
-        == state.overlay_generation.load(Ordering::Acquire))
-    .into();
-    let signature = detail.to_string();
-    if let Ok(mut previous) = state.overlay_observation.lock() {
-        if phase != "tick" || *previous != signature {
-            app.state::<DesktopLog>()
-                .event("program_overlay_snapshot", phase, Some(&signature));
-            *previous = signature;
-        }
-    };
-}
-
-fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>, epoch: u64) {
-    let ticket = app
-        .state::<production_exit::ExitGate>()
-        .presentation_ticket()
-        .ok();
-    let host = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let state = host.state::<HostState>();
-        let Ok(_presentation) = state.overlay_presentation.lock() else {
-            return;
-        };
-        if state.overlay_epoch.load(Ordering::Acquire) != epoch {
-            return;
-        }
-        let Some(overlay) = host.get_webview_window("program-overlay") else {
-            return;
-        };
-        let generation = state.overlay_generation.load(Ordering::Acquire);
-        let game_allowed = state
-            .tracker
-            .try_lock()
-            .is_ok_and(|tracker| tracker.overlay_still_allowed(&overlay_workspace_windows(&host)));
-        let allowed = overlay_recovery::may_present(
-            state.visible.load(Ordering::Acquire),
-            state.overlay_recovering.load(Ordering::Acquire),
-            generation,
-            state.overlay_ready.load(Ordering::Acquire),
-            game_allowed,
-        );
-        let desired = rect.filter(|_| allowed);
-        let presented = ticket.is_some_and(|ticket| {
-            host.state::<production_exit::ExitGate>()
-                .publish(ticket, || {
-                    if let Some(rect) = desired {
-                        placement(&overlay, rect);
-                        let _ = window_presentation::set_overlay_visible(&overlay, true);
-                    } else {
-                        let _ = window_presentation::set_overlay_visible(&overlay, false);
-                    }
-                })
-                .is_ok()
-        });
-        if !presented {
-            let _ = window_presentation::set_overlay_visible(&overlay, false);
-        }
-        observe_overlay(
-            &host,
-            &overlay,
-            if presented { desired } else { None },
-            "tick",
-        );
-    });
-}
-
 #[tauri::command]
 fn restore_layout(
     app: tauri::AppHandle,
@@ -684,7 +446,7 @@ fn restore_layout(
                 .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
             let position = monitor.position();
             let size = monitor.size();
-            apply_layout(
+            workspace_presentation::apply_layout(
                 &app,
                 geometry::workspace_layout(Rect {
                     x: position.x,
@@ -708,8 +470,8 @@ fn restore_layout(
             })?
             .restore_layout()
             .ok_or_else(|| serde_json::json!("无法读取显示器工作区。"))?;
-        apply_layout(&app, layout);
-        update_overlay(&app, &state);
+        workspace_presentation::apply_layout(&app, layout);
+        workspace_presentation::update_overlay(&app, &state);
         let tracker = state.tracker.lock().map_err(|error| {
             command_log.preserve_error(
                 "restore_layout",
@@ -743,66 +505,6 @@ fn restore_layout(
     diagnostic_result
 }
 
-fn focus_session(process: &managed_cs2::WorkspaceProcess) -> workspace_focus::Session {
-    workspace_focus::Session {
-        pid: process.pid,
-        created: process.created,
-    }
-}
-
-fn attempt_game_focus(app: &tauri::AppHandle, request: workspace_focus::Request) -> bool {
-    let result = (|| -> Result<(), &'static str> {
-        let state = app.state::<HostState>();
-        if !state.visible.load(Ordering::Acquire)
-            || app.state::<production_exit::ExitGate>().check().is_err()
-            || app.state::<cs2_activity::Activity>().phase() != "idle"
-        {
-            return Err("workspace_unavailable");
-        }
-        let cs2_state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let cs2 = cs2_state.try_lock().map_err(|_| "session_busy")?;
-        let process = cs2
-            .workspace_process()
-            .map_err(|_| "session_invalid")?
-            .ok_or("session_missing")?;
-        if !process.is_running() {
-            return Err("process_stopped");
-        }
-        let tracker = state.tracker.try_lock().map_err(|_| "tracker_busy")?;
-        let window = tracker.window.ok_or("game_window_missing")?;
-        if window.pid != process.pid {
-            return Err("game_window_mismatch");
-        }
-        let mut invoked = false;
-        let focused = request.attempt(
-            focus_session(&process),
-            windows_host::foreground(),
-            true,
-            |source| {
-                invoked = true;
-                tracker.restore_focus(source)
-            },
-        );
-        if focused {
-            Ok(())
-        } else if invoked {
-            Err("native_focus_not_acquired")
-        } else {
-            Err("intent_cancelled")
-        }
-    })();
-    app.state::<DesktopLog>().event(
-        "workspace_focus_attempt",
-        if result.is_ok() {
-            "focused"
-        } else {
-            "not_focused"
-        },
-        result.err(),
-    );
-    result.is_ok()
-}
-
 #[tauri::command]
 fn restore_cs2_focus(
     window: tauri::WebviewWindow,
@@ -832,9 +534,9 @@ fn restore_cs2_focus(
             let Ok(Some(process)) = cs2.workspace_process() else {
                 return false;
             };
-            workspace_focus::Request::new(focus_session(&process), source)
+            workspace_focus::Request::new(workspace_presentation::focus_session(&process), source)
         };
-        request.is_some_and(|request| attempt_game_focus(&app, request))
+        request.is_some_and(|request| workspace_presentation::attempt_game_focus(&app, request))
     })();
     diagnostic_log.native_outcome(
         "restore_cs2_focus",
@@ -867,7 +569,7 @@ fn set_program_overlay_enabled(
                 )
             })?
             .overlay_enabled = enabled;
-        update_overlay(&app, &state);
+        workspace_presentation::update_overlay(&app, &state);
         Ok(())
     })();
     diagnostic_log.native_outcome(
@@ -940,18 +642,6 @@ async fn select_obs_executable(
         &diagnostic_result,
     );
     diagnostic_result
-}
-
-fn local_url(path: &str) -> WebviewUrl {
-    WebviewUrl::External(format!("{BASE}{path}").parse().expect("fixed local URL"))
-}
-
-fn obs_executable_allowed(path: &Path) -> bool {
-    path.is_absolute()
-        && path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("obs64.exe"))
 }
 
 #[tauri::command]
@@ -1485,13 +1175,6 @@ async fn finish_workspace(
     diagnostic_result
 }
 
-fn demo_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("请在制作中心操作 Demo 试播。".into());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 async fn select_demo_file(
     window: tauri::WebviewWindow,
@@ -1502,7 +1185,7 @@ async fn select_demo_file(
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<Option<serde_json::Value>, String> = async move {
-        demo_main_window(&window)?;
+        window_presentation::check_demo_main(&window)?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
             let native_operation_id = native_operation_id.clone();
@@ -1573,7 +1256,7 @@ async fn start_demo_test(
     let command_log = diagnostic_log.clone();
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<serde_json::Value, String> = async move {
-        demo_main_window(&window)?;
+        window_presentation::check_demo_main(&window)?;
         app.state::<production_exit::ExitGate>().check()?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
@@ -1696,7 +1379,7 @@ async fn resume_demo_test(
     app: tauri::AppHandle,
     request_id: String,
 ) -> Result<serde_json::Value, String> {
-    demo_main_window(&window)?;
+    window_presentation::check_demo_main(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
         let log = app.state::<DesktopLog>();
         mulnx_launch::resume_demo(&app, &log, &request_id)
@@ -1707,7 +1390,7 @@ async fn resume_demo_test(
 
 #[tauri::command]
 fn entry_document(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<String, String> {
-    demo_main_window(&window)?;
+    window_presentation::check_demo_main(&window)?;
     app.state::<EntryIntent>().generation()
 }
 
@@ -1717,7 +1400,7 @@ fn cancel_entry_intent(
     app: tauri::AppHandle,
     intent_id: String,
 ) -> Result<(), String> {
-    demo_main_window(&window)?;
+    window_presentation::check_demo_main(&window)?;
     if intent_id.len() != 36
         || !intent_id
             .bytes()
@@ -2174,105 +1857,6 @@ async fn open_cs2_backup(
     diagnostic_result
 }
 
-fn trusted_navigation(url: &tauri::Url) -> bool {
-    url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3000)
-}
-
-fn show_workspace(app: &tauri::AppHandle) {
-    let state = app.state::<HostState>();
-    state.panels_only.store(false, Ordering::Release);
-    {
-        let _presentation = state
-            .overlay_presentation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
-        state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
-        state.visible.store(true, Ordering::Release);
-    }
-    sync_workspace_shell(app);
-    // Native window calls can synchronously dispatch window events. Release
-    // the tracker before presenting any WebView or posting HUD visibility.
-    let layout = state
-        .tracker
-        .lock()
-        .ok()
-        .and_then(|mut tracker| tracker.restore_layout());
-    if let Some(layout) = layout {
-        apply_layout(app, layout);
-    }
-    for label in ["workspace-left", "workspace-dock"] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window_presentation::show_without_activation(&window);
-        }
-    }
-    // The existing worker presents the HUD after the exit publication gate is released.
-}
-
-fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
-    let state = app.state::<HostState>();
-    {
-        let _presentation = state
-            .overlay_presentation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
-        state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
-        state.visible.store(false, Ordering::Release);
-    }
-    if let Ok(mut group) = state.window_group.lock() {
-        *group = workspace_group::Group::default();
-    }
-    sync_workspace_shell(app);
-    let result = window_presentation::hide_panels(|label| {
-        let Some(window) = app.get_webview_window(label) else {
-            return Ok(());
-        };
-        window_presentation::hide_without_activation(&window).map_err(|error| {
-            app.state::<DesktopLog>().event(
-                "production_finish",
-                "failure",
-                Some(&format!(
-                    "phase=workspace_hide_panel; label={label}; cause={error}"
-                )),
-            );
-            let title = if label == "workspace-left" {
-                "现场工作区"
-            } else {
-                "现场控制底栏"
-            };
-            format!("{title}未能隐藏，请在准备中心重试退出工作台。")
-        })
-    });
-    if let Some(review) = app.get_webview_window("tool-review") {
-        let _ = review.destroy();
-    }
-    present_overlay(app, None, state.overlay_epoch.load(Ordering::Acquire));
-    result
-}
-
-fn main_path_allowed(path: &str) -> bool {
-    [
-        "/",
-        "/matches",
-        "/resources",
-        "/matches?tab=roster",
-        "/matches?tab=maps",
-        "/matches#match-bp",
-        "/matches#series-binding",
-        "/picture",
-        "/picture?tab=overlay",
-        "/settings",
-        "/settings?tab=gsi",
-        "/settings?tab=obs",
-        "/settings?tab=music",
-        "/settings?tab=camera",
-        "/settings?tab=music&section=camera",
-        "/settings?tab=rivalhub",
-    ]
-    .contains(&path)
-}
-
 #[tauri::command]
 fn open_main(
     app: tauri::AppHandle,
@@ -2307,55 +1891,6 @@ fn present_production_inner(app: &tauri::AppHandle, live: bool) -> Result<(), St
 }
 
 // Only the fixed Program surface is constructed here. Both paths use the same options.
-fn create_program_overlay(app: &tauri::AppHandle) -> Result<(), String> {
-    let state = app.state::<HostState>();
-    let generation = state.overlay_generation.fetch_add(1, Ordering::AcqRel) + 1;
-    state.overlay_ready.store(0, Ordering::Release);
-    state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
-    let script = format!("window.__MIZAR_OVERLAY_GENERATION__ = {generation};");
-    let overlay = WebviewWindowBuilder::new(app, "program-overlay", local_url("/program?host=desktop"))
-        .title("Mizar · Program HUD")
-        .decorations(false).shadow(false).resizable(false).transparent(true)
-        .always_on_top(true).focusable(false).focused(false).skip_taskbar(true).visible(false)
-        .initialization_script(&script)
-        .on_navigation(trusted_navigation)
-        .on_page_load(move |window, payload| {
-            let state = window.state::<HostState>();
-            if state.overlay_generation.load(Ordering::Acquire) != generation { return; }
-            if payload.event() == tauri::webview::PageLoadEvent::Started {
-                let _presentation = state.overlay_presentation.lock().unwrap_or_else(|error| error.into_inner());
-                if state.overlay_generation.load(Ordering::Acquire) != generation { return; }
-                state.overlay_ready.store(0, Ordering::Release);
-                state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
-                state.overlay_document.fetch_add(1, Ordering::AcqRel);
-            } else if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                let document_id = state.overlay_document.load(Ordering::Acquire);
-                let script = format!("window.__MIZAR_OVERLAY_DOCUMENT__ = {document_id}; window.dispatchEvent(new Event('mizar-overlay-document'));");
-                if let Err(error) = window.eval(&script) {
-                    window.state::<DesktopLog>().event("program_overlay_document", "failure", Some(&error.to_string()));
-                }
-            }
-            window.state::<DesktopLog>().event("program_overlay_navigation", "observed",
-                Some(&serde_json::json!({"generation":generation,"documentId":state.overlay_document.load(Ordering::Acquire),"event":format!("{:?}", payload.event())}).to_string()));
-        })
-        .build().map_err(|error| error.to_string())?;
-    if let Err(error) = window_presentation::observe_process_failure(&overlay, generation) {
-        let _ = overlay.destroy();
-        return Err(error);
-    }
-    if let Err(error) = overlay.set_ignore_cursor_events(true) {
-        let _ = overlay.destroy();
-        return Err(error.to_string());
-    }
-    if let Ok(hwnd) = overlay.hwnd() {
-        window_frame::square_window(hwnd.0 as isize);
-    }
-    if let Err(error) = window_presentation::sync_visibility(&overlay) {
-        let _ = overlay.destroy();
-        return Err(error.to_string());
-    }
-    Ok(())
-}
 
 #[tauri::command]
 fn program_overlay_ready(
@@ -2395,7 +1930,7 @@ fn program_overlay_ready(
         "ready",
         Some(&serde_json::json!({"generation":generation,"documentId":document_id}).to_string()),
     );
-    update_overlay(app, &state);
+    workspace_presentation::update_overlay(app, &state);
     Ok(())
 }
 
@@ -2408,7 +1943,7 @@ impl Drop for OverlayRecoveryGuard<'_> {
         self.state
             .overlay_recovering
             .store(false, Ordering::Release);
-        update_overlay(self.app, self.state);
+        workspace_presentation::update_overlay(self.app, self.state);
     }
 }
 
@@ -2471,13 +2006,13 @@ async fn recover_program_overlay(
         };
         let old = app.get_webview_window("program-overlay");
         if let Some(old) = &old {
-            let workspace_windows = overlay_workspace_windows(&app);
+            let workspace_windows = workspace_presentation::overlay_workspace_windows(&app);
             let desired = state
                 .tracker
                 .lock()
                 .ok()
                 .and_then(|tracker| tracker.overlay_rect(&workspace_windows));
-            observe_overlay(&app, old, desired, "before_recovery");
+            workspace_presentation::observe_overlay(&app, old, desired, "before_recovery");
             if let Err(error) = window_presentation::snapshot_controller(old) {
                 app.state::<DesktopLog>().event(
                     "program_overlay_snapshot",
@@ -2523,7 +2058,7 @@ async fn recover_program_overlay(
                 if !valid() {
                     return Err("恢复已取消。".into());
                 }
-                create_program_overlay(&app)
+                workspace_presentation::create_program_overlay(&app)
             },
         )?;
         let generation = state.overlay_generation.load(Ordering::Acquire);
@@ -2564,76 +2099,6 @@ async fn recover_program_overlay(
         diagnostic_operation_id.as_deref(),
         &result,
     );
-    result
-}
-
-fn ensure_live_windows(app: &tauri::AppHandle, overlay: bool) -> Result<(), String> {
-    let state = app.state::<HostState>();
-    let _guard = state
-        .live_window_lock
-        .lock()
-        .map_err(|_| "现场窗口状态不可用。")?;
-    if ["workspace-left", "workspace-dock"]
-        .iter()
-        .all(|label| app.get_webview_window(label).is_some())
-        && (!overlay || app.get_webview_window("program-overlay").is_some())
-    {
-        return Ok(());
-    }
-    let log = app.state::<DesktopLog>();
-    let mut created = Vec::new();
-    let result = (|| {
-        if app.get_webview_window("workspace-left").is_none() {
-            log.step("workspace_left", || {
-                WebviewWindowBuilder::new(app, "workspace-left", local_url("/workspace/left"))
-                    .title("Mizar · 工作区")
-                    .decorations(false)
-                    .shadow(false)
-                    .resizable(false)
-                    .visible(false)
-                    .focused(false)
-                    .on_navigation(trusted_navigation)
-                    .build()
-            })?;
-            created.push("workspace-left");
-        }
-        if app.get_webview_window("workspace-dock").is_none() {
-            log.step("workspace_dock", || {
-                WebviewWindowBuilder::new(app, "workspace-dock", local_url("/workspace/dock"))
-                    .title("Mizar · 现场控制")
-                    .decorations(false)
-                    .shadow(false)
-                    .resizable(false)
-                    .visible(false)
-                    .focused(false)
-                    .on_navigation(trusted_navigation)
-                    .build()
-            })?;
-            created.push("workspace-dock");
-        }
-        if overlay && app.get_webview_window("program-overlay").is_none() {
-            create_program_overlay(app)?;
-            created.push("program-overlay");
-        }
-        for label in &created {
-            if let Some(hwnd) = app
-                .get_webview_window(label)
-                .and_then(|window| window.hwnd().ok())
-            {
-                window_frame::square_window(hwnd.0 as isize);
-            }
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        for label in &created {
-            if let Some(window) = app.get_webview_window(label) {
-                let _ = window.destroy();
-            }
-        }
-        log.event("live_windows_rollback", "success", None);
-    }
-
     result
 }
 
@@ -2754,7 +2219,7 @@ async fn open_tool(
         .visible(tool != "review")
         .title(format!("Mizar · {title}"))
         .inner_size(1280.0, 800.0)
-        .on_navigation(trusted_navigation)
+        .on_navigation(workspace_presentation::trusted_navigation)
         .build()
         .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能打开。"))?;
     if tool == "review" { present_review(&app, &window)?; }
@@ -3048,17 +2513,6 @@ fn open_rivalhub_authorization(
         &diagnostic_result,
     );
     diagnostic_result
-}
-
-fn background_powershell() -> Command {
-    let mut command = Command::new("powershell.exe");
-    // PowerShell 7's inherited module path hides Windows PowerShell's built-in
-    // modules (including Get-FileHash). Let the child initialize its own path.
-    command
-        .env_remove("PSModulePath")
-        .stdin(Stdio::null())
-        .creation_flags(0x08000000);
-    command
 }
 
 fn valid_workbench_path(path: &str) -> bool {
@@ -3395,7 +2849,8 @@ fn run_desktop(
     update_stage: Arc<Mutex<Option<PathBuf>>>,
 ) -> Result<(), String> {
     let exit_request = Arc::new(
-        ExitRequest::new(&shutdown_scope(&bundle_root()?)?).map_err(|error| error.to_string())?,
+        ExitRequest::new(&shutdown_scope(&host_runtime::bundle_root()?)?)
+            .map_err(|error| error.to_string())?,
     );
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
@@ -3466,20 +2921,20 @@ fn run_desktop(
             let handle = app.handle();
             let page_log = setup_log.clone();
             setup_log.step("main_window", || {
-                WebviewWindowBuilder::new(handle, "main", local_url("/"))
+                WebviewWindowBuilder::new(handle, "main", workspace_presentation::local_url("/"))
                     .title("Mizar")
                     .inner_size(1280.0, 860.0)
                     .min_inner_size(720.0, 560.0)
                     .maximized(true)
                     .visible(true)
-                    .on_navigation(trusted_navigation)
+                    .on_navigation(workspace_presentation::trusted_navigation)
                     .on_page_load(move |window, payload| {
                         if payload.event() == tauri::webview::PageLoadEvent::Started {
                             window.state::<EntryIntent>().cancel_all();
                             obs_configuration::document_changed(&page_log);
                         }
                         if payload.event() == tauri::webview::PageLoadEvent::Finished
-                            && trusted_navigation(payload.url())
+                            && workspace_presentation::trusted_navigation(payload.url())
                         {
                             // Navigation finished; this does not assert React or production readiness.
                             page_log.event("main_page_load", "success", None);
@@ -3520,7 +2975,7 @@ fn run_desktop(
                             }
                         }
                         "hide_workspace" => {
-                            let _ = hide_workspace(app);
+                            let _ = workspace_presentation::hide_workspace(app);
                             if let Some(window) = app.get_webview_window("workspace-dock") {
                                 let _ =
                                     window.eval("window.dispatchEvent(new Event('mizar-hide'))");
@@ -3633,7 +3088,7 @@ fn run_desktop(
                         && !host.state::<HostState>().panels_only.load(Ordering::Acquire)
                         && !exit_signal.requested()
                     {
-                        let workspace_windows = overlay_workspace_windows(&host);
+                        let workspace_windows = workspace_presentation::overlay_workspace_windows(&host);
                         worker_tracker
                             .lock()
                             .ok()
@@ -3707,13 +3162,13 @@ fn run_desktop(
                                             .visible
                                             .load(Ordering::Relaxed)
                                         {
-                                            sync_workspace_shell(&tick_host);
+                                            workspace_presentation::sync_workspace_shell(&tick_host);
                                             if let Some(layout) = layout {
-                                                apply_layout(&tick_host, layout);
+                                                workspace_presentation::apply_layout(&tick_host, layout);
                                             }
-                                            present_overlay(&tick_host, rect, overlay_epoch);
+                                            workspace_presentation::present_overlay(&tick_host, rect, overlay_epoch);
                                         } else {
-                                            present_overlay(&tick_host, None, overlay_epoch);
+                                            workspace_presentation::present_overlay(&tick_host, None, overlay_epoch);
                                         }
                                         window_presentation::sync_all(&tick_host);
                                     }
@@ -3904,7 +3359,7 @@ fn run_desktop(
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
                     host.state::<production_exit::ExitGate>().cancel();
-                    let _ = hide_workspace(&host);
+                    let _ = workspace_presentation::hide_workspace(&host);
                     if host.state::<production_exit::VerifiedStop>().complete() {
                         // Direct service-stop callers may already have removed HTTP.
                         // Native recovery remains available through the tray, never a refused WebView.
@@ -3991,7 +3446,8 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
     // Failure cannot stop a same-artifact runtime borrowed from another session.
     // A successful desktop session's explicit exit may stop its verified local runtime.
     let mut stopped_target = None;
-    let stop_result = if runtime_owned(log, child.id()) || (outcome.is_ok() && health_matches(root))
+    let stop_result = if runtime_owned(log, child.id())
+        || (outcome.is_ok() && host_runtime::health_matches(root))
     {
         match runtime_stop_target(root, false) {
             Ok(target) => {
@@ -4082,7 +3538,7 @@ fn main() {
         eprintln!("启动参数无法识别。");
         std::process::exit(1);
     }
-    let root = match bundle_root() {
+    let root = match host_runtime::bundle_root() {
         Ok(root) => root,
         Err(message) => {
             if !headless {

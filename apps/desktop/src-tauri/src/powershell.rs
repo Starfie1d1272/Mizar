@@ -2,6 +2,7 @@ use crate::{cs2_diagnostics, startup_log::DesktopLog};
 use serde_json::Value;
 use std::{
     io::{self, Read},
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -162,4 +163,15 @@ pub fn run(
 pub fn parse(log: &DesktopLog, operation: &str, output: &str) -> Result<Value, String> {
     serde_json::from_str(output.trim())
         .map_err(|e| failed(log, operation, "解析结果", &format!("{e:?}\n{output}")))
+}
+
+pub(crate) fn background() -> Command {
+    let mut command = Command::new("powershell.exe");
+    // PowerShell 7's inherited module path hides Windows PowerShell's built-in
+    // modules (including Get-FileHash). Let the child initialize its own path.
+    command
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .creation_flags(0x08000000);
+    command
 }

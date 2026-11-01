@@ -1,7 +1,7 @@
 //! The desktop owns preparation independently of any webview lifetime.
+use crate::host_state::HostState;
 use crate::{
-    check_preparation, entry_intent::EntryIntent, preparation_gate, preparation_ticket,
-    production_exit, startup_log::DesktopLog, HostState,
+    entry_intent::EntryIntent, preparation_gate, production_exit, startup_log::DesktopLog,
 };
 use serde_json::{json, Value};
 use std::{
@@ -193,9 +193,9 @@ fn check(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     let t = snapshot()?
         .filter(|t| t.id == id && !t.cancelled)
         .ok_or("准备已取消。")?;
-    check_preparation(app, Some(id))?;
+    preparation_gate::check_preparation(app, Some(id))?;
     app.state::<production_exit::ExitGate>()
-        .check_ticket(preparation_ticket(app, id)?)?;
+        .check_ticket(preparation_gate::preparation_ticket(app, id)?)?;
     let production = request(app, "GET", "/local/v1/production", json!({}))?;
     let production = crate::lifecycle_contract::production_view(&production)?;
     let valid = if t.entered {
@@ -721,7 +721,7 @@ fn preparation_start(
                 return Err("已有准备任务，请重试或取消原任务。".into());
             }
             app.state::<production_exit::ExitGate>()
-                .check_ticket(preparation_ticket(&app, &existing.id)?)?;
+                .check_ticket(preparation_gate::preparation_ticket(&app, &existing.id)?)?;
             if existing.running {
                 return Ok(());
             }

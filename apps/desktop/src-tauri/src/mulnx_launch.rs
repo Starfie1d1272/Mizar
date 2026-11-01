@@ -277,7 +277,7 @@ fn launch_operation(
 ) -> Result<Value, String> {
     let gate = app.state::<crate::preparation_gate::PreparationGate>();
     let exit_ticket = match preparation_id {
-        Some(id) => crate::preparation_ticket(app, id)?,
+        Some(id) => crate::preparation_gate::preparation_ticket(app, id)?,
         None => app
             .state::<production_exit::ExitGate>()
             .presentation_ticket()?,
@@ -583,7 +583,7 @@ fn launch_operation(
             std::thread::sleep(Duration::from_millis(200));
         }
         no_game()?;
-        let root = crate::bundle_root()?;
+        let root = crate::host_runtime::bundle_root()?;
         let mut request = Command::new(root.join("resources/runtime/node.exe"));
         request
             .arg(root.join("resources/app/dist/orchestration/provider.js"))
@@ -991,7 +991,7 @@ pub fn stop_managed_for_exit(
             }
             crate::mulnx_stop::verify_present(&game)?;
             verify_gateway_owner(log, 55202, game.pid)?;
-            let root = crate::bundle_root()?;
+            let root = crate::host_runtime::bundle_root()?;
             let mut command = Command::new(root.join("resources/runtime/node.exe"));
             command
                 .arg(root.join("resources/app/dist/orchestration/provider.js"))

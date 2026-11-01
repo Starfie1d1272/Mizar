@@ -1,5 +1,6 @@
 //! Serializes cancellation with the irreversible submission of a preparation step.
 use std::{collections::HashSet, sync::Mutex};
+use tauri::Manager;
 
 #[derive(Default)]
 pub struct PreparationGate(Mutex<HashSet<String>>);
@@ -100,4 +101,19 @@ pub fn may_recover_mulnx_journal(
     mulnx: bool,
 ) -> bool {
     expected.is_none() || (mulnx && expected == actual)
+}
+
+pub(crate) fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Result<(), String> {
+    app.state::<PreparationGate>().check(id)
+}
+
+pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64, String> {
+    app.state::<crate::host_state::HostState>()
+        .entry_ticket
+        .lock()
+        .map_err(|_| "启动状态不可用。")?
+        .as_ref()
+        .filter(|(saved, _)| saved == id)
+        .map(|(_, ticket)| *ticket)
+        .ok_or_else(|| "本次启动已失效，请重新进入工作台。".into())
 }

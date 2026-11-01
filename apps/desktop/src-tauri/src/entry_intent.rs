@@ -1,5 +1,5 @@
 //! Ownership and document fencing of a pending workspace entry.
-use crate::demo_main_window;
+
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -128,7 +128,7 @@ pub(crate) fn begin(
     intent_id: String,
     document: String,
 ) -> Result<(), String> {
-    demo_main_window(&window)?;
+    crate::window_presentation::check_demo_main(&window)?;
     if intent_id.len() != 36
         || !intent_id
             .bytes()
