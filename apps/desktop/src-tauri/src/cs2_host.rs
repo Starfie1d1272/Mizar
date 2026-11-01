@@ -48,6 +48,7 @@ pub(crate) async fn begin_camera(
         let mut submitted = false;
         let outcome = (|| -> Result<(), String> {
             let ticket = preparation_gate::preparation_ticket(&app, &preparation_id)?;
+            let _operation = crate::observer_workspace::operation()?;
             app.state::<production_exit::ExitGate>()
                 .check_ticket(ticket)?;
             app.state::<preparation_gate::PreparationGate>()

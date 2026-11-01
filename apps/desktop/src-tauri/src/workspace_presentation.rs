@@ -237,7 +237,9 @@ pub(crate) fn present_production_inner_checked(
         app.state::<updates::PendingUpdate>().check()?;
         let (mut request, process) = {
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-            let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
+            let cs2 = managed
+                .try_lock()
+                .map_err(|_| "CS2 正忙，请稍后重试进入工作台。")?;
             let process = cs2.workspace_process()?;
             let request = process.as_ref().and_then(|process| {
                 app.state::<HostState>()
