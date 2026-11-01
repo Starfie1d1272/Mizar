@@ -361,15 +361,18 @@ export class LocalTournamentStore {
     });
   }
 
-  async selectMatch(matchId: string): Promise<MatchDocumentV1> {
+  async selectMatch(matchId: string, canCommit?: () => boolean): Promise<MatchDocumentV1> {
     return this.queue.run(async () => {
       const document = this.state.matches.find((match) => match.matchId === matchId);
       if (document === undefined) throw new Error('local_match_not_found');
-      await this.commit({
-        ...this.state,
-        selectedMatchId: matchId,
-        selectedAt: new Date().toISOString(),
-      });
+      await this.commit(
+        {
+          ...this.state,
+          selectedMatchId: matchId,
+          selectedAt: new Date().toISOString(),
+        },
+        canCommit,
+      );
       return document;
     });
   }
@@ -505,14 +508,17 @@ export class LocalTournamentStore {
     });
   }
 
-  async saveEvent(input: {
-    readonly eventId: string;
-    readonly name: string;
-    readonly logoUrl: string | null;
-    readonly themeColor: string | null;
-    readonly mapPool: readonly string[];
-    readonly bo3Rules?: LocalBo3BpRules;
-  }): Promise<LocalEventV1> {
+  async saveEvent(
+    input: {
+      readonly eventId: string;
+      readonly name: string;
+      readonly logoUrl: string | null;
+      readonly themeColor: string | null;
+      readonly mapPool: readonly string[];
+      readonly bo3Rules?: LocalBo3BpRules;
+    },
+    canCommit?: () => boolean,
+  ): Promise<LocalEventV1> {
     return this.queue.run(async () => {
       const existing = this.state.events.find((item) => item.eventId === input.eventId);
       if (
@@ -548,24 +554,43 @@ export class LocalTournamentStore {
             })
           : match,
       );
-      await this.commit({
-        ...this.state,
-        events: this.state.events.map((event) =>
-          event.eventId === input.eventId ? updated : event,
-        ),
-        matches: nextMatches,
-      });
+      await this.commit(
+        {
+          ...this.state,
+          events: this.state.events.map((event) =>
+            event.eventId === input.eventId ? updated : event,
+          ),
+          matches: nextMatches,
+        },
+        canCommit,
+      );
       return updated;
     });
   }
 
   /** One-time import of a previously saved standalone BP match. */
-  async importLegacyMatch(input: unknown, bo3Rules?: LocalBo3BpRules): Promise<MatchDocumentV1> {
+  async importLegacyMatch(
+    input: unknown,
+    bo3Rules?: LocalBo3BpRules,
+    canCommit?: () => boolean,
+  ): Promise<MatchDocumentV1> {
     const document = parseMatchDocumentV1(input);
     const competition = document.competition;
     return this.queue.run(async () => {
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
-      if (existing !== undefined) return existing;
+      if (existing !== undefined) {
+        if (canCommit) {
+          await this.commit(
+            {
+              ...this.state,
+              selectedMatchId: existing.matchId,
+              selectedAt: new Date().toISOString(),
+            },
+            canCommit,
+          );
+        }
+        return existing;
+      }
       const event: LocalEventV1 | null =
         competition === null
           ? null
@@ -584,26 +609,29 @@ export class LocalTournamentStore {
         logoUrl: entrant.logoUrl,
         players: entrant.players,
       });
-      await this.commit({
-        ...this.state,
-        events:
-          event === null
-            ? this.state.events
-            : this.state.events.some((item) => item.eventId === event.eventId)
-              ? this.state.events.map((item) =>
-                  item.eventId === event.eventId
-                    ? { ...item, matchIds: [...item.matchIds, document.matchId] }
-                    : item,
-                )
-              : [...this.state.events, event],
-        teams: [...this.state.teams, team(document.entrants.a), team(document.entrants.b)].filter(
-          (item, index, all) =>
-            all.findIndex((candidate) => candidate.teamId === item.teamId) === index,
-        ),
-        matches: [...this.state.matches, document],
-        selectedMatchId: document.matchId,
-        selectedAt: new Date().toISOString(),
-      });
+      await this.commit(
+        {
+          ...this.state,
+          events:
+            event === null
+              ? this.state.events
+              : this.state.events.some((item) => item.eventId === event.eventId)
+                ? this.state.events.map((item) =>
+                    item.eventId === event.eventId
+                      ? { ...item, matchIds: [...item.matchIds, document.matchId] }
+                      : item,
+                  )
+                : [...this.state.events, event],
+          teams: [...this.state.teams, team(document.entrants.a), team(document.entrants.b)].filter(
+            (item, index, all) =>
+              all.findIndex((candidate) => candidate.teamId === item.teamId) === index,
+          ),
+          matches: [...this.state.matches, document],
+          selectedMatchId: document.matchId,
+          selectedAt: new Date().toISOString(),
+        },
+        canCommit,
+      );
       return document;
     });
   }
