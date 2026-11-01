@@ -401,10 +401,7 @@ export class UpdateManager {
     this.event('check', `update_check_${reason}`);
     try {
       await this.saveConfig();
-      const release = await this.source.latest(
-        signal,
-        this.config.highestVersion ?? this.options.version.split('-')[0],
-      );
+      const release = await this.source.latest(signal, this.config.highestVersion ?? undefined);
       if (!release) {
         this.phase = 'current';
         return;

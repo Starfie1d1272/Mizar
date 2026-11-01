@@ -8,6 +8,43 @@ import { UpdateManager } from '../src/updates/manager.js';
 import { transfer } from '../src/distribution/transfer.js';
 import { updateRequest, boundedBytes } from '../src/updates/network.js';
 
+test('a newer installed RC does not require an unpublished Stable version from the mirror', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-rc-stable-'));
+  let checks = 0;
+  const manager = new UpdateManager({
+    stateRoot: root,
+    bundleRoot: root,
+    currentContentDigest: 'a'.repeat(64),
+    version: '1.11.0-rc.4',
+    installed: true,
+    source: {
+      latest: async (_signal, minimum) => {
+        checks++;
+        if (minimum && minimum !== '1.10.3') throw new Error('update_mirror_unavailable');
+        return {
+          tag_name: 'v1.10.3',
+          draft: false,
+          prerelease: false,
+          published_at: '2026-10-30T00:00:00Z',
+          assets: [],
+        };
+      },
+      authenticate: async () => {
+        throw new Error('older Stable must not be installed over RC');
+      },
+    },
+  });
+  try {
+    await manager.load();
+    await manager.check();
+    assert.equal(checks, 1);
+    assert.equal(manager.status().phase, 'current');
+  } finally {
+    await manager.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('shares a running update check and preserves a disabled preference', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-update-backport-'));
   let finish!: (value: null) => void;
