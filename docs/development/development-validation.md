@@ -47,7 +47,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 验证层次
 
-常规自动化执行类型检查、生产构建、格式与基础 lint，并启动实际构建的 Companion，确认就绪、主页面渲染无未捕获异常以及正常退出。发行流程通过 `--app-version` 核对桌面 EXE 版本，并验证发行物身份与签名；该命令不验证主窗口加载或正常退出。真实 CS2、OBS、Windows 交互和业务行为通过实机验收，不由启动检查替代。
+常规自动化执行类型检查、生产构建、格式与基础 lint，并启动实际构建的 Companion，确认就绪、主页面渲染无未捕获异常以及正常退出。发行流程通过 `--app-version` 核对桌面 EXE 版本，并验证发行物身份与来源证明；该命令不验证主窗口加载或正常退出。真实 CS2、OBS、Windows 交互和业务行为通过实机验收，不由启动检查替代。
 
 ## 操作记录与失败可诊断性审查
 
@@ -63,7 +63,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## CI 编译检查
 
-常规 CI 执行类型检查、构建、格式与基础 lint，并启动实际构建的 Companion、在 Chromium 打开主页面和正常退出；main、手动运行和涉及桌面宿主、其嵌入资源或 CI 工作流的 PR 另在 Windows 编译宿主，无法确定差异时也编译。`ci-gate` 要求所选构建成功并检查从运行创建到门禁的 180 秒预算。Cargo 缓存优先精确命中，其次选择同锁文件的构建；同平台、工具链、profile 和编译参数的其他旧构建可作为最后回退，由 Cargo 重新核对依赖、源码与编译指纹。超时在门禁判定；排队或任务运行不能保证在期限到达瞬间中断。正式发行仍须验证产物身份及签名。产品行为由实机检查验证。
+常规 CI 执行类型检查、构建、格式与基础 lint，并启动实际构建的 Companion、在 Chromium 打开主页面和正常退出；main、手动运行和涉及桌面宿主、其嵌入资源或 CI 工作流的 PR 另在 Windows 编译宿主，无法确定差异时也编译。`ci-gate` 要求所选构建成功并检查从运行创建到门禁的 180 秒预算。Cargo 缓存优先精确命中，其次选择同锁文件的构建；同平台、工具链、profile 和编译参数的其他旧构建可作为最后回退，由 Cargo 重新核对依赖、源码与编译指纹。超时在门禁判定；排队或任务运行不能保证在期限到达瞬间中断。正式发行仍须验证产物身份及来源证明。产品行为由实机检查验证。
 
 ## 样例、重放与来源
 
@@ -110,7 +110,7 @@ Desktop 通过 localhost Companion 读取随包 Web，Tauri 不嵌入生产 Web 
 
 [#226 的参数对照](https://github.com/Starfie1d1272/Mizar/pull/226)显示编译耗时与产物体积存在取舍；单轮、固定顺序以及缺少真实下载和冻结 RC 验收，不足以改变正式 Cargo/NSIS 参数。一次性研究入口、脚本与原始输出已归档于该 PR 和 Git 历史，不作为常规 CI。正式 ZIP 与 Setup 已压缩，资格产品上传保持外层压缩关闭，原始产品字节与身份不变。
 
-产品的 Windows、CS2 与 OBS 行为通过实机验收；自动发行保留资产、来源与签名检查。
+产品的 Windows、CS2 与 OBS 行为通过实机验收；自动发行保留资产与来源证明检查。
 
 ```sh
 node scripts/qualification/desktop-smoke.mjs <bundle-root> <report.json>
