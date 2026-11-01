@@ -1235,10 +1235,6 @@ async fn mulnx_control(
     if window.label() != "main" {
         return Err("请在准备中心管理 MulNX。".into());
     }
-    if action == "stop" {
-        finish_workspace(window, app, None, diagnostic_operation_id, None, None).await?;
-        return Ok(serde_json::json!({"result":"finished", "execution":"confirmed"}));
-    }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
