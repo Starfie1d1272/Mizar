@@ -23,6 +23,13 @@ pub(crate) fn cleanup_operation() -> std::sync::MutexGuard<'static, ()> {
 pub(crate) fn try_operation() -> Option<std::sync::MutexGuard<'static, ()>> {
     OPERATION.try_lock().ok()
 }
+pub(crate) fn try_cleanup_operation() -> Option<std::sync::MutexGuard<'static, ()>> {
+    match OPERATION.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
 
 fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = production_exit::runtime_token(log)?;
