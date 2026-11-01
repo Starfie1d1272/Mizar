@@ -415,12 +415,28 @@ fn restore_layout(
 }
 
 #[tauri::command]
-fn restore_cs2_focus(
+async fn restore_cs2_focus(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     diagnostic_operation_id: Option<String>,
 ) -> bool {
-    workspace_presentation::restore_cs2_focus(window, app, diagnostic_operation_id)
+    let log = app.state::<DesktopLog>().inner().clone();
+    let operation = diagnostic_operation_id.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        workspace_presentation::restore_cs2_focus(window, app, diagnostic_operation_id)
+    })
+    .await
+    {
+        Ok(focused) => focused,
+        Err(error) => {
+            log.event(
+                "restore_cs2_focus",
+                "failure",
+                Some(&format!("operation={operation:?}; task={error}")),
+            );
+            false
+        }
+    }
 }
 
 #[tauri::command]
@@ -1749,11 +1765,11 @@ fn run_desktop(
                                         if activate {
                                             let _ = workspace_presentation::open_main(tick_host.clone(), None, None);
                                         }
+                                        workspace_presentation::sync_workspace_shell(&tick_host);
                                         if tick_host.state::<HostState>().visible.load(Ordering::Acquire)
                                             && tick_host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch
                                             && tick_host.state::<production_exit::ExitGate>().check().is_ok()
                                         {
-                                            workspace_presentation::sync_workspace_shell(&tick_host);
                                             if let Some(layout) = layout {
                                                 workspace_presentation::apply_layout(&tick_host, layout);
                                             }

@@ -315,14 +315,52 @@ pub(crate) fn present_production_inner_checked(
                             .complete(&Ok(()));
                         show_workspace(&host);
                         if let Some(request) = request {
-                            let focused = attempt_game_focus(&host, request);
-                            host.state::<DesktopLog>().event(
-                                "workspace_entry_focus",
-                                if focused { "focused" } else { "not_focused" },
-                                None,
-                            );
-                        }
-                        if let Some(main) = host.get_webview_window("main") {
+                            let focus_host = host.clone();
+                            let epoch = host
+                                .state::<HostState>()
+                                .workspace_epoch
+                                .load(Ordering::Acquire);
+                            let expected_page = expected_url.as_ref().map(|(url, _)| url.clone());
+                            tauri::async_runtime::spawn_blocking(move || {
+                                let focused = attempt_game_focus(&focus_host, request);
+                                focus_host.state::<DesktopLog>().event(
+                                    "workspace_entry_focus",
+                                    if focused { "focused" } else { "not_focused" },
+                                    None,
+                                );
+                                let published_host = focus_host.clone();
+                                if let Err(error) = focus_host.run_on_main_thread(move || {
+                                    let gate = published_host.state::<production_exit::ExitGate>();
+                                    let _ = gate.publish(ticket, || {
+                                        let state = published_host.state::<HostState>();
+                                        if state.visible.load(Ordering::Acquire)
+                                            && state.workspace_epoch.load(Ordering::Acquire)
+                                                == epoch
+                                        {
+                                            if let Some(main) =
+                                                published_host.get_webview_window("main")
+                                            {
+                                                if expected_page.as_ref().is_none_or(|expected| {
+                                                    main.url()
+                                                        .ok()
+                                                        .is_some_and(|url| url.as_str() == expected)
+                                                }) {
+                                                    let _ = window_presentation::set_visible(
+                                                        &main, false,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    });
+                                }) {
+                                    focus_host.state::<DesktopLog>().event(
+                                        "workspace_entry_focus",
+                                        "failure",
+                                        Some(&error.to_string()),
+                                    );
+                                }
+                            });
+                        } else if let Some(main) = host.get_webview_window("main") {
                             let _ = window_presentation::set_visible(&main, false);
                         }
                     };
@@ -430,10 +468,11 @@ pub(crate) fn sync_workspace_shell(app: &tauri::AppHandle) {
             }
         }
     }
-    let marked = state
-        .fullscreen_scope
-        .lock()
-        .is_ok_and(|mut scope| scope.synchronize(&windows));
+    let Ok(mut scope) = state.fullscreen_scope.try_lock() else {
+        return;
+    };
+    let marked = scope.synchronize(&windows);
+    drop(scope);
     if let Ok(mut tracker) = state.tracker.try_lock() {
         tracker.fullscreen_layout = visible && marked;
     };
@@ -661,7 +700,7 @@ pub(crate) fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
         state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
         state.visible.store(false, Ordering::Release);
     }
-    if let Ok(mut group) = state.window_group.lock() {
+    if let Ok(mut group) = state.window_group.try_lock() {
         *group = workspace_group::Group::default();
     }
     sync_workspace_shell(app);
