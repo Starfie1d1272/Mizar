@@ -124,6 +124,7 @@ export function PreparationPage() {
   const [submittingEntry, setSubmittingEntry] = useState(false);
   const [cancellingEntry, setCancellingEntry] = useState(false);
   const [cancelFailed, setCancelFailed] = useState(false);
+  const [cancelError, setCancelError] = useState('');
   const entryGeneration = useRef(0);
   const cancelling = useRef(false);
   const [demoOpen, setDemoOpen] = useState(() =>
@@ -163,8 +164,7 @@ export function PreparationPage() {
         if (active && generation === entryGeneration.current) {
           setEntering(status?.running ?? false);
           if (!status) setCancelFailed(false);
-          if (status && !status.running && status.message)
-            setMessage((current) => current || status.message);
+          if (status && !status.running && status.message) setMessage(status.message);
         }
       } catch {
         /* The desktop may still be starting. */
@@ -346,12 +346,12 @@ export function PreparationPage() {
               cancelling.current = true;
               entryGeneration.current += 1;
               setCancellingEntry(true);
-              setMessage('');
+              setCancelError('');
               void cancelProductionEntry()
                 .then(() => setCancelFailed(false))
                 .catch((error: unknown) => {
                   setCancelFailed(true);
-                  reportActionError(error);
+                  setCancelError(error instanceof Error ? error.message : '操作未完成。');
                 })
                 .finally(() => {
                   entryGeneration.current += 1;
@@ -368,6 +368,7 @@ export function PreparationPage() {
         ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
+        {cancelError ? <StatusBanner tone="danger">{cancelError}</StatusBanner> : null}
         {message ? (
           <StatusBanner tone="danger">
             {message}
