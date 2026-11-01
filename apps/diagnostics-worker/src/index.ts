@@ -466,8 +466,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       EXISTS(SELECT 1 FROM installations WHERE id=? AND revoked_at IS NULL AND
         (quota_day!=? OR (quota_bytes+?<=? AND quota_batches<?))) AND
       EXISTS(SELECT 1 FROM daily WHERE day=? AND bytes+?<=? AND batches<?)
-      ON CONFLICT(installation_id,id) DO UPDATE SET owner=excluded.owner,state='pending',writers=batches.writers+1
-      WHERE batches.state IN ('failed','pending') AND batches.writers<8`,
+      ON CONFLICT(installation_id,id) DO NOTHING`,
       installation,
       id,
       objectKey,
@@ -513,12 +512,29 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       id,
       owner,
     ),
+    // A retained pending/failed batch already reserved its bytes and batch slot.
+    // Retrying it must not consume another slot, or a failed R2/index write can
+    // exhaust the daily budget and prevent that same evidence from recovering.
+    sql(
+      env,
+      `UPDATE batches SET owner=?,state='pending',writers=writers+1
+      WHERE installation_id=? AND id=? AND owner!=? AND state IN ('failed','pending')
+      AND writers<8 AND expires_at>? AND EXISTS(
+        SELECT 1 FROM installations WHERE id=? AND revoked_at IS NULL)`,
+      owner,
+      installation,
+      id,
+      owner,
+      now,
+      installation,
+    ),
     batchStatement(env, installation, id),
   ]);
-  if (!reserved[1]?.meta.changes) return json({ error: 'capacity_or_concurrent_reservation' }, 429);
+  if (!reserved[1]?.meta.changes && !reserved[4]?.meta.changes)
+    return json({ error: 'capacity_or_concurrent_reservation' }, 429);
   let row: BatchRow | null = null;
   try {
-    row = (reserved[4]?.results[0] as BatchRow | undefined) ?? null;
+    row = (reserved[5]?.results[0] as BatchRow | undefined) ?? null;
     if (!row || row.owner !== owner) return json({ error: 'reservation_unconfirmed' }, 503);
     // Never overwrite an acknowledged/retried object and reset its original retention clock.
     const created = await env.DIAGNOSTICS_BUCKET.put(row.object_key, bytes, {

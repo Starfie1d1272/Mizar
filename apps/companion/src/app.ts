@@ -119,7 +119,7 @@ import { ProgramSceneController, registerProgramSceneRoutes } from './program-sc
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
 import { registerSupportRoutes } from './support/routes.js';
@@ -585,19 +585,57 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     hud: hudConfigStore.getState().document,
     match: matchContextController?.getActiveBinding() ?? null,
   });
+  const renewalRoute = (request: FastifyRequest) =>
+    request.method === 'POST' &&
+    ['/operator/runtime/observer', '/operator/runtime/camera-session'].includes(
+      request.routeOptions.url ?? '',
+    );
+  const isRenewal = (request: FastifyRequest) =>
+    renewalRoute(request) && (request.body as { action?: unknown } | null)?.action === 'pulse';
+  // Body parsing happens after onRequest. Keep the original state in memory so
+  // rejected commands and failed renewals retain their complete before/after evidence.
+  const renewalRequests = new WeakMap<
+    FastifyRequest,
+    {
+      before: ReturnType<typeof controlState>;
+      startedAt: number;
+      compact: boolean;
+      beforeRecorded: boolean;
+    }
+  >();
+  const renewalContext = (state: ReturnType<typeof controlState>) =>
+    JSON.stringify({
+      production: state.production,
+      program: state.program,
+      hud: state.hud,
+      match: state.match,
+    });
   app.addHook('onRequest', (request, _reply, done) => {
-    if (isControl(request.url, request.method))
+    if (sessionJournal && isControl(request.url, request.method)) {
+      const before = controlState();
+      if (renewalRoute(request))
+        renewalRequests.set(request, {
+          before: structuredClone(before),
+          startedAt: performance.now(),
+          compact: false,
+          beforeRecorded: false,
+        });
       sessionJournal?.record('operation_received', {
         requestId: request.id,
         browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
         method: request.method,
         route: request.routeOptions.url,
-        before: controlState(),
+        ...(renewalRoute(request) ? { stateDeferredUntilResult: true } : { before }),
       });
+    }
     done();
   });
   app.addHook('preHandler', (request, _reply, done) => {
-    if (isControl(request.url, request.method))
+    if (isControl(request.url, request.method)) {
+      const renewal = renewalRequests.get(request);
+      // Real commands on these routes still commit their before-state prior to
+      // executing a launch/stop, rather than relying on the process surviving it.
+      if (renewal && !isRenewal(request)) renewal.beforeRecorded = true;
       sessionJournal?.record('operation_begin', {
         requestId: request.id,
         browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
@@ -605,11 +643,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         route: request.routeOptions.url,
         parameters: diagnosticValue(request.body),
         filename: request.headers['x-mizar-filename'],
+        ...(renewal?.beforeRecorded ? { before: renewal.before } : {}),
       });
+    }
     done();
   });
   app.addHook('onSend', (request, reply, payload, done) => {
-    if (isControl(request.url, request.method)) {
+    if (sessionJournal && isControl(request.url, request.method)) {
       let result: unknown = payload;
       if (typeof payload === 'string') {
         try {
@@ -618,6 +658,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           result = { bytes: Buffer.byteLength(payload) };
         }
       }
+      const renewal = renewalRequests.get(request);
+      const after = controlState();
+      const outcome = result as { ok?: unknown; failed?: unknown } | null;
+      const compact = Boolean(
+        renewal &&
+        isRenewal(request) &&
+        reply.statusCode >= 200 &&
+        reply.statusCode < 300 &&
+        outcome?.ok === true &&
+        outcome.failed !== true &&
+        renewalContext(renewal.before) === renewalContext(after),
+      );
+      if (renewal) renewal.compact = compact;
       sessionJournal?.record('operation_result', {
         requestId: request.id,
         browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
@@ -625,7 +678,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         route: request.routeOptions.url,
         httpStatus: reply.statusCode,
         result,
-        after: controlState(),
+        ...(renewal ? { durationMs: performance.now() - renewal.startedAt } : {}),
+        ...(compact
+          ? { renewal: true, controlContextUnchanged: true }
+          : { ...(renewal && !renewal.beforeRecorded ? { before: renewal.before } : {}), after }),
       });
     }
     done(null, payload);
@@ -641,7 +697,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('onResponse', async (request, reply) => {
     if (
       reply.statusCode >= 400 ||
-      (request.method !== 'GET' && request.url.startsWith('/operator/'))
+      (request.method !== 'GET' &&
+        request.url.startsWith('/operator/') &&
+        !renewalRequests.get(request)?.compact)
     )
       request.log.info(
         {
@@ -2011,6 +2069,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (demoTest.get().active) await demoTest.recover();
     else await restoreFormal();
   });
+  const recordConfiguration = async () => {
+    if (!sessionJournal) return;
+    await sessionJournal.recordCommitted('configuration_snapshot', {
+      ...controlState(),
+      obs: await obsConfigStore
+        ?.read()
+        .catch((error: unknown) => ({ readError: diagnosticValue(error) })),
+    });
+  };
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
     await outputService.start();
@@ -2032,11 +2099,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     for (const record of outputService.getReliableRecords())
       businessJournal?.reliable(record, 'restored');
     await businessJournal?.flush();
-    sessionJournal?.record('configuration_snapshot', {
-      ...controlState(),
-      obs: await obsConfigStore
-        ?.read()
-        .catch((error: unknown) => ({ readError: diagnosticValue(error) })),
+    await recordConfiguration().catch((error: unknown) => {
+      sessionJournal?.record('diagnostic_delivery_failure', {
+        phase: 'configuration_snapshot',
+        error: diagnosticValue(error),
+      });
     });
   });
   app.get('/local/v1/live-snapshot', (request, reply) => {
@@ -2250,6 +2317,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
+    onConsent: recordConfiguration,
     onReport: () => {
       recordPerformanceWindow('problem_report');
       performanceContext?.trigger('problem_report', {
