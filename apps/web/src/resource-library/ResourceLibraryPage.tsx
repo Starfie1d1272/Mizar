@@ -277,11 +277,23 @@ export function ResourceLibraryPage() {
             <dl>
               <div>
                 <dt>已选版本</dt>
-                <dd>{view.tool.installed ?? '尚未安装'}</dd>
+                <dd>
+                  {view.tool.installed ?? (view.tool.bundled ? '首次启动时自动准备' : '尚未准备')}
+                </dd>
               </div>
+              {view.tool.bundled ? (
+                <div>
+                  <dt>随包版本</dt>
+                  <dd>{view.tool.bundled}</dd>
+                </div>
+              ) : null}
               {view.tool.latest ? (
                 <div>
-                  <dt>最新版本</dt>
+                  <dt>
+                    {view.tool.checkResult === 'current' || view.tool.checkResult === 'available'
+                      ? '上次确认版本'
+                      : '已知可用版本'}
+                  </dt>
                   <dd>{view.tool.latest}</dd>
                 </div>
               ) : null}

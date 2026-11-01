@@ -90,6 +90,8 @@ export interface OrchestrationStatus {
 }
 export interface MulnxToolView {
   installed: string | null;
+  /** Bundled release metadata; bytes are verified on first preparation. */
+  bundled?: string | null;
   latest: string | null;
   busy: boolean;
   phase?:
@@ -98,10 +100,13 @@ export interface MulnxToolView {
     | 'downloading'
     | 'verifying'
     | 'installing'
+    | 'preparing-bundle'
     | 'complete'
     | 'error'
     | 'cancelled';
   checkedAt?: number | null;
+  confirmedAt?: number | null;
+  retryAt?: number | null;
   checkResult?: 'unchecked' | 'current' | 'available' | 'error';
   downloadedBytes?: number;
   totalBytes?: number;

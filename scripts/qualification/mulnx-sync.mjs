@@ -10,6 +10,18 @@ const names = ['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const root = process.env.MULNX_SYNC_DIR ?? '.agent-tmp/mulnx-sync';
 const sourceSha = process.env.GITHUB_SHA;
+// Only a previously authenticated, fully published snapshot can avoid archive transport.
+async function publishedSnapshot() {
+  const { readMulnxMirror } = await import(
+    pathToFileURL(join(process.cwd(), 'apps/companion/dist/orchestration/tool-mirror.js')).href
+  );
+  try {
+    return await readMulnxMirror(join(root, 'trust'));
+  } catch (error) {
+    console.warn('Existing MulNX snapshot unavailable; preparing full snapshot:', error.message);
+    return undefined;
+  }
+}
 const fail = (message) => {
   throw new Error(message);
 };
@@ -22,9 +34,12 @@ async function prepare() {
     pathToFileURL(join(process.cwd(), 'apps/companion/dist/orchestration/tool-release.js')).href
   );
   const release = await latestMulnxRelease(buildMetadata);
-  await downloadVerified(release.url, join(root, 'MulNX.7z'), release.sha256, release.size);
-  const notices = {};
-  for (const name of names) {
+  const previous = await publishedSnapshot();
+  const reuse = previous && JSON.stringify(previous.release) === JSON.stringify(release);
+  const notices = reuse ? previous.notices : {};
+  if (!reuse)
+    await downloadVerified(release.url, join(root, 'MulNX.7z'), release.sha256, release.size);
+  for (const name of reuse ? [] : names) {
     const bytes = await upstreamNotice(name, release.tag, buildMetadata);
     if (!bytes.length || bytes.length > 256 * 1024) fail('MulNX notice exceeds budget');
     await writeFile(join(root, name), bytes, { flag: 'wx' });
@@ -74,6 +89,7 @@ async function publish() {
     fail('proof source mismatch');
   const box = new BoxClient(process.env.MIZAR_BOX_REPO_TOKEN);
   await box.initialize();
+  const previous = await publishedSnapshot();
   await publishSnapshot(
     box,
     indexBytes,
@@ -85,14 +101,19 @@ async function publish() {
       );
       return latestMulnxRelease(buildMetadata);
     },
+    previous,
   );
 }
-export async function publishSnapshot(box, indexBytes, proof, readSource, latest) {
+export async function publishSnapshot(box, indexBytes, proof, readSource, latest, previous) {
   const index = JSON.parse(indexBytes);
   const folder = `/Tools/MulNX/${index.release.id}/${index.release.assetId}`;
   for (const dir of ['/Tools', '/Tools/MulNX', `/Tools/MulNX/${index.release.id}`, folder])
     await ensureDirectory(box, dir);
-  for (const name of ['MulNX.7z', ...names]) {
+  const reuse =
+    previous &&
+    JSON.stringify(previous.release) === JSON.stringify(index.release) &&
+    JSON.stringify(previous.notices) === JSON.stringify(index.notices);
+  for (const name of reuse ? [] : ['MulNX.7z', ...names]) {
     const bytes = await readSource(name);
     const expected =
       name === 'MulNX.7z'

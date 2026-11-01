@@ -22,7 +22,7 @@ export type ResourceSourceMode = 'auto' | 'github';
 const fixedNames = new Set(Object.values(RESOURCE_ASSET_NAMES));
 export function mirrorResourcePath(version: string, name: string) {
   if (
-    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/.test(version) ||
     !(
       fixedNames.has(name) ||
       /^Mizar-official-epl-default-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.zip$/.test(name)
