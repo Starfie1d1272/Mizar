@@ -1,11 +1,12 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
 use crate::host_state::HostState;
 use crate::{
-    cs2_activity, managed_cs2, mulnx_launch, observer_hud, preparation_gate, production_exit,
-    startup_log::DesktopLog, updates, workspace_presentation,
+    cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
+    preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
 };
-use std::sync::Mutex;
+use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 pub(crate) async fn status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -420,4 +421,345 @@ pub(crate) async fn finish_managed_cs2(
         },
     );
     diagnostic_result
+}
+
+pub(crate) async fn set_preferences(
+    app: tauri::AppHandle,
+    quality_preset: String,
+    frame_rate_limit: u16,
+    prefer_mulnx: Option<bool>,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), String> = async move {
+        let mut preferences = cs2_preferences::Preferences::new(&quality_preset, frame_rate_limit)?;
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            move || {
+                let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                let mut cs2 = state.lock().map_err(|error| {
+                    command_log.preserve_error(
+                        "set_cs2_preferences",
+                        native_operation_id.as_deref(),
+                        &error,
+                        "CS2 配置状态不可用。",
+                    )
+                })?;
+                let activity = app.state::<cs2_activity::Activity>();
+                let _activity = activity.begin(3);
+                preferences.prefer_mulnx =
+                    prefer_mulnx.unwrap_or(cs2.status()?["preferMulnx"].as_bool().unwrap_or(false));
+                cs2.preferences(preferences)
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "set_cs2_preferences",
+                native_operation_id.as_deref(),
+                &error,
+                "CS2 启动设置未保存。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "set_cs2_preferences",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn restore_backup(
+    app: tauri::AppHandle,
+    confirm_steam_cancelled: bool,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let native_task_id = diagnostic_task_id.clone();
+    let native_trigger = diagnostic_trigger.clone();
+    let diagnostic_result: Result<(), String> = async move {
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            let native_task_id = native_task_id.clone();
+            let native_trigger = native_trigger.clone();
+            move || {
+                command_log.with_task(
+                    native_task_id.as_deref(),
+                    native_operation_id.as_deref(),
+                    native_trigger.as_deref(),
+                    || {
+                        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                        let mut cs2 = state.lock().map_err(|error| {
+                            command_log.preserve_error(
+                                "restore_cs2_backup",
+                                native_operation_id.as_deref(),
+                                &error,
+                                "CS2 配置状态不可用。",
+                            )
+                        })?;
+                        let activity = app.state::<cs2_activity::Activity>();
+                        let _activity = activity.begin(2);
+                        cs2.restore_backup(confirm_steam_cancelled)?;
+                        workspace_presentation::refresh_finished_window_feedback(&app, &cs2);
+                        Ok(())
+                    },
+                )
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "restore_cs2_backup",
+                native_operation_id.as_deref(),
+                &error,
+                "CS2 原配置恢复未完成。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.with_task(
+        diagnostic_task_id.as_deref(),
+        diagnostic_operation_id.as_deref(),
+        diagnostic_trigger.as_deref(),
+        || {
+            diagnostic_log.native_outcome(
+                "restore_cs2_backup",
+                diagnostic_operation_id.as_deref(),
+                &diagnostic_result,
+            )
+        },
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn manage_backup(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action: String,
+    selection_id: Option<String>,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    if window.label() != "main" {
+        return Err("请在制作中心恢复游戏设置。".into());
+    }
+    let log = app.state::<DesktopLog>().inner().clone();
+    let command_log = log.clone();
+    let operation = diagnostic_operation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<production_exit::ExitGate>().check()?;
+        app.state::<updates::PendingUpdate>().check()?;
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        if action == "select" {
+            // Retire prior approval before opening the modal native chooser.
+            state
+                .lock()
+                .map_err(|_| "恢复状态不可用。")?
+                .cancel_selected_backup();
+            let Some(file) = app
+                .dialog()
+                .file()
+                .add_filter("CS2 配置备份", &["txt", "bak"])
+                .blocking_pick_file()
+            else {
+                return Ok(None);
+            };
+            let path = file.into_path().map_err(|e| {
+                command_log.preserve_error(
+                    "manage_cs2_backup",
+                    operation.as_deref(),
+                    &e,
+                    "备份路径无法读取。",
+                )
+            })?;
+            app.state::<production_exit::ExitGate>().check()?;
+            app.state::<updates::PendingUpdate>().check()?;
+            return state
+                .lock()
+                .map_err(|_| "恢复状态不可用。")?
+                .select_backup(&path)
+                .map(Some);
+        }
+        let mut cs2 = state.lock().map_err(|_| "恢复状态不可用。")?;
+        match action.as_str() {
+            "cancel" => cs2.cancel_selected_backup(),
+            "apply" => {
+                let activity = app.state::<cs2_activity::Activity>();
+                let _activity = activity.begin(2);
+                cs2.apply_selected_backup(selection_id.as_deref().ok_or("请先核对备份。")?)?;
+            }
+            _ => return Err("备份操作无效。".into()),
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|e| {
+        log.preserve_error(
+            "manage_cs2_backup",
+            diagnostic_operation_id.as_deref(),
+            &e,
+            "备份操作未完成。",
+        )
+    })?;
+    // The full selected file stays inside Host. Log the operation outcome rather
+    // than duplicating avatar image bytes in the native diagnostic stream.
+    log.native_outcome(
+        "manage_cs2_backup",
+        diagnostic_operation_id.as_deref(),
+        &result.as_ref().map(|_| ()),
+    );
+    result
+}
+
+pub(crate) async fn open_backup(
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), String> = async move {
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            move || {
+                let path = app
+                    .state::<Mutex<managed_cs2::ManagedCs2>>()
+                    .lock()
+                    .map_err(|error| {
+                        command_log.preserve_error(
+                            "open_cs2_backup",
+                            native_operation_id.as_deref(),
+                            &error,
+                            "CS2 配置状态不可用。",
+                        )
+                    })?
+                    .backup_directory();
+                fs::create_dir_all(&path).map_err(|error| {
+                    command_log.preserve_error(
+                        "open_cs2_backup",
+                        native_operation_id.as_deref(),
+                        &error,
+                        "备份目录无法打开。",
+                    )
+                })?;
+                let executable = PathBuf::from(
+                    std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?,
+                )
+                .join("explorer.exe");
+                Command::new(executable)
+                    .arg(path)
+                    .spawn()
+                    .map_err(|error| {
+                        command_log.preserve_error(
+                            "open_cs2_backup",
+                            native_operation_id.as_deref(),
+                            &error,
+                            "备份目录无法打开。",
+                        )
+                    })?;
+                Ok(())
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "open_cs2_backup",
+                native_operation_id.as_deref(),
+                &error,
+                "备份目录无法打开。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "open_cs2_backup",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn console_settings(
+    app: tauri::AppHandle,
+    enabled: Option<bool>,
+    expected_generation: Option<String>,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let command = if enabled.is_some() {
+        "set_cs2_console_capture"
+    } else {
+        "cs2_console_status"
+    };
+    let log = app.state::<DesktopLog>().inner().clone();
+    let diagnostic_log = log.clone();
+    let join_operation = diagnostic_operation_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        log.with_task(
+            diagnostic_task_id.as_deref(),
+            diagnostic_operation_id.as_deref(),
+            diagnostic_trigger.as_deref(),
+            || {
+                let result = (|| {
+                    if let Some(enabled) = enabled {
+                        cs2_console::set_enabled(&log, enabled, expected_generation.as_deref())?;
+                    }
+                    cs2_console::status(&log)
+                })();
+                log.native_outcome(command, diagnostic_operation_id.as_deref(), &result);
+                result
+            },
+        )
+    })
+    .await
+    .map_err(|error| {
+        diagnostic_log.preserve_error(
+            command,
+            join_operation.as_deref(),
+            &error,
+            "技术日志设置未能完成，请重试。".to_string(),
+        )
+    })?
+}
+
+pub(crate) async fn mulnx_control(
+    app: tauri::AppHandle,
+    action: String,
+    diagnostic_operation_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let log = app.state::<DesktopLog>().inner().clone();
+    let evidence = log.clone();
+    log.event("mulnx_control", "begin", Some(&format!("action={action}")));
+    let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
+        "update" => mulnx_launch::update(&app, &log),
+        _ => Err("请选择更新 MulNX。".into()),
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
+    evidence.native_outcome("mulnx_control", diagnostic_operation_id.as_deref(), &result);
+    result
+}
+
+pub(crate) async fn handoff_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let result = state
+            .try_lock()
+            .map_err(|_| "CS2 正忙，请稍后检查。".to_string())?
+            .mulnx_handoff_status();
+        result
+    })
+    .await
+    .map_err(|_| "无法读取 CS2 进程身份。".to_string())?
 }

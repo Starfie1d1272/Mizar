@@ -117,3 +117,26 @@ pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64
         .map(|(_, ticket)| *ticket)
         .ok_or_else(|| "本次启动已失效，请重新进入工作台。".into())
 }
+
+pub(crate) async fn cancel_cs2_preparation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在准备中心取消启动。".into());
+    }
+    if preparation_id.is_empty()
+        || preparation_id.len() > 64
+        || !preparation_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err("启动事务标识无效。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PreparationGate>().cancel(preparation_id)
+    })
+    .await
+    .map_err(|_| "启动取消状态不可用。".to_string())?
+}

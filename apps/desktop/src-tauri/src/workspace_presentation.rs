@@ -1043,3 +1043,284 @@ pub(crate) fn restore_layout(
     );
     diagnostic_result
 }
+
+struct OverlayRecoveryGuard<'a> {
+    state: &'a HostState,
+    app: &'a tauri::AppHandle,
+}
+impl Drop for OverlayRecoveryGuard<'_> {
+    fn drop(&mut self) {
+        self.state
+            .overlay_recovering
+            .store(false, Ordering::Release);
+        update_overlay(self.app, self.state);
+    }
+}
+
+pub(crate) async fn recover_program_overlay(
+    window: tauri::WebviewWindow,
+    diagnostic_operation_id: Option<String>,
+) -> Result<String, String> {
+    if !matches!(window.label(), "workspace-left" | "workspace-dock") {
+        return Err("请从现场工作台恢复本机 HUD。".into());
+    }
+    let app = window.app_handle().clone();
+    let log = app.state::<DesktopLog>().inner().clone();
+    log.event(
+        "recover_program_overlay",
+        "begin",
+        Some(&serde_json::json!({"operationId":diagnostic_operation_id}).to_string()),
+    );
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        let _guard = overlay_recovery::try_lock(&state.live_window_lock)?;
+        let caller = app
+            .get_webview_window(window.label())
+            .ok_or("工作台窗口已失效。")?;
+        if !caller
+            .hwnd()
+            .ok()
+            .zip(window.hwnd().ok())
+            .is_some_and(|(a, b)| a == b)
+        {
+            return Err("工作台窗口已失效。".into());
+        }
+        let ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
+        if !state.visible.load(Ordering::Acquire) {
+            return Err("工作台已隐藏，请重新进入后再试。".into());
+        }
+        let workspace_epoch = state.workspace_epoch.load(Ordering::Acquire);
+        let presentation = state
+            .overlay_presentation
+            .lock()
+            .map_err(|_| "HUD 窗口状态不可用。")?;
+        state.overlay_recovering.store(true, Ordering::Release);
+        let epoch = state.overlay_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        drop(presentation);
+        let _recovery = OverlayRecoveryGuard {
+            state: &state,
+            app: &app,
+        };
+        let valid = || {
+            overlay_recovery::workspace_valid(
+                state.visible.load(Ordering::Acquire),
+                workspace_epoch,
+                state.workspace_epoch.load(Ordering::Acquire),
+                app.state::<production_exit::ExitGate>()
+                    .publish(ticket, || {})
+                    .is_ok(),
+            ) && state.overlay_epoch.load(Ordering::Acquire) == epoch
+        };
+        let old = app.get_webview_window("program-overlay");
+        if let Some(old) = &old {
+            let workspace_windows = overlay_workspace_windows(&app);
+            let desired = state
+                .tracker
+                .lock()
+                .ok()
+                .and_then(|tracker| tracker.overlay_rect(&workspace_windows));
+            observe_overlay(&app, old, desired, "before_recovery");
+            if let Err(error) = window_presentation::snapshot_controller(old) {
+                app.state::<DesktopLog>().event(
+                    "program_overlay_snapshot",
+                    "failure",
+                    Some(&error),
+                );
+            }
+        }
+        overlay_recovery::replace(
+            || {
+                if !valid() {
+                    return Err("恢复已取消。".into());
+                }
+                if let Some(old) = old {
+                    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                    old.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Destroyed) {
+                            let _ = sender.try_send(());
+                        }
+                    });
+                    old.destroy()
+                        .map_err(|error| format!("HUD 窗口销毁失败：{error}"))?;
+                    receiver
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| "未确认旧 HUD 窗口销毁，请重试。")?;
+                }
+                Ok(())
+            },
+            || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while app.get_webview_window("program-overlay").is_some() {
+                    if !valid() {
+                        return Err("恢复已取消。".into());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err("旧 HUD 窗口仍在释放，请重试。".into());
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Ok(())
+            },
+            || {
+                if !valid() {
+                    return Err("恢复已取消。".into());
+                }
+                create_program_overlay(&app)
+            },
+        )?;
+        let generation = state.overlay_generation.load(Ordering::Acquire);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if !overlay_recovery::workspace_valid(
+                state.visible.load(Ordering::Acquire),
+                workspace_epoch,
+                state.workspace_epoch.load(Ordering::Acquire),
+                app.state::<production_exit::ExitGate>()
+                    .publish(ticket, || {})
+                    .is_ok(),
+            ) || state.overlay_generation.load(Ordering::Acquire) != generation
+            {
+                if state.overlay_generation.load(Ordering::Acquire) == generation {
+                    if let Some(current) = app.get_webview_window("program-overlay") {
+                        let _ = current.destroy();
+                    }
+                }
+                return Err("恢复已取消。".into());
+            }
+            if state.overlay_ready.load(Ordering::Acquire) == generation {
+                return Ok("HUD 文档和策略已就绪；是否显示取决于当前游戏窗口条件。".into());
+            }
+            if Instant::now() >= deadline {
+                if let Some(current) = app.get_webview_window("program-overlay") {
+                    let _ = current.destroy();
+                }
+                return Err("HUD 文档或策略未能就绪，请检查运行诊断后重试。".into());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    log.native_outcome(
+        "recover_program_overlay",
+        diagnostic_operation_id.as_deref(),
+        &result,
+    );
+    result
+}
+
+pub(crate) fn restore_cs2_focus(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+) -> bool {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let diagnostic_result: bool = (|| {
+        if !matches!(
+            window.label(),
+            "workspace-left" | "workspace-dock" | "tool-review"
+        ) {
+            return false;
+        }
+        let Ok(hwnd) = window.hwnd() else {
+            return false;
+        };
+        let source = hwnd.0 as isize;
+        if windows_host::foreground() != source {
+            return false;
+        }
+        let request = {
+            let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+            let Ok(cs2) = managed.try_lock() else {
+                return false;
+            };
+            let Ok(Some(process)) = cs2.workspace_process() else {
+                return false;
+            };
+            workspace_focus::Request::new(focus_session(&process), source)
+        };
+        request.is_some_and(|request| attempt_game_focus(&app, request))
+    })();
+    diagnostic_log.native_outcome(
+        "restore_cs2_focus",
+        diagnostic_operation_id.as_deref(),
+        &Ok::<bool, String>(diagnostic_result),
+    );
+    diagnostic_result
+}
+
+pub(crate) fn set_overlay_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+    diagnostic_operation_id: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<HostState>();
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<(), String> = (|| {
+        state
+            .tracker
+            .lock()
+            .map_err(|error| {
+                command_log.preserve_error(
+                    "set_program_overlay_enabled",
+                    native_operation_id.as_deref(),
+                    &error,
+                    "桌面窗口状态不可用。",
+                )
+            })?
+            .overlay_enabled = enabled;
+        update_overlay(&app, &state);
+        Ok(())
+    })();
+    diagnostic_log.native_outcome(
+        "set_program_overlay_enabled",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
+    );
+    diagnostic_result
+}
+
+pub(crate) fn overlay_ready(
+    window: tauri::WebviewWindow,
+    generation: u64,
+    document_id: u64,
+) -> Result<(), String> {
+    if window.label() != "program-overlay" {
+        return Err("窗口无权报告 HUD 状态。".into());
+    }
+    let app = window.app_handle();
+    let state = app.state::<HostState>();
+    {
+        let _presentation = state
+            .overlay_presentation
+            .lock()
+            .map_err(|_| "HUD 文档状态不可用。")?;
+        let current = app
+            .get_webview_window("program-overlay")
+            .ok_or("HUD 窗口已失效。")?;
+        if generation != state.overlay_generation.load(Ordering::Acquire)
+            || !current
+                .hwnd()
+                .ok()
+                .zip(window.hwnd().ok())
+                .is_some_and(|(a, b)| a == b)
+        {
+            return Err("HUD 文档已失效。".into());
+        }
+        if document_id == 0 || document_id != state.overlay_document.load(Ordering::Acquire) {
+            return Err("HUD 文档已失效。".into());
+        }
+        state.overlay_ready.store(generation, Ordering::Release);
+    }
+    app.state::<DesktopLog>().event(
+        "program_overlay_document",
+        "ready",
+        Some(&serde_json::json!({"generation":generation,"documentId":document_id}).to_string()),
+    );
+    update_overlay(app, &state);
+    Ok(())
+}

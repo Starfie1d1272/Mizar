@@ -6,6 +6,7 @@ use crate::{
 };
 use std::sync::Mutex;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 pub(crate) async fn enter(
     window: tauri::WebviewWindow,
@@ -360,6 +361,71 @@ pub(crate) async fn finish(
                 &diagnostic_result,
             )
         },
+    );
+    diagnostic_result
+}
+
+pub(crate) async fn select_file(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    let command_log = diagnostic_log.clone();
+    let native_operation_id = diagnostic_operation_id.clone();
+    let diagnostic_result: Result<Option<serde_json::Value>, String> = async move {
+        window_presentation::check_demo_main(&window)?;
+        tauri::async_runtime::spawn_blocking({
+            let command_log = command_log.clone();
+            let native_operation_id = native_operation_id.clone();
+            move || {
+                app.state::<production_exit::ExitGate>().check()?;
+                app.state::<updates::PendingUpdate>().check()?;
+                let Some(file) = app
+                    .dialog()
+                    .file()
+                    .add_filter("CS2 Demo", &["dem"])
+                    .blocking_pick_file()
+                else {
+                    return Ok(None);
+                };
+                let path = file.into_path().map_err(|error| {
+                    command_log.preserve_error(
+                        "select_demo_file",
+                        native_operation_id.as_deref(),
+                        &error,
+                        "无法读取所选 Demo 路径。",
+                    )
+                })?;
+                let selection = app.state::<Mutex<demo_test::Selection>>();
+                let mut selection = selection.lock().map_err(|error| {
+                    command_log.preserve_error(
+                        "select_demo_file",
+                        native_operation_id.as_deref(),
+                        &error,
+                        "Demo 选择状态不可用。",
+                    )
+                })?;
+                selection
+                    .select(&path, &app.state::<DesktopLog>())
+                    .map(Some)
+            }
+        })
+        .await
+        .map_err(|error| {
+            command_log.preserve_error(
+                "select_demo_file",
+                native_operation_id.as_deref(),
+                &error,
+                "Demo 文件选择未完成。".to_string(),
+            )
+        })?
+    }
+    .await;
+    diagnostic_log.native_outcome(
+        "select_demo_file",
+        diagnostic_operation_id.as_deref(),
+        &diagnostic_result,
     );
     diagnostic_result
 }
