@@ -323,7 +323,11 @@ pub(crate) fn present_production_inner_checked(
                             let expected_page = expected_url.as_ref().map(|(url, _)| url.clone());
                             tauri::async_runtime::spawn_blocking(move || {
                                 let same_document = document.is_some()
-                                    && focus_host.state::<EntryIntent>().try_generation()
+                                    && focus_host
+                                        .state::<EntryIntent>()
+                                        .generation()
+                                        .ok()
+                                        .and_then(|value| value.parse::<u64>().ok())
                                         == document;
                                 let same_page = expected_page.as_ref().is_none_or(|expected| {
                                     focus_host.get_webview_window("main").is_some_and(|main| {
