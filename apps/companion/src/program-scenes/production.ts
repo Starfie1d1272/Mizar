@@ -10,30 +10,58 @@ import type { FastifyInstance } from 'fastify';
 import type { ProgramSceneController } from './controller.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-/** Presentation lifecycle only. Match and series facts remain with their existing owners. */
-export function registerProductionRoutes(
-  app: FastifyInstance,
-  options: {
-    originPolicy: LocalWebOriginPolicy;
-    scenes: ProgramSceneController;
-    release: () => Promise<void>;
-    handoffRelease?: () => Promise<void>;
-    beforeEnter?: () => void;
-    waitForBroadcast?: () => Promise<void>;
-    onEnter?: () => void;
-    onEntered?: () => void;
-    onFinish?: () => void;
-    beforeFinish?: () => void | Promise<void>;
-    afterSafeScene?: (valid?: () => boolean) => void | Promise<void>;
-    beforeExit?: () => void;
-    finishTrial?: () => Promise<void>;
-    previousObsExitUnconfirmed?: boolean;
-    recordObsExit?:
-      | ((state: 'pending' | 'confirmed' | 'unconfirmed', valid?: () => boolean) => Promise<void>)
-      | undefined;
-    waitForObsExitWrites?: (() => Promise<void>) | undefined;
-  },
-) {
+import type { ObsAdapter } from '../obs/adapter.js';
+import type { MusicDirector } from '../music/director.js';
+import type { GameAudioController } from '../obs/audio-policy-controller.js';
+import type { CameraDirector } from '../orchestration/director.js';
+import type { ObserverSettingsStore } from '../telemetry/observer-settings.js';
+import type { DemoTestController } from '../demo-test/controller.js';
+import type { MatchContextBinding } from '../match-context/index.js';
+import { statsTarget, type RivalHubConnection } from '../match-context/rivalhub-connection.js';
+
+export type ProductionDependencies = {
+  scenes: ProgramSceneController;
+  obs?:
+    | Pick<
+        ObsAdapter,
+        | 'settleAutomatic'
+        | 'restoreVideo'
+        | 'pauseAutomatic'
+        | 'resumeAutomatic'
+        | 'startCommentaryRecovery'
+        | 'hasCurrentPreparation'
+        | 'startBrowserRecovery'
+      >
+    | undefined;
+  music: () => MusicDirector | undefined;
+  gameAudio?: GameAudioController | undefined;
+  camera: () => CameraDirector | undefined;
+  demo: () => DemoTestController | undefined;
+  observer: ObserverSettingsStore;
+  source?:
+    | (Pick<RivalHubConnection, 'handoffForExit' | 'release' | 'clearStats'> & {
+        stats: (
+          target: Parameters<RivalHubConnection['stats']>[0],
+        ) => ReturnType<RivalHubConnection['stats']> | undefined;
+      })
+    | undefined;
+  binding: () => MatchContextBinding | undefined;
+  waitForBroadcast: () => Promise<void>;
+  obsExit: {
+    previousUnconfirmed: boolean;
+    record: (
+      state: 'pending' | 'confirmed' | 'unconfirmed',
+      valid?: () => boolean,
+    ) => Promise<void>;
+    wait: () => Promise<void>;
+  };
+  warn: (details: object, message: string) => void;
+  error: (details: object, message: string) => void;
+};
+
+/** Owns presentation lifecycle, exclusion and exit recovery. */
+export function createProduction(options: ProductionDependencies) {
+  let statsActive = false;
   let mode: 'preparation' | 'live' | 'hidden' = 'preparation';
   let revision = randomUUID();
   let busy = false;
@@ -48,8 +76,10 @@ export function registerProductionRoutes(
   let releaseGeneration = 0;
   let handoffStarted = false;
   let handoffPromise: Promise<void> | undefined;
-  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' =
-    options.previousObsExitUnconfirmed ? 'unconfirmed' : 'idle';
+  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' = options.obsExit
+    .previousUnconfirmed
+    ? 'unconfirmed'
+    : 'idle';
   let obsExitGeneration = 0;
   let exitFrozen = false;
   let obsExitStatusWrite: Promise<void> | undefined;
@@ -63,14 +93,14 @@ export function registerProductionRoutes(
       }
     | undefined;
   function startHandoff(): Promise<void> {
-    if (!options.handoffRelease) return Promise.resolve();
+    if (!options.source?.handoffForExit) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
     if (handoffStarted) return Promise.resolve();
     handoffStarted = true;
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      const pending = options.handoffRelease();
+      const pending = options.source?.handoffForExit();
       handoffPromise = pending.then(
         () => {
           if (generation === releaseGeneration) releaseHandoffState = 'recorded';
@@ -81,7 +111,7 @@ export function registerProductionRoutes(
             handoffStarted = false;
             handoffPromise = undefined;
           }
-          app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+          options.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
           throw error;
         },
       );
@@ -89,7 +119,7 @@ export function registerProductionRoutes(
     } catch (error) {
       handoffStarted = false;
       releaseHandoffState = 'unconfirmed';
-      app.log.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
+      options.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
       return Promise.reject(error);
     }
   }
@@ -113,7 +143,7 @@ export function registerProductionRoutes(
     const current = task;
     task.promise = (async () => {
       if (!valid()) throw new Error('OBS 播出状态已变化。');
-      await options.beforeFinish?.();
+      await options.obs?.settleAutomatic();
       if (!valid()) throw new Error('OBS 播出状态已变化。');
       if (sceneRequired) {
         const result = await options.scenes.selectWaitingForExit(
@@ -123,21 +153,21 @@ export function registerProductionRoutes(
         if (!result.ok) throw new Error(result.message);
       }
       if (!valid()) throw new Error('OBS 播出状态已变化。');
-      await options.afterSafeScene?.(valid);
+      await options.obs?.restoreVideo(undefined, valid);
       if (!valid()) throw new Error('OBS 播出状态已变化。');
     })()
       .then(
         async () => {
           if (valid()) {
             try {
-              if (sceneRequired) await options.recordObsExit?.('confirmed', valid);
+              if (sceneRequired) await options.obsExit.record('confirmed', valid);
               if (valid()) {
                 current.completed = true;
                 if (sceneRequired) obsExitState = 'confirmed';
               }
             } catch (error) {
               if (valid()) obsExitState = 'unconfirmed';
-              app.log.warn({ err: error }, 'OBS exit status not saved');
+              options.warn({ err: error }, 'OBS exit status not saved');
             }
           }
         },
@@ -145,13 +175,13 @@ export function registerProductionRoutes(
           if (generation === obsExitGeneration) {
             obsExitState = 'unconfirmed';
             if (sceneRequired)
-              await options
-                .recordObsExit?.('unconfirmed', () => generation === obsExitGeneration)
+              await options.obsExit
+                .record('unconfirmed', () => generation === obsExitGeneration)
                 .catch((error: unknown) =>
-                  app.log.warn({ err: error }, 'OBS exit status not saved'),
+                  options.warn({ err: error }, 'OBS exit status not saved'),
                 );
           }
-          app.log.warn(
+          options.warn(
             { stage: 'production_safe_scene', err: error },
             'OBS exit state unconfirmed',
           );
@@ -166,8 +196,8 @@ export function registerProductionRoutes(
     if (!task || task.valid() || !task.sceneRequired || obsExitState === 'unconfirmed') return;
     obsExitState = 'unconfirmed';
     const pending = Promise.resolve(
-      options.recordObsExit?.('unconfirmed', () => task.generation === obsExitGeneration),
-    ).catch((error: unknown) => app.log.warn({ err: error }, 'OBS exit status not saved'));
+      options.obsExit.record('unconfirmed', () => task.generation === obsExitGeneration),
+    ).catch((error: unknown) => options.warn({ err: error }, 'OBS exit status not saved'));
     obsExitStatusWrite = pending;
   }
   const view = () => {
@@ -183,21 +213,6 @@ export function registerProductionRoutes(
     productionViewSchema.parse(current);
     return current;
   };
-  app.get('/local/v1/production', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(view()),
-  );
-  app.get('/local/v1/preparation-status', (request, reply) => {
-    const id = (request.query as { preparationId?: unknown }).preparationId;
-    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
-      return reply
-        .code(lifecycleErrors.preparationIdInvalid.status)
-        .send(lifecycleErrors.preparationIdInvalid);
-    return reply.header('cache-control', 'no-store').send(
-      cancellationResponseSchema.parse({
-        entered: lastEnteredId === id && mode !== 'preparation',
-      }),
-    );
-  });
   async function change(
     body: { action?: unknown; expectedRevision?: unknown; preparationId?: unknown } | null,
   ) {
@@ -216,7 +231,7 @@ export function registerProductionRoutes(
       try {
         await options.waitForBroadcast?.();
       } catch (error) {
-        app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
+        options.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
         return {
           code: lifecycleErrors.broadcastSyncFailure.status,
           value: {
@@ -241,7 +256,9 @@ export function registerProductionRoutes(
       preparationGeneration++;
       sessionGeneration++;
       options.scenes.holdAutomatic();
-      options.beforeExit?.();
+      options.obs?.pauseAutomatic();
+      options.camera()?.finishProduction();
+      options.observer.endProduction();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
       shuttingDown = true;
@@ -289,7 +306,8 @@ export function registerProductionRoutes(
     const controlValid = options.scenes.controlValid();
     try {
       if (body?.action === 'enter') {
-        options.beforeEnter?.();
+        options.demo()?.openFormalBoundary();
+        options.scenes.holdAutomatic();
         obsExitGeneration++;
         obsExitTask = undefined;
         exitFrozen = false;
@@ -298,18 +316,31 @@ export function registerProductionRoutes(
           handoffStarted = false;
           handoffPromise = undefined;
           releaseGeneration++;
-          options.onEnter?.();
+          options.obs?.resumeAutomatic();
+          options.obs?.startCommentaryRecovery(
+            options.music(),
+            options.gameAudio,
+            () => production.automaticAllowed() && (options.obs?.hasCurrentPreparation() ?? false),
+          );
+          options.camera()?.beginProduction();
+          statsActive = true;
+          const binding = options.binding();
+          if (
+            binding?.origin === 'online' ||
+            (binding?.origin === 'cache' && binding.cachedFrom === 'online')
+          )
+            void options.source?.stats(statsTarget(binding.context));
         }
         mode = 'live';
         if (entering) lastEnteredId = entryId;
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
-        if (shutdown && options.handoffRelease) {
+        if (shutdown && options.source?.handoffForExit) {
           stage = 'production_release';
           await startHandoff();
         } else if (!shutdown && !obsOnlyRetry) void startHandoff().catch(() => {});
-        if (!trialPending && options.handoffRelease) {
+        if (!trialPending && options.source?.handoffForExit) {
           if (obsExitTask && !obsExitTask.valid()) {
             if (body?.action === 'finish') {
               const required = obsExitTask.sceneRequired;
@@ -338,7 +369,7 @@ export function registerProductionRoutes(
               let timer: ReturnType<typeof setTimeout> | undefined;
               try {
                 await Promise.race([
-                  options.recordObsExit?.('pending', () => sessionId === pendingSession),
+                  options.obsExit.record('pending', () => sessionId === pendingSession),
                   new Promise<never>((_, reject) => {
                     timer = setTimeout(() => reject(new Error('OBS exit status timeout')), 2000);
                   }),
@@ -347,23 +378,26 @@ export function registerProductionRoutes(
                 if (timer) clearTimeout(timer);
               }
             } catch (error) {
-              app.log.warn({ err: error }, 'OBS exit status not saved');
+              options.warn({ err: error }, 'OBS exit status not saved');
             }
           }
           scheduleObsExit(controlValid, sceneRequired);
           mode = 'preparation';
-          if (!obsOnlyRetry) options.onFinish?.();
+          if (!obsOnlyRetry) {
+            statsActive = false;
+            options.source?.clearStats();
+          }
         } else {
           // Local cleanup must continue if an OBS operation cannot be confirmed.
           // Shutdown keeps its synchronous contract because the service is about to stop.
           let safeScene = true;
           const sceneRequired = mode !== 'preparation';
           try {
-            await options.beforeFinish?.();
+            await options.obs?.settleAutomatic();
             if (!controlValid()) throw new Error('OBS 播出状态已变化。');
             if (trialPending) {
               stage = 'production_safe_scene';
-              await options.finishTrial?.();
+              await options.demo()?.finish();
             }
             if (mode !== 'preparation') {
               stage = 'production_safe_scene';
@@ -376,15 +410,15 @@ export function registerProductionRoutes(
           } catch (error) {
             if (shutdown || trialPending) throw error;
             safeScene = false;
-            app.log.warn({ stage, err: error }, 'OBS exit state unconfirmed');
+            options.warn({ stage, err: error }, 'OBS exit state unconfirmed');
           }
           obsExitState = safeScene ? (sceneRequired ? 'confirmed' : 'idle') : 'unconfirmed';
           if (safeScene) {
             stage = 'production_video_restore';
             try {
-              await options.afterSafeScene?.();
+              await options.obs?.restoreVideo();
             } catch (error) {
-              app.log.warn(
+              options.warn(
                 {
                   event: 'production',
                   stage,
@@ -404,7 +438,7 @@ export function registerProductionRoutes(
                   message: 'OBS 播出状态已变化，请核对后重试。',
                 },
               };
-            await options.release();
+            await options.source?.release();
             if (!controlValid())
               return {
                 code: lifecycleErrors.obsStateChanged.status,
@@ -414,12 +448,13 @@ export function registerProductionRoutes(
                 },
               };
             releaseHandoffState = 'confirmed';
-          } else if (!options.handoffRelease) {
-            await options.release();
+          } else if (!options.source?.handoffForExit) {
+            await options.source?.release();
             releaseHandoffState = 'confirmed';
           }
           mode = 'preparation';
-          options.onFinish?.();
+          statsActive = false;
+          options.source?.clearStats();
         }
       }
       committed = true;
@@ -428,11 +463,11 @@ export function registerProductionRoutes(
       if (body?.action !== 'hide' || mode !== 'preparation') revision = randomUUID();
       if (entering) {
         sessionGeneration++;
-        options.onEntered?.();
+        options.obs?.startBrowserRecovery(production.sessionValid());
       }
       return { code: 200, value: view() };
     } catch (error) {
-      app.log.error(
+      options.error(
         {
           event: 'production',
           stage,
@@ -493,50 +528,18 @@ export function registerProductionRoutes(
       if (activeExitChange === pending) activeExitChange = undefined;
     }
   }
-  app.post('/operator/preparation-cancel', { bodyLimit: 1024 }, async (request, reply) => {
-    if (
-      options.originPolicy.mode !== 'loopback' ||
-      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
-    )
-      return reply
-        .code(lifecycleErrors.operatorForbidden.status)
-        .send(lifecycleErrors.operatorForbidden);
-    const id = (request.body as { preparationId?: unknown } | null)?.preparationId;
-    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
-      return reply
-        .code(lifecycleErrors.preparationIdInvalid.status)
-        .send({ ...lifecycleErrors.preparationIdInvalid, message: '启动事务标识无效。' });
-    cancelPreparation(id);
-    return reply.send(
-      cancellationResponseSchema.parse({ entered: lastEnteredId === id && mode !== 'preparation' }),
-    );
-  });
-  app.post('/operator/production', { bodyLimit: 1024 }, async (request, reply) => {
-    if (
-      options.originPolicy.mode !== 'loopback' ||
-      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
-    )
-      return reply
-        .code(lifecycleErrors.operatorForbidden.status)
-        .send(lifecycleErrors.operatorForbidden);
-    const result = await dispatchChange(
-      request.body as {
-        action?: unknown;
-        expectedRevision?: unknown;
-        preparationId?: unknown;
-      } | null,
-    );
-    return reply.code(result.code).send(result.value);
-  });
-  return {
+  const production = {
     get: view,
+    statsActive: () => statsActive,
+    entered: (id: string) => lastEnteredId === id && mode !== 'preparation',
+    change: dispatchChange,
     // Closing the service can join this task without making OBS a condition
     // for the Host's local game cleanup or for accepting the exit command.
     waitForObsExit: async () => {
       invalidateObsExit();
       await obsExitTask?.promise;
       await obsExitStatusWrite;
-      await options.waitForObsExitWrites?.();
+      await options.obsExit.wait();
       return obsExitState;
     },
     invalidateObsExit,
@@ -653,4 +656,61 @@ export function registerProductionRoutes(
     },
     shutdown: () => dispatchChange({ action: 'shutdown', expectedRevision: revision }),
   };
+  return production;
+}
+
+export function registerProductionRoutes(
+  app: FastifyInstance,
+  options: { originPolicy: LocalWebOriginPolicy; production: ReturnType<typeof createProduction> },
+) {
+  const { production } = options;
+  app.get('/local/v1/production', (_request, reply) =>
+    reply.header('cache-control', 'no-store').send(production.get()),
+  );
+  app.get('/local/v1/preparation-status', (request, reply) => {
+    const id = (request.query as { preparationId?: unknown }).preparationId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
+      return reply
+        .code(lifecycleErrors.preparationIdInvalid.status)
+        .send(lifecycleErrors.preparationIdInvalid);
+    return reply.header('cache-control', 'no-store').send(
+      cancellationResponseSchema.parse({
+        entered: production.entered(id),
+      }),
+    );
+  });
+  app.post('/operator/preparation-cancel', { bodyLimit: 1024 }, async (request, reply) => {
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
+    )
+      return reply
+        .code(lifecycleErrors.operatorForbidden.status)
+        .send(lifecycleErrors.operatorForbidden);
+    const id = (request.body as { preparationId?: unknown } | null)?.preparationId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(id))
+      return reply
+        .code(lifecycleErrors.preparationIdInvalid.status)
+        .send({ ...lifecycleErrors.preparationIdInvalid, message: '启动事务标识无效。' });
+    cancelPreparation(id);
+    return reply.send(cancellationResponseSchema.parse({ entered: production.entered(id) }));
+  });
+  app.post('/operator/production', { bodyLimit: 1024 }, async (request, reply) => {
+    if (
+      options.originPolicy.mode !== 'loopback' ||
+      !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed
+    )
+      return reply
+        .code(lifecycleErrors.operatorForbidden.status)
+        .send(lifecycleErrors.operatorForbidden);
+    const result = await production.change(
+      request.body as {
+        action?: unknown;
+        expectedRevision?: unknown;
+        preparationId?: unknown;
+      } | null,
+    );
+    return reply.code(result.code).send(result.value);
+  });
+  return production;
 }
