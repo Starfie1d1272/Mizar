@@ -847,7 +847,26 @@ pub(crate) async fn enter_workspace(
             if expected_demo_request.is_some() {
                 return Err("试播状态已变化，请重新进入。".into());
             }
-            if view.mode != "preparation" {
+            if view.mode == "hidden" {
+                let resumed = app.state::<preparation_gate::PreparationGate>().commit(
+                    Some(&preparation_id),
+                    || {
+                        app.state::<production_exit::ExitGate>().commit(ticket, || {
+                            request(
+                                &app,
+                                "POST",
+                                "/operator/production",
+                                json!({"action":"enter","expectedRevision":view.revision}),
+                            )
+                        })
+                    },
+                )?;
+                if crate::lifecycle_contract::production_view(&resumed)?.mode != "live" {
+                    return Err("制作进入状态未确认。".into());
+                }
+                return present_entry(&app, &preparation_id, ticket);
+            }
+            if view.mode == "live" {
                 return present_entry(&app, &preparation_id, ticket);
             }
             if expected_revision
