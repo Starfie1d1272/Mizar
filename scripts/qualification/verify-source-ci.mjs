@@ -1,13 +1,24 @@
+import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fullSourceJobs, assertSuccessfulJobs } from '../ci/source-contract.mjs';
-import { verifyMergeEvidence, githubApi } from '../ci/verify-merge-evidence.mjs';
+function githubApi(endpoint) {
+  // One compact JSON value per page also supports older gh without --slurp.
+  const output = execFileSync('gh', ['api', '--paginate', '--jq', 'tojson', endpoint], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return output
+    .trim()
+    .split('\n')
+    .map((page) => JSON.parse(page));
+}
 
 export const requiredJobs = fullSourceJobs;
 
-export function verifySourceCi(repository, sourceSha, api = githubApi, options = {}) {
+export function verifySourceCi(repository, sourceSha, api = githubApi) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f0-9]{40}$/.test(sourceSha)) {
     throw new Error('无效的 CI 仓库或源码 SHA');
   }
@@ -31,15 +42,6 @@ export function verifySourceCi(repository, sourceSha, api = githubApi, options =
   const jobs = api(
     `repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
   ).flatMap((page) => page.jobs);
-  const incomplete = requiredJobs.some((name) => {
-    const matches = jobs.filter((job) => job.name === name);
-    return matches.length !== 1 || matches[0].conclusion !== 'success';
-  });
-  if (incomplete && options.allowMergeReuse) {
-    // Even reuse requires a successful exact-main run and aggregate gate.
-    assertSuccessfulJobs(jobs, ['plan', 'ci-gate'], run);
-    return verifyMergeEvidence(repository, sourceSha, api, options.logs);
-  }
   assertSuccessfulJobs(jobs, requiredJobs, run);
   return { gitSha: sourceSha, runId: run.id, runAttempt: run.run_attempt, url: run.html_url };
 }
