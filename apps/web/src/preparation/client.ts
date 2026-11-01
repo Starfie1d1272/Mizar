@@ -237,6 +237,8 @@ async function enterDesktopWorkspace(
   task?: ControlTask,
   signal?: AbortSignal,
 ) {
+  if (pendingStart) throw new Error('正在进入工作台，请稍候。');
+  if (signal?.aborted) throw new Error('进入已取消。');
   const preparationId = crypto.randomUUID();
   const cancel = () =>
     void desktopInvoke('cancel_demo_entry', { intentId: preparationId }).catch(() => {});

@@ -880,7 +880,8 @@ pub(crate) async fn enter_workspace(
         })
     })
     .await
-    .map_err(|_| "进入工作台未完成。".to_string())?;
+    .map_err(|_| "进入工作台未完成。".to_string())
+    .and_then(|result| result);
     let _ = intent_app.state::<DemoEntryIntent>().cancel(&intent_id);
     result
 }
