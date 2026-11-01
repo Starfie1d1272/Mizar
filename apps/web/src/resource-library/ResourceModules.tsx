@@ -855,6 +855,18 @@ export function ResourceModules({
                     ? '预览与详情'
                     : '查看详情'}
               </Button>
+              {previewsEnabled &&
+                selected !== entry.id &&
+                (entry.kind === 'hud' || entry.kind === 'program') && (
+                  <div className="resource-library__thumbnail">
+                    <PresetVisualPreview
+                      mode={entry.kind}
+                      staticFrame
+                      bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
+                      modules={[entry]}
+                    />
+                  </div>
+                )}
               {selected === entry.id && (
                 <div className="resource-library__detail" id={`resource-detail-${entry.id}`}>
                   <div className="resource-library__preset-actions">

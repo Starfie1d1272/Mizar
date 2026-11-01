@@ -181,3 +181,24 @@
 .resource-library__music-heading p {
   margin: 0;
 }
+
+.resource-library__module:has(.resource-library__thumbnail) {
+  grid-template-columns: minmax(0, 1fr) auto minmax(200px, 320px);
+}
+.resource-library__thumbnail .resource-library__preview {
+  margin: 0;
+}
+.resource-library [data-static-preview='true'] *,
+.resource-library [data-static-preview='true'] *::before,
+.resource-library [data-static-preview='true'] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (max-width: 800px) {
+  .resource-library__module:has(.resource-library__thumbnail) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .resource-library__thumbnail {
+    grid-column: 1 / -1;
+  }
+}
