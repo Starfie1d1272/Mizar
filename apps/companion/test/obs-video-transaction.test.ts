@@ -7,7 +7,11 @@ import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
-import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import {
+  createProduction,
+  registerProductionRoutes,
+  type ProductionDependencies,
+} from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
 const original = {
@@ -91,24 +95,44 @@ for (const condition of ['external output', 'OBS closed'] as const) {
         // Models the separate exit proof: external takeover or confirmed absent OBS.
         selectWaitingForExit: async () => ({ ok: true }),
       } as unknown as ProgramSceneController;
-      const production = registerProductionRoutes(app, {
-        originPolicy: createLocalWebOriginPolicy(),
+      const production = createProduction({
         scenes,
-        afterSafeScene: () =>
-          condition === 'OBS closed'
-            ? tx.restore(
-                {
-                  call: async () => {
-                    throw new Error('OBS unavailable');
+        music: () => undefined,
+        camera: () => undefined,
+        demo: () => undefined,
+        observer: { endProduction: () => {} } as ProductionDependencies['observer'],
+        binding: () => undefined,
+        waitForBroadcast: async () => {},
+        obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
+        warn: () => {},
+        error: () => {},
+        obs: {
+          pauseAutomatic: () => {},
+          resumeAutomatic: () => {},
+          startCommentaryRecovery: () => {},
+          hasCurrentPreparation: () => false,
+          settleAutomatic: async () => {},
+          startBrowserRecovery: () => {},
+          restoreVideo: () =>
+            condition === 'OBS closed'
+              ? tx.restore(
+                  {
+                    call: async () => {
+                      throw new Error('OBS unavailable');
+                    },
                   },
-                },
-                endpoint,
-              )
-            : tx.restore(f.obs, endpoint),
-        release: async () => {
-          released = true;
-        },
+                  endpoint,
+                )
+              : tx.restore(f.obs, endpoint),
+        } as ProductionDependencies['obs'],
+        source: {
+          clearStats: () => {},
+          release: async () => {
+            released = true;
+          },
+        } as ProductionDependencies['source'],
       });
+      registerProductionRoutes(app, { originPolicy: createLocalWebOriginPolicy(), production });
       try {
         const response = await app.inject({
           method: 'POST',

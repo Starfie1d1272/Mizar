@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import { ensureObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
-import { registerProductionRoutes } from '../src/program-scenes/production.js';
+import {
+  createProduction,
+  registerProductionRoutes,
+  type ProductionDependencies,
+} from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
 test('passive OBS preparation never takes another collection, including while output is active', async () => {
@@ -47,16 +51,32 @@ test('browser recovery is granted after entering and revoked on exit intent', as
     holdAutomatic: () => undefined,
     controlValid: () => () => true,
   } as unknown as ProgramSceneController;
-  const production = registerProductionRoutes(app, {
-    originPolicy: createLocalWebOriginPolicy(),
+  const production = createProduction({
     scenes,
-    release: async () => undefined,
-    onEntered: () => {
-      seenMode = production.get().mode;
-      seenRevision = production.get().revision;
-      valid = production.sessionValid();
-    },
+    music: () => undefined,
+    camera: () => undefined,
+    demo: () => undefined,
+    observer: { endProduction: () => {} } as ProductionDependencies['observer'],
+    binding: () => undefined,
+    waitForBroadcast: async () => {},
+    obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
+    warn: () => {},
+    error: () => {},
+    obs: {
+      pauseAutomatic: () => {},
+      resumeAutomatic: () => {},
+      startCommentaryRecovery: () => {},
+      hasCurrentPreparation: () => false,
+      settleAutomatic: async () => {},
+      restoreVideo: async () => {},
+      startBrowserRecovery: (sessionValid: () => boolean) => {
+        seenMode = production.get().mode;
+        seenRevision = production.get().revision;
+        valid = sessionValid;
+      },
+    } as ProductionDependencies['obs'],
   });
+  registerProductionRoutes(app, { originPolicy: createLocalWebOriginPolicy(), production });
   const initialRevision = production.get().revision;
   const request = (action: string, expectedRevision: string) =>
     app.inject({

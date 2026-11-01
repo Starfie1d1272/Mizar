@@ -60,7 +60,11 @@ import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { productionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
-import { registerProductionRoutes } from './program-scenes/production.js';
+import {
+  createProduction,
+  productionHttpResponse,
+  registerProductionRoutes,
+} from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
@@ -988,7 +992,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   }
   let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
-  let statsProductionActive = false;
   // The binding listener must retire fixture state on the way out, but it is created
   // before the rehearsal exists; this slot carries the later-constructed instance.
   const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
@@ -1013,7 +1016,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             const committed = programRuntime.bindContext(binding?.context, binding?.origin);
             projectionCoordinator.setMatchContextBinding(binding, committed);
             if (
-              statsProductionActive &&
+              production.statsActive() &&
               (binding?.origin === 'online' ||
                 (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
             )
@@ -1185,73 +1188,50 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }
   }
   let obsExitWrites = Promise.resolve();
-  const production = registerProductionRoutes(app, {
-    previousObsExitUnconfirmed,
-    waitForObsExitWrites: async () => {
-      while (true) {
-        const pending = obsExitWrites;
-        await pending;
-        if (pending === obsExitWrites) return;
-      }
-    },
-    recordObsExit: obsExitPath
-      ? (state, valid) => {
-          const pending = obsExitWrites.then(async () => {
-            await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
-          });
-          obsExitWrites = pending.catch((error: unknown) => {
-            app.log.warn({ err: error }, 'OBS exit status not saved');
-          });
-          return pending;
-        }
-      : undefined,
-    originPolicy: localWebTransport.getOriginPolicy(),
+  const production = createProduction({
     scenes: sceneController,
+    obs: obsAdapter,
+    music: () => musicDirector,
+    gameAudio,
+    camera: () => cameraDirector,
+    demo: () => demoTest,
+    observer: observerSettings,
+    binding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
+    source: {
+      handoffForExit: async () => {
+        await options.rivalhubConnection?.handoffForExit();
+      },
+      release: async () => {
+        await options.rivalhubConnection?.release();
+      },
+      stats: (target) => options.rivalhubConnection?.stats(target),
+      clearStats: () => options.rivalhubConnection?.clearStats(),
+    },
     waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
-    beforeEnter: () => {
-      demoTest?.openFormalBoundary();
-      sceneController.holdAutomatic();
+    obsExit: {
+      previousUnconfirmed: previousObsExitUnconfirmed,
+      wait: async () => {
+        while (true) {
+          const pending = obsExitWrites;
+          await pending;
+          if (pending === obsExitWrites) return;
+        }
+      },
+      record: async (state, valid) => {
+        if (!obsExitPath) return;
+        const pending = obsExitWrites.then(async () => {
+          await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
+        });
+        obsExitWrites = pending.catch((error: unknown) => {
+          app.log.warn({ err: error }, 'OBS exit status not saved');
+        });
+        return pending;
+      },
     },
-    onEnter: () => {
-      obsAdapter?.resumeAutomatic();
-      obsAdapter?.startCommentaryRecovery(
-        musicDirector,
-        gameAudio,
-        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
-      );
-      cameraDirector?.beginProduction();
-      statsProductionActive = true;
-      const binding = matchContextController?.getActiveBinding() ?? options.matchContextBinding;
-      if (
-        binding?.origin === 'online' ||
-        (binding?.origin === 'cache' && binding.cachedFrom === 'online')
-      )
-        void options.rivalhubConnection?.stats(statsTarget(binding.context));
-    },
-    onEntered: () => {
-      obsAdapter?.startBrowserRecovery(production.sessionValid());
-    },
-    onFinish: () => {
-      statsProductionActive = false;
-      options.rivalhubConnection?.clearStats();
-    },
-    beforeExit: () => {
-      obsAdapter?.pauseAutomatic();
-      cameraDirector?.finishProduction();
-      observerSettings.endProduction();
-    },
-    beforeFinish: () => obsAdapter?.settleAutomatic(),
-    afterSafeScene: (valid) => obsAdapter?.restoreVideo(undefined, valid),
-    finishTrial: async () => {
-      await demoTest?.finish();
-    },
-    release: async () => {
-      await options.rivalhubConnection?.release();
-    },
-    handoffRelease: async () => {
-      await options.rivalhubConnection?.handoffForExit();
-    },
+    warn: (details, message) => app.log.warn(details, message),
+    error: (details, message) => app.log.error(details, message),
   });
+  registerProductionRoutes(app, { originPolicy: localWebTransport.getOriginPolicy(), production });
   const localMatchExit =
     matchContextController === null
       ? undefined
@@ -1845,7 +1825,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       connection: options.rivalhubConnection,
       canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
-      canFetchStats: () => statsProductionActive,
+      canFetchStats: () => production.statsActive(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
@@ -2116,7 +2096,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
-      const result = await production.shutdown();
+      const result = productionHttpResponse(await production.shutdown());
       if (result.code !== 200) return reply.code(result.code).send(result.value);
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
