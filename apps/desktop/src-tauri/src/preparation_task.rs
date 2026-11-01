@@ -932,7 +932,7 @@ pub(crate) async fn enter_workspace(
                         preparation_start(
                             window,
                             app.clone(),
-                            preparation_id,
+                            preparation_id.clone(),
                             view.revision,
                             preserve_settings,
                             external_pid,
