@@ -52,7 +52,9 @@ export function MulnxToolControls({
         )
           ? '无法检查 MulNX 更新：GitHub 拒绝了请求，可能已达到请求次数限制。请稍后重试。'
           : error instanceof Error
-            ? error.message
+            ? error.message === 'mulnx_metadata_stale'
+              ? '发布元数据已过期，暂未确认最新版。请稍后重新检查。'
+              : error.message
             : action === 'stop'
               ? '停止操作未完成；请核对游戏与退出状态，结果不明确时不要重复发送。'
               : '操作失败，请重试。',
@@ -66,10 +68,16 @@ export function MulnxToolControls({
   return (
     <div>
       {!runtimeOnly && tool.checkResult === 'error' ? (
-        <p>未能确认最新版，请稍后重新检查。</p>
+        <p>暂未确认最新版；已准备的本机版本仍可使用，请稍后重新检查。</p>
       ) : null}
       {!runtimeOnly && tool.checkedAt ? (
         <p>检查时间：{new Date(tool.checkedAt).toLocaleString()}</p>
+      ) : null}
+      {!runtimeOnly && tool.confirmedAt ? (
+        <p>最近确认：{new Date(tool.confirmedAt).toLocaleString()}</p>
+      ) : null}
+      {!runtimeOnly && tool.retryAt ? (
+        <p>GitHub 可重试时间：{new Date(tool.retryAt).toLocaleString()}；仍可检查签名索引。</p>
       ) : null}
       {tool.phase === 'downloading' || tool.phase === 'verifying' ? (
         <p>
