@@ -438,10 +438,19 @@ impl GameTracker {
         }
         (owner.is_running() && owner.pid == window.pid && pid == window.pid).then_some(window)
     }
-    pub fn retire_layout(&mut self) {
+    pub fn retire_layout(&mut self) -> Result<(), std::io::Error> {
+        let submitted = self.frame.as_mut().map_or(Ok(()), |frame| frame.retire());
         self.frame = None;
         self.managed = false;
         self.alignment_retries = 0;
+        if let Err(error) = &submitted {
+            self.alignment_failure = Some(AlignmentFailure {
+                stage: "frame_restore",
+                api: Some("SetWindowPos"),
+                last_error: error.raw_os_error().map(|code| code as u32),
+            });
+        }
+        submitted
     }
     pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
         self.owner = owner.filter(|process| process.is_running());

@@ -49,6 +49,7 @@ pub struct GameFrame {
     original: WindowRect,
     corner: Option<u32>,
     border: Option<u32>,
+    retired: bool,
 }
 impl GameFrame {
     pub fn capture(hwnd: isize, process: crate::managed_cs2::WorkspaceProcess) -> Option<Self> {
@@ -63,6 +64,7 @@ impl GameFrame {
                 original,
                 corner: attribute(hwnd, CORNER),
                 border: attribute(hwnd, BORDER),
+                retired: false,
             })
     }
     fn exists(&self) -> bool {
@@ -86,12 +88,13 @@ impl GameFrame {
         square_window(self.hwnd);
     }
 }
-impl Drop for GameFrame {
-    fn drop(&mut self) {
+impl GameFrame {
+    pub fn retire(&mut self) -> Result<(), std::io::Error> {
+        self.retired = true;
         if !self.exists() {
-            return;
+            return Ok(());
         }
-        unsafe {
+        let submitted = unsafe {
             SetWindowLongW(self.hwnd, -16, self.style);
             SetWindowPos(
                 self.hwnd,
@@ -101,13 +104,26 @@ impl Drop for GameFrame {
                 self.original.right - self.original.left,
                 self.original.bottom - self.original.top,
                 0x4034,
-            );
-        }
+            ) != 0
+        };
+        let result = if submitted {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
         if let Some(value) = self.corner {
             set_attribute(self.hwnd, CORNER, value);
         }
         if let Some(value) = self.border {
             set_attribute(self.hwnd, BORDER, value);
+        }
+        result
+    }
+}
+impl Drop for GameFrame {
+    fn drop(&mut self) {
+        if !self.retired {
+            let _ = self.retire();
         }
     }
 }

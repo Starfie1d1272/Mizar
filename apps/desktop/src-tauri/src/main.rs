@@ -1591,7 +1591,9 @@ fn run_desktop(
                     let next_exit = host.state::<production_exit::ExitGate>().generation();
                     if next_exit != exit_generation {
                         if let Ok(mut tracker) = worker_tracker.lock() {
-                            tracker.retire_layout();
+                            if let Err(error) = tracker.retire_layout() {
+                                host.state::<DesktopLog>().event("cs2_window_retire", "failure", Some(&format!("SetWindowPos: {error}")));
+                            }
                             exit_generation = next_exit;
                             retired_workspace = Some(host.state::<HostState>().workspace_epoch.load(Ordering::Acquire));
                             if host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) != next_exit {
