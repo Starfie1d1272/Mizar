@@ -30,6 +30,10 @@ const metadataCache = new Map<string, { value: unknown; until: number }>();
 const metadataPending = new Map<string, Promise<unknown>>();
 let metadataRetry: { until: number; status: number } | undefined;
 
+export function metadataRetryAt(): number | null {
+  return metadataRetry && metadataRetry.until > Date.now() ? metadataRetry.until : null;
+}
+
 export function publicJson(url: string, fresh = false): Promise<unknown> {
   const cached = metadataCache.get(url);
   if (!fresh && cached && cached.until > Date.now()) return Promise.resolve(cached.value);

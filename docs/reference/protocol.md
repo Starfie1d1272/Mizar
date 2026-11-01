@@ -4,7 +4,7 @@
 
 产品运行时的 `/health.product.appVersion` 来自同包 artifact 元数据，与 `gitSha` 一同供高级设置展示；开发运行或旧包缺少版本号时明确显示不可用。
 
-`GET /local/v1/resource-library` 面向本机受信任页面，汇总示例素材状态及 MulNX 当前版本、已检查版本和镜头来源名称。对应提供方不可用时返回 `null`，不推断安装状态；该查询不返回路径，也不修改资源。MulNX 更新检查继续使用现有 `/operator/orchestration` 控制入口。
+`GET /local/v1/resource-library` 面向本机受信任页面，汇总示例素材状态及 MulNX 已选版本、随包版本、准备阶段、已检查版本和镜头来源名称。随包版本来自本地发行清单，首次使用仍校验归档；已选版本为空不表示必须手动安装。对应提供方不可用时返回 `null`，不推断安装状态；该查询不返回路径，也不修改资源。MulNX 更新检查继续使用现有 `/operator/orchestration` 控制入口。
 
 ## 契约来源
 
