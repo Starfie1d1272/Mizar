@@ -800,6 +800,8 @@ export class MulnxTool {
               this.phase = 'downloading';
               this.downloadedBytes = bytes;
               this.sourceName = name;
+              if (bytes === 0)
+                this.diagnostic('mulnx_source_download', { result: 'begin', source: name });
             },
             this.mirror && sameMulnxAsset(this.mirror.release, release)
               ? (signal, end) => mirrorArchive(this.mirror!, signal, end)
@@ -812,7 +814,9 @@ export class MulnxTool {
               this.phase = 'verifying';
             },
             true,
+            (evidence) => this.diagnostic('mulnx_source_probe', evidence),
           );
+          this.diagnostic('mulnx_source_download', { result: 'verified', source: this.sourceName });
         } catch (error) {
           this.phase = abort.signal.aborted ? 'cancelled' : 'error';
           throw error;

@@ -3,6 +3,17 @@ const PROBE_TIMEOUT = 3_000;
 const CACHE_MS = 6 * 60 * 60_000;
 const cache = new Map<string, { until: number; order: number[] }>();
 
+export type SourceDiagnostic = {
+  stage: 'probe' | 'selection';
+  source?: number;
+  elapsedMs?: number;
+  status?: number | undefined;
+  rangeIgnored?: boolean;
+  error?: unknown;
+  cacheHit?: boolean;
+  order?: number[];
+};
+
 export function forgetSourceOrder(key: string) {
   cache.delete(key);
 }
@@ -13,6 +24,7 @@ export async function sourceOrder(
   expectedBytes: number,
   signal: AbortSignal,
   probes: Array<(signal: AbortSignal, end: number) => Promise<Response>>,
+  report?: (diagnostic: SourceDiagnostic) => void,
 ): Promise<number[]> {
   signal.throwIfAborted();
   if (
@@ -23,8 +35,10 @@ export async function sourceOrder(
   )
     throw new Error('source_probe_invalid');
   const cached = cache.get(key);
-  if (cached && cached.until > Date.now() && cached.order.length === probes.length)
+  if (cached && cached.until > Date.now() && cached.order.length === probes.length) {
+    report?.({ stage: 'selection', cacheHit: true, order: [...cached.order] });
     return [...cached.order];
+  }
   const sample = Math.min(expectedBytes, SAMPLE_BYTES);
   const measured = await Promise.all(
     probes.map(async (probe, index) => {
@@ -37,6 +51,7 @@ export async function sourceOrder(
         if (attempt.aborted) abortListener();
         else attempt.addEventListener('abort', abortListener, { once: true });
       });
+      let status: number | undefined;
       try {
         const pending = probe(attempt, sample - 1);
         void pending.then(
@@ -46,20 +61,22 @@ export async function sourceOrder(
           () => undefined,
         );
         const response = await Promise.race([pending, aborted]);
+        status = response.status;
         reader = response.body?.getReader();
-        if (!reader || ![200, 206].includes(response.status)) throw new Error('probe_failed');
+        if (!reader || ![200, 206].includes(response.status))
+          throw new Error(`probe_http_${response.status}`);
         const encoding = response.headers.get('content-encoding');
         const type = response.headers.get('content-type') ?? '';
-        if ((encoding && encoding !== 'identity') || /text\/html/i.test(type))
-          throw new Error('probe_invalid');
+        if (encoding && encoding !== 'identity') throw new Error('probe_encoding_invalid');
+        if (/text\/html/i.test(type)) throw new Error('probe_html');
         const length = response.headers.get('content-length');
         if (
           response.status === 206 &&
           response.headers.get('content-range') !== `bytes 0-${sample - 1}/${expectedBytes}`
         )
-          throw new Error('probe_invalid');
+          throw new Error('probe_range_invalid');
         if (response.status === 200 && length && Number(length) !== expectedBytes)
-          throw new Error('probe_invalid');
+          throw new Error('probe_size_invalid');
         let bytes = 0;
         while (bytes < sample) {
           const chunk = await Promise.race([reader.read(), aborted]);
@@ -67,8 +84,23 @@ export async function sourceOrder(
           if (chunk.done || !chunk.value.length) throw new Error('probe_incomplete');
           bytes += Math.min(chunk.value.length, sample - bytes);
         }
-        return { index, elapsed: performance.now() - started };
-      } catch {
+        const elapsed = performance.now() - started;
+        report?.({
+          stage: 'probe',
+          source: index,
+          elapsedMs: elapsed,
+          status,
+          rangeIgnored: status === 200,
+        });
+        return { index, elapsed };
+      } catch (error) {
+        report?.({
+          stage: 'probe',
+          source: index,
+          elapsedMs: performance.now() - started,
+          status,
+          error,
+        });
         return { index, elapsed: Infinity };
       } finally {
         if (abortListener) attempt.removeEventListener('abort', abortListener);
@@ -83,5 +115,6 @@ export async function sourceOrder(
     if (cache.size >= 16) cache.delete(cache.keys().next().value!);
     cache.set(key, { until: Date.now() + CACHE_MS, order });
   }
+  report?.({ stage: 'selection', cacheHit: false, order: [...order] });
   return order;
 }

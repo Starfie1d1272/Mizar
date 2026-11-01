@@ -20,7 +20,7 @@ import {
 export async function installOfficialPack({
   store,
   inputs,
-  loadInputs,
+  loadVerified,
   authorization,
   tufCachePath,
   signal = new globalThis.AbortController().signal,
@@ -46,7 +46,7 @@ export async function installOfficialPack({
     // authenticated new publication. Offline identity failures remain failures.
     if (
       signal.aborted ||
-      (typeof loadInputs !== 'function' &&
+      (typeof loadVerified !== 'function' &&
         !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
           (name) => Buffer.isBuffer(inputs?.[name]),
         ))
@@ -55,31 +55,32 @@ export async function installOfficialPack({
   }
   if (cached)
     return finishOfficialPack(store, cached, pinnedPolicy, signal, undefined, authorization);
-  if (loadInputs !== undefined) {
-    if (typeof loadInputs !== 'function') throw new Error('Official resource loader is invalid');
-    inputs = await loadInputs(signal);
-    signal.throwIfAborted();
+  let verified;
+  if (loadVerified !== undefined) {
+    if (typeof loadVerified !== 'function') throw new Error('Official resource loader is invalid');
+    verified = await loadVerified(signal);
+  } else {
+    const frozenInputs = Object.fromEntries(
+      [
+        ['statementBytes', 64 * 1024],
+        ['publicationBundleBytes', 2 * 1024 * 1024],
+        ['archiveBytes', LIMITS.archiveBytes],
+        ['archiveBundleBytes', 2 * 1024 * 1024],
+      ].map(([name, maximum]) => {
+        const bytes = inputs?.[name];
+        if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maximum) {
+          throw new Error('Official resource input exceeds the publisher contract');
+        }
+        return [name, Buffer.from(bytes)];
+      }),
+    );
+    verified = await verifyCatalogResourcePublicationBytes({
+      ...frozenInputs,
+      authorization,
+      tufCachePath,
+      signal,
+    });
   }
-  const frozenInputs = Object.fromEntries(
-    [
-      ['statementBytes', 64 * 1024],
-      ['publicationBundleBytes', 2 * 1024 * 1024],
-      ['archiveBytes', LIMITS.archiveBytes],
-      ['archiveBundleBytes', 2 * 1024 * 1024],
-    ].map(([name, maximum]) => {
-      const bytes = inputs?.[name];
-      if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maximum) {
-        throw new Error('Official resource input exceeds the publisher contract');
-      }
-      return [name, Buffer.from(bytes)];
-    }),
-  );
-  const verified = await verifyCatalogResourcePublicationBytes({
-    ...frozenInputs,
-    authorization,
-    tufCachePath,
-    signal,
-  });
   signal.throwIfAborted();
   // The shared verifier owns the receipt schema and offline trust snapshot.
   // Forward its authenticated receipt unchanged; do not reconstruct evidence here.
