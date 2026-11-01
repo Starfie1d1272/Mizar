@@ -717,6 +717,8 @@ fn launch_operation(
         );
         // No retry: an interrupted request can still have been queued.
         let deadline = Instant::now() + Duration::from_secs(120);
+        let placement_started = Instant::now();
+        let mut placement_logged = false;
         log.event("mulnx_launch_confirmation", "begin", None);
         let result = loop {
             let actual =
@@ -726,15 +728,44 @@ fn launch_operation(
                     let process = &processes[0];
                     let candidate =
                         json!({"mizarLaunch":1,"pid":process["pid"],"created":process["created"]});
-                    if validate_game_identity(&actual, &candidate, &executable).is_ok()
-                        && verify_gateway_owner(
-                            log,
-                            55202,
-                            process["pid"].as_u64().unwrap_or(0) as u32,
+                    if validate_game_identity(&actual, &candidate, &executable).is_ok() {
+                        let pid = process["pid"].as_u64().ok_or("游戏进程身份缺失。")? as u32;
+                        let created = process["created"]
+                            .as_str()
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .ok_or("游戏创建时间缺失。")?;
+                        let owner = confirmation_lock(&managed, deadline, || guard.check())?
+                            .verified_mulnx_process(pid, created, &executable)?;
+                        let positioned = guard.commit(|| {
+                            let position = || {
+                                crate::workspace_presentation::position_starting_game(
+                                    app, owner, preserve,
+                                )
+                            };
+                            if guard.exit.is_some() {
+                                position()
+                            } else {
+                                app.state::<production_exit::ExitGate>()
+                                    .commit(exit_ticket, position)
+                            }
+                        })?;
+                        if positioned && !placement_logged {
+                            log.event("cs2_startup_placement", "success", Some(&json!({
+                                "pid": pid, "elapsedMs": placement_started.elapsed().as_millis()
+                            }).to_string()));
+                            placement_logged = true;
+                        }
+                        // Do not block window discovery on a PowerShell port-owner query
+                        // while the gateway has not even started listening.
+                        if std::net::TcpStream::connect_timeout(
+                            &std::net::SocketAddr::from(([127, 0, 0, 1], 55202)),
+                            Duration::from_millis(50),
                         )
                         .is_ok()
-                    {
-                        break candidate;
+                            && verify_gateway_owner(log, 55202, pid).is_ok()
+                        {
+                            break candidate;
+                        }
                     }
                 } else if processes.len() > 1 {
                     return Err("检测到多个 CS2，请检查后退出游戏与 MulNX。".into());
@@ -743,7 +774,7 @@ fn launch_operation(
             if Instant::now() >= deadline {
                 return Err("MulNX 启动结果待确认；请检查游戏和启动器，退出后再重试。".into());
             }
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(250));
         };
         let bytes = result.to_string();
         let pid = result["pid"].as_u64().ok_or("MulNX 游戏进程身份缺失。")? as u32;

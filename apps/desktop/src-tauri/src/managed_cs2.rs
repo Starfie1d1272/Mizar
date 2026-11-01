@@ -1564,7 +1564,22 @@ impl ManagedCs2 {
         created: u64,
         executable: &Path,
     ) -> Result<(), String> {
+        self.verified_mulnx_process(pid, created, executable)?;
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
+        journal["pid"] = json!(pid);
+        journal["created"] = json!(created);
+        self.store.save(&journal)?;
+        self.commit_managed_source(&mut journal)
+    }
+    /// Window placement needs launch provenance, but does not grant gateway control
+    /// or commit a telemetry source before MulNX finishes starting.
+    pub(crate) fn verified_mulnx_process(
+        &self,
+        pid: u32,
+        created: u64,
+        executable: &Path,
+    ) -> Result<WorkspaceProcess, String> {
+        let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         if (!journal["pid"].is_null() || !journal["created"].is_null())
             && (journal["pid"].as_u64() != Some(pid as u64)
                 || journal["created"].as_u64() != Some(created))
@@ -1591,10 +1606,11 @@ impl ManagedCs2 {
         {
             return Err("游戏身份已变化，原配置备份仍保留。".into());
         }
-        journal["pid"] = json!(pid);
-        journal["created"] = json!(created);
-        self.store.save(&journal)?;
-        self.commit_managed_source(&mut journal)
+        Ok(WorkspaceProcess {
+            process: Arc::new(process),
+            pid,
+            created,
+        })
     }
     pub fn ensure_demo_available(&self) -> Result<(), String> {
         if self.store.load()?.is_some() || any_cs2_running(&self.log)? {
