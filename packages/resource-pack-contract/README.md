@@ -18,3 +18,5 @@
 `verifyResourceCatalogBytes` 先验证原 Qualification descriptor 与 Promotion catalog 的双证据，要求原始规范字节、descriptor SHA、Core 与固定八个 GitHub 下载地址一致，返回进程内授权句柄。`getResourceAuthorization` 拒绝 JSON 克隆、裸 policy 或自报 trusted；`verifyCatalogResourcePublicationBytes` 只接受此句柄，核对 catalog 绑定的原声明／archive／manifest，并将原目录双证据加入真实 `.receipt.catalog`。不接受外部 verifier、用户 gh 或另一组签发根。
 
 `verifyResourceCatalogReceipt` 用固定 seed 认证的 snapshot 离线重建同一授权。`verifyResourceReceipt` 的新 catalog 路径需要当前已认证 Core 的版本与源码；已有固定策略还须匹配目录身份。缓存不联网，首次安装保持当前 TUF、签发有效期与 publication 门禁。原始目录字节和四个证明均保存在同一 Store receipt 中；未签结构测试、既有正式签名的错误 subject 拒绝测试不构成新资源生产签名正例。
+
+缓存目录没有匹配当前 Core 的条目时，`verifyResourceReceipt` 拒绝并返回 `resource_authorization_required` 错误码；这只表示需要当前授权，不证明旧缓存可信或文件损坏。其他签名与完整性拒绝不合并为该原因。
