@@ -777,10 +777,15 @@ pub(crate) async fn enter_workspace(
                 }
                 if let Some(existing) = snapshot()?.filter(|task| !task.cancelled) {
                     if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
-                        let task_entered = entered(&app, &existing.id)?;
-                        let actual = http(&app, "GET", "/local/v1/production", json!({})).await?;
+                        let task_entered = entered(&app, &existing.id)
+                            .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
+                        let actual = http(&app, "GET", "/local/v1/production", json!({}))
+                            .await
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
                         if task_entered
-                            && crate::lifecycle_contract::production_view(&actual)?.mode
+                            && crate::lifecycle_contract::production_view(&actual)
+                                .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?
+                                .mode
                                 != "preparation"
                         {
                             return present_entry(&app, &preparation_id, ticket);
@@ -854,9 +859,13 @@ pub(crate) async fn enter_workspace(
             if manual {
                 if let Some(existing) = snapshot()? {
                     if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
-                        let task_entered = entered(&app, &existing.id)?;
-                        production = http(&app, "GET", "/local/v1/production", json!({})).await?;
-                        view = crate::lifecycle_contract::production_view(&production)?;
+                        let task_entered = entered(&app, &existing.id)
+                            .map_err(|cause| format!("{error} 进入状态复核失败：{cause}"))?;
+                        production = http(&app, "GET", "/local/v1/production", json!({}))
+                            .await
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
+                        view = crate::lifecycle_contract::production_view(&production)
+                            .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
                         if task_entered && view.mode != "preparation" {
                             return present_entry(&app, &preparation_id, ticket);
                         }
