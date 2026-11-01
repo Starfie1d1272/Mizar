@@ -296,7 +296,6 @@ export function PreparationPage() {
               void action(async () => {
                 entryGeneration.current += 1;
                 setSubmittingEntry(true);
-                setCancelFailed(false);
                 try {
                   const result = await productionAction('enter', production);
                   if (
