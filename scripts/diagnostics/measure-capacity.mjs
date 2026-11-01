@@ -14,6 +14,16 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { strict as assert } from 'node:assert';
 import { setImmediate as yieldIO, setTimeout as waitForIO } from 'node:timers/promises';
 import { buildApp } from '../../apps/companion/src/app.ts';
+import {
+  WorkspaceObserver,
+  registerWorkspaceObserver,
+} from '../../apps/companion/src/telemetry/observer-workspace.ts';
+import { CameraDirector } from '../../apps/companion/src/orchestration/director.ts';
+import { OrchestrationStore } from '../../apps/companion/src/orchestration/store.ts';
+import { MulnxProvider } from '../../apps/companion/src/orchestration/provider.ts';
+import { registerOrchestrationRoutes } from '../../apps/companion/src/orchestration/routes.ts';
+import { MusicStore } from '../../apps/companion/src/music/store.ts';
+import { createLocalWebOriginPolicy } from '../../apps/companion/src/local-web/origin-policy.ts';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.ts';
 import {
   DiagnosticDelivery,
@@ -58,6 +68,7 @@ async function profile(directory) {
   let frames = 0,
     browser = 0,
     http = 0,
+    renewals = 0,
     nativeOps = 0,
     technicalLines = 0;
   const app = buildApp({
@@ -72,7 +83,57 @@ async function profile(directory) {
       frames++;
     },
   });
+  // Exercise the actual renewal POST handlers and native lease. No game or
+  // observer process is launched; GSI and source records remain synthetic.
+  const observer = new WorkspaceObserver(async () => {
+    throw new Error('capacity_no_process_launch');
+  });
+  const controlToken = 'public-capacity-control';
+  registerWorkspaceObserver(app, observer, controlToken);
+  const provider = new MulnxProvider();
+  const camera = new CameraDirector(
+    new OrchestrationStore(join(root, 'camera')),
+    provider,
+    () => {
+      throw new Error('capacity_renewal_must_not_execute_camera');
+    },
+    undefined,
+    () => virtual,
+  );
+  registerOrchestrationRoutes(
+    app,
+    camera,
+    new MusicStore(join(root, 'music')),
+    createLocalWebOriginPolicy(),
+    { controlToken, configure: (_revision, commit) => commit() },
+  );
+  app.addHook('onClose', async () => {
+    await observer.close();
+    provider.close();
+  });
   await app.ready();
+  const nativeHeaders = { 'x-runtime-token': controlToken };
+  const cameraRoute = '/operator/runtime/camera-session';
+  const host = 'public-capacity-host';
+  assert.equal(
+    (
+      await app.inject({
+        method: 'POST',
+        url: cameraRoute,
+        headers: nativeHeaders,
+        payload: { action: 'host-start', host },
+      })
+    ).statusCode,
+    200,
+  );
+  const begin = await app.inject({
+    method: 'POST',
+    url: cameraRoute,
+    headers: nativeHeaders,
+    payload: { action: 'begin', host, expectedRevision: 'public' },
+  });
+  assert.equal(begin.statusCode, 200);
+  const lease = begin.json().lease;
   const payload = {
     auth: { token: 'public-capacity' },
     provider: {
@@ -132,6 +193,21 @@ async function profile(directory) {
       });
       assert.equal(response.statusCode, 204);
       durations.push(performance.now() - before);
+      if (sequence % 40 === 0) {
+        for (const [url, body] of [
+          ['/operator/runtime/observer', { action: 'pulse' }],
+          [cameraRoute, { action: 'pulse', host, lease }],
+        ]) {
+          const renewed = await app.inject({
+            method: 'POST',
+            url,
+            headers: nativeHeaders,
+            payload: body,
+          });
+          assert.equal(renewed.statusCode, 200, renewed.body);
+          renewals++;
+        }
+      }
       if (sequence % 10 === 0) {
         assert.equal(
           (
@@ -338,6 +414,7 @@ async function profile(directory) {
         inputVariation:
           'changing positions, health, publication counters and technical line counters',
         ownReadsPerMinute: 120,
+        nativeRenewalsPerMinute: 60,
         browserAggregatesPerMinute: 8,
         nativeOperationsPerMinute: 3,
         technicalConsoleLinesPerSecond: 1,
@@ -346,6 +423,7 @@ async function profile(directory) {
       },
       frames,
       http,
+      renewals,
       browser,
       nativeOps,
       technicalLines,
@@ -1286,6 +1364,7 @@ try {
     upload: configuration.ratelimits.find((v) => v.name === 'UPLOAD_LIMITER').simple.limit,
   };
   const result = await profile(directory);
+  console.error(JSON.stringify({ profile: result.report }));
   const faultResult = await fault(directory);
   const sharedResult = await sharedIp(directory, [
     { name: 'previous', enroll: 5, upload: 30 },

@@ -548,6 +548,7 @@ export class DiagnosticDelivery {
       fetch?: typeof fetch;
       now?: () => number;
       allowTestEndpoint?: boolean;
+      onConsent?: () => Promise<void>;
     } = {},
   ) {
     this.endpoint = diagnosticsEndpoint(options.endpoint, options.allowTestEndpoint);
@@ -769,7 +770,12 @@ export class DiagnosticDelivery {
     return this.transaction(async () => {
       if (enabled && epoch !== this.epoch) return this.status();
       if (enabled) {
-        if (this.state.consent && !this.revocationFenced) return this.status();
+        if (this.state.consent && !this.revocationFenced) {
+          // A preceding baseline write can fail after consent itself was saved.
+          // An explicit retry must capture it rather than silently returning success.
+          await this.options.onConsent?.();
+          return this.status();
+        }
         if (
           this.state.withdrawals.length + this.state.retiredIdentities.length >=
           DELIVERY_LIMITS.tombstones
@@ -805,6 +811,9 @@ export class DiagnosticDelivery {
           this.fences.delete(name);
         }
         if (epoch === this.epoch) this.revocationFenced = this.fences.size > 0;
+        // Capture current state after the durable consent boundary, never replay
+        // the pre-consent startup snapshot. Journal ingress does not await this transaction.
+        if (epoch === this.epoch && this.consentActive()) await this.options.onConsent?.();
       } else {
         await fence;
         const prior = this.state.credentials;

@@ -14,6 +14,7 @@ export function registerDiagnosticDelivery(
     originPolicy: LocalWebOriginPolicy;
     endpoint?: string;
     fetch?: typeof fetch;
+    onConsent?: () => Promise<void>;
     onReport?: (report: { category: string; observedAt: string }) => void;
   },
 ) {
@@ -48,6 +49,7 @@ export function registerDiagnosticDelivery(
         delivery = new DiagnosticDelivery(directory, journal, {
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
+          ...(options.onConsent ? { onConsent: options.onConsent } : {}),
         });
         await delivery.initialize();
         ready = true;
