@@ -1,14 +1,7 @@
 import { useRef, useState } from 'react';
 import type { MulnxToolView } from '@mizar/protocol/orchestration';
 import { Button, Dialog, StatusBanner } from '../ui';
-import {
-  command,
-  checkObsBeforeLaunch,
-  productionAction,
-  useLocalRead,
-  type Production,
-  type ExternalGameIdentity,
-} from '../preparation/client';
+import { command, productionAction, useLocalRead, type Production } from '../preparation/client';
 import { desktopInvoke } from '../workspace/client';
 
 export function MulnxToolControls({
@@ -32,19 +25,14 @@ export function MulnxToolControls({
   const [confirmStop, setConfirmStop] = useState(false);
   const running = useRef(false);
   if (!tool) return null;
-  async function run(action: 'check' | 'open' | 'update' | 'stop') {
+  async function run(action: 'check' | 'update' | 'stop') {
     if (running.current) return;
     running.current = true;
     setBusy(true);
     setMessage('');
     setFailed(false);
     try {
-      if (action === 'open') {
-        if (!production || !(await checkObsBeforeLaunch(true))) return;
-        const game = await desktopInvoke<ExternalGameIdentity>('launch_mulnx', { automatic: true });
-        await productionAction('enter', production, false, undefined, game);
-        setMessage('已由 Mizar 启动 MulNX 游戏并进入工作台。');
-      } else if (action === 'update') {
+      if (action === 'update') {
         await desktopInvoke('mulnx_control', { action: 'update' });
         setMessage('MulNX 版本准备已完成；确认支持自动启动后，从 Mizar 启动工作台。');
       } else if (action === 'stop') {
@@ -77,18 +65,6 @@ export function MulnxToolControls({
   }
   return (
     <div>
-      {!runtimeOnly && !maintenanceOnly ? (
-        <p>
-          启动前请先退出完美世界竞技平台、其他竞技平台和游戏，Mizar 会调用 MulNX
-          完成环境检查。仅用于离线 Demo 或已授权观战。
-        </p>
-      ) : null}
-      {!runtimeOnly && !maintenanceOnly ? (
-        <p>
-          MulNX · {tool.installed ?? '首次启动时准备'}
-          {tool.latest && tool.latest !== tool.installed ? ` · 可更新至 ${tool.latest}` : ''}
-        </p>
-      ) : null}
       {!runtimeOnly && tool.checkResult === 'error' ? (
         <p>未能确认最新版，请稍后重新检查。</p>
       ) : null}
@@ -133,14 +109,6 @@ export function MulnxToolControls({
                 ? '重新安装'
                 : '更新'
             : '更新或重新准备 MulNX'}
-        </Button>
-      ) : null}
-      {!runtimeOnly && !maintenanceOnly && window.__TAURI_INTERNALS__ ? (
-        <Button
-          disabled={busy || tool.busy || !production?.canEnter || production.mode !== 'preparation'}
-          onClick={() => void run('open')}
-        >
-          启动 MulNX 工作台
         </Button>
       ) : null}
       {!maintenanceOnly && window.__TAURI_INTERNALS__ && allowStop ? (

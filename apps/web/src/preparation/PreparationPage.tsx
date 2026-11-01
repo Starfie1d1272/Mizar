@@ -14,7 +14,7 @@ import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -121,12 +121,22 @@ export function PreparationPage() {
     null,
   );
   const [entering, setEntering] = useState(false);
+  const [submittingEntry, setSubmittingEntry] = useState(false);
+  const [cancellingEntry, setCancellingEntry] = useState(false);
+  const [cancelFailed, setCancelFailed] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const entryGeneration = useRef(0);
+  const cancelling = useRef(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
   );
   const [librarySource, setLibrarySource] = useState<'local' | 'website'>(() =>
     new URLSearchParams(window.location.search).get('source') === 'website' ? 'website' : 'local',
   );
+
+  function reportActionError(error: unknown) {
+    setMessage(error instanceof Error ? error.message : '操作未完成。');
+  }
 
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
@@ -135,7 +145,7 @@ export function PreparationPage() {
     try {
       await run();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作未完成。');
+      reportActionError(error);
     } finally {
       setBusy(false);
     }
@@ -146,13 +156,15 @@ export function PreparationPage() {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      const generation = entryGeneration.current;
       try {
         const status = await desktopInvoke<{ running: boolean; message: string } | null>(
           'preparation_status',
         );
-        if (active && status) {
-          setEntering(status.running);
-          if (!status.running && status.message) setMessage(status.message);
+        if (active && generation === entryGeneration.current) {
+          setEntering(status?.running ?? false);
+          if (!status) setCancelFailed(false);
+          if (status && !status.running && status.message) setMessage(status.message);
         }
       } catch {
         /* The desktop may still be starting. */
@@ -278,20 +290,28 @@ export function PreparationPage() {
           </div>
           <Button
             variant={match ? 'primary' : 'secondary'}
-            disabled={busy || Boolean(exit?.busy) || !production}
+            disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
             onClick={() =>
               production &&
               void action(async () => {
-                setEntering(true);
+                entryGeneration.current += 1;
+                setSubmittingEntry(true);
                 try {
-                  await productionAction('enter', production);
+                  const result = await productionAction('enter', production);
+                  if (
+                    result === 'confirmed' &&
+                    production.mode === 'preparation' &&
+                    window.__TAURI_INTERNALS__
+                  )
+                    setEntering(true);
                 } finally {
-                  setEntering(false);
+                  entryGeneration.current += 1;
+                  setSubmittingEntry(false);
                 }
               })
             }
           >
-            {entering
+            {entering || submittingEntry
               ? '正在自动准备工作台…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
@@ -303,7 +323,9 @@ export function PreparationPage() {
             <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
             {window.__TAURI_INTERNALS__ ? (
               <Button
-                disabled={busy || entering || Boolean(exit?.busy)}
+                disabled={
+                  busy || cancellingEntry || entering || submittingEntry || Boolean(exit?.busy)
+                }
                 onClick={() =>
                   void action(async () => {
                     await enterProductionManually(production);
@@ -316,12 +338,37 @@ export function PreparationPage() {
             {window.__TAURI_INTERNALS__ ? <p>手动进入不会自动启动游戏或配置 OBS。</p> : null}
           </>
         ) : null}
-        {entering ? <Button onClick={cancelProductionEntry}>取消进入</Button> : null}
+        {entering || submittingEntry || cancellingEntry || cancelFailed ? (
+          <Button
+            disabled={cancellingEntry}
+            onClick={() => {
+              if (cancelling.current) return;
+              cancelling.current = true;
+              entryGeneration.current += 1;
+              setCancellingEntry(true);
+              setCancelError('');
+              void cancelProductionEntry()
+                .then(() => setCancelFailed(false))
+                .catch((error: unknown) => {
+                  setCancelFailed(true);
+                  setCancelError(error instanceof Error ? error.message : '操作未完成。');
+                })
+                .finally(() => {
+                  entryGeneration.current += 1;
+                  cancelling.current = false;
+                  setCancellingEntry(false);
+                });
+            }}
+          >
+            {cancellingEntry ? '正在取消…' : cancelFailed ? '重试取消' : '取消进入'}
+          </Button>
+        ) : null}
         {path === '/' && production?.mode === 'preparation' && window.__TAURI_INTERNALS__ ? (
           <DiagnosticDeliveryNotice />
         ) : null}
 
         {!(path === '/settings' && tab === 'gsi') ? <Cs2Recovery production={production} /> : null}
+        {cancelError ? <StatusBanner tone="danger">{cancelError}</StatusBanner> : null}
         {message ? (
           <StatusBanner tone="danger">
             {message}
