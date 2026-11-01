@@ -40,12 +40,10 @@ export function registerResourceRoutes(
           try {
             const store = current();
             if (action === 'activate' && !store.getStatus(PACK_ID).preparedVersion)
-              return reply
-                .code(409)
-                .send({
-                  error: 'resource_not_ready',
-                  message: '尚无已准备素材，请先准备当前素材。',
-                });
+              return reply.code(409).send({
+                error: 'resource_not_ready',
+                message: '尚无已准备素材，请先准备当前素材。',
+              });
             if (action === 'repair')
               await store.repair(PACK_ID, prepareCurrentResource(recovery.core, recovery.root));
             else if (!(await store.activatePrepared(PACK_ID)))
