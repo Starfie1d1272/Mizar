@@ -717,15 +717,19 @@ pub(crate) async fn enter_workspace(
     if window.label() != "main" {
         return Err("请在准备中心启动工作台。".into());
     }
+    let ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
+    let expected_url = window
+        .url()
+        .map_err(|_| "准备中心页面不可用。")?
+        .to_string();
     begin_demo_entry(window.clone(), app.clone(), preparation_id.clone())?;
     let intent_app = app.clone();
     let intent_id = preparation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _entry = ENTRY.try_lock().map_err(|_| "正在进入工作台，请稍候。")?;
         tauri::async_runtime::block_on(async move {
-            let ticket = app
-                .state::<production_exit::ExitGate>()
-                .presentation_ticket()?;
             let mut production = http(&app, "GET", "/local/v1/production", json!({})).await?;
             let mut view = crate::lifecycle_contract::production_view(&production)?;
             let demo = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
@@ -761,10 +765,6 @@ pub(crate) async fn enter_workspace(
                         return Err(error);
                     }
                 }
-                let expected_url = window
-                    .url()
-                    .map_err(|_| "准备中心页面不可用。")?
-                    .to_string();
                 let result = async {
                     let camera = enter_demo_test(
                         window.clone(),
