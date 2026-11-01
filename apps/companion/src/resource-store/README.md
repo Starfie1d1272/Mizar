@@ -30,13 +30,13 @@ Server 使用独立持久目录，并从已通过 Core 内容身份校验的 bun
 
 ## 升级后的恢复
 
-启动仍离线验证。目录没有当前 Core 授权时返回 `resource_authorization_required`，不将其判为文件损坏，也不信任旧 receipt 的自报身份。签名拒绝、下载失败与文件完整性错误分别保留；诊断 cause 和原版本目录、receipt 不清除。
+启动仍离线验证。目录没有当前 Core 授权时返回 `resource_authorization_required`，不将其判为文件损坏，也不信任旧 receipt 的自报身份。共享获取入口失败以 `resource_preparation_failed` 保留完整 cause，不从非结构化异常猜测下载或签名失败；Store 文件完整性错误仍独立保留。诊断和原版本目录、receipt 不清除。
 
-资源卡片的「重新准备素材」调用 `POST /local/v1/resources/official:epl-default/repair`。Companion 以已认证 productRuntime 的版本和源码身份验证当前发行目录的双证明，再验证 publication、归档与清单；复用有界 HTTP 传输，来源固定为当前版本的 GitHub 发行资产。该动作不查询最新应用版本，不更新 Core，不续签或改写旧 receipt。不能取得合法当前授权时明确失败，不根据内容相同放行。
+资源卡片的「重新准备素材」调用 `POST /local/v1/resources/official:epl-default/repair`。Companion 将已认证 productRuntime 的版本和源码身份传给 `distribution/resources.ts` 的 `fetchPublishedResource`，与安装器共用目录获取、来源选择、传输和 SDK 验证入口。恢复适配器只将已验证成员写入 Store 准备目录并返回原 receipt，不另行编排目录或 ZIP 获取。该动作不查询最新应用版本，不更新 Core，不续签或改写旧 receipt。不能取得合法当前授权时明确失败，不根据内容相同放行。
 
 下载和准备均在同一 Store 的 `repair` 操作内，状态、字节数、取消和互斥继续由 Store 持有。验证通过后按既有生命周期锁激活；制作中只准备，结束制作后通过 `POST /local/v1/resources/official:epl-default/activate` 启用。失败保留最后有效活动资源，旧版本目录和证据仍保留。这里选择重新准备受信资源，避免把安装器专用的直接活动缓存复用入口暴露给运行中的页面。
 
-卡片分别显示独立缓存与 Full 随包来源；随包存在性来自同一 Web 根目录的 EPL 清单。无活动缓存时沿原静态 URL 使用 Full；有活动缓存时严格读取该版本，成员错误不能混入 Full。Core 缺素材只影响 EPL 示例预览，不阻止无关开播。当前错误在卡片详情中按资源身份、错误码和日志阶段定位，完整诊断仍使用既有入口。
+Full 可用且无活动独立缓存时，卡片以「内置素材可用」为主状态，旧缓存原因和恢复操作收在默认折叠的「独立缓存维护（可选）」中，用户可直接忽略并继续使用。卡片分别显示独立缓存与 Full 随包来源；随包存在性来自同一 Web 根目录的 EPL 清单。无活动缓存时沿原静态 URL 使用 Full；有活动缓存时严格读取该版本，成员错误不能混入 Full。Core 缺素材只影响 EPL 示例预览，不阻止无关开播。当前错误在卡片详情中按资源身份、错误码和日志阶段定位，完整诊断仍使用既有入口。
 
 ## 只读资源
 
