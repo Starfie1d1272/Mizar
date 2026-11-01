@@ -9,6 +9,12 @@ export async function readAppVersion(root = new URL('../../', import.meta.url)) 
     await readFile(new URL('apps/desktop/src-tauri/tauri.conf.json', root), 'utf8'),
   );
   if (!appVersion || config.version !== appVersion) throw new Error('Cargo / Tauri 应用版本不一致');
+  if (/^\d+\.\d+\.\d+$/.test(appVersion)) {
+    const policy = JSON.parse(
+      await readFile(new URL('scripts/qualification/update-release.json', root), 'utf8'),
+    );
+    if (policy.version !== appVersion) throw new Error('正式版更新发布配置与应用版本不一致');
+  }
   return appVersion;
 }
 export function windowsBundleName(appVersion) {
