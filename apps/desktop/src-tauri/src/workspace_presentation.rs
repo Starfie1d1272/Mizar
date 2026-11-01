@@ -123,6 +123,7 @@ pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Res
         let host = app.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
+            let mut panels_result = Ok(());
             let result = host
                 .state::<production_exit::ExitGate>()
                 .publish(ticket, || {
@@ -130,14 +131,22 @@ pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Res
                     state.panels_only.store(true, Ordering::Release);
                     state.visible.store(true, Ordering::Release);
                     apply_layout(&host, layout);
-                    for label in ["workspace-left", "workspace-dock"] {
-                        if let Some(window) = host.get_webview_window(label) {
-                            let _ = window_presentation::show_without_activation(&window);
+                    panels_result = (|| {
+                        for label in ["workspace-left", "workspace-dock"] {
+                            let window =
+                                host.get_webview_window(label).ok_or("工作台面板不可用。")?;
+                            window_presentation::show_without_activation(&window)?;
+                            window_presentation::raise_panel_behind(&window, &main)?;
                         }
-                    }
-                    let _ = window_presentation::set_visible(&main, false);
+                        window_presentation::set_visible(&main, false)
+                            .map_err(|error| error.to_string())
+                    })();
                 });
-            let _ = sender.send(result);
+            if let Err(error) = &panels_result {
+                host.state::<DesktopLog>()
+                    .event("workspace_panel_entry", "failure", Some(error));
+            }
+            let _ = sender.send(result.and(panels_result));
         })
         .map_err(|e| e.to_string())?;
         receiver

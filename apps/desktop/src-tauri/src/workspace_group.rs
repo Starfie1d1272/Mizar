@@ -73,7 +73,6 @@ trait Windows {
 pub struct Group {
     members: Option<Members>,
     inside: bool,
-    last_foreground: isize,
     // One transaction and a monotonic deadline, independent of worker delays.
     pending: Option<(isize, std::time::Instant, bool)>,
     pub restored: bool,
@@ -84,10 +83,11 @@ impl Group {
         let selected = windows.foreground();
         if self.members != members {
             self.members = members;
-            self.inside = members.is_some_and(|m| m.contains(self.last_foreground));
+            // Newly available members have never been raised as a group, even
+            // when CS2 already took foreground while its gateway was starting.
+            self.inside = false;
             self.pending = None;
         }
-        self.last_foreground = selected;
         let Some(members) = members else {
             return None;
         };
@@ -339,7 +339,6 @@ mod native {
             group.members = None;
             group.inside = false;
             group.pending = None;
-            group.last_foreground = unsafe { GetForegroundWindow() };
             None
         }
     }

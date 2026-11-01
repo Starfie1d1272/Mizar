@@ -242,6 +242,8 @@ extern "system" {
     fn IsWindowVisible(hwnd: isize) -> i32;
     fn IsIconic(hwnd: isize) -> i32;
     fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn GetForegroundWindow() -> isize;
+    fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
 }
 #[link(name = "kernel32")]
@@ -322,6 +324,28 @@ fn set_workspace_visibility(window: &WebviewWindow, visible: bool) -> Result<(),
 }
 pub fn show_without_activation(window: &WebviewWindow) -> Result<(), String> {
     set_workspace_visibility(window, true)
+}
+/// UI-thread entry presentation: keep the preparation window as the foreground
+/// anchor until both panels are above the other normal windows, then hide it.
+pub fn raise_panel_behind(window: &WebviewWindow, source: &WebviewWindow) -> Result<(), String> {
+    let anchor = source.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    unsafe {
+        // A user who switched away cancels the one-shot presentation. Inserting
+        // behind a topmost anchor would also promote the panel, so skip it.
+        if GetForegroundWindow() != anchor || GetWindowLongW(anchor, -20) & 0x8 != 0 {
+            return Ok(());
+        }
+        // NOSIZE | NOMOVE | NOACTIVATE | NOOWNERZORDER. Both HWNDs belong to
+        // this UI thread; no async request or persistent topmost flag is needed.
+        if SetWindowPos(hwnd, anchor, 0, 0, 0, 0, 0x0213) == 0 {
+            return Err(format!(
+                "工作台窗口层级调整失败：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    Ok(())
 }
 pub fn hide_without_activation(window: &WebviewWindow) -> Result<(), String> {
     set_workspace_visibility(window, false)
