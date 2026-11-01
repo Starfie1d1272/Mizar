@@ -563,12 +563,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: calc(var(--mizar-layout-compact) / 2);
 }
-.workspace-obs-confirmation {
-  padding: var(--mizar-layout-compact);
-}
-.workspace-obs-confirmation h2 {
-  margin-bottom: var(--mizar-layout-compact);
-}
 .workspace-production {
   container-type: size;
 }

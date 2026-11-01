@@ -1,6 +1,6 @@
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useState } from 'react';
-import { Button, Field, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 interface DeliveryStatus {
   available: boolean;
@@ -171,9 +171,8 @@ export function DiagnosticDeliverySettings({
         <details>
           <summary>开启自动发送诊断</summary>
           <DiagnosticConsentDisclosure />
-          <Field
+          <Checkbox
             label="我已阅读并同意发送诊断"
-            type="checkbox"
             checked={accepted}
             onChange={(event) => setAccepted(event.target.checked)}
           />

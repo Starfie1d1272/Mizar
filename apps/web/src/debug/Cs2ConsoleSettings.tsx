@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Field, Panel, StatusBanner } from '../ui';
+import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { ControlTask } from './control-task';
 
@@ -104,8 +104,7 @@ export function Cs2ConsoleSettings() {
           void save();
         }}
       >
-        <Field
-          type="checkbox"
+        <Checkbox
           label="显示 ALL 公共聊天"
           checked={enabled}
           disabled={!status || busy}

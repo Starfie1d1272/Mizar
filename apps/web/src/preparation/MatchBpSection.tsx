@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import { BpLocalEditor } from '../bp/BpLocalEditor';
 import { useBpWorkspace } from '../bp/client';
-import { Button, Dialog, Panel, Select, StatusBanner } from '../ui';
+import { Button, Dialog, Panel, Select, StatusBanner, useConfirmation } from '../ui';
 import { command } from './client';
 import { MatchDocumentView } from './MatchDocumentView';
 import '@mizar/hud-view/bp.css';
@@ -16,13 +16,17 @@ export function MatchBpSection({
   local: boolean;
   contextRevision: string | undefined;
 }) {
+  const confirmation = useConfirmation();
   const { workspace, connected } = useBpWorkspace();
   const [mode, setMode] = useState<'maps' | 'bp' | null>(null);
   const [message, setMessage] = useState('');
   const [savedRevision, setSavedRevision] = useState<string>();
   const editor = useRef({ dirty: false, saving: false });
-  const canClose = () =>
-    !editor.current.saving && (!editor.current.dirty || window.confirm('放弃尚未保存的修改？'));
+  const canClose = async () => {
+    if (editor.current.saving) return false;
+    if (editor.current.dirty && !(await confirmation.confirm('放弃尚未保存的修改？'))) return false;
+    return !editor.current.saving;
+  };
   const editable =
     local &&
     contextRevision !== savedRevision &&
@@ -32,6 +36,7 @@ export function MatchBpSection({
     contextRevision === workspace.contextRevision;
   return (
     <section id="match-bp" className="match-bp-section" aria-label="地图与禁选">
+      {confirmation.dialog}
       <Panel className="match-bp-toolbar">
         <div>
           <h2>地图与禁选</h2>
@@ -91,8 +96,8 @@ export function MatchBpSection({
             onStateChange={(state) => {
               editor.current = state;
             }}
-            onCancel={() => {
-              if (canClose()) setMode(null);
+            onCancel={async () => {
+              if (await canClose()) setMode(null);
             }}
             onSaved={(text) => {
               setSavedRevision(contextRevision);
@@ -109,8 +114,8 @@ export function MatchBpSection({
             onStateChange={(state) => {
               editor.current = state;
             }}
-            onCancel={() => {
-              if (canClose()) setMode(null);
+            onCancel={async () => {
+              if (await canClose()) setMode(null);
             }}
             onSaved={() => {
               setSavedRevision(contextRevision);

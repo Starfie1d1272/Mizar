@@ -87,6 +87,13 @@ export function LiveRosterAlert({
           setDismissedKey(alert.key);
           setRequested(false);
         }}
+        actions={
+          <>
+            <Button variant="primary" onClick={onReview}>
+              核对网站名单
+            </Button>
+          </>
+        }
       >
         <p role="status">{alert.syncStatus}</p>
         <p>可能存在临时换人或借用账号。先确认所选比赛与服务器，再由赛务核对网站首发。</p>
@@ -110,9 +117,7 @@ export function LiveRosterAlert({
         <p>
           在比赛资料页打开网站本场工作台；赛务修正后返回刷新比赛资料。OBS 播出继续由原有控制管理。
         </p>
-        <Button variant="primary" onClick={onReview}>
-          核对网站名单
-        </Button>
+
         {error ? <p role="alert">{error}</p> : null}
       </ReviewDialog>
     </>

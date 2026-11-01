@@ -207,6 +207,20 @@ export function MatchConnectionDialog() {
       onClose={close}
       canClose={() => !operation.current}
       showCloseButton={false}
+      actions={
+        <>
+          <Button disabled={busy} onClick={close}>
+            {confirmed ? '完成' : '取消'}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy || confirmed || automatic === null}
+            onClick={() => void confirm()}
+          >
+            {saved ? '重试准备' : '确认本图连接'}
+          </Button>
+        </>
+      }
     >
       <Field
         label={nextMap ? '下一图 GoTV 连接' : '本图观战连接'}
@@ -317,18 +331,6 @@ export function MatchConnectionDialog() {
         </Button>
       ) : null}
       {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
-      <div className="preparation-actions">
-        <Button disabled={busy} onClick={close}>
-          {confirmed ? '完成' : '取消'}
-        </Button>
-        <Button
-          variant="primary"
-          disabled={busy || confirmed || automatic === null}
-          onClick={() => void confirm()}
-        >
-          {saved ? '重试准备' : '确认本图连接'}
-        </Button>
-      </div>
     </Dialog>
   );
 }

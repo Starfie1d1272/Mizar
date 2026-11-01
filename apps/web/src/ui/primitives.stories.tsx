@@ -13,12 +13,36 @@ import {
   Select,
   StatusBanner,
   StatusPill,
+  useConfirmation,
   type StatusTone,
 } from './index.js';
 
 const meta = { title: '基础组件/状态与交互', parameters: { layout: 'padded' } } satisfies Meta;
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+function ConfirmationExample() {
+  const confirmation = useConfirmation();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>编辑未保存内容</Button>
+      {confirmation.dialog}
+      <Dialog
+        open={open}
+        title="未保存的编辑"
+        onClose={() => setOpen(false)}
+        canClose={() => confirmation.confirm('放弃尚未保存的修改？')}
+      >
+        <Field label="草稿内容" defaultValue="保留这份草稿" />
+      </Dialog>
+    </>
+  );
+}
+export const Confirmation: Story = {
+  name: '确认放弃修改',
+  render: () => <ConfirmationExample />,
+};
 
 function ButtonsExample() {
   const [count, setCount] = useState(0);
@@ -169,7 +193,16 @@ function DialogExample() {
   return (
     <>
       <Button onClick={() => setOpen(true)}>打开设置</Button>
-      <Dialog open={open} title="预览设置" onClose={() => setOpen(false)}>
+      <Dialog
+        open={open}
+        title="预览设置"
+        onClose={() => setOpen(false)}
+        actions={
+          <Button variant="primary" onClick={() => setOpen(false)}>
+            保存预览设置
+          </Button>
+        }
+      >
         <Field label="预览名称" />
         <Divider />
       </Dialog>

@@ -182,6 +182,18 @@
   background: var(--mizar-bg-canvas);
   opacity: var(--mizar-state-disabled-opacity);
 }
+.mizar-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--mizar-layout-gap);
+  margin-top: var(--mizar-layout-padding);
+}
+.mizar-dialog__actions > .mizar-button {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .mizar-spinner {
   width: var(--mizar-layout-gap);
   height: var(--mizar-layout-gap);

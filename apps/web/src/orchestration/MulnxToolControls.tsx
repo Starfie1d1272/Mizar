@@ -142,19 +142,24 @@ export function MulnxToolControls({
           title="结束 MulNX 工作台"
           onClose={() => setConfirmStop(false)}
           canClose={() => !busy}
+          showCloseButton={false}
+          actions={
+            <>
+              <Button disabled={busy} onClick={() => setConfirmStop(false)}>
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                disabled={busy}
+                aria-busy={busy}
+                onClick={() => void run('stop')}
+              >
+                {busy ? '正在请求停止…' : '结束制作并关闭游戏'}
+              </Button>
+            </>
+          }
         >
           <p>将结束本场制作，正常关闭本次 CS2，并恢复 Mizar 修改的游戏配置。</p>
-          <Button disabled={busy} onClick={() => setConfirmStop(false)}>
-            取消
-          </Button>
-          <Button
-            variant="primary"
-            disabled={busy}
-            aria-busy={busy}
-            onClick={() => void run('stop')}
-          >
-            {busy ? '正在请求停止…' : '结束制作并关闭游戏'}
-          </Button>
         </Dialog>
       ) : null}
       {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}

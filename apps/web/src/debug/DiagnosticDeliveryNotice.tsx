@@ -1,6 +1,6 @@
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useEffect, useRef, useState } from 'react';
-import { Button, Dialog, Field, StatusBanner } from '../ui';
+import { Button, Dialog, Checkbox, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { DiagnosticConsentDisclosure } from './DiagnosticDeliverySettings';
 
@@ -92,6 +92,13 @@ export function DiagnosticDeliveryNotice() {
         }
       }}
       canClose={() => !pendingRef.current}
+      actions={
+        <>
+          <Button variant="primary" disabled={pending} onClick={() => void confirm()}>
+            {pending ? '正在保存…' : '确认并继续'}
+          </Button>
+        </>
+      }
     >
       <p>
         帮助维护者定位使用中的问题。确认后，将操作、错误、运行状态和相关配置发送至维护者管理的
@@ -103,17 +110,14 @@ export function DiagnosticDeliveryNotice() {
         <summary>完整发送说明与保留规则</summary>
         <DiagnosticConsentDisclosure />
       </details>
-      <Field
+      <Checkbox
         label="发送技术诊断"
-        type="checkbox"
         checked={enabled}
         disabled={pending}
         onChange={(event) => setEnabled(event.target.checked)}
       />
       <p>{enabled ? '点击确认后开启自动发送。' : '保持关闭，正常使用 Mizar。'}</p>
-      <Button variant="primary" disabled={pending} onClick={() => void confirm()}>
-        {pending ? '正在保存…' : '确认并继续'}
-      </Button>
+
       {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
     </Dialog>
   );

@@ -76,7 +76,6 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
         })}
       </div>
       <Dialog
-        className="workspace-obs-confirmation"
         showCloseButton={false}
         open={confirmation !== null}
         title={
@@ -87,18 +86,21 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
               : '停止 OBS 录像？'
         }
         onClose={() => setConfirmation(null)}
-      >
-        <Button autoFocus onClick={() => setConfirmation(null)}>
-          取消
-        </Button>
-        <Button
-          variant="primary"
-          disabled={!canConfirm}
-          onClick={() => confirmation && void run(confirmation)}
-        >
-          确认停止
-        </Button>
-      </Dialog>
+        actions={
+          <>
+            <Button autoFocus onClick={() => setConfirmation(null)}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!canConfirm}
+              onClick={() => confirmation && void run(confirmation)}
+            >
+              确认停止
+            </Button>
+          </>
+        }
+      />
     </>
   );
 }
