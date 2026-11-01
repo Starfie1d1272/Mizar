@@ -796,6 +796,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
   let waitForBroadcast: (() => Promise<void>) | undefined;
+  let flushBroadcastReceipts: (() => Promise<void>) | undefined;
   let getExportBroadcastDocument:
     (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
   let isExportBroadcastReady = () => false;
@@ -1641,6 +1642,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         return document;
       };
       waitForBroadcast = () => broadcastRuntime.waitForApply();
+      flushBroadcastReceipts = () => broadcastRuntime.flushConsumerReceipts();
       isExportBroadcastReady = () => broadcastRuntime.ready;
       getBroadcastReferences = () => {
         if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
@@ -2553,6 +2555,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (hudConfigStore.getState().persistenceError)
         throw new Error('hud_config_close_unconfirmed');
     });
+    await closeStep(() => flushBroadcastReceipts?.());
     await closeStep(async () => {
       const recorder = currentRecorder();
       await recorder.finalize();

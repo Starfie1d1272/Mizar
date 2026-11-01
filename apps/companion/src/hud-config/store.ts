@@ -409,7 +409,8 @@ export class HudConfigStore {
       } catch (error: unknown) {
         if (error instanceof Error && error.message === 'capability_unsupported')
           throw new HudConfigPersistenceError(error);
-        this.persistenceError = error instanceof Error ? error.message : String(error);
+        if (!(error instanceof Error && error.message === 'broadcast_receipt_unconfirmed'))
+          this.persistenceError = error instanceof Error ? error.message : String(error);
         this.onDiagnostic('hud_config_persist_failed', error);
         throw new HudConfigPersistenceError(error);
       }
