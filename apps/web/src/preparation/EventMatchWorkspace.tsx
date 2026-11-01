@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { Button, Panel, Select } from '../ui';
+import { Button, Panel, Select, useConfirmation } from '../ui';
 import {
   LocalTournamentEditor,
   type LocalTournamentView,
@@ -21,6 +21,7 @@ export function EventMatchWorkspace({
   refresh: () => Promise<void>;
   action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
+  const confirmation = useConfirmation();
   const query = new URLSearchParams(window.location.search);
   const initial = view?.matches.find((match) => match.matchId === query.get('resource'));
   const [eventId, setEventId] = useState(
@@ -36,8 +37,8 @@ export function EventMatchWorkspace({
   const [editingMatch, setEditingMatch] = useState(false);
   const [editingMatchScope, setEditingMatchScope] = useState<'match' | 'candidate'>('candidate');
   const dirty = useRef(false);
-  const canChange = () =>
-    !dirty.current || window.confirm('赛事资料有未保存修改，放弃后切换资源？');
+  const canChange = async () =>
+    !dirty.current || (await confirmation.confirm('赛事资料有未保存修改，放弃后切换资源？'));
   const markDirty = useCallback((value: boolean) => {
     dirty.current = value;
   }, []);
@@ -66,8 +67,8 @@ export function EventMatchWorkspace({
       }))}
       selectedId={match?.matchId}
       emptyMessage="本分组暂无比赛，可创建第一场。"
-      onSelect={(id) => {
-        if (!canChange()) return;
+      onSelect={async (id) => {
+        if (!(await canChange())) return;
         setMatchId(id);
         setEditing(false);
         setCreating(false);
@@ -81,13 +82,14 @@ export function EventMatchWorkspace({
           <Select
             label="浏览赛事"
             value={eventId}
-            onChange={(change) => {
-              if (!canChange()) return;
+            onChange={async (change) => {
+              const selectedEvent = change.target.value;
+              if (!(await canChange())) return;
               const url = new URL(window.location.href);
-              url.searchParams.set('event', change.target.value);
+              url.searchParams.set('event', selectedEvent);
               url.searchParams.delete('resource');
               window.history.replaceState(null, '', url);
-              setEventId(change.target.value);
+              setEventId(selectedEvent);
               setMatchId('');
               setCreating(false);
               setEditingMatch(false);
@@ -108,8 +110,8 @@ export function EventMatchWorkspace({
           {event ? (
             <Button
               aria-expanded={editing}
-              onClick={() => {
-                if (!canChange()) return;
+              onClick={async () => {
+                if (!(await canChange())) return;
                 setEditing((value) => !value);
                 setCreating(false);
                 setEditingMatch(false);
@@ -119,8 +121,8 @@ export function EventMatchWorkspace({
             </Button>
           ) : null}
           <Button
-            onClick={() => {
-              if (!canChange()) return;
+            onClick={async () => {
+              if (!(await canChange())) return;
               setCreating((value) => !value);
               setEditing(false);
               setEditingMatch(false);
@@ -137,8 +139,8 @@ export function EventMatchWorkspace({
             {!editingMatch ? (
               <Button
                 disabled={!canWrite}
-                onClick={() => {
-                  if (!canChange()) return;
+                onClick={async () => {
+                  if (!(await canChange())) return;
                   setEditingMatchScope(
                     match.matchId === view?.activeLocalMatchId ? 'match' : 'candidate',
                   );
@@ -167,12 +169,12 @@ export function EventMatchWorkspace({
               <Button
                 variant="primary"
                 disabled={!canWrite}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    !canChange() ||
-                    !window.confirm(
+                    !(await canChange()) ||
+                    !(await confirmation.confirm(
                       `将本场切换为 ${match.entrants.a.name} vs ${match.entrants.b.name}？`,
-                    )
+                    ))
                   )
                     return;
                   void action(async () => {
@@ -188,6 +190,7 @@ export function EventMatchWorkspace({
         ) : null
       }
     >
+      {confirmation.dialog}
       {creating ? (
         <Panel>
           <h2>创建本地比赛</h2>
@@ -196,7 +199,7 @@ export function EventMatchWorkspace({
             mode="create"
             initialEventId={event?.eventId ?? ''}
             onCancel={() => setCreating(false)}
-            beforeApply={() => canWrite && canChange()}
+            beforeApply={async () => canWrite && (await canChange())}
             action={action}
             onSelected={() => window.location.assign('/?tab=match')}
           />

@@ -174,6 +174,34 @@ function DesktopUpdateNotification() {
       onClose={() => {
         if (open) dismiss();
       }}
+      showCloseButton={false}
+      actions={
+        <>
+          {mizarOpen ? (
+            <Button
+              variant="primary"
+              onClick={() => {
+                dismissMizar();
+                window.location.assign('/settings?tab=advanced');
+              }}
+            >
+              查看 Mizar 更新
+            </Button>
+          ) : null}
+          {mulnxOpen ? (
+            <Button
+              variant="primary"
+              onClick={() => {
+                dismissMulnx();
+                window.location.assign('/packages');
+              }}
+            >
+              查看 MulNX 更新
+            </Button>
+          ) : null}
+          <Button onClick={dismiss}>稍后</Button>
+        </>
+      }
     >
       {mizarOpen ? (
         <>
@@ -182,31 +210,6 @@ function DesktopUpdateNotification() {
         </>
       ) : null}
       {mulnxOpen ? <p>MulNX {shownMulnx?.version} 可更新，建议开播前更新。</p> : null}
-      <div className="preparation-actions">
-        {mizarOpen ? (
-          <Button
-            variant="primary"
-            onClick={() => {
-              dismissMizar();
-              window.location.assign('/settings?tab=advanced');
-            }}
-          >
-            查看 Mizar 更新
-          </Button>
-        ) : null}
-        {mulnxOpen ? (
-          <Button
-            variant="primary"
-            onClick={() => {
-              dismissMulnx();
-              window.location.assign('/packages');
-            }}
-          >
-            查看 MulNX 更新
-          </Button>
-        ) : null}
-        <Button onClick={dismiss}>稍后</Button>
-      </div>
     </Dialog>
   );
 }

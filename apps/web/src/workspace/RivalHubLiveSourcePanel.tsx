@@ -319,17 +319,22 @@ export function RivalHubLiveSourcePanel({
         title="接管本场数据源"
         onClose={() => setTakeoverOpen(false)}
         canClose={() => !busy}
+        showCloseButton={false}
+        actions={
+          <>
+            <Button disabled={busy} onClick={() => setTakeoverOpen(false)}>
+              取消
+            </Button>
+            <Button disabled={busy} aria-busy={busy} onClick={() => void handleTakeover()}>
+              确认接管
+            </Button>
+          </>
+        }
       >
         <p>
           当前数据源归属：{connection.activeDeviceName}
           。接管后由本机提供本场数据，请先与该设备的操作者确认。
         </p>
-        <Button disabled={busy} onClick={() => setTakeoverOpen(false)}>
-          取消
-        </Button>
-        <Button disabled={busy} aria-busy={busy} onClick={() => void handleTakeover()}>
-          确认接管
-        </Button>
       </Dialog>
     </div>
   );

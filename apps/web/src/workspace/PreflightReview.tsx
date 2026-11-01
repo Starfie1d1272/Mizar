@@ -245,6 +245,37 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
         title={online && !websiteReady && !warmup ? '网站连接需要处理' : '赛前核对'}
         className="workspace-preflight"
         onClose={close}
+        actions={
+          <>
+            <Button onClick={close}>稍后处理</Button>
+            <Button
+              onClick={() => {
+                const next = !silenced;
+                setSilencedMatch(next ? matchId : null);
+                if (next) close();
+              }}
+            >
+              {silenced ? '恢复本场自动提醒' : '本场不再弹出提示和警告'}
+            </Button>
+            {preparation ? (
+              <Button
+                variant="primary"
+                disabled={busy || !ready}
+                onClick={() => {
+                  setAcknowledged(fingerprint);
+                  try {
+                    localStorage.setItem(completionKey, fingerprint);
+                  } catch {
+                    /* In-memory review still works when storage is unavailable. */
+                  }
+                  close();
+                }}
+              >
+                完成赛前核对
+              </Button>
+            ) : null}
+          </>
+        }
       >
         <p className="preflight-intro">
           {operator?.matchContext.summary?.entryAName} 对阵{' '}
@@ -422,35 +453,6 @@ function ReviewSession({ operator, program, cursor, connection, onOpen }: Props)
           </>
         ) : null}
         {error ? <p role="alert">{error}</p> : null}
-        <footer>
-          <Button onClick={close}>稍后处理</Button>
-          <Button
-            onClick={() => {
-              const next = !silenced;
-              setSilencedMatch(next ? matchId : null);
-              if (next) close();
-            }}
-          >
-            {silenced ? '恢复本场自动提醒' : '本场不再弹出提示和警告'}
-          </Button>
-          {preparation ? (
-            <Button
-              variant="primary"
-              disabled={busy || !ready}
-              onClick={() => {
-                setAcknowledged(fingerprint);
-                try {
-                  localStorage.setItem(completionKey, fingerprint);
-                } catch {
-                  /* In-memory review still works when storage is unavailable. */
-                }
-                close();
-              }}
-            >
-              完成赛前核对
-            </Button>
-          ) : null}
-        </footer>
       </ReviewDialog>
     </section>
   );

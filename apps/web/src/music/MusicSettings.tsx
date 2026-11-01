@@ -10,12 +10,13 @@ import {
   type MusicGroup,
   type MusicTrack,
 } from '@mizar/protocol/music';
-import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
+import { Button, Checkbox, Field, Panel, Select, StatusBanner, useConfirmation } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 import { desktopInvoke } from '../workspace/client';
 import { MusicControls, MUSIC_LABELS, type MusicView } from './MusicControls';
 
 export function MusicSettings({ active = true }: { active?: boolean }) {
+  const confirmation = useConfirmation();
   const preview = useMusicPreview(active);
   const current = useLocalRead<MusicView>('/local/v1/music', 2000);
   const [selectedGroup, setSelectedGroup] = useState<MusicGroup>('waiting');
@@ -59,6 +60,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
   };
   return (
     <>
+      {confirmation.dialog}
       <Panel className="music-settings-playback">
         <div className="music-settings-playback-intro">
           <h2>当前播放</h2>
@@ -104,8 +106,13 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                 <p>在资源管理中查看或使用内置节目音乐。</p>
                 <Button
                   disabled={busy}
-                  onClick={() => {
-                    if (dirty && !window.confirm('音乐配置有未保存的修改，离开后将丢失。继续吗？'))
+                  onClick={async () => {
+                    if (
+                      dirty &&
+                      !(await confirmation.confirm(
+                        '音乐配置有未保存的修改，离开后将丢失。继续吗？',
+                      ))
+                    )
                       return;
                     void action(async () => {
                       await preview.stop();
