@@ -23,6 +23,9 @@ pub(crate) fn cleanup_operation() -> std::sync::MutexGuard<'static, ()> {
 pub(crate) fn try_operation() -> Option<std::sync::MutexGuard<'static, ()>> {
     OPERATION.try_lock().ok()
 }
+pub(crate) fn clear_operation_poison() {
+    OPERATION.clear_poison();
+}
 pub(crate) fn try_cleanup_operation() -> Option<std::sync::MutexGuard<'static, ()>> {
     match OPERATION.try_lock() {
         Ok(guard) => Some(guard),

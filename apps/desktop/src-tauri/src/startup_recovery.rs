@@ -195,6 +195,9 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
                     Ok(message) => {
                         let status = managed.startup_recovery_status();
                         let incomplete = status.as_ref().map_or(true, |status| status.pending);
+                        if !incomplete {
+                            crate::observer_workspace::clear_operation_poison();
+                        }
                         feedback = restoration_feedback(message, &status);
                         log.event(
                             "cs2_startup_recovery",
