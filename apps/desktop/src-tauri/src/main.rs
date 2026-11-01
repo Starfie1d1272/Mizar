@@ -1987,6 +1987,8 @@ async fn enter_demo_test(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request_id: String,
+    intent_id: String,
+    entry_ticket: u64,
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
@@ -2005,62 +2007,71 @@ async fn enter_demo_test(
             let native_task_id = native_task_id.clone();
             let native_trigger = native_trigger.clone();
             move || {
-                command_log.with_task(
-                    native_task_id.as_deref(),
-                    native_operation_id.as_deref(),
-                    native_trigger.as_deref(),
-                    || {
-                        let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
-                        let log = host.state::<DesktopLog>();
-                        mulnx_launch::resume_demo(&host, &log, &request_id)?;
-                        let mut cs2 = managed.lock().map_err(|error| {
-                            command_log.preserve_error(
-                                "enter_demo_test",
+                host.state::<production_exit::ExitGate>()
+                    .commit(entry_ticket, || {
+                        host.state::<EntryIntent>().commit(&intent_id, false, || {
+                            command_log.with_task(
+                                native_task_id.as_deref(),
                                 native_operation_id.as_deref(),
-                                &error,
-                                "CS2 配置状态不可用。",
+                                native_trigger.as_deref(),
+                                || {
+                                    let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
+                                    let log = host.state::<DesktopLog>();
+                                    mulnx_launch::resume_demo(&host, &log, &request_id)?;
+                                    let mut cs2 = managed.lock().map_err(|error| {
+                                        command_log.preserve_error(
+                                            "enter_demo_test",
+                                            native_operation_id.as_deref(),
+                                            &error,
+                                            "CS2 配置状态不可用。",
+                                        )
+                                    })?;
+                                    host.state::<production_exit::ExitGate>().check()?;
+                                    host.state::<updates::PendingUpdate>().check()?;
+                                    cs2.validate_demo_running(&request_id)?;
+                                    let log = host.state::<DesktopLog>();
+                                    let camera_trial = cs2
+                                        .console_source()?
+                                        .is_some_and(|(context, _)| context["mulnxLaunch"] == true);
+                                    if camera_trial && cs2.managed_camera_lease().is_none() {
+                                        if !mulnx_launch::observer_control_available(&cs2, &log) {
+                                            return Err(
+                                                "运镜工具尚未就绪，请检查试播游戏状态。".into()
+                                            );
+                                        }
+                                        let game = cs2
+                                            .workspace_process()?
+                                            .filter(|game| game.is_running())
+                                            .ok_or("试播游戏身份已变化。")?;
+                                        let value = production_exit::camera_session(
+                                            &log,
+                                            "begin-demo",
+                                            None,
+                                            Some(&request_id),
+                                        )?;
+                                        let lease = value["lease"]
+                                            .as_str()
+                                            .ok_or("运镜会话未确认。")?
+                                            .to_owned();
+                                        if let Err(error) =
+                                            cs2.bind_managed_camera(game, lease.clone())
+                                        {
+                                            let _ = production_exit::camera_session(
+                                                &log,
+                                                "invalidate",
+                                                Some(&lease),
+                                                None,
+                                            );
+                                            return Err(error);
+                                        }
+                                    }
+                                    demo_test::request(&log, "playing", &request_id, None)?;
+                                    drop(cs2);
+                                    Ok(camera_trial)
+                                },
                             )
-                        })?;
-                        host.state::<production_exit::ExitGate>().check()?;
-                        host.state::<updates::PendingUpdate>().check()?;
-                        cs2.validate_demo_running(&request_id)?;
-                        let log = host.state::<DesktopLog>();
-                        let camera_trial = cs2
-                            .console_source()?
-                            .is_some_and(|(context, _)| context["mulnxLaunch"] == true);
-                        if camera_trial && cs2.managed_camera_lease().is_none() {
-                            if !mulnx_launch::observer_control_available(&cs2, &log) {
-                                return Err("运镜工具尚未就绪，请检查试播游戏状态。".into());
-                            }
-                            let game = cs2
-                                .workspace_process()?
-                                .filter(|game| game.is_running())
-                                .ok_or("试播游戏身份已变化。")?;
-                            let value = production_exit::camera_session(
-                                &log,
-                                "begin-demo",
-                                None,
-                                Some(&request_id),
-                            )?;
-                            let lease = value["lease"]
-                                .as_str()
-                                .ok_or("运镜会话未确认。")?
-                                .to_owned();
-                            if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
-                                let _ = production_exit::camera_session(
-                                    &log,
-                                    "invalidate",
-                                    Some(&lease),
-                                    None,
-                                );
-                                return Err(error);
-                            }
-                        }
-                        demo_test::request(&log, "playing", &request_id, None)?;
-                        drop(cs2);
-                        Ok(camera_trial)
-                    },
-                )
+                        })
+                    })
             }
         })
         .await
@@ -2090,38 +2101,78 @@ async fn enter_demo_test(
 }
 
 #[derive(Default)]
-struct DemoEntryIntent(Mutex<Option<String>>);
-impl DemoEntryIntent {
+struct EntryIntentState {
+    active: Option<String>,
+    cancelled: std::collections::HashSet<String>,
+}
+#[derive(Default)]
+struct EntryIntent(Mutex<EntryIntentState>);
+impl EntryIntent {
     fn begin(&self, id: String) -> Result<(), String> {
-        let mut current = self.0.lock().map_err(|_| "试播进入状态不可用。")?;
-        if current.is_some() {
+        let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        if state.cancelled.remove(&id) {
+            return Err("进入已取消。".into());
+        }
+        if state.active.is_some() {
             return Err("正在进入工作台，请稍候。".into());
         }
-        *current = Some(id);
+        state.active = Some(id);
         Ok(())
     }
     fn cancel(&self, id: &str) -> Result<(), String> {
-        let mut current = self.0.lock().map_err(|_| "试播进入状态不可用。")?;
-        if current.as_deref() == Some(id) {
-            *current = None;
+        let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        if state.active.as_deref() == Some(id) {
+            state.active = None;
+        } else {
+            if state.cancelled.len() >= 1024 && !state.cancelled.contains(id) {
+                return Err("进入取消记录已满，请重新启动 Mizar。".into());
+            }
+            state.cancelled.insert(id.to_owned());
         }
         Ok(())
     }
+    fn finish(&self, id: &str) {
+        if let Ok(mut state) = self.0.lock() {
+            if state.active.as_deref() == Some(id) {
+                state.active = None;
+            }
+            state.cancelled.remove(id);
+        }
+    }
     fn cancel_all(&self) {
-        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active = None;
+    }
+    fn commit<T>(
+        &self,
+        id: &str,
+        consume: bool,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        if state.active.as_deref() != Some(id) {
+            return Err("进入已取消。".into());
+        }
+        let result = action();
+        if consume && result.is_ok() {
+            state.active = None;
+        }
+        result
     }
     fn publish(&self, id: &str, valid_page: impl FnOnce() -> bool, show: impl FnOnce()) -> bool {
-        let mut current = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        if current.as_deref() != Some(id) || !valid_page() {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if state.active.as_deref() != Some(id) || !valid_page() {
             return false;
         }
-        *current = None;
+        state.active = None;
         show();
         true
     }
 }
 
-fn begin_demo_entry(
+fn begin_entry(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     intent_id: String,
@@ -2132,19 +2183,26 @@ fn begin_demo_entry(
             .bytes()
             .all(|c| c.is_ascii_hexdigit() || c == b'-')
     {
-        return Err("试播进入请求无效。".into());
+        return Err("进入请求无效。".into());
     }
-    app.state::<DemoEntryIntent>().begin(intent_id)
+    app.state::<EntryIntent>().begin(intent_id)
 }
 
 #[tauri::command]
-fn cancel_demo_entry(
+fn cancel_entry_intent(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     intent_id: String,
 ) -> Result<(), String> {
     demo_main_window(&window)?;
-    app.state::<DemoEntryIntent>().cancel(&intent_id)
+    if intent_id.len() != 36
+        || !intent_id
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() || c == b'-')
+    {
+        return Err("进入请求无效。".into());
+    }
+    app.state::<EntryIntent>().cancel(&intent_id)
 }
 
 async fn present_demo_test(
@@ -2208,7 +2266,7 @@ async fn finish_demo_test(
                     native_operation_id.as_deref(),
                     native_trigger.as_deref(),
                     || {
-                        host.state::<DemoEntryIntent>().cancel_all();
+                        host.state::<EntryIntent>().cancel_all();
                         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
                         let mut cs2 = managed.lock().map_err(|error| {
                             command_log.preserve_error(
@@ -2975,7 +3033,7 @@ fn present_production_inner_checked(
                         }
                     };
                     if let Some((expected, id)) = &expected_url {
-                        valid_intent = host.state::<DemoEntryIntent>().publish(
+                        valid_intent = host.state::<EntryIntent>().publish(
                             id,
                             || {
                                 host.get_webview_window("main").is_some_and(|window| {
@@ -2996,7 +3054,7 @@ fn present_production_inner_checked(
                 if valid_intent {
                     Ok(())
                 } else {
-                    Err("进入试播的页面已变化，请重新进入。".into())
+                    Err("进入页面已变化，请重新进入。".into())
                 }
             });
             let _ = published.send(result);
@@ -4320,7 +4378,7 @@ fn run_desktop(
         .manage(Mutex::new(demo_test::Selection::default()))
         .manage(cs2_activity::Activity::default())
         .manage(production_exit::ExitGate::default())
-        .manage(DemoEntryIntent::default())
+        .manage(EntryIntent::default())
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(preparation_gate::PreparationGate::default())
@@ -4352,7 +4410,7 @@ fn run_desktop(
                     .on_navigation(trusted_navigation)
                     .on_page_load(move |window, payload| {
                         if payload.event() == tauri::webview::PageLoadEvent::Started {
-                            window.state::<DemoEntryIntent>().cancel_all();
+                            window.state::<EntryIntent>().cancel_all();
                             obs_configuration::document_changed(&page_log);
                         }
                         if payload.event() == tauri::webview::PageLoadEvent::Finished
@@ -4636,7 +4694,7 @@ fn run_desktop(
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if window.label() == "main" {
-                    window.state::<DemoEntryIntent>().cancel_all();
+                    window.state::<EntryIntent>().cancel_all();
                 }
                 match window.label() {
                     "tool-review" => { let _ = window.destroy(); }

@@ -230,7 +230,7 @@ async function enterDesktopWorkspace(
   const preparationId = crypto.randomUUID();
   activeEntryId = preparationId;
   const cancel = () =>
-    void desktopInvoke('cancel_demo_entry', { intentId: preparationId }).catch(() => {});
+    void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
   window.addEventListener('pagehide', cancel);
   window.addEventListener('popstate', cancel);
   signal?.addEventListener('abort', cancel);

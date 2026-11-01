@@ -699,7 +699,7 @@ pub(crate) async fn cancel_workspace_entry(
     if let Some(id) = &entry_id {
         app.state::<preparation_gate::PreparationGate>()
             .cancel(id.clone())?;
-        app.state::<DemoEntryIntent>().cancel(id)?;
+        app.state::<EntryIntent>().cancel(id)?;
     }
     if let Some(task) = snapshot()? {
         preparation_cancel(app, task.id).await?;
@@ -718,10 +718,20 @@ pub(crate) fn retry_workspace_entry(app: tauri::AppHandle) -> Result<(), String>
     preparation_retry(app, task.id)
 }
 
-fn present_entry(app: &tauri::AppHandle, id: &str, ticket: u64) -> Result<(), String> {
+fn present_entry(
+    app: &tauri::AppHandle,
+    id: &str,
+    ticket: u64,
+    expected_url: &str,
+) -> Result<(), String> {
     app.state::<preparation_gate::PreparationGate>()
         .commit(Some(id), || {
-            present_production_inner_checked(app, true, None, Some(ticket))
+            present_production_inner_checked(
+                app,
+                true,
+                Some((expected_url.to_owned(), id.to_owned())),
+                Some(ticket),
+            )
         })
 }
 
@@ -729,6 +739,7 @@ fn present_existing(
     app: &tauri::AppHandle,
     id: &str,
     ticket: u64,
+    expected_url: &str,
     view: &crate::lifecycle_contract::ProductionView,
 ) -> Result<(), String> {
     if view.mode == "hidden" {
@@ -736,23 +747,22 @@ fn present_existing(
             .state::<preparation_gate::PreparationGate>()
             .commit(Some(id), || {
                 app.state::<production_exit::ExitGate>().commit(ticket, || {
-                    request(
-                        app,
-                        "POST",
-                        "/operator/production",
-                        json!({"action":"enter","expectedRevision":view.revision}),
-                    )
+                    app.state::<EntryIntent>().commit(id, false, || {
+                        request(
+                            app,
+                            "POST",
+                            "/operator/production",
+                            json!({"action":"enter","expectedRevision":view.revision}),
+                        )
+                    })
                 })
             })?;
         if crate::lifecycle_contract::production_view(&resumed)?.mode != "live" {
             return Err("制作进入状态未确认。".into());
         }
     }
-    present_entry(app, id, ticket)
+    present_entry(app, id, ticket, expected_url)
 }
-
-// Serialize entry decisions; the task itself continues independently of this call.
-static ENTRY: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
 pub(crate) async fn enter_workspace(
@@ -776,11 +786,10 @@ pub(crate) async fn enter_workspace(
         .url()
         .map_err(|_| "准备中心页面不可用。")?
         .to_string();
-    begin_demo_entry(window.clone(), app.clone(), preparation_id.clone())?;
+    begin_entry(window.clone(), app.clone(), preparation_id.clone())?;
     let intent_app = app.clone();
     let intent_id = preparation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _entry = ENTRY.try_lock().map_err(|_| "正在进入工作台，请稍候。")?;
         tauri::async_runtime::block_on(async move {
             app.state::<preparation_gate::PreparationGate>()
                 .check(Some(&preparation_id))?;
@@ -811,7 +820,13 @@ pub(crate) async fn enter_workspace(
                         let actual_view = crate::lifecycle_contract::production_view(&actual)
                             .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
                         if task_entered && actual_view.mode != "preparation" {
-                            return present_existing(&app, &preparation_id, ticket, &actual_view);
+                            return present_existing(
+                                &app,
+                                &preparation_id,
+                                ticket,
+                                &expected_url,
+                                &actual_view,
+                            );
                         }
                         return Err(error);
                     }
@@ -823,6 +838,8 @@ pub(crate) async fn enter_workspace(
                         window.clone(),
                         app.clone(),
                         request_id.clone(),
+                        preparation_id.clone(),
+                        ticket,
                         None,
                         None,
                         None,
@@ -834,7 +851,7 @@ pub(crate) async fn enter_workspace(
                         window.clone(),
                         app.clone(),
                         request_id.clone(),
-                        expected_url,
+                        expected_url.clone(),
                         preparation_id.clone(),
                         Some(ticket),
                     )
@@ -864,14 +881,13 @@ pub(crate) async fn enter_workspace(
                     Ok(())
                 }
                 .await;
-                let _ = app.state::<DemoEntryIntent>().cancel(&preparation_id);
                 return result;
             }
             if expected_demo_request.is_some() {
                 return Err("试播状态已变化，请重新进入。".into());
             }
             if view.mode != "preparation" {
-                return present_existing(&app, &preparation_id, ticket, &view);
+                return present_existing(&app, &preparation_id, ticket, &expected_url, &view);
             }
             if expected_revision
                 .as_deref()
@@ -890,7 +906,13 @@ pub(crate) async fn enter_workspace(
                         view = crate::lifecycle_contract::production_view(&production)
                             .map_err(|cause| format!("{error} 制作状态复核失败：{cause}"))?;
                         if task_entered && view.mode != "preparation" {
-                            return present_existing(&app, &preparation_id, ticket, &view);
+                            return present_existing(
+                                &app,
+                                &preparation_id,
+                                ticket,
+                                &expected_url,
+                                &view,
+                            );
                         }
                         return Err(error);
                     }
@@ -898,7 +920,7 @@ pub(crate) async fn enter_workspace(
                 production = http(&app, "GET", "/local/v1/production", json!({})).await?;
                 view = crate::lifecycle_contract::production_view(&production)?;
                 if view.mode != "preparation" {
-                    return present_existing(&app, &preparation_id, ticket, &view);
+                    return present_existing(&app, &preparation_id, ticket, &expected_url, &view);
                 }
                 if expected_revision
                     .as_deref()
@@ -908,37 +930,41 @@ pub(crate) async fn enter_workspace(
                 }
                 app.state::<production_exit::ExitGate>()
                     .check_ticket(ticket)?;
-                let entered = app.state::<preparation_gate::PreparationGate>().commit(
-                    Some(&preparation_id),
-                    || {
-                        app.state::<production_exit::ExitGate>().commit(ticket, || {
-                            request(
+                let entered =
+                    app.state::<preparation_gate::PreparationGate>().commit(
+                        Some(&preparation_id),
+                        || {
+                            app.state::<production_exit::ExitGate>().commit(ticket, || {
+                            app.state::<EntryIntent>().commit(&preparation_id, false, || request(
                                 &app,
                                 "POST",
                                 "/operator/production",
                                 json!({"action":"enter","expectedRevision":view.revision}),
-                            )
+                            ))
                         })
-                    },
-                )?;
+                        },
+                    )?;
                 if crate::lifecycle_contract::production_view(&entered)?.mode != "live" {
                     return Err("制作进入状态未确认。".into());
                 }
-                return present_entry(&app, &preparation_id, ticket);
+                return present_entry(&app, &preparation_id, ticket, &expected_url);
             }
             app.state::<preparation_gate::PreparationGate>()
                 .commit(Some(&preparation_id), || {
                     app.state::<production_exit::ExitGate>().commit(ticket, || {
-                        preparation_start(
-                            window,
-                            app.clone(),
-                            preparation_id.clone(),
-                            view.revision,
-                            preserve_settings,
-                            external_pid,
-                            external_created,
-                            ticket,
-                        )
+                        app.state::<EntryIntent>()
+                            .commit(&preparation_id, true, || {
+                                preparation_start(
+                                    window,
+                                    app.clone(),
+                                    preparation_id.clone(),
+                                    view.revision,
+                                    preserve_settings,
+                                    external_pid,
+                                    external_created,
+                                    ticket,
+                                )
+                            })
                     })
                 })
         })
@@ -946,6 +972,6 @@ pub(crate) async fn enter_workspace(
     .await
     .map_err(|_| "进入工作台未完成。".to_string())
     .and_then(|result| result);
-    let _ = intent_app.state::<DemoEntryIntent>().cancel(&intent_id);
+    intent_app.state::<EntryIntent>().finish(&intent_id);
     result
 }
