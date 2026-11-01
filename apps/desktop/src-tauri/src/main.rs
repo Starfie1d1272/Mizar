@@ -1235,13 +1235,16 @@ async fn mulnx_control(
     if window.label() != "main" {
         return Err("请在准备中心管理 MulNX。".into());
     }
+    if action == "stop" {
+        finish_workspace(window, app, None, diagnostic_operation_id, None, None).await?;
+        return Ok(serde_json::json!({"result":"finished", "execution":"confirmed"}));
+    }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
     let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "update" => mulnx_launch::update(&app, &log),
-        "stop" => mulnx_launch::stop_control(&app, &log),
-        _ => Err("请选择更新或停止 MulNX 控制。".into()),
+        _ => Err("请选择更新或结束 MulNX 工作台。".into()),
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
@@ -1291,130 +1294,6 @@ fn open_mulnx_browser(
         &outcome,
     );
     outcome
-}
-
-#[tauri::command]
-async fn attach_external_cs2(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    pid: u32,
-    created: String,
-    expected_revision: String,
-    demo_trial: Option<bool>,
-    diagnostic_operation_id: Option<String>,
-    diagnostic_task_id: Option<String>,
-    diagnostic_trigger: Option<String>,
-) -> Result<bool, String> {
-    if window.label() != "main" {
-        return Err("请在准备中心选择外部游戏。".into());
-    }
-    let log = app.state::<DesktopLog>().inner().clone();
-    let evidence_log = log.clone();
-    let task = diagnostic_task_id.clone();
-    let operation = diagnostic_operation_id.clone();
-    let trigger = diagnostic_trigger.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        log.with_task(
-            task.as_deref(),
-            operation.as_deref(),
-            trigger.as_deref(),
-            || {
-                app.state::<production_exit::ExitGate>().check()?;
-                app.state::<updates::PendingUpdate>().check()?;
-                let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
-                let activity = app.state::<cs2_activity::Activity>();
-                let _activity = activity.begin(3);
-                // Same read-only selected-installation discovery as GSI; never accept an executable path from the UI.
-                let output = gsi_script("gsi-status.ps1", None, Duration::from_secs(20), &log)?;
-                let gsi = powershell::parse(&log, "外部游戏安装位置核对", &output)?;
-                if gsi["detected"] != true
-                    || gsi["installed"] != true
-                    || gsi["conflict"] != false
-                    || gsi["readFailed"] != false
-                {
-                    return Err("请先完成所选 CS2 的 GSI 配置，再重新检查外部游戏。".into());
-                }
-                let cfg = PathBuf::from(gsi["cfgPath"].as_str().ok_or("CS2 安装位置未确认。")?);
-                let executable = cfg
-                    .parent()
-                    .and_then(Path::parent)
-                    .and_then(Path::parent)
-                    .ok_or("CS2 安装位置无效。")?
-                    .join("bin")
-                    .join("win64")
-                    .join("cs2.exe");
-                let created = created.parse::<u64>().map_err(|_| "游戏创建标识无效。")?;
-                app.state::<production_exit::ExitGate>().check()?;
-                app.state::<updates::PendingUpdate>().check()?;
-                production_exit::prepare_external_entry(&log, &expected_revision)?;
-                cs2.attach_external(pid, created, &executable)?;
-                let trial_id = if demo_trial == Some(true) {
-                    let id = demo_test::new_request_id(&log)?;
-                    demo_test::begin_external(&log, &id)?;
-                    Some(id)
-                } else {
-                    None
-                };
-                let lease = production_exit::camera_session(&log, "host-start", None, None)
-                    .and_then(|_| {
-                        production_exit::camera_session(
-                            &log,
-                            if trial_id.is_some() {
-                                "begin-demo"
-                            } else {
-                                "begin"
-                            },
-                            None,
-                            Some(trial_id.as_deref().unwrap_or(&expected_revision)),
-                        )
-                    })
-                    .and_then(|value| {
-                        value["lease"]
-                            .as_str()
-                            .map(str::to_owned)
-                            .ok_or("原生运镜会话未确认。".into())
-                    });
-                match lease {
-                    Ok(lease) => cs2.bind_external_camera(lease),
-                    Err(error) => {
-                        cs2.invalidate_external();
-                        return Err(error);
-                    }
-                }
-                if let Some(id) = &trial_id {
-                    cs2.bind_external_demo(id.clone());
-                }
-                if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                    tracker.preserve_settings = true;
-                }
-                if let Some(id) = trial_id {
-                    demo_test::request(&log, "playing", &id, None)?;
-                    drop(cs2);
-                    // Presentation requires an idle host operation. The verified
-                    // attachment and lease are committed before opening its windows.
-                    drop(_activity);
-                    present_production_inner(&app, true)?;
-                }
-                Ok(false) // No game was launched or acquired as an owned process.
-            },
-        )
-    })
-    .await
-    .map_err(|_| "外部游戏交接未完成，请重新检查实例。".to_string())?;
-    evidence_log.with_task(
-        diagnostic_task_id.as_deref(),
-        diagnostic_operation_id.as_deref(),
-        diagnostic_trigger.as_deref(),
-        || {
-            evidence_log.native_outcome(
-                "attach_external_cs2",
-                diagnostic_operation_id.as_deref(),
-                &result,
-            )
-        },
-    );
-    result
 }
 
 #[tauri::command]
@@ -1545,7 +1424,7 @@ async fn begin_managed_camera(
             let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
             let game = cs2
                 .workspace_process()?
-                .filter(|game| game.owned && game.is_running())
+                .filter(|game| game.is_running())
                 .ok_or("请先确认受管 CS2 已启动。")?;
             let actual = cs2.mulnx_handoff_status()?;
             let unique = actual["processes"].as_array().is_some_and(|processes| {
@@ -1673,9 +1552,6 @@ async fn finish_managed_cs2(
                         })?;
                         let activity = app.state::<cs2_activity::Activity>();
                         let _activity = activity.begin(2);
-                        if cs2.has_external() {
-                            return Err("请使用退出工作台解除借用；外部游戏由原启动方退出。".into());
-                        }
                         production_exit::finish_managed_game(
                             &app.state::<DesktopLog>(),
                             |requires_proof| {
@@ -1807,11 +1683,6 @@ async fn finish_workspace(
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
             log.step("workspace_exit_game_finish", || cs2.finish())?;
-        } else if cs2.has_external() {
-            feedback.stage("detachment");
-            let _activity = activity.begin(3);
-            // Production has safely finished. Detach without granting game-stop/recycle proof.
-            log.step("workspace_external_detach", || cs2.finish())?;
         } else {
             feedback.stage("restoration");
             let _activity = activity.begin(2);
@@ -2155,16 +2026,16 @@ async fn enter_demo_test(
                         host.state::<updates::PendingUpdate>().check()?;
                         cs2.validate_demo_running(&request_id)?;
                         let log = host.state::<DesktopLog>();
-                        let camera_trial = cs2.console_source()?.is_some_and(|(context, game)| {
-                            game.owned && context["mulnxLaunch"] == true
-                        });
+                        let camera_trial = cs2
+                            .console_source()?
+                            .is_some_and(|(context, _)| context["mulnxLaunch"] == true);
                         if camera_trial && cs2.managed_camera_lease().is_none() {
                             if !mulnx_launch::observer_control_available(&cs2, &log) {
                                 return Err("运镜工具尚未就绪，请检查试播游戏状态。".into());
                             }
                             let game = cs2
                                 .workspace_process()?
-                                .filter(|game| game.owned && game.is_running())
+                                .filter(|game| game.is_running())
                                 .ok_or("试播游戏身份已变化。")?;
                             let value = production_exit::camera_session(
                                 &log,
@@ -3008,16 +2879,13 @@ fn present_production_inner_checked(
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = managed.lock().map_err(|_| "CS2 配置状态不可用。")?;
             let process = cs2.workspace_process()?;
-            let request = process
-                .as_ref()
-                .filter(|process| process.owned)
-                .and_then(|process| {
-                    app.state::<HostState>()
-                        .entry_focus
-                        .lock()
-                        .ok()?
-                        .request(focus_session(process), source)
-                });
+            let request = process.as_ref().and_then(|process| {
+                app.state::<HostState>()
+                    .entry_focus
+                    .lock()
+                    .ok()?
+                    .request(focus_session(process), source)
+            });
             (request, process)
         };
         if request.is_some() {
@@ -4576,19 +4444,6 @@ fn run_desktop(
                                     }
                                 }
                             }
-                            if let Some(lease) = cs2.external_camera_lease().map(str::to_owned) {
-                                let log = host.state::<DesktopLog>();
-                                let invalid = cs2.external_isolation_pending();
-                                let action = if invalid { "invalidate" } else { "pulse" };
-                                match production_exit::camera_session(&log, action, Some(&lease), None) {
-                                    Ok(_) if invalid => cs2.external_isolated(),
-                                    Ok(_) => (),
-                                    Err(error) => {
-                                        cs2.invalidate_external();
-                                        log.event("external_game_isolation", "failure", Some(&error));
-                                    },
-                                }
-                            }
                             refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
@@ -4624,7 +4479,7 @@ fn run_desktop(
                     let mut group_outcome = None;
                     if let Ok(mut group) = host.state::<HostState>().window_group.lock() {
                         let failure = workspace_group::synchronize(
-                            &mut group, process.as_ref().filter(|process| process.owned), panels, &allowed,
+                            &mut group, process.as_ref(), panels, &allowed,
                         );
                         group_outcome = Some((group.restored, failure));
                         if let Some(failure) = failure {
@@ -4858,7 +4713,7 @@ fn run_desktop(
                         }
                     });
                     let activity = cleanup_host.state::<cs2_activity::Activity>();
-                    let _activity = activity.begin(if cs2.has_external() { 3 } else { 2 });
+                    let _activity = activity.begin(2);
                     let cleanup = production_exit::restore_then_cleanup(
                         || {
                             if cleanup_host
@@ -4874,7 +4729,7 @@ fn run_desktop(
                             let service_stopped = cleanup_host
                                 .state::<production_exit::VerifiedStop>()
                                 .complete();
-                            if service_stopped || cs2.has_external() {
+                            if service_stopped {
                                 cs2.finish_with_service_stopped(service_stopped)
                             } else {
                                 production_exit::finish_managed_game(

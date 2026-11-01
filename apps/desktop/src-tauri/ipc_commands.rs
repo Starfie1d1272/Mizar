@@ -42,7 +42,6 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("cancel_cs2_preparation", PRODUCT_WINDOWS),
     ("begin_managed_camera", PRODUCT_WINDOWS),
     ("cancel_managed_camera", PRODUCT_WINDOWS),
-    ("attach_external_cs2", MAIN_AND_WORKSPACE),
     ("finish_managed_cs2", PRODUCT_WINDOWS),
     ("finish_workspace", MAIN_AND_WORKSPACE),
     ("workspace_exit_status", PRODUCT_WINDOWS),

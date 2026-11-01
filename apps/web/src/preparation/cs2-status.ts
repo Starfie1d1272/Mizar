@@ -18,8 +18,6 @@ export interface Cs2ConfigStatus {
   mulnxLaunchResumable?: boolean;
   cameraLeaseReady?: boolean;
   running: boolean;
-  borrowed?: boolean;
-  externalDetached?: boolean;
   message: string | null;
   busy?: boolean;
   phase?: 'idle' | 'starting' | 'checking' | 'restoring' | 'uncertain' | 'running' | 'pending';

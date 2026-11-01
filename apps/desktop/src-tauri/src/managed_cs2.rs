@@ -609,21 +609,16 @@ pub struct ManagedCs2 {
     launch_observation: Option<Value>,
     can_preserve: bool,
     selected_backup: Option<Value>,
-    external: Option<ExternalSession>,
     camera: Option<CameraLease>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
-    pending_mulnx_stop: Option<(Value, WorkspaceProcess)>,
-    // Keep window preservation after detach until a new managed launch is accepted.
-    external_preservation: bool,
     source_resume: Mutex<Option<(String, std::time::Instant, bool)>>,
 }
 
-/// A verified session process held open during window operations. Keeping the
+/// A verified, Mizar-owned session process held open during window operations. Keeping the
 /// handle prevents PID reuse from turning a stale window into another game.
 #[derive(Clone)]
 pub struct WorkspaceProcess {
     process: Arc<Process>,
-    pub owned: bool,
     pub pid: u32,
     pub created: u64,
 }
@@ -632,16 +627,6 @@ struct CameraLease {
     lease: String,
     invalidated: bool,
 }
-struct ExternalSession {
-    console_source: Value,
-    demo_request_id: Option<String>,
-    invalidated: bool,
-    isolation_pending: bool,
-    process: Arc<Process>,
-    pid: u32,
-    created: u64,
-}
-
 struct ReplacementTarget {
     process: Process,
     pid: u32,
@@ -675,13 +660,6 @@ impl WorkspaceProcess {
     pub fn is_running(&self) -> bool {
         unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
     }
-    pub(crate) fn has_exited(&self) -> Result<bool, String> {
-        match unsafe { WaitForSingleObject(self.process.0, 0) } {
-            0 => Ok(true),
-            258 => Ok(false),
-            _ => Err("无法检查游戏状态，请重试。".into()),
-        }
-    }
 }
 pub fn verified_session_process(
     value: &Value,
@@ -692,7 +670,6 @@ pub fn verified_session_process(
     };
     Ok(Some(WorkspaceProcess {
         process: Arc::new(process),
-        owned: true,
         pid: value["pid"].as_u64().ok_or("CS2 进程记录缺失。")? as u32,
         created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
     }))
@@ -706,22 +683,10 @@ impl ManagedCs2 {
             launch_observation: None,
             can_preserve: false,
             selected_backup: None,
-            external: None,
             camera: None,
             mulnx_launcher: None,
-            pending_mulnx_stop: None,
-            external_preservation: false,
             source_resume: Mutex::new(None),
         }
-    }
-    pub(crate) fn pending_mulnx_stop(&self) -> Option<(Value, WorkspaceProcess)> {
-        self.pending_mulnx_stop.clone()
-    }
-    pub(crate) fn remember_mulnx_stop(&mut self, context: Value, game: WorkspaceProcess) {
-        self.pending_mulnx_stop = Some((context, game));
-    }
-    pub(crate) fn clear_mulnx_stop(&mut self) {
-        self.pending_mulnx_stop = None;
     }
     pub(crate) fn remember_mulnx_launcher(
         &mut self,
@@ -746,7 +711,7 @@ impl ManagedCs2 {
         &mut self,
         expected_executable: &Path,
     ) -> Result<bool, String> {
-        if self.has_external() || any_cs2_running(&self.log)? {
+        if any_cs2_running(&self.log)? {
             return Err("请先退出 CS2 再启动观战配置。".into());
         }
         crate::observer_hud::restore(&self.log)?;
@@ -765,7 +730,7 @@ impl ManagedCs2 {
         &self,
         expected_executable: &Path,
     ) -> Result<(), String> {
-        if self.has_external() || any_cs2_running(&self.log)? {
+        if any_cs2_running(&self.log)? {
             return Err("请先退出 CS2，再启动观战配置。".into());
         }
         let (executable, video, account) = self.recovery_identity()?;
@@ -779,10 +744,7 @@ impl ManagedCs2 {
         self.store.mark_mulnx_options_clean()
     }
     pub(crate) fn cancel_unsubmitted_mulnx_observer(&mut self) -> Result<(), String> {
-        if self.has_external()
-            || any_cs2_running(&self.log)?
-            || !process_pids("CS2Injector.exe", &self.log)?.is_empty()
-        {
+        if any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
             return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
         }
         self.store.cancel_unsubmitted_mulnx_observer()
@@ -859,10 +821,6 @@ impl ManagedCs2 {
         // Core restoration can succeed while cleanup retains a warning and journal.
         // Return the owner's actual result, without inventing another recovery state.
         Ok(self.message.clone())
-    }
-
-    pub fn has_external(&self) -> bool {
-        self.external.is_some()
     }
 
     // Discovery and process identity are repeated at the mutation boundary. The
@@ -953,10 +911,6 @@ impl ManagedCs2 {
                 Ok(())
             })?;
         } else {
-            if self.has_external() {
-                guard.check()?;
-                self.finish()?;
-            }
             if let Some(target) = target {
                 let (created, actual) = identity(&target.process, &self.log)?;
                 if cs2_pids(&self.log)? != vec![target.pid]
@@ -995,108 +949,19 @@ impl ManagedCs2 {
         }
         Ok(false)
     }
-    pub(crate) fn external_matches(&self, game: &WorkspaceProcess) -> bool {
-        self.external.as_ref().is_some_and(|external| {
-            external.pid == game.pid
-                && external.created == game.created
-                && Arc::ptr_eq(&external.process, &game.process)
-        })
-    }
-    pub fn attach_external(
-        &mut self,
-        pid: u32,
-        created: u64,
-        executable: &std::path::Path,
-    ) -> Result<(), String> {
-        let observer = self
-            .store
-            .mulnx_observer_matches(pid, created, executable)?;
-        if self.store.load()?.is_some()
-            || self.store.full_spectator_pending()
-            || (self.store.spectator_pending() && observer.is_none())
-            || self.store.playback_cleanup_pending()
-            || crate::demo_test::requires_recovery(&self.log, None)
-        {
-            return Err("请先完成 Mizar 原有游戏与配置恢复，再使用外部游戏。".into());
-        }
-        if let Some(external) = &self.external {
-            if !external.invalidated
-                && external.pid == pid
-                && external.created == created
-                && unsafe { WaitForSingleObject(external.process.0, 0) } == 258
-                && cs2_pids(&self.log)? == vec![pid]
-                && identity(&external.process, &self.log)?
-                    .1
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(&executable.to_string_lossy())
-            {
-                return Ok(());
-            }
-            return Err("已有借用实例，请先退出工作台解除借用。".into());
-        }
-        // Refuse ambiguity, stale UI identities, a different installation and exited processes.
-        if cs2_pids(&self.log)? != vec![pid] {
-            return Err("CS2 实例不唯一或已变化，请重新检查。".into());
-        }
-        let process = open(pid, &self.log)?.ok_or("所选 CS2 已退出，请重新检查。")?;
-        let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created
-            || !actual_executable
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&executable.to_string_lossy())
-            || unsafe { WaitForSingleObject(process.0, 0) } != 258
-        {
-            return Err("游戏身份或安装位置不匹配，请重新检查。".into());
-        }
-        let console = crate::cs2_console::boundary(&self.log, &actual_executable)?;
-        let console_source = json!({"executable":actual_executable.to_string_lossy(),"launchTime":crate::cs2_console::utc(),"pid":pid,"created":created.to_string(),"consoleDiagnostics":console,"ownership":"external", "nativeHudToggle":observer == Some(true), "spectatorCfg":observer.is_some()});
-        self.external = Some(ExternalSession {
-            console_source,
-            demo_request_id: None,
-            invalidated: false,
-            isolation_pending: false,
-            process: Arc::new(process),
-            pid,
-            created,
-        });
-        self.external_preservation = true;
-        self.can_preserve = false;
-        self.message = Some("已借用外部游戏；保持原设置和窗口，退出工作台不会关闭它。".into());
-        self.log.event("external_game_attach", "success", Some(&json!({"pid":pid,"created":created.to_string(),"ownership":"external","preserveSettings":true}).to_string()));
-        Ok(())
-    }
     pub fn workspace_process(&self) -> Result<Option<WorkspaceProcess>, String> {
-        if let Some(external) = &self.external {
-            return Ok((!external.invalidated
-                && unsafe { WaitForSingleObject(external.process.0, 0) } == 258)
-                .then(|| WorkspaceProcess {
-                    process: external.process.clone(),
-                    owned: false,
-                    pid: external.pid,
-                    created: external.created,
-                }));
-        }
         let Some(value) = self.store.load()? else {
             return Ok(None);
         };
         verified_session_process(&value, &self.log)
     }
-    /// Read-only diagnostics context follows the explicit current attachment.
-    /// This context is never written to SessionStore and grants no shutdown right.
+    /// Read-only diagnostics for the verified managed game.
     pub fn console_source(&self) -> Result<Option<(Value, WorkspaceProcess)>, String> {
         let Some(process) = self.workspace_process()? else {
             return Ok(None);
         };
-        let context = if let Some(external) = &self.external {
-            if cs2_pids(&self.log)? != vec![external.pid] {
-                return Ok(None);
-            }
-            external.console_source.clone()
-        } else {
-            let Some(journal) = self.store.load()? else {
-                return Ok(None);
-            };
-            journal
+        let Some(context) = self.store.load()? else {
+            return Ok(None);
         };
         Ok(Some((context, process)))
     }
@@ -1105,11 +970,7 @@ impl ManagedCs2 {
         Ok(!process_pids("CS2Injector.exe", &self.log)?.is_empty())
     }
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
-        let owned = if self.has_external() {
-            None
-        } else {
-            self.workspace_process()?
-        };
+        let owned = self.workspace_process()?;
         let mut processes = Vec::new();
         for pid in cs2_pids(&self.log)? {
             let Some(process) = open(pid, &self.log)? else {
@@ -1126,7 +987,7 @@ impl ManagedCs2 {
             let managed = owned
                 .as_ref()
                 .is_some_and(|p| p.pid == pid && p.created == created && p.is_running());
-            processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed, "borrowed": self.external.as_ref().is_some_and(|p| p.pid == pid && p.created == created)}));
+            processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed}));
         }
         // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
         Ok(json!({"processes": processes, "url": "http://127.0.0.1:3000/"}))
@@ -1139,18 +1000,8 @@ impl ManagedCs2 {
             .transpose()?
             .flatten()
             .is_some();
-        let borrowed = self.external.is_some();
-        let running = owned_running || (borrowed && self.workspace_process()?.is_some());
+        let running = owned_running;
         let preferences = self.store.preferences()?;
-        let borrowed_observer = running
-            && self
-                .external
-                .as_ref()
-                .is_some_and(|external| external.console_source["spectatorCfg"] == true);
-        let borrowed_hud = self
-            .external
-            .as_ref()
-            .is_some_and(|external| external.console_source["nativeHudToggle"] == true);
         let mulnx_uncertain = self.store.mulnx_observer_unconfirmed()?
             || (pending.is_some()
                 && self
@@ -1186,7 +1037,7 @@ impl ManagedCs2 {
             false
         };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && (borrowed_hud || pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true)), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none() && !borrowed_observer, "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": borrowed || pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.owned && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])), "borrowed":borrowed, "externalDetached":self.external_preservation && !borrowed, "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1504,27 +1355,6 @@ impl ManagedCs2 {
         Ok(())
     }
     pub fn poll(&mut self) {
-        if let Some(external) = &mut self.external {
-            if !external.invalidated
-                && (unsafe { WaitForSingleObject(external.process.0, 0) } != 258
-                    || cs2_pids(&self.log).map_or(true, |pids| pids != vec![external.pid]))
-            {
-                external.invalidated = true;
-                external.isolation_pending = true;
-                self.message = Some(
-                    "借用实例已退出或不再唯一；自动运镜连接正在隔离，请结束制作后重新检查。".into(),
-                );
-                self.log.event(
-                    "external_game_invalidated",
-                    "unknown",
-                    Some(
-                        &json!({"pid":external.pid,"created":external.created.to_string()})
-                            .to_string(),
-                    ),
-                );
-            }
-            return;
-        }
         if let Err(error) = self.recover(false) {
             self.message = Some(error);
         }
@@ -1535,7 +1365,7 @@ impl ManagedCs2 {
         process: WorkspaceProcess,
         lease: String,
     ) -> Result<(), String> {
-        if !process.owned || !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
+        if !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
             return Err("受管游戏身份已变化，运镜会话未绑定。".into());
         }
         self.camera = Some(CameraLease {
@@ -1547,9 +1377,6 @@ impl ManagedCs2 {
     }
     pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
         let camera = self.camera.as_mut()?;
-        if !camera.process.owned {
-            return None;
-        }
         if !camera.process.is_running()
             || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid])
         {
@@ -1559,69 +1386,13 @@ impl ManagedCs2 {
     }
     pub fn invalidate_managed_camera(&mut self) {
         if let Some(camera) = &mut self.camera {
-            if camera.process.owned {
-                camera.invalidated = true;
-            }
+            camera.invalidated = true;
         }
     }
     pub fn clear_managed_camera(&mut self) {
-        if self
-            .camera
-            .as_ref()
-            .is_some_and(|camera| camera.process.owned)
-        {
-            self.camera = None;
-        }
-    }
-    pub fn bind_external_camera(&mut self, lease: String) {
-        if let Some(external) = &self.external {
-            let process = WorkspaceProcess {
-                process: external.process.clone(),
-                owned: false,
-                pid: external.pid,
-                created: external.created,
-            };
-            self.camera = Some(CameraLease {
-                process,
-                lease,
-                invalidated: false,
-            });
-        }
-    }
-    pub fn bind_external_demo(&mut self, request_id: String) {
-        if let Some(external) = &mut self.external {
-            external.demo_request_id = Some(request_id);
-        }
-    }
-    pub fn external_camera_lease(&self) -> Option<&str> {
-        self.external
-            .as_ref()
-            .filter(|external| !external.invalidated || external.isolation_pending)?;
-        self.camera
-            .as_ref()
-            .filter(|camera| !camera.process.owned)
-            .map(|camera| camera.lease.as_str())
-    }
-    pub fn invalidate_external(&mut self) {
-        if let Some(external) = &mut self.external {
-            external.invalidated = true;
-            external.isolation_pending = true;
-        }
-        self.message = Some("原生运镜会话已失效；请结束制作后重新借用。".into());
-    }
-    pub fn external_isolation_pending(&self) -> bool {
-        self.external.as_ref().is_some_and(|p| p.isolation_pending)
-    }
-    pub fn external_isolated(&mut self) {
-        if let Some(external) = &mut self.external {
-            external.isolation_pending = false;
-        }
-        self.message = Some("借用实例已失效，旧运镜连接已断开；请结束制作后重新检查。".into());
+        self.camera = None;
     }
     pub fn preserve_settings(&self) -> bool {
-        if self.external_preservation {
-            return true;
-        }
         // Corrupt/unreadable journals must also prevent automatic game layout.
         self.store.load().map_or(true, |value| {
             value.is_some_and(|v| v["preserveSettings"] == true)
@@ -1648,13 +1419,6 @@ impl ManagedCs2 {
         preparation_id: Option<&str>,
         guard: &crate::preparation_gate::PreparationGuard<'_>,
     ) -> Result<bool, String> {
-        if self.has_external() {
-            self.poll();
-            if self.workspace_process()?.is_none() {
-                return Err("借用实例已失效，请先结束本次制作，再重新选择实例。".into());
-            }
-            return Ok(false);
-        }
         let journal = self.store.load()?;
         if let (Some(id), Some(existing)) = (preparation_id, journal.as_ref()) {
             if existing["preparationId"] != id {
@@ -1781,7 +1545,7 @@ impl ManagedCs2 {
         self.commit_managed_source(&mut journal)
     }
     pub fn ensure_demo_available(&self) -> Result<(), String> {
-        if self.has_external() || self.store.load()?.is_some() || any_cs2_running(&self.log)? {
+        if self.store.load()?.is_some() || any_cs2_running(&self.log)? {
             return Err("请先退出 CS2 并恢复原配置，再开始 Demo 试播。".into());
         }
         Ok(())
@@ -1864,18 +1628,6 @@ impl ManagedCs2 {
             .is_some_and(|v| v.get("demoTestRequestId").is_some()))
     }
     pub fn validate_demo_running(&mut self, request_id: &str) -> Result<(), String> {
-        if let Some(external) = &self.external {
-            if !external.invalidated
-                && external.demo_request_id.as_deref() == Some(request_id)
-                && cs2_pids(&self.log)? == vec![external.pid]
-                && self
-                    .workspace_process()?
-                    .is_some_and(|process| process.is_running())
-            {
-                return Ok(());
-            }
-            return Err("外部 Demo 试播或游戏实例已变化，请重新交接。".into());
-        }
         self.recover(false)?;
         let journal = self.store.load()?.ok_or("Demo 游戏启动记录已失效。")?;
         if journal["demoTestRequestId"].as_str() != Some(request_id)
@@ -1926,7 +1678,6 @@ impl ManagedCs2 {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         self.message = None;
-        self.external_preservation = false;
         let size = if preserve {
             None
         } else {
@@ -2294,8 +2045,7 @@ impl ManagedCs2 {
         self.store.backup_directory()
     }
     fn require_backup_idle(&self) -> Result<(), String> {
-        if self.has_external()
-            || self.store.load()?.is_some()
+        if self.store.load()?.is_some()
             || self.store.spectator_pending()
             || self.store.playback_cleanup_pending()
             || crate::demo_test::requires_recovery(&self.log, None)
@@ -2423,9 +2173,6 @@ impl ManagedCs2 {
         Ok(())
     }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
-        if self.has_external() {
-            return Err("请先退出工作台解除借用；不会向外部游戏写回配置。".into());
-        }
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
             if self.store.load()?.is_none() && self.store.spectator_pending() {
                 if self.store.mulnx_observer_unconfirmed()? {
@@ -2543,27 +2290,9 @@ impl ManagedCs2 {
 
     /// Read-only feedback retirement; absent journal alone is not a stop proof.
     pub fn window_session_finished(&self) -> Result<bool, String> {
-        if self.external_preservation {
-            return Ok(!self.has_external() && self.store.load()?.is_none());
-        }
         Ok(self.store.load()?.is_none() && !any_cs2_running(&self.log)?)
     }
 
-    fn detach_external(&mut self) -> bool {
-        if let Some(external) = self.external.take() {
-            if self
-                .camera
-                .as_ref()
-                .is_some_and(|camera| !camera.process.owned)
-            {
-                self.camera = None;
-            }
-            self.log.event("external_game_detach", "success", Some(&json!({"pid":external.pid,"created":external.created.to_string(),"gameStopped":false}).to_string()));
-            self.message = Some("已解除游戏借用；外部游戏及设置保持不变。".into());
-            return true;
-        }
-        false
-    }
     pub fn finish(&mut self) -> Result<(), String> {
         self.finish_with_service_stopped(false)
     }
@@ -2592,30 +2321,19 @@ impl ManagedCs2 {
         let unknown_trial = Value::Null;
         let trial_state = trial_status.as_ref().unwrap_or(&unknown_trial);
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
-            let borrowed_observer = self
-                .external
-                .as_ref()
-                .is_some_and(|external| external.console_source["spectatorCfg"] == true);
             if self.store.load()?.is_some()
-                || (self.store.spectator_pending() && !borrowed_observer)
+                || self.store.spectator_pending()
                 || self.store.playback_cleanup_pending()
             {
                 return Err("请先完成受管游戏的配置恢复。".into());
             }
-            // The trial owns isolated match data, never the externally launched game.
-            // Keep the handle until OBS and formal-context restoration both succeed.
+            // Read-only migration of an old external Demo marker. No new external
+            // session can be created, and this marker never grants game ownership.
             crate::production_exit::disconnect_camera(&self.log)?;
             let trial = crate::demo_test::quarantine(&self.log)?;
-            self.invalidate_external();
             crate::demo_test::complete(&self.log, trial.as_deref())?;
-            self.external_preservation = true;
-            self.detach_external();
             self.message = Some("试播已结束，游戏保持运行。".into());
             return Ok(());
-        }
-        if self.detach_external() {
-            // No owned journal is ever created. Releasing a query handle cannot terminate a game.
-            return trial_status.map(|_| ());
         }
         if let Some((lease, _)) = self.managed_camera_lease() {
             // The caller holds the CS2 mutex, so the heartbeat cannot renew while

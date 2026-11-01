@@ -88,7 +88,6 @@ const commandSchema = z.discriminatedUnion('action', [
       requestId: z.uuid(),
       teamAName: z.string().trim().min(1).max(128).optional(),
       teamBName: z.string().trim().min(1).max(128).optional(),
-      gameOwnership: z.literal('external').optional(),
     })
     .strict(),
   z
@@ -230,7 +229,6 @@ export class DemoTestController {
           requestId: body.requestId,
           teamAName: body.teamAName ?? 'A',
           teamBName: body.teamBName ?? 'B',
-          ...(body.gameOwnership ? { gameOwnership: body.gameOwnership } : {}),
         };
         const document = trialDocument(marker);
         if (this.options.canBegin?.() === false)

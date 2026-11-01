@@ -450,11 +450,10 @@ impl GameTracker {
         unsafe {
             GetWindowThreadProcessId(window.hwnd, &mut pid);
         }
-        (owner.owned && owner.is_running() && owner.pid == window.pid && pid == window.pid)
-            .then_some(window)
+        (owner.is_running() && owner.pid == window.pid && pid == window.pid).then_some(window)
     }
     pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
-        self.owner = owner.filter(|process| process.owned && process.is_running());
+        self.owner = owner.filter(|process| process.is_running());
     }
     pub fn finish_session_feedback(
         &mut self,
