@@ -124,6 +124,8 @@ test('shares an in-flight MulNX check rather than issuing a second request', asy
     const first = tool.check(),
       second = tool.check();
     assert.equal(first, second);
+    // The signed index is tried before falling back to upstream metadata.
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(githubCalls, 1);
     const tag = 'Fixture1';
     finish(
