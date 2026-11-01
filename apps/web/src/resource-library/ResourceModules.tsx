@@ -590,8 +590,7 @@ export function ResourceModules({
     <section className="resource-library__music" aria-label="资源">
       <div className="resource-library__music-heading">
         <div>
-          <h2>资源</h2>
-          <p>查看已保存的资源；使用后才会改变播出配置。</p>
+          <p>预览和保存不改变播出；使用后才会切换配置。</p>
         </div>
         <input
           ref={input}
@@ -609,6 +608,14 @@ export function ResourceModules({
         <Button disabled={busy} onClick={() => input.current?.click()}>
           导入资源
         </Button>
+        <details>
+          <summary>创建和制作</summary>
+          <div className="resource-library__preset-actions">
+            <a href="/operator/hud">HUD 编辑器</a>
+            <a href="/settings?tab=music">音乐制作</a>
+            <a href="/settings?tab=camera">运镜制作</a>
+          </div>
+        </details>
       </div>
       {notice && <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner>}
       {editing && (
@@ -808,7 +815,11 @@ export function ResourceModules({
         )}
       {showList &&
         entries.map(({ module: entry, builtin, availability }) => (
-          <Panel className="resource-library__item" key={entry.id} id={`resource-${entry.id}`}>
+          <Panel
+            className="resource-library__item resource-library__module"
+            key={entry.id}
+            id={`resource-${entry.id}`}
+          >
             <div>
               <span className="resource-library__kind">
                 {labels[entry.kind]} · {builtin ? '内置' : entry.origin ? '导入' : '自建'}
@@ -823,6 +834,8 @@ export function ResourceModules({
               </p>
             </div>
             <Button
+              aria-expanded={selected === entry.id}
+              aria-controls={`resource-detail-${entry.id}`}
               onClick={() => {
                 selectionEpoch.current++;
                 setSelected(selected === entry.id ? null : entry.id);
@@ -831,58 +844,21 @@ export function ResourceModules({
             >
               {selected === entry.id ? '关闭详情' : '查看详情'}
             </Button>
+            {selected !== entry.id && (entry.kind === 'hud' || entry.kind === 'program') && (
+              <div className="resource-library__thumbnail">
+                <PresetVisualPreview
+                  mode={entry.kind}
+                  compact
+                  bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
+                  modules={[entry]}
+                />
+              </div>
+            )}
             {selected === entry.id && (
-              <div>
-                {availability?.state === 'dependency_missing' && (
-                  <StatusBanner tone="warning">
-                    {entry.kind === 'camera'
-                      ? '运镜来源不可用，请准备对应的 MulNX 镜头内容后重试。'
-                      : '所需资源不可用，请重新导入或恢复资源后重试。'}
-                  </StatusBanner>
-                )}
-                {(entry.kind === 'hud' || entry.kind === 'program') && (
-                  <PresetVisualPreview
-                    key={entry.id}
-                    mode={entry.kind}
-                    bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
-                    modules={[entry]}
-                  />
-                )}
-                {entry.kind === 'music' && (
-                  <dl>
-                    {Object.entries(entry.value.groups).map(([name, group]) => (
-                      <div key={name}>
-                        <dt>{MUSIC_LABELS[name as MusicGroup]}</dt>
-                        <dd>{group.tracks.map((track) => track.name).join('、') || '无曲目'}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                )}
-                {entry.kind === 'camera' && (
-                  <dl>
-                    {entry.value.maps.map((map, index) => (
-                      <div key={index}>
-                        <dt>{map.map}</dt>
-                        <dd>
-                          {map.source.sourceName} · {map.openingSound?.name ?? '无开场音效'}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                )}
-                {!builtin &&
-                  (entry.kind === 'program' ||
-                    entry.kind === 'music' ||
-                    entry.kind === 'camera') && (
-                    <Button
-                      disabled={busy || !!editing}
-                      onClick={() => setEditing(structuredClone(entry))}
-                    >
-                      编辑{labels[entry.kind]}
-                    </Button>
-                  )}
+              <div className="resource-library__detail" id={`resource-detail-${entry.id}`}>
                 <div className="resource-library__preset-actions">
                   <Button
+                    variant="primary"
                     disabled={
                       busy || !snapshot || (entry.kind === 'program' && programUnsupported(entry))
                     }
@@ -900,7 +876,11 @@ export function ResourceModules({
                       )
                     }
                   >
-                    使用
+                    {snapshot?.active.sourceModuleIds?.[entry.kind] === entry.id &&
+                    snapshot.active.sourceModuleRevisions?.[entry.kind] === entry.revision &&
+                    !metadata?.consumers?.[entry.kind]?.error
+                      ? '重新使用'
+                      : '使用'}
                   </Button>
                   <Button
                     disabled={busy}
@@ -955,6 +935,54 @@ export function ResourceModules({
                     </Button>
                   )}
                 </div>
+                {availability?.state === 'dependency_missing' && (
+                  <StatusBanner tone="warning">
+                    {entry.kind === 'camera'
+                      ? '运镜来源不可用，请准备对应的 MulNX 镜头内容后重试。'
+                      : '所需资源不可用，请重新导入或恢复资源后重试。'}
+                  </StatusBanner>
+                )}
+                {(entry.kind === 'hud' || entry.kind === 'program') && (
+                  <PresetVisualPreview
+                    key={entry.id}
+                    mode={entry.kind}
+                    bindings={[{ kind: entry.kind, mode: 'use', moduleId: entry.id }]}
+                    modules={[entry]}
+                  />
+                )}
+                {entry.kind === 'music' && (
+                  <dl>
+                    {Object.entries(entry.value.groups).map(([name, group]) => (
+                      <div key={name}>
+                        <dt>{MUSIC_LABELS[name as MusicGroup]}</dt>
+                        <dd>{group.tracks.map((track) => track.name).join('、') || '无曲目'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {entry.kind === 'camera' && (
+                  <dl>
+                    {entry.value.maps.map((map, index) => (
+                      <div key={index}>
+                        <dt>{map.map}</dt>
+                        <dd>
+                          {map.source.sourceName} · {map.openingSound?.name ?? '无开场音效'}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {!builtin &&
+                  (entry.kind === 'program' ||
+                    entry.kind === 'music' ||
+                    entry.kind === 'camera') && (
+                    <Button
+                      disabled={busy || !!editing}
+                      onClick={() => setEditing(structuredClone(entry))}
+                    >
+                      编辑{labels[entry.kind]}
+                    </Button>
+                  )}
                 {!builtin && (
                   <details>
                     <summary>删除资源</summary>

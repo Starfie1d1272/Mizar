@@ -504,7 +504,7 @@ export function BroadcastPresets({
       <div className="resource-library__music-heading">
         <div>
           <h2>播出方案</h2>
-          <p>查看配置，并在准备阶段使用方案。</p>
+          <p>组合 HUD、场景、音乐与运镜，一次使用；也可分别使用单项内容。</p>
         </div>
         <div className="resource-library__preset-actions">
           <Button
@@ -655,8 +655,8 @@ export function BroadcastPresets({
               <Button disabled={busy} onClick={() => void exportFile(preset)}>
                 分享
               </Button>
-              <Button disabled={busy} onClick={() => void applyPreset(preset)}>
-                使用方案
+              <Button variant="primary" disabled={busy} onClick={() => void applyPreset(preset)}>
+                {current && known && !changed && !active.adjusted ? '重新使用方案' : '使用方案'}
               </Button>
             </div>
           </Panel>
