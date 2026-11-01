@@ -530,8 +530,7 @@ pub(crate) fn retire_after_exit() {
         }
     }
 }
-#[tauri::command]
-pub(crate) fn preparation_start(
+fn preparation_start(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,
@@ -539,6 +538,7 @@ pub(crate) fn preparation_start(
     preserve_settings: bool,
     external_pid: Option<u32>,
     external_created: Option<String>,
+    ticket: u64,
 ) -> Result<(), String> {
     if window.label() != "main" {
         return Err("请在准备中心启动工作台。".into());
@@ -566,6 +566,8 @@ pub(crate) fn preparation_start(
             {
                 return Err("已有准备任务，请重试或取消原任务。".into());
             }
+            app.state::<production_exit::ExitGate>()
+                .check_ticket(preparation_ticket(&app, &existing.id)?)?;
             if existing.running {
                 return Ok(());
             }
@@ -580,7 +582,14 @@ pub(crate) fn preparation_start(
         if existing.running {
             return Err("原准备任务正在取消，请稍后重试。".into());
         }
+        if !existing.cancellation_confirmed {
+            return Err("原准备任务取消或恢复未确认，请重试取消。".into());
+        }
     }
+    *app.state::<HostState>()
+        .entry_ticket
+        .lock()
+        .map_err(|_| "启动状态不可用。")? = Some((preparation_id.clone(), ticket));
     *state = Some(Task {
         id: preparation_id.clone(),
         revision: expected_revision,
@@ -669,13 +678,13 @@ pub(crate) async fn preparation_cancel(
             Err("制作已进入，请退出工作台。".into())
         }
         Ok(false) => {
-            update(&preparation_id, |task| task.cancellation_confirmed = true);
             if let Ok(window) = main_window(&app) {
                 cancel_managed_camera(window, app.clone()).await?;
             }
             // Cancellation is acknowledged by the service before restoring: it
             // fences a delayed enter request for this same preparation ID.
             restore_video(&app, &preparation_id, true).await?;
+            update(&preparation_id, |task| task.cancellation_confirmed = true);
             publish(&app, &preparation_id, "准备已取消。".into());
             Ok(())
         }
@@ -688,4 +697,190 @@ pub(crate) async fn preparation_cancel(
             Err(error)
         }
     }
+}
+
+// Serialize entry decisions; the task itself continues independently of this call.
+static ENTRY: Mutex<()> = Mutex::new(());
+
+#[tauri::command]
+pub(crate) async fn enter_workspace(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    preparation_id: String,
+    expected_revision: Option<String>,
+    expected_demo_request: Option<String>,
+    manual: bool,
+    preserve_settings: bool,
+    external_pid: Option<u32>,
+    external_created: Option<String>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("请在准备中心启动工作台。".into());
+    }
+    begin_demo_entry(window.clone(), app.clone(), preparation_id.clone())?;
+    let intent_app = app.clone();
+    let intent_id = preparation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _entry = ENTRY.try_lock().map_err(|_| "正在进入工作台，请稍候。")?;
+        tauri::async_runtime::block_on(async move {
+            let ticket = app
+                .state::<production_exit::ExitGate>()
+                .presentation_ticket()?;
+            let mut production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+            let mut view = crate::lifecycle_contract::production_view(&production)?;
+            let demo = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
+            if demo["active"] == true {
+                let request_id = demo["requestId"]
+                    .as_str()
+                    .ok_or("试播状态未确认，请重试。")?
+                    .to_owned();
+                if expected_demo_request
+                    .as_deref()
+                    .is_some_and(|id| id != request_id)
+                {
+                    return Err("试播状态已变化，请重新进入。".into());
+                }
+                if external_pid.is_some() || external_created.is_some() {
+                    return Err("请先结束 Demo 试播，再选择游戏。".into());
+                }
+                if let Some(existing) = snapshot()?.filter(|task| !task.cancelled) {
+                    if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
+                        let task_entered = entered(&app, &existing.id)?;
+                        let actual = http(&app, "GET", "/local/v1/production", json!({})).await?;
+                        if task_entered
+                            && crate::lifecycle_contract::production_view(&actual)?.mode
+                                != "preparation"
+                        {
+                            return present_production_inner_checked(
+                                &app,
+                                true,
+                                None,
+                                Some(ticket),
+                            );
+                        }
+                        return Err(error);
+                    }
+                }
+                let expected_url = window
+                    .url()
+                    .map_err(|_| "准备中心页面不可用。")?
+                    .to_string();
+                let result = async {
+                    let camera = enter_demo_test(
+                        window.clone(),
+                        app.clone(),
+                        request_id.clone(),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    app.state::<production_exit::ExitGate>()
+                        .check_ticket(ticket)?;
+                    present_demo_test(
+                        window.clone(),
+                        app.clone(),
+                        request_id.clone(),
+                        expected_url,
+                        preparation_id.clone(),
+                        Some(ticket),
+                    )
+                    .await?;
+                    if camera {
+                        let state = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
+                        if state["active"] != true
+                            || state["phase"] != "playing"
+                            || state["requestId"] != request_id
+                        {
+                            return Err("试播状态已变化，请重新进入。".into());
+                        }
+                        http(
+                            &app,
+                            "POST",
+                            "/operator/orchestration",
+                            json!({"action":"connect"}),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                }
+                .await;
+                let _ = app.state::<DemoEntryIntent>().cancel(&preparation_id);
+                return result;
+            }
+            if expected_demo_request.is_some() {
+                return Err("试播状态已变化，请重新进入。".into());
+            }
+            if view.mode != "preparation" {
+                return present_production_inner_checked(&app, true, None, Some(ticket));
+            }
+            if expected_revision
+                .as_deref()
+                .is_some_and(|revision| revision != view.revision)
+            {
+                return Err("制作状态已变化，请刷新后重试。".into());
+            }
+            if manual {
+                if let Some(existing) = snapshot()? {
+                    if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
+                        let task_entered = entered(&app, &existing.id)?;
+                        production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+                        view = crate::lifecycle_contract::production_view(&production)?;
+                        if task_entered && view.mode != "preparation" {
+                            return present_production_inner_checked(
+                                &app,
+                                true,
+                                None,
+                                Some(ticket),
+                            );
+                        }
+                        return Err(error);
+                    }
+                }
+                production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+                view = crate::lifecycle_contract::production_view(&production)?;
+                if view.mode != "preparation" {
+                    return present_production_inner_checked(&app, true, None, Some(ticket));
+                }
+                if expected_revision
+                    .as_deref()
+                    .is_some_and(|revision| revision != view.revision)
+                {
+                    return Err("制作状态已变化，请刷新后重试。".into());
+                }
+                app.state::<production_exit::ExitGate>()
+                    .check_ticket(ticket)?;
+                let entered = app
+                    .state::<production_exit::ExitGate>()
+                    .commit(ticket, || {
+                        request(
+                            &app,
+                            "POST",
+                            "/operator/production",
+                            json!({"action":"enter","expectedRevision":view.revision}),
+                        )
+                    })?;
+                if crate::lifecycle_contract::production_view(&entered)?.mode != "live" {
+                    return Err("制作进入状态未确认。".into());
+                }
+                return present_production_inner_checked(&app, true, None, Some(ticket));
+            }
+            app.state::<production_exit::ExitGate>().commit(ticket, || {
+                preparation_start(
+                    window,
+                    app.clone(),
+                    preparation_id,
+                    view.revision,
+                    preserve_settings,
+                    external_pid,
+                    external_created,
+                    ticket,
+                )
+            })
+        })
+    })
+    .await
+    .map_err(|_| "进入工作台未完成。".to_string())?;
+    let _ = intent_app.state::<DemoEntryIntent>().cancel(&intent_id);
+    result
 }

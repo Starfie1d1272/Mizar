@@ -1,5 +1,4 @@
 import { ControlTask } from '../debug/control-task';
-import type { DemoTestView } from './demo-test';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 import { prepareObs } from '../workspace/obs-preparation';
@@ -66,43 +65,9 @@ export async function enterDemoTest(
   isCurrent: () => boolean = () => true,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const location = window.location.href;
-  const intentId = crypto.randomUUID();
-  const current = () => !signal?.aborted && isCurrent() && window.location.href === location;
-  const cancel = () => {
-    void desktopInvoke('cancel_demo_entry', { intentId }).catch(() => {});
-  };
-  if (!current()) return false;
-  window.addEventListener('pagehide', cancel);
-  window.addEventListener('popstate', cancel);
-  signal?.addEventListener('abort', cancel);
-  try {
-    await desktopInvoke('begin_demo_entry', { intentId }, task);
-    if (!current()) return false;
-    const camera = await desktopInvoke<boolean>('enter_demo_test', { requestId }, task);
-    if (!current()) return false;
-    await desktopInvoke('present_demo_test', { requestId, expectedUrl: location, intentId }, task);
-    if (!current()) return false;
-    if (camera) {
-      const response = await fetch('/local/v1/demo-test', {
-        headers: task?.headers() ?? {},
-        cache: 'no-store',
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) throw new Error('试播状态未确认，请重试。');
-      const trial = (await response.json()) as DemoTestView;
-      if (!current() || !trial.active || trial.phase !== 'playing' || trial.requestId !== requestId)
-        return false;
-      await command('/operator/orchestration', { action: 'connect' }, task);
-      if (!current()) return false;
-    }
-    return true;
-  } finally {
-    window.removeEventListener('pagehide', cancel);
-    window.removeEventListener('popstate', cancel);
-    signal?.removeEventListener('abort', cancel);
-    cancel();
-  }
+  if (signal?.aborted || !isCurrent()) return false;
+  await enterDesktopWorkspace({ expectedDemoRequest: requestId }, task, signal);
+  return !signal?.aborted && isCurrent();
 }
 
 export type Tool = 'hud' | 'bp' | 'diagnostics';
@@ -261,42 +226,52 @@ export async function retryPendingPreparation() {
   await desktopInvoke('preparation_retry', { preparationId: status.id });
 }
 
-/** Enter the existing production view without starting a managed game or preparing OBS. */
-export async function enterProductionManually(state: Production) {
-  const read = async (): Promise<Production> => {
-    const response = await fetch('/local/v1/production', {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error('制作状态未确认，请重试。');
-    return (await response.json()) as Production;
-  };
-  const present = async () => {
-    if (window.__TAURI_INTERNALS__) await desktopInvoke('present_production', { live: true });
-    else window.location.assign('/workspace');
-  };
-  let current = await read();
-  // Reopening an already entered workspace does not start another preparation.
-  if (current.mode !== 'preparation') return present();
-  if (state.sessionId && current.sessionId !== state.sessionId)
-    throw new Error('制作状态已变化，请刷新后重试。');
-  if (window.__TAURI_INTERNALS__) {
-    const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
+async function enterDesktopWorkspace(
+  options: {
+    expectedRevision?: string;
+    expectedDemoRequest?: string;
+    manual?: boolean;
+    preserveSettings?: boolean;
+    external?: ExternalGameIdentity | undefined;
+  },
+  task?: ControlTask,
+  signal?: AbortSignal,
+) {
+  const preparationId = crypto.randomUUID();
+  const cancel = () =>
+    void desktopInvoke('cancel_demo_entry', { intentId: preparationId }).catch(() => {});
+  window.addEventListener('pagehide', cancel);
+  window.addEventListener('popstate', cancel);
+  signal?.addEventListener('abort', cancel);
+  try {
+    const start = desktopInvoke(
+      'enter_workspace',
+      {
+        preparationId,
+        expectedRevision: options.expectedRevision ?? null,
+        expectedDemoRequest: options.expectedDemoRequest ?? null,
+        manual: options.manual ?? false,
+        preserveSettings: options.preserveSettings ?? false,
+        externalPid: options.external?.pid ?? null,
+        externalCreated: options.external?.created ?? null,
+      },
+      task,
+    );
+    pendingStart = start;
     try {
-      if (status) await cancelProductionEntry();
-    } catch (error) {
-      // Cancellation can race with a committed enter. Only display its actual result.
-      current = await read();
-      if (current.mode !== 'preparation') return present();
-      throw error;
+      await start;
+    } finally {
+      if (pendingStart === start) pendingStart = undefined;
     }
+  } finally {
+    window.removeEventListener('pagehide', cancel);
+    window.removeEventListener('popstate', cancel);
+    signal?.removeEventListener('abort', cancel);
   }
-  current = await read();
-  if (current.mode !== 'preparation') return present();
-  if (state.sessionId && current.sessionId !== state.sessionId)
-    throw new Error('制作状态已变化，请刷新后重试。');
-  await command('/operator/production', { action: 'enter', expectedRevision: current.revision });
-  await present();
+}
+
+export async function enterProductionManually(state: Production) {
+  await enterDesktopWorkspace({ expectedRevision: state.revision, manual: true });
 }
 
 export async function productionAction(
@@ -357,8 +332,7 @@ export async function productionAction(
         task.finish('unconfirmed', { reason: 'local_cleanup_complete_remote_or_obs_pending' });
         return task.result;
       }
-    } else if (window.__TAURI_INTERNALS__ && action === 'enter' && state.mode === 'preparation') {
-      // The existing notification observes the result; checking never gates entry.
+    } else if (window.__TAURI_INTERNALS__ && action === 'enter') {
       void fetch('/operator/updates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...task.headers() },
@@ -366,44 +340,11 @@ export async function productionAction(
         keepalive: true,
         signal: AbortSignal.timeout(40_000),
       }).catch(() => {});
-      const response = await fetch('/local/v1/demo-test', {
-        cache: 'no-store',
-        signal: AbortSignal.any([entryAbort!.signal, AbortSignal.timeout(5000)]),
-      });
-      if (!response.ok) throw new Error('试播状态未确认，请检查本地服务后重试。');
-      const trial = (await response.json()) as DemoTestView;
-      if (trial.active) {
-        if (external) throw new Error('请先结束 Demo 试播，再选择外部游戏。');
-        if (
-          !trial.requestId ||
-          !(await enterDemoTest(trial.requestId, task, () => true, entryAbort?.signal))
-        ) {
-          task.finish('cancelled', { reason: 'demo_entry_changed' });
-          return task.result;
-        }
-      } else {
-        if (entryAbort?.signal.aborted) {
-          task.finish('cancelled', { reason: 'entry_cancelled' });
-          return task.result;
-        }
-        const start = desktopInvoke(
-          'preparation_start',
-          {
-            preparationId: crypto.randomUUID(),
-            expectedRevision: state.revision,
-            preserveSettings,
-            externalPid: external?.pid ?? null,
-            externalCreated: external?.created ?? null,
-          },
-          task,
-        );
-        pendingStart = start;
-        try {
-          await start;
-        } finally {
-          if (pendingStart === start) pendingStart = undefined;
-        }
-      }
+      await enterDesktopWorkspace(
+        { expectedRevision: state.revision, preserveSettings, external },
+        task,
+        entryAbort?.signal,
+      );
     } else {
       if (
         !window.__TAURI_INTERNALS__ &&

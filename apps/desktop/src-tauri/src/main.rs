@@ -1983,7 +1983,6 @@ async fn resume_demo_test(
     .map_err(|_| "Demo 启动状态未能确认。".to_string())?
 }
 
-#[tauri::command]
 async fn enter_demo_test(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -2094,7 +2093,11 @@ async fn enter_demo_test(
 struct DemoEntryIntent(Mutex<Option<String>>);
 impl DemoEntryIntent {
     fn begin(&self, id: String) -> Result<(), String> {
-        *self.0.lock().map_err(|_| "试播进入状态不可用。")? = Some(id);
+        let mut current = self.0.lock().map_err(|_| "试播进入状态不可用。")?;
+        if current.is_some() {
+            return Err("正在进入工作台，请稍候。".into());
+        }
+        *current = Some(id);
         Ok(())
     }
     fn cancel(&self, id: &str) -> Result<(), String> {
@@ -2118,7 +2121,6 @@ impl DemoEntryIntent {
     }
 }
 
-#[tauri::command]
 fn begin_demo_entry(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -2145,13 +2147,13 @@ fn cancel_demo_entry(
     app.state::<DemoEntryIntent>().cancel(&intent_id)
 }
 
-#[tauri::command]
 async fn present_demo_test(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request_id: String,
     expected_url: String,
     intent_id: String,
+    entry_ticket: Option<u64>,
 ) -> Result<(), String> {
     demo_main_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2162,7 +2164,7 @@ async fn present_demo_test(
         {
             return Err("试播状态已变化，请重新进入。".into());
         }
-        present_production_inner_checked(&app, true, Some((expected_url, intent_id)), None)
+        present_production_inner_checked(&app, true, Some((expected_url, intent_id)), entry_ticket)
     })
     .await
     .map_err(|_| "试播工作台未能打开。".to_string())?
@@ -4340,8 +4342,9 @@ fn run_desktop(
                     .maximized(true)
                     .visible(true)
                     .on_navigation(trusted_navigation)
-                    .on_page_load(move |_window, payload| {
+                    .on_page_load(move |window, payload| {
                         if payload.event() == tauri::webview::PageLoadEvent::Started {
+                            window.state::<DemoEntryIntent>().cancel_all();
                             obs_configuration::document_changed(&page_log);
                         }
                         if payload.event() == tauri::webview::PageLoadEvent::Finished
