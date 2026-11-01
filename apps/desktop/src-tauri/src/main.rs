@@ -1874,13 +1874,27 @@ fn run_desktop(
             if code.unwrap_or(0) == 0 && !exit_cleanup_done.load(Ordering::Acquire) =>
         {
             api.prevent_exit();
-            if !app.state::<production_exit::ExitGate>().begin() {
-                return;
-            }
             let done = exit_cleanup_done.clone();
             let host = app.clone();
-            // Serialize with an in-flight launch; keep the UI loop responsive.
+            // Gate acquisition can wait for an accepted publication. Never wait on the UI loop.
             tauri::async_runtime::spawn(async move {
+                let gate_host = host.clone();
+                match tauri::async_runtime::spawn_blocking(move || {
+                    gate_host.state::<production_exit::ExitGate>().begin()
+                })
+                .await
+                {
+                    Ok(true) => (),
+                    Ok(false) => return,
+                    Err(error) => {
+                        host.state::<DesktopLog>().event(
+                            "workspace_exit",
+                            "failure",
+                            Some(&format!("gate task: {error}")),
+                        );
+                        return;
+                    }
+                }
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     // The gate is already closed; wait for an accepted launch,
