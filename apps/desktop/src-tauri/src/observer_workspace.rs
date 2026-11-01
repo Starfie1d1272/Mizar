@@ -166,14 +166,16 @@ pub async fn observer_command(
                 return Ok(());
             }
             if action == "stop" {
+                let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
                 let _operation = cleanup_operation();
+                app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
                 return stop_inner(&log, true);
             }
             if action == "restore-hud" {
-                app.state::<production_exit::ExitGate>().check()?;
+                let ticket = app.state::<production_exit::ExitGate>().presentation_ticket()?;
                 app.state::<crate::updates::PendingUpdate>().check()?;
                 let _operation = operation()?;
-                app.state::<production_exit::ExitGate>().check()?;
+                app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
                 return crate::observer_hud::restore(&log);
             }
             if action == "preflight" {
