@@ -32,6 +32,7 @@ pub(crate) async fn enter(
             let native_task_id = native_task_id.clone();
             let native_trigger = native_trigger.clone();
             move || {
+                let _operation = crate::observer_workspace::operation()?;
                 host.state::<production_exit::ExitGate>()
                     .commit(entry_ticket, || {
                         host.state::<EntryIntent>().commit(&intent_id, false, || {
@@ -140,11 +141,16 @@ pub(crate) async fn start(
     let native_operation_id = diagnostic_operation_id.clone();
     let diagnostic_result: Result<serde_json::Value, String> = async move {
         window_presentation::check_demo_main(&window)?;
-        app.state::<production_exit::ExitGate>().check()?;
+        let operation_ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
             let native_operation_id = native_operation_id.clone();
             move || {
+                let _operation = crate::observer_workspace::operation()?;
+                app.state::<production_exit::ExitGate>()
+                    .check_ticket(operation_ticket)?;
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let mut cs2 = managed.lock().map_err(|error| {
                     command_log.preserve_error(
@@ -261,7 +267,13 @@ pub(crate) async fn resume(
     request_id: String,
 ) -> Result<serde_json::Value, String> {
     window_presentation::check_demo_main(&window)?;
+    let operation_ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = crate::observer_workspace::operation()?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(operation_ticket)?;
         let log = app.state::<DesktopLog>();
         mulnx_launch::resume_demo(&app, &log, &request_id)
     })
@@ -285,6 +297,9 @@ pub(crate) async fn finish(
         if !["main", "workspace-left", "workspace-dock"].contains(&window.label()) {
             return Err("请在制作中心或试播工作台结束 Demo 试播。".into());
         }
+        let operation_ticket = app
+            .state::<production_exit::ExitGate>()
+            .presentation_ticket()?;
         let host = app.clone();
         tauri::async_runtime::spawn_blocking({
             let command_log = command_log.clone();
@@ -298,6 +313,9 @@ pub(crate) async fn finish(
                     native_trigger.as_deref(),
                     || {
                         host.state::<EntryIntent>().cancel_all();
+                        let _operation = crate::observer_workspace::operation()?;
+                        host.state::<production_exit::ExitGate>()
+                            .check_ticket(operation_ticket)?;
                         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
                         let mut cs2 = managed.lock().map_err(|error| {
                             command_log.preserve_error(

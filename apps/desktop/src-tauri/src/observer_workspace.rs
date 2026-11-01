@@ -11,6 +11,19 @@ use tauri::Manager;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static OPERATION: Mutex<()> = Mutex::new(());
 
+// Session mutations and observer operations always acquire this before ManagedCs2.
+pub(crate) fn operation() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    OPERATION
+        .lock()
+        .map_err(|_| "游戏与观察辅助操作状态不可用。".into())
+}
+pub(crate) fn cleanup_operation() -> std::sync::MutexGuard<'static, ()> {
+    OPERATION.lock().unwrap_or_else(|error| error.into_inner())
+}
+pub(crate) fn try_operation() -> Option<std::sync::MutexGuard<'static, ()>> {
+    OPERATION.try_lock().ok()
+}
+
 fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = production_exit::runtime_token(log)?;
     let timeout = if body["action"] == "pulse" { 1 } else { 18 };
@@ -43,14 +56,8 @@ fn stop_inner(log: &DesktopLog, force: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub fn stop(log: &DesktopLog) -> Result<(), String> {
-    let _operation = OPERATION.lock().map_err(|_| "观察辅助状态不可用。")?;
-    stop_inner(log, false)
-}
-
-/// End game automation only at the production/control boundary, independently of auxiliary enablement.
-pub fn finish(log: &DesktopLog) -> Result<(), String> {
-    let _operation = OPERATION.lock().unwrap_or_else(|error| error.into_inner());
+/// The caller holds the game/observer operation lock.
+pub fn finish_locked(log: &DesktopLog) -> Result<(), String> {
     let observer = stop_inner(log, false);
     let hud = crate::observer_hud::restore(log);
     production_exit::cleanup_results(observer, hud)
@@ -99,7 +106,7 @@ fn verify_session(
     Ok(())
 }
 
-pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
+pub fn pulse_locked(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
     if !ACTIVE.load(Ordering::Acquire) {
         return;
     }
@@ -112,13 +119,13 @@ pub fn pulse(app: &tauri::AppHandle, cs2: &managed_cs2::ManagedCs2) {
     let result = if valid {
         request(&log, serde_json::json!({"action":"pulse"})).and_then(|value| {
             if value["enabled"] == false {
-                stop(&log)
+                stop_inner(&log, false)
             } else {
                 Ok(())
             }
         })
     } else {
-        stop(&log)
+        stop_inner(&log, false)
     };
     if let Err(error) = result {
         log.event("observer_lease", "failure", Some(&error));
@@ -159,15 +166,14 @@ pub async fn observer_command(
                 return Ok(());
             }
             if action == "stop" {
-                let _operation = OPERATION.lock().map_err(|_| "观察辅助状态不可用。")?;
+                let _operation = cleanup_operation();
                 return stop_inner(&log, true);
             }
             if action == "restore-hud" {
                 app.state::<production_exit::ExitGate>().check()?;
                 app.state::<crate::updates::PendingUpdate>().check()?;
-                let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let _cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                let _operation = OPERATION.lock().map_err(|_| "观察辅助状态不可用。")?;
+                let _operation = operation()?;
+                app.state::<production_exit::ExitGate>().check()?;
                 return crate::observer_hud::restore(&log);
             }
             if action == "preflight" {
@@ -185,6 +191,8 @@ pub async fn observer_command(
             if !app.state::<crate::host_state::HostState>().visible.load(Ordering::Acquire) {
                 return Err("请打开制播工作台后连接早源。".into());
             }
+            let _operation = operation()?;
+            app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
             let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
             let (context, game) = cs2.console_source()?.ok_or("请先从工作台启动或接入 CS2。")?;
@@ -192,7 +200,6 @@ pub async fn observer_command(
             let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
             let use_mulnx = action == "start-configured" && crate::mulnx_launch::observer_control_available(&cs2, &log);
             drop(cs2);
-            let _operation = OPERATION.lock().map_err(|_| "观察辅助状态不可用。")?;
             let verify = || verify_session(&app, ticket, &context, &game);
             verify()?;
             if action == "start-configured" {

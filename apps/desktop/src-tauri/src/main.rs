@@ -1612,16 +1612,16 @@ fn run_desktop(
                         retired_workspace = None;
                     }
                     if cs2_check.elapsed() >= Duration::from_secs(2) {
-                        if let Ok(mut cs2) =
-                            host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
-                        {
+                        if let Some(_operation) = observer_workspace::try_operation() {
+                          if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
                             cs2.poll();
-                            observer_workspace::pulse(&host, &cs2);
+                            observer_workspace::pulse_locked(&host, &cs2);
                             workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
                                 tracker.preserve_settings = cs2.preserve_settings();
                                 tracker.set_owner(cs2.workspace_process().ok().flatten());
                             }
+                          }
                         }
                         cs2_check = Instant::now();
                     }
@@ -1869,6 +1869,7 @@ fn run_desktop(
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
+                    let _operation = observer_workspace::cleanup_operation();
                     let state = cleanup_host.state::<Mutex<managed_cs2::ManagedCs2>>();
                     let mut cs2 = state.lock().map_err(|_| "CS2 配置状态不可用。")?;
                     let service_stopped = cleanup_host
@@ -1902,7 +1903,9 @@ fn run_desktop(
                             {
                                 observer_hud::restore(&cleanup_host.state::<DesktopLog>())
                             } else {
-                                observer_workspace::finish(&cleanup_host.state::<DesktopLog>())
+                                observer_workspace::finish_locked(
+                                    &cleanup_host.state::<DesktopLog>(),
+                                )
                             }
                         },
                         || {
