@@ -1564,7 +1564,7 @@ impl ManagedCs2 {
         created: u64,
         executable: &Path,
     ) -> Result<(), String> {
-        self.verified_mulnx_process(pid, created, executable)?;
+        let _process = self.verified_mulnx_process(pid, created, executable)?;
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         journal["pid"] = json!(pid);
         journal["created"] = json!(created);
