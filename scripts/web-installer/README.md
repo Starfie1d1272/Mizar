@@ -14,11 +14,11 @@
 
 ## 下载与验证
 
-Native 先读取 Box 的只读 Mizar 资料库、原 v2 更新信封及精确 Setup 文件，核对 Qualification 内嵌的版本、源码、大小和摘要；Box 不可用或不匹配时回退 GitHub 固定版本。此步骤核对公开状态，不能替代来源签名。下载的原 NSIS 全部字节必须符合固定资格身份，执行前再验证。只读 Token 只发往指定 Box API，不随临时文件链接或 GitHub 请求发送。
+Native 读取 Box 的只读 Mizar 资料库、固定版本 Runtime 机器元数据中的原 v2 更新信封及精确 Setup 文件，核对 Qualification 内嵌的版本、源码、大小和摘要；Box 不可用或不匹配时明确失败，不调用 GitHub 匿名 API。固定资产下载仍可使用原 GitHub Release 地址。此步骤核对公开状态，不能替代来源签名。下载的原 NSIS 全部字节必须符合固定资格身份，执行前再验证。只读 Token 只发往指定 Box API，不随临时文件链接或 GitHub 请求发送。
 
 原生后端下载在既有摘要命名的缓存和独占锁内保存 `.part` 与有界运输记录。记录绑定内嵌资格计划的版本、源码、清单摘要、载荷名称、完整 SHA-256 和长度，以及请求来源、最终允许地址和强 ETag；不保存只读 Token。取消与超时同时关闭响应以中断停滞读取；取消、超时或截断等待文件关闭并保留合格 partial，重开同一计划时使用 `Range` / `If-Range` 续传。无强 ETag、损坏记录或不同计划／镜像重新完整下载；最终地址变化、206 范围或 ETag 不匹配、416 清空后有界重试，200 从零覆盖。运输记录与 ETag 只保证续传条件，不能授予来源信任；完整原字节仍须通过固定资格摘要，执行前沿用原锁定文件复验，资源与签名验证继续由原 SDK / Store 负责。
 
-安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 验证原更新清单与正式发布确认的双签名；机器元数据从 Box Runtime/v<应用版本>/machine-metadata.json 或 GitHub 同名附件解出原字节；资源 ZIP 从 Resources/v<应用版本>/ 读取，失败回退 GitHub。运输载体有名称白名单、大小、重复条目和规范编码边界；原目录/出版/归档签名仍交同一 SDK 验证，不建立第二根。现代客户端验证同次 Qualification 对 Full/Core 四份原始清单的精确 subject，并核对版本、源码、派生摘要和 Windows x64 安装包身份后选择 Core；旧 1.1 继续消费原 Full 更新清单。仅 Core 与同一 Store 的官方资源通过验证才显示完成，先验证资源小元数据及缓存原 receipt 和实际内容，缓存不可用时再验证原资源声明与归档的精确签名 subject，之后才请求 ZIP。更新工具在提交 Core 升级前完成同一安装桥；资源准备失败恢复旧程序，Store 保留原可用缓存。Full 保留随包来源，Core 只使用已授权缓存。
+安装后使用已核验 Core 自带的 Node 和原 SDK。StableSource 从 Box Runtime/v<应用版本>/machine-metadata.json 解出该版本原更新清单与正式发布确认，并验证双签名；资源 ZIP 从 Resources/v<应用版本>/ 读取，失败回退 GitHub。运输载体有名称白名单、大小、重复条目和规范编码边界；原目录/出版/归档签名仍交同一 SDK 验证，不建立第二根。现代客户端验证同次 Qualification 对 Full/Core 四份原始清单的精确 subject，并核对版本、源码、派生摘要和 Windows x64 安装包身份后选择 Core；旧 1.1 继续消费原 Full 更新清单。仅 Core 与同一 Store 的官方资源通过验证才显示完成，先验证资源小元数据及缓存原 receipt 和实际内容，缓存不可用时再验证原资源声明与归档的精确签名 subject，之后才请求 ZIP。更新工具在提交 Core 升级前完成同一安装桥；资源准备失败恢复旧程序，Store 保留原可用缓存。Full 保留随包来源，Core 只使用已授权缓存。
 
 Box 生产端先验证原来源证明，镜像推荐 EXE、NSIS 后端、完整 ZIP 和八份资源文件，回读全部原字节并完成历史归档，最后更新 `Updates/latest.json`。资源版本目录只补缺，不覆盖异内容。公开分享使用既有根地址，实际同步状态以版本号和回读结果为准。
 

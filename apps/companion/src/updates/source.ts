@@ -9,7 +9,7 @@ import { BoxSource } from './box.js';
 import type { Bundle, BundleVerifier } from 'sigstore';
 import { createTufVerifier } from '@mizar/resource-pack-contract/attestation';
 import { z } from 'zod';
-import { boundedBytes, updateJson, updateRequest, type UpdateFetch } from './network.js';
+import { boundedBytes, updateRequest, type UpdateFetch } from './network.js';
 import {
   compareVersions,
   UPDATE_REPOSITORY,
@@ -20,22 +20,13 @@ import {
   type UpdateManifest,
 } from './contract.js';
 
-const api = `https://api.github.com/repos/${UPDATE_REPOSITORY}`;
-const assetSchema = z.object({
-  name: z.string(),
-  size: z.number().int().positive(),
-  digest: z.string().nullable(),
-  browser_download_url: z.string(),
-});
-const releaseSchema = z.object({
-  id: z.number().int().positive().optional(),
-  tag_name: z.string(),
-  draft: z.boolean(),
-  prerelease: z.boolean(),
-  published_at: z.string().nullable(),
-  assets: z.array(assetSchema).max(100),
-});
-type Release = z.infer<typeof releaseSchema>;
+type Release = {
+  tag_name: string;
+  draft: false;
+  prerelease: false;
+  published_at: string;
+  assets: never[];
+};
 const attestationSchema = z.object({
   _type: z.literal('https://in-toto.io/Statement/v1'),
   subject: z.array(z.object({ name: z.string(), digest: z.object({ sha256: z.string() }) })),
@@ -103,7 +94,6 @@ export class StableSource {
   constructor(
     private readonly cachePath: string,
     private readonly fetcher: UpdateFetch = globalThis.fetch,
-    private readonly sourceMode: 'auto' | 'github' = 'auto',
     private readonly diagnostic?: (stage: string, error: unknown, durationMs?: number) => void,
   ) {}
   private async verifier(identity: string, signal: AbortSignal): Promise<BundleVerifier> {
@@ -190,23 +180,16 @@ export class StableSource {
     if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
     return manifest;
   }
-  private async selectCore(
-    manifest: UpdateManifest,
-    signal: AbortSignal,
-    carrier?: Buffer,
-    sourceMode = this.sourceMode,
-  ) {
+  private async selectCore(manifest: UpdateManifest, signal: AbortSignal, carrier?: Buffer) {
     if (compareVersions(manifest.version, '1.2.0') < 0) return manifest;
     if (!carrier) {
-      if (sourceMode === 'auto') {
-        try {
-          carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
-            new BoxSource(this.fetcher).machine(manifest.version, deadline),
-          );
-        } catch (error) {
-          this.diagnostic?.('box_core_fallback', error);
-          signal.throwIfAborted();
-        }
+      try {
+        carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
+          new BoxSource(this.fetcher).machine(manifest.version, deadline),
+        );
+      } catch (error) {
+        this.diagnostic?.('box_core_fallback', error);
+        signal.throwIfAborted();
       }
       carrier ??= await boundedBytes(
         await updateRequest(
@@ -284,158 +267,42 @@ export class StableSource {
   }
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
     this.mirrorCandidate = undefined;
-    try {
-      if (this.sourceMode === 'github') throw new Error('update_github_transport');
-      const attempt = signal;
-      const box = new BoxSource(this.fetcher);
-      const { manifest, publication } = await this.authenticateIndex(
-        await this.phase('box_metadata', attempt, 15_000, (deadline) => box.metadata(deadline)),
-        attempt,
-      );
-      if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
-        throw new Error('update_mirror_unavailable');
-      const release = {
-        tag_name: `v${manifest.version}`,
-        draft: false,
-        prerelease: false,
-        published_at: publication.publishedAt,
-        assets: [],
-      };
-      // A valid signature proves origin, not freshness. A reachable but stale
-      // mirror must not hide a newer official release from a first-time client.
-      // GitHub failure leaves the authenticated mirror usable in China.
-      try {
-        const official = await this.phase('github_freshness', signal, 15_000, (deadline) =>
-          this.githubLatest(deadline),
-        );
-        if (official && compareVersions(official.tag_name.slice(1), manifest.version) > 0)
-          return official;
-      } catch (error) {
-        this.diagnostic?.('github_freshness_unavailable', error);
-        signal.throwIfAborted();
-      }
-      this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, attempt) };
-      return release;
-    } catch (error) {
-      if (this.sourceMode !== 'github') this.diagnostic?.('box_metadata_fallback', error);
-      signal.throwIfAborted();
-      // Both transports need the same Sigstore trust service. Switching to
-      // GitHub cannot repair its failure and would obscure it with API limits.
-      if (error instanceof Error && error.message === 'update_trust_metadata_failed') throw error;
-    }
-    return this.phase('github_metadata', signal, 15_000, (deadline) => this.githubLatest(deadline));
-  }
-  private async githubLatest(signal: AbortSignal): Promise<Release | null> {
-    // 'latest' alone can select a release by publication date rather than SemVer.
-    const values: Release[] = [];
-    for (let page = 1; ; page++) {
-      const batch = z
-        .array(releaseSchema)
-        .max(100)
-        .parse(
-          await updateJson(
-            `${api}/releases?per_page=100&page=${page}`,
-            signal,
-            this.fetcher,
-            2 * 1024 * 1024,
-          ),
-        );
-      values.push(...batch);
-      if (batch.length < 100) break;
-      if (page === 10) throw new Error('update_release_list_too_large');
-    }
-    const releases = values.filter(
-      (r) =>
-        !r.draft &&
-        !r.prerelease &&
-        r.published_at &&
-        /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(r.tag_name),
+    const { manifest, publication } = await this.authenticateIndex(
+      await this.phase('box_metadata', signal, 15_000, (deadline) =>
+        new BoxSource(this.fetcher).metadata(deadline),
+      ),
+      signal,
     );
-    releases.sort((a, b) => compareVersions(b.tag_name.slice(1), a.tag_name.slice(1)));
-    return releases[0] ?? null;
+    if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
+      throw new Error('update_mirror_unavailable');
+    const release: Release = {
+      tag_name: 'v' + manifest.version,
+      draft: false,
+      prerelease: false,
+      published_at: publication.publishedAt,
+      assets: [],
+    };
+    this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, signal) };
+    return release;
   }
   async authenticate(release: Release, signal: AbortSignal): Promise<UpdateManifest> {
-    if (release === this.mirrorCandidate?.release) {
-      signal.throwIfAborted();
-      return this.mirrorCandidate.manifest;
-    }
-    let manifest: UpdateManifest;
-    let carrier: Buffer | undefined;
-    const carriers = release.assets.filter((asset) => asset.name === MACHINE_METADATA_NAME);
-    const indices = carriers.length
-      ? carriers
-      : release.assets.filter((asset) => asset.name === 'update-index.json');
-    const indexName = carriers.length ? MACHINE_METADATA_NAME : 'update-index.json';
-    const maximum = carriers.length ? MACHINE_METADATA_MAX_BYTES : 2 * 1024 * 1024;
-    if (indices.length) {
-      const asset = indices[0]!;
-      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/${indexName}`;
-      if (indices.length !== 1 || asset.size > maximum || asset.browser_download_url !== url)
-        throw new Error('update_asset_invalid');
-      const bytes = await boundedBytes(await updateRequest(url, signal, this.fetcher), maximum);
-      if (
-        bytes.length !== asset.size ||
-        asset.digest !== `sha256:${createHash('sha256').update(bytes).digest('hex')}`
-      )
-        throw new Error('update_metadata_corrupt');
-      if (carriers.length) carrier = bytes;
-      const authenticated = await this.authenticateIndex(
-        carriers.length ? readMachineFile(bytes, 'update-index.json') : bytes,
-        signal,
-      );
-      if (
-        authenticated.publication.releaseId !== release.id ||
-        authenticated.publication.publishedAt !== release.published_at
-      )
-        throw new Error('update_publication_mismatch');
-      manifest = authenticated.manifest;
-    } else {
-      const metas = release.assets.filter((a) => a.name === 'update-manifest.json');
-      if (metas.length !== 1 || metas[0]!.size > 64 * 1024)
-        throw new Error('update_metadata_missing');
-      const meta = metas[0]!;
-      const url = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${release.tag_name}/update-manifest.json`;
-      if (meta.browser_download_url !== url) throw new Error('update_asset_invalid');
-      const bytes = await boundedBytes(await updateRequest(url, signal, this.fetcher), 64 * 1024);
-      const sha = createHash('sha256').update(bytes).digest('hex');
-      if (meta.size !== bytes.length || meta.digest !== `sha256:${sha}`)
-        throw new Error('update_metadata_corrupt');
-      const bundles = z
-        .object({
-          attestations: z
-            .array(z.object({ bundle: z.unknown() }))
-            .min(1)
-            .max(20),
-        })
-        .parse(
-          await updateJson(
-            `${api}/attestations/sha256:${sha}?per_page=20`,
-            signal,
-            this.fetcher,
-            2 * 1024 * 1024,
-          ),
-        );
-      manifest = await this.verify(
-        bytes,
-        bundles.attestations.map((e) => e.bundle as Bundle),
-        signal,
-      );
-    }
-    if (`v${manifest.version}` !== release.tag_name) throw new Error('update_tag_mismatch');
-    const tag = z
-      .object({ object: z.object({ type: z.literal('commit'), sha: z.string() }) })
-      .parse(await updateJson(`${api}/git/ref/tags/${release.tag_name}`, signal, this.fetcher));
-    if (tag.object.sha !== manifest.gitSha) throw new Error('update_source_mismatch');
-    manifest = await this.selectCore(manifest, signal, carrier, 'github');
-    const assets = release.assets.filter((a) => a.name === manifest.installer.name);
-    if (
-      assets.length !== 1 ||
-      assets[0]!.size !== manifest.installer.bytes ||
-      assets[0]!.digest !== `sha256:${manifest.installer.sha256}` ||
-      assets[0]!.browser_download_url !== installerUrl(manifest)
-    )
-      throw new Error('update_asset_mismatch');
-    return manifest;
+    signal.throwIfAborted();
+    if (release !== this.mirrorCandidate?.release) throw new Error('update_metadata_missing');
+    return this.mirrorCandidate.manifest;
+  }
+  /** Fixed-version installers authenticate that version's original dual-signed index. */
+  async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
+      throw new Error('update_version_invalid');
+    const carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
+      new BoxSource(this.fetcher).machine(version, deadline),
+    );
+    const { manifest } = await this.authenticateIndex(
+      readMachineFile(carrier, 'update-index.json'),
+      signal,
+    );
+    if (manifest.version !== version) throw new Error('update_tag_mismatch');
+    return this.selectCore(manifest, signal, carrier);
   }
 }
 export function installerUrl(manifest: UpdateManifest): string {

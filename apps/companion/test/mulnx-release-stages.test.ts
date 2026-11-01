@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({
   candidate: null as null | typeof release,
   hash: null as null | string,
   fail: false,
+  checkedAt: null as string | null,
 }));
 const release = {
   id: 1,
@@ -19,7 +20,15 @@ const release = {
   sha256: 'a'.repeat(64),
 };
 vi.mock('../src/orchestration/tool-mirror.js', () => ({
-  readMulnxMirror: () => Promise.reject(new Error('mirror unavailable')),
+  readMulnxMirror: () =>
+    fixture.fail
+      ? Promise.reject(new Error('mirror unavailable'))
+      : Promise.resolve({
+          release: fixture.candidate ?? release,
+          checkedAt: fixture.checkedAt ?? new Date().toISOString(),
+        }),
+  mirrorNotice: () => Promise.resolve('notice'),
+  mirrorArchive: () => Promise.resolve(new Response('x')),
   sameMulnxAsset: (a: typeof release, b: typeof release) =>
     a.id === b.id &&
     a.assetId === b.assetId &&
@@ -29,15 +38,9 @@ vi.mock('../src/orchestration/tool-mirror.js', () => ({
 }));
 vi.mock('../src/orchestration/tool-release.js', () => ({
   SEVEN_ZIP: { sha256: 'extractor' },
-  metadataRetryAt: () => null,
-  latestMulnxRelease: () =>
-    fixture.fail
-      ? Promise.reject(new Error('upstream unavailable'))
-      : Promise.resolve(fixture.candidate ?? release),
   fileSha256: (path: string) =>
     Promise.resolve(path.endsWith('7zr.exe') ? 'extractor' : (fixture.hash ?? release.sha256)),
   downloadVerified: async (_url: string, path: string) => writeFile(path, 'x'),
-  upstreamNotice: () => Promise.resolve('notice'),
   extractMulnx: async (_extractor: string, _archive: string, destination: string) => {
     const root = join(destination, 'MulNX');
     await mkdir(join(root, 'Config'), { recursive: true });
@@ -87,7 +90,21 @@ afterEach(async () => {
   fixture.candidate = null;
   fixture.hash = null;
   fixture.fail = false;
+  fixture.checkedAt = null;
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+it('rejects stale mirror discovery and update preparation without an upstream fallback', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-stale-'));
+  roots.push(root);
+  fixture.checkedAt = new Date(Date.now() - 7 * 60 * 60_000).toISOString();
+  const tool = new MulnxTool(join(root, 'mulnx'), join(root, 'bundle'));
+  await tool.load();
+  await expect(tool.check()).rejects.toThrow('mulnx_metadata_stale');
+  expect(tool.view()).toMatchObject({
+    checkResult: 'error',
+    confirmedAt: Date.parse(fixture.checkedAt),
+  });
+  await expect(tool.prepareRelease()).rejects.toThrow('mulnx_metadata_stale');
 });
 it('prepares without selecting and publishes a configured instance only after selection succeeds', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-stages-'));

@@ -29,11 +29,7 @@ import {
   downloadVerified,
   extractMulnx,
   fileSha256,
-  latestMulnxRelease,
-  publicJson,
-  metadataRetryAt,
   SEVEN_ZIP,
-  upstreamNotice,
   type MulnxRelease,
 } from './tool-release.js';
 
@@ -130,7 +126,7 @@ export class MulnxTool {
       phase: this.phase,
       checkedAt: this.checkedAt,
       confirmedAt: this.confirmedAt,
-      retryAt: this.checkResult === 'error' ? metadataRetryAt() : null,
+      retryAt: null,
       checkResult: this.checkResult,
       downloadedBytes: this.downloadedBytes,
       totalBytes: this.downloadTotal,
@@ -370,7 +366,7 @@ export class MulnxTool {
     this.pending = task;
     return task;
   }
-  private async resolveRelease(fresh = false) {
+  private async resolveRelease() {
     let mirror: MulnxMirror | undefined;
     try {
       mirror = await readMulnxMirror(join(dirname(this.directory), 'updates', 'trust'));
@@ -381,39 +377,12 @@ export class MulnxTool {
       });
     } catch (error) {
       this.diagnostic('mulnx_mirror_check', { result: 'failure', error });
+      throw error;
     }
     const mirrorFresh = Boolean(
       mirror && Date.now() - Date.parse(mirror.checkedAt) <= 6 * 60 * 60_000,
     );
-    let upstream: MulnxRelease | undefined;
-    if (!mirrorFresh) {
-      try {
-        upstream = await latestMulnxRelease((url) => publicJson(url, fresh));
-        this.diagnostic('mulnx_upstream_check', { result: 'success', version: upstream.tag });
-      } catch (error) {
-        this.diagnostic('mulnx_upstream_check', {
-          result: 'failure',
-          error,
-          retryAt: metadataRetryAt(),
-        });
-        if (
-          !mirror ||
-          (error instanceof Error && error.message === 'mulnx_latest_release_incomplete')
-        )
-          throw error;
-      }
-    } else {
-      this.diagnostic('mulnx_upstream_check', { result: 'skipped', reason: 'fresh_signed_index' });
-    }
-    if (
-      upstream &&
-      mirror &&
-      upstream.id === mirror.release.id &&
-      upstream.assetId === mirror.release.assetId &&
-      !sameMulnxAsset(upstream, mirror.release)
-    )
-      throw new Error('mulnx_identity_changed');
-    const release = upstream ?? mirror!.release;
+    const release = mirror.release;
     let highest: MulnxRelease | undefined;
     try {
       highest = releaseSchema.parse(await readJson(this.directory, 'highest.json'));
@@ -435,8 +404,8 @@ export class MulnxTool {
     if (!highest || !sameMulnxAsset(highest, release))
       await atomicJson(join(this.directory, 'highest.json'), release);
     this.mirror = mirror && sameMulnxAsset(release, mirror.release) ? mirror : undefined;
-    const recentlyChecked = Boolean(upstream || mirrorFresh);
-    this.confirmedAt = upstream ? Date.now() : Date.parse(mirror!.checkedAt);
+    const recentlyChecked = mirrorFresh;
+    this.confirmedAt = Date.parse(mirror.checkedAt);
     this.latest = release;
     this.checkedAt = Date.now();
     this.checkResult = !recentlyChecked
@@ -444,6 +413,7 @@ export class MulnxTool {
       : this.installed && sameMulnxAsset(this.installed.release, release)
         ? 'current'
         : 'available';
+    if (!recentlyChecked) throw new Error('mulnx_metadata_stale');
     return { release, recentlyChecked };
   }
   check() {
@@ -514,7 +484,7 @@ export class MulnxTool {
       const preparingBundle = !update && !this.installed;
       try {
         const release = update
-          ? (await this.resolveRelease(true)).release
+          ? (await this.resolveRelease()).release
           : (this.installed?.release ??
             z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
               .release);
@@ -695,7 +665,7 @@ export class MulnxTool {
   prepareRelease(update = true) {
     return this.run('mulnx_prepare_release', async () => {
       const release = update
-        ? (await this.resolveRelease(true)).release
+        ? (await this.resolveRelease()).release
         : z.object({ release: releaseSchema }).parse(await readJson(this.bundle, 'release.json'))
             .release;
       return this.prepareReleaseFiles(release);
@@ -834,19 +804,10 @@ export class MulnxTool {
           const content = usingBundle
             ? await readFile(await safePath(this.bundle, `MulNX-${name}`))
             : this.mirror && sameMulnxAsset(this.mirror.release, release)
-              ? await mirrorNotice(this.mirror, name as keyof MulnxMirror['notices']).catch(
-                  async () => {
-                    const upstream = await upstreamNotice(name, release.tag);
-                    const expected = this.mirror!.notices[name as keyof MulnxMirror['notices']];
-                    if (
-                      upstream.length !== expected.size ||
-                      createHash('sha256').update(upstream).digest('hex') !== expected.sha256
-                    )
-                      throw new Error('mulnx_notice_integrity');
-                    return upstream;
-                  },
-                )
-              : await upstreamNotice(name, release.tag);
+              ? await mirrorNotice(this.mirror, name as keyof MulnxMirror['notices'])
+              : (() => {
+                  throw new Error('mulnx_mirror_unavailable');
+                })();
           await writeFile(join(notices, name), content, { flag: 'wx' });
         }),
       );

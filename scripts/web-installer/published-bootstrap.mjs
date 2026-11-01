@@ -1,6 +1,4 @@
 import { StableSource, installerUrl } from '../updates/source.js';
-import { updateJson } from '../updates/network.js';
-import { logBootstrapFallback } from './resource-mirror.mjs';
 import { authenticatePublishedResource } from '../distribution/resources.js';
 import { createActivePolicyVerifier } from '../resource-store/runtime-adapter.js';
 import { PACK_ID } from '@mizar/resource-pack-contract';
@@ -9,38 +7,19 @@ import {
   verifyResourceCatalogReceipt,
 } from '@mizar/resource-pack-contract/runtime';
 
-const repository = 'Starfie1d1272/Mizar';
 /** Authenticate the existing Core update chain, then both original resource directory proofs. */
 export async function authenticatePublishedBootstrap(options) {
   const signal = globalThis.AbortSignal.any([
     options.signal ?? new globalThis.AbortController().signal,
     globalThis.AbortSignal.timeout(600000),
   ]);
-  let manifest;
-  let sourceMode = 'auto';
-  try {
-    manifest = await authenticateBootstrapSource({ ...options, signal, sourceMode });
-  } catch (mirrorError) {
-    logBootstrapFallback('bootstrap authentication fallback', mirrorError);
-    signal.throwIfAborted();
-    sourceMode = 'github';
-    try {
-      manifest = await authenticateBootstrapSource({ ...options, signal, sourceMode });
-    } catch (githubError) {
-      throw new AggregateError([mirrorError, githubError], 'Bootstrap core authentication failed', {
-        cause: githubError,
-      });
-    }
-  }
-  const { authorization, loadVerified } = await authenticatePublishedResource(
-    {
-      core: { appVersion: manifest.version, gitSha: manifest.gitSha },
-      tufCachePath: options.tufCachePath,
-      signal,
-      fetcher: options.fetcher,
-    },
-    sourceMode,
-  );
+  const manifest = await authenticateBootstrapSource({ ...options, signal });
+  const { authorization, loadVerified } = await authenticatePublishedResource({
+    core: { appVersion: manifest.version, gitSha: manifest.gitSha },
+    tufCachePath: options.tufCachePath,
+    signal,
+    fetcher: options.fetcher,
+  });
   const identity = getResourceAuthorization(authorization);
   if (options.expectedCore && identity.core.archiveSha256 !== options.expectedCore.coreSha256)
     throw new Error('Published Core archive differs from the fixed native qualification identity');
@@ -63,29 +42,20 @@ async function authenticateBootstrapSource({
   tufCachePath,
   fetcher = globalThis.fetch,
   expectedCore,
-  sourceMode,
   signal = new globalThis.AbortController().signal,
 }) {
   signal = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(600000)]);
   if (version !== undefined && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
     throw new Error('Bootstrap version must be an exact Stable version');
-  const source = new StableSource(tufCachePath, fetcher, sourceMode);
-  let selected = await source.latest(signal, version);
-  if (version !== undefined && selected?.tag_name !== `v${version}`) {
-    selected = await updateJson(
-      `https://api.github.com/repos/${repository}/releases/tags/v${version}`,
-      signal,
-      fetcher,
-    );
-  }
-  if (
-    !selected ||
-    selected.draft !== false ||
-    selected.prerelease !== false ||
-    typeof selected.published_at !== 'string'
-  )
-    throw new Error('Bootstrap requires a published Stable release');
-  const manifest = await source.authenticate(selected, signal);
+  const source = new StableSource(tufCachePath, fetcher);
+  const selected = version === undefined ? await source.latest(signal) : null;
+  const manifest =
+    version !== undefined
+      ? await source.authenticateVersion(version, signal)
+      : selected
+        ? await source.authenticate(selected, signal)
+        : null;
+  if (!manifest) throw new Error('Bootstrap requires a published Stable release');
   if (
     expectedCore &&
     (manifest.version !== expectedCore.version ||

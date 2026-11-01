@@ -5,8 +5,6 @@ export type UpdateFetch = typeof globalThis.fetch;
 export function allowedUpdateUrl(url: URL): boolean {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash)
     return false;
-  if (url.hostname === 'api.github.com')
-    return url.pathname.startsWith(`/repos/${UPDATE_REPOSITORY}/`);
   if (url.hostname === 'github.com')
     return url.pathname.startsWith(`/${UPDATE_REPOSITORY}/releases/download/`);
   if (url.hostname === 'release-assets.githubusercontent.com') return true;
@@ -57,7 +55,7 @@ export async function updateRequest(
         )
           ? { Authorization: `Token ${BOX_READ_TOKEN}` }
           : {}),
-        Accept: url.hostname === 'api.github.com' ? 'application/vnd.github+json' : '*/*',
+        Accept: '*/*',
         ...(options?.rangeEnd !== undefined ? { Range: `bytes=0-${options.rangeEnd}` } : {}),
         'User-Agent': 'Mizar-Stable-Updater',
       },
