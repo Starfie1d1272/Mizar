@@ -36,6 +36,9 @@ impl ExitGate {
         self.generation.fetch_add(1, Ordering::AcqRel);
         true
     }
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.active.load(Ordering::Acquire) {
             Err("Mizar 正在退出，请完成收尾后再启动。".into())

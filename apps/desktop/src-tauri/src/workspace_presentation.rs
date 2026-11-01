@@ -635,6 +635,10 @@ pub(crate) fn show_workspace(app: &tauri::AppHandle) {
         state.visible.store(true, Ordering::Release);
     }
     sync_workspace_shell(app);
+    state.layout_request_generation.store(
+        app.state::<production_exit::ExitGate>().generation(),
+        Ordering::Release,
+    );
     state.layout_dirty.store(true, Ordering::Release);
     for label in ["workspace-left", "workspace-dock"] {
         if let Some(window) = app.get_webview_window(label) {
@@ -991,6 +995,10 @@ pub(crate) fn restore_layout(
         app.state::<production_exit::ExitGate>()
             .check()
             .map_err(|error| serde_json::json!(error))?;
+        state.layout_request_generation.store(
+            app.state::<production_exit::ExitGate>().generation(),
+            Ordering::Release,
+        );
         state.layout_request.fetch_add(1, Ordering::AcqRel);
         state.layout_dirty.store(true, Ordering::Release);
         Ok("queued")

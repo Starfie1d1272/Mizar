@@ -13,6 +13,7 @@ pub(crate) struct HostState {
     pub(crate) entry_message: Mutex<String>,
     pub(crate) layout_dirty: Arc<AtomicBool>,
     pub(crate) layout_request: AtomicU64,
+    pub(crate) layout_request_generation: AtomicU64,
     pub(crate) layout_completed: AtomicU64,
     pub(crate) running: Arc<AtomicBool>,
     pub(crate) live_window_lock: Mutex<()>,

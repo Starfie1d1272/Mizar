@@ -1435,6 +1435,7 @@ fn run_desktop(
         entry_message: Mutex::new(String::new()),
         layout_dirty: Arc::new(AtomicBool::new(false)),
         layout_request: AtomicU64::new(0),
+        layout_request_generation: AtomicU64::new(0),
         layout_completed: AtomicU64::new(0),
         running: running.clone(),
         live_window_lock: Mutex::new(()),
@@ -1584,7 +1585,30 @@ fn run_desktop(
             let pending = Arc::new(AtomicBool::new(false));
             let worker = thread::spawn(move || {
                 let mut cs2_check = Instant::now() - Duration::from_secs(2);
+                let mut exit_generation = host.state::<production_exit::ExitGate>().generation();
+                let mut retired_workspace = None;
                 while worker_running.load(Ordering::Relaxed) {
+                    let next_exit = host.state::<production_exit::ExitGate>().generation();
+                    if next_exit != exit_generation {
+                        if let Ok(mut tracker) = worker_tracker.lock() {
+                            tracker.retire_layout();
+                            exit_generation = next_exit;
+                            retired_workspace = Some(host.state::<HostState>().workspace_epoch.load(Ordering::Acquire));
+                            if host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) != next_exit {
+                                worker_layout_dirty.store(false, Ordering::Release);
+                                if host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) == next_exit {
+                                    worker_layout_dirty.store(true, Ordering::Release);
+                                }
+                            }
+                        }
+                    }
+                    if retired_workspace.is_some_and(|epoch| epoch != host.state::<HostState>().workspace_epoch.load(Ordering::Acquire))
+                        || (worker_layout_dirty.load(Ordering::Acquire)
+                            && host.state::<HostState>().layout_request_generation.load(Ordering::Acquire) == exit_generation
+                            && host.state::<production_exit::ExitGate>().check().is_ok())
+                    {
+                        retired_workspace = None;
+                    }
                     if cs2_check.elapsed() >= Duration::from_secs(2) {
                         if let Ok(mut cs2) =
                             host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock()
@@ -1609,6 +1633,7 @@ fn run_desktop(
                             && !exit_signal.requested()
                             && host.state::<production_exit::ExitGate>().check().is_ok()
                             && host.state::<cs2_activity::Activity>().phase() == "idle"
+                            && retired_workspace.is_none()
                     };
                     let process = if allowed() {
                         host.state::<Mutex<managed_cs2::ManagedCs2>>()

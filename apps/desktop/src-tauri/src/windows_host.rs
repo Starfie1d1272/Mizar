@@ -438,6 +438,11 @@ impl GameTracker {
         }
         (owner.is_running() && owner.pid == window.pid && pid == window.pid).then_some(window)
     }
+    pub fn retire_layout(&mut self) {
+        self.frame = None;
+        self.managed = false;
+        self.alignment_retries = 0;
+    }
     pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
         self.owner = owner.filter(|process| process.is_running());
     }
@@ -567,15 +572,29 @@ impl GameTracker {
         }
         if let Some(window) = self.window {
             if self.frame.is_none() {
-                self.frame = crate::window_frame::GameFrame::capture(window.hwnd, window.pid);
+                self.frame = self
+                    .owner
+                    .as_ref()
+                    .filter(|owner| owner.pid == window.pid && owner.is_running())
+                    .and_then(|owner| {
+                        crate::window_frame::GameFrame::capture(window.hwnd, owner.clone())
+                    });
             }
             if let Some(frame) = &self.frame {
                 frame.apply();
             }
         }
-        let alignment = self
-            .window
-            .map(|window| align_cs2(window, layout.game, correcting));
+        let alignment = self.window.map(|window| {
+            if self.frame.is_none() {
+                Err(AlignmentFailure {
+                    stage: "frame_capture",
+                    api: None,
+                    last_error: None,
+                })
+            } else {
+                align_cs2(window, layout.game, correcting)
+            }
+        });
         self.managed = matches!(alignment, Some(Ok(())));
         self.alignment_failure = alignment.and_then(Result::err);
         if let Some(window) = self.window.filter(|_| self.managed) {

@@ -1,9 +1,19 @@
 //! Window-local chrome only; never changes desktop or Steam preferences.
 use std::ffi::c_void;
 
+#[repr(C)]
+#[derive(Default)]
+struct WindowRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
 #[link(name = "user32")]
 extern "system" {
     fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
+    fn GetWindowRect(hwnd: isize, rect: *mut WindowRect) -> i32;
     fn SetWindowLongW(hwnd: isize, index: i32, value: i32) -> i32;
     fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
@@ -34,28 +44,33 @@ pub fn square_window(hwnd: isize) {
 
 pub struct GameFrame {
     hwnd: isize,
-    pid: u32,
+    process: crate::managed_cs2::WorkspaceProcess,
     style: i32,
+    original: WindowRect,
     corner: Option<u32>,
     border: Option<u32>,
 }
 impl GameFrame {
-    pub fn capture(hwnd: isize, pid: u32) -> Option<Self> {
+    pub fn capture(hwnd: isize, process: crate::managed_cs2::WorkspaceProcess) -> Option<Self> {
         let style = unsafe { GetWindowLongW(hwnd, -16) };
-        (style != 0).then(|| Self {
-            hwnd,
-            pid,
-            style,
-            corner: attribute(hwnd, CORNER),
-            border: attribute(hwnd, BORDER),
-        })
+        let mut original = WindowRect::default();
+        let measured = unsafe { GetWindowRect(hwnd, &mut original) } != 0;
+        (style != 0 && measured && original.right > original.left && original.bottom > original.top)
+            .then(|| Self {
+                hwnd,
+                process,
+                style,
+                original,
+                corner: attribute(hwnd, CORNER),
+                border: attribute(hwnd, BORDER),
+            })
     }
     fn exists(&self) -> bool {
         let mut pid = 0;
         unsafe {
             GetWindowThreadProcessId(self.hwnd, &mut pid);
         }
-        pid == self.pid
+        self.process.is_running() && pid == self.process.pid
     }
     pub fn apply(&self) {
         if !self.exists() {
@@ -78,7 +93,15 @@ impl Drop for GameFrame {
         }
         unsafe {
             SetWindowLongW(self.hwnd, -16, self.style);
-            SetWindowPos(self.hwnd, 0, 0, 0, 0, 0, 0x4037);
+            SetWindowPos(
+                self.hwnd,
+                0,
+                self.original.left,
+                self.original.top,
+                self.original.right - self.original.left,
+                self.original.bottom - self.original.top,
+                0x4034,
+            );
         }
         if let Some(value) = self.corner {
             set_attribute(self.hwnd, CORNER, value);
