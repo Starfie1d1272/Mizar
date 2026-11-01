@@ -44,10 +44,7 @@ export function OperatorShell({
 }) {
   return (
     <DesktopCanvas kind="product">
-      <div
-        className="product-shell mizar-surface"
-        data-settings={active === '/settings' || active === '/packages' || undefined}
-      >
+      <div className="product-shell mizar-surface">
         <a className="product-skip" href="#product-content">
           跳到主要内容
         </a>
