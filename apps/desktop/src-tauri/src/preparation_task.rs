@@ -110,9 +110,10 @@ fn claim_cancellation(id: &str) -> Result<CancellationClaim, String> {
     if task.entered {
         return Err("制作已进入，请退出工作台。".into());
     }
-    if task.cancellation_confirmed {
+    if task.cancellation_confirmed && task.video_transaction.is_none() {
         return Ok(CancellationClaim::Complete);
     }
+    task.cancellation_confirmed = false;
     task.cancelled = true;
     let flight = Arc::new(CancellationFlight::default());
     task.cancellation = Some(flight.clone());
@@ -697,7 +698,7 @@ fn preparation_start(
         if existing.running {
             return Err("原准备任务正在取消，请稍后重试。".into());
         }
-        if !existing.cancellation_confirmed {
+        if !existing.cancellation_confirmed || existing.video_transaction.is_some() {
             return Err("原准备任务取消或恢复未确认，请重试取消。".into());
         }
     }
