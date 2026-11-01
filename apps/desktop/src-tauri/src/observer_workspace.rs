@@ -183,7 +183,9 @@ pub async fn observer_command(
             if action == "connection-mode" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.try_lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                automation = Some(crate::mulnx_launch::observer_control_available(&cs2, &log));
+                let game = crate::mulnx_launch::observer_control_snapshot(&cs2, &log);
+                drop(cs2);
+                automation = Some(game.is_some_and(|game| crate::mulnx_launch::observer_gateway_available(&game, &log)));
                 return Ok(());
             }
             if action == "stop" {
@@ -221,8 +223,9 @@ pub async fn observer_command(
             let (context, game) = cs2.console_source()?.ok_or("请先从工作台启动或接入 CS2。")?;
             if !game.is_running() { return Err("请先启动 CS2，再连接观察辅助。".into()); }
             let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
-            let use_mulnx = action == "start-configured" && crate::mulnx_launch::observer_control_available(&cs2, &log);
+            let control_game = if action == "start-configured" { crate::mulnx_launch::observer_control_snapshot(&cs2, &log) } else { None };
             drop(cs2);
+            let use_mulnx = control_game.is_some_and(|game| crate::mulnx_launch::observer_gateway_available(&game, &log));
             let verify = || verify_session(&app, ticket, &context, &game);
             verify()?;
             if action == "start-configured" {
