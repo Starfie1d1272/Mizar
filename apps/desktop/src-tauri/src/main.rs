@@ -1892,6 +1892,10 @@ fn run_desktop(
                             "failure",
                             Some(&format!("gate task: {error}")),
                         );
+                        host.dialog()
+                            .message("退出任务未能开始，请重试并查看运行日志。")
+                            .title("Mizar 退出未完成")
+                            .show(|_| {});
                         return;
                     }
                 }
