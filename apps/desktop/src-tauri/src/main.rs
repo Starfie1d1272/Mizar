@@ -2102,14 +2102,27 @@ async fn enter_demo_test(
 
 #[derive(Default)]
 struct EntryIntentState {
+    document: u64,
     active: Option<String>,
     cancelled: std::collections::HashSet<String>,
 }
 #[derive(Default)]
 struct EntryIntent(Mutex<EntryIntentState>);
 impl EntryIntent {
-    fn begin(&self, id: String) -> Result<(), String> {
+    fn generation(&self) -> Result<String, String> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| "进入状态不可用。")?
+            .document
+            .to_string())
+    }
+    fn begin(&self, id: String, document: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        if document != state.document.to_string() {
+            state.cancelled.remove(&id);
+            return Err("进入页面已变化，请重新进入。".into());
+        }
         if state.cancelled.remove(&id) {
             return Err("进入已取消。".into());
         }
@@ -2140,10 +2153,10 @@ impl EntryIntent {
         }
     }
     fn cancel_all(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .active = None;
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        state.active = None;
+        state.cancelled.clear();
+        state.document = state.document.wrapping_add(1);
     }
     fn commit<T>(
         &self,
@@ -2176,6 +2189,7 @@ fn begin_entry(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     intent_id: String,
+    document: String,
 ) -> Result<(), String> {
     demo_main_window(&window)?;
     if intent_id.len() != 36
@@ -2185,7 +2199,13 @@ fn begin_entry(
     {
         return Err("进入请求无效。".into());
     }
-    app.state::<EntryIntent>().begin(intent_id)
+    app.state::<EntryIntent>().begin(intent_id, &document)
+}
+
+#[tauri::command]
+fn entry_document(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<String, String> {
+    demo_main_window(&window)?;
+    app.state::<EntryIntent>().generation()
 }
 
 #[tauri::command]

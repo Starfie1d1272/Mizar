@@ -29,6 +29,7 @@ export type DesktopCommand =
   | 'select_demo_file'
   | 'start_demo_test'
   | 'resume_demo_test'
+  | 'entry_document'
   | 'cancel_entry_intent'
   | 'finish_demo_test'
   | 'restore_cs2_backup'

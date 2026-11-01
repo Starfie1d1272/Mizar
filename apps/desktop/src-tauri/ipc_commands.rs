@@ -48,6 +48,7 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("select_demo_file", MAIN),
     ("start_demo_test", MAIN),
     ("resume_demo_test", MAIN),
+    ("entry_document", MAIN),
     ("cancel_entry_intent", MAIN),
     ("finish_demo_test", MAIN_AND_WORKSPACE),
     ("restore_cs2_backup", PRODUCT_WINDOWS),

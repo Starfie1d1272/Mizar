@@ -228,6 +228,7 @@ async function enterDesktopWorkspace(
   if (activeEntryId) throw new Error('正在进入工作台，请稍候。');
   if (signal?.aborted) throw new Error('进入已取消。');
   const preparationId = crypto.randomUUID();
+  const location = window.location.href;
   activeEntryId = preparationId;
   const cancel = () =>
     void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
@@ -235,10 +236,13 @@ async function enterDesktopWorkspace(
   window.addEventListener('popstate', cancel);
   signal?.addEventListener('abort', cancel);
   try {
+    const document = await desktopInvoke<string>('entry_document');
+    if (signal?.aborted || window.location.href !== location) throw new Error('进入已取消。');
     await desktopInvoke(
       'enter_workspace',
       {
         preparationId,
+        document,
         expectedRevision: options.expectedRevision ?? null,
         expectedDemoRequest: options.expectedDemoRequest ?? null,
         manual: options.manual ?? false,

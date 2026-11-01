@@ -768,6 +768,7 @@ pub(crate) async fn enter_workspace(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     preparation_id: String,
+    document: String,
     expected_revision: Option<String>,
     expected_demo_request: Option<String>,
     manual: bool,
@@ -785,7 +786,12 @@ pub(crate) async fn enter_workspace(
         .url()
         .map_err(|_| "准备中心页面不可用。")?
         .to_string();
-    begin_entry(window.clone(), app.clone(), preparation_id.clone())?;
+    begin_entry(
+        window.clone(),
+        app.clone(),
+        preparation_id.clone(),
+        document,
+    )?;
     let intent_app = app.clone();
     let intent_id = preparation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
