@@ -1,11 +1,11 @@
 import './desktop-canvas.css';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
-// Preview and product surfaces retain logical coordinates. Native workspace windows
-// use their CSS pixel dimensions, which already account for display scaling.
+// The dock keeps one logical control layout across native display scales.
+// The left panel remains responsive to its available CSS pixels.
 const surfaces = {
   left: { width: 480, height: 1080 },
-  dock: { width: 1440, height: 270 },
+  dock: { width: 1280, height: 240 },
   preview: { width: 1920, height: 1080 },
   product: { width: 1920, height: 1080 },
 } as const;
@@ -20,7 +20,7 @@ export function DesktopCanvas({
   const host = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const size = surfaces[kind];
-  const responsive = kind === 'left' || kind === 'dock';
+  const responsive = kind === 'left';
   useLayoutEffect(() => {
     if (responsive) return;
     const element = host.current;

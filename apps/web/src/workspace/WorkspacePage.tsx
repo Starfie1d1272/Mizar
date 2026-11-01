@@ -446,6 +446,7 @@ function WorkspaceDockContent() {
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [entryNotice, setEntryNotice] = useState('');
+  const [dockDetail, setDockDetail] = useState<'notices' | 'display' | 'tools' | null>(null);
   useEffect(() => {
     let changed = false;
     const status = (event: Event) => {
@@ -660,19 +661,9 @@ function WorkspaceDockContent() {
             <CameraControls workspace />
           </div>
         ) : null}
-        <details className="workspace-secondary">
-          <summary>本机显示</summary>
-          <LocalOverlayControls onMessage={setMessage} />
-        </details>
+        <Button onClick={() => setDockDetail('display')}>本机显示</Button>
       </section>
       <section className="workspace-production" aria-label="制作工具">
-        {entryNotice ? (
-          <StatusBanner tone="warning">
-            {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
-            <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>{' '}
-            <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
-          </StatusBanner>
-        ) : null}
         <div className="workspace-section-heading">
           <span data-tone={connected ? 'success' : 'warning'}>
             {connected
@@ -690,6 +681,129 @@ function WorkspaceDockContent() {
             OBS 配置
           </Button>
         </div>
+        <ObsOutputControls onError={setErrorMessage} />
+        <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
+        {entryNotice ||
+        obs?.findings.some((finding) => finding.code === 'audio_teamspeak_compatibility') ? (
+          <Button onClick={() => setDockDetail('notices')}>
+            {entryNotice ? '启动准备 · 查看状态' : '声音兼容提示'}
+          </Button>
+        ) : null}
+        <Button onClick={() => setDockDetail('tools')}>更多工具</Button>
+      </section>
+      <Dialog open={dockDetail === 'tools'} title="更多工具" onClose={() => setDockDetail(null)}>
+        <div className="workspace-tools">
+          {showCamera ? (
+            <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
+              配置运镜
+            </Button>
+          ) : null}
+          <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
+            HUD 编辑器
+          </Button>
+          <Button
+            onClick={() =>
+              void openTool('diagnostics').catch((reason: unknown) =>
+                setErrorMessage(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
+              )
+            }
+          >
+            运行诊断
+          </Button>
+          <Button
+            disabled={busy || !window.__TAURI_INTERNALS__}
+            onClick={() =>
+              void action(async () => {
+                const request = ++layoutRequest.current;
+                const result = await desktopInvoke<string>('restore_layout');
+                if (result === 'panels') {
+                  setMessage('工作台面板布局请求已提交。');
+                  return;
+                }
+                setMessage('布局请求已提交，游戏窗口对齐结果仍待确认。');
+                void (async () => {
+                  for (let attempt = 0; attempt < 32; attempt++) {
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    const status = await desktopInvoke<{
+                      layoutPending: boolean;
+                      visible: boolean;
+                      found: boolean;
+                      managed: boolean;
+                      message?: string | null;
+                      geometry?: { preserveSettings?: boolean; alignmentRetries?: number };
+                    }>('cs2_host_status').catch(() => null);
+                    if (request !== layoutRequest.current) return;
+                    if (!status || status.layoutPending) continue;
+                    if (!status.visible) return;
+                    if (status.managed) {
+                      setMessage('已确认 CS2 窗口对齐；工作台面板布局请求已提交。');
+                      return;
+                    }
+                    if (
+                      !status.found ||
+                      status.geometry?.preserveSettings ||
+                      status.geometry?.alignmentRetries === 0
+                    ) {
+                      setMessage('');
+                      setErrorMessage(
+                        status.geometry?.preserveSettings
+                          ? '本次启动保留原游戏设置，未接管游戏窗口布局。需要自动布局时请先正常退出游戏，在准备中心完成恢复后选择自动设置启动。'
+                          : status.message ||
+                              (!status.found
+                                ? '尚未找到 CS2。打开游戏后再恢复布局。'
+                                : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
+                      );
+                      return;
+                    }
+                  }
+                  if (request === layoutRequest.current)
+                    setMessage('布局请求已提交，CS2 窗口对齐尚未确认。');
+                })();
+              })
+            }
+          >
+            恢复布局
+          </Button>
+          <Button
+            disabled={busy || !window.__TAURI_INTERNALS__}
+            aria-busy={overlayRecovering}
+            onClick={() =>
+              void action(async () => {
+                setOverlayRecovering(true);
+                try {
+                  const result = await desktopInvoke<string>('recover_program_overlay');
+                  setMessage(result);
+                } finally {
+                  setOverlayRecovering(false);
+                }
+              })
+            }
+          >
+            {overlayRecovering ? '正在重建本机 HUD…' : '恢复本机 HUD'}
+          </Button>
+          <Button
+            disabled={!production || busy}
+            onClick={() => production && void action(() => productionAction('hide', production))}
+          >
+            隐藏工作区
+          </Button>
+        </div>
+      </Dialog>
+      <Dialog open={dockDetail === 'display'} title="本机显示" onClose={() => setDockDetail(null)}>
+        <LocalOverlayControls onMessage={setMessage} />
+      </Dialog>
+      <Dialog
+        open={dockDetail === 'notices'}
+        title="准备与声音提示"
+        onClose={() => setDockDetail(null)}
+      >
+        {entryNotice ? (
+          <StatusBanner tone="warning">
+            {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
+            <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>{' '}
+            <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
+          </StatusBanner>
+        ) : null}
         {obs?.findings
           .filter((finding) => finding.code === 'audio_teamspeak_compatibility')
           .map((finding) => (
@@ -697,108 +811,7 @@ function WorkspaceDockContent() {
               {finding.message}
             </StatusBanner>
           ))}
-        <ObsOutputControls onError={setErrorMessage} />
-        <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-        <details className="workspace-secondary">
-          <summary>更多工具</summary>
-          <div className="workspace-tools">
-            {showCamera ? (
-              <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
-                配置运镜
-              </Button>
-            ) : null}
-            <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
-              HUD 编辑器
-            </Button>
-            <Button
-              onClick={() =>
-                void openTool('diagnostics').catch((reason: unknown) =>
-                  setErrorMessage(reason instanceof Error ? reason.message : '诊断窗口无法打开。'),
-                )
-              }
-            >
-              运行诊断
-            </Button>
-            <Button
-              disabled={busy || !window.__TAURI_INTERNALS__}
-              onClick={() =>
-                void action(async () => {
-                  const request = ++layoutRequest.current;
-                  const result = await desktopInvoke<string>('restore_layout');
-                  if (result === 'panels') {
-                    setMessage('工作台面板布局请求已提交。');
-                    return;
-                  }
-                  setMessage('布局请求已提交，游戏窗口对齐结果仍待确认。');
-                  void (async () => {
-                    for (let attempt = 0; attempt < 32; attempt++) {
-                      await new Promise((resolve) => setTimeout(resolve, 1000));
-                      const status = await desktopInvoke<{
-                        layoutPending: boolean;
-                        visible: boolean;
-                        found: boolean;
-                        managed: boolean;
-                        message?: string | null;
-                        geometry?: { preserveSettings?: boolean; alignmentRetries?: number };
-                      }>('cs2_host_status').catch(() => null);
-                      if (request !== layoutRequest.current) return;
-                      if (!status || status.layoutPending) continue;
-                      if (!status.visible) return;
-                      if (status.managed) {
-                        setMessage('已确认 CS2 窗口对齐；工作台面板布局请求已提交。');
-                        return;
-                      }
-                      if (
-                        !status.found ||
-                        status.geometry?.preserveSettings ||
-                        status.geometry?.alignmentRetries === 0
-                      ) {
-                        setMessage('');
-                        setErrorMessage(
-                          status.geometry?.preserveSettings
-                            ? '本次启动保留原游戏设置，未接管游戏窗口布局。需要自动布局时请先正常退出游戏，在准备中心完成恢复后选择自动设置启动。'
-                            : status.message ||
-                                (!status.found
-                                  ? '尚未找到 CS2。打开游戏后再恢复布局。'
-                                  : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
-                        );
-                        return;
-                      }
-                    }
-                    if (request === layoutRequest.current)
-                      setMessage('布局请求已提交，CS2 窗口对齐尚未确认。');
-                  })();
-                })
-              }
-            >
-              恢复布局
-            </Button>
-            <Button
-              disabled={busy || !window.__TAURI_INTERNALS__}
-              aria-busy={overlayRecovering}
-              onClick={() =>
-                void action(async () => {
-                  setOverlayRecovering(true);
-                  try {
-                    const result = await desktopInvoke<string>('recover_program_overlay');
-                    setMessage(result);
-                  } finally {
-                    setOverlayRecovering(false);
-                  }
-                })
-              }
-            >
-              {overlayRecovering ? '正在重建本机 HUD…' : '恢复本机 HUD'}
-            </Button>
-            <Button
-              disabled={!production || busy}
-              onClick={() => production && void action(() => productionAction('hide', production))}
-            >
-              隐藏工作区
-            </Button>
-          </div>
-        </details>
-      </section>
+      </Dialog>
       <footer className="workspace-message" role="status">
         <span title={sceneState?.director?.reason ?? undefined}>
           {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
