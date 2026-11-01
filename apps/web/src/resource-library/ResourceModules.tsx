@@ -396,10 +396,12 @@ export function ResourceModules({
             await exportFailure(response, snapshot?.modules ?? [], snapshot?.presets ?? []),
           );
         const result = (await response.json().catch(() => ({}))) as {
-          error?: { message?: string };
+          error?: { code?: string; message?: string };
         };
         throw new Error(
-          result.error?.message ??
+          (path === '/operator/broadcast-modules/save' && result.error?.code === 'revision_conflict'
+            ? '资源已被修改或删除，保存未完成，草稿已保留。请复制需要的内容，再取消编辑并重新打开最新资源。'
+            : result.error?.message) ??
             (response.status === 409
               ? '配置已变化，请刷新后重试。'
               : '操作未完成，请检查资源后重试。'),
@@ -627,7 +629,7 @@ export function ResourceModules({
               module={editing}
               modules={snapshot?.modules ?? []}
               busy={busy || draftStale || draftConflict}
-              cancel={() => setEditing(null)}
+              cancel={() => setEditing((current) => (current === editing ? null : current))}
               save={(value) =>
                 perform(
                   '/operator/broadcast-modules/save',
@@ -641,7 +643,7 @@ export function ResourceModules({
               module={editing}
               modules={snapshot?.modules ?? []}
               busy={busy || draftStale || draftConflict}
-              cancel={() => setEditing(null)}
+              cancel={() => setEditing((current) => (current === editing ? null : current))}
               save={(value, expectedRevision) =>
                 perform(
                   '/operator/broadcast-modules/save',
