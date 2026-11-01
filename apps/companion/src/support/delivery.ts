@@ -133,6 +133,8 @@ const stateSchema = z
           'automatic_window_expired',
           'payload_clock_future',
           'payload_creation_time_missing',
+          'permit_budget',
+          'rate_limited',
           'unconfirmed',
         ]),
       })
@@ -1542,6 +1544,8 @@ export class DiagnosticDelivery {
           'automatic_window_expired',
           'payload_clock_future',
           'payload_creation_time_missing',
+          'permit_budget',
+          'rate_limited',
         ];
         this.state.transportFailure = this.transportPhase
           ? {
