@@ -285,6 +285,7 @@ export class MatchContextController {
     } = {},
   ): Promise<MatchContextBinding> {
     this.requireFormal();
+    if (expectedRevision !== this.getActiveRevision()) throw new Error('local_context_conflict');
     const document = parseMatchDocumentV1(input);
     localDocumentBindingManifest(document);
     const generation = this.activeSelectionGeneration;
