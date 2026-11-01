@@ -2547,7 +2547,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // not prevent the remaining owners from attempting their own flush.
     await closeStep(() => projectionCoordinator.close());
     await closeStep(() => programCueCoordinator.close());
-    await closeStep(() => outputService.close());
+    await closeStep(() => outputService.stopDelivery());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
     await closeStep(async () => {
@@ -2596,7 +2596,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          options.rivalhubConnection.shutdownSource(),
+          options.rivalhubConnection
+            .shutdownSource()
+            .finally(() => closeStep(() => outputService.close())),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => reject(new Error('数据源远端收尾超时')), 9000);
           }),
@@ -2607,6 +2609,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (timer) clearTimeout(timer);
       }
     }
+    if (!options.rivalhubConnection?.shutdownSource) await closeStep(() => outputService.close());
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
     if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
       const stateRoot = process.env.MIZAR_STATE_ROOT;
