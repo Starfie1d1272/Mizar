@@ -103,4 +103,8 @@ jobs:
           created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
           elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
           echo "CI created to gate: ${elapsed}s"
+          if [ "$elapsed" -lt 0 ]; then
+            echo "Runner and GitHub timestamps are inconsistent; cannot verify CI budget" >&2
+            exit 1
+          fi
           test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success && test "$elapsed" -le 180
