@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { transfer } from '../distribution/transfer.js';
-import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
+import { sourceOrder, forgetSourceOrder, type SourceDiagnostic } from '../distribution/sources.js';
 
 export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
 export const SEVEN_ZIP = {
@@ -191,6 +191,7 @@ export async function downloadVerified(
   fallback?: (error: unknown, name: string) => void,
   verifying?: () => void,
   selectSources = false,
+  report?: (diagnostic: SourceDiagnostic & { candidates: string[] }) => void,
 ) {
   const isMulnx =
     selectSources &&
@@ -218,6 +219,7 @@ export async function downloadVerified(
         expectedSize,
         signal,
         sources.map((source) => source.request),
+        (diagnostic) => report?.({ ...diagnostic, candidates: sources.map((entry) => entry.name) }),
       )
     : sources.map((_, index) => index);
   try {
