@@ -316,7 +316,9 @@ export class MatchContextController {
       }
       if (!isCurrent() || !(options.canActivate?.() ?? true))
         throw new Error('local_context_conflict');
-      return this.activateLocalDocument(saved);
+      const latest = store.getSnapshot().matches.find((match) => match.matchId === saved.matchId);
+      if (!latest) throw new Error('local_match_not_found');
+      return this.activateLocalDocument(latest);
     });
   }
 
@@ -327,14 +329,15 @@ export class MatchContextController {
     const canCommit = () => !this.temporary && generation === this.activeSelectionGeneration;
     await this.commitQueue.run(async () => {
       if (!canCommit()) throw new Error('local_context_conflict');
-      let document: MatchDocumentV1;
       try {
-        document = await store.selectMatch(matchId, canCommit);
+        await store.selectMatch(matchId, canCommit);
       } catch (error) {
         if (!canCommit()) throw new Error('local_context_conflict', { cause: error });
         throw error;
       }
       if (!canCommit()) throw new Error('local_context_conflict');
+      const document = store.getSnapshot().matches.find((match) => match.matchId === matchId);
+      if (!document) throw new Error('local_match_not_found');
       this.activateLocalDocument(document);
     });
   }
@@ -360,8 +363,12 @@ export class MatchContextController {
         throw error;
       }
       if (!isCurrent() || !canActivate()) throw new Error('local_context_conflict');
-      this.activateLocalDocument(document);
-      return document;
+      const latest = store
+        .getSnapshot()
+        .matches.find((match) => match.matchId === document.matchId);
+      if (!latest) throw new Error('local_match_not_found');
+      this.activateLocalDocument(latest);
+      return latest;
     });
   }
 
