@@ -11,7 +11,8 @@ export type BroadcastMigrationStatus =
         | 'program_dependency_unavailable'
         | 'facades_pending'
         | 'dependency_unavailable'
-        | 'owner_sync_pending';
+        | 'owner_sync_pending'
+        | 'persistence_unconfirmed';
     };
 /** This status is private to the local operator; it never includes legacy configuration or paths. */
 export function registerBroadcastMigrationStatus(
