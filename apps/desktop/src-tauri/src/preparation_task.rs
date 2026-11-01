@@ -618,11 +618,7 @@ fn preparation_start(
 pub(crate) fn preparation_status() -> Result<Value, String> {
     Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message})).unwrap_or(Value::Null))
 }
-#[tauri::command]
-pub(crate) fn preparation_retry(
-    app: tauri::AppHandle,
-    preparation_id: String,
-) -> Result<(), String> {
+fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
     let task = state
         .as_mut()
@@ -637,11 +633,7 @@ pub(crate) fn preparation_retry(
     spawn(app, preparation_id);
     Ok(())
 }
-#[tauri::command]
-pub(crate) async fn preparation_cancel(
-    app: tauri::AppHandle,
-    preparation_id: String,
-) -> Result<(), String> {
+async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     {
         let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
         let task = state
@@ -699,6 +691,40 @@ pub(crate) async fn preparation_cancel(
     }
 }
 
+#[tauri::command]
+pub(crate) async fn cancel_workspace_entry(
+    app: tauri::AppHandle,
+    entry_id: Option<String>,
+) -> Result<(), String> {
+    if let Some(id) = &entry_id {
+        app.state::<preparation_gate::PreparationGate>()
+            .cancel(id.clone())?;
+        app.state::<DemoEntryIntent>().cancel(id)?;
+    }
+    if let Some(task) = snapshot()? {
+        preparation_cancel(app, task.id).await?;
+    } else if entry_id.is_some() {
+        let production = http(&app, "GET", "/local/v1/production", json!({})).await?;
+        if crate::lifecycle_contract::production_view(&production)?.mode != "preparation" {
+            return Err("制作已进入，请退出工作台。".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn retry_workspace_entry(app: tauri::AppHandle) -> Result<(), String> {
+    let task = snapshot()?.ok_or("本次准备任务不可用，请重新进入工作台。")?;
+    preparation_retry(app, task.id)
+}
+
+fn present_entry(app: &tauri::AppHandle, id: &str, ticket: u64) -> Result<(), String> {
+    app.state::<preparation_gate::PreparationGate>()
+        .commit(Some(id), || {
+            present_production_inner_checked(app, true, None, Some(ticket))
+        })
+}
+
 // Serialize entry decisions; the task itself continues independently of this call.
 static ENTRY: Mutex<()> = Mutex::new(());
 
@@ -730,6 +756,8 @@ pub(crate) async fn enter_workspace(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _entry = ENTRY.try_lock().map_err(|_| "正在进入工作台，请稍候。")?;
         tauri::async_runtime::block_on(async move {
+            app.state::<preparation_gate::PreparationGate>()
+                .check(Some(&preparation_id))?;
             let mut production = http(&app, "GET", "/local/v1/production", json!({})).await?;
             let mut view = crate::lifecycle_contract::production_view(&production)?;
             let demo = http(&app, "GET", "/local/v1/demo-test", json!({})).await?;
@@ -755,17 +783,14 @@ pub(crate) async fn enter_workspace(
                             && crate::lifecycle_contract::production_view(&actual)?.mode
                                 != "preparation"
                         {
-                            return present_production_inner_checked(
-                                &app,
-                                true,
-                                None,
-                                Some(ticket),
-                            );
+                            return present_entry(&app, &preparation_id, ticket);
                         }
                         return Err(error);
                     }
                 }
                 let result = async {
+                    app.state::<preparation_gate::PreparationGate>()
+                        .check(Some(&preparation_id))?;
                     let camera = enter_demo_test(
                         window.clone(),
                         app.clone(),
@@ -794,13 +819,19 @@ pub(crate) async fn enter_workspace(
                         {
                             return Err("试播状态已变化，请重新进入。".into());
                         }
-                        http(
-                            &app,
-                            "POST",
-                            "/operator/orchestration",
-                            json!({"action":"connect"}),
-                        )
-                        .await?;
+                        app.state::<preparation_gate::PreparationGate>().commit(
+                            Some(&preparation_id),
+                            || {
+                                app.state::<production_exit::ExitGate>().commit(ticket, || {
+                                    request(
+                                        &app,
+                                        "POST",
+                                        "/operator/orchestration",
+                                        json!({"action":"connect"}),
+                                    )
+                                })
+                            },
+                        )?;
                     }
                     Ok(())
                 }
@@ -812,7 +843,7 @@ pub(crate) async fn enter_workspace(
                 return Err("试播状态已变化，请重新进入。".into());
             }
             if view.mode != "preparation" {
-                return present_production_inner_checked(&app, true, None, Some(ticket));
+                return present_entry(&app, &preparation_id, ticket);
             }
             if expected_revision
                 .as_deref()
@@ -827,12 +858,7 @@ pub(crate) async fn enter_workspace(
                         production = http(&app, "GET", "/local/v1/production", json!({})).await?;
                         view = crate::lifecycle_contract::production_view(&production)?;
                         if task_entered && view.mode != "preparation" {
-                            return present_production_inner_checked(
-                                &app,
-                                true,
-                                None,
-                                Some(ticket),
-                            );
+                            return present_entry(&app, &preparation_id, ticket);
                         }
                         return Err(error);
                     }
@@ -840,7 +866,7 @@ pub(crate) async fn enter_workspace(
                 production = http(&app, "GET", "/local/v1/production", json!({})).await?;
                 view = crate::lifecycle_contract::production_view(&production)?;
                 if view.mode != "preparation" {
-                    return present_production_inner_checked(&app, true, None, Some(ticket));
+                    return present_entry(&app, &preparation_id, ticket);
                 }
                 if expected_revision
                     .as_deref()
@@ -850,33 +876,39 @@ pub(crate) async fn enter_workspace(
                 }
                 app.state::<production_exit::ExitGate>()
                     .check_ticket(ticket)?;
-                let entered = app
-                    .state::<production_exit::ExitGate>()
-                    .commit(ticket, || {
-                        request(
-                            &app,
-                            "POST",
-                            "/operator/production",
-                            json!({"action":"enter","expectedRevision":view.revision}),
-                        )
-                    })?;
+                let entered = app.state::<preparation_gate::PreparationGate>().commit(
+                    Some(&preparation_id),
+                    || {
+                        app.state::<production_exit::ExitGate>().commit(ticket, || {
+                            request(
+                                &app,
+                                "POST",
+                                "/operator/production",
+                                json!({"action":"enter","expectedRevision":view.revision}),
+                            )
+                        })
+                    },
+                )?;
                 if crate::lifecycle_contract::production_view(&entered)?.mode != "live" {
                     return Err("制作进入状态未确认。".into());
                 }
-                return present_production_inner_checked(&app, true, None, Some(ticket));
+                return present_entry(&app, &preparation_id, ticket);
             }
-            app.state::<production_exit::ExitGate>().commit(ticket, || {
-                preparation_start(
-                    window,
-                    app.clone(),
-                    preparation_id,
-                    view.revision,
-                    preserve_settings,
-                    external_pid,
-                    external_created,
-                    ticket,
-                )
-            })
+            app.state::<preparation_gate::PreparationGate>()
+                .commit(Some(&preparation_id), || {
+                    app.state::<production_exit::ExitGate>().commit(ticket, || {
+                        preparation_start(
+                            window,
+                            app.clone(),
+                            preparation_id,
+                            view.revision,
+                            preserve_settings,
+                            external_pid,
+                            external_created,
+                            ticket,
+                        )
+                    })
+                })
         })
     })
     .await

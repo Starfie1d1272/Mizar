@@ -2164,7 +2164,15 @@ async fn present_demo_test(
         {
             return Err("试播状态已变化，请重新进入。".into());
         }
-        present_production_inner_checked(&app, true, Some((expected_url, intent_id)), entry_ticket)
+        app.state::<preparation_gate::PreparationGate>()
+            .commit(Some(&intent_id), || {
+                present_production_inner_checked(
+                    &app,
+                    true,
+                    Some((expected_url, intent_id.clone())),
+                    entry_ticket,
+                )
+            })
     })
     .await
     .map_err(|_| "试播工作台未能打开。".to_string())?

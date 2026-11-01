@@ -203,27 +203,15 @@ export async function checkObsBeforeLaunch(
 
 export type ExternalGameIdentity = { pid: number; created: string };
 
-type PreparationStatus = {
-  id: string;
-  running: boolean;
-  cancelled: boolean;
-  entered: boolean;
-  message: string;
-};
-
 let pendingEntry: AbortController | undefined;
-let pendingStart: Promise<unknown> | undefined;
+let activeEntryId: string | undefined;
 export async function cancelProductionEntry() {
   if (!window.__TAURI_INTERNALS__) return;
   pendingEntry?.abort();
-  await pendingStart?.catch(() => {});
-  const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
-  if (status) await desktopInvoke('preparation_cancel', { preparationId: status.id });
+  await desktopInvoke('cancel_workspace_entry', { entryId: activeEntryId ?? null });
 }
 export async function retryPendingPreparation() {
-  const status = await desktopInvoke<PreparationStatus | null>('preparation_status');
-  if (!status) throw new Error('本次准备任务不可用，请重新进入工作台。');
-  await desktopInvoke('preparation_retry', { preparationId: status.id });
+  await desktopInvoke('retry_workspace_entry');
 }
 
 async function enterDesktopWorkspace(
@@ -237,16 +225,17 @@ async function enterDesktopWorkspace(
   task?: ControlTask,
   signal?: AbortSignal,
 ) {
-  if (pendingStart) throw new Error('正在进入工作台，请稍候。');
+  if (activeEntryId) throw new Error('正在进入工作台，请稍候。');
   if (signal?.aborted) throw new Error('进入已取消。');
   const preparationId = crypto.randomUUID();
+  activeEntryId = preparationId;
   const cancel = () =>
     void desktopInvoke('cancel_demo_entry', { intentId: preparationId }).catch(() => {});
   window.addEventListener('pagehide', cancel);
   window.addEventListener('popstate', cancel);
   signal?.addEventListener('abort', cancel);
   try {
-    const start = desktopInvoke(
+    await desktopInvoke(
       'enter_workspace',
       {
         preparationId,
@@ -259,16 +248,11 @@ async function enterDesktopWorkspace(
       },
       task,
     );
-    pendingStart = start;
-    try {
-      await start;
-    } finally {
-      if (pendingStart === start) pendingStart = undefined;
-    }
   } finally {
     window.removeEventListener('pagehide', cancel);
     window.removeEventListener('popstate', cancel);
     signal?.removeEventListener('abort', cancel);
+    if (activeEntryId === preparationId) activeEntryId = undefined;
   }
 }
 
