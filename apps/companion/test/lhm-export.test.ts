@@ -119,8 +119,9 @@ it('exports the selected active HUD with a guarded revision and no live data', a
 it('reports unsupported legacy edits without changing editor state or persistence health', async () => {
   const store = new HudConfigStore();
   await store.load();
-  await store.adoptPersistence({
-    initialize: (document) => Promise.resolve(document),
+  const initialDocument = store.getState().document;
+  await store.bindPersistence({
+    read: () => Promise.resolve(initialDocument),
     commit: () => Promise.reject(new Error('capability_unsupported')),
   });
   const before = store.getState();

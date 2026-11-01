@@ -60,7 +60,6 @@ export function createBroadcastRuntime(input: {
   let builtinMusicAvailable = false;
   let cameraUnavailable = false;
   let programUnavailable = false;
-  let musicUnavailable = false;
   let cameraAvailable = () => true;
   function canSynchronizeCamera(active: ActiveBroadcastSnapshot): boolean {
     if (store.snapshot.active.revision !== active.revision) return false;
@@ -241,6 +240,7 @@ export function createBroadcastRuntime(input: {
     await deps.references.run(initializeUnderReferenceGuard);
   }
   async function initializeUnderReferenceGuard(): Promise<void> {
+    let musicUnavailable = false;
     let existing = false;
     try {
       await lstat(deps.path);
@@ -345,8 +345,7 @@ export function createBroadcastRuntime(input: {
     let hudUnavailable = false;
     let hudRestored = false;
     try {
-      if (existing) await hud.restorePersistence(hudPersistence);
-      else await hud.adoptPersistence(hudPersistence);
+      await hud.bindPersistence(hudPersistence);
     } catch (error) {
       hudUnavailable = true;
       input.diagnostic(error);
@@ -359,8 +358,7 @@ export function createBroadcastRuntime(input: {
     }
     let musicRestored = false;
     try {
-      if (music.ready && !music.failure) await music.adoptPersistence(musicPersistence);
-      else await music.loadWithPersistence(musicPersistence);
+      await music.bindPersistence(musicPersistence);
       musicUnavailable = false;
     } catch (error) {
       musicUnavailable = true;
@@ -374,8 +372,7 @@ export function createBroadcastRuntime(input: {
     }
     let cameraRestored = false;
     try {
-      if (camera.ready) await camera.adoptPersistence(cameraPersistence);
-      else await camera.loadWithPersistence(cameraPersistence);
+      await camera.bindPersistence(cameraPersistence);
       cameraUnavailable = false;
     } catch (error) {
       cameraUnavailable = true;

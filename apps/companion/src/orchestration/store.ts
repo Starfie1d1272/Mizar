@@ -35,7 +35,6 @@ interface CameraPersistenceState {
 }
 export interface CameraConfigPersistence {
   canChange?(): boolean;
-  initialize(catalog: CameraCatalog, automaticEnabled: boolean): Promise<CameraPersistenceState>;
   read(): Promise<CameraPersistenceState>;
   readApplied?(): Promise<CameraPersistenceState>;
   commit(
@@ -136,23 +135,14 @@ export class OrchestrationStore {
     this.automaticEnabled = value.automaticEnabled;
     this.persistedRevision = value.revision;
   }
-  async loadWithPersistence(persistence: CameraConfigPersistence): Promise<void> {
-    if (this.ready || this.persistence) throw new Error('camera_storage_unavailable');
-    await ensureDirectory(this.directory);
-    this.persistence = persistence;
-    const state = await persistence.read();
-    this.usePersisted(state);
-    this.ready = true;
-  }
-  async adoptPersistence(persistence: CameraConfigPersistence): Promise<void> {
+  /** Bind to the single config owner after any legacy import, without a second migration mode. */
+  async bindPersistence(persistence: CameraConfigPersistence): Promise<void> {
     const result = this.queue.then(async () => {
-      if (!this.ready || this.persistence) throw new Error('camera_storage_unavailable');
+      if (this.persistence) throw new Error('camera_storage_unavailable');
+      await ensureDirectory(this.directory);
       this.persistence = persistence;
-      const value = await persistence.initialize(
-        structuredClone(this.catalog()),
-        this.automaticEnabled,
-      );
-      this.usePersisted(value);
+      this.usePersisted(await persistence.read());
+      this.ready = true;
     });
     this.queue = result.catch(() => undefined);
     return result;

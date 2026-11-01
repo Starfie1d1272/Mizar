@@ -143,7 +143,6 @@ export function createCameraConfigPersistence(
     get available() {
       return !store.pendingLegacyCamera && !store.consumerStatus.camera?.error;
     },
-    initialize: () => read(),
     read: () => read(),
     readApplied: () => {
       const active = store.fallbackSnapshot('camera');

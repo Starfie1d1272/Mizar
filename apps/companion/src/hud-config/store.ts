@@ -34,7 +34,7 @@ export interface HudConfigStoreOptions {
 
 /** A coordinator becomes the only writer after initialize succeeds. */
 export interface HudConfigPersistence {
-  initialize(document: HudConfigDocument): Promise<HudConfigDocument>;
+  read(): Promise<HudConfigDocument>;
   readApplied?(): Promise<HudConfigDocument>;
   readDraft?(current: HudConfigDocument): HudConfigDocument;
   commit(
@@ -189,9 +189,7 @@ export class HudConfigStore {
     if (this.persistence) {
       await this.commits.run(async () => {
         if (!this.persistence) throw new Error('hud_persistence_unavailable');
-        this.document = parseHudConfigDocument(
-          await this.persistence.initialize(clone(this.document)),
-        );
+        this.document = parseHudConfigDocument(await this.persistence.read());
         this.persistenceError = null;
         this.loaded = true;
       });
@@ -226,24 +224,12 @@ export class HudConfigStore {
     }
   }
 
-  /** Swap writers while the legacy command queue is held; failure leaves the old writer active. */
-  async adoptPersistence(persistence: HudConfigPersistence): Promise<void> {
-    await this.commits.run(async () => {
-      if (!this.loaded || this.loadFailure || this.persistence)
-        throw new Error('hud_persistence_unavailable');
-      this.persistence = persistence;
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
-    });
-  }
-
-  /** Recover an existing coordinator without treating the legacy file as authoritative. */
-  async restorePersistence(persistence: HudConfigPersistence): Promise<void> {
+  /** Bind once after legacy import; the coordinator owns config on both first start and restart. */
+  async bindPersistence(persistence: HudConfigPersistence): Promise<void> {
     await this.commits.run(async () => {
       if (this.persistence) throw new Error('hud_persistence_unavailable');
       this.persistence = persistence;
-      const document = parseHudConfigDocument(await persistence.initialize(clone(this.document)));
-      this.document = document;
+      this.document = parseHudConfigDocument(await persistence.read());
       this.persistenceError = null;
       this.loadFailure = false;
       this.loaded = true;
