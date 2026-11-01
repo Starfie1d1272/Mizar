@@ -64,6 +64,10 @@ export type ProductionDependencies = {
   error: (details: object, message: string) => void;
 };
 
+function sourceStateUnavailable(error: unknown): boolean {
+  return error instanceof Error && error.message === 'rivalhub_source_state_unavailable';
+}
+
 type ProductionAction =
   'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'invalid';
 type ProductionCommand = {
@@ -276,7 +280,8 @@ export function createProduction(options: ProductionDependencies) {
       try {
         await startHandoff();
         return { ok: true as const, value: view() };
-      } catch {
+      } catch (error) {
+        if (sourceStateUnavailable(error)) return { ok: true as const, value: view() };
         return {
           ok: false as const,
           failure: 'handoffUnconfirmed' as const,
@@ -349,7 +354,11 @@ export function createProduction(options: ProductionDependencies) {
       } else {
         if (shutdown && options.source?.handoffForExit) {
           stage = 'production_release';
-          await startHandoff();
+          try {
+            await startHandoff();
+          } catch (error) {
+            if (!sourceStateUnavailable(error)) throw error;
+          }
         } else if (!shutdown && !obsOnlyRetry) void startHandoff().catch(() => {});
         if (!trialPending && options.source?.handoffForExit) {
           if (obsExitTask && !obsExitTask.valid()) {
@@ -447,14 +456,19 @@ export function createProduction(options: ProductionDependencies) {
                 failure: 'obsStateChanged' as const,
                 message: 'OBS 播出状态已变化，请核对后重试。',
               };
-            await options.source?.release();
+            try {
+              await options.source?.release();
+              releaseHandoffState = 'confirmed';
+            } catch (error) {
+              if (!sourceStateUnavailable(error)) throw error;
+              releaseHandoffState = 'unconfirmed';
+            }
             if (!controlValid())
               return {
                 ok: false as const,
                 failure: 'obsStateChanged' as const,
                 message: 'OBS 播出状态已变化，请核对后重试。',
               };
-            releaseHandoffState = 'confirmed';
           } else if (!options.source?.handoffForExit) {
             await options.source?.release();
             releaseHandoffState = 'confirmed';
