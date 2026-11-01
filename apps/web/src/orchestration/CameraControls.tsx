@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
-import { Button, StatusPill } from '../ui';
+import { Button, Dialog, StatusPill } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
 
 export function CameraControls({
@@ -13,6 +13,7 @@ export function CameraControls({
   const view = useLocalRead<OrchestrationView>('/local/v1/orchestration', 1000);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   if (!view || (!setup && !workspace && !view.preset.maps.length))
     return workspace ? (
       <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
@@ -48,7 +49,9 @@ export function CameraControls({
           </StatusPill>
         </div>
       ) : null}
-      {!workspace || error || preparation === 'error' || (!s.current && preparation !== 'ready') ? (
+      {workspace && (error || preparation === 'error') ? (
+        <Button onClick={() => setDetailsOpen(true)}>运镜异常 · 查看详情</Button>
+      ) : !workspace || (!s.current && preparation !== 'ready') ? (
         <span
           className="music-controls__track"
           title={error || s.message}
@@ -125,6 +128,9 @@ export function CameraControls({
         </Button>
       ) : null}
       {error && !workspace ? <span role="alert">{error}</span> : null}
+      <Dialog open={detailsOpen} title="运镜状态" onClose={() => setDetailsOpen(false)}>
+        <p>{error || s.message}</p>
+      </Dialog>
     </div>
   );
 }
