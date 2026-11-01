@@ -1,7 +1,7 @@
 //! The native host selects the installation and opens the managed upstream launcher.
 use crate::{
-    cs2_activity, gsi_script, managed_cs2, powershell, production_exit, startup_log::DesktopLog,
-    updates,
+    cs2_activity, gsi_host::gsi_script, managed_cs2, powershell, production_exit,
+    startup_log::DesktopLog, updates,
 };
 use serde_json::{json, Value};
 use std::os::windows::{ffi::OsStrExt, process::CommandExt};
