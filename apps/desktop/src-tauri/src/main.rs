@@ -1235,16 +1235,12 @@ async fn mulnx_control(
     if window.label() != "main" {
         return Err("请在准备中心管理 MulNX。".into());
     }
-    if action == "stop" {
-        finish_workspace(window, app, None, diagnostic_operation_id, None, None).await?;
-        return Ok(serde_json::json!({"result":"finished", "execution":"confirmed"}));
-    }
     let log = app.state::<DesktopLog>().inner().clone();
     let evidence = log.clone();
     log.event("mulnx_control", "begin", Some(&format!("action={action}")));
     let result = tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "update" => mulnx_launch::update(&app, &log),
-        _ => Err("请选择更新或结束 MulNX 工作台。".into()),
+        _ => Err("请选择更新 MulNX。".into()),
     })
     .await
     .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
