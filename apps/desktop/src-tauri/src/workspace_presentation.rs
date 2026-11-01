@@ -307,11 +307,10 @@ pub(crate) fn present_production_inner_checked(
             // Check and publish under the same gate on the actual UI thread.
             // An exit begun during readiness invalidates this callback even after it finishes.
             let mut valid_intent = true;
-            let document = host.state::<EntryIntent>().try_generation();
             let result = host
                 .state::<production_exit::ExitGate>()
                 .publish(ticket, || {
-                    let show = || {
+                    let show = |document: Option<u64>| {
                         host.state::<production_exit::WorkspaceExit>()
                             .complete(&Ok(()));
                         show_workspace(&host);
@@ -382,10 +381,10 @@ pub(crate) fn present_production_inner_checked(
                                             .is_some_and(|url| url.as_str() == expected)
                                 })
                             },
-                            show,
+                            |document| show(Some(document)),
                         );
                     } else {
-                        show();
+                        show(host.state::<EntryIntent>().try_generation());
                     }
                 });
             let result = result.and_then(|()| {

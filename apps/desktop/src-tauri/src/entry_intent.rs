@@ -109,7 +109,7 @@ impl EntryIntent {
         &self,
         id: &str,
         valid_page: impl FnOnce() -> bool,
-        show: impl FnOnce(),
+        show: impl FnOnce(u64),
     ) -> bool {
         let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if !state
@@ -120,7 +120,7 @@ impl EntryIntent {
         {
             return false;
         }
-        show();
+        show(state.document);
         true
     }
 }
