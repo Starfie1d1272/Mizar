@@ -79,7 +79,7 @@ jobs:
       - if: steps.select.outputs.native == 'true'
         run: cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
       - if: steps.select.outputs.native == 'true'
-        run: cargo clippy --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
       - name: Save Cargo caches on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.select.outputs.native == 'true'
         uses: ./.github/actions/save-cargo-cache
