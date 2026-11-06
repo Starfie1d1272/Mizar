@@ -1972,7 +1972,6 @@ impl SessionStore {
     }
 
     /// Recheck every original, then durably save the plan before the first write.
-
     fn commit_files_locked(
         &self,
         guard: &StoreGuard,

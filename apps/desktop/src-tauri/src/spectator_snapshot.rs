@@ -78,6 +78,7 @@ pub(crate) fn acquire(root: &Path) -> Result<fs::File, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&path)
         .map_err(|_| "snapshot_lock_failed")?;
     check_path(&path, false)?;
