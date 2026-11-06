@@ -6,10 +6,7 @@ export function obsFindingReadiness(findings: readonly ObsFinding[]) {
   const blockingFindings: ObsFinding[] = [];
   for (const finding of findings) {
     const code = finding.code.split(':', 1)[0] ?? '';
-    (['audio_muted', 'audio_tracks', 'audio_teamspeak_compatibility'].includes(code)
-      ? warnings
-      : blockingFindings
-    ).push(finding);
+    (['audio_muted', 'audio_tracks'].includes(code) ? warnings : blockingFindings).push(finding);
   }
   return { blockingFindings, warnings };
 }

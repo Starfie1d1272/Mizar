@@ -683,11 +683,8 @@ function WorkspaceDockContent() {
         </div>
         <ObsOutputControls onError={setErrorMessage} />
         <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
-        {entryNotice ||
-        obs?.findings.some((finding) => finding.code === 'audio_teamspeak_compatibility') ? (
-          <Button onClick={() => setDockDetail('notices')}>
-            {entryNotice ? '启动准备 · 查看状态' : '声音兼容提示'}
-          </Button>
+        {entryNotice ? (
+          <Button onClick={() => setDockDetail('notices')}>启动准备 · 查看状态</Button>
         ) : null}
         <Button onClick={() => setDockDetail('tools')}>更多工具</Button>
       </section>
@@ -794,7 +791,7 @@ function WorkspaceDockContent() {
       </Dialog>
       <Dialog
         open={dockDetail === 'notices'}
-        title="准备与声音提示"
+        title="启动准备状态"
         onClose={() => setDockDetail(null)}
       >
         {entryNotice ? (
@@ -804,13 +801,6 @@ function WorkspaceDockContent() {
             <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
           </StatusBanner>
         ) : null}
-        {obs?.findings
-          .filter((finding) => finding.code === 'audio_teamspeak_compatibility')
-          .map((finding) => (
-            <StatusBanner key={finding.code} tone="warning">
-              {finding.message}
-            </StatusBanner>
-          ))}
       </Dialog>
       <footer className="workspace-message" role="status">
         <span title={sceneState?.director?.reason ?? undefined}>
