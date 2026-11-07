@@ -563,18 +563,33 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     if !task.capture {
         let result: Result<(), String> = async {
             check(&app, &id)?;
-            let warmup = http(&app, "POST", "/operator/obs/capture-warmup", json!({"expectedRevision":revision,"preparationId":id})).await?;
+            let mut warmup = Value::Null;
+            for _ in 0..60 {
+                check(&app, &id)?;
+                warmup = http(&app, "POST", "/operator/obs/capture-warmup", json!({"expectedRevision":revision,"preparationId":id})).await?;
+                if warmup["state"] != "waiting" { break; }
+                tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1))).await.map_err(|_| "游戏窗口等待失败。")?;
+            }
+            if warmup["state"] == "waiting" {
+                return Err(warmup["message"].as_str().unwrap_or("OBS 尚未发现可用的 CS2 窗口，请确认游戏已启动，再重试准备。").to_string());
+            }
             let transaction = warmup["transactionId"].as_str().ok_or("游戏捕获准备未确认。")?.to_owned();
             let since = warmup["startedAt"].clone();
             let capture = async {
+                let mut message = "OBS 游戏捕获未确认，请检查后重试。";
                 for _ in 0..60 {
                     check(&app, &id)?;
                     let state = http(&app, "POST", "/operator/obs/capture-initialization", json!({"expectedRevision":revision,"since":since,"transactionId":transaction})).await?;
                     if state["state"] == "initialized" { return Ok(()); }
+                    message = match state["reason"].as_str() {
+                        Some("target_unavailable") => "OBS 游戏采集目标不可用，请确认 CS2 窗口已打开，并在停止输出后修复 Mizar 场景，再重试准备。",
+                        Some("target_ambiguous") => "OBS 检测到多个 CS2 窗口，请关闭多余游戏窗口，再重试准备。",
+                        _ => "OBS 游戏捕获未确认，请检查后重试。",
+                    };
                     if state["state"] == "failed" || state["reason"] == "source_inactive" { break; }
                     tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1))).await.map_err(|_| "捕获等待失败。")?;
                 }
-                Err("OBS 游戏捕获未确认，请检查后重试。".to_string())
+                Err(message.to_string())
             }.await;
             let release = http(&app, "POST", "/operator/obs/capture-warmup-release", json!({"transactionId":transaction})).await;
             match (capture, release) {

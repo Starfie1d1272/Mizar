@@ -170,6 +170,21 @@ export class ObsCaptureWarmup {
       (await this.valid(id))
     );
   }
+  /** Settle the previous warmup before changing its shared capture source. */
+  async recoverBeforePreparation(
+    obs: ObsRpc,
+    endpoint: string,
+    lease: () => boolean,
+  ): Promise<void> {
+    if (!lease()) throw lost();
+    const previous = await this.read();
+    if (previous) {
+      if (this.active?.id === previous.id && this.active.valid())
+        throw error('capture_warmup_busy', 'OBS 临时采集正在使用，请等待当前准备完成。');
+      this.active = undefined;
+      await this.release(obs, endpoint, previous.id, lease);
+    }
+  }
   async begin(
     obs: ObsRpc,
     endpoint: string,
@@ -178,13 +193,7 @@ export class ObsCaptureWarmup {
     lease: () => boolean,
   ): Promise<{ transactionId: string; startedAt: number }> {
     if (!valid() || !lease()) throw lost();
-    const previous = await this.read();
-    if (previous) {
-      if (this.active?.id === previous.id && this.active.valid())
-        throw error('capture_warmup_busy', 'OBS 临时采集正在使用，请等待当前准备完成。');
-      this.active = undefined;
-      await this.release(obs, endpoint, previous.id, lease);
-    }
+    await this.recoverBeforePreparation(obs, endpoint, lease);
     await assertNoVideoOutput(obs);
     const original = await identity(obs);
     await audioDisabled(obs, original.sourceUuid);
