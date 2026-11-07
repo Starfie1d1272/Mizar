@@ -64,15 +64,19 @@ function submit(command: string): Promise<void> {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (
-    args[0] !== '--observer-query' ||
-    ![2, 3].includes(args.length) ||
-    (args[2] !== undefined && args[2] !== '0' && args[2] !== '1')
-  )
-    throw new Error('observer_hud_arguments');
-  await sendObserverGameCommand(
-    observerHudQuery(args[1]!, args[2] === undefined ? undefined : (Number(args[2]) as 0 | 1)),
-  );
+  if (args[0] === '--frame-rate-query' && [2, 3].includes(args.length)) {
+    await sendObserverGameCommand(frameRateQuery(args[1]!, args[2]));
+  } else {
+    if (
+      args[0] !== '--observer-query' ||
+      ![2, 3].includes(args.length) ||
+      (args[2] !== undefined && args[2] !== '0' && args[2] !== '1')
+    )
+      throw new Error('observer_hud_arguments');
+    await sendObserverGameCommand(
+      observerHudQuery(args[1]!, args[2] === undefined ? undefined : (Number(args[2]) as 0 | 1)),
+    );
+  }
   console.log(JSON.stringify({ queued: true }));
 }
 
@@ -82,4 +86,17 @@ export function observerConnectCommand(connection: ObserverConnection, hideHud: 
 export function observerHudQuery(marker: string, value?: 0 | 1) {
   if (!/^MIZAR_HUD_[a-f0-9]{32}$/.test(marker)) throw new Error('observer_hud_marker');
   return `echo ${marker};${value === undefined ? '' : `cl_draw_only_deathnotices ${value};`}cl_draw_only_deathnotices`;
+}
+
+/** Fixed fps_max only. A queue receipt is never an execution receipt. */
+export function frameRateQuery(marker: string, value?: string) {
+  if (!/^MIZAR_FPS_[a-f0-9]{32}$/.test(marker)) throw new Error('frame_rate_marker');
+  if (
+    value !== undefined &&
+    (!/^[0-9]+(?:\.[0-9]+)?$/.test(value) ||
+      !Number.isFinite(Number(value)) ||
+      Number(value) > 10000)
+  )
+    throw new Error('frame_rate_value');
+  return `echo ${marker};${value === undefined ? '' : `fps_max ${value};`}fps_max;echo ${marker}_END`;
 }

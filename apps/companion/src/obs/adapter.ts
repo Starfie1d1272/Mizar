@@ -104,8 +104,8 @@ export interface ObsStatus {
   readonly connectionFailure?: ReturnType<typeof obsFailureKind>;
   readonly currentScene: string | null;
   readonly port: number;
-  readonly streaming: boolean;
-  readonly recording: boolean;
+  readonly streaming: boolean | null;
+  readonly recording: boolean | null;
   readonly passwordConfigured: boolean;
   readonly video: null | { readonly canvas: string; readonly output: string; readonly fps: number };
   readonly findings: readonly ObsFinding[];
@@ -158,9 +158,9 @@ export class ObsAdapter {
   private recoveryPrepared = false;
   private browserRecoveryPermission:
     { recovery: number; program: number; production: () => boolean } | undefined;
-  private recoveryComplete = false;
+  private browserRefreshSubmitted = false;
   private recoveryTask: Promise<void> | undefined;
-  private readonly refreshedBrowserSources = new Set<string>();
+  private readonly submittedBrowserRefreshes = new Set<string>();
   private commentaryChoices = new Map<
     string,
     { window: string; revision: string; endpoint: string; probe: string; until: number }
@@ -173,6 +173,7 @@ export class ObsAdapter {
     private readonly commentary?: { owner: RemoteCommentary; journal: string },
     private readonly videoTransaction?: ObsVideoTransaction,
     private readonly captureWarmup?: ObsCaptureWarmup,
+    private readonly buildId = process.env.MIZAR_APP_VERSION ?? 'development',
   ) {
     this.audioConfiguration = new AudioConfigurationConnection(configStore);
     this.outputs = new ObsOutputController(
@@ -189,7 +190,7 @@ export class ObsAdapter {
           return;
         }
         if (kind === 'scene' && this.expectedCollection) return;
-        if (kind === 'scene' && name === this.expectedScene) {
+        if (kind === 'scene' && this.expectedScene !== undefined && name === this.expectedScene) {
           this.expectedScene = undefined;
           return;
         }
@@ -298,7 +299,7 @@ export class ObsAdapter {
       program: this.programGeneration,
       production,
     };
-    this.recoveryComplete = false;
+    this.browserRefreshSubmitted = false;
     this.runBrowserRecovery();
   }
 
@@ -306,7 +307,7 @@ export class ObsAdapter {
     if (
       this.recoveryClosed ||
       this.recoveryPaused ||
-      this.recoveryComplete ||
+      this.browserRefreshSubmitted ||
       this.recoveryTask ||
       this.recoveryTimer
     )
@@ -332,7 +333,8 @@ export class ObsAdapter {
             refreshObsBrowserSources(
               guardedObs(obs, valid),
               this.browserBaseUrl,
-              this.refreshedBrowserSources,
+              this.submittedBrowserRefreshes,
+              this.buildId,
             ),
           TIMEOUT_MS,
           undefined,
@@ -341,12 +343,12 @@ export class ObsAdapter {
         );
       })
         .then((complete) => {
-          if (valid()) this.recoveryComplete = complete;
+          if (valid()) this.browserRefreshSubmitted = complete;
         })
         .catch(() => undefined)
         .finally(() => {
           this.recoveryTask = undefined;
-          if (valid() && !this.recoveryComplete) {
+          if (valid() && !this.browserRefreshSubmitted) {
             this.recoveryTimer = setTimeout(attempt, 5000);
             this.recoveryTimer.unref();
           } else if (this.browserRecoveryPermission !== permission) {
@@ -671,9 +673,12 @@ export class ObsAdapter {
           },
           call: async (type, data) => {
             if (!active) throw new Error('obs_operation_cancelled');
-            if (type === 'SetCurrentProgramScene' && typeof data?.sceneName === 'string') {
-              this.expectedScene = data.sceneName;
-              const expected = data.sceneName;
+            if (
+              type === 'SetCurrentProgramScene' &&
+              typeof (data?.sceneUuid ?? data?.sceneName) === 'string'
+            ) {
+              const expected = (data?.sceneUuid ?? data?.sceneName) as string;
+              this.expectedScene = expected;
               const timer = setTimeout(() => {
                 if (this.expectedScene === expected) this.expectedScene = undefined;
               }, 2000);
@@ -700,7 +705,14 @@ export class ObsAdapter {
             return result;
           },
         };
-        return operation(rpc, `ws://${config.host}:${config.port}`);
+        return operation(
+          await this.configStore.managedResources.bind(
+            rpc,
+            `ws://${config.host}:${config.port}`,
+            this.browserBaseUrl,
+          ),
+          `ws://${config.host}:${config.port}`,
+        );
       })();
       return await Promise.race([
         task,
@@ -771,8 +783,10 @@ export class ObsAdapter {
 
   private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
+    let connected = false;
     try {
       const status = await this.withObs(async (obs, endpoint) => {
+        connected = true;
         const [scene, outputs, video, findings] = await Promise.all([
           obs.call('GetCurrentProgramScene'),
           this.outputs.read(),
@@ -788,15 +802,18 @@ export class ObsAdapter {
           }),
         ]);
         if (outputs.stream.active === null || outputs.record.active === null)
-          throw new Error('OBS 输出状态无法确认。');
+          findings.push({
+            code: 'output_query_failed',
+            message: 'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
+          });
         const currentScene =
           typeof scene.currentProgramSceneName === 'string' ? scene.currentProgramSceneName : null;
         return {
           connection: 'connected',
           currentScene,
           port: config.port,
-          streaming: outputs.stream.active === true,
-          recording: outputs.record.active === true,
+          streaming: outputs.stream.active,
+          recording: outputs.record.active,
           passwordConfigured: Boolean(config.password),
           video: {
             canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
@@ -832,8 +849,9 @@ export class ObsAdapter {
     } catch (error: unknown) {
       const kind = obsFailureKind(error);
       return {
-        connection:
-          kind === 'authentication'
+        connection: connected
+          ? 'connected'
+          : kind === 'authentication'
             ? config.password
               ? 'invalid_password'
               : 'password_required'
@@ -841,11 +859,18 @@ export class ObsAdapter {
         connectionFailure: kind,
         currentScene: null,
         port: config.port,
-        streaming: false,
-        recording: false,
+        streaming: null,
+        recording: null,
         passwordConfigured: Boolean(config.password),
         video: null,
-        findings: [],
+        findings: connected
+          ? [
+              {
+                code: 'status_query_failed',
+                message: 'OBS 已连接，但状态查询未完成。请重新检查，不必修改密码。',
+              },
+            ]
+          : [],
         programEvidence: null,
       };
     }
@@ -2225,15 +2250,15 @@ export class ObsAdapter {
           this.bpDisconnect?.();
         });
         client.on('SceneItemEnableStateChanged', (event) => {
-          if (this.bpOwner.observeItem(event.sceneName, event.sceneItemId, event.sceneItemEnabled))
+          if (this.bpOwner.observeItem(event.sceneUuid, event.sceneItemId, event.sceneItemEnabled))
             this.bpDisconnect?.();
         });
         client.on('SceneItemRemoved', (event) => {
-          if (this.bpOwner.observeRemoval(event.sceneName, event.sceneItemId))
+          if (this.bpOwner.observeRemoval(event.sceneUuid, event.sceneItemId))
             this.bpDisconnect?.();
         });
         client.on('SceneRemoved', (event) => {
-          if (this.bpOwner.observeSceneRemoval(event.sceneName)) this.bpDisconnect?.();
+          if (this.bpOwner.observeSceneRemoval(event.sceneUuid)) this.bpDisconnect?.();
         });
         let connectTimer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -2265,7 +2290,19 @@ export class ObsAdapter {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          this.bpOwner.set(rpc, this.browserBaseUrl, visible),
+          this.configStore
+            .read()
+            .then(async (config) =>
+              this.bpOwner.set(
+                await this.configStore.managedResources.bind(
+                  rpc,
+                  `ws://${config.host}:${config.port}`,
+                  this.browserBaseUrl,
+                ),
+                this.browserBaseUrl,
+                visible,
+              ),
+            ),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), TIMEOUT_MS);
           }),

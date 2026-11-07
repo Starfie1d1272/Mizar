@@ -6,10 +6,10 @@ import { useCs2Status, type Cs2ConfigStatus } from './cs2-status';
 
 export function Cs2LaunchSettings() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
-  const { status, phase, refresh, error: statusError } = useCs2Status();
+  const { status, refresh, error: statusError } = useCs2Status();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const disabled = !status || busy || Boolean(phase) || status.pending;
+  const disabled = !status || busy;
   const qualityLabels = { 'very-high': '最高', high: '高', medium: '中', preserve: '保留原画质' };
   const [draft, setDraft] = useState<Pick<
     Cs2ConfigStatus,
@@ -50,7 +50,7 @@ export function Cs2LaunchSettings() {
   }
   return (
     <Panel className="settings-card">
-      <h2>CS2 启动设置</h2>
+      <h2>下次启动设置</h2>
       <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏时保留其画质与帧率。</p>
       {desktop ? (
         <form
@@ -74,7 +74,7 @@ export function Cs2LaunchSettings() {
             </Select>
             <Select
               label="游戏画质"
-              value={preferences?.qualityPreset ?? 'very-high'}
+              value={preferences?.qualityPreset ?? 'medium'}
               disabled={disabled}
               onChange={(event) => {
                 if (preferences)

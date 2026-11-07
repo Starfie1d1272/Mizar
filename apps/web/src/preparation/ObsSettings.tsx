@@ -90,7 +90,7 @@ export function ObsSettings() {
   const preparation = useObsPreparation();
   const preparing = preparation.phase === 'running';
   const connected = obs?.connection === 'connected';
-  const outputActive = connected && (obs.streaming || obs.recording);
+  const outputActive = Boolean(connected && (obs.streaming !== false || obs.recording !== false));
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
@@ -133,8 +133,14 @@ export function ObsSettings() {
                 ? 'OBS 密码无效'
                 : 'OBS 未连接'}
           </StatusPill>
-          <span>直播 · {connected ? (obs.streaming ? '进行中' : '未开始') : '待确认'}</span>
-          <span>录制 · {connected ? (obs.recording ? '进行中' : '未开始') : '待确认'}</span>
+          <span>
+            直播 ·{' '}
+            {connected && obs.streaming !== null ? (obs.streaming ? '进行中' : '未开始') : '待确认'}
+          </span>
+          <span>
+            录制 ·{' '}
+            {connected && obs.recording !== null ? (obs.recording ? '进行中' : '未开始') : '待确认'}
+          </span>
         </div>
         <Button disabled={busy || preparing} onClick={() => void action(() => obsCommand('open'))}>
           打开 OBS
@@ -376,7 +382,9 @@ export function ObsSettings() {
                     <Button
                       variant="primary"
                       loading={busy || preparing}
-                      disabled={busy || preparing || obs.streaming || obs.recording}
+                      disabled={
+                        busy || preparing || obs.streaming !== false || obs.recording !== false
+                      }
                       onClick={() =>
                         void action(async () => {
                           await prepareObs();

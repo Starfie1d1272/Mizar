@@ -1,5 +1,40 @@
 let controlDeliveryFailures = 0;
 let browserDocumentId: string | null = null;
+let documentSequence = 0;
+const hostQueue: Record<string, unknown>[] = [];
+let hostSending: Promise<void> | undefined;
+let hostRetry: ReturnType<typeof setTimeout> | undefined;
+function handoffHost(): Promise<void> {
+  if (hostSending) return hostSending;
+  if (!hostQueue.length) return Promise.resolve();
+  const events: Record<string, unknown>[] = [];
+  let bytes = 2;
+  for (const event of hostQueue.slice(0, 64)) {
+    const length = JSON.stringify(event).length * 3 + 1;
+    if (bytes + length > 240 * 1024) break;
+    events.push(event);
+    bytes += length;
+  }
+  hostSending = window
+    .__TAURI_INTERNALS__!.invoke<{ eventIds: string[] }>('persist_diagnostic_events', { events })
+    .then((receipt) => {
+      const ids = new Set(receipt.eventIds);
+      for (let i = hostQueue.length - 1; i >= 0; i--)
+        if (ids.has(hostQueue[i]!.eventId as string)) hostQueue.splice(i, 1);
+    })
+    .catch(() => {
+      controlDeliveryFailures++;
+    })
+    .finally(() => {
+      hostSending = undefined;
+      if (hostQueue.length && !hostRetry)
+        hostRetry = setTimeout(() => {
+          hostRetry = undefined;
+          void handoffHost();
+        }, 1000);
+    });
+  return hostSending;
+}
 
 export function browserErrorEvidence(error: unknown, seen = new Set<unknown>()): unknown {
   if (!(error instanceof Error)) return error;
@@ -28,9 +63,49 @@ export function sendControlEvidence(
     browserDocumentId ??= crypto.randomUUID();
     const context =
       evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
+    const sequence = ++documentSequence;
+    if (window.__TAURI_INTERNALS__) {
+      const now = new Date().toISOString();
+      const event = {
+        schema: 'mizar-diagnostic-event/2',
+        eventId: `${browserDocumentId}:${sequence}`,
+        producerKind: 'document',
+        producerRunId: browserDocumentId,
+        sequence,
+        kind: operation,
+        phase,
+        outcome: context.result ?? null,
+        observedAt: now,
+        recordedAt: now,
+        monotonicMs: performance.now(),
+        sourceInterval: null,
+        taskId: context.taskId ?? null,
+        operationId: context.operationId ?? null,
+        parentOperationId: context.parentOperationId ?? null,
+        attemptId: context.attemptId ?? null,
+        scope: { page: location.pathname },
+        evidence,
+        coverage: {
+          durability: 'pending',
+          unknown: ['document-termination-before-handoff'],
+          excluded: controlDeliveryFailures
+            ? [`unhanded_records_or_attempt_failures:${controlDeliveryFailures}`]
+            : [],
+          replayCount: 0,
+          occurrences: 1,
+        },
+      };
+      if (hostQueue.length >= 256 || JSON.stringify(event).length > 32768) {
+        controlDeliveryFailures++;
+        return Promise.resolve();
+      }
+      hostQueue.push(event);
+      return handoffHost();
+    }
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     for (const [field, header] of [
       ['taskId', 'x-mizar-task-id'],
+      ['attemptId', 'x-mizar-attempt-id'],
       ['operationId', 'x-mizar-operation-id'],
       ['parentOperationId', 'x-mizar-parent-operation-id'],
     ] as const) {

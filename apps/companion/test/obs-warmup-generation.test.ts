@@ -19,10 +19,19 @@ it('invalidates the capture lease on OBS output, takeover, input, disconnect and
   ) => void = () => {
     throw new Error('OBS connection missing');
   };
+  const extraActive: Record<string, boolean> = {
+    GetReplayBufferStatus: false,
+    GetVirtualCamStatus: false,
+  };
   let closeConnection: () => void = () => undefined;
   server.get('/', { websocket: true }, (socket) => {
-    sendEvent = (eventType, eventIntent, eventData = {}) =>
+    sendEvent = (eventType, eventIntent, eventData = {}) => {
+      if (eventType === 'ReplayBufferStateChanged')
+        extraActive.GetReplayBufferStatus = eventData.outputActive === true;
+      if (eventType === 'VirtualcamStateChanged')
+        extraActive.GetVirtualCamStatus = eventData.outputActive === true;
       socket.send(JSON.stringify({ op: 5, d: { eventType, eventIntent, eventData } }));
+    };
     closeConnection = () => socket.close();
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
     socket.on('message', (raw) => {
@@ -32,14 +41,22 @@ it('invalidates the capture lease on OBS output, takeover, input, disconnect and
       };
       if (request.op === 1) socket.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
       if (request.op !== 6) return;
-      const responseData =
-        request.d.requestType === 'GetStreamStatus' || request.d.requestType === 'GetRecordStatus'
-          ? { outputActive: false, outputReconnecting: false, outputPaused: false }
-          : request.d.requestType === 'GetSceneCollectionList'
-            ? { currentSceneCollectionName: 'Mizar' }
-            : request.d.requestType === 'GetCurrentProgramScene'
-              ? { currentProgramSceneName: '等待画面' }
-              : {};
+      const responseData = [
+        'GetStreamStatus',
+        'GetRecordStatus',
+        'GetReplayBufferStatus',
+        'GetVirtualCamStatus',
+      ].includes(request.d.requestType)
+        ? {
+            outputActive: extraActive[request.d.requestType] ?? false,
+            outputReconnecting: false,
+            outputPaused: false,
+          }
+        : request.d.requestType === 'GetSceneCollectionList'
+          ? { currentSceneCollectionName: 'Mizar' }
+          : request.d.requestType === 'GetCurrentProgramScene'
+            ? { currentProgramSceneName: '等待画面' }
+            : {};
       socket.send(
         JSON.stringify({
           op: 7,
@@ -73,7 +90,7 @@ it('invalidates the capture lease on OBS output, takeover, input, disconnect and
     await vi.waitFor(() => expect(starting()).toBe(false));
     await expect(adapter.captureWarmupGuard()).rejects.toThrow('直播正在开始');
     const time = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 9000);
-    expect((await adapter.outputStatus()).stream.phase).toBe('starting');
+    expect((await adapter.outputStatus()).stream.phase).toBe('unknown');
     time.mockRestore();
     sendEvent('StreamStateChanged', 64, {
       outputActive: false,

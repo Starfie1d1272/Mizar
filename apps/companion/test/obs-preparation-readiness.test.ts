@@ -190,7 +190,7 @@ test('OBS status and explicit ensure expose the same blocking and warning facts'
   }
 });
 
-test('explicit ensure repairs legacy names even when no other finding requires repair', async () => {
+test('explicit ensure preserves legacy named audio without verified ownership', async () => {
   const desired = obsDesiredScenes(baseUrl);
   const inputs = [
     ...desired.map((scene) => ({ inputName: scene.browserInput, inputKind: 'browser_source' })),
@@ -198,7 +198,6 @@ test('explicit ensure repairs legacy names even when no other finding requires r
     { inputName: 'Mizar · Desktop Audio', inputKind: 'wasapi_output_capture' },
   ];
   let outputActive = false;
-  let startAfterRename = false;
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: async (type, data = {}) => {
@@ -288,7 +287,6 @@ test('explicit ensure repairs legacy names even when no other finding requires r
         inputs.find((item) => item.inputName === data.inputName)!.inputName = String(
           data.newInputName,
         );
-        if (startAfterRename) outputActive = true;
         return {};
       }
       if (['SetInputSettings', 'SetSceneItemTransform', 'SetSceneItemIndex'].includes(type))
@@ -297,30 +295,24 @@ test('explicit ensure repairs legacy names even when no other finding requires r
     },
   };
   outputActive = true;
-  await assert.rejects(
-    ensureObsConfiguration(obs, baseUrl, () => activeScene, true),
-    /Virtual camera/,
+  await ensureObsConfiguration(obs, baseUrl, () => activeScene, true);
+  assert.equal(
+    calls.some((type) => /^(Create|Set|Remove|Stop)/.test(type)),
+    false,
   );
-  assert.equal(calls.includes('SetInputName'), false);
-  outputActive = false;
-  startAfterRename = true;
-  await assert.rejects(
-    ensureObsConfiguration(obs, baseUrl, () => activeScene, true),
-    /Virtual camera/,
-  );
-  assert.equal(calls.includes('SetInputSettings'), false);
-  inputs.find((input) => input.inputName === '桌面声音')!.inputName = 'Mizar · Desktop Audio';
-  startAfterRename = false;
   outputActive = false;
   const findings = await ensureObsConfiguration(obs, baseUrl, () => activeScene, true);
   assert.equal(
     findings.some((item) => item.code === 'legacy_names'),
     false,
   );
-  assert.ok(inputs.some((input) => input.inputName === '桌面声音'));
-  assert.ok(calls.includes('SetInputName'));
+  assert.ok(inputs.some((input) => input.inputName === 'Mizar · Desktop Audio'));
   assert.equal(
-    calls.some((type) => type.startsWith('Stop')),
+    inputs.some((input) => input.inputName === '桌面声音'),
+    false,
+  );
+  assert.equal(
+    calls.some((type) => /^(Create|Set|Remove|Stop)/.test(type)),
     false,
   );
 });

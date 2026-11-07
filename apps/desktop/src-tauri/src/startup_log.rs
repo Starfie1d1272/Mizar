@@ -2,7 +2,7 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -32,8 +32,7 @@ fn diagnostic_uuid(value: Option<&str>) -> Option<&str> {
     })
 }
 
-pub const LOG_LIMIT: u64 = 25 * 1024 * 1024;
-const HISTORY: usize = 3;
+pub const LOG_LIMIT: u64 = 1024 * 1024;
 const MESSAGE_LIMIT: usize = 8192;
 
 #[derive(Clone)]
@@ -49,6 +48,71 @@ struct LogFile {
     identity: Value,
     limit: u64,
     page_loads: u64,
+    sequence: u64,
+    segment_name: String,
+    document_segment_name: String,
+    active_segments: Vec<String>,
+    write_poisoned: bool,
+}
+
+fn reserve_segment(directory: &Path, prefix: &str) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..32 {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(
+                format!(
+                    "{}:{stamp}:{}",
+                    std::process::id(),
+                    NONCE.fetch_add(1, Ordering::Relaxed)
+                )
+                .as_bytes()
+            )
+        );
+        let name = format!(
+            "{prefix}-{}-{}-4{}-8{}-{}.ndjson",
+            &digest[..8],
+            &digest[8..12],
+            &digest[13..16],
+            &digest[17..20],
+            &digest[20..32]
+        );
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join(&name))
+        {
+            Ok(file) => {
+                file.sync_all()?;
+                return Ok(name);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("diagnostic segment reservation exhausted"))
+}
+
+fn append_committed(log: &mut LogFile, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if log.write_poisoned {
+        return Err(io::Error::other("diagnostic append repair required"));
+    }
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    let start = file.seek(SeekFrom::End(0))?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_data()) {
+        if file.set_len(start).and_then(|_| file.sync_data()).is_err() {
+            // Preserve uncertain bytes for recovery; never append/ACK over a partial record.
+            log.write_poisoned = true;
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn normalized(path: &Path) -> PathBuf {
@@ -102,28 +166,6 @@ pub fn writable_root(root: &Path, override_path: Option<PathBuf>) -> io::Result<
         }
     }
     Ok(state)
-}
-
-fn rotated(directory: &Path, index: usize) -> PathBuf {
-    directory.join(if index == 0 {
-        "desktop.ndjson".into()
-    } else {
-        format!("desktop.{index}.ndjson")
-    })
-}
-
-fn rotate(directory: &Path) -> io::Result<()> {
-    let oldest = rotated(directory, HISTORY);
-    if oldest.exists() {
-        fs::remove_file(oldest)?;
-    }
-    for index in (0..HISTORY).rev() {
-        let source = rotated(directory, index);
-        if source.exists() {
-            fs::rename(source, rotated(directory, index + 1))?;
-        }
-    }
-    Ok(())
 }
 
 fn credential_key(key: &str) -> bool {
@@ -220,12 +262,23 @@ impl DesktopLog {
         let state_root = writable_root(root, state_override)?;
         let directory = state_root.join("logs");
         fs::create_dir_all(&directory)?;
-        rotate(&directory)?;
         let ticks = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let session_id = format!("{:032x}-{:08x}", ticks, std::process::id());
+        use sha2::{Digest, Sha256};
+        let entropy = format!(
+            "{:x}",
+            Sha256::digest(format!("{ticks}:{}", std::process::id()).as_bytes())
+        );
+        let session_id = format!(
+            "{}-{}-4{}-8{}-{}",
+            &entropy[..8],
+            &entropy[8..12],
+            &entropy[13..16],
+            &entropy[17..20],
+            &entropy[20..32]
+        );
         let artifact_path = root.join("resources/metadata/artifact.json");
         let artifact: Value = fs::metadata(&artifact_path)
             .ok()
@@ -257,6 +310,11 @@ impl DesktopLog {
                 identity,
                 limit: LOG_LIMIT,
                 page_loads: 0,
+                sequence: 0,
+                segment_name: reserve_segment(&directory, "desktop")?,
+                document_segment_name: reserve_segment(&directory, "document")?,
+                active_segments: Vec::new(),
+                write_poisoned: false,
             })),
             directory,
             state_root,
@@ -316,24 +374,43 @@ impl DesktopLog {
                         .as_nanos()
                 );
                 for (index, text) in chunks.iter().enumerate() {
-                    Self::write_entry(&log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable)?;
+                    Self::write_entry(&mut log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable)?;
                 }
                 return Ok(());
             }
-            Self::write_entry(&log, stage, result, Some(&clean), durable)
+            Self::write_entry(&mut log, stage, result, Some(&clean), durable)
         } else {
-            Self::write_entry(&log, stage, result, None, durable)
+            Self::write_entry(&mut log, stage, result, None, durable)
         }
     }
 
     fn write_entry(
-        log: &LogFile,
+        log: &mut LogFile,
         stage: &str,
         result: &str,
         detail: Option<&str>,
         durable: bool,
     ) -> io::Result<()> {
+        log.sequence += 1;
         let mut entry = log.identity.clone();
+        entry["schema"] = json!("mizar-diagnostic-event/2");
+        entry["producerKind"] = json!("host");
+        entry["producerRunId"] = entry["startupSessionId"].clone();
+        entry["sequence"] = json!(log.sequence);
+        entry["eventId"] = json!(format!(
+            "{}:{}",
+            entry["startupSessionId"].as_str().unwrap_or("unknown"),
+            log.sequence
+        ));
+        entry["kind"] = json!(stage);
+        entry["phase"] = json!(result);
+        entry["outcome"] = json!(result);
+        entry["parentOperationId"] = Value::Null;
+        entry["attemptId"] = Value::Null;
+        entry["scope"] = Value::Null;
+        entry["monotonicMs"] = Value::Null;
+        entry["sourceInterval"] = Value::Null;
+        entry["coverage"] = json!({"durability":"committed","unknown":["cross-process-clock-order"],"excluded":[],"replayCount":0,"occurrences":1});
         entry["trigger"] = json!("system");
         entry["taskId"] = Value::Null;
         entry["operationId"] = Value::Null;
@@ -345,34 +422,401 @@ impl DesktopLog {
             }
         });
         entry["time"] = json!(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        entry["observedAt"] = entry["time"].clone();
+        entry["recordedAt"] = entry["time"].clone();
         entry["stage"] = json!(stage);
         entry["result"] = json!(result);
-        if let Some(detail) = detail {
-            entry[if result == "failure" {
-                "error"
-            } else {
-                "detail"
-            }] = json!(serde_json::from_str::<Value>(detail)
-                .map(redact_value)
-                .map(|value| value.to_string())
-                .unwrap_or_else(|_| redact_text(detail)));
-        }
+        entry["evidence"] = detail
+            .map(|text| {
+                serde_json::from_str::<Value>(text)
+                    .map(redact_value)
+                    .unwrap_or_else(|_| json!({"text":redact_text(text)}))
+            })
+            .unwrap_or(Value::Null);
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
         }
         let mut bytes = serde_json::to_vec(&entry)?;
         bytes.push(b'\n');
-        let current = rotated(&log.directory, 0);
+        let mut current = log.directory.join(&log.segment_name);
         if fs::metadata(&current).map_or(0, |m| m.len()) + bytes.len() as u64 > log.limit {
-            rotate(&log.directory)?;
+            Self::collect_segments(log, bytes.len() as u64)?;
+            let sealed = log.segment_name.clone();
+            log.active_segments.push(sealed);
+            log.segment_name = reserve_segment(&log.directory, "desktop")?;
+            current = log.directory.join(&log.segment_name);
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(current)?;
-        file.write_all(&bytes)?;
-        file.flush()?;
-        if durable {
-            file.sync_data()?;
+        if fs::metadata(&current)?.len() == 0 {
+            Self::collect_segments(log, LOG_LIMIT)?;
+        }
+        let _ = durable;
+        append_committed(log, &current, &bytes)?;
+        Ok(())
+    }
+
+    /// A document retains its immutable IDs until this fsync receipt is returned.
+    pub fn persist_document_events(&self, events: &[Value]) -> Result<Value, String> {
+        if events.is_empty()
+            || events.len() > 64
+            || serde_json::to_vec(events).map_err(|e| e.to_string())?.len() > 256 * 1024
+        {
+            return Err("诊断交接批次超出限制。".into());
+        }
+        let mut log = self.inner.lock().map_err(|_| "诊断写入暂不可用。")?;
+        let mut ids = Vec::new();
+        let mut bytes = Vec::new();
+        for event in events {
+            let run =
+                diagnostic_uuid(event["producerRunId"].as_str()).ok_or("诊断文档身份无效。")?;
+            let sequence = event["sequence"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or("诊断序号无效。")?;
+            let expected = format!("{run}:{sequence}");
+            if event["schema"] != "mizar-diagnostic-event/2"
+                || event["producerKind"] != "document"
+                || event["eventId"] != expected
+                || !event["coverage"].is_object()
+                || !event["evidence"].is_object()
+                || event["kind"]
+                    .as_str()
+                    .is_none_or(|v| v.is_empty() || v.len() > 160)
+                || event["recordedAt"]
+                    .as_str()
+                    .is_none_or(|v| chrono::DateTime::parse_from_rfc3339(v).is_err())
+            {
+                return Err("诊断信封无效。".into());
+            }
+            let mut clean = redact_value(event.clone());
+            clean["coverage"]["durability"] = json!("committed");
+            serde_json::to_writer(&mut bytes, &clean).map_err(|e| e.to_string())?;
+            bytes.push(b'\n');
+            ids.push(expected);
+        }
+        // Dedicated document carrier: retries preserve identity and readers deduplicate by eventId.
+        let mut path = self.directory.join(&log.document_segment_name);
+        if fs::metadata(&path).map_or(0, |m| m.len()) + bytes.len() as u64 > LOG_LIMIT {
+            Self::collect_segments(&log, bytes.len() as u64).map_err(|e| e.to_string())?;
+            let current = log.document_segment_name.clone();
+            log.active_segments.push(current);
+            log.document_segment_name =
+                reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
+            path = self.directory.join(&log.document_segment_name);
+        }
+        if fs::metadata(&path).map_or(0, |m| m.len()) + bytes.len() as u64 > 100 * 1024 * 1024 {
+            return Err("诊断文档保留空间已满。".into());
+        }
+        if fs::metadata(&path).map_err(|e| e.to_string())?.len() == 0 {
+            Self::collect_segments(&log, LOG_LIMIT).map_err(|e| e.to_string())?;
+        }
+        append_committed(&mut log, &path, &bytes).map_err(|e| e.to_string())?;
+        Ok(json!({"eventIds":ids}))
+    }
+
+    fn collect_segments(log: &LogFile, incoming: u64) -> io::Result<()> {
+        use std::collections::HashSet;
+        let mut protected: HashSet<String> = log.active_segments.iter().cloned().collect();
+        protected.insert(log.segment_name.clone());
+        protected.insert(log.document_segment_name.clone());
+        let mut extra = HashSet::new();
+        let pins = log.directory.join("host-pins");
+        if pins.exists() {
+            for entry in fs::read_dir(&pins)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !(name.ends_with(".json") || name.ends_with(".partial")) {
+                    continue;
+                }
+                let meta = fs::symlink_metadata(entry.path())?;
+                if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
+                    return Err(io::Error::other("unsafe host pin"));
+                }
+                let receipt: Value = serde_json::from_slice(&fs::read(entry.path())?)?;
+                if receipt["expiresAt"]
+                    .as_str()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .is_some_and(|t| t < Utc::now())
+                {
+                    continue;
+                }
+                for segment in receipt["segments"]
+                    .as_array()
+                    .ok_or_else(|| io::Error::other("invalid host pin"))?
+                {
+                    let name = segment["name"]
+                        .as_str()
+                        .ok_or_else(|| io::Error::other("invalid host pin name"))?;
+                    protected.insert(name.to_owned());
+                    if receipt["kind"] == "incident" && receipt["state"] == "committed" {
+                        extra.insert(name.to_owned());
+                    }
+                }
+            }
+        }
+        let mut files = Vec::new();
+        let mut ordinary = 0u64;
+        for entry in fs::read_dir(&log.directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !(name.starts_with("desktop-") || name.starts_with("document-"))
+                || !name.ends_with(".ndjson")
+            {
+                continue;
+            }
+            let meta = fs::symlink_metadata(entry.path())?;
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                return Err(io::Error::other("unsafe host segment"));
+            }
+            if !extra.contains(&name) {
+                ordinary += meta.len();
+            }
+            files.push((meta.modified()?, name, meta.len()));
+        }
+        files.sort();
+        for (time, name, bytes) in files {
+            if protected.contains(&name) {
+                continue;
+            }
+            if ordinary + incoming <= 100 * 1024 * 1024
+                && SystemTime::now()
+                    .duration_since(time)
+                    .unwrap_or_default()
+                    .as_secs()
+                    <= 14 * 86400
+            {
+                continue;
+            }
+            if fs::metadata(log.directory.join("host-retention.ndjson"))
+                .map(|m| m.len() >= 4 * 1024 * 1024)
+                .unwrap_or(false)
+            {
+                return Err(io::Error::other("host retention evidence ledger capacity"));
+            }
+            let evidence = json!({"schema":"mizar-host-retention/2","name":name,"bytes":bytes,"reason":"un pinned age or capacity","recordedAt":Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)});
+            let mut record = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log.directory.join("host-retention.ndjson"))?;
+            serde_json::to_writer(&mut record, &evidence)?;
+            record.write_all(b"\n")?;
+            record.sync_data()?;
+            fs::remove_file(log.directory.join(&name))?;
+            ordinary = ordinary.saturating_sub(bytes);
+        }
+        if ordinary + incoming > 100 * 1024 * 1024 {
+            return Err(io::Error::other("host pinned retention budget"));
         }
         Ok(())
+    }
+
+    /// Prepare/commit/release only this producer's evidence, in its writer serial section.
+    pub fn diagnostic_pin(&self, action: &str, pin_id: &str, kind: &str) -> Result<Value, String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        if diagnostic_uuid(Some(pin_id)).is_none()
+            || !["incident", "export", "delivery", "active"].contains(&kind)
+            || !["prepare", "commit", "release"].contains(&action)
+        {
+            return Err("诊断固定请求无效。".into());
+        }
+        let mut log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
+        let directory = self.directory.join("host-pins");
+        fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        let meta = fs::symlink_metadata(&directory).map_err(|e| e.to_string())?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err("诊断固定路径无效。".into());
+        }
+        let path = directory.join(format!("{pin_id}.json"));
+        if action == "prepare" && path.exists() {
+            let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() > 1024 * 1024
+            {
+                return Err("诊断固定回执无效。".into());
+            }
+            let previous: Value =
+                serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            if previous["pinId"] != pin_id || previous["kind"] != kind {
+                return Err("诊断固定回执不匹配。".into());
+            }
+            return Ok(previous);
+        }
+        if action == "release" {
+            match fs::remove_file(&path) {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.to_string()),
+            };
+            return Ok(json!({"pinId":pin_id,"state":"released"}));
+        }
+        let mut receipt = if action == "prepare" {
+            let mut segments = Vec::new();
+            for entry in fs::read_dir(&self.directory).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !(name.starts_with("desktop-") || name.starts_with("document-"))
+                    || !name.ends_with(".ndjson")
+                {
+                    continue;
+                }
+                let before = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+                if !before.is_file() || before.file_type().is_symlink() {
+                    return Err("诊断固定源无效。".into());
+                }
+                let mut file = fs::File::open(entry.path()).map_err(|e| e.to_string())?;
+                let mut hash = Sha256::new();
+                let mut size = 0u64;
+                let mut buffer = [0u8; 65536];
+                loop {
+                    let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                    if n == 0 {
+                        break;
+                    }
+                    size += n as u64;
+                    hash.update(&buffer[..n]);
+                }
+                if size != before.len() {
+                    return Err("诊断固定源已变化。".into());
+                }
+                segments.push(
+                    json!({"name":name,"bytes":size,"sha256":format!("{:x}",hash.finalize())}),
+                );
+            }
+            // Seal both live carriers. Their names are never reused after receipt publication.
+            let next_host =
+                reserve_segment(&log.directory, "desktop").map_err(|e| e.to_string())?;
+            let next_document =
+                reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
+            let sealed = log.segment_name.clone();
+            log.active_segments.push(sealed);
+            let sealed_document = log.document_segment_name.clone();
+            log.active_segments.push(sealed_document);
+            log.segment_name = next_host;
+            log.document_segment_name = next_document;
+            json!({"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments})
+        } else {
+            let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
+                return Err("诊断固定回执无效。".into());
+            }
+            let receipt: Value =
+                serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            if receipt["schema"] != "mizar-producer-pin/2"
+                || receipt["pinId"] != pin_id
+                || receipt["kind"] != kind
+            {
+                return Err("诊断固定回执不匹配。".into());
+            }
+            receipt
+        };
+        if action == "commit" {
+            if receipt["expiresAt"]
+                .as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .is_some_and(|time| time <= Utc::now())
+            {
+                return Err("诊断固定租约已到期，请重新固定。".into());
+            }
+            for segment in receipt["segments"].as_array().ok_or("固定范围无效。")? {
+                let name = segment["name"].as_str().ok_or("固定文件无效。")?;
+                if name.contains(['/', '\\'])
+                    || !(name.starts_with("desktop-") || name.starts_with("document-"))
+                    || !name.ends_with(".ndjson")
+                {
+                    return Err("固定文件路径无效。".into());
+                }
+                let path = self.directory.join(name);
+                let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+                if !meta.is_file()
+                    || meta.file_type().is_symlink()
+                    || meta.len() != segment["bytes"].as_u64().ok_or("固定大小无效。")?
+                {
+                    return Err("固定文件已变化。".into());
+                }
+                let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+                let mut hash = Sha256::new();
+                let mut buffer = [0u8; 65536];
+                loop {
+                    let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                    if n == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..n]);
+                }
+                if segment["sha256"] != format!("{:x}", hash.finalize()) {
+                    return Err("固定文件摘要不匹配。".into());
+                }
+            }
+        }
+        if action == "commit" && kind == "incident" {
+            let reservation_path = self.directory.join("incident-pins.json");
+            let metadata = fs::symlink_metadata(&reservation_path).map_err(|e| e.to_string())?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > 4 * 1024 * 1024
+            {
+                return Err("现场证据额度预留无效。".into());
+            }
+            let reservations: Value =
+                serde_json::from_slice(&fs::read(reservation_path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let mark = reservations["marks"]
+                .as_array()
+                .and_then(|marks| {
+                    marks.iter().find(|mark| {
+                        mark["pinId"] == pin_id
+                            && ["reserved", "partial", "committed"]
+                                .contains(&mark["status"].as_str().unwrap_or(""))
+                    })
+                })
+                .ok_or("现场证据额度尚未预留。")?;
+            let host = mark["receipts"]
+                .as_array()
+                .and_then(|receipts| receipts.iter().find(|r| r["producerId"] == "host"))
+                .ok_or("Host 固定额度尚未确认。")?;
+            for segment in receipt["segments"].as_array().ok_or("固定范围无效。")? {
+                if !host["segments"].as_array().is_some_and(|segments| {
+                    segments.iter().any(|s| {
+                        s["name"] == segment["name"]
+                            && s["bytes"] == segment["bytes"]
+                            && s["sha256"] == segment["sha256"]
+                    })
+                }) {
+                    return Err("固定范围与额度预留不匹配。".into());
+                }
+            }
+        }
+        if action == "commit" {
+            receipt["state"] = json!("committed");
+            if kind != "export" {
+                receipt["expiresAt"] = Value::Null;
+            }
+        }
+        let temporary = directory.join(format!("{pin_id}.partial"));
+        if let Ok(meta) = fs::symlink_metadata(&temporary) {
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                return Err("诊断固定暂存路径无效。".into());
+            }
+            fs::remove_file(&temporary).map_err(|e| e.to_string())?;
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&serde_json::to_vec(&receipt).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        fs::rename(temporary, path).map_err(|e| e.to_string())?;
+        Ok(receipt)
     }
 
     /// Scope synchronous native work only; async/spawned work must enter its own scope.
@@ -383,8 +827,31 @@ impl DesktopLog {
         trigger: Option<&str>,
         run: impl FnOnce() -> T,
     ) -> T {
+        self.with_task_attempt(task_id, operation_id, None, None, trigger, run)
+    }
+
+    pub fn with_task_attempt<T>(
+        &self,
+        task_id: Option<&str>,
+        operation_id: Option<&str>,
+        parent_operation_id: Option<&str>,
+        attempt_id: Option<&str>,
+        trigger: Option<&str>,
+        run: impl FnOnce() -> T,
+    ) -> T {
         let task_id = diagnostic_uuid(task_id);
-        let context = json!({"taskId":task_id,"operationId":diagnostic_uuid(operation_id),"trigger":if task_id.is_some() { match trigger { Some("user") => "user", Some("system") => "system", _ => "unattributed" } } else {"unattributed"}});
+        let context = json!({"taskId":task_id,"operationId":diagnostic_uuid(operation_id),"parentOperationId":diagnostic_uuid(parent_operation_id),"attemptId":diagnostic_uuid(attempt_id),"trigger":if task_id.is_some() { match trigger { Some("user") => "user", Some("system") => "system", _ => "unattributed" } } else {"unattributed"}});
+        let _guard = TaskContextGuard(TASK_CONTEXT.with(|slot| slot.replace(context)));
+        run()
+    }
+
+    /// Add a synchronous child attempt while preserving the current task and operation.
+    pub fn with_attempt<T>(&self, attempt_id: Option<&str>, run: impl FnOnce() -> T) -> T {
+        let mut context = TASK_CONTEXT.with(|slot| slot.borrow().clone());
+        if !context.is_object() {
+            context = json!({});
+        }
+        context["attemptId"] = json!(diagnostic_uuid(attempt_id));
         let _guard = TaskContextGuard(TASK_CONTEXT.with(|slot| slot.replace(context)));
         run()
     }
@@ -447,9 +914,9 @@ impl DesktopLog {
         std::panic::set_hook(Box::new(move |info| {
             let current = std::thread::current();
             // A panic inside the logger must not deadlock on its own mutex.
-            if let Ok(log) = logger.inner.try_lock() {
+            if let Ok(mut log) = logger.inner.try_lock() {
                 let _ = Self::write_entry(
-                    &log,
+                    &mut log,
                     "panic",
                     "failure",
                     Some(&format!(

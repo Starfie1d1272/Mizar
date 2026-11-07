@@ -1227,6 +1227,7 @@ impl ManagedCs2 {
     }
 
     pub fn recover(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        crate::cs2_frame_rate_live::retire_ended(&self.log)?;
         let Some(mut value) = self.store.load()? else {
             return Ok(());
         };
@@ -1416,6 +1417,50 @@ impl ManagedCs2 {
     pub(crate) fn camera_state(&self) -> Arc<Mutex<Option<CameraLease>>> {
         self.camera.clone()
     }
+    pub(crate) fn control_live_frame_rate(
+        &mut self,
+        action: &str,
+        limit: Option<u16>,
+    ) -> Result<Value, String> {
+        let log = self.log.clone();
+        crate::cs2_frame_rate_live::retire_ended(&log)?;
+        let pending = crate::cs2_frame_rate_live::pending(&log);
+        let unsupported = |message: &str| json!({"status":"unsupported","message":message,"canApply":false,"canRestore":false,"transaction": if pending { "pending" } else { "idle" }});
+        if crate::cs2_console::settings(&log)?["enabled"] != true && (action == "apply" || !pending)
+        {
+            return Ok(unsupported(
+                "未启用本机控制台记录，请使用游戏原生设置。本操作不会开启采集。",
+            ));
+        }
+        let Some((context, process)) = self.console_source()? else {
+            return Ok(unsupported("当前没有可核验的受管游戏，请使用原生设置。"));
+        };
+        let Some((lease, false)) = self.managed_camera_lease() else {
+            return Ok(unsupported(
+                "当前控制权限不支持可靠读回，请使用游戏原生设置。",
+            ));
+        };
+        if context["mulnxLaunch"] != true {
+            return Ok(unsupported(
+                "当前启动方式不支持现场帧率控制，请使用游戏原生设置。",
+            ));
+        }
+        let executable = PathBuf::from(
+            context["executable"]
+                .as_str()
+                .ok_or("受管游戏路径不可用。")?,
+        );
+        crate::cs2_frame_rate_live::control(&log, &executable, &process, action, limit, || {
+            process.is_running()
+                && self.workspace_process().is_ok_and(|now| {
+                    now.is_some_and(|now| now.pid == process.pid && now.created == process.created)
+                })
+                && self
+                    .managed_camera_lease()
+                    .is_some_and(|(current, invalid)| !invalid && current == lease)
+        })
+    }
+
     pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
         let mut state = self
             .camera
@@ -2402,6 +2447,15 @@ impl ManagedCs2 {
             crate::demo_test::complete(&self.log, trial.as_deref())?;
             self.message = Some("试播已结束，游戏保持运行。".into());
             return Ok(());
+        }
+        if crate::cs2_frame_rate_live::pending(&self.log) && !service_stopped {
+            // Restore before revoking the live lease. An unknown result is not
+            // replayed; normal owned-process exit can still safely proceed.
+            let result = crate::cs2_frame_rate_live::finish_restore(|| {
+                self.control_live_frame_rate("restore", None)
+            });
+            self.log
+                .native_outcome("cs2_frame_rate_finish_restore", None, &result);
         }
         if let Some((lease, _)) = self.managed_camera_lease() {
             // Mark under the camera lock after any in-flight pulse, before revocation.

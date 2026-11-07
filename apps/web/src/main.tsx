@@ -9,7 +9,6 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import '@fontsource/inter/700.css';
 
-import { MatchConnectionDialog } from './preparation/MatchConnectionDialog';
 import { App } from './App';
 import './product-shell.css';
 import './styles.css';
@@ -26,6 +25,5 @@ installPerformanceJournal();
 createRoot(rootElement).render(
   <StrictMode>
     <App />
-    <MatchConnectionDialog />
   </StrictMode>,
 );

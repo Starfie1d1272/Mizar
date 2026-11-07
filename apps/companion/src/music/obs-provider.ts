@@ -1,9 +1,11 @@
+import { isAbsolute, relative } from 'node:path';
+import { assertNoVideoOutput } from '../obs/video-transaction.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from '../obs/config.js';
 import type { ObsRpc } from '../obs/reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../obs/desired-state.js';
-import { looping, type MusicStore } from './store.js';
+import { looping, type MusicStore, type MusicState } from './store.js';
 
 export type MusicLayer = 'bgm' | 'stinger';
 export class ObsMusicProvider {
@@ -18,6 +20,9 @@ export class ObsMusicProvider {
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
     private readonly onMonitorSettingsChanged: () => void = () => {},
   ) {}
+  get isConnected(): boolean {
+    return this.connected;
+  }
   private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
     try {
       this.diagnostic(stage, diagnosticValue(evidence, '', new Set(), secrets));
@@ -98,9 +103,13 @@ export class ObsMusicProvider {
             { result: 'failure', request: name, parameters: data, error },
             [config.password],
           );
-          this.retryAt = Date.now() + 2000;
-          await this.close();
-          throw new Error('music_obs_unavailable', {
+          // An OBS request rejection is not a disconnected WebSocket.
+          if (!this.connected) {
+            this.retryAt = Date.now() + 2000;
+            throw new Error('music_obs_unavailable', { cause: error });
+          }
+          const code = (error as { code?: unknown } | undefined)?.code;
+          throw new Error(code === 600 ? 'music_source_missing' : 'music_playback_failed', {
             cause: error,
           });
         } finally {
@@ -108,7 +117,14 @@ export class ObsMusicProvider {
         }
       },
     };
-    return run(rpc, this.epoch);
+    return run(
+      await this.config.managedResources.bind(
+        rpc,
+        `ws://${config.host}:${config.port}`,
+        'http://127.0.0.1:3000',
+      ),
+      this.epoch,
+    );
   }
   async close() {
     this.connected = false;
@@ -142,6 +158,163 @@ export class ObsMusicProvider {
   }
 }
 
+type Initialization = MusicState['sourceInitialization'][number];
+const geometryKeys = [
+  'positionX',
+  'positionY',
+  'rotation',
+  'scaleX',
+  'scaleY',
+  'boundsType',
+  'boundsWidth',
+  'boundsHeight',
+  'boundsAlignment',
+  'alignment',
+  'cropLeft',
+  'cropRight',
+  'cropTop',
+  'cropBottom',
+];
+function geometry(value: unknown): Record<string, number | string> {
+  if (!value || typeof value !== 'object') throw new Error('music_initialization_unconfirmed');
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.scaleX !== 'number' ||
+    typeof record.scaleY !== 'number' ||
+    typeof record.boundsType !== 'string'
+  )
+    throw new Error('music_initialization_unconfirmed');
+  return Object.fromEntries(
+    geometryKeys.flatMap((key) =>
+      typeof record[key] === 'number' || typeof record[key] === 'string'
+        ? [[key, record[key] as number | string]]
+        : [],
+    ),
+  );
+}
+const sameGeometry = (a: Record<string, number | string>, b: Record<string, number | string>) =>
+  geometryKeys.every((key) => a[key] === b[key]);
+const sameItem = (a: Initialization, b: Initialization) =>
+  a.layer === b.layer &&
+  a.scope === b.scope &&
+  a.inputUuid === b.inputUuid &&
+  a.sceneUuid === b.sceneUuid &&
+  a.sceneItemId === b.sceneItemId;
+
+/** Resume only a persisted unfinished item, never infer ownership from an existing layout. */
+async function initializeMusicItem(
+  obs: ObsRpc,
+  store: MusicStore,
+  pending: Initialization,
+  scope: string | undefined,
+  valid: () => boolean,
+  newlyCreated = false,
+): Promise<void> {
+  const assertCurrent = () => {
+    if (!valid()) throw new Error('music_cancelled');
+    if (
+      pending.scope !== (scope ?? null) ||
+      store.state.sources[pending.layer] !== pending.inputUuid
+    )
+      throw new Error('music_source_conflict');
+  };
+  const read = async () => {
+    assertCurrent();
+    if (
+      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION ||
+      ((await obs.ownershipScope?.()) ?? null) !== pending.scope
+    )
+      throw new Error('music_source_conflict');
+    const items = (await obs.call('GetSceneItemList', { sceneUuid: pending.sceneUuid }))
+      .sceneItems as { sourceUuid: string; sceneItemId: number; sceneItemEnabled: boolean }[];
+    const matches = items.filter(
+      (item) =>
+        (pending.sceneItemId === null || item.sceneItemId === pending.sceneItemId) &&
+        item.sourceUuid === pending.inputUuid,
+    );
+    if (matches.length !== 1 || typeof matches[0]!.sceneItemEnabled !== 'boolean')
+      throw new Error('music_source_conflict');
+    if (pending.phase === 'locate') {
+      const sceneItemId = matches[0]!.sceneItemId;
+      if (!Number.isInteger(sceneItemId)) throw new Error('music_initialization_unconfirmed');
+      await store.update((state) => {
+        const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
+        if (!entry) throw new Error('music_initialization_unconfirmed');
+        entry.sceneItemId = sceneItemId;
+        entry.phase = 'transform';
+      });
+      pending = { ...pending, sceneItemId, phase: 'transform' };
+    }
+    const transform = geometry(
+      (
+        await obs.call('GetSceneItemTransform', {
+          sceneUuid: pending.sceneUuid,
+          sceneItemId: pending.sceneItemId,
+        })
+      ).sceneItemTransform,
+    );
+    assertCurrent();
+    return { enabled: matches[0]!.sceneItemEnabled, transform };
+  };
+  let current = await read();
+  if (pending.before === null) {
+    // If the first observation itself was interrupted, there is no saved geometry
+    // against which to exclude an operator edit. Keep the journal and fail closed.
+    if (!newlyCreated || current.enabled) throw new Error('music_initialization_unconfirmed');
+    pending = { ...pending, before: current.transform };
+    await store.update((state) => {
+      const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
+      if (!entry) throw new Error('music_initialization_unconfirmed');
+      entry.before = current.transform;
+    });
+  }
+  const target = { ...pending.before!, boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 };
+  if (pending.phase === 'transform') {
+    if (
+      current.enabled ||
+      (!sameGeometry(current.transform, pending.before!) &&
+        !sameGeometry(current.transform, target))
+    )
+      throw new Error('music_source_conflict');
+    if (!sameGeometry(current.transform, target)) {
+      await assertNoVideoOutput(obs);
+      assertCurrent();
+      await obs.call('SetSceneItemTransform', {
+        sceneUuid: pending.sceneUuid,
+        sceneItemId: pending.sceneItemId,
+        sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
+      });
+    }
+    current = await read();
+    if (current.enabled || !sameGeometry(current.transform, target))
+      throw new Error('music_initialization_unconfirmed');
+    await store.update((state) => {
+      const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
+      if (!entry) throw new Error('music_initialization_unconfirmed');
+      entry.phase = 'enable';
+    });
+  }
+  current = await read();
+  if (!sameGeometry(current.transform, target)) throw new Error('music_source_conflict');
+  if (!current.enabled) {
+    await assertNoVideoOutput(obs);
+    assertCurrent();
+    await obs.call('SetSceneItemEnabled', {
+      sceneUuid: pending.sceneUuid,
+      sceneItemId: pending.sceneItemId,
+      sceneItemEnabled: true,
+    });
+  }
+  current = await read();
+  if (!current.enabled || !sameGeometry(current.transform, target))
+    throw new Error('music_initialization_unconfirmed');
+  await store.update((state) => {
+    state.sourceInitialization = state.sourceInitialization.filter(
+      (entry) => !sameItem(entry, pending),
+    );
+  });
+}
+
 /** UUID + unpredictable installation name, never a display-name-only ownership assumption. */
 export async function ownedMusicInput(
   obs: ObsRpc,
@@ -151,7 +324,6 @@ export async function ownedMusicInput(
   valid: () => boolean,
   attach = true,
   preservePlayback = false,
-  renameLegacy = true,
 ) {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
@@ -160,6 +332,14 @@ export async function ownedMusicInput(
   const collection = await obs.call('GetSceneCollectionList');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('music_collection_inactive');
+  // A timed-out creation may already exist in OBS. Names alone cannot recover
+  // its UUID authority, so retain the original submitted intent and never replay.
+  if (
+    store.state.sourceInitialization.some(
+      (entry) => entry.layer === layer && entry.phase === 'create',
+    )
+  )
+    throw new Error('music_initialization_unconfirmed');
   const legacyName = `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${store.state.owner}`;
   const baseName = layer === 'bgm' ? '音乐' : '音效';
   const inputs = (await obs.call('GetInputList')).inputs as {
@@ -169,20 +349,26 @@ export async function ownedMusicInput(
   }[];
   const expected = store.state.sources[layer];
   const found = expected ? inputs.find((i) => i.inputUuid === expected) : undefined;
+  const scope = await obs.ownershipScope?.();
+  if (found && scope && store.state.sourceScopes[layer] !== scope) {
+    if (store.state.sourceScopes[layer] !== null) throw new Error('music_source_conflict');
+    const settings = (await obs.call('GetInputSettings', { inputUuid: expected })).inputSettings as
+      Record<string, unknown> | undefined;
+    const path =
+      typeof settings?.local_file === 'string'
+        ? relative(store.directory, settings.local_file)
+        : '..';
+    if (found.inputName !== legacyName && (!path || path.startsWith('..') || isAbsolute(path)))
+      throw new Error('music_source_conflict');
+    if (found.inputKind !== 'ffmpeg_source') throw new Error('music_source_conflict');
+    await store.update((state) => {
+      state.sourceScopes[layer] = scope;
+    });
+  }
+  if (!found && store.state.sourceInitialization.some((entry) => entry.layer === layer))
+    throw new Error('music_source_conflict');
   let name = found?.inputName ?? baseName;
-  if (renameLegacy && found?.inputName === legacyName && found.inputKind === 'ffmpeg_source') {
-    const [stream, record] = await Promise.all([
-      obs.call('GetStreamStatus'),
-      obs.call('GetRecordStatus'),
-    ]);
-    if (stream.outputActive === false && record.outputActive === false) {
-      name = baseName;
-      for (let index = 2; inputs.some((input) => input.inputName === name); index++)
-        name = `${baseName} ${index}`;
-      assertCurrent();
-      await obs.call('SetInputName', { inputUuid: expected, newInputName: name });
-    }
-  } else if (!found) {
+  if (!found) {
     if (
       inputs.some(
         (i) =>
@@ -203,14 +389,34 @@ export async function ownedMusicInput(
   } else {
     if (!create) return null;
     // Missing sources may be recreated, but existing unowned ones are never adopted.
-    const sceneNames = ((await obs.call('GetSceneList')).scenes as { sceneName: string }[]).map(
-      (s) => s.sceneName,
-    );
+    const sceneList = (await obs.call('GetSceneList')).scenes as {
+      sceneName: string;
+      sceneUuid: string;
+    }[];
+    const sceneNames = sceneList.map((s) => s.sceneName);
     const scenes = obsDesiredScenes('http://127.0.0.1:3000').filter((s) =>
       sceneNames.includes(s.sceneName),
     );
     if (!scenes.length) throw new Error('music_scenes_missing');
+    const sceneUuid = sceneList.find(
+      (scene) => scene.sceneName === scenes[0]!.sceneName,
+    )?.sceneUuid;
+    if (typeof sceneUuid !== 'string') throw new Error('music_source_conflict');
     assertCurrent();
+    await assertNoVideoOutput(obs);
+    const creation: Initialization = {
+      layer,
+      scope: scope ?? null,
+      inputUuid: null,
+      requestedName: name,
+      sceneUuid,
+      sceneItemId: null,
+      phase: 'create',
+      before: null,
+    };
+    await store.update((state) => {
+      state.sourceInitialization.push(creation);
+    });
     const result = await obs.call('CreateInput', {
       sceneName: scenes[0]!.sceneName,
       inputName: name,
@@ -222,11 +428,30 @@ export async function ownedMusicInput(
         restart_on_activate: false,
         close_when_inactive: false,
       },
-      sceneItemEnabled: true,
+      // OBS also creates the first scene item. Do not expose album-art video
+      // before that newly owned item's transform is made audio-only below.
+      sceneItemEnabled: false,
     });
     if (typeof result.inputUuid !== 'string') throw new Error('music_obs_version');
+    // Persist the accepted source before the first fallible item query. An unknown
+    // item id remains a locate intent, never permission to create another source.
+    const pending: Initialization = {
+      layer,
+      scope: scope ?? null,
+      inputUuid: result.inputUuid,
+      sceneUuid,
+      sceneItemId: Number.isInteger(result.sceneItemId) ? (result.sceneItemId as number) : null,
+      phase: Number.isInteger(result.sceneItemId) ? 'transform' : 'locate',
+      before: null,
+    };
     await store.update((s) => {
       s.sources[layer] = result.inputUuid as string;
+      const index = s.sourceInitialization.findIndex(
+        (entry) => sameItem(entry, creation) && entry.phase === 'create',
+      );
+      if (index < 0) throw new Error('music_initialization_unconfirmed');
+      s.sourceInitialization[index] = pending;
+      if (scope) s.sourceScopes[layer] = scope;
       const previous = s[layer];
       if (previous && !preservePlayback) {
         if (looping(previous.group)) s[layer] = null;
@@ -236,11 +461,17 @@ export async function ownedMusicInput(
         }
       }
     });
+    await initializeMusicItem(obs, store, pending, scope, valid, true);
+  }
+  for (const pending of store.state.sourceInitialization.filter((entry) => entry.layer === layer)) {
+    await initializeMusicItem(obs, store, pending, scope, valid);
   }
   if (create && (attach || !found)) {
-    const sceneNames = ((await obs.call('GetSceneList')).scenes as { sceneName: string }[]).map(
-      (s) => s.sceneName,
-    );
+    const sceneList = (await obs.call('GetSceneList')).scenes as {
+      sceneName: string;
+      sceneUuid: string;
+    }[];
+    const sceneNames = sceneList.map((s) => s.sceneName);
     for (const scene of obsDesiredScenes('http://127.0.0.1:3000').filter((s) =>
       sceneNames.includes(s.sceneName),
     )) {
@@ -248,37 +479,41 @@ export async function ownedMusicInput(
       const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
         .sceneItems as { sourceName: string; sourceUuid: string; sceneItemId: number }[];
       const owned = items.filter((i) => i.sourceUuid === store.state.sources[layer]);
-      if (!owned.length) {
-        assertCurrent();
-        const result = await obs.call('CreateSceneItem', {
-          sceneName: scene.sceneName,
-          sourceUuid: store.state.sources[layer],
-          sceneItemEnabled: false,
+      if (owned.length) continue; // Existing layouts are not initialization evidence.
+      const sceneUuid = sceneList.find((item) => item.sceneName === scene.sceneName)?.sceneUuid;
+      if (typeof sceneUuid !== 'string') throw new Error('music_source_conflict');
+      assertCurrent();
+      await assertNoVideoOutput(obs);
+      const pending: Initialization = {
+        layer,
+        scope: scope ?? null,
+        inputUuid: store.state.sources[layer]!,
+        sceneUuid,
+        sceneItemId: null,
+        phase: 'locate',
+        before: null,
+      };
+      // Attaching is also a side effect: retain an unresolved exact-source intent
+      // before dispatch so a lost reply cannot become an unjournaled disabled item.
+      await store.update((state) => {
+        state.sourceInitialization.push(pending);
+      });
+      const result = await obs.call('CreateSceneItem', {
+        sceneUuid,
+        sourceUuid: store.state.sources[layer],
+        sceneItemEnabled: false,
+      });
+      if (Number.isInteger(result.sceneItemId)) {
+        await store.update((state) => {
+          const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
+          if (!entry) throw new Error('music_initialization_unconfirmed');
+          entry.sceneItemId = result.sceneItemId as number;
+          entry.phase = 'transform';
         });
-        owned.push({
-          sourceName: name,
-          sourceUuid: store.state.sources[layer]!,
-          sceneItemId: result.sceneItemId as number,
-        });
+        pending.sceneItemId = result.sceneItemId as number;
+        pending.phase = 'transform';
       }
-      for (const item of owned) {
-        assertCurrent();
-        // A media source can decode embedded album art as video. Keep the item
-        // active for audio, but give its video no area in the broadcast canvas.
-        await obs.call('SetSceneItemTransform', {
-          sceneName: scene.sceneName,
-          sceneItemId: item.sceneItemId,
-          sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
-        });
-        if (!items.some((i) => i.sceneItemId === item.sceneItemId)) {
-          assertCurrent();
-          await obs.call('SetSceneItemEnabled', {
-            sceneName: scene.sceneName,
-            sceneItemId: item.sceneItemId,
-            sceneItemEnabled: true,
-          });
-        }
-      }
+      await initializeMusicItem(obs, store, pending, scope, valid, true);
     }
   }
   assertCurrent();

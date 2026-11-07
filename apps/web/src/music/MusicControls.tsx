@@ -27,9 +27,11 @@ export const MUSIC_LABELS = {
 export function MusicControls({
   compact = false,
   volumeDisabled = false,
+  onAddMusic,
 }: {
   compact?: boolean;
   volumeDisabled?: boolean;
+  onAddMusic?: () => void;
 }) {
   const view = useLocalRead<MusicView>('/local/v1/music', 1000);
   const [error, setError] = useState('');
@@ -57,6 +59,7 @@ export function MusicControls({
   };
   const status = view?.status;
   if (!status) return null;
+  const empty = Object.values(view.config.groups).every((group) => group.tracks.length === 0);
   const trackTitle = status.bgm?.track ?? (status.held ? '音乐已停止' : '当前无音乐');
   const nextDisabled =
     busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group);
@@ -102,6 +105,12 @@ export function MusicControls({
     ) : null;
   const notices = (
     <>
+      {empty ? (
+        <span>
+          尚未添加音乐。
+          {onAddMusic ? <Button onClick={onAddMusic}>添加音乐</Button> : '请在下方添加曲目。'}
+        </span>
+      ) : null}
       {error ? <span role="alert">{error}</span> : null}
       {status.message ? <span role="status">{status.message}</span> : null}
       {status.stingerHeld && !status.held ? <span role="status">音效由 OBS 人工控制</span> : null}

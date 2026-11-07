@@ -3,7 +3,7 @@ import { diagnosticValue } from '../support/session-journal.js';
 import { encodeLogVolumes, type ArchivedLogFile } from '../support/archive.js';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import { lstat, open, opendir } from 'node:fs/promises';
+import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import {
@@ -533,6 +533,13 @@ export interface ObsNativeOptions {
   readonly readProcesses?: () => Promise<readonly ObsNativeProcess[]>;
   readonly budgetMs?: number;
   readonly includeRelatedLogs?: boolean;
+  /** Trusted local exporter takes ownership of an already validated fixed OBS log handle. */
+  readonly retainRelatedLog?: (source: {
+    name: string;
+    handle: FileHandle;
+    bytes: number;
+    secrets: readonly string[];
+  }) => Promise<void>;
 }
 
 /** Fixed local OBS roots only. No browser paths, network, settings mutations or arbitrary profile export. */
@@ -1029,6 +1036,13 @@ export async function collectObsNativeEvidence(
               chronologyKnown = false;
             return chronologyKnown ? clockDate.toISOString() : null;
           };
+          const relatedSources = [
+            OBS_CAPTURE_INPUT,
+            'Mizar · CS2 Game Capture',
+            ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
+            ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
+          ];
+          let relatedMarker = false;
           const scan = await read(
             root,
             ['logs', name],
@@ -1036,6 +1050,9 @@ export async function collectObsNativeEvidence(
             false,
             true,
             (line) => {
+              relatedMarker ||= relatedSources.some(
+                (source) => line.includes(`: '${source}']`) || line.includes(`: "${source}"]`),
+              );
               const occurredAt = lineDate(line);
               const parsed = projectObsNativeLogLine(line);
               const event = parsed ? { ...parsed, occurredAt } : null;
@@ -1139,6 +1156,45 @@ export async function collectObsNativeEvidence(
               relatedLogBytes + tail.size > OBS_NATIVE_LIMITS.relatedLogTotalBytes
             ) {
               file.status = 'source_exceeds_budget';
+            } else if (options.retainRelatedLog) {
+              if (!relatedMarker) file.status = 'mizar_association_not_established';
+              else {
+                let handle: FileHandle | undefined;
+                try {
+                  const path = join(root, 'logs', name);
+                  const chain = await guardedPath(path);
+                  const before = chain.at(-1)!.stat;
+                  handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+                  const actual = await handle.stat();
+                  await unchanged(chain);
+                  if (
+                    !actual.isFile() ||
+                    actual.nlink !== 1 ||
+                    actual.ino !== before.ino ||
+                    actual.dev !== before.dev ||
+                    actual.size > OBS_NATIVE_LIMITS.relatedLogBytes ||
+                    relatedLogBytes + actual.size > OBS_NATIVE_LIMITS.relatedLogTotalBytes
+                  )
+                    throw new Error('related_log_snapshot_changed');
+                  await options.retainRelatedLog({
+                    name: `root-${evidence.roots.length - 1}-${slot}`,
+                    handle,
+                    bytes: actual.size,
+                    secrets: logSecrets,
+                  });
+                  handle = undefined;
+                  relatedLogBytes += actual.size;
+                  file.sourceBytes = actual.size;
+                  file.readBytes = actual.size;
+                  file.association = 'mizar_source_marker';
+                  file.status = 'snapshot_handle_retained';
+                } catch (error) {
+                  file.status = 'unreadable';
+                  evidence.errors.push(failure('related_log_open', error));
+                } finally {
+                  await handle?.close();
+                }
+              }
             } else {
               try {
                 const full = await read(

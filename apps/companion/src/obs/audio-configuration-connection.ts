@@ -98,7 +98,11 @@ export class AudioConfigurationConnection {
         },
       };
       return await bounded(
-        operation(rpc, endpoint, observeAudioMigration(client as MigrationEventSource)),
+        operation(
+          await this.config.managedResources.bind(rpc, endpoint, 'http://127.0.0.1:3000'),
+          endpoint,
+          observeAudioMigration(client as MigrationEventSource),
+        ),
         Math.max(1, deadline - Date.now()),
       );
     } finally {

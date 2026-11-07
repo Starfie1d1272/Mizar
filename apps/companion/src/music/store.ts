@@ -83,7 +83,28 @@ const stateSchema = z
     holdReason: z.enum(['external', 'stop']).optional(),
     stingerHeld: z.boolean().optional(),
     owner: z.string().uuid(),
+    sourceScopes: z
+      .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
+      .strict()
+      .default({ bgm: null, stinger: null }),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
+    sourceInitialization: z
+      .array(
+        z
+          .object({
+            layer: z.enum(['bgm', 'stinger']),
+            scope: z.string().nullable(),
+            inputUuid: z.string().min(1).nullable(),
+            requestedName: z.string().min(1).optional(),
+            sceneUuid: z.string().min(1),
+            sceneItemId: z.number().int().nullable(),
+            phase: z.enum(['create', 'locate', 'transform', 'enable']),
+            before: z.record(z.string(), z.union([z.number().finite(), z.string()])).nullable(),
+          })
+          .strict(),
+      )
+      .max(128)
+      .default([]),
     bgm: playbackSchema.nullable(),
     stinger: playbackSchema.nullable(),
     pause: z.object({ map: z.string(), id: z.string() }).nullable(),
@@ -131,7 +152,9 @@ export class MusicStore {
     monitorConfigured: { bgm: null, stinger: null },
     held: false,
     owner: randomUUID(),
+    sourceScopes: { bgm: null, stinger: null },
     sources: { bgm: null, stinger: null },
+    sourceInitialization: [],
     bgm: null,
     stinger: null,
     pause: null,

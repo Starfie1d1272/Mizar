@@ -19,7 +19,7 @@ struct State {
     configuration_owned: bool,
     sessions: BTreeSet<String>,
     document: u64,
-    feedback: Option<&'static str>,
+    feedback: Option<String>,
 }
 impl State {
     fn synchronize_document(&mut self, document: u64) -> bool {
@@ -30,9 +30,10 @@ impl State {
         self.document = document;
         self.sessions.clear();
         self.configuration_owned = false;
-        self.feedback = abandoned_owned.then_some(
-            "OBS 配置页面已离开，未自动关闭 OBS。如仍在运行，请核对推流与录制后手动关闭。",
-        );
+        self.feedback = abandoned_owned.then(|| {
+            "OBS 配置页面已离开，未自动关闭 OBS。如仍在运行，请核对推流与录制后手动关闭。"
+                .to_owned()
+        });
         abandoned_owned
     }
 
@@ -88,7 +89,7 @@ pub fn context(log: &DesktopLog) -> Result<Value, String> {
         log.event("obs_configuration", "preserved", Some("document_changed"));
     }
     Ok(
-        json!({ "documentGeneration": state.document.to_string(), "message": state.feedback.unwrap_or("") }),
+        json!({ "documentGeneration": state.document.to_string(), "message": state.feedback.as_deref().unwrap_or("") }),
     )
 }
 
@@ -199,6 +200,7 @@ pub fn launch(path: &str, session: Option<(&str, &str)>, log: &DesktopLog) -> Re
     synchronize_request(&mut state, session, log)?;
     if let Some((session, _)) = session {
         state.sessions.insert(session.to_owned());
+        state.feedback = None;
     } else {
         state.configuration_owned = false;
     }
@@ -262,36 +264,56 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
         return Err("OBS 配置会话无法识别。".into());
     }
     let mut state = STATE.lock().map_err(|_| "OBS 启动状态不可用。")?;
-    synchronize_request(&mut state, None, log)?;
-    let session_result = state.finish_session(session);
-    if session_result != "owned" {
-        return Ok(outcome(session_result));
+    let result: Result<Value, String> = (|| {
+        synchronize_request(&mut state, None, log)?;
+        let session_result = state.finish_session(session);
+        if session_result != "owned" {
+            return Ok(outcome(session_result));
+        }
+        if reap(&mut state, log).is_err() {
+            return Ok(outcome("unconfirmed"));
+        }
+        if state.child.is_none() {
+            return Ok(outcome("not_owned"));
+        }
+        let mut probe = crate::powershell::background();
+        probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
+        let reason =
+            match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8))
+            {
+                Ok(text) => match serde_json::from_str::<Value>(&text) {
+                    Ok(value) => preservation_reason(&value["production"], &value["outputs"]),
+                    Err(error) => {
+                        log.event(
+                            "obs_configuration",
+                            "status_parse_failed",
+                            Some(&error.to_string()),
+                        );
+                        "unconfirmed"
+                    }
+                },
+                Err(_) => "unconfirmed",
+            };
+        log.event("obs_configuration", "preserved", Some(reason));
+        Ok(outcome(reason))
+    })();
+    match &result {
+        Ok(value) => {
+            if let Some(message) = value["message"]
+                .as_str()
+                .filter(|message| !message.is_empty())
+            {
+                state.feedback = Some(message.to_owned());
+            }
+        }
+        Err(_) => {
+            state.feedback = Some(
+                "OBS 配置已结束，但实例状态未能确认。请在 OBS 中核对推流与录制，再手动关闭。"
+                    .into(),
+            )
+        }
     }
-    if reap(&mut state, log).is_err() {
-        return Ok(outcome("unconfirmed"));
-    }
-    if state.child.is_none() {
-        return Ok(outcome("not_owned"));
-    }
-    let mut probe = crate::powershell::background();
-    probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
-    let reason =
-        match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8)) {
-            Ok(text) => match serde_json::from_str::<Value>(&text) {
-                Ok(value) => preservation_reason(&value["production"], &value["outputs"]),
-                Err(error) => {
-                    log.event(
-                        "obs_configuration",
-                        "status_parse_failed",
-                        Some(&error.to_string()),
-                    );
-                    "unconfirmed"
-                }
-            },
-            Err(_) => "unconfirmed",
-        };
-    log.event("obs_configuration", "preserved", Some(reason));
-    Ok(outcome(reason))
+    result
 }
 
 pub(crate) async fn launch_managed(

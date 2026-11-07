@@ -12,7 +12,7 @@ function label(
   const action = pending?.output === kind ? pending.action : state?.pending;
   if (action || state?.phase === 'starting' || state?.phase === 'stopping')
     return `${action === 'stop' || state?.phase === 'stopping' ? '停止' : '开始'}${name}中…`;
-  if (!state || state.active === null) return `开始${name}`;
+  if (!state || state.active === null) return `${name}状态未确认`;
   if (state.phase === 'reconnecting') return '重连 · 停止';
   if (state.phase === 'paused') return '暂停 · 停止';
   return `${state.active ? '停止' : '开始'}${name}`;
@@ -49,7 +49,7 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
           return (
             <Button
               key={kind}
-              disabled={busy}
+              disabled={busy || !state || state.active === null}
               aria-label={label(kind, state, pending)}
               loading={Boolean(
                 (pending?.output === kind && pending) ||

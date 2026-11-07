@@ -285,6 +285,7 @@ export function registerRivalHubConnectionRoutes(
           : null,
       syncHealth,
       activeMatchId: linkedBinding()?.context.matchId ?? null,
+      contextRevision: linkedBinding()?.manifest.revision ?? null,
       activeDeviceName:
         options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
           ? options.connection.view().activeDeviceName
@@ -305,7 +306,7 @@ export function registerRivalHubConnectionRoutes(
               : options.canClaim && !options.canClaim()
                 ? '进入现场后可以成为本场数据源。'
                 : !observedLineupReady()
-                  ? '等待当前比赛的十人首发数据；就绪后自动认领，也可手动重试。'
+                  ? '等待当前比赛的有效名单；就绪后可开启网站同步。'
                   : null,
       lastRefreshAt,
       refreshError,
@@ -459,6 +460,49 @@ export function registerRivalHubConnectionRoutes(
       return reply
         .code(409)
         .send({ message: error instanceof Error ? error.message : '数据源切换未完成。' });
+    } finally {
+      sourceCommand = null;
+    }
+  });
+  app.post('/operator/rivalhub/source/resume', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const binding = linkedBinding();
+    const snapshot = options.currentSnapshot();
+    const body = request.body as { matchId?: unknown; contextRevision?: unknown } | null;
+    if (
+      !binding ||
+      binding.origin !== 'online' ||
+      !snapshot ||
+      body?.matchId !== binding.context.matchId ||
+      body.contextRevision !== binding.manifest.revision ||
+      snapshot.matchId !== binding.context.matchId ||
+      !observedLineupReady() ||
+      (options.canClaim && !options.canClaim())
+    )
+      return reply.code(409).send({ message: '比赛或制作状态已变化，请核对本场后恢复网站同步。' });
+    if (sourceCommand) return reply.code(409).send({ message: '网站同步操作正在进行，请稍候。' });
+    const current = () => {
+      const next = options.currentSnapshot();
+      return (
+        linkedBinding()?.manifest.revision === binding.manifest.revision &&
+        linkedBinding()?.context.matchId === binding.context.matchId &&
+        (!options.canClaim || options.canClaim()) &&
+        next?.matchId === snapshot.matchId &&
+        next.cursor.producerInstanceId === snapshot.cursor.producerInstanceId &&
+        next.cursor.liveSessionId === snapshot.cursor.liveSessionId &&
+        next.cursor.programSourceGeneration === snapshot.cursor.programSourceGeneration &&
+        next.cursor.mapEpoch === snapshot.cursor.mapEpoch
+      );
+    };
+    try {
+      sourceCommand = options.connection.resumeSync(snapshot, binding.manifest.revision, current);
+      return await sourceCommand;
+    } catch (error) {
+      request.log.error({ err: error }, 'Website sync recovery unconfirmed');
+      return reply
+        .code(409)
+        .send({ message: error instanceof Error ? error.message : '网站同步恢复尚未确认。' });
     } finally {
       sourceCommand = null;
     }

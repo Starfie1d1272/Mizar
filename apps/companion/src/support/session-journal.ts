@@ -1,14 +1,17 @@
+import { diagnosticSegmentNames } from './segments.js';
+import { ProducerRetention, type IncidentParticipant } from './retention.js';
+import { diagnosticEnvelope } from './envelope.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BOX_READ_TOKEN } from '../updates/contract.js';
 import { atomicJson, safePath } from '../resource-store/files.js';
 import { constants } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
-import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const SESSION_LIMITS = {
-  segmentBytes: 8 * 1024 * 1024,
-  segments: 8,
+  segmentBytes: 1024 * 1024,
+  segments: 64,
   retentionDays: 14,
   pendingBytes: 2 * 1024 * 1024,
 };
@@ -124,11 +127,13 @@ export function diagnosticValue(
 /** Small asynchronous observer of existing control/log boundaries; never runs filesystem I/O on ingress. */
 export class SessionJournal {
   readonly sessionId = randomUUID();
+  private readonly retained: ProducerRetention;
   readonly hostStartupSessionId: string | null;
   private readonly requestContext = new AsyncLocalStorage<{
     requestId: string;
     browserOperationId: string | null;
     taskId?: string | null;
+    attemptId?: string | null;
     parentOperationId?: string | null;
     trigger?: 'user' | 'system' | 'unattributed';
   }>();
@@ -137,6 +142,7 @@ export class SessionJournal {
       requestId: string;
       browserOperationId: string | null;
       taskId?: string | null;
+      attemptId?: string | null;
       parentOperationId?: string | null;
       trigger?: 'user' | 'system' | 'unattributed';
     },
@@ -154,6 +160,7 @@ export class SessionJournal {
     return () => this.listeners.delete(listener);
   }
   private sequence = 0;
+  private committedSequence = 0;
   private pendingBytes = 0;
   private writer = Promise.resolve();
   private pending: {
@@ -173,7 +180,8 @@ export class SessionJournal {
   private inflightRecords = 0;
   private inflightLines: string[] = [];
   private repair: { ino: number; dev: number; offset: number } | undefined;
-  private size = -1;
+  private size = 0;
+  private segmentName = `session-${randomUUID()}.ndjson`;
   private initialized = false;
   private readonly identity: {
     appVersion: string | null;
@@ -190,6 +198,10 @@ export class SessionJournal {
       hostStartupSessionId?: string | null;
     } = {},
   ) {
+    this.retained = new ProducerRetention(directory, 'companion', {
+      budgetBytes: 64 * 1024 * 1024,
+      retentionMs: 14 * 86400_000,
+    });
     const hostSession = identity.hostStartupSessionId ?? process.env.MIZAR_STARTUP_SESSION_ID;
     this.hostStartupSessionId =
       typeof hostSession === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(hostSession)
@@ -251,17 +263,46 @@ export class SessionJournal {
     evidence: unknown,
     receipt?: { resolve: (sequence: number) => void; reject: (error: unknown) => void },
   ): void {
+    const now = new Date().toISOString();
+    const sequence = ++this.sequence;
+    const context = this.requestContext.getStore();
+    const detail =
+      evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
     const line =
       JSON.stringify({
-        time: new Date().toISOString(),
+        schema: 'mizar-diagnostic-event/2',
+        eventId: `${this.sessionId}:${sequence}`,
+        producerKind: 'companion',
+        producerRunId: this.sessionId,
+        sequence,
+        kind: stage,
+        phase: typeof detail.phase === 'string' ? detail.phase : null,
+        outcome: typeof detail.result === 'string' ? detail.result : null,
+        observedAt: diagnosticEnvelope({ stage, evidence, time: now }).times[0] ?? null,
+        recordedAt: now,
+        monotonicMs: performance.now(),
+        sourceInterval: null,
+        taskId: context?.taskId ?? null,
+        operationId: context?.browserOperationId ?? context?.requestId ?? null,
+        parentOperationId: context?.parentOperationId ?? null,
+        attemptId:
+          context?.attemptId ?? (typeof detail.attemptId === 'string' ? detail.attemptId : null),
+        scope: detail.scope ?? null,
+        coverage: {
+          durability: 'committed',
+          unknown: ['cross-process-clock-order'],
+          excluded: [],
+          replayCount: 0,
+          occurrences: 1,
+        },
+        // Read-only compatibility aliases for existing in-process observers. No second body.
+        time: now,
         startupSessionId: this.sessionId,
+        stage,
         hostStartupSessionId: this.hostStartupSessionId,
         ...this.identity,
-        sequence: ++this.sequence,
-        stage,
-        taskId: null,
-        trigger: 'system',
-        ...this.requestContext.getStore(),
+        trigger: context?.trigger ?? 'system',
+        ...context,
         droppedBefore: this.dropped,
         writeFailuresBefore: this.failures,
         evidence: diagnosticValue(evidence),
@@ -283,7 +324,7 @@ export class SessionJournal {
   private startWriter() {
     if (this.draining) return;
     this.draining = true;
-    this.writer = Promise.resolve().then(() => this.drain());
+    this.writer = this.writer.then(() => this.drain());
   }
   private async drain(): Promise<void> {
     let failed = false;
@@ -299,11 +340,8 @@ export class SessionJournal {
         this.inflightRecords = batch.length;
         this.inflightLines = batch.map((entry) => entry.line);
         try {
-          await this.append(
-            batch.map((entry) => entry.line).join(''),
-            bytes,
-            batch.some((entry) => entry.receipt),
-          );
+          await this.append(batch.map((entry) => entry.line).join(''), bytes);
+          this.committedSequence = batch[batch.length - 1]!.sequence;
           this.writeError = null;
           this.pendingBytes -= bytes;
           for (const entry of batch) entry.receipt?.resolve(entry.sequence);
@@ -374,11 +412,17 @@ export class SessionJournal {
       await file.close();
     }
   }
-  private async append(line: string, bytes: number, sync = false) {
+  private async append(line: string, bytes: number) {
     await this.initialize();
     if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
+    // A failed collect after sealing must be retried before the empty successor accepts bytes.
+    if (
+      !this.size &&
+      !(await this.retained.collect({ incomingBytes: SESSION_LIMITS.segmentBytes })).writable
+    )
+      throw new Error('session_retention_pinned_budget');
     await safePath(this.directory);
-    const path = join(this.directory, 'session.ndjson');
+    const path = join(this.directory, this.segmentName);
     const before = await lstat(path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return null;
@@ -413,7 +457,7 @@ export class SessionJournal {
       }
       try {
         await fd.writeFile(line);
-        if (sync) await fd.sync();
+        await fd.sync();
         this.size = appendStart + bytes;
       } catch (error) {
         try {
@@ -453,54 +497,136 @@ export class SessionJournal {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failures++;
     }
-    for (let index = 0; index < SESSION_LIMITS.segments; index++) {
-      const path = join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson');
+    // Old rotating files are cold migration inputs, never deleted by the new writer.
+    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    await this.retained.initialize();
+    for (const name of (await diagnosticSegmentNames(this.directory)).filter((name) =>
+      name.startsWith('session-'),
+    )) {
+      if (this.retained.snapshot().segments.some((segment) => segment.name === name)) continue;
+      const path = await safePath(this.directory, name);
+      const size = (await lstat(path)).size;
+      if (size > 2 * 1024 * 1024) continue;
       try {
-        const stat = await lstat(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
-          throw new Error('unsafe_session_log');
-        if (Date.now() - stat.mtimeMs > SESSION_LIMITS.retentionDays * 86400_000) {
-          await unlink(path);
-          this.retention.expiredFiles++;
-          this.retention.expiredBytes += stat.size;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const events = (await readFile(path, 'utf8'))
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                producerRunId: string;
+                sequence: number;
+                observedAt: string | null;
+              },
+          );
+        if (!events[0]?.producerRunId) continue;
+        await this.retained.registerSegment(name, {
+          producerRunId: events[0].producerRunId,
+          firstSequence: events[0].sequence,
+          lastSequence: events.at(-1)!.sequence,
+          firstObservedAt: events[0].observedAt,
+          lastObservedAt: events.at(-1)!.observedAt,
+          records: events.length,
+        });
+      } catch {
+        this.failures++; /* Torn or invalid source remains cold, never silently deleted. */
       }
     }
-    this.size = await lstat(join(this.directory, 'session.ndjson')).then(
-      (s) => s.size,
-      () => 0,
-    );
-    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
+    for (const pin of this.retained.snapshot().pins)
+      if (pin.kind === 'active' && pin.pinId !== this.sessionId)
+        await this.retained.releasePin(pin.pinId);
     this.initialized = true;
   }
-  private async rotate() {
-    const oldest = await lstat(
-      join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`),
-    ).catch((error) => {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      return null;
+  private async seal() {
+    if (!this.size) return;
+    const content = await readFile(await safePath(this.directory, this.segmentName), 'utf8');
+    const events = content
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            sequence: number;
+            observedAt: string | null;
+            taskId?: string;
+            kind?: string;
+            stage?: string;
+            outcome?: string;
+          },
+      );
+    await this.retained.registerSegment(this.segmentName, {
+      producerRunId: this.sessionId,
+      firstSequence: events[0]?.sequence ?? null,
+      lastSequence: events.at(-1)?.sequence ?? null,
+      firstObservedAt: events[0]?.observedAt ?? null,
+      lastObservedAt: events.at(-1)?.observedAt ?? null,
+      records: events.length,
     });
-    if (oldest) {
-      this.retention.rotatedFiles++;
-      this.retention.rotatedBytes += oldest.size;
+    // Active critical paths remain protected; ordinary high-frequency observations may age out.
+    if (
+      events.some(
+        (event) =>
+          event.taskId ||
+          String(event.kind ?? event.stage).startsWith('business_') ||
+          diagnosticEnvelope(event).failureKinds.length > 0 ||
+          ['failed', 'failure', 'error'].includes(event.outcome ?? ''),
+      )
+    ) {
+      const pinId = this.segmentName.slice('session-'.length, -'.ndjson'.length);
+      await this.retained.preparePin({ pinId, kind: 'active', names: [this.segmentName] });
+      await this.retained.commitPin(pinId);
     }
-    await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
-    await unlink(join(this.directory, `session.ndjson.${SESSION_LIMITS.segments - 1}`)).catch(
-      (e) => {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      },
-    );
-    for (let index = SESSION_LIMITS.segments - 2; index >= 0; index--) {
-      await rename(
-        join(this.directory, index ? `session.ndjson.${index}` : 'session.ndjson'),
-        join(this.directory, `session.ndjson.${index + 1}`),
-      ).catch((e) => {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      });
-    }
+    this.segmentName = `session-${randomUUID()}.ndjson`;
     this.size = 0;
+  }
+  private async rotate() {
+    await this.seal();
+    if (!(await this.retained.collect({ incomingBytes: SESSION_LIMITS.segmentBytes })).writable)
+      throw new Error('session_retention_pinned_budget');
+  }
+  incidentParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('incident');
+  }
+  exportParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('export');
+  }
+  private evidenceParticipant(kind: 'incident' | 'export'): IncidentParticipant {
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = this.writer.then(operation);
+      this.writer = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    };
+    return {
+      producerId: 'companion',
+      prepare: (pinId) =>
+        serialize(async () => {
+          await this.initialize();
+          await this.seal();
+          const receipt = await this.retained.preparePin({
+            pinId,
+            kind,
+            names: this.retained.snapshot().segments.map((segment) => segment.name),
+          });
+          return {
+            ...receipt,
+            sourceState: {
+              health: this.health(),
+              memoryOnly: {
+                included: false,
+                events: this.pending.length,
+                reason: 'not-durably-committed',
+              },
+            },
+          };
+        }),
+      commit: (pinId) => serialize(() => this.retained.commitPin(pinId)),
+      release: (pinId) => serialize(() => this.retained.releasePin(pinId)),
+    };
   }
   async flush() {
     await this.writer;
@@ -513,6 +639,9 @@ export class SessionJournal {
     return {
       sessionId: this.sessionId,
       sequence: this.sequence,
+      committedSequence: this.committedSequence,
+      acceptedSequence: this.sequence,
+      asOf: new Date().toISOString(),
       dropped: this.dropped,
       writeFailures: this.failures,
       writeError: this.writeError,
@@ -520,7 +649,7 @@ export class SessionJournal {
       pendingBytes: this.pendingBytes,
       closed: this.closed,
       rejectedAfterClose: this.rejectedAfterClose,
-      retention: this.retention,
+      retention: { ...this.retention, segments: this.retained.snapshot() },
     };
   }
   pendingEvidence(): readonly string[] {

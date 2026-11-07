@@ -68,7 +68,14 @@ it.each(['idle', 'streaming', 'late'])('video guard %s', async (scenario) => {
         calls.push(requestType);
         let responseData: Record<string, unknown> = {};
         if (requestType === 'GetProfileList') responseData = { currentProfileName: 'Personal' };
-        else if (requestType === 'GetStreamStatus' || requestType === 'GetRecordStatus')
+        else if (
+          [
+            'GetStreamStatus',
+            'GetRecordStatus',
+            'GetReplayBufferStatus',
+            'GetVirtualCamStatus',
+          ].includes(requestType)
+        )
           responseData = {
             outputActive: streaming && requestType === 'GetStreamStatus',
             outputPaused: false,

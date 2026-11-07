@@ -84,7 +84,15 @@ export function defaultMusicConfig(): MusicConfig {
     groups: Object.fromEntries(MUSIC_GROUPS.map((g) => [g, {}])),
   });
 }
+export type MusicFailureCode =
+  | 'obs_disconnected'
+  | 'scene_missing'
+  | 'source_missing'
+  | 'source_conflict'
+  | 'load_failed'
+  | 'playback_failed';
 export interface MusicStatus {
+  failure?: MusicFailureCode | null;
   held: boolean;
   stingerHeld?: boolean;
   connection: 'idle' | 'connected' | 'unavailable';

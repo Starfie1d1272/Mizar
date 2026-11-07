@@ -94,15 +94,8 @@ export function workspaceLiveRosterAlert(
     new Set(starters.map((p) => p.steam64)).size !== 10
   )
     return null;
-  const current = program.players.filter((p) => p.lineupEvidence === 'current');
-  if (
-    current.length !== 10 ||
-    new Set(current.map((p) => p.sourcePlayerId)).size !== 10 ||
-    current.some((p) => !/^\d{17}$/.test(p.sourcePlayerId)) ||
-    current.filter((p) => p.side === 'CT').length !== 5 ||
-    current.filter((p) => p.side === 'T').length !== 5
-  )
-    return null;
+  const { current, complete } = currentRosterEvidence(operator, program, programCursor);
+  if (!complete || current.some((p) => !/^\d{17}$/.test(p.sourcePlayerId))) return null;
   const expectedIds = new Set(starters.map((p) => p.steam64));
   const observedIds = new Set(current.map((p) => p.sourcePlayerId));
   const observed = current
@@ -152,4 +145,33 @@ export function workspaceLiveRosterAlert(
     absent,
     syncStatus,
   };
+}
+
+export function currentRosterEvidence(
+  operator: OperatorPayload | null,
+  program: ProgramPayload | null,
+  cursor: ProgramSnapshot['cursor'] | null,
+) {
+  const current = program?.players.filter((player) => player.lineupEvidence === 'current') ?? [];
+  const aligned = Boolean(
+    operator &&
+    program &&
+    cursor &&
+    operator.matchContext.summary?.matchId === program.match?.matchId &&
+    program.match &&
+    cursor.programReceiveSequence === operator.runtime.lastAccepted?.receiveSequence &&
+    cursor.mapEpoch === operator.activeLineup.mapEpoch &&
+    cursor.programSourceGeneration === operator.activeLineup.sourceGeneration,
+  );
+  const complete =
+    aligned &&
+    operator?.runtime.telemetryFreshness === 'fresh' &&
+    program?.status.telemetry === 'fresh' &&
+    operator.activeLineup.state === 'complete' &&
+    operator.activeLineup.retainedCount === 0 &&
+    current.length === 10 &&
+    new Set(current.map((player) => player.sourcePlayerId)).size === 10 &&
+    current.filter((player) => player.side === 'CT').length === 5 &&
+    current.filter((player) => player.side === 'T').length === 5;
+  return { complete, current, warmup: aligned && program?.map.phase === 'warmup' };
 }

@@ -44,6 +44,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
         path: '/debug',
       },
     ];
+  if (!operator.matchContext.summary && operator.runtime.telemetryFreshness !== 'fresh') return [];
   const issues: WorkspaceIssue[] = [];
   const authority = operator.matchContext.rosterAuthority ?? 'unknown';
   const localRoster = authority === 'local-server';
@@ -60,7 +61,14 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
   const serverRosterReady =
     operator.runtime.telemetryFreshness === 'fresh' &&
     operator.activeLineup?.state === 'complete' &&
-    operator.activeLineup.retainedCount === 0;
+    operator.activeLineup.retainedCount === 0 &&
+    operator.activeLineup.ctCount === 5 &&
+    operator.activeLineup.tCount === 5 &&
+    !operator.identity.issues.some((issue) =>
+      ['partial_roster_evidence', 'duplicate_observed_identity', 'allplayers_degraded'].includes(
+        issue.code,
+      ),
+    );
   const identityCodes = new Set(operator.identity.issues.map((issue) => issue.code));
   const seriesNeedsOperator = operator.seriesProgress?.bindingState === 'needs_operator';
   // Series issues retain history across recovery; only current identity evidence
@@ -186,7 +194,12 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: '核对比赛资料',
       path: '/matches',
     });
-  else if (identityCodes.has('unexpected_human_steam64') && !rosterIncomplete && !steam64Missing)
+  else if (
+    serverRosterReady &&
+    identityCodes.has('unexpected_human_steam64') &&
+    !rosterIncomplete &&
+    !steam64Missing
+  )
     issues.push({
       id: 'steam64',
       summary: authority === 'rivalhub' ? '上场账号与网站名单不一致' : '上场账号与名单不一致',
@@ -194,7 +207,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       action: rosterAction,
       path: '/matches?tab=roster',
     });
-  else if (identityCodes.has('lineup_differs_from_expected'))
+  else if (serverRosterReady && identityCodes.has('lineup_differs_from_expected'))
     issues.push({
       id: 'roster',
       summary: '名单不一致',

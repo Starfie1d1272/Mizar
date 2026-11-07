@@ -269,7 +269,9 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ### 本机诊断历史
 
-`POST /debug/support-bundle` 继续只允许本机受信任 Origin，保留 `mizar-support-bundle/1` 容器；新增 `businessHistory` 附件及其独立 manifest。业务 ID 与诊断名单 Steam64 跨重启和导出保留原值，仅用于使用者明确保存的排障包，不进入新的公开接口，也不自动上传。字段白名单、容量、完整性与旧日志兼容规则见[架构](architecture.md)。
+诊断事件使用 `mizar-diagnostic-event/2`，定义见 [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)。Host、Companion 与文档保留原生产者身份和事件 ID，持久回执与业务动作成功不是同一概念。桌面文档调用有界 `persist_diagnostic_events`，Host 回执只确认该批事件已持久；纯浏览器继续使用受本机 Origin 限制的 `POST /debug/control-event`。
+
+`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。旧 `POST /debug/support-bundle` 暂保留独立 v1 响应适配，下一版本移除生成入口；旧文件读取不受影响。业务身份仅用于用户明确保存的本机包，不自动公开上传。
 
 ### 本机网站同步健康
 
@@ -281,13 +283,13 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `POST /operator/rivalhub/source/retry` 复用本机来源校验与现场、名单、权限守卫。有当前开局确认时解除实时发送退避，下一次只发送最新快照；未确认开局时重新认领本场，等待新遥测建立当前授权的可靠开局，不重放历史赛果。LIVE 在收到 HTTP 响应前发生明确的连接重置、连接拒绝、网络不可达、暂态 DNS 故障或超时时，采用 1 秒起、最高 2 秒的退避；服务器拒绝、响应异常、广播失败及其它未确认原因继续采用最高 8 秒退避。失败类别切换重新计数，成功接收或切换地图执行清除旧退避；新执行仍须等待其可靠开局确认。退避结束只发送最新快照，不缓存或重发旧帧。认领与停止操作在服务端互斥；主动停止禁止本场新产生的实时和可靠发送，持久交接后仅收尾已有可靠队列；远端释放失败仍保留本地禁发，只有明确重新认领成功才解除。其他设备归属按比赛限定；HTTP 403 只证明请求被拒，不能据此猜测另一台设备或来源已释放。现有诊断与可靠赛果守卫保持独立。
 
+`POST /operator/rivalhub/source/resume` 固定 matchId/contextRevision，核对当前制作与输入范围，在原 sourceCommands 串行区先清算旧 scope，再合法复用或默认不接管地认领。等待当前执行可靠开始 ACK 与预期 LIVE accepted 才确认正在同步。进入或返回工作台不隐式执行该命令，主动停止仍有独立恢复入口；目标变化使在途恢复失效，已产生但过期的认领按原身份交接。
+
 ## 本机节目音乐
 
 手动播放、暂停、继续和定位不依赖比赛阶段或遥测；人工播放保持到明确停止、恢复自动或 OBS 控制变化。自动阶段策略仍独立执行。`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/preview` 接收有期限的试听开始、音量更新、续租和停止，核对窗口身份、会话令牌与递增操作编号；不写持久配置或正式播放记录。`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
 
-本机诊断导出 `POST /debug/support-bundle` 接受可选 ISO 时间 `from/to` 与可选索引焦点 `focusSessionId`，默认全保留范围；完整日志、压缩分卷、预算和完整性语义统一见[架构](architecture.md)。`POST /debug/control-event` 只允许本机可信 Origin，最多 64 KiB，接收 Mizar 浏览器操作证据，不具备控制或文件读取能力。
-
-`fullLogs.files` 中 `format: obs-log-text/1` 为已关联 Mizar 的 OBS 日志原文经凭据替换后的分卷，采用同一 SHA-256 完整性契约；附带来源会话 UTC 起点与本地时区偏移。`nativeObs` 和 `attachments.obsLogs` 仍是技术事件索引，不能代替原文或证明画面正常。候选选择、预算、拒绝与缺失状态见架构；浏览器不能提交 OBS 文件路径。
+本机诊断路径与容器以[本机诊断历史](#本机诊断历史)为唯一接口说明。旧 v1 中的 `fullLogs.files` 和 `obs-log-text/1` 分卷仍可由维护读取器恢复；新 v2 把相关 OBS 原文保存为独立 `.log` 附件，并列入 entry 摘要与覆盖。OBS 文件路径不来自浏览器，附件与技术索引不能证明当前画面正常。
 
 ## 本机地图编排控制
 

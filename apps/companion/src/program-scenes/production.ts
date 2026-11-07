@@ -243,7 +243,7 @@ export function createProduction(options: ProductionDependencies) {
     // A lost response must not turn an already committed entry into a new entry.
     if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
       return { ok: true as const, value: view() };
-    if (body?.action === 'enter') {
+    if (body?.action === 'enter' && mode === 'preparation') {
       try {
         await options.waitForBroadcast?.();
       } catch (error) {
@@ -312,6 +312,12 @@ export function createProduction(options: ProductionDependencies) {
         failure: 'productionActionInvalid' as const,
         message: '制作操作无法识别。',
       };
+    // Ordinary return is window presentation only, not a new production session.
+    if (body.action === 'enter' && mode !== 'preparation') {
+      mode = 'live';
+      revision = randomUUID();
+      return { ok: true as const, value: view() };
+    }
     busy = true;
     const shutdown = body?.action === 'shutdown';
     if (shutdown) shuttingDown = true;

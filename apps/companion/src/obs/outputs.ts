@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
 import type {
   ObsOutputCommand,
+  ObsOutputResult,
   ObsOutputKind,
   ObsOutputPhase,
   ObsOutputsStatus,
@@ -107,7 +108,8 @@ export class ObsOutputController {
   private readonly warmupExtraOutputs: Record<
     'replay' | 'virtual',
     'idle' | 'starting' | 'active' | 'stopping' | 'unknown'
-  > = { replay: 'idle', virtual: 'idle' };
+  > = { replay: 'unknown', virtual: 'unknown' };
+  private extraTransitionAt = { replay: 0, virtual: 0 };
   private warmupCollectionChanging = false;
   private warmupExitStarted = false;
 
@@ -181,6 +183,10 @@ export class ObsOutputController {
     return { stream: { ...this.values.stream }, record: { ...this.values.record } };
   }
 
+  private result(kind: ObsOutputKind, result: ObsOutputResult): void {
+    this.values[kind] = { ...this.values[kind], result };
+  }
+
   private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
     const previous = this.values[kind];
     if (previous.phase === phase && previous.active === active) return;
@@ -193,8 +199,8 @@ export class ObsOutputController {
     if (client && this.client !== client) return;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
-    this.warmupExtraOutputs.replay = 'idle';
-    this.warmupExtraOutputs.virtual = 'idle';
+    this.warmupExtraOutputs.replay = 'unknown';
+    this.warmupExtraOutputs.virtual = 'unknown';
     this.warmupCollectionChanging = false;
     this.warmupExitStarted = false;
     const old = this.client;
@@ -272,7 +278,7 @@ export class ObsOutputController {
     client.on('CurrentProgramSceneChanged', (event) => {
       if (current()) {
         this.warmupGeneration++;
-        this.observeProgram('scene', event.sceneName);
+        this.observeProgram('scene', event.sceneUuid);
       }
     });
     client.on('CurrentSceneCollectionChanged', (event) => {
@@ -310,6 +316,7 @@ export class ObsOutputController {
       const phase = phases[event.outputState] ?? 'unknown';
       this.warmupExtraOutputs[kind] =
         phase === 'idle' && event.outputActive !== false ? 'unknown' : phase;
+      if (phase === 'starting' || phase === 'stopping') this.extraTransitionAt[kind] = Date.now();
     };
     client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
     client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
@@ -378,38 +385,81 @@ export class ObsOutputController {
     }
   }
 
+  private async query<T>(request: Promise<T>): Promise<T | null> {
+    try {
+      return await bounded(request);
+    } catch (error) {
+      const config = await this.config.read();
+      this.diagnostic(error, config.password);
+      return null;
+    }
+  }
+
   private async refresh(client: OBSWebSocket, generation: number): Promise<void> {
     const versions = { ...this.events };
-    const [stream, record] = await bounded(
-      Promise.all([client.call('GetStreamStatus'), client.call('GetRecordStatus')]),
-    );
+    const extraVersion = this.warmupGeneration;
+    const [stream, record, replay, virtual] = await Promise.all([
+      this.query(client.call('GetStreamStatus')),
+      this.query(client.call('GetRecordStatus')),
+      this.query(client.call('GetReplayBufferStatus')),
+      this.query(client.call('GetVirtualCamStatus')),
+    ]);
+    const extrasCurrent = extraVersion === this.warmupGeneration;
+    for (const [kind, value] of [
+      ['replay', replay],
+      ['virtual', virtual],
+    ] as const) {
+      if (!extrasCurrent) continue;
+      const previous = this.warmupExtraOutputs[kind];
+      if (previous === 'starting' || previous === 'stopping') {
+        if (Date.now() - this.extraTransitionAt[kind] < CONFIRM_MS) continue;
+        this.warmupExtraOutputs[kind] = 'unknown';
+        this.warmupGeneration++;
+        continue;
+      }
+      const phase =
+        value?.outputActive === true
+          ? 'active'
+          : value?.outputActive === false
+            ? 'idle'
+            : 'unknown';
+      if (this.warmupExtraOutputs[kind] !== phase) {
+        this.warmupGeneration++;
+        this.preparationOutputGeneration++;
+        this.warmupExtraOutputs[kind] = phase;
+      }
+    }
     if (this.client !== client || this.generation !== generation || this.closed)
       throw new Error('OBS connection superseded');
     for (const kind of kinds) {
       // Events received while reading are newer than this snapshot.
       if (this.events[kind] !== versions[kind]) continue;
       const value = kind === 'stream' ? stream : record;
-      if (typeof value.outputActive !== 'boolean') {
+      if (!value || typeof value.outputActive !== 'boolean') {
         this.update(kind, 'unknown', null);
         continue;
       }
       const phase = !value.outputActive
         ? 'idle'
-        : kind === 'stream' && stream.outputReconnecting
+        : kind === 'stream' && stream?.outputReconnecting
           ? 'reconnecting'
-          : kind === 'record' && record.outputPaused
+          : kind === 'record' && record?.outputPaused
             ? 'paused'
             : 'active';
       // A transitional event is stronger evidence than a snapshot of the old active bit.
       const previous = this.values[kind].phase;
       if (
-        (previous === 'starting' && !value.outputActive) ||
+        (previous === 'starting' &&
+          !value.outputActive &&
+          Date.now() - this.transitionAt[kind] < CONFIRM_MS) ||
         (Date.now() - this.transitionAt[kind] < CONFIRM_MS &&
           previous === 'stopping' &&
           value.outputActive)
       )
         continue;
-      this.update(kind, phase, value.outputActive);
+      if ((this.unconfirmedStart[kind] || previous === 'starting') && !value.outputActive)
+        this.update(kind, 'unknown', null);
+      else this.update(kind, phase, value.outputActive);
     }
   }
 
@@ -419,7 +469,7 @@ export class ObsOutputController {
     if (!client || !this.ready) throw new Error('OBS unavailable');
     if (!this.reading) {
       const task = this.refresh(client, this.generation).catch((error: unknown) => {
-        if (this.client === client) this.invalidate(client);
+        if (this.client === client) for (const kind of kinds) this.update(kind, 'unknown', null);
         throw error;
       });
       this.reading = task;
@@ -440,6 +490,7 @@ export class ObsOutputController {
       await this.read().catch(() => undefined);
       if (this.values[output].active === true) {
         this.unconfirmedStart[output] = false;
+        this.result(output, { action, state: 'started' });
         return this.snapshot();
       }
       throw new ObsOutputError(
@@ -464,7 +515,7 @@ export class ObsOutputController {
         const observed = await bounded(
           client.call(output === 'stream' ? 'GetStreamStatus' : 'GetRecordStatus'),
         ).catch(() => null);
-        if (!observed)
+        if (!observed || typeof observed.outputActive !== 'boolean')
           throw new ObsOutputError('obs_output_unconfirmed', '无法确认 OBS 输出状态，请稍后重试。');
         if (observed.outputActive === true) {
           await this.read().catch(() => undefined);
@@ -472,17 +523,25 @@ export class ObsOutputController {
         }
         submitted = true;
         this.unconfirmedStart[output] = true;
+        this.result(output, { action, state: 'pending' });
         await bounded(client.call(requests[output].start));
+        this.result(output, { action, state: 'accepted' });
         await this.read();
         if (this.values[output].active !== true)
           throw new ObsOutputError('obs_output_unconfirmed', '输出请求已提交，结果尚未确认。');
         this.unconfirmedStart[output] = false;
+        this.result(output, { action, state: 'started' });
         return this.snapshot();
       } catch (error) {
         const code = (error as { code?: unknown } | undefined)?.code;
         if (!submitted || (typeof code === 'number' && code >= 200 && code < 800))
           this.unconfirmedStart[output] = false;
+        this.result(output, {
+          action,
+          state: typeof code === 'number' && code >= 200 && code < 800 ? 'failed' : 'unknown',
+        });
         if (error instanceof ObsOutputError) throw error;
+        if (typeof code === 'number' && code >= 200 && code < 800) throw rejectedOutput(error);
         throw new ObsOutputError(
           'obs_output_unconfirmed',
           submitted ? '输出请求结果尚未确认，请勿重复操作。' : '无法连接 OBS，请检查连接后重试。',
@@ -518,7 +577,9 @@ export class ObsOutputController {
       let failure: unknown;
       try {
         if (action === 'start') this.unconfirmedStart[output] = true;
+        this.result(output, { action, state: 'pending' });
         await bounded(client.call(requests[output][action]));
+        this.result(output, { action, state: 'accepted' });
       } catch (error) {
         failure = error;
         const config = await this.config.read();
@@ -529,12 +590,14 @@ export class ObsOutputController {
       while (this.generation === generation && Date.now() < deadline) {
         if (reached()) {
           if (action === 'start') this.unconfirmedStart[output] = false;
+          this.result(output, { action, state: action === 'start' ? 'started' : 'stopped' });
           return this.snapshot();
         }
         await this.read().catch(() => undefined);
         if (this.generation !== generation) break;
         if (reached()) {
           if (action === 'start') this.unconfirmedStart[output] = false;
+          this.result(output, { action, state: action === 'start' ? 'started' : 'stopped' });
           return this.snapshot();
         }
         // A server rejection is definite; timeout/network failure may have executed.
@@ -553,6 +616,14 @@ export class ObsOutputController {
         { cause: failure },
       );
     } catch (error) {
+      this.result(output, {
+        action,
+        state:
+          error instanceof ObsOutputError && error.code !== 'obs_output_unconfirmed'
+            ? 'failed'
+            : 'unknown',
+        ...(error instanceof ObsOutputError ? { code: error.code, message: error.message } : {}),
+      });
       if (error instanceof ObsOutputError) throw error;
       throw new ObsOutputError(
         'obs_output_unconfirmed',

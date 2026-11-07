@@ -1,3 +1,4 @@
+import { musicFailure } from './failure.js';
 import { randomUUID } from 'node:crypto';
 import type {
   MusicGroup,
@@ -200,16 +201,7 @@ export class MusicDirector {
         let failure: unknown;
         for (const layer of ['bgm', 'stinger'] as const) {
           try {
-            const name = await ownedMusicInput(
-              obs,
-              this.store,
-              layer,
-              false,
-              current,
-              false,
-              true,
-              false,
-            );
+            const name = await ownedMusicInput(obs, this.store, layer, false, current, false, true);
             if (!current()) throw new Error('music_cancelled');
             const uuid = this.store.state.sources[layer];
             if (name && uuid) await run(obs, layer, uuid);
@@ -612,19 +604,10 @@ export class MusicDirector {
     }
   }
 
-  private async readMonitor(obs: ObsRpc, valid: () => boolean, readOnly = false) {
+  private async readMonitor(obs: ObsRpc, valid: () => boolean) {
     const modes: unknown[] = [];
     for (const layer of ['bgm', 'stinger'] as const) {
-      const name = await ownedMusicInput(
-        obs,
-        this.store,
-        layer,
-        false,
-        valid,
-        false,
-        false,
-        !readOnly && !(layer === 'stinger' && this.isStingerHeld()),
-      );
+      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false, false);
       if (!valid()) return;
       if (!name) continue;
       const read = await obs.call('GetInputAudioMonitorType', {
@@ -747,16 +730,7 @@ export class MusicDirector {
         Record<MusicLayer, NonNullable<MonitorOriginals[MusicLayer]> | null>
       > = {};
       for (const layer of ['bgm', 'stinger'] as const) {
-        const name = await ownedMusicInput(
-          obs,
-          this.store,
-          layer,
-          false,
-          current,
-          false,
-          false,
-          false,
-        );
+        const name = await ownedMusicInput(obs, this.store, layer, false, current, false, false);
         const uuid = this.store.state.sources[layer];
         const original = this.store.state.desktopMonitorOriginal[layer];
         if (!name || !uuid) {
@@ -967,7 +941,7 @@ export class MusicDirector {
       return;
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
     if (this.store.failure && !this.preview.busy) {
-      this.status.connection = 'unavailable';
+      this.status.failure = 'load_failed';
       this.status.playback = 'unknown';
       this.status.message = '本机音乐配置无法读取，音乐已停用。请保留原文件并检查本机配置。';
       return;
@@ -1089,10 +1063,11 @@ export class MusicDirector {
         if (this.manual) this.manual.epoch = epoch;
         this.epoch = epoch;
         this.status.connection = 'connected';
+        this.status.failure = null;
         this.status.message = null;
         if (this.isExternalHold()) {
           await this.observeHeldPlayback(obs, valid);
-          if (valid()) await this.readMonitor(obs, valid, true);
+          if (valid()) await this.readMonitor(obs, valid);
           if (this.unknownControl && valid())
             this.status.message = '音乐控制未确认，请在 OBS 核对后停止音乐或恢复自动。';
           return;
@@ -1184,9 +1159,12 @@ export class MusicDirector {
       });
     } catch (error) {
       if (!(error instanceof Error && error.message === 'music_cancelled'))
-        this.preview.unavailable();
+        this.preview.unavailable(error);
       if (valid()) {
-        this.status.connection = 'unavailable';
+        const failure = musicFailure(error);
+        this.store.previewEvent('music_operation_failed', { error, code: failure.code });
+        this.status.failure = failure.code;
+        this.status.connection = failure.code === 'obs_disconnected' ? 'unavailable' : 'connected';
         if (this.manual) {
           this.manual = null;
           this.unknownControl = true;
@@ -1200,9 +1178,7 @@ export class MusicDirector {
         this.status.durationMs = null;
         this.status.monitor = 'unknown';
         this.status.message =
-          error instanceof Error && error.message === 'music_cancelled'
-            ? null
-            : '音乐控制未确认。请在 OBS 检查或停止 音乐来源；连接恢复后会重新核对。';
+          error instanceof Error && error.message === 'music_cancelled' ? null : failure.message;
       }
     } finally {
       this.inFlight = false;
@@ -1260,7 +1236,7 @@ export class MusicDirector {
   }
   private async observeHeldPlayback(obs: ObsRpc, valid: () => boolean) {
     this.status.stinger = null;
-    const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false, false);
+    const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false);
     if (!valid()) return;
     if (!name) {
       this.status.playback = 'unknown';
@@ -1312,7 +1288,6 @@ export class MusicDirector {
         'stinger',
         false,
         valid,
-        false,
         false,
         false,
       );

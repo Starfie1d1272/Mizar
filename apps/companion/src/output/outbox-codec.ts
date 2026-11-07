@@ -147,6 +147,14 @@ export interface DeliveryContinuity {
 }
 
 export interface BoundaryScope {
+  /** Frozen delivery identity, independent of the currently selected source. */
+  readonly source?: ExactSource;
+  readonly ruleVersion?: 2;
+  readonly reason?:
+    | 'execution_evidence_missing'
+    | 'execution_owner_unknown'
+    | 'boundary_capture_incomplete'
+    | 'capacity_exhausted';
   readonly matchId?: string;
   readonly producerInstanceId: string;
   readonly liveSessionId?: string;
@@ -540,7 +548,21 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw))
       throw new Error('boundary_gap_invalid');
     const item = raw as Record<string, unknown>;
+    const source = item.source === undefined ? undefined : parseSource(item.source);
     if (
+      (source &&
+        (source.matchId !== item.matchId ||
+          source.producerInstanceId !== item.producerInstanceId ||
+          source.liveSessionId !== item.liveSessionId)) ||
+      (item.ruleVersion !== undefined && item.ruleVersion !== 2) ||
+      (item.ruleVersion === 2 && typeof item.reason !== 'string') ||
+      (item.reason !== undefined &&
+        ![
+          'execution_evidence_missing',
+          'execution_owner_unknown',
+          'boundary_capture_incomplete',
+          'capacity_exhausted',
+        ].includes(String(item.reason))) ||
       (item.matchId !== undefined &&
         (typeof item.matchId !== 'string' || !item.matchId || item.matchId.length > 256)) ||
       typeof item.producerInstanceId !== 'string' ||
@@ -567,6 +589,11 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
     )
       throw new Error('boundary_gap_invalid');
     return {
+      ...(source ? { source } : {}),
+      ...(item.ruleVersion === 2 ? { ruleVersion: 2 as const } : {}),
+      ...(typeof item.reason === 'string'
+        ? { reason: item.reason as NonNullable<BoundaryScope['reason']> }
+        : {}),
       ...(typeof item.matchId === 'string' ? { matchId: item.matchId } : {}),
       producerInstanceId: item.producerInstanceId,
       ...(typeof item.liveSessionId === 'string' ? { liveSessionId: item.liveSessionId } : {}),

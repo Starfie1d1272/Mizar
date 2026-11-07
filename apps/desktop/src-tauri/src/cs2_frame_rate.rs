@@ -233,17 +233,32 @@ fn fps_number(value: &str) -> Result<f64, String> {
     Ok(value)
 }
 
-fn fps_field(text: &str) -> Result<Token, String> {
-    let token = field(text, &["config", "convars", "fps_max"])
-        .map_err(|error| format!("cs2_machine_convars.vcfg / fps_max：{error}"))?
+fn fps_fields(text: &str) -> Result<Vec<Token>, String> {
+    let tokens: Vec<_> = scalar_section(text, &["config", "convars"])?
+        .into_iter()
+        .filter(|(key, _)| key.value.eq_ignore_ascii_case("fps_max"))
+        .map(|(_, value)| value)
+        .collect();
+    let first = tokens
+        .first()
         .ok_or("缺少 CS2 帧率配置，请先运行一次游戏。")?;
-    fps_number(&token.value)?;
-    Ok(token)
+    let number = fps_number(&first.value)?;
+    for token in &tokens {
+        if fps_number(&token.value)? != number {
+            return Err("cs2_machine_convars.vcfg / fps_max：冲突重复，未修改配置；请选择备份恢复或保持原设置继续。".into());
+        }
+    }
+    Ok(tokens)
+}
+fn fps_field(text: &str) -> Result<Token, String> {
+    Ok(fps_fields(text)?.remove(0))
 }
 fn patch_convars(text: &str, limit: u16) -> Result<String, String> {
-    let token = fps_field(text)?;
+    let tokens = fps_fields(text)?;
     let mut result = text.to_string();
-    result.replace_range(token.start..token.end, &format!("\"{limit}\""));
+    for token in tokens.into_iter().rev() {
+        result.replace_range(token.start..token.end, &format!("\"{limit}\""));
+    }
     Ok(result)
 }
 
@@ -675,9 +690,11 @@ pub fn restored(record: &Value, current: &str) -> Result<String, String> {
     }
     if record["kind"] == "convars" {
         let before = fps_field(original)?;
-        let now = fps_field(current)?;
+        let now = fps_fields(current)?;
         let mut result = current.to_string();
-        result.replace_range(now.start..now.end, &original[before.start..before.end]);
+        for token in now.into_iter().rev() {
+            result.replace_range(token.start..token.end, &original[before.start..before.end]);
+        }
         Ok(result)
     } else {
         Err("本次启动配置已被外部修改，请检查帧率备份后重试恢复。".into())

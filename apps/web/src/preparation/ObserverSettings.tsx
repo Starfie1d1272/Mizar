@@ -7,13 +7,9 @@ import {
   type ObserverSettings,
 } from '@mizar/protocol/assist';
 import { Button, Checkbox, Field, Panel, StatusBanner } from '../ui';
-import { command, useLocalRead } from './client';
+import { command, useLocalRead, openTool } from './client';
 import { desktopInvoke } from '../workspace/client';
-import {
-  flushObserverPreparation,
-  type ConnectionPreparationView,
-  type ObserverRuntimeView,
-} from './observer-preparation';
+import { type ConnectionPreparationView, type ObserverRuntimeView } from './observer-preparation';
 import { useCs2Status } from './cs2-status';
 
 type ObserverView = ConnectionPreparationView & {
@@ -140,9 +136,7 @@ export function GameAutomationSettingsPanel() {
     setBusy(true);
     setMessage('');
     try {
-      const ready = await flushObserverPreparation(useMulnx, cs2.status?.running);
-      if (ready === null) return;
-      setMessage('本图连接操作已完成，请在游戏内核对节目源。');
+      await openTool('connection');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '请重试本图连接。');
     } finally {

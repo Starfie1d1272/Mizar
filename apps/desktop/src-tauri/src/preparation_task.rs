@@ -4,6 +4,7 @@ use crate::{
     entry_intent::EntryIntent, preparation_gate, production_exit, startup_log::DesktopLog,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     net::TcpStream,
     sync::{Arc, Mutex},
@@ -16,6 +17,7 @@ use tauri::Manager;
 struct Task {
     id: String,
     revision: String,
+    attempt: u64,
     preserve: bool,
     external: Option<(u32, String)>,
     running: bool,
@@ -173,11 +175,73 @@ fn update(id: &str, f: impl FnOnce(&mut Task)) {
         }
     }
 }
+// IDs derive from this owner's actual task and retry, never from wall-clock proximity.
+fn diagnostic_identity(id: &str, attempt: u64, step: &str) -> String {
+    let digest = Sha256::digest(format!("mizar-preparation:{id}:{attempt}:{step}").as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+fn diagnostic(app: &tauri::AppHandle, id: &str, step: &str, outcome: &str, evidence: Value) {
+    let Some(task) = snapshot().ok().flatten().filter(|task| task.id == id) else {
+        return;
+    };
+    let attempt = diagnostic_identity(id, task.attempt, "attempt");
+    let operation = if step == "preparation" {
+        id.to_owned()
+    } else {
+        diagnostic_identity(id, task.attempt, step)
+    };
+    let log = app.state::<DesktopLog>();
+    log.with_task_attempt(
+        Some(id),
+        Some(&operation),
+        (step != "preparation").then_some(id),
+        Some(&attempt),
+        Some("user"),
+        || {
+            log.event(
+                "preparation_task",
+                outcome,
+                Some(&json!({"step":step,"attempt":task.attempt,"details":evidence}).to_string()),
+            );
+        },
+    );
+}
+fn diagnostic_result(app: &tauri::AppHandle, id: &str, step: &str, result: &Result<(), String>) {
+    diagnostic(
+        app,
+        id,
+        step,
+        if result.is_ok() { "success" } else { "failure" },
+        match result {
+            Ok(()) => Value::Null,
+            Err(cause) => json!({"cause":cause}),
+        },
+    );
+}
 fn publish(app: &tauri::AppHandle, id: &str, message: String) {
     if !snapshot().ok().flatten().is_some_and(|task| task.id == id) {
         return;
     }
+    let changed = snapshot()
+        .ok()
+        .flatten()
+        .is_some_and(|task| task.message != message);
     update(id, |t| t.message = message.clone());
+    if changed {
+        diagnostic(app, id, "status", "changed", json!({"message":message}));
+    }
     if let Ok(mut status) = app.state::<HostState>().entry_message.lock() {
         *status = message.clone();
     }
@@ -279,6 +343,10 @@ async fn restore_video(
             });
             return Err(error);
         }
+        update(id, |task| {
+            task.obs = false;
+            task.capture = false;
+        });
     }
     Ok(())
 }
@@ -351,216 +419,258 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .filter(|t| t.id == id)
         .ok_or("准备任务不存在。")?;
     main_window(&app)?;
-    if !task.entered {
+    if !task.presented {
         crate::workspace_presentation::panels(app.clone(), id.clone()).await?;
-        publish(&app, &id, "正在准备游戏和 OBS…".into());
-        check(&app, &id)?;
-        let status = crate::cs2_host::status(app.clone()).await?;
-        let resuming = status["preparationId"] == id
-            && (status["running"] == true
-                || status["pending"] == true
-                || status["mulnxLaunchResumable"] == true);
-        if !resuming {
-            let replacement = crate::cs2_host::preflight(app.clone()).await?;
-            let target = &replacement["target"];
-            if let Some((pid, created)) = &task.external {
-                if target["pid"].as_u64() != Some(u64::from(*pid))
-                    || target["created"].as_str() != Some(created.as_str())
-                {
-                    return Err("所选游戏实例已变化，请重试。".into());
-                }
-            }
-            crate::cs2_host::replace(
-                app.clone(),
-                target["pid"].as_u64().map(|v| v as u32),
-                target["created"].as_str().map(str::to_owned),
-                task.revision.clone(),
-                id.clone(),
-                None,
-            )
-            .await?;
-        }
-    } else {
-        check(&app, &id)?;
-        let game = crate::cs2_host::status(app.clone()).await?;
-        if game["preparationId"] != id || game["running"] != true {
-            return Err("本次游戏尚未确认，请检查后重试。".into());
-        }
     }
+    publish(&app, &id, "正在准备游戏和 OBS…".into());
+    check(&app, &id)?;
     let mut errors = Vec::new();
     let revision = current_revision(&app)?;
-    if !task.obs {
-        let result: Result<(), String> = async {
-            check(&app, &id)?;
-            let mut obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
-            if task.obs_owned && obs["connection"] == "connected" && obs["sceneAligned"] == false {
-                return Err("OBS 场景已由操作者接管，未自动切换。".into());
-            }
-            if obs["connection"] != "connected" {
-                if obs["connection"] == "password_required"
-                    || obs["connection"] == "invalid_password"
-                {
-                    return Err("OBS WebSocket 密码未配置或不正确。".into());
-                }
-                let target = http(&app, "POST", "/operator/obs/launch-target", json!({})).await?;
-                let path = target["executablePath"]
-                    .as_str()
-                    .ok_or("未找到 OBS 可执行文件。")?
-                    .to_owned();
-                crate::obs_configuration::launch_managed(
-                    path,
-                    app.state::<DesktopLog>().inner().clone(),
-                    None,
-                )
-                .await?;
-                for _ in 0..30 {
+    let prepare_obs = {
+        let app = app.clone();
+        let id = id.clone();
+        let task = task.clone();
+        let revision = revision.clone();
+        tauri::async_runtime::spawn(async move {
+            if !task.obs {
+                diagnostic(&app, &id, "obs", "begin", Value::Null);
+                let result: Result<(), String> = async {
                     check(&app, &id)?;
-                    tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
-                        .await
-                        .map_err(|_| "OBS 等待失败。")?;
-                    obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
-                    if obs["connection"] == "connected" {
-                        break;
+                    let mut obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+                    if task.obs_owned
+                        && obs["connection"] == "connected"
+                        && obs["sceneAligned"] == false
+                    {
+                        return Err("OBS 场景已由操作者接管，未自动切换。".into());
+                    }
+                    if obs["connection"] != "connected" {
+                        if obs["connection"] == "password_required"
+                            || obs["connection"] == "invalid_password"
+                        {
+                            return Err("OBS WebSocket 密码未配置或不正确。".into());
+                        }
+                        let target =
+                            http(&app, "POST", "/operator/obs/launch-target", json!({})).await?;
+                        let path = target["executablePath"]
+                            .as_str()
+                            .ok_or("未找到 OBS 可执行文件。")?
+                            .to_owned();
+                        crate::obs_configuration::launch_managed(
+                            path,
+                            app.state::<DesktopLog>().inner().clone(),
+                            Some(diagnostic_identity(&id, task.attempt, "obs")),
+                        )
+                        .await?;
+                        for _ in 0..30 {
+                            check(&app, &id)?;
+                            tauri::async_runtime::spawn_blocking(|| {
+                                thread::sleep(Duration::from_secs(1))
+                            })
+                            .await
+                            .map_err(|_| "OBS 等待失败。")?;
+                            obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+                            if obs["connection"] == "connected" {
+                                break;
+                            }
+                        }
+                        if obs["connection"] != "connected" {
+                            return Err("OBS 未能连接，请检查后重试。".into());
+                        }
+                    }
+                    http(
+                        &app,
+                        "POST",
+                        "/operator/obs/video-preflight",
+                        json!({"expectedRevision":revision}),
+                    )
+                    .await?;
+                    let video = http(
+                        &app,
+                        "POST",
+                        "/operator/obs/video-prepare",
+                        json!({"expectedRevision":revision}),
+                    )
+                    .await?;
+                    if let Some(transaction) = video["transactionId"].as_str() {
+                        update(&id, |t| t.video_transaction = Some(transaction.to_owned()));
+                    }
+                    let prepared = async {
+                        check(&app, &id)?;
+                        controlled_post(
+                            &app,
+                            &id,
+                            "/operator/obs/ensure",
+                            json!({"expectedRevision":revision,"preparationId":id}),
+                        )
+                        .await?;
+                        update(&id, |t| t.obs_owned = true);
+                        let obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+                        if obs["connection"] != "connected" || obs["readiness"]["ready"] != true {
+                            return Err(obs["readiness"]["reason"]
+                                .as_str()
+                                .unwrap_or("OBS 准备状态未确认。")
+                                .to_string());
+                        }
+                        check(&app, &id)
+                    }
+                    .await;
+                    if prepared.is_err() && !task.entered {
+                        restore_video(&app, &id, false).await?;
+                    }
+                    prepared
+                }
+                .await;
+                diagnostic_result(&app, &id, "obs", &result);
+                match result {
+                    Ok(()) => update(&id, |t| t.obs = true),
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok::<(), String>(())
+        })
+    };
+    diagnostic(&app, &id, "game", "begin", Value::Null);
+    let prepare_game = async {
+        if !task.entered {
+            check(&app, &id)?;
+            let status = crate::cs2_host::status(app.clone()).await?;
+            let resuming = status["preparationId"] == id
+                && (status["running"] == true
+                    || status["pending"] == true
+                    || status["mulnxLaunchResumable"] == true);
+            if !resuming {
+                let replacement = crate::cs2_host::preflight(app.clone()).await?;
+                let target = &replacement["target"];
+                if let Some((pid, created)) = &task.external {
+                    if target["pid"].as_u64() != Some(u64::from(*pid))
+                        || target["created"].as_str() != Some(created.as_str())
+                    {
+                        return Err("所选游戏实例已变化，请重试。".into());
                     }
                 }
-                if obs["connection"] != "connected" {
-                    return Err("OBS 未能连接，请检查后重试。".into());
-                }
-            }
-            http(
-                &app,
-                "POST",
-                "/operator/obs/video-preflight",
-                json!({"expectedRevision":revision}),
-            )
-            .await?;
-            let video = http(
-                &app,
-                "POST",
-                "/operator/obs/video-prepare",
-                json!({"expectedRevision":revision}),
-            )
-            .await?;
-            if let Some(transaction) = video["transactionId"].as_str() {
-                update(&id, |t| t.video_transaction = Some(transaction.to_owned()));
-            }
-            let prepared = async {
-                check(&app, &id)?;
-                controlled_post(
-                    &app,
-                    &id,
-                    "/operator/obs/ensure",
-                    json!({"expectedRevision":revision,"preparationId":id}),
+                crate::cs2_host::replace(
+                    app.clone(),
+                    target["pid"].as_u64().map(|v| v as u32),
+                    target["created"].as_str().map(str::to_owned),
+                    task.revision.clone(),
+                    id.clone(),
+                    Some(diagnostic_identity(&id, task.attempt, "game")),
                 )
                 .await?;
-                update(&id, |t| t.obs_owned = true);
-                let obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
-                if obs["connection"] != "connected" || obs["readiness"]["ready"] != true {
-                    return Err(obs["readiness"]["reason"]
+            }
+        } else {
+            check(&app, &id)?;
+        }
+        if !task.gsi {
+            diagnostic(&app, &id, "gsi", "begin", Value::Null);
+            let result: Result<(), String> = async {
+                check(&app, &id)?;
+                let status =
+                    crate::gsi_host::status(app.state::<DesktopLog>().inner().clone()).await?;
+                if status["readFailed"] == true || status["detected"] != true {
+                    return Err(status["issues"][0]["message"]
                         .as_str()
-                        .unwrap_or("OBS 准备状态未确认。")
-                        .to_string());
+                        .unwrap_or("无法确认 CS2 安装或 GSI 配置。")
+                        .into());
+                }
+                let result = crate::gsi_host::ensure(
+                    app.clone(),
+                    app.state::<DesktopLog>().inner().clone(),
+                    Some(id.clone()),
+                    Some(diagnostic_identity(&id, task.attempt, "gsi")),
+                )
+                .await?;
+                if result["installed"] != true
+                    || result["conflict"] == true
+                    || result["readFailed"] == true
+                {
+                    return Err("GSI 自动配置未完成。".into());
                 }
                 check(&app, &id)
             }
             .await;
-            if prepared.is_err() && !task.entered {
-                restore_video(&app, &id, false).await?;
+            diagnostic_result(&app, &id, "gsi", &result);
+            match result {
+                Ok(()) => update(&id, |t| t.gsi = true),
+                Err(e) => return Err(e),
             }
-            prepared
         }
-        .await;
-        match result {
-            Ok(()) => update(&id, |t| t.obs = true),
-            Err(e) => errors.push(e),
-        }
-    }
-    if !task.gsi {
-        let result: Result<(), String> = async {
-            check(&app, &id)?;
-            let status = crate::gsi_host::status(app.state::<DesktopLog>().inner().clone()).await?;
-            if status["readFailed"] == true || status["detected"] != true {
-                return Err(status["issues"][0]["message"]
-                    .as_str()
-                    .unwrap_or("无法确认 CS2 安装或 GSI 配置。")
-                    .into());
-            }
-            let result = crate::gsi_host::ensure(
+        check(&app, &id)?;
+        let mut game = crate::cs2_host::status(app.clone()).await?;
+        let mut launched_mulnx = false;
+        if game["mulnxLaunchResumable"] == true {
+            let receipt = crate::cs2_host::launch_mulnx(
                 app.clone(),
-                app.state::<DesktopLog>().inner().clone(),
-                Some(id.clone()),
                 None,
+                None,
+                Some(true),
+                Some(id.clone()),
+                Some(diagnostic_identity(&id, task.attempt, "game")),
             )
             .await?;
-            if result["installed"] != true
-                || result["conflict"] == true
-                || result["readFailed"] == true
-            {
-                return Err("GSI 自动配置未完成。".into());
+            launched_mulnx = true;
+            if receipt["result"] == "not-found" {
+                return Err("原启动请求无法确认，请退出后重新准备。".into());
             }
-            check(&app, &id)
+        } else if game["preferMulnx"] == true && game["running"] != true && game["pending"] != true
+        {
+            crate::cs2_host::launch_mulnx(
+                app.clone(),
+                Some(true),
+                Some(task.preserve),
+                None,
+                Some(id.clone()),
+                Some(diagnostic_identity(&id, task.attempt, "game")),
+            )
+            .await?;
+            launched_mulnx = true;
         }
-        .await;
-        match result {
-            Ok(()) => update(&id, |t| t.gsi = true),
-            Err(e) => errors.push(e),
-        }
-    }
-    check(&app, &id)?;
-    let mut game = crate::cs2_host::status(app.clone()).await?;
-    let mut launched_mulnx = false;
-    if game["mulnxLaunchResumable"] == true {
-        let receipt = crate::cs2_host::launch_mulnx(
-            app.clone(),
-            None,
-            None,
-            Some(true),
-            Some(id.clone()),
-            None,
-        )
-        .await?;
-        launched_mulnx = true;
-        if receipt["result"] == "not-found" {
-            return Err("原启动请求无法确认，请退出后重新准备。".into());
-        }
-    } else if game["preferMulnx"] == true && game["running"] != true && game["pending"] != true {
-        crate::cs2_host::launch_mulnx(
-            app.clone(),
-            Some(true),
-            Some(task.preserve),
-            None,
-            Some(id.clone()),
-            None,
-        )
-        .await?;
-        launched_mulnx = true;
-    }
-    game = crate::cs2_host::status(app.clone()).await?;
-    if (game["running"] != true && game["pending"] != true) || launched_mulnx {
-        crate::cs2_host::start(
-            app.clone(),
-            Some(task.preserve && !launched_mulnx),
-            Some(id.clone()),
-            None,
-            None,
-            None,
-        )
-        .await?;
-    }
-    for _ in 0..60 {
-        check(&app, &id)?;
         game = crate::cs2_host::status(app.clone()).await?;
-        if game["running"] == true && game["preparationId"] == id {
-            break;
+        if (game["running"] != true && game["pending"] != true) || launched_mulnx {
+            crate::cs2_host::start(
+                app.clone(),
+                Some(task.preserve && !launched_mulnx),
+                Some(id.clone()),
+                Some(diagnostic_identity(&id, task.attempt, "game")),
+                Some(id.clone()),
+                Some("user".into()),
+            )
+            .await?;
         }
-        tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
-            .await
-            .map_err(|_| "游戏等待失败。")?;
+        for _ in 0..60 {
+            check(&app, &id)?;
+            game = crate::cs2_host::status(app.clone()).await?;
+            if game["running"] == true && game["preparationId"] == id {
+                break;
+            }
+            tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
+                .await
+                .map_err(|_| "游戏等待失败。")?;
+        }
+        if game["running"] != true || game["preparationId"] != id {
+            return Err("CS2 启动尚未确认，请检查游戏状态后重试。".into());
+        }
+        Ok::<(), String>(())
+    };
+    let game_result = prepare_game.await;
+    diagnostic_result(&app, &id, "game", &game_result);
+    let game_prepared = game_result.is_ok();
+    let obs_result = prepare_obs
+        .await
+        .map_err(|_| "OBS 准备任务未完成。".to_string())?;
+    if let Err(error) = obs_result {
+        errors.push(error);
     }
-    if game["running"] != true || game["preparationId"] != id {
-        return Err("CS2 启动尚未确认，请检查游戏状态后重试。".into());
+    if let Err(error) = game_result {
+        errors.push(error);
     }
-    if !task.capture {
+    let prepared = snapshot()?
+        .filter(|t| t.id == id)
+        .ok_or("准备任务不存在。")?;
+    let game = crate::cs2_host::status(app.clone()).await?;
+    let game_ready = game_prepared && game["running"] == true && game["preparationId"] == id;
+    if !task.capture && prepared.obs && game_ready {
+        diagnostic(&app, &id, "capture", "begin", Value::Null);
         let result: Result<(), String> = async {
             check(&app, &id)?;
             let mut warmup = Value::Null;
@@ -598,12 +708,14 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                 (Err(first), Err(second)) => Err(format!("{first} 临时捕获来源清理未确认：{second}")),
             }
         }.await;
+        diagnostic_result(&app, &id, "capture", &result);
         match result {
             Ok(()) => update(&id, |t| t.capture = true),
             Err(e) => errors.push(e),
         }
     }
-    if !task.camera {
+    if !task.camera && game_ready {
+        diagnostic(&app, &id, "camera", "begin", Value::Null);
         let result: Result<(), String> = async {
             check(&app, &id)?;
             if task.camera_uncertain {
@@ -628,6 +740,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             Ok(())
         }
         .await;
+        diagnostic_result(&app, &id, "camera", &result);
         match result {
             Ok(()) => update(&id, |t| {
                 t.camera = true;
@@ -637,10 +750,15 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         }
     }
     check(&app, &id)?;
+    if !game_ready {
+        publish(&app, &id, errors.join("；"));
+        return Ok(());
+    }
     if !task.entered {
         // Until the service confirms the outcome, never roll back resources:
         // the enter request may have committed even if its response was lost.
         update(&id, |t| t.enter_attempted = true);
+        diagnostic(&app, &id, "enter", "begin", Value::Null);
         controlled_post(
             &app,
             &id,
@@ -649,6 +767,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         )
         .await?;
         update(&id, |t| t.entered = true);
+        diagnostic(&app, &id, "enter", "success", Value::Null);
     }
     if !task.presented {
         crate::workspace_presentation::present(
@@ -667,12 +786,28 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
 }
 fn spawn(app: tauri::AppHandle, id: String) {
     tauri::async_runtime::spawn(async move {
+        diagnostic(&app, &id, "preparation", "begin", Value::Null);
         let result = run(app.clone(), id.clone()).await;
         if let Err(mut error) = result {
             if let Err(restore) = restore_video(&app, &id, false).await {
                 error = format!("{error} OBS 视频设置恢复未确认：{restore}");
             }
+            diagnostic(&app, &id, "preparation", "failure", json!({"cause":error}));
             publish(&app, &id, error);
+        } else if let Some(task) = snapshot().ok().flatten().filter(|task| task.id == id) {
+            diagnostic(
+                &app,
+                &id,
+                "preparation",
+                if task.cancelled {
+                    "cancelled"
+                } else if task.entered && task.message.is_empty() {
+                    "success"
+                } else {
+                    "partial"
+                },
+                json!({"entered":task.entered,"obs":task.obs,"gsi":task.gsi,"capture":task.capture,"camera":task.camera,"message":task.message}),
+            );
         }
         mark_run_finished(&id);
     });
@@ -742,6 +877,7 @@ fn preparation_start(
             }
             existing.preserve = preserve_settings;
             existing.running = true;
+            existing.attempt = existing.attempt.saturating_add(1);
             let id = existing.id.clone();
             drop(state);
             publish(&app, &id, "正在重试准备…".into());
@@ -762,6 +898,7 @@ fn preparation_start(
     *state = Some(Task {
         id: preparation_id.clone(),
         revision: expected_revision,
+        attempt: 1,
         preserve: preserve_settings,
         external,
         running: true,
@@ -786,7 +923,7 @@ fn preparation_start(
     Ok(())
 }
 pub(crate) fn status() -> Result<Value, String> {
-    Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message})).unwrap_or(Value::Null))
+    Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message,"steps":{"obs":t.obs,"gameConfiguration":t.gsi,"capture":t.capture,"camera":t.camera}})).unwrap_or(Value::Null))
 }
 fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
@@ -798,6 +935,7 @@ fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<()
         return Ok(());
     }
     task.running = true;
+    task.attempt = task.attempt.saturating_add(1);
     drop(state);
     publish(&app, &preparation_id, "正在重试准备…".into());
     spawn(app, preparation_id);
@@ -808,6 +946,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
         CancellationClaim::Complete => return Ok(()),
         CancellationClaim::Running(flight) => flight,
         CancellationClaim::Start(flight) => {
+            diagnostic(&app, &preparation_id, "cancel", "begin", Value::Null);
             let job_flight = flight.clone();
             tauri::async_runtime::spawn(async move {
                 let mut owner = CancellationOwner {
@@ -879,6 +1018,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                 if outcome.is_ok() {
                     publish(&app, &preparation_id, "准备已取消。".into());
                 }
+                diagnostic_result(&app, &preparation_id, "cancel", &outcome);
                 owner.complete(outcome);
             });
             flight

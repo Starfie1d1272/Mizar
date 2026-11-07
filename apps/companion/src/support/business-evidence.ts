@@ -5,67 +5,6 @@ export const BUSINESS_LOG_FILES = [
   'business.ndjson.2',
   'business.ndjson.3',
 ];
-const codes = new Set([
-  'baseline',
-  'contiguous',
-  'gap-resync',
-  'stale-recovery',
-  'source-generation-advanced',
-  'map-execution-reset',
-  'duplicate',
-  'out-of-order',
-  'non-monotonic-time',
-  'stale-generation',
-  'generation-ahead',
-  'invalid-generation-advance',
-  'map-not-established',
-  'context_unbound',
-  'roster_evidence_pending',
-  'allplayers_unavailable',
-  'allplayers_degraded',
-  'partial_roster_evidence',
-  'source_generation_changed',
-  'map_epoch_changed',
-  'roster_incomplete',
-  'missing_canonical_steam64',
-  'missing_canonical_display_name',
-  'duplicate_canonical_player_id',
-  'duplicate_canonical_steam64',
-  'bot_or_noncanonical_source_id',
-  'unexpected_human_steam64',
-  'duplicate_observed_identity',
-  'unknown_observed_side',
-  'ambiguous_side_mapping',
-  'side_mapping_conflict',
-  'lineup_differs_from_expected',
-  'map_not_confirmed',
-  'map_mismatch',
-  'context_invalid',
-  'map_unbound',
-  'map_ambiguous',
-  'map_order_exception',
-  'side_mapping_unproven',
-  'final_score_unavailable',
-  'final_score_conflict',
-  'result_pending_review',
-  'round_number_unavailable',
-  'round_history_partial',
-  'round_history_cap',
-  'checkpoint_incompatible',
-  'checkpoint_invalid',
-  'operator_bind_applied',
-  'operator_bind_rejected',
-  'context_result_conflict',
-  'current_scope_failed',
-  'boundary_unconfirmed_result',
-  'send_guard_blocked',
-  'receiver_accepted',
-  'delivery_rejected_unknown',
-  'retry_unknown',
-  'retention_expired',
-  'queued',
-  'restored',
-]);
 export const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -175,17 +114,10 @@ export function businessEvidence(value: unknown) {
     liveSessionRef: ref(input.liveSessionRef),
     producerRef: ref(input.producerRef),
     mapRef: ref(input.mapRef),
-    mapName: pick(input.mapName, [
-      'de_ancient',
-      'de_anubis',
-      'de_dust2',
-      'de_inferno',
-      'de_mirage',
-      'de_nuke',
-      'de_overpass',
-      'de_train',
-      'de_vertigo',
-    ]),
+    mapName:
+      typeof input.mapName === 'string' && /^[a-zA-Z0-9_./-]{1,128}$/.test(input.mapName)
+        ? input.mapName
+        : null,
     plannedMapRef: ref(input.plannedMapRef),
     eventKind: pick(input.eventKind, [
       'match_started',
@@ -239,13 +171,7 @@ export function businessEvidence(value: unknown) {
         : null,
     reason: isReason(input.reason) ? input.reason : null,
     issues: Array.isArray(input.issues)
-      ? [
-          ...new Set(
-            input.issues.filter(
-              (code): code is string => typeof code === 'string' && codes.has(code),
-            ),
-          ),
-        ]
+      ? [...new Set(input.issues.filter((code): code is string => isReason(code)))]
           .sort()
           .slice(0, 32)
       : [],
@@ -277,51 +203,7 @@ const steamList = (value: unknown) =>
     ? value.filter((v: unknown): v is string => steam64(v) !== null).slice(0, 64)
     : [];
 const isReason = (value: unknown): value is string =>
-  typeof value === 'string' &&
-  (codes.has(value) ||
-    [
-      'unknown',
-      'claim_attempt',
-      'claim_accepted',
-      'claim_rejected',
-      'network_failed',
-      'timeout',
-      'invalid_response',
-      'response_read_failed',
-      'response_cancel_failed',
-      'response_too_large',
-      'broadcast_unavailable',
-      'unknown_rejection',
-      'frame_expired',
-      'contended',
-      'delivery_dropped',
-      'capacity',
-      'source_unavailable',
-      'producer_mismatch',
-      'map_start_pending',
-      'map_start_rejected',
-      'quarantined',
-      'bundle_unavailable',
-      'context_not_fresh',
-      'telemetry_not_fresh',
-      'identity_not_matched',
-      'scope_not_current',
-      'final_evidence_not_current',
-      'map_phase_not_gameover',
-      'map_name_changed',
-      'map_score_changed',
-      'map_result_not_completed',
-      'canonical_result_changed',
-      'mismatch_no_longer_current',
-      'claim_response_received',
-      'release_attempt',
-      'release_confirmed',
-      'release_pending',
-      'release_blocked',
-      'request_started',
-      'request_aborted',
-    ].includes(value) ||
-    /^http_[1-5]\d{2}$/.test(value));
+  typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value);
 
 /** One fault predicate for retained business history and diagnostic search indexes. */
 export function businessEvidenceHasFailure(value: unknown): boolean {

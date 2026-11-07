@@ -4,6 +4,7 @@ import { browserErrorEvidence, controlEvidence } from './control-journal';
 export class ControlTask {
   readonly taskId: string;
   readonly operationId = crypto.randomUUID();
+  readonly attemptId = crypto.randomUUID();
   readonly parentOperationId: string | null;
   result: 'confirmed' | 'failed' | 'blocked' | 'cancelled' | 'unconfirmed' | null = null;
   private terminal = false;
@@ -20,6 +21,7 @@ export class ControlTask {
   headers(): Record<string, string> {
     return {
       'x-mizar-task-id': this.taskId,
+      'x-mizar-attempt-id': this.attemptId,
       'x-mizar-trigger': this.trigger,
       'x-mizar-parent-operation-id': this.operationId,
     };
@@ -27,6 +29,7 @@ export class ControlTask {
   event(phase: string, evidence: unknown): void {
     controlEvidence('task', phase, {
       taskId: this.taskId,
+      attemptId: this.attemptId,
       operationId: this.operationId,
       parentOperationId: this.parentOperationId,
       kind: this.kind,

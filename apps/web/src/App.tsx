@@ -1,3 +1,5 @@
+import { GamePictureTool } from './workspace/GamePictureTool';
+import { MatchConnectionDialog } from './preparation/MatchConnectionDialog';
 import { useBroadcastDisplayConfig } from './realtime/broadcast-display-client';
 import { useRadarViewSource } from './realtime/radar-view-source';
 import { useLocalReadWithTime } from './preparation/client';
@@ -752,12 +754,9 @@ export function App() {
   if (pathname === '/program/bp') return <BpPage />;
   if (pathname === '/program/bp-compact') return <BpPage compact />;
   if (pathname === '/workspace') return <WorkspacePreview />;
-  if (pathname === '/workspace/review')
-    return ['connection', 'next-connection'].includes(
-      new URLSearchParams(window.location.search).get('kind') ?? '',
-    ) ? null : (
-      <WorkspaceReview />
-    );
+  if (pathname === '/workspace/game-picture') return <GamePictureTool />;
+  if (pathname === '/workspace/connection') return <MatchConnectionDialog />;
+  if (pathname === '/workspace/review') return <WorkspaceReview />;
   if (pathname === '/workspace/left') return <WorkspaceLeft />;
   if (pathname === '/workspace/dock') return <WorkspaceDock />;
   if (pathname === '/program/stats') return <StatsInsertPage />;

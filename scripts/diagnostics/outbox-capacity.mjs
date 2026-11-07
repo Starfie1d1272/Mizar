@@ -1,3 +1,4 @@
+import { diagnosticSegmentNames } from '../../apps/companion/src/support/segments.ts';
 import { strict as assert } from 'node:assert';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -20,6 +21,37 @@ import {
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const { Response, Headers } = globalThis;
+const receipt = (value) =>
+  Response.json(value, { headers: { 'x-diagnostics-event-version': '2' } });
+// Public synthetic technical identifiers, not arbitrary text that v2 correctly excludes.
+const syntheticTechnicalPayload = () => {
+  const identifiers = [
+    'code',
+    'reason',
+    'stage',
+    'phase',
+    'result',
+    'status',
+    'state',
+    'operation',
+    'failureKind',
+    'matchId',
+    'competitionId',
+    'mapId',
+    'mapName',
+    'liveSessionId',
+    'producerInstanceId',
+    'contextRevision',
+  ];
+  const fields = () =>
+    Object.fromEntries(identifiers.map((key) => [key, randomBytes(72).toString('hex')]));
+  return Object.fromEntries(
+    ['error', 'cause', 'correlation', 'coverage', 'timing', 'metrics'].map((key) => [
+      key,
+      { ...fields(), cause: fields() },
+    ]),
+  );
+};
 
 /** Admission belongs to the real journal/outbox. This focused boundary probe
  * uses deterministic protocol receipts; real server quotas and storage are
@@ -39,7 +71,7 @@ export async function fullOutbox(directory) {
       const url = new URL(input);
       if (url.pathname.endsWith('/enroll')) {
         installation = JSON.parse(init.body).enrollmentId;
-        return Response.json({
+        return receipt({
           installationId: installation,
           token: 'public-boundary-receipt',
           expiresAt: Date.now() + 86400_000,
@@ -47,7 +79,7 @@ export async function fullOutbox(directory) {
       }
       if (url.pathname.includes('/permits/')) {
         const issuedAt = Date.now();
-        return Response.json({
+        return receipt({
           schema: 'mizar-diagnostic-permit/2',
           installationId: installation,
           installationCreatedAt: diagnosticInstallationCreatedAt(installation),
@@ -66,9 +98,9 @@ export async function fullOutbox(directory) {
       assert.equal(hash(sealed.payload), sealed.permit.payloadSha256);
       originalPayloads.add(hash(sealed.payload));
       for (const event of (await decodeDiagnosticBatch(bytes)).events)
-        if (event.stage === 'outbox_capacity') received.add(event.evidence.index);
+        if (event.stage === 'outbox_capacity') received.add(event.evidence.count);
       const id = hash(bytes);
-      return Response.json({ accepted: true, batchId: id, sha256: id });
+      return receipt({ accepted: true, batchId: id, sha256: id });
     };
     const open = async () => {
       journal = new SessionJournal(path);
@@ -87,15 +119,17 @@ export async function fullOutbox(directory) {
       await delivery.pause(true);
       let offered = 0;
       while (delivery.status().error !== 'queue_budget_local_journal_retained') {
-        assert(offered < 6000, 'production admission did not enforce the configured boundary');
+        assert(
+          offered < 6000,
+          `production admission did not enforce ${boundary} boundary: ${JSON.stringify({ delivery: delivery.status(), journal: journal.health() })}`,
+        );
         const count = boundary === 'bytes' ? 32 : 1;
         for (let i = 0; i < count; i++) {
           journal.record('outbox_capacity', {
-            index: offered++,
-            text:
-              boundary === 'bytes'
-                ? randomBytes(24000).toString('base64')
-                : 'public count boundary',
+            count: offered++,
+            ...(boundary === 'bytes'
+              ? syntheticTechnicalPayload()
+              : { operation: 'public-count-boundary' }),
           });
         }
         await journal.flush();
@@ -115,7 +149,7 @@ export async function fullOutbox(directory) {
       }
       // Full admission must retain every existing byte and defer this new record.
       journal.record('outbox_capacity', {
-        index: offered++,
+        count: offered++,
         text: 'pending across restart at full capacity',
       });
       await journal.flush();
@@ -132,7 +166,7 @@ export async function fullOutbox(directory) {
           tailIds.push(index);
           const text = 'compressible retained source '.repeat(1200);
           retainedTailBytes += Buffer.byteLength(text);
-          journal.record('outbox_capacity', { index, text });
+          journal.record('outbox_capacity', { count: index, text });
           if (i % 16 === 15) await journal.flush();
         }
         await journal.flush();
@@ -140,8 +174,9 @@ export async function fullOutbox(directory) {
         assert(retainedTailBytes < SESSION_LIMITS.segmentBytes * SESSION_LIMITS.segments);
         const retained = new Set();
         let actualTailBytes = 0;
-        for (let segment = 0; segment < SESSION_LIMITS.segments; segment++) {
-          const name = segment ? 'session.ndjson.' + segment : 'session.ndjson';
+        for (const name of (await diagnosticSegmentNames(path)).filter((name) =>
+          name.startsWith('session-'),
+        )) {
           const text = await readFile(join(path, name), 'utf8').catch((error) => {
             if (error.code === 'ENOENT') return '';
             throw error;
@@ -149,8 +184,8 @@ export async function fullOutbox(directory) {
           for (const line of text.split('\n').filter(Boolean)) {
             const event = JSON.parse(line);
             if (event.stage === 'outbox_capacity') {
-              retained.add(event.evidence.index);
-              if (tailIds.includes(event.evidence.index))
+              retained.add(event.evidence.count);
+              if (tailIds.includes(event.evidence.count))
                 actualTailBytes += Buffer.byteLength(line) + 1;
             }
           }

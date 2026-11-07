@@ -1,6 +1,6 @@
 import { flushPerformanceJournal } from './performance-journal';
 import { flushControlSnapshots, sendControlEvidence } from './control-journal';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
@@ -100,15 +100,51 @@ export function SupportExport() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{
+    exportId: string;
+    phase: string;
+    inputBytes?: number;
+    outputBytes?: number;
+  } | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  const [hasReadyJob, setHasReadyJob] = useState(false);
+  const readyJob = useRef<{
+    exportId: string;
+    expiresAt: string;
+    parts: { name: string }[];
+  } | null>(null);
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
 
   async function exportBundle() {
     if (busy) return;
     setBusy(true);
     setResult(null);
+    controller.current = new AbortController();
+    const signal = controller.current.signal;
+    const deadline = Date.now() + 120_000;
     let stage: 'collect' | 'generate' | 'save' = 'collect';
+    let hostPinId: string | undefined;
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
+      if (readyJob.current && Date.parse(readyJob.current.expiresAt) <= Date.now()) {
+        readyJob.current = null;
+        setHasReadyJob(false);
+      }
+      if (desktop && readyJob.current) {
+        stage = 'save';
+        const saved = await desktopInvoke<boolean>('save_support_bundle', {
+          exportId: readyJob.current.exportId,
+        });
+        setResult({
+          error: false,
+          message: saved ? '诊断包已保存，请一并私下交付全部分卷及清单。' : '已取消保存。',
+        });
+        if (saved) {
+          readyJob.current = null;
+          setHasReadyJob(false);
+        }
+        return;
+      }
       const [gsi, cs2, consoleStatus] = desktop
         ? await Promise.all([
             boundedStatus(desktopInvoke('gsi_status')),
@@ -124,11 +160,25 @@ export function SupportExport() {
         );
       await flushControlSnapshots();
       await flushPerformanceJournal();
+      if (desktop) {
+        hostPinId = crypto.randomUUID();
+        await desktopInvoke('diagnostic_pin', {
+          action: 'prepare',
+          pinId: hostPinId,
+          kind: 'export',
+        });
+        await desktopInvoke('diagnostic_pin', {
+          action: 'commit',
+          pinId: hostPinId,
+          kind: 'export',
+        });
+      }
       stage = 'generate';
-      const response = await fetch('/debug/support-bundle', {
+      const response = await fetch('/debug/support-exports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(hostPinId ? { hostPinId } : {}),
           ...(from ? { from: new Date(from).toISOString() } : {}),
           ...(to ? { to: new Date(to).toISOString() } : {}),
           desktop: desktop
@@ -148,34 +198,64 @@ export function SupportExport() {
             : null,
         }),
         cache: 'no-store',
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
       });
       if (!response.ok) throw new Error(`export_http_${response.status}`);
-      const text = await response.text();
-      if (
-        new TextEncoder().encode(text).length > 256 * 1024 * 1024 ||
-        (JSON.parse(text) as { schema?: string }).schema !== 'mizar-support-bundle/1'
-      )
-        throw new Error('invalid_bundle');
+      let job = (await response.json()) as {
+        exportId: string;
+        phase: string;
+        error?: string;
+        parts?: { name: string }[];
+        expiresAt?: string;
+        knownGaps?: number;
+      };
+      setProgress(job);
+      while (!['ready', 'failed', 'cancelled'].includes(job.phase)) {
+        if (signal.aborted) throw new Error('export_cancelled');
+        if (Date.now() > deadline) throw new Error('export_deadline');
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const status = await fetch(`/debug/support-exports/${job.exportId}`, {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+          cache: 'no-store',
+        });
+        if (!status.ok) throw new Error('export_status_unavailable');
+        job = await status.json();
+        setProgress(job);
+      }
+      if (job.phase === 'cancelled') throw new Error('export_cancelled');
+      if (job.phase === 'failed' || !job.parts?.length)
+        throw new Error(job.error ?? 'invalid_bundle');
+      readyJob.current = job.expiresAt
+        ? { exportId: job.exportId, parts: job.parts, expiresAt: job.expiresAt }
+        : null;
+      setHasReadyJob(Boolean(readyJob.current));
       stage = 'save';
       if (desktop) {
-        const saved = await desktopInvoke<boolean>('save_support_bundle', { contents: text });
+        const saved = await desktopInvoke<boolean>('save_support_bundle', {
+          exportId: job.exportId,
+        });
+        if (saved) {
+          readyJob.current = null;
+          setHasReadyJob(false);
+        }
         setResult({
           error: false,
-          message: saved ? '诊断包已保存，请私下交付维护者。' : '已取消保存。可以随时重新导出。',
+          message: saved
+            ? `诊断包已保存（${job.parts.length} 份 ZIP 和总清单），请一并私下交付维护者。${job.knownGaps ? ` 有 ${job.knownGaps} 处来源缺口，详情已写入清单。` : ''}`
+            : '已取消保存。',
         });
       } else {
-        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `mizar-support-${new Date().toISOString().replaceAll(':', '-')}.json`;
-        document.body.append(link);
-        link.click();
-        link.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        for (const name of [...job.parts.map((part) => part.name), 'generated.json']) {
+          const link = document.createElement('a');
+          link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
+          link.download = name;
+          document.body.append(link);
+          link.click();
+          link.remove();
+        }
         setResult({
           error: false,
-          message: '已发起下载。请在浏览器下载列表中确认文件后，再私下交付维护者。',
+          message: `已发起 ${job.parts.length} 份 ZIP 和总清单的下载，请在浏览器中确认全部文件。${job.knownGaps ? ` 有 ${job.knownGaps} 处来源缺口，详情已写入清单。` : ''}`,
         });
       }
     } catch (error) {
@@ -183,23 +263,31 @@ export function SupportExport() {
       setResult({
         error: true,
         message:
-          stage === 'save'
-            ? '诊断包已生成，但未能保存。请检查保存位置后重新导出。'
-            : code.startsWith('export_http_')
-              ? `本地服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
-              : code === 'invalid_bundle'
-                ? '诊断包内容不完整或超过大小限制，请缩短导出时间范围后重试。'
-                : stage === 'generate'
-                  ? '诊断包生成请求未完成，请检查本地服务连接后重试。'
-                  : '诊断信息收集未完成，请稍后重试。',
+          code === 'export_cancelled' || signal.aborted
+            ? '已取消生成诊断包。'
+            : stage === 'save'
+              ? '诊断包已生成，但未能保存。请检查保存位置后重试保存。'
+              : code.startsWith('export_http_')
+                ? `本地服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
+                : code === 'invalid_bundle'
+                  ? '诊断包内容不完整或超过大小限制，请缩短导出时间范围后重试。'
+                  : stage === 'generate'
+                    ? '诊断包生成请求未完成，请检查本地服务连接后重试。'
+                    : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {
+      if (hostPinId)
+        await desktopInvoke('diagnostic_pin', {
+          action: 'release',
+          pinId: hostPinId,
+          kind: 'export',
+        }).catch(() => undefined);
       setBusy(false);
     }
   }
 
   return (
-    <Panel>
+    <Panel id="support-export">
       <h2>问题反馈</h2>
       <p>
         诊断包包含操作记录、比赛账号信息（含名单和 Steam64）及相关 OBS
@@ -239,13 +327,44 @@ export function SupportExport() {
           onChange={(e) => setTo(e.target.value)}
         />
       </details>
+      {busy && progress ? (
+        <p role="status">
+          {progress.phase === 'collecting' ? '正在固定来源范围' : '正在生成诊断包'} · 已读取{' '}
+          {Math.round((progress.inputBytes ?? 0) / 1024)} KiB · 已输出{' '}
+          {Math.round((progress.outputBytes ?? 0) / 1024)} KiB
+        </p>
+      ) : null}
+      {busy && progress?.phase !== 'ready' ? (
+        <Button
+          onClick={() => {
+            controller.current?.abort();
+            if (progress)
+              void fetch(`/debug/support-exports/${progress.exportId}/cancel`, { method: 'POST' });
+          }}
+        >
+          取消生成
+        </Button>
+      ) : null}
+      {!busy && hasReadyJob ? (
+        <Button
+          onClick={() => {
+            {
+              readyJob.current = null;
+              setHasReadyJob(false);
+            }
+            void exportBundle();
+          }}
+        >
+          重新生成诊断包
+        </Button>
+      ) : null}
       <Button
         variant="primary"
         loading={busy}
         onClick={() => void exportBundle()}
         aria-label={busy ? '正在生成诊断包' : '导出诊断包'}
       >
-        导出诊断包
+        {hasReadyJob ? '重试保存' : '导出诊断包'}
       </Button>
       {result === null ? null : (
         <StatusBanner tone={result.error ? 'danger' : 'info'}>{result.message}</StatusBanner>

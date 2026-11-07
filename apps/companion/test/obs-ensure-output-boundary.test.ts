@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -116,9 +116,23 @@ it.each([
       if (packet.op !== 6) return;
       const { requestType: type, requestId, requestData = {} } = packet.d;
       requests.push(type);
+      if (typeof requestData.sceneUuid === 'string')
+        requestData.sceneName = requestData.sceneUuid.replace('scene:', '');
+      if (typeof requestData.inputUuid === 'string')
+        requestData.inputName = requestData.inputUuid.replace('input:', '');
       const scene = desired.find((item) => item.sceneName === requestData.sceneName);
       let responseData: Record<string, unknown> = {};
       switch (type) {
+        case 'GetPersistentData':
+          responseData = {
+            slotValue:
+              requestData.realm === 'SCENE_COLLECTION' ? 'fixture-collection' : 'fixture-instance',
+          };
+          break;
+        case 'GetReplayBufferStatus':
+        case 'GetVirtualCamStatus':
+          responseData = { outputActive: false };
+          break;
         case 'GetStreamStatus':
         case 'GetRecordStatus':
           responseData = {
@@ -151,7 +165,10 @@ it.each([
         case 'GetSceneList':
           responseData = {
             currentProgramSceneName: currentScene,
-            scenes: desired.map((item) => ({ sceneName: item.sceneName })),
+            scenes: desired.map((item) => ({
+              sceneName: item.sceneName,
+              sceneUuid: `scene:${item.sceneName}`,
+            })),
           };
           break;
         case 'GetCurrentProgramScene':
@@ -167,9 +184,14 @@ it.each([
             inputs: [
               ...desired.map((item) => ({
                 inputName: item.browserInput,
+                inputUuid: `input:${item.browserInput}`,
                 inputKind: 'browser_source',
               })),
-              { inputName: OBS_CAPTURE_INPUT, inputKind: 'game_capture' },
+              {
+                inputName: OBS_CAPTURE_INPUT,
+                inputKind: 'game_capture',
+                inputUuid: `input:${OBS_CAPTURE_INPUT}`,
+              },
               ...(preparedAudio
                 ? [
                     { inputName: '桌面声音', inputKind: 'wasapi_output_capture' },
@@ -201,6 +223,7 @@ it.each([
             sceneItems: [
               ...(scene?.sources ?? []).map((sourceName, index) => ({
                 sourceName,
+                sourceUuid: `input:${sourceName}`,
                 sceneItemId: index + 1,
                 sceneItemIndex: index,
                 sceneItemEnabled: true,
@@ -313,6 +336,27 @@ it.each([
   await server.listen({ host: '127.0.0.1', port: 0 });
   const address = server.server.address();
   if (!address || typeof address === 'string') throw new Error('address unavailable');
+  await writeFile(
+    join(directory, 'obs.json.resources.json'),
+    JSON.stringify([
+      {
+        endpoint: `ws://127.0.0.1:${address.port}`,
+        collection: 'Mizar',
+        instance: 'fixture-instance',
+        collectionIdentity: 'fixture-collection',
+        roles: Object.fromEntries([
+          ...desired.flatMap((scene) => [
+            [`scene:${scene.id}`, { uuid: `scene:${scene.sceneName}`, kind: 'scene', version: 1 }],
+            [
+              `browser:${scene.id}`,
+              { uuid: `input:${scene.browserInput}`, kind: 'browser_source', version: 1 },
+            ],
+          ]),
+          ['capture', { uuid: `input:${OBS_CAPTURE_INPUT}`, kind: 'game_capture', version: 1 }],
+        ]),
+      },
+    ]),
+  );
   const config = new ObsConfigStore(join(directory, 'obs.json'));
   await config.save({
     host: '127.0.0.1',

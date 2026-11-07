@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -63,10 +63,24 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
       void (async () => {
         const type = request.d.requestType;
         const data = request.d.requestData ?? {};
+        if (data.sceneUuid === 'waiting-uuid') data.sceneName = obsSceneName('waiting');
+        if (data.sceneUuid === 'gameplay-uuid') data.sceneName = obsSceneName('gameplay');
         calls.push(type);
         let responseData: Record<string, unknown> = {};
-        if (type === 'GetStreamStatus' || type === 'GetRecordStatus')
+        if (
+          [
+            'GetStreamStatus',
+            'GetRecordStatus',
+            'GetReplayBufferStatus',
+            'GetVirtualCamStatus',
+          ].includes(type)
+        )
           responseData = { outputActive: false };
+        else if (type === 'GetPersistentData')
+          responseData = {
+            slotValue:
+              data.realm === 'SCENE_COLLECTION' ? 'fixture-collection' : 'fixture-instance',
+          };
         else if (type === 'GetOutputList') responseData = { outputs: [] };
         else if (type === 'GetSceneCollectionList')
           responseData = { currentSceneCollectionName: 'Mizar' };
@@ -158,6 +172,22 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   if (!address || typeof address === 'string') throw new Error('missing port');
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
+  await writeFile(
+    join(dir, 'obs.json.resources.json'),
+    JSON.stringify([
+      {
+        endpoint: `ws://127.0.0.1:${address.port}`,
+        collection: 'Mizar',
+        instance: 'fixture-instance',
+        collectionIdentity: 'fixture-collection',
+        roles: {
+          'scene:waiting': { uuid: 'waiting-uuid', kind: 'scene', version: 1 },
+          'scene:gameplay': { uuid: 'gameplay-uuid', kind: 'scene', version: 1 },
+          capture: { uuid: 'capture-uuid', kind: 'game_capture', version: 1 },
+        },
+      },
+    ]),
+  );
   const adapter = new ObsAdapter(
     config,
     origin,

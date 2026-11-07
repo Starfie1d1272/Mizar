@@ -1,3 +1,4 @@
+import { ManagedObsResources } from './managed-resources.js';
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -73,7 +74,10 @@ export class ObsConfigStore {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  constructor(private readonly filePath: string) {}
+  readonly managedResources: ManagedObsResources;
+  constructor(private readonly filePath: string) {
+    this.managedResources = new ManagedObsResources(`${filePath}.resources.json`);
+  }
   async read(): Promise<ObsConfig> {
     try {
       return validateObsConfig(JSON.parse(await readFile(this.filePath, 'utf8')) as unknown);

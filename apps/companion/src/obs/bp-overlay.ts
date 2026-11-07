@@ -173,9 +173,9 @@ export class BpOverlayOwner {
     pending: boolean | null;
   } | null = null;
 
-  observeItem(sceneName: string, itemId: number, enabled: boolean): boolean {
+  observeItem(sceneUuid: string, itemId: number, enabled: boolean): boolean {
     const lease = this.lease;
-    if (!lease || sceneName !== obsSceneName('gameplay') || lease.itemId !== itemId) return false;
+    if (!lease || sceneUuid !== lease.sceneUuid || lease.itemId !== itemId) return false;
     if (lease.pending === enabled) {
       lease.pending = null;
       return false;
@@ -183,13 +183,13 @@ export class BpOverlayOwner {
     lease.modified = true;
     return true;
   }
-  observeRemoval(sceneName: string, itemId: number): boolean {
-    if (sceneName !== obsSceneName('gameplay') || this.lease?.itemId !== itemId) return false;
+  observeRemoval(sceneUuid: string, itemId: number): boolean {
+    if (sceneUuid !== this.lease?.sceneUuid || this.lease?.itemId !== itemId) return false;
     this.invalidate();
     return true;
   }
-  observeSceneRemoval(sceneName: string): boolean {
-    if (sceneName !== obsSceneName('gameplay') || !this.lease) return false;
+  observeSceneRemoval(sceneUuid: string): boolean {
+    if (sceneUuid !== this.lease?.sceneUuid || !this.lease) return false;
     this.invalidate();
     return true;
   }
