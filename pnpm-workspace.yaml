@@ -46,3 +46,9 @@ tasks:
     dependsOn: ['^build']
   consumer:typecheck:
     dependsOn: ['build']
+
+# Miniflare 4 pins vulnerable transitive versions; remove when stable upstream
+# includes the fixes (undici GHSA-2m5v-pch6-74hx; sharp GHSA-wq5f-xc86-pv6w).
+overrides:
+  miniflare@4.20260730.0>undici: 7.30.1
+  miniflare@4.20260730.0>sharp: 0.35.5
