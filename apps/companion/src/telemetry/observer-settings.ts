@@ -16,14 +16,17 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
+type SettingsChange = 'scope' | 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
-  mapConnection: { id: string; mode: 'connect' | 'seamless'; nextMap: boolean } | undefined;
+  mapConnection:
+    { id: string; mode: 'connect' | 'seamless' | 'register-current'; nextMap: boolean } | undefined;
+  private scope: string | undefined;
+  private connectionRequestedAt: number | null = null;
   waitingForMap = false;
   revision = randomUUID();
   private listeners = new Set<(kind: SettingsChange) => void>();
@@ -56,6 +59,7 @@ export class ObserverSettingsStore {
   view() {
     return {
       settings: this.settings,
+      connectionRequestedAt: this.connectionRequestedAt,
       gameAutomation: this.gameAutomation,
       revision: this.revision,
       mapConnection: this.mapConnection ?? null,
@@ -114,10 +118,11 @@ export class ObserverSettingsStore {
   }
   setMapConnection(
     id: string,
-    mode: 'connect' | 'seamless',
+    mode: 'connect' | 'seamless' | 'register-current',
     value?: ObserverConnection,
     nextMap = false,
   ) {
+    if (mode === 'register-current' && nextMap) throw new Error('map_intent_conflict');
     const connection = value ? observerConnectionSchema.parse(value) : this.connection;
     if (!connection) throw new Error('connection_required');
     if (this.mapConnection?.id === id) {
@@ -132,12 +137,24 @@ export class ObserverSettingsStore {
     if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
       throw new Error('seamless_connection_changed');
     this.connection = connection;
+    this.connectionRequestedAt = Date.now();
     this.mapConnection = { id, mode, nextMap: nextMap || mode === 'seamless' };
     this.changed('map');
+  }
+  /** Scope changes invalidate drafts; migration never issues another game connect. */
+  observeScope(scope: string) {
+    if (scope === this.scope) return;
+    const previous = this.scope;
+    this.scope = scope;
+    if (previous === undefined) return;
+    if (this.mapConnection?.nextMap) this.mapConnection = { ...this.mapConnection, nextMap: false };
+    this.waitingForMap = false;
+    this.changed('scope');
   }
   clearConnection() {
     if (!this.connection) return;
     this.connection = undefined;
+    this.connectionRequestedAt = null;
     this.mapConnection = undefined;
     this.waitingForMap = false;
     this.changed('connection');
@@ -166,6 +183,7 @@ export function registerObserverSettings(
   app: FastifyInstance,
   store: ObserverSettingsStore,
   policy: LocalWebOriginPolicy,
+  canRegisterCurrent: () => boolean = () => true,
 ) {
   app.get('/local/v1/observer-assist', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(store.view()),
@@ -180,7 +198,7 @@ export function registerObserverSettings(
     z.strictObject({
       action: z.literal('map-connection'),
       id: z.uuid(),
-      mode: z.enum(['connect', 'seamless']),
+      mode: z.enum(['connect', 'seamless', 'register-current']),
       nextMap: z.boolean().default(false),
       connection: observerConnectionSchema.optional(),
       expectedRevision: z.uuid(),
@@ -211,6 +229,8 @@ export function registerObserverSettings(
           .code(409)
           .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
       if (parsed.data.action === 'map-connection') {
+        if (parsed.data.mode === 'register-current' && !canRegisterCurrent())
+          return reply.code(409).send({ message: '请在当前制作工作台登记观战连接。' });
         try {
           store.setMapConnection(
             parsed.data.id,
@@ -218,6 +238,8 @@ export function registerObserverSettings(
             parsed.data.connection,
             parsed.data.nextMap,
           );
+          if (parsed.data.mode === 'register-current' && !store.settings.enabled)
+            await store.configure({ ...store.settings, enabled: true });
         } catch (error) {
           if (error instanceof Error && error.message === 'map_intent_conflict')
             return reply.code(409).send({ message: '本图连接意图已变化，请重新确认。' });

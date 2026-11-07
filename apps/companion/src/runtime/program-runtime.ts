@@ -17,6 +17,7 @@ import {
   type RuntimeTransition,
   type TrustedProgramRoundEvents,
 } from '@mizar/core/runtime';
+import { projectionCursorFromRuntimeState, type ProjectionCursor } from '@mizar/core/projection';
 import type { MatchContext } from '@mizar/core/match-context';
 import {
   createIdentityResolver,
@@ -83,8 +84,22 @@ export interface ProgramRuntimeSnapshot {
   readonly recentTransitions: readonly RuntimeTransition[];
 }
 
+export type ExecutionBoundary =
+  | { readonly kind: 'none'; readonly cursor: ProjectionCursor }
+  | {
+      readonly kind: 'owned';
+      readonly matchId: string;
+      readonly fixture: boolean;
+      readonly cursor: ProjectionCursor;
+    }
+  | { readonly kind: 'unknown'; readonly cursor: ProjectionCursor };
+
 export type ProgramCommitResult = RuntimeReduceResult & {
   readonly snapshot: ProgramRuntimeSnapshot;
+  readonly executionBoundary: {
+    readonly before: ExecutionBoundary;
+    readonly after: ExecutionBoundary;
+  };
 };
 
 export interface SeriesOperatorCommandResult {
@@ -129,7 +144,6 @@ export class ProgramRuntime {
   private unknownNewExecution = false;
   private suspendedProduction:
     { owner: { matchId: string; fixture: boolean } | undefined; unknown: boolean } | undefined;
-  private previousBoundaryOwner: { runtimeSeq: number; matchId: string } | undefined;
   private restoredExecutionProof: SeriesProgressCheckpoint['executionOwner'];
   private restoredExecutionMatchId: string | undefined;
   private unverifiedSeriesProgress: SeriesProgress | undefined;
@@ -258,7 +272,6 @@ export class ProgramRuntime {
       this.executionConflict = priorConflict;
       this.executionOwnerUnknown = priorUnknown;
     }
-    this.previousBoundaryOwner = undefined;
     this.restoredExecutionProof = undefined;
     this.restoredExecutionMatchId = undefined;
     this.unverifiedSeriesProgress = undefined;
@@ -752,13 +765,6 @@ export class ProgramRuntime {
     return this.managedSourceId;
   }
 
-  getExecutionOwnerMatchId(runtimeSeq: number): string | undefined {
-    if (this.executionOwner && !this.executionOwner.fixture) return this.executionOwner.matchId;
-    return this.previousBoundaryOwner?.runtimeSeq === runtimeSeq
-      ? this.previousBoundaryOwner.matchId
-      : undefined;
-  }
-
   /** Called only for the first frame of a committed Host-verified managed source. */
   activateManagedSource(
     matchId: string,
@@ -800,7 +806,18 @@ export class ProgramRuntime {
     this.executionAwaitingObservation = true;
     this.managedSourceId = sourceId;
     this.commitFacts();
-    return boundary ? { boundary: { ...boundary, snapshot: this.getSnapshot() } } : {};
+    return boundary
+      ? {
+          boundary: {
+            ...boundary,
+            snapshot: this.getSnapshot(),
+            executionBoundary: {
+              before: boundary.executionBoundary.before,
+              after: this.executionBoundary(),
+            },
+          },
+        }
+      : {};
   }
 
   private setSourceUnverified(): void {
@@ -880,20 +897,34 @@ export class ProgramRuntime {
     };
   }
 
+  /** Capture ownership before reduction: a later binding cannot identify an old execution. */
+  private executionBoundary(): ExecutionBoundary {
+    const cursor = projectionCursorFromRuntimeState(this.state);
+    if (this.executionOwner) return { kind: 'owned', ...this.executionOwner, cursor };
+    if (
+      this.executionOwnerUnknown ||
+      this.executionConflict ||
+      this.restorePending ||
+      this.deliveryRestoreAwaitingTelemetry ||
+      this.unverifiedSeriesProgress ||
+      this.state.map.epoch > 0 ||
+      this.state.programTelemetry?.telemetry.map?.name
+    )
+      return { kind: 'unknown', cursor };
+    return { kind: 'none', cursor };
+  }
+
   private apply(
     input: Parameters<typeof reduceRuntime>[1],
     unverifiedNewExecution = false,
     deferFacts = false,
   ): ProgramCommitResult {
+    const before = this.executionBoundary();
     const result = reduceRuntime(this.state, input, this.continuityPolicy);
     this.state = result.state;
     if (result.transitions.some((transition) => transition.kind === 'map_execution_changed')) {
       if (this.explicitSourceOwner) this.executionConflict = true;
       this.explicitSourceOwner = undefined;
-      this.previousBoundaryOwner =
-        this.executionOwner && !this.executionOwner.fixture
-          ? { runtimeSeq: result.state.runtimeSeq, matchId: this.executionOwner.matchId }
-          : undefined;
       if (this.executionConflict || this.executionOwnerUnknown) {
         this.executionOwner = undefined;
         this.executionOwnerUnknown = true;
@@ -922,7 +953,11 @@ export class ProgramRuntime {
     )
       this.markUnverifiedNewExecution();
     if (!deferFacts && result.disposition.kind === 'accepted') this.commitFacts();
-    return { ...result, snapshot: this.getSnapshot() };
+    return {
+      ...result,
+      snapshot: this.getSnapshot(),
+      executionBoundary: { before, after: this.executionBoundary() },
+    };
   }
 
   private queueSeriesEvents(transitions: readonly RuntimeTransition[]): void {

@@ -1,3 +1,6 @@
+import { withAcknowledgedWireCoverage } from './migration.js';
+import { diagnosticSegmentNames } from './segments.js';
+import { technicalProjection } from './technical-projection.js';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
   DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
@@ -8,8 +11,9 @@ import {
   stampDiagnosticGzip,
   diagnosticPermit,
   sealDiagnosticGzip,
+  readDiagnosticGzipPermit,
 } from '@mizar/protocol/diagnostics-upload';
-import { diagnosticConsoleEvidence, diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
+import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { z } from 'zod';
 import { constants } from 'node:fs';
@@ -49,10 +53,15 @@ interface Batch {
   id: string;
   bytes: number;
   serverExpired?: boolean;
+  acknowledgedAt?: string;
   unavailableReason?: string;
   sealed?: boolean;
   index: {
     schema: string;
+    eventSchemaVersion?: 2;
+    producerKind?: string;
+    uniqueEvents?: number;
+    aggregatedOccurrences?: number;
     events: number;
     expandedBytes: number;
     stages: string[];
@@ -97,6 +106,8 @@ interface State {
   acknowledged: number;
   nextAttemptAt: number;
   failures: number;
+  consecutiveFailures: number;
+  serverRetryAt: number;
 }
 const identifier = z.string().uuid();
 const counter = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -128,6 +139,7 @@ const stateSchema = z
         phase: z.enum(['enrollment', 'permit', 'upload', 'withdrawal']),
         status: z.number().int().min(400).max(599).nullable(),
         reason: z.enum([
+          'receiver_upgrade_required',
           'receipt_invalid',
           'batch_retention_expired',
           'automatic_window_expired',
@@ -144,7 +156,7 @@ const stateSchema = z
     withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
     retiredIdentities: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones).default([]),
     sessions: z.record(
-      identifier,
+      z.string().regex(/^(?:performance:)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i),
       z.object({ from: counter, queued: counter }).refine((v) => v.queued >= v.from),
     ),
     queue: z
@@ -153,8 +165,11 @@ const stateSchema = z
           id: z.string().regex(/^[a-f0-9]{64}$/),
           bytes: z.number().int().min(1).max(DELIVERY_LIMITS.compressedBytes),
           serverExpired: z.boolean().optional(),
+          acknowledgedAt: z.iso.datetime().optional(),
           unavailableReason: z
             .enum([
+              'acknowledged_local_history',
+              'permanent_rejection',
               'installation_lease_closed',
               'consent_policy_changed',
               'server_retention_expired',
@@ -167,9 +182,13 @@ const stateSchema = z
           sealed: z.boolean().optional(),
           index: z.object({
             schema: z.literal('mizar-technical-diagnostics/1'),
+            eventSchemaVersion: z.literal(2).optional(),
+            producerKind: z.enum(['companion', 'host', 'document', 'legacy-unknown']).optional(),
+            uniqueEvents: counter.optional(),
+            aggregatedOccurrences: counter.optional(),
             events: z.number().int().min(1).max(DELIVERY_LIMITS.events),
             expandedBytes: z.number().int().min(1).max(DELIVERY_LIMITS.expandedBytes),
-            stages: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)).max(32),
+            stages: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/)).max(32),
             sessionId: identifier.optional(),
             from: z.iso.datetime().nullable().optional(),
             to: z.iso.datetime().nullable().optional(),
@@ -193,6 +212,8 @@ const stateSchema = z
     acknowledged: counter,
     nextAttemptAt: z.number().min(0).max(Number.MAX_SAFE_INTEGER),
     failures: counter,
+    consecutiveFailures: counter.default(0),
+    serverRetryAt: counter.default(0),
   })
   .passthrough()
   .refine(
@@ -257,6 +278,8 @@ const initial = (): State => ({
   acknowledged: 0,
   nextAttemptAt: 0,
   failures: 0,
+  consecutiveFailures: 0,
+  serverRetryAt: 0,
 });
 const checksum = (value: Uint8Array | string) => createHash('sha256').update(value).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -275,175 +298,36 @@ export function diagnosticsEndpoint(value: string | undefined, test = false): st
     throw new Error('invalid_diagnostics_endpoint');
   return url.origin;
 }
-function cloudValue(value: unknown, key = ''): unknown {
-  if (/^(?:chat|chatText|teamChat|privateChat|messageBody|rawPayload|audio|imageData)$/i.test(key))
-    return '[not-collected]';
-  if (Array.isArray(value)) return value.map((v) => cloudValue(v));
-  if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloudValue(v, k)]));
-  return value;
-}
-function cloudBrowserPerformance(
-  value: unknown,
-  observedAt: unknown,
-  consentAt: string | null,
-): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-  const evidence = { ...(value as Record<string, unknown>) };
-  const anomalies = Array.isArray(evidence.anomalies) ? evidence.anomalies : [];
-  const kept = anomalies.filter((item) => {
-    const time = diagnosticSourceUtc((item as { time?: unknown } | null)?.time);
-    return time && consentAt && time >= consentAt;
-  });
-  const source = diagnosticSourceUtc(observedAt);
-  const span = evidence.windowMs;
-  const crossing =
-    !source ||
-    !consentAt ||
-    typeof span !== 'number' ||
-    !Number.isFinite(span) ||
-    span < 0 ||
-    Date.parse(source) - span < Date.parse(consentAt) ||
-    kept.length !== anomalies.length;
-  evidence.anomalies = kept;
-  if (crossing) {
-    for (const field of ['frames', 'longTasks', 'channels']) delete evidence[field];
-    evidence.anomalyCount = kept.length;
-    evidence.omittedAnomalySamples = null;
-  }
-  evidence.cloudCoverage = {
-    excludedPreConsentOrUnknownTimeAnomalies: anomalies.length - kept.length,
-    aggregateWindowExcluded: crossing,
-    scope: crossing
-      ? 'known post-consent anomaly records and current surfaces only; original aggregate/omitted sample times unavailable, local evidence retained'
-      : 'source window and anomaly UTC after consent',
-  };
-  return evidence;
-}
+/** Legacy source adaptation is isolated from immutable already-created batches. */
 function cloudRecord(line: string, consentAt: string | null): unknown {
-  const value = JSON.parse(line) as {
-    stage?: string;
-    evidence?: {
-      samples?: { time?: string }[];
-      entries?: { entry?: { time?: string; stage?: string; detail?: unknown } }[];
-      sourceRecord?: { time?: string };
-      [key: string]: unknown;
-    };
-  };
-  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.sourceRecord) {
-    const sourceTime = diagnosticSourceUtc(value.evidence.sourceRecord.time);
-    if (!sourceTime || !consentAt || sourceTime < consentAt) {
-      value.stage = 'diagnostic_source_excluded';
-      value.evidence = { reason: 'recovered_source_before_consent_or_unknown_time' };
-    }
-  }
-  if (value.stage === 'browser_control' && value.evidence?.operation === 'browser_performance')
-    value.evidence.evidence = cloudBrowserPerformance(
-      value.evidence.evidence,
-      value.evidence.time,
-      consentAt,
-    );
-  if (['browser_control', 'business_evidence', 'update_stage'].includes(value.stage ?? '')) {
-    const source = diagnosticEnvelope(value).times;
-    if (!consentAt || !source.length || source.some((time) => time < consentAt)) {
-      value.stage = 'diagnostic_source_excluded';
-      value.evidence = { reason: 'deferred_source_before_consent_or_unknown_time' };
-    }
-  }
-  if (value.stage?.startsWith('performance_anomaly_') && value.evidence?.correlation) {
-    const correlation = value.evidence.correlation as Record<string, unknown>;
-    if (correlation.operation === 'browser_performance')
-      correlation.originalEvidence = cloudBrowserPerformance(
-        correlation.originalEvidence,
-        correlation.observedAt,
-        consentAt,
-      );
-    if (typeof correlation.operation === 'string' && correlation.operation.startsWith('browser_')) {
-      const source = diagnosticSourceUtc(correlation.observedAt);
-      if (!source || !consentAt || source < consentAt)
-        value.evidence.correlation = {
-          sourceEvidenceExcluded: true,
-          reason: 'browser_source_before_consent_or_unknown_time',
-        };
-    }
-  }
-  if (value.stage === 'performance_anomaly_samples' && Array.isArray(value.evidence?.samples)) {
-    const original = value.evidence.samples;
-    const since = consentAt ? Date.parse(consentAt) : NaN;
-    value.evidence.samples = original.filter((sample) => {
-      if (!sample || typeof sample !== 'object') return false;
-      const source = diagnosticSourceUtc(sample.time);
-      const time = source ? Date.parse(source) : NaN;
-      return Number.isFinite(since) && Number.isFinite(time) && time >= since;
-    });
-    value.evidence.cloudCoverage = {
-      consentAt,
-      excludedPreConsentOrUnknownTimeSamples: original.length - value.evidence.samples.length,
-      scope: 'only source samples since consent; local window metadata describes original scope',
-    };
-  }
-  if (value.stage === 'native_host_records' && Array.isArray(value.evidence?.entries)) {
-    const original = value.evidence.entries;
-    const since = consentAt ? Date.parse(consentAt) : NaN;
-    const filteredConsole = original.map((record) => {
-      const entry = record?.entry;
-      if (entry?.stage !== 'cs2_console_records') return record;
-      const detail = diagnosticConsoleEvidence(entry);
-      const records = Array.isArray(detail?.records) ? detail.records : [];
-      const kept = records.filter((value: unknown) => {
-        if (!value || typeof value !== 'object') return false;
-        const item = value as Record<string, unknown>;
-        const after = diagnosticSourceUtc(item.sourceAfterUtc);
-        const captured = diagnosticSourceUtc(item.capturedAt);
-        const host = diagnosticSourceUtc(entry.time);
-        return (
-          Number.isFinite(since) &&
-          after !== null &&
-          captured !== null &&
-          host !== null &&
-          Date.parse(after) >= since &&
-          after <= captured &&
-          captured <= host
-        );
-      });
-      return {
-        ...record,
-        entry: {
-          ...entry,
-          detail: JSON.stringify({
-            ...(detail ?? { source: 'owned-cs2-technical-console', rawFileIncluded: false }),
-            records: kept,
-            cloudCoverage: {
-              excludedPreConsentUnknownOrInvalidSourceRecords: records.length - kept.length,
-              sourceEnvelopeValid: detail !== null,
-              scope:
-                'source write interval, never Host poll time, controls console consent; full local source retained',
-            },
-          }),
-        },
-      };
-    });
-    value.evidence.entries = filteredConsole.filter((record) => {
-      const entry = record?.entry;
-      if (!entry || typeof entry !== 'object' || typeof entry.time !== 'string') return false;
-      const source = diagnosticSourceUtc(entry.time);
-      const time = source ? Date.parse(source) : NaN;
-      return (
-        Number.isFinite(since) &&
-        Number.isFinite(time) &&
-        time >= since &&
-        typeof entry.stage === 'string' &&
-        !/chat/i.test(entry.stage)
-      );
-    });
-    value.evidence.cloudCoverage = {
-      consentAt,
-      excludedPreConsentUnknownTimeOrChatRecords: original.length - value.evidence.entries.length,
-      scope:
-        'original Host source time controls consent; delayed copying cannot authorize historical upload',
-    };
-  }
-  return cloudValue(diagnosticValue(value));
+  const value = JSON.parse(line) as Record<string, unknown>;
+  if (value.schema === 'mizar-diagnostic-event/2') return technicalProjection(value, consentAt);
+  const sourceTimes = diagnosticEnvelope(value).times;
+  return technicalProjection(
+    {
+      schema: 'mizar-diagnostic-event/2',
+      eventId: `${value.startupSessionId}:${value.sequence}`,
+      producerKind: 'legacy-unknown',
+      producerRunId: value.startupSessionId,
+      sequence: value.sequence,
+      kind: value.stage,
+      phase: null,
+      outcome: null,
+      observedAt: sourceTimes[0] ?? null,
+      recordedAt: diagnosticSourceUtc(value.time),
+      monotonicMs: null,
+      sourceInterval: null,
+      taskId: value.taskId ?? null,
+      operationId: value.browserOperationId ?? value.requestId ?? null,
+      parentOperationId: value.parentOperationId ?? null,
+      attemptId: null,
+      scope: null,
+      evidence: value.evidence,
+      coverage: { occurrences: 1 },
+      appVersion: value.appVersion,
+    },
+    consentAt,
+  );
 }
 async function secureRead(directory: string, name: string, maximum: number) {
   await safePath(directory, name);
@@ -465,6 +349,77 @@ async function secureRead(directory: string, name: string, maximum: number) {
   } finally {
     await file.close();
   }
+}
+/** Fixed-length safe source traversal. No full log buffer, including legacy Host files. */
+async function* sourceLines(directory: string, name: string): AsyncGenerator<string> {
+  const path = await safePath(directory, name);
+  const before = await lstat(path);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    before.size > 100 * 1024 * 1024
+  )
+    throw new Error('unsafe_diagnostic_source');
+  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const actual = await file.stat();
+    if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
+      throw new Error('diagnostic_source_changed');
+    let offset = 0;
+    let tail = Buffer.alloc(0);
+    const chunk = Buffer.alloc(64 * 1024);
+    while (offset < before.size) {
+      const { bytesRead } = await file.read(
+        chunk,
+        0,
+        Math.min(chunk.length, before.size - offset),
+        offset,
+      );
+      if (!bytesRead) throw new Error('diagnostic_source_truncated');
+      offset += bytesRead;
+      tail = Buffer.concat([tail, chunk.subarray(0, bytesRead)]);
+      let newline: number;
+      while ((newline = tail.indexOf(10)) >= 0) {
+        if (newline > DELIVERY_LIMITS.expandedBytes / 2)
+          throw new Error('diagnostic_source_line_budget');
+        yield tail.subarray(0, newline).toString('utf8');
+        tail = tail.subarray(newline + 1);
+      }
+      if (tail.length > DELIVERY_LIMITS.expandedBytes / 2)
+        throw new Error('diagnostic_source_line_budget');
+    }
+    if (tail.length) throw new Error('diagnostic_source_uncommitted_tail');
+  } finally {
+    await file.close();
+  }
+}
+async function orderedSources(directory: string) {
+  const names = await diagnosticSegmentNames(directory);
+  const records: { name: string; run: string; sequence: number; order: number }[] = [];
+  for (const [order, name] of names.entries()) {
+    let run = '';
+    let sequence = 0;
+    if (name.startsWith('session-')) {
+      try {
+        for await (const line of sourceLines(directory, name)) {
+          const event = JSON.parse(line) as { producerRunId?: string; sequence?: number };
+          run = event.producerRunId ?? '';
+          sequence = event.sequence ?? 0;
+          break;
+        }
+      } catch {
+        /* Recovery below reports the unavailable source without dropping other sources. */
+      }
+    }
+    records.push({ name, run, sequence, order });
+  }
+  // Session segments have one producer. Host/document ordering is the producer-owned file order.
+  const sessions = records
+    .filter((value) => value.run)
+    .sort((a, b) => a.run.localeCompare(b.run) || a.sequence - b.sequence);
+  let next = 0;
+  return records.map((value) => (value.run ? sessions[next++]!.name : value.name));
 }
 /** Raw batches are never inflated without a bound, including malicious cloud archives. */
 export async function decodeDiagnosticBatch(bytes: Buffer) {
@@ -502,7 +457,21 @@ function batchMetadata(sessionId: string, events: unknown[]) {
     (value) =>
       typeof value.appVersion === 'string' && /^[a-zA-Z0-9.+_-]{1,64}$/.test(value.appVersion),
   )?.appVersion;
+  const canonical = events as Record<string, unknown>[];
+  const v2 = canonical.every((event) => event.schema === 'mizar-diagnostic-event/2');
   return {
+    ...(v2
+      ? {
+          eventSchemaVersion: 2 as const,
+          producerKind: String(canonical[0]!.producerKind),
+          uniqueEvents: new Set(canonical.map((event) => event.eventId)).size,
+          aggregatedOccurrences: canonical.reduce(
+            (n, event) =>
+              n + Number((event.coverage as { occurrences?: number })?.occurrences ?? 1),
+            0,
+          ),
+        }
+      : {}),
     sessionId,
     from: times[0] ?? null,
     to: times.at(-1) ?? null,
@@ -516,11 +485,12 @@ function batchMetadata(sessionId: string, events: unknown[]) {
 /** One local outbox. Queue references and source cursors commit together, before upload. */
 export class DiagnosticDelivery {
   private state = initial();
-  private pending: { line: string; sessionId: string; sequence: number }[] = [];
+  private pending: { line: string; sessionId: string; cursorId: string; sequence: number }[] = [];
   private pendingBytes = 0;
   private recoveryNeeded = false;
   private serial = Promise.resolve();
   private sending: Promise<void> | undefined;
+  private cleaningAcknowledged: Promise<void> | undefined;
   private abort: AbortController | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
@@ -624,20 +594,25 @@ export class DiagnosticDelivery {
           batch.unavailableReason = 'consent_policy_changed';
         }
       } else this.state.queue = [];
-      this.state.failures = 0;
+      this.state.consecutiveFailures = 0;
       this.state.nextAttemptAt = 0;
+      await this.save();
+    }
+    if (
+      this.state.transportFailure?.status === null &&
+      this.state.transportFailure.reason !== 'receiver_upgrade_required' &&
+      this.state.serverRetryAt <= this.now()
+    ) {
+      this.state.nextAttemptAt = Math.max(
+        this.now(),
+        (Date.parse(this.state.lastAttemptAt ?? '') || 0) + 30_000,
+      );
       await this.save();
     }
     this.requestedConsent = this.state.consent;
     this.requestedPause = this.state.paused;
-    // Bytes not referenced by the atomic manifest were never eligible for upload.
-    for (const entry of await readdir(this.queueDirectory, { withFileTypes: true }))
-      if (
-        entry.isFile() &&
-        /^[a-f0-9]{64}\.gz$/.test(entry.name) &&
-        !this.state.queue.some((v) => `${v.id}.gz` === entry.name)
-      )
-        await unlink(join(this.queueDirectory, entry.name));
+    // Unreferenced wire files may contain unique pre-upgrade evidence. Migration owns
+    // deletion only after a verified canonical-coverage receipt, never initialization.
     this.unsubscribe = this.journal.subscribe((line) => {
       this.sourceRevision++;
       this.observe(line);
@@ -679,8 +654,11 @@ export class DiagnosticDelivery {
       lastAttemptAt: this.state.lastAttemptAt,
       lastConfirmedAt: this.state.lastConfirmedAt,
       transportFailure: this.state.transportFailure,
-      queuedBatches: this.state.queue.length,
-      blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
+      queuedBatches: this.state.queue.filter((value) => !value.acknowledgedAt).length,
+      retainedAcknowledgedBatches: this.state.queue.filter((value) => value.acknowledgedAt).length,
+      blockedBatches: this.state.queue.filter(
+        (value) => value.serverExpired && !value.acknowledgedAt,
+      ).length,
       queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
       pendingBytes: this.pendingBytes,
       omitted: this.state.omitted,
@@ -690,6 +668,11 @@ export class DiagnosticDelivery {
       retiredIdentityCount: this.state.retiredIdentities.length,
       nextAttemptAt: this.state.nextAttemptAt,
       failures: this.state.failures,
+      consecutiveFailures: this.state.consecutiveFailures,
+      sendableBatches: this.state.queue.filter((value) => !value.serverExpired).length,
+      manualOnlyBatches: this.state.queue.filter(
+        (value) => value.serverExpired && !value.acknowledgedAt,
+      ).length,
       error: this.error,
       scope:
         'technical diagnostics; not anonymous; cloud completeness is bounded by explicitly reported local and server budgets',
@@ -836,9 +819,9 @@ export class DiagnosticDelivery {
         this.state.sessions = {};
         this.pending = [];
         this.pendingBytes = 0;
-        const removed = this.state.queue.splice(0);
+        this.state.queue.splice(0);
         this.state.nextAttemptAt = 0;
-        this.state.failures = 0;
+        this.state.consecutiveFailures = 0;
         await this.save();
         // The manifest now durably says off. Keep this request's fence and
         // remove only older markers; a later request must retain its own fence.
@@ -849,10 +832,8 @@ export class DiagnosticDelivery {
           });
           this.fences.delete(name);
         }
-        for (const batch of removed)
-          await unlink(join(this.queueDirectory, `${batch.id}.gz`)).catch((error) => {
-            if (!missing(error)) throw error;
-          });
+        // Revocation removes sending authority, not independent local evidence.
+        // Cold wire files remain available to manual export until migration covers them.
       }
       this.journal.record('diagnostic_consent', {
         enabled: this.consentActive(),
@@ -874,7 +855,11 @@ export class DiagnosticDelivery {
     return this.transaction(async () => {
       const previous = this.state.paused;
       this.state.paused = paused;
-      this.state.nextAttemptAt = 0;
+      this.state.nextAttemptAt = Math.max(
+        this.now(),
+        this.state.serverRetryAt,
+        (Date.parse(this.state.lastAttemptAt ?? '') || 0) + 30_000,
+      );
       try {
         await this.save();
       } catch (error) {
@@ -891,27 +876,46 @@ export class DiagnosticDelivery {
     this.state.omitted += count;
     this.state.omissionReasons[reason] = (this.state.omissionReasons[reason] ?? 0) + count;
   }
-  private observe(line: string, recovering = false) {
+  private observe(line: string, recovering = false, namespace = '') {
     if (!this.consentActive() || this.closed || (this.recoveryNeeded && !recovering)) return;
     // Journal supplies an immutable, already-redacted durable record.
-    const value = JSON.parse(line) as { startupSessionId: string; sequence: number; stage: string };
+    const value = JSON.parse(line) as {
+      startupSessionId: string;
+      producerRunId?: string;
+      schema?: string;
+      observedAt?: string;
+      recordedAt?: string;
+      kind?: string;
+      sequence: number;
+      stage: string;
+    };
+    const cursorId = namespace + (value.producerRunId ?? value.startupSessionId);
+    if (value.schema === 'mizar-diagnostic-event/2') {
+      value.startupSessionId = value.producerRunId ?? '';
+      value.stage = value.kind ?? '';
+      const time = diagnosticSourceUtc(value.observedAt);
+      if (!time || !this.state.consentAt || time < this.state.consentAt) return;
+      if (
+        !this.state.sessions[cursorId] &&
+        Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
+      )
+        this.state.sessions[cursorId] = { from: 0, queued: 0 };
+    }
     if (
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.startupSessionId) ||
       !Number.isSafeInteger(value.sequence) ||
       value.sequence < 1 ||
       typeof value.stage !== 'string' ||
-      !/^[a-z][a-z0-9_]{0,63}$/.test(value.stage)
+      !/^[a-z][a-z0-9_.-]{0,63}$/.test(value.stage)
     ) {
       this.omitted('invalid_source_cursor');
       return;
     }
-    const cursor = this.state.sessions[value.startupSessionId];
+    const cursor = this.state.sessions[cursorId];
     if (
       !cursor ||
       value.sequence <= cursor.queued ||
-      this.pending.some(
-        (v) => v.sessionId === value.startupSessionId && v.sequence === value.sequence,
-      )
+      this.pending.some((v) => v.cursorId === cursorId && v.sequence === value.sequence)
     )
       return;
     if (/chat/i.test(value.stage)) {
@@ -928,7 +932,12 @@ export class DiagnosticDelivery {
       this.recoveryNeeded = true;
       return false;
     }
-    this.pending.push({ line, sessionId: value.startupSessionId, sequence: value.sequence });
+    this.pending.push({
+      line,
+      sessionId: value.startupSessionId,
+      cursorId,
+      sequence: value.sequence,
+    });
     this.pendingBytes += bytes;
     if (value.stage === 'problem_report')
       this.nextCollectionAt = Math.min(this.nextCollectionAt, this.now() + 15_000);
@@ -959,62 +968,100 @@ export class DiagnosticDelivery {
     const startedSequence = this.journal.health().sequence;
     let sourceUnavailable = false;
     // Fixed Mizar log names only; source rotation remains governed by SessionJournal.
-    for (let i = SESSION_LIMITS.segments - 1; i >= 0; i--) {
-      const name = i ? `session.ndjson.${i}` : 'session.ndjson';
-      let bytes: Buffer;
+    const names = [
+      ...Array.from({ length: SESSION_LIMITS.segments }, (_, i) =>
+        i ? `session.ndjson.${i}` : 'session.ndjson',
+      ).reverse(),
+      ...['desktop.3.ndjson', 'desktop.2.ndjson', 'desktop.1.ndjson', 'desktop.ndjson'],
+      ...(await orderedSources(this.directory)),
+    ];
+    for (const name of names) {
+      let count = 0;
       try {
-        bytes = await secureRead(
-          this.directory,
-          name,
-          SESSION_LIMITS.segmentBytes + SESSION_LIMITS.pendingBytes,
-        );
+        for await (const line of sourceLines(this.directory, name)) {
+          if (!line) continue;
+          try {
+            if (this.observe(line + '\n', true) === false) return;
+          } catch {
+            this.omitted('unreadable_journal_record');
+          }
+          if (++count % 32 === 0) await yieldIO();
+          if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
+            return;
+          if (this.state.queue.length >= DELIVERY_LIMITS.batches) {
+            this.error = 'queue_budget_local_journal_retained';
+            // Capacity may stop recovery before reaching the unqueued tail in a
+            // later segment. Keep scanning eligible source records after ACKs
+            // release space, including when this process has just restarted.
+            this.recoveryNeeded = true;
+            return;
+          }
+        }
       } catch (error) {
         if (missing(error)) continue;
-        this.error = 'journal_unreadable';
+        this.error = error instanceof Error ? error.message : 'journal_unreadable';
         sourceUnavailable = true;
-        continue;
       }
-      let count = 0;
-      // A concurrent append can be visible before its final newline. Only
-      // complete journal records are eligible. An active tail may still commit;
-      // a rotated segment is sealed and its truncated tail cannot be completed.
-      const completeBytes = bytes.lastIndexOf(10) + 1;
-      for (const line of bytes.subarray(0, completeBytes).toString('utf8').split('\n')) {
-        if (!line) continue;
-        try {
-          if (this.observe(line + '\n', true) === false) return;
-        } catch {
-          this.omitted('unreadable_journal_record');
-        }
-        if (++count % 32 === 0) await yieldIO();
-        if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist())) return;
+    }
+    // Performance bodies are final gzip evidence, not copies inside the ordinary journal.
+    const performanceDirectory = join(this.directory, 'performance-pending');
+    try {
+      await safePath(performanceDirectory);
+      const files = (await readdir(performanceDirectory)).filter((name) =>
+        /^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz$/.test(name),
+      );
+      const ordered: { name: string; run: string; sequence: number }[] = [];
+      const read = async (name: string) => {
+        const bytes = await secureRead(performanceDirectory, name, 1536 * 1024);
+        const raw = await decompress(bytes, { maxOutputLength: 1024 * 1024 });
+        const records = JSON.parse(raw.toString('utf8')) as Record<string, unknown>[];
         if (
-          this.state.queue.length >= DELIVERY_LIMITS.batches ||
-          this.state.queue.reduce((n, v) => n + v.bytes, 0) >
-            DELIVERY_LIMITS.queueBytes - DELIVERY_LIMITS.compressedBytes
-        ) {
-          // Capacity may stop recovery before reaching the unqueued tail in a
-          // later segment. Keep scanning eligible source records after ACKs
-          // release space, including when this process has just restarted.
-          this.recoveryNeeded = true;
-          return;
+          !Array.isArray(records) ||
+          records.length > DELIVERY_LIMITS.events ||
+          records.some((event) => event.schema !== 'mizar-diagnostic-event/2')
+        )
+          throw new Error('performance_source_format');
+        return records;
+      };
+      for (const name of files) {
+        try {
+          const records = await read(name);
+          if (records[0])
+            ordered.push({
+              name,
+              run: String(records[0].producerRunId),
+              sequence: Number(records[0].sequence),
+            });
+        } catch {
+          this.omitted('performance_source_unreadable');
+          sourceUnavailable = true;
         }
       }
-      if (completeBytes < bytes.length) {
-        if (i === 0) return;
-        // Preserve the original file for export and report the damaged record,
-        // but do not let a sealed crash fragment block later healthy segments.
-        this.omitted('truncated_sealed_journal_record');
+      ordered.sort((a, b) => a.run.localeCompare(b.run) || a.sequence - b.sequence);
+      for (const source of ordered) {
+        try {
+          for (const event of await read(source.name)) {
+            if (this.observe(JSON.stringify(event) + '\n', true, 'performance:') === false) return;
+          }
+          if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
+            return;
+        } catch {
+          this.omitted('performance_source_unreadable');
+          sourceUnavailable = true;
+        }
+      }
+    } catch (error) {
+      if (!missing(error)) {
+        this.omitted('performance_source_unavailable');
+        sourceUnavailable = true;
       }
     }
     // A stable source clock does not mean the scan completed. Capacity or
     // unreadable source can leave an unadmitted tail; keep its cursors and the
     // recovery flag until both scanning and prefix persistence succeed.
     if (!(await this.persist()) || sourceUnavailable) return;
-    for (const id of Object.keys(this.state.sessions)) {
-      if (id === this.journal.sessionId || this.pending.some((v) => v.sessionId === id)) continue;
-      delete this.state.sessions[id];
-    }
+    // Keep producer cursors across restart; forgetting a recovered producer would
+    // regenerate its already-queued immutable batches on the next scan.
     this.registerSession(0);
     await this.save();
     // A record may have its sequence allocated before this scan but commit
@@ -1028,6 +1075,7 @@ export class DiagnosticDelivery {
     const epoch = this.epoch;
     // Bound this collection to its admitted prefix. New committed records may
     // arrive during compression/fsync; keep them for the next scheduled batch.
+    this.pending.sort((a, b) => a.cursorId.localeCompare(b.cursorId) || a.sequence - b.sequence);
     let remaining = this.pending.length;
     while (remaining > 0) {
       const selected: typeof this.pending = [];
@@ -1145,7 +1193,7 @@ export class DiagnosticDelivery {
       const oldQueue = [...this.state.queue];
       this.state.queue.push(batch);
       for (const item of selected) {
-        const cursor = this.state.sessions[item.sessionId];
+        const cursor = this.state.sessions[item.cursorId];
         if (cursor) {
           if (item.sequence > cursor.queued + 1)
             this.omitted('source_sequence_gap', item.sequence - cursor.queued - 1);
@@ -1196,7 +1244,20 @@ export class DiagnosticDelivery {
         throw error;
       }
     });
-    return request!;
+    const response = await request!;
+    if (response.status === 429 || response.status === 503) {
+      const header = response.headers.get('retry-after');
+      const delay =
+        header && /^\d+$/.test(header)
+          ? this.now() + Number(header) * 1000
+          : header
+            ? Date.parse(header)
+            : NaN;
+      this.state.serverRetryAt = Number.isFinite(delay)
+        ? Math.max(this.now() + 30_000, delay)
+        : this.now() + 15 * 60_000;
+    }
+    return response;
   }
   private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
@@ -1300,7 +1361,7 @@ export class DiagnosticDelivery {
       enrollmentSecret: randomBytes(32).toString('hex'),
     };
     this.state.nextAttemptAt = 0;
-    this.state.failures = 0;
+    this.state.consecutiveFailures = 0;
     try {
       await this.save();
     } catch (error) {
@@ -1315,15 +1376,67 @@ export class DiagnosticDelivery {
       oldCopies: 'retained locally for manual export; not acknowledged or re-signed',
     });
   }
+  private collectAcknowledged() {
+    this.cleaningAcknowledged ??= (async () => {
+      for (const batch of this.state.queue.filter((value) => value.acknowledgedAt).slice(0, 4)) {
+        if (this.closed) return;
+        try {
+          const released = await withAcknowledgedWireCoverage(
+            this.directory,
+            this.journal,
+            batch.id,
+            () =>
+              this.transaction(async () => {
+                const current = this.state.queue.find((value) => value.id === batch.id);
+                if (!current?.acknowledgedAt) throw new Error('acknowledged_batch_changed');
+                try {
+                  const original = await secureRead(
+                    this.queueDirectory,
+                    `${batch.id}.gz`,
+                    DELIVERY_LIMITS.compressedBytes,
+                  );
+                  if (checksum(original) !== batch.id)
+                    throw new Error('acknowledged_batch_integrity');
+                  await unlink(await safePath(this.queueDirectory, `${batch.id}.gz`));
+                } catch (error) {
+                  if (!missing(error)) throw error;
+                }
+                const previous = this.state.queue;
+                this.state.queue = previous.filter((value) => value.id !== batch.id);
+                try {
+                  await this.save();
+                } catch (error) {
+                  this.state.queue = previous;
+                  throw error;
+                }
+                this.recoveryNeeded = true;
+              }),
+          );
+          if (!released) this.error = 'ack_history_release_pending';
+          else if (
+            this.error === 'ack_history_release_pending' ||
+            this.error === 'queue_budget_local_journal_retained'
+          )
+            this.error = null;
+        } catch {
+          this.error = 'ack_history_release_pending';
+        }
+      }
+    })().finally(() => {
+      this.cleaningAcknowledged = undefined;
+    });
+    return this.cleaningAcknowledged;
+  }
   async tick(forceCollection = true) {
+    await this.collectAcknowledged();
     await this.transaction(async () => {
       await this.renewExpiredInstallation();
       const collecting = forceCollection || this.now() >= this.nextCollectionAt;
       if (collecting) {
-        await this.persist();
+        await this.recover();
         this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
       }
-      if (this.recoveryNeeded) await this.recover();
+      if (!collecting && this.recoveryNeeded) await this.recover();
       // persist() freezes the admitted prefix; a second pass here would turn
       // records arriving during gzip/fsync into an immediate tiny extra batch.
       // recover() already persists its own recovered prefix when needed.
@@ -1333,8 +1446,9 @@ export class DiagnosticDelivery {
       this.sending = undefined;
     });
     await this.sending;
+    await this.collectAcknowledged();
   }
-  private async send() {
+  private async send(): Promise<void> {
     this.transportPhase = null;
     const epoch = this.epoch;
     this.abort = new AbortController();
@@ -1379,7 +1493,7 @@ export class DiagnosticDelivery {
               this.error === 'withdrawal_pending');
           if (recovered) {
             this.state.transportFailure = null;
-            this.state.failures = 0;
+            this.state.consecutiveFailures = 0;
             this.state.nextAttemptAt = 0;
           }
           try {
@@ -1411,13 +1525,16 @@ export class DiagnosticDelivery {
         DELIVERY_LIMITS.compressedBytes,
       );
       if (checksum(bytes) !== batch.id) throw new Error('batch_integrity_failed');
+      const creationTime = diagnosticGzipCreatedAt(bytes);
+      const localReason = diagnosticAutomaticTimeReason(creationTime, this.now());
+      const sealedPermit = batch.sealed ? readDiagnosticGzipPermit(bytes)?.permit : null;
+      if (localReason || (sealedPermit && sealedPermit.expiresAt <= this.now())) {
+        await this.retainExpiredBatch(batch, epoch, localReason ?? 'batch_retention_expired');
+        // Move past expired local work in the same pump, without an HTTP attempt.
+        if (epoch === this.epoch && !this.requestedPause) return this.send();
+        return;
+      }
       if (!batch.sealed) {
-        const creationTime = diagnosticGzipCreatedAt(bytes);
-        const localReason = diagnosticAutomaticTimeReason(creationTime, this.now());
-        if (localReason) {
-          await this.retainExpiredBatch(batch, epoch, localReason);
-          return;
-        }
         const response = await this.transportFetch(
           `${this.endpoint}/v1/diagnostics/permits/${batch.id}`,
           {
@@ -1444,7 +1561,18 @@ export class DiagnosticDelivery {
           await this.retainExpiredBatch(batch, epoch, (receipt as { error: string }).error);
           return;
         }
+        if ([400, 413, 422].includes(response.status)) {
+          await this.retainExpiredBatch(batch, epoch, 'permanent_rejection');
+          return;
+        }
         if (!response.ok) throw transportReceiptError('permit', response.status, receipt);
+        if (
+          batch.index.eventSchemaVersion === 2 &&
+          response.headers.get('x-diagnostics-event-version') !== '2'
+        )
+          throw Object.assign(new Error('receiver_upgrade_required'), {
+            reason: 'receiver_upgrade_required',
+          });
         if (
           !permit ||
           permit.installationId !== identity.installationId ||
@@ -1512,6 +1640,10 @@ export class DiagnosticDelivery {
         accepted: boolean;
         error?: unknown;
       };
+      if ([400, 413, 422].includes(response.status)) {
+        await this.retainExpiredBatch(batch, epoch, 'permanent_rejection');
+        return;
+      }
       if (response.status === 410 && ack.error === 'batch_retention_expired') {
         await this.retainExpiredBatch(batch, epoch);
         return;
@@ -1527,10 +1659,13 @@ export class DiagnosticDelivery {
       await this.transaction(async () => {
         if (epoch !== this.epoch || !this.consentActive()) return;
         const previous = structuredClone(this.state);
-        this.state.queue = this.state.queue.filter((v) => v.id !== batch.id);
+        const retained = this.state.queue.find((value) => value.id === batch.id)!;
+        retained.acknowledgedAt = new Date(this.now()).toISOString();
+        retained.serverExpired = true;
+        retained.unavailableReason = 'acknowledged_local_history';
         this.state.acknowledged++;
         this.state.lastConfirmedAt = new Date(this.now()).toISOString();
-        this.state.failures = 0;
+        this.state.consecutiveFailures = 0;
         this.state.nextAttemptAt = 0;
         this.error = null;
         this.state.transportFailure = null;
@@ -1540,14 +1675,16 @@ export class DiagnosticDelivery {
           this.state = previous;
           throw error;
         }
-        await unlink(join(this.queueDirectory, `${batch.id}.gz`));
+        // ACK releases delivery only. Unique local history waits for migration coverage.
       });
     } catch (error) {
       if (epoch !== this.epoch || this.requestedPause) return;
       await this.transaction(async () => {
         this.state.failures++;
+        this.state.consecutiveFailures++;
         const detail = error as { status?: unknown; reason?: unknown };
         const reasons = [
+          'receiver_upgrade_required',
           'receipt_invalid',
           'batch_retention_expired',
           'automatic_window_expired',
@@ -1569,10 +1706,19 @@ export class DiagnosticDelivery {
                   : 'unconfirmed',
             }
           : null;
-        this.state.nextAttemptAt =
+        this.state.nextAttemptAt = Math.max(
+          this.state.serverRetryAt,
           this.now() +
-          Math.min(6 * 3600_000, 30_000 * 2 ** Math.min(this.state.failures - 1, 10)) *
-            (0.8 + (randomBytes(1)[0]! / 255) * 0.4);
+            Math.min(
+              15 * 60_000,
+              Math.max(
+                30_000,
+                30_000 *
+                  2 ** Math.min(this.state.consecutiveFailures - 1, 10) *
+                  (0.8 + (randomBytes(1)[0]! / 255) * 0.4),
+              ),
+            ),
+        );
         this.error = error instanceof Error ? error.message : 'delivery_failed';
         this.journal.record('diagnostic_transport_failure', {
           transportFailure: this.state.transportFailure,
@@ -1631,6 +1777,7 @@ export class DiagnosticDelivery {
     this.unsubscribe?.();
     this.abort?.abort();
     await this.sending;
+    await this.cleaningAcknowledged;
     await this.transaction(() => this.persist());
   }
   /** Explicit manual export only. Copies immutable bodies while ACK/deletion is

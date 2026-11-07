@@ -1,3 +1,4 @@
+import { diagnosticSegmentNames } from './segments.js';
 import { setImmediate as yieldIO } from 'node:timers/promises';
 import { safePath } from '../resource-store/files.js';
 import { createHash } from 'node:crypto';
@@ -269,7 +270,7 @@ export async function fullLogArchive(
   }[] = [];
   // Open fixed producer files before processing any large body. Their initial
   // bytes stay readable when another process rotates/unlinks the named files.
-  for (const name of names) {
+  for (const name of [...names, ...(await diagnosticSegmentNames(directory))]) {
     const file: ArchivedLogFile = {
       name,
       status: 'missing',

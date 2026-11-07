@@ -490,7 +490,7 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'lead' || kind === 'name' || kind === 'game') return;
+    if (kind === 'lead' || kind === 'name' || kind === 'game' || kind === 'scope') return;
 
     const attempt = ++epoch;
     if (kind === 'map')
@@ -634,6 +634,7 @@ export function registerWorkspaceObserver(
               (observer.view().active && observerKey === activeKeys.observer)) &&
             (!gameControl ||
               ((!gameControl.autoConnect ||
+                settings.mapConnection?.mode === 'register-current' ||
                 (settings.mapConnection?.mode === 'seamless' && seamlessGame === activeKeys.game) ||
                 connectedGame === activeKeys.connect) &&
                 (body.nativeHudToggle ||
@@ -668,6 +669,7 @@ export function registerWorkspaceObserver(
           if (settings.mapConnection?.mode === 'seamless' && !seamlessGame) seamlessGame = key.game;
           const connect = Boolean(
             gameControl?.autoConnect &&
+            settings.mapConnection?.mode !== 'register-current' &&
             !(settings.mapConnection?.mode === 'seamless' && seamlessGame === key.game) &&
             connectedGame !== key.connect,
           );

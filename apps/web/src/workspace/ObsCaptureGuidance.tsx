@@ -29,6 +29,9 @@ export function ObsCaptureGuidance({
   return (
     <>
       <StatusBanner tone="warning">{message}</StatusBanner>
+      <Button disabled={busy} loading={busy} onClick={onCheck}>
+        重新检测捕获
+      </Button>
       <details className="obs-setup__help" open={expanded}>
         <summary>处理捕获问题</summary>
         {diagnostic.reason === 'access_denied' ? (
@@ -50,9 +53,6 @@ export function ObsCaptureGuidance({
           重新检测后在 OBS 核对实际画面。仍无画面时，可在 OBS 临时添加「窗口采集」并选择
           CS2，检查画面与音频后再播出。
         </p>
-        <Button disabled={busy} loading={busy} onClick={onCheck}>
-          重新检测捕获
-        </Button>
       </details>
     </>
   );

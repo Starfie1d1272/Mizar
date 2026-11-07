@@ -165,3 +165,11 @@ export function readDiagnosticGzipPermit(bytes: Uint8Array) {
   payload.set(bytes.subarray(12 + extra), 10);
   return diagnosticGzipCreatedAt(payload) === permit.payloadCreatedAt ? { permit, payload } : null;
 }
+
+/** Optional v2 event metadata within the unchanged immutable /1 gzip wire envelope. */
+export interface DiagnosticEventMetadata {
+  eventSchemaVersion?: 2;
+  producerKind?: 'companion' | 'host' | 'document' | 'legacy-unknown';
+  uniqueEvents?: number;
+  aggregatedOccurrences?: number;
+}

@@ -1245,9 +1245,8 @@ impl SessionStore {
         _guard: &StoreGuard,
         preferences: Preferences,
     ) -> Result<(), String> {
-        if self.load()?.is_some() {
-            return Err("请结束制作并恢复配置后再修改启动设置。".into());
-        }
+        // Preferences are for the next launch only. The active session's
+        // original/applied values and restoration ownership stay immutable.
         atomic_write(
             &self.root.join("preferences.json"),
             &serde_json::to_vec(&preferences.json()).unwrap(),

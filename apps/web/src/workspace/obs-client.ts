@@ -29,8 +29,8 @@ export interface ObsStatus {
   };
   readonly port: number;
   readonly sceneAligned: boolean | null;
-  readonly streaming: boolean;
-  readonly recording: boolean;
+  readonly streaming: boolean | null;
+  readonly recording: boolean | null;
   readonly passwordConfigured: boolean;
   readonly video: null | { canvas: string; output: string; fps: number };
   readonly findings: readonly { code: string; message: string }[];
@@ -178,11 +178,13 @@ export function beginObsConfiguration() {
   const ready = (async () => {
     const { documentGeneration } = await readObsConfigurationContext();
     const executablePath = await obsConfigurationTarget();
-    return desktopInvoke<boolean>('begin_obs_configuration', {
+    const result = await desktopInvoke<boolean>('begin_obs_configuration', {
       executablePath,
       sessionId,
       documentGeneration,
     });
+    window.dispatchEvent(new Event('mizar:obs-configuration-changed'));
+    return result;
   })();
   let finished: Promise<ObsConfigurationResult> | null = null;
   return {

@@ -1783,11 +1783,40 @@ export class RivalHubConnection {
     );
   }
 
+  /** Explicit recovery only. The existing source command queue owns cleanup and claim. */
+  async resumeSync(snapshot: LiveSnapshotV1, contextRevision: string, isCurrent: () => boolean) {
+    this.requireSourceState();
+    const generation = this.bindingGeneration;
+    return this.sourceCommands.run(async () => {
+      if (!isCurrent() || generation !== this.bindingGeneration)
+        throw new Error('比赛已变化，请重新确认网站同步。');
+      await this.cleanup(true);
+      if (!isCurrent() || generation !== this.bindingGeneration)
+        throw new Error('比赛已变化，请重新确认网站同步。');
+      const source = this.source;
+      if (
+        source &&
+        !source.draining &&
+        !source.paused &&
+        source.matchId === snapshot.matchId &&
+        source.producerInstanceId === snapshot.cursor.producerInstanceId &&
+        source.liveSessionId === snapshot.cursor.liveSessionId &&
+        this.stoppedMatchId !== snapshot.matchId
+      ) {
+        this.retryLive();
+        return this.view();
+      }
+      // claimLocked checks persisted pending tails/authority and defaults to no takeover.
+      return this.claimLocked(snapshot, contextRevision, false, generation, isCurrent);
+    });
+  }
+
   private async claimLocked(
     snapshot: LiveSnapshotV1,
     contextRevision: string,
     takeover: boolean,
     generation: number,
+    isCurrent: () => boolean = () => true,
   ) {
     if (
       !this.installation ||
@@ -1805,7 +1834,8 @@ export class RivalHubConnection {
       await this.retireCurrent('switch');
       await this.cleanup(false);
     }
-    if (generation !== this.bindingGeneration) throw new Error('比赛已变化，请重新认领数据源。');
+    if (generation !== this.bindingGeneration || !isCurrent())
+      throw new Error('比赛已变化，请重新认领数据源。');
     const scope: SourceScope = {
       baseUrl: installation.baseUrl,
       competitionId: installation.competitionId,
@@ -1837,6 +1867,8 @@ export class RivalHubConnection {
         item.liveSessionId === scope.liveSessionId
       )
         priorRevisions.push(item.authorityRevision);
+    if (generation !== this.bindingGeneration || !isCurrent())
+      throw new Error('比赛已变化，请重新确认网站同步。');
     const intent = await this.sourceState.beginClaim(
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,
@@ -1850,6 +1882,11 @@ export class RivalHubConnection {
           (player) => player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
         )
         .map((player) => player.sourcePlayerId);
+      if (generation !== this.bindingGeneration || !isCurrent()) {
+        await this.sourceState.clearIntent(intent.id);
+        await this.updateCleanupSummary();
+        throw new Error('比赛已变化，请重新确认网站同步。');
+      }
       const response = await this.request('claim', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1898,7 +1935,7 @@ export class RivalHubConnection {
         if (!Number.isSafeInteger(result.authorityRevision) || result.authorityRevision <= 0)
           throw new Error('数据源授权响应无效，等待核对。');
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
-        if (generation !== this.bindingGeneration) {
+        if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.sourceState.handoff(identity, 'switch');
           // The previous source may still own an unsettled tail. Keep its
           // exact identity fenced until its own cleanup has confirmed release.
@@ -1934,7 +1971,7 @@ export class RivalHubConnection {
       } else if (result.claimed === false) {
         await this.sourceState.clearIntent(intent.id);
         await this.updateCleanupSummary();
-        if (generation !== this.bindingGeneration)
+        if (generation !== this.bindingGeneration || !isCurrent())
           throw new Error('比赛已变化，请重新认领数据源。');
         if (this.source) this.source.paused = true;
         this.activeDeviceName = result.activeDeviceName ?? '另一台制播设备';

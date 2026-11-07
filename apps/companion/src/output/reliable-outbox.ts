@@ -123,7 +123,7 @@ export class ReliableOutbox {
   private readonly revoking = new Map<string, { source: ExactSource; count: number }>();
   private readonly pendingEnqueues = new Map<
     string,
-    { event: ReliableEventV1; retry: () => Promise<boolean> }
+    { event: ReliableEventV1; source?: ExactSource | null; retry: () => Promise<boolean> }
   >();
 
   private noteUnconfirmedWrite(key: string): void {
@@ -285,8 +285,15 @@ export class ReliableOutbox {
     ];
   }
 
-  getScopeDisposition(scope: ReliableDeliveryScope): ReliableScopeDisposition {
-    const history = this.repository().forDelivery(scope);
+  getScopeDisposition(
+    scope: ReliableDeliveryScope,
+    source?: ExactSource,
+  ): ReliableScopeDisposition {
+    const belongs = (item: { source?: ExactSource }) =>
+      !source || !item.source || sourceKey(source) === sourceKey(item.source);
+    const history = this.repository()
+      .forDelivery(scope)
+      .filter((item) => belongs(item.value as ReliableOutboxRecord | BoundaryIntent));
     const records = history.filter((item) => item.kind === 'record');
     const result = {
       pending: 0,
@@ -314,6 +321,7 @@ export class ReliableOutbox {
     ]) {
       const c = record.event.cursor;
       if (
+        !belongs(record) ||
         record.event.matchId !== scope.matchId ||
         c.producerInstanceId !== scope.producerInstanceId ||
         c.liveSessionId !== scope.liveSessionId
@@ -654,6 +662,7 @@ export class ReliableOutbox {
     ].filter((intent) => {
       if (
         !this.matchesBoundaryScope(intent.event, intent.authorityFingerprint, scope) ||
+        (scope.source && intent.source && sourceKey(scope.source) !== sourceKey(intent.source)) ||
         seen.has(intent.event.idempotencyKey)
       )
         return false;
@@ -679,6 +688,41 @@ export class ReliableOutbox {
     );
   }
 
+  private matchesGap(gap: BoundaryScope, scope: BoundaryScope): boolean {
+    return (
+      (!gap.source || !scope.source || sourceKey(gap.source) === sourceKey(scope.source)) &&
+      // A new unknown-owner gap describes only its observed execution.
+      // No matchId must not turn it into a wildcard for later formal
+      // executions. Old-format uncertainty and known-owner causal
+      // chains retain their conservative high-water comparisons below.
+      (!(gap.ruleVersion === 2 && gap.reason === 'execution_owner_unknown' && !gap.matchId) ||
+        ((gap.programSourceGeneration === undefined ||
+          scope.programSourceGeneration === undefined ||
+          gap.programSourceGeneration === scope.programSourceGeneration) &&
+          (gap.mapEpoch === undefined ||
+            scope.mapEpoch === undefined ||
+            gap.mapEpoch === scope.mapEpoch))) &&
+      (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
+      gap.producerInstanceId === scope.producerInstanceId &&
+      (!gap.liveSessionId || !scope.liveSessionId || gap.liveSessionId === scope.liveSessionId) &&
+      (!gap.ownerFingerprint ||
+        !scope.ownerFingerprint ||
+        gap.ownerFingerprint === scope.ownerFingerprint) &&
+      (gap.runtimeSeq === undefined ||
+        scope.runtimeSeq === undefined ||
+        gap.runtimeSeq <= scope.runtimeSeq) &&
+      (gap.programSourceGeneration === undefined ||
+        scope.programSourceGeneration === undefined ||
+        gap.programSourceGeneration <= scope.programSourceGeneration) &&
+      (gap.mapEpoch === undefined ||
+        scope.mapEpoch === undefined ||
+        gap.mapEpoch <= scope.mapEpoch) &&
+      (!gap.authorityFingerprint ||
+        !scope.authorityFingerprint ||
+        gap.authorityFingerprint === scope.authorityFingerprint)
+    );
+  }
+
   hasBoundaryGap(scope?: BoundaryScope): boolean {
     return (
       this.boundaryCaptureFailed ||
@@ -689,29 +733,7 @@ export class ReliableOutbox {
           : this.boundaryOverflowOwners.length > 0
         : this.boundaryOverflowOwners.length > 0) ||
       (scope
-        ? this.boundaryGaps.some(
-            (gap) =>
-              (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
-              gap.producerInstanceId === scope.producerInstanceId &&
-              (!gap.liveSessionId ||
-                !scope.liveSessionId ||
-                gap.liveSessionId === scope.liveSessionId) &&
-              (!gap.ownerFingerprint ||
-                !scope.ownerFingerprint ||
-                gap.ownerFingerprint === scope.ownerFingerprint) &&
-              (gap.runtimeSeq === undefined ||
-                scope.runtimeSeq === undefined ||
-                gap.runtimeSeq <= scope.runtimeSeq) &&
-              (gap.programSourceGeneration === undefined ||
-                scope.programSourceGeneration === undefined ||
-                gap.programSourceGeneration <= scope.programSourceGeneration) &&
-              (gap.mapEpoch === undefined ||
-                scope.mapEpoch === undefined ||
-                gap.mapEpoch <= scope.mapEpoch) &&
-              (!gap.authorityFingerprint ||
-                !scope.authorityFingerprint ||
-                gap.authorityFingerprint === scope.authorityFingerprint),
-          )
+        ? this.boundaryGaps.some((gap) => this.matchesGap(gap, scope))
         : this.boundaryGaps.length > 0)
     );
   }
@@ -723,16 +745,7 @@ export class ReliableOutbox {
       );
     return Boolean(
       (scope.ownerFingerprint && this.boundaryOverflowOwners.includes(scope.ownerFingerprint)) ||
-      this.boundaryGaps.some(
-        (gap) =>
-          gap.overflow &&
-          gap.producerInstanceId === scope.producerInstanceId &&
-          (!gap.ownerFingerprint ||
-            !scope.ownerFingerprint ||
-            gap.ownerFingerprint === scope.ownerFingerprint) &&
-          (!gap.matchId || !scope.matchId || gap.matchId === scope.matchId) &&
-          (!gap.liveSessionId || !scope.liveSessionId || gap.liveSessionId === scope.liveSessionId),
-      ),
+      this.boundaryGaps.some((gap) => gap.overflow && this.matchesGap(gap, scope)),
     );
   }
 
@@ -809,8 +822,24 @@ export class ReliableOutbox {
             ? [
                 ...this.boundaryGaps,
                 ...(overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS
-                  ? [{ ...scope, overflow: true as const }]
-                  : [scope]),
+                  ? [
+                      {
+                        ...scope,
+                        ruleVersion: 2 as const,
+                        reason:
+                          scope.reason === 'execution_owner_unknown'
+                            ? scope.reason
+                            : ('capacity_exhausted' as const),
+                        overflow: true as const,
+                      },
+                    ]
+                  : [
+                      {
+                        ...scope,
+                        ruleVersion: 2 as const,
+                        reason: scope.reason ?? ('boundary_capture_incomplete' as const),
+                      },
+                    ]),
               ]
             : this.boundaryGaps;
         let overflowOwners = this.boundaryOverflowOwners;
@@ -828,7 +857,7 @@ export class ReliableOutbox {
         const frozen = gap || this.hasBoundaryGap(scope);
         await this.commit(
           overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS ? this.records : records,
-          frozen ? this.continuity : continuity,
+          frozen ? this.continuity : (continuity ?? this.continuity),
           overflow ? this.boundaryIntents : allIntents,
           this.boundaryGap,
           gaps,
@@ -1090,6 +1119,7 @@ export class ReliableOutbox {
         if (this.unconfirmedWrites.has(operationKey))
           this.pendingEnqueues.set(operationKey, {
             event: retryArgs[0],
+            ...(retryArgs[6] === undefined ? {} : { source: retryArgs[6] }),
             retry: () => this.enqueue(...retryArgs, true),
           });
         throw error;
@@ -1097,9 +1127,10 @@ export class ReliableOutbox {
     );
   }
 
-  hasPendingEnqueues(scope: ReliableDeliveryScope): boolean {
+  hasPendingEnqueues(scope: ReliableDeliveryScope, source?: ExactSource): boolean {
     return [...this.pendingEnqueues.values()].some(
-      ({ event }) =>
+      ({ event, source: pendingSource }) =>
+        (!source || !pendingSource || sourceKey(source) === sourceKey(pendingSource)) &&
         event.matchId === scope.matchId &&
         event.cursor.producerInstanceId === scope.producerInstanceId &&
         event.cursor.liveSessionId === scope.liveSessionId,

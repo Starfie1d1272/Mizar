@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -60,28 +60,48 @@ async function rig(blockSettings = false) {
           await blocked;
         }
         const responseData =
-          type === 'GetSceneCollectionList'
-            ? { currentSceneCollectionName: currentCollection }
-            : type === 'GetInputList'
-              ? {
-                  inputs: [
-                    ...scenes.map((scene, index) => ({
-                      inputName: scene.browserInput,
-                      inputKind: 'browser_source',
-                      inputUuid: `owned-${index}`,
-                    })),
-                    { inputName: 'Personal', inputKind: 'browser_source', inputUuid: 'personal' },
-                  ],
-                }
-              : type === 'GetInputSettings'
-                ? {
-                    inputSettings: {
-                      url: scenes.find(
-                        (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
-                      )?.browserUrl,
-                    },
-                  }
-                : {};
+          type === 'GetPersistentData'
+            ? {
+                slotValue:
+                  request.d.requestData?.realm === 'SCENE_COLLECTION'
+                    ? 'fixture-collection'
+                    : 'fixture-instance',
+              }
+            : type === 'GetOutputList'
+              ? { outputs: [] }
+              : [
+                    'GetStreamStatus',
+                    'GetRecordStatus',
+                    'GetReplayBufferStatus',
+                    'GetVirtualCamStatus',
+                  ].includes(type)
+                ? { outputActive: false }
+                : type === 'GetSceneCollectionList'
+                  ? { currentSceneCollectionName: currentCollection }
+                  : type === 'GetInputList'
+                    ? {
+                        inputs: [
+                          ...scenes.map((scene, index) => ({
+                            inputName: scene.browserInput,
+                            inputKind: 'browser_source',
+                            inputUuid: `owned-${index}`,
+                          })),
+                          {
+                            inputName: 'Personal',
+                            inputKind: 'browser_source',
+                            inputUuid: 'personal',
+                          },
+                        ],
+                      }
+                    : type === 'GetInputSettings'
+                      ? {
+                          inputSettings: {
+                            url: scenes.find(
+                              (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
+                            )?.browserUrl,
+                          },
+                        }
+                      : {};
         socket.send(
           JSON.stringify({
             op: 7,
@@ -101,6 +121,23 @@ async function rig(blockSettings = false) {
   if (!address || typeof address === 'string') throw new Error('missing address');
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
+  await writeFile(
+    join(dir, 'obs.json.resources.json'),
+    JSON.stringify([
+      {
+        endpoint: `ws://127.0.0.1:${address.port}`,
+        collection: 'Mizar',
+        instance: 'fixture-instance',
+        collectionIdentity: 'fixture-collection',
+        roles: Object.fromEntries(
+          scenes.map((scene, index) => [
+            `browser:${scene.id}`,
+            { uuid: `owned-${index}`, kind: 'browser_source', version: 1 },
+          ]),
+        ),
+      },
+    ]),
+  );
   const adapter = new ObsAdapter(config, base);
   cleanups.push(async () => {
     release();

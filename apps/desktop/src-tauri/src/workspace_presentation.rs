@@ -487,7 +487,7 @@ pub(crate) fn position_starting_game(
             Some(&failure.diagnostic().to_string()),
         );
     }
-    Ok(tracker.managed)
+    Ok(tracker.layout_aligned)
 }
 
 pub(crate) fn apply_layout(app: &tauri::AppHandle, layout: Layout) {
@@ -609,10 +609,10 @@ pub(crate) fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>, epoch:
             return;
         };
         let generation = state.overlay_generation.load(Ordering::Acquire);
-        let game_allowed = state
-            .tracker
-            .try_lock()
-            .is_ok_and(|tracker| tracker.overlay_still_allowed(&overlay_workspace_windows(&host)));
+        let game_allowed = state.tracker.try_lock().is_ok_and(|tracker| {
+            tracker.overlay_still_allowed(&overlay_workspace_windows(&host))
+                && tracker.overlay_rect(&overlay_workspace_windows(&host)) == rect
+        });
         let allowed = overlay_recovery::may_present(
             state.visible.load(Ordering::Acquire),
             state.overlay_recovering.load(Ordering::Acquire),
@@ -999,6 +999,8 @@ pub(crate) async fn open_tool(
         "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
         "review" => ("tool-review", "本场核对", "/workspace/review"),
+        "connection" => ("tool-connection", "GoTV 连接", "/workspace/connection"),
+        "game-picture" => ("tool-game-picture", "游戏画面", "/workspace/game-picture"),
         _ => return Err("工具无法识别。".into()),
     };
     let mut target = format!("{BASE}{path}").parse::<tauri::Url>()
@@ -1006,7 +1008,7 @@ pub(crate) async fn open_tool(
     if tool == "review" {
         if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit" | "connection" | "next-connection") { return Err("核对页面无法识别。".into()); }
+        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit") { return Err("核对页面无法识别。".into()); }
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {
@@ -1025,7 +1027,7 @@ pub(crate) async fn open_tool(
             }
         } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
             return Err("请先完成或关闭当前任务，再打开其他任务。".into());
-        } else if tool != "review" {
+        } else if !matches!(tool.as_str(), "review" | "connection" | "game-picture") {
             window.navigate(target.clone())
                 .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
         }
@@ -1282,7 +1284,11 @@ pub(crate) fn restore_cs2_focus(
     let diagnostic_result: bool = (|| {
         if !matches!(
             window.label(),
-            "workspace-left" | "workspace-dock" | "tool-review"
+            "workspace-left"
+                | "workspace-dock"
+                | "tool-review"
+                | "tool-connection"
+                | "tool-game-picture"
         ) {
             return false;
         }

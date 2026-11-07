@@ -711,7 +711,7 @@ impl Capture {
         bytes.truncate(count);
         let captured_at = utc();
         let mut start = 0;
-        let mut records = Vec::new();
+        let mut records: Vec<Value> = Vec::new();
         let mut record_bytes = 0;
         let mut total_record_bytes = 0;
         let mut technical_lines = 0;
@@ -819,7 +819,34 @@ impl Capture {
             }
             technical_lines += 1;
             total_record_bytes += expanded;
-            for record in line_records {
+            for mut record in line_records {
+                // Only identical engine-noise observations in the same source interval coalesce.
+                // Real controls, cause changes and recovery observations retain separate identities.
+                let repeated = console_body(clean.trim_start())
+                    .split_once(']')
+                    .is_some_and(|(_, body)| {
+                        body.trim_start()
+                            .starts_with("Ignoring CSVCMsg_UserCommands_t")
+                    })
+                    && pieces.len() == 1;
+                if repeated {
+                    if let Some(previous) = records.last_mut() {
+                        if previous["text"] == record["text"]
+                            && previous["channel"] == record["channel"]
+                            && previous["sourceAfterUtc"] == record["sourceAfterUtc"]
+                        {
+                            previous["occurrences"] =
+                                json!(previous["occurrences"].as_u64().unwrap_or(1) + 1);
+                            previous["lastSourceRecordId"] = record["sourceRecordId"].clone();
+                            previous["lastSourceOffset"] = record["sourceOffset"].clone();
+                            previous["lastCapturedAt"] = record["capturedAt"].clone();
+                            continue;
+                        }
+                    }
+                    record["occurrences"] = json!(1);
+                    record["aggregation"] =
+                        json!("identical_source_interval; uncommitted tail unknown");
+                }
                 let size = record.to_string().len();
                 if record_bytes + size > 6 * 1024 {
                     self.flush(log, &mut records, owned)?;

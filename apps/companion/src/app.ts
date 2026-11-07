@@ -37,10 +37,11 @@ import { MulnxProvider } from './orchestration/provider.js';
 import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
+import { startDiagnosticMigration } from './support/migration.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
-import { NativeSource } from './support/native-source.js';
+import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
 import { readMusicPack } from './music/archive.js';
@@ -394,7 +395,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     isExecutionOwnedBy: (binding) =>
       programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
-    executionOwnerMatchId: (runtimeSeq) => programRuntime.getExecutionOwnerMatchId(runtimeSeq),
     managedSourceId: () => programRuntime.getManagedSourceId(),
     isActiveOnlineBinding: (binding) =>
       matchContextController !== null &&
@@ -512,6 +512,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
   });
+  let diagnosticMigration: ReturnType<typeof startDiagnosticMigration> | undefined;
+  app.addHook('onReady', () => {
+    if (options.supportLogsDirectory && sessionJournal)
+      diagnosticMigration = startDiagnosticMigration(options.supportLogsDirectory, sessionJournal);
+  });
   const performanceContext = sessionJournal
     ? new PerformanceWindow(
         sessionJournal,
@@ -534,7 +539,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
-      ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) => {
+      ? new ProgramChatNativeInput(options.supportLogsDirectory, sessionJournal, (record) => {
           if (programChat.ingest(record)) projectionCoordinator.refresh();
         })
       : undefined;
@@ -565,6 +570,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
           taskId: browserOperationId(request.headers['x-mizar-task-id']),
           parentOperationId: browserOperationId(request.headers['x-mizar-parent-operation-id']),
+          attemptId: browserOperationId(request.headers['x-mizar-attempt-id']),
           trigger:
             request.headers['x-mizar-trigger'] === 'user'
               ? 'user'
@@ -815,6 +821,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           confirmedObserverMap = waitingObserverMap = undefined;
         }
         observerMatchId = matchId;
+        observerSettings.observeScope(JSON.stringify([matchId, musicMapKey(bundle.program)]));
         outputService.setCurrent(bundle, outputBinding);
       },
     });
@@ -942,6 +949,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           },
           new ObsVideoTransaction(`${options.obsConfigPath}.video-transaction.json`),
           new ObsCaptureWarmup(`${options.obsConfigPath}.capture-warmup.json`),
+          options.productRuntime?.appVersion ?? 'development',
         );
   if (obsAdapter)
     app.addHook('onReady', async () => {
@@ -1106,6 +1114,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     managedBoundary?: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>['boundary'],
     managedSourceId?: string,
     managedActivation = false,
+    mutationContext?: ReturnType<OutputService['captureRuntimeMutationContext']>,
   ): boolean => {
     const processingStarted = performance.now();
     latestInput = observation.receive;
@@ -1125,7 +1134,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         });
         publishRuntimeCommit(changed);
       }
-      outputService.beforeRuntimeMutation();
+      outputService.beforeRuntimeMutation(mutationContext);
       const accepted = programRuntime.acceptObservation(
         observation,
         Boolean(
@@ -1136,7 +1145,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
       let result =
         managedBoundary && accepted.disposition.kind === 'accepted'
-          ? { ...accepted, transitions: [...managedBoundary.transitions, ...accepted.transitions] }
+          ? {
+              ...accepted,
+              transitions: [...managedBoundary.transitions, ...accepted.transitions],
+              executionBoundary: {
+                before: managedBoundary.executionBoundary.before,
+                after: accepted.executionBoundary.after,
+              },
+            }
           : accepted;
       if (result.disposition.kind === 'ignored')
         performanceContext?.trigger('observation_ignored', {
@@ -1982,7 +1998,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
   observerEligible = () =>
     production.automaticAllowed() && !production.isTrialPending() && !demoTest.get().active;
-  registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
+  registerObserverSettings(
+    app,
+    observerSettings,
+    localWebTransport.getOriginPolicy(),
+    observerEligible,
+  );
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {
       projectionCoordinator.refresh();
@@ -2318,6 +2339,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
     onConsent: recordConfiguration,
+    incidentParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.incidentParticipant()] : []),
+      ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
+    ],
     onReport: () => {
       recordPerformanceWindow('problem_report');
       performanceContext?.trigger('problem_report', {
@@ -2346,8 +2371,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     sessionLogHealth: () =>
       sessionJournal
-        ? { ...sessionJournal.health(), performanceContext: performanceContext?.health() ?? null }
+        ? {
+            ...sessionJournal.health(),
+            performanceContext: performanceContext?.health() ?? null,
+            migration: diagnosticMigration?.health() ?? null,
+          }
         : null,
+    exportParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
+      ...(performanceContext ? [performanceContext.exportParticipant()] : []),
+    ],
     pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
     pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
     diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
@@ -2377,6 +2410,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       | {
           sourceId: string;
           result: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>;
+          mutationContext: ReturnType<OutputService['captureRuntimeMutationContext']>;
         }
       | undefined;
     registerGsiIngress(app, {
@@ -2436,12 +2470,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           pendingManagedBoundary = undefined;
         const owner = managedSource.ownerForFirstObservation(sourceId);
         if (owner && sourceId && observation.telemetry.map?.name && !pendingManagedBoundary) {
+          const mutationContext = outputService.captureRuntimeMutationContext();
           const activation = programRuntime.activateManagedSource(
             owner.matchId,
             sourceId,
             observation,
           );
-          if (activation) pendingManagedBoundary = { sourceId, result: activation };
+          if (activation)
+            pendingManagedBoundary = { sourceId, result: activation, mutationContext };
         }
         const boundary =
           pendingManagedBoundary && pendingManagedBoundary.sourceId === sourceId
@@ -2449,7 +2485,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             : undefined;
         const activating = Boolean(sourceId && pendingManagedBoundary?.sourceId === sourceId);
         if (
-          dispatchObservation(observation, undefined, boundary, sourceId, activating) &&
+          dispatchObservation(
+            observation,
+            undefined,
+            boundary,
+            sourceId,
+            activating,
+            activating ? pendingManagedBoundary?.mutationContext : undefined,
+          ) &&
           activating &&
           sourceId
         ) {
@@ -2588,6 +2631,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         failures.push(error);
       }
     };
+    await closeStep(() => diagnosticMigration?.stop());
     clearInterval(performanceTimer);
     clearInterval(contextTimer);
     clearInterval(directorTimer);

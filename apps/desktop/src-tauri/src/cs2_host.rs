@@ -473,8 +473,6 @@ pub(crate) async fn set_preferences(
                         "CS2 配置状态不可用。",
                     )
                 })?;
-                let activity = app.state::<cs2_activity::Activity>();
-                let _activity = activity.begin(3);
                 preferences.prefer_mulnx =
                     prefer_mulnx.unwrap_or(cs2.status()?["preferMulnx"].as_bool().unwrap_or(false));
                 cs2.preferences(preferences)
@@ -807,4 +805,58 @@ pub(crate) async fn handoff_status(app: tauri::AppHandle) -> Result<serde_json::
     })
     .await
     .map_err(|_| "无法读取 CS2 进程身份。".to_string())?
+}
+
+/// Read back only; the transaction owner never replays an uncertain write.
+pub(crate) async fn probe_frame_rate(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    control_frame_rate(app, "inspect".into(), None, None, None, None).await
+}
+
+pub(crate) async fn control_frame_rate(
+    app: tauri::AppHandle,
+    action: String,
+    frame_rate_limit: Option<u16>,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if !matches!(action.as_str(), "inspect" | "apply" | "restore") {
+        return Err("帧率操作无法识别。".into());
+    }
+    let ticket = app
+        .state::<production_exit::ExitGate>()
+        .presentation_ticket()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let log = app.state::<DesktopLog>();
+        log.with_task(
+            diagnostic_task_id.as_deref(),
+            diagnostic_operation_id.as_deref(),
+            diagnostic_trigger.as_deref(),
+            || {
+                let result: Result<serde_json::Value, String> = (|| {
+                    let _operation = crate::observer_workspace::operation()?;
+                    app.state::<production_exit::ExitGate>()
+                        .check_ticket(ticket)?;
+                    let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+                    let mut cs2 = state.try_lock().map_err(|error| {
+                        log.preserve_error(
+                            "control_cs2_frame_rate",
+                            diagnostic_operation_id.as_deref(),
+                            &error,
+                            "游戏状态正忙，请稍后复查。".to_string(),
+                        )
+                    })?;
+                    cs2.control_live_frame_rate(&action, frame_rate_limit)
+                })();
+                log.native_outcome(
+                    "control_cs2_frame_rate",
+                    diagnostic_operation_id.as_deref(),
+                    &result,
+                );
+                result
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

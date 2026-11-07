@@ -70,11 +70,13 @@ export async function enterDemoTest(
   return !signal?.aborted && isCurrent();
 }
 
-export type Tool = 'hud' | 'bp' | 'diagnostics';
+export type Tool = 'hud' | 'bp' | 'diagnostics' | 'connection' | 'game-picture';
 const toolPaths = {
   hud: '/operator/hud',
   bp: '/matches#match-bp',
   diagnostics: '/debug',
+  connection: '/workspace/connection',
+  'game-picture': '/workspace/game-picture',
 };
 export async function openTool(tool: Tool, presetId?: string) {
   if (window.__TAURI_INTERNALS__) {
@@ -93,6 +95,11 @@ export async function openTool(tool: Tool, presetId?: string) {
           editor.dispatchEvent(new CustomEvent('mizar:hud-select-preset', { detail: presetId }));
         editor.focus();
       } else editor.location.assign(path);
+    } else if (tool === 'connection' || tool === 'game-picture') {
+      const toolWindow = window.open('', `mizar-${tool}`);
+      if (!toolWindow) throw new Error('请允许打开工具窗口后重试。');
+      if (toolWindow.location.pathname !== path) toolWindow.location.assign(path);
+      toolWindow.focus();
     } else window.open(path, `mizar-${tool}`);
   }
 }
@@ -181,14 +188,19 @@ export async function checkObsBeforeLaunch(
           ? ((await response.json()) as {
               connection: string;
               findings: readonly unknown[];
-              streaming?: boolean;
-              recording?: boolean;
+              streaming?: boolean | null;
+              recording?: boolean | null;
             })
           : null,
       )
       .catch(() => null);
   let obs = await readObs();
-  if (entry && obs?.connection === 'connected' && !obs.streaming && !obs.recording) {
+  if (
+    entry &&
+    obs?.connection === 'connected' &&
+    obs.streaming === false &&
+    obs.recording === false
+  ) {
     await prepareObs(entry.revision, entry.signal);
     obs = await readObs();
   }
@@ -232,8 +244,6 @@ async function enterDesktopWorkspace(
   activeEntryId = preparationId;
   const cancel = () =>
     void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
-  window.addEventListener('pagehide', cancel);
-  window.addEventListener('popstate', cancel);
   signal?.addEventListener('abort', cancel);
   try {
     const document = await desktopInvoke<string>('entry_document');
@@ -336,20 +346,6 @@ export async function productionAction(
         entryAbort?.signal,
       );
     } else {
-      if (
-        !window.__TAURI_INTERNALS__ &&
-        action === 'enter' &&
-        !(await checkObsBeforeLaunch(
-          false,
-          task,
-          state.mode === 'preparation'
-            ? { revision: state.revision, signal: AbortSignal.timeout(40_000) }
-            : undefined,
-        ))
-      ) {
-        task.finish('blocked', { reason: 'preflight_requires_attention' });
-        return task.result;
-      }
       await command('/operator/production', { action, expectedRevision: state.revision }, task);
       if (window.__TAURI_INTERNALS__)
         await desktopInvoke('present_production', { live: action === 'enter' }, task);

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
+import type { ProgramCommitResult } from '../runtime/program-runtime.js';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
@@ -16,6 +17,7 @@ import {
   type ReliableDeliveryScope,
   type BoundaryIntent,
   type BoundaryScope,
+  parseSource,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
@@ -39,7 +41,6 @@ export interface OutputServiceOptions {
   readonly exactSource?: () => ExactSource | undefined;
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
   readonly isExecutionOwnedBy?: (binding: MatchContextBinding) => boolean;
-  readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
   readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
   readonly onOutboxLoadError?: (error: unknown) => void;
@@ -48,6 +49,14 @@ export interface OutputServiceOptions {
     event: ReliableEventV1,
     state: 'continuity_chain_missing' | 'continuity_waiting' | 'context_reconfirming',
   ) => void;
+}
+
+/** Immutable projection evidence held only across the corresponding runtime mutation. */
+export interface OutputMutationContext {
+  readonly bundle: ProjectionBundle;
+  readonly binding: MatchContextBinding | undefined;
+  readonly source: ExactSource | null | undefined;
+  readonly authority: string | undefined;
 }
 
 /** One public-safe output boundary for local consumers and later outbound adapters. */
@@ -59,6 +68,8 @@ export class OutputService {
   private readonly onDiagnostic: ((code: string) => void) | undefined;
   private bundle: ProjectionBundle | undefined;
   private priorForMutation: ProjectionBundle | undefined;
+  private boundaryContext: OutputMutationContext | undefined;
+  private priorBoundaryContext: OutputMutationContext | undefined;
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
@@ -486,6 +497,13 @@ export class OutputService {
     this.bundle = bundle;
     this.lastBundleAt = this.now().getTime();
     this.binding = binding;
+    const source = this.sourceFor(binding?.context.matchId, bundle.program.cursor);
+    this.boundaryContext = {
+      bundle,
+      binding,
+      source: source ? { ...source } : source,
+      authority: this.boundaryAuthority(),
+    };
     this.updateMapStartScope(bundle, binding);
     const scope = this.snapshotScope(bundle, binding);
     if (scope !== undefined && this.playerSnapshot?.scope !== scope)
@@ -598,8 +616,13 @@ export class OutputService {
     return true;
   }
 
-  beforeRuntimeMutation(): void {
-    this.priorForMutation = this.bundle;
+  captureRuntimeMutationContext(): OutputMutationContext | undefined {
+    return this.boundaryContext;
+  }
+
+  beforeRuntimeMutation(context = this.captureRuntimeMutationContext()): void {
+    this.priorForMutation = context?.bundle ?? this.bundle;
+    this.priorBoundaryContext = context;
   }
 
   current(includeRadar = false): LiveSnapshotV1 | null {
@@ -651,57 +674,54 @@ export class OutputService {
   }
 
   afterRuntimeMutation(
-    result: RuntimeReduceResult,
+    result: RuntimeReduceResult & Partial<Pick<ProgramCommitResult, 'executionBoundary'>>,
     bundle: ProjectionBundle,
     binding: MatchContextBinding | undefined,
   ): void {
     if (this.closed || result.disposition.kind !== 'accepted') return;
     const previous = this.priorForMutation ?? this.bundle;
+    const frozen = this.priorBoundaryContext ?? this.boundaryContext;
     this.priorForMutation = undefined;
+    this.priorBoundaryContext = undefined;
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
 
-    if (this.quarantined || this.outboxUnavailable || binding?.origin === 'fixture') {
+    const before = result.executionBoundary?.before;
+    if (
+      this.quarantined ||
+      this.outboxUnavailable ||
+      (before?.kind === 'owned' ? before.fixture : binding?.origin === 'fixture')
+    )
       return;
-    }
     const cursor = bundle.program.cursor;
-    if (binding && !this.executionEligible(binding)) {
-      if (
-        this.outbox &&
-        (result.disposition.reason === 'source-generation-advanced' ||
-          result.transitions.some((transition) => transition.kind === 'map_execution_changed'))
-      ) {
-        const priorScope = this.boundaryScope(
-          this.options.executionOwnerMatchId?.(cursor.runtimeSeq),
-          cursor,
-        );
-        // Current binding authority may belong to a different match than this execution.
-        let scope: BoundaryScope | undefined;
-        if (priorScope) {
-          const { authorityFingerprint, ...rest } = priorScope;
-          void authorityFingerprint;
-          scope = rest;
-        }
-        const key = this.boundaryScopeKey(scope);
-        this.boundaryCommits.set(key, (this.boundaryCommits.get(key) ?? 0) + 1);
-        void this.outbox
-          .captureBoundaries([], [], undefined, true, this.now(), scope)
-          .then(() => this.onDiagnostic?.('outbox_boundary_gap'))
-          .catch(() => {
-            this.quarantined = true;
-            this.onDiagnostic?.('outbox_boundary_capture_failed');
-          })
-          .finally(() => {
-            const remaining = (this.boundaryCommits.get(key) ?? 1) - 1;
-            if (remaining) this.boundaryCommits.set(key, remaining);
-            else this.boundaryCommits.delete(key);
-          });
-      }
-      return;
-    }
+    const preparationBoundary = before?.kind === 'none';
+    const eligible = !binding || this.executionEligible(binding);
+    const frozenMatches =
+      before?.kind === 'owned' &&
+      frozen?.binding?.context.matchId === before.matchId &&
+      frozen.bundle.program.match?.matchId === before.matchId &&
+      sameMapExecution(frozen.bundle.program.cursor, before.cursor) &&
+      frozen.bundle.program.cursor.programSourceGeneration ===
+        before.cursor.programSourceGeneration;
+    // A boundary with explicit owner evidence must use that owner's frozen
+    // context. If it is unavailable, retain a scoped gap rather than borrow a
+    // later binding or current source. Legacy callers keep conservative behavior.
+    const boundaryContext =
+      before === undefined
+        ? {
+            bundle,
+            binding,
+            source: this.sourceFor(binding?.context.matchId, cursor),
+            authority: this.boundaryAuthority(),
+          }
+        : frozenMatches
+          ? frozen
+          : undefined;
     if (
       binding &&
       cursor.liveSessionId &&
+      !result.transitions.some((transition) => transition.kind === 'map_execution_changed') &&
+      result.disposition.reason !== 'source-generation-advanced' &&
       this.retiringScopes.has(
         JSON.stringify([binding.context.matchId, cursor.producerInstanceId, cursor.liveSessionId]),
       )
@@ -710,7 +730,7 @@ export class OutputService {
 
     const managedSourceId = this.options.managedSourceId?.();
     const continuity: DeliveryContinuity | undefined =
-      binding === undefined
+      binding === undefined || !eligible
         ? undefined
         : {
             matchId: binding.context.matchId,
@@ -724,13 +744,41 @@ export class OutputService {
       (transition) => transition.kind === 'map_execution_changed',
     );
     const generationAdvanced = result.disposition.reason === 'source-generation-advanced';
-    const hasBoundary = transitions.length > 0 || generationAdvanced;
+    const hasBoundary = !preparationBoundary && (transitions.length > 0 || generationAdvanced);
     const outputScope = this.boundaryScope(binding?.context.matchId, bundle.program.cursor);
+    const priorExecutionScope =
+      before && before.kind !== 'none'
+        ? this.boundaryScope(before.kind === 'owned' ? before.matchId : undefined, before.cursor)
+        : outputScope;
+    // Gaps belong to the prior execution and survive a later authority revision.
+    const { authorityFingerprint: priorAuthority, ...priorScope } = priorExecutionScope ?? {};
+    void priorAuthority;
+    const gapScope = priorExecutionScope
+      ? ({
+          ...priorScope,
+          ...(boundaryContext?.source &&
+          before?.kind === 'owned' &&
+          boundaryContext.source.matchId === before.matchId &&
+          sameSourceSession(boundaryContext.source, before.cursor)
+            ? { source: boundaryContext.source }
+            : {}),
+          ruleVersion: 2 as const,
+          reason:
+            before?.kind === 'unknown'
+              ? ('execution_owner_unknown' as const)
+              : ('boundary_capture_incomplete' as const),
+        } as BoundaryScope)
+      : outputScope;
+    if (!eligible && !hasBoundary) return;
     if (!hasBoundary && continuity !== undefined)
       void this.outbox
         ?.updateContinuity(continuity, outputScope)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
-    if (bundle.program.status.telemetry === 'fresh' && bundle.program.map.phase === 'gameover') {
+    if (
+      eligible &&
+      bundle.program.status.telemetry === 'fresh' &&
+      bundle.program.map.phase === 'gameover'
+    ) {
       const cursor = bundle.program.cursor;
       const map = bundle.program.map;
       void this.outbox
@@ -759,17 +807,23 @@ export class OutputService {
           this.onDiagnostic?.('outbox_supersede_failed');
         });
     }
-    const newMapObservation = this.newMapObservation(result, bundle);
+    const newMapObservation = eligible && this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
     let projectionFailed = false;
     try {
-      candidates = [
-        ...transitionReliableEventsV1({
-          result,
-          bundle,
-          binding,
-        }),
-      ];
+      candidates = !eligible
+        ? []
+        : [
+            ...transitionReliableEventsV1({
+              result,
+              bundle,
+              binding,
+            }).filter(
+              (event) =>
+                !preparationBoundary ||
+                (event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed'),
+            ),
+          ];
     } catch {
       this.onDiagnostic?.('event_projection_failed');
       if (!hasBoundary) return;
@@ -796,13 +850,20 @@ export class OutputService {
         });
       const events: ReliableEventV1[] = [];
       const intents: BoundaryIntent[] = [];
-      let missing = projectionFailed;
-      for (const entry of entries) {
+      const sameSession = !before || sameSourceSession(before.cursor, cursor);
+      let missing = projectionFailed || !boundaryContext || !sameSession;
+      for (const entry of boundaryContext && sameSession ? entries : []) {
         try {
           const candidate = buildReliableEventV1({
             kind: entry.kind,
-            bundle,
-            binding,
+            bundle:
+              before?.kind === 'owned' && bundle.program.match?.matchId === before.matchId
+                ? bundle
+                : boundaryContext!.bundle,
+            binding: boundaryContext!.binding,
+            // The event is the transition's watermark but belongs to the
+            // frozen previous owner and exact source, not the new binding.
+            cursor,
             observedAt: entry.observedAt,
             source:
               entry.kind === 'map_epoch_changed' ? 'runtime-transition' : 'runtime-continuity',
@@ -817,10 +878,11 @@ export class OutputService {
           }
           if (candidate.evidence.contextFresh) events.push(candidate);
           else {
-            const authorityFingerprint = this.boundaryAuthority();
+            const authorityFingerprint = boundaryContext!.authority;
+            const boundaryBinding = boundaryContext!.binding;
             if (
-              !binding ||
-              binding.origin !== 'online' ||
+              !boundaryBinding ||
+              boundaryBinding.origin !== 'online' ||
               !authorityFingerprint ||
               !candidate.cursor.liveSessionId
             ) {
@@ -829,7 +891,7 @@ export class OutputService {
             }
             intents.push({
               event: candidate,
-              planFingerprint: manifestPlanFingerprint(binding.manifest),
+              planFingerprint: manifestPlanFingerprint(boundaryBinding.manifest),
               authorityFingerprint,
             });
           }
@@ -846,8 +908,8 @@ export class OutputService {
           continuity,
           missing,
           this.now(),
-          outputScope,
-          this.sourceFor(binding?.context.matchId, cursor),
+          gapScope,
+          boundaryContext?.source ?? (this.options.exactSource ? null : undefined),
         )
         .then(() => {
           if (this.outbox?.hasBoundaryOverflow(outputScope))
@@ -868,6 +930,7 @@ export class OutputService {
         (event) => event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed',
       );
     }
+    if (!eligible) return;
     const ended = candidates.find(
       (event): event is Extract<ReliableEventV1, { kind: 'map_ended' }> =>
         event.kind === 'map_ended',
@@ -1230,26 +1293,15 @@ export class OutputService {
     );
     if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
+    const exact = 'authorityRevision' in scope ? parseSource(scope) : undefined;
+    const frozenScope: BoundaryScope = { ...scope, ...(exact ? { source: exact } : {}) };
+    // Tail settlement intentionally has no current authority or ephemeral
+    // service-owner filter. All retained intents/gaps in the exact old delivery
+    // scope must settle, including awaitingSource and previous-authority work.
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
-      this.outbox.hasBoundaryGap({
-        ...scope,
-        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
-        authorityFingerprint:
-          this.boundaryAuthority() ??
-          createHash('sha256')
-            .update(JSON.stringify([this.boundaryOwner, null]))
-            .digest('hex'),
-      }) ||
-      this.outbox.getBoundaryIntents({
-        ...scope,
-        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
-        authorityFingerprint:
-          this.boundaryAuthority() ??
-          createHash('sha256')
-            .update(JSON.stringify([this.boundaryOwner, null]))
-            .digest('hex'),
-      }).length
+      this.outbox.hasBoundaryGap(frozenScope) ||
+      this.outbox.getBoundaryIntents(frozenScope).length
     )
       return false;
     await this.outbox.flushPending();
@@ -1258,7 +1310,10 @@ export class OutputService {
     await this.retryCompletion;
     await this.outbox.flushPending();
     return (
-      !this.outbox.hasPendingEnqueues(scope) && this.outbox.getScopeDisposition(scope).pending === 0
+      !this.outbox.hasPendingEnqueues(scope, exact) &&
+      !this.outbox.hasBoundaryGap(frozenScope) &&
+      this.outbox.getBoundaryIntents(frozenScope).length === 0 &&
+      this.outbox.getScopeDisposition(scope, exact).pending === 0
     );
   }
 

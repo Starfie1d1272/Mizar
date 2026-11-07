@@ -1,3 +1,4 @@
+import { usePreparationStatus } from '../preparation/AutomaticPreparation';
 import { cancelProductionEntry, retryPendingPreparation } from '../preparation/client';
 import { useRadarViewSource } from '../realtime/radar-view-source';
 import { MatchConnectionControl } from './MatchConnectionControl';
@@ -132,26 +133,32 @@ function ContextPanel({
   }
   return (
     <section className="workspace-context" aria-label="当前比赛与制作状态">
-      <div className="workspace-match-score">
-        <strong title={score?.teamA.name ?? match?.entryAName}>
-          {score?.teamA.name ?? match?.entryAName ?? '队伍 A'}
-        </strong>
-        <b aria-label="当前图回合比分">
-          {score?.teamA.mapScore ?? '–'} : {score?.teamB.mapScore ?? '–'}
-        </b>
-        <strong title={score?.teamB.name ?? match?.entryBName}>
-          {score?.teamB.name ?? match?.entryBName ?? '队伍 B'}
-        </strong>
-      </div>
-      <div className="workspace-context__meta">
-        <small className="workspace-score-detail" title={score?.seriesScoreText ?? undefined}>
-          {score?.currentMapName ?? '地图待确认'}
-          {score?.seriesScoreText ? ` · 系列 ${score.seriesScoreText}` : ''}
-        </small>
-        <p className="workspace-pov" title={pov ?? undefined}>
-          视角 · {pov ?? '等待观战数据'}
-        </p>
-      </div>
+      {match ? (
+        <>
+          <div className="workspace-match-score">
+            <strong title={score?.teamA.name ?? match?.entryAName}>
+              {score?.teamA.name ?? match?.entryAName ?? '队伍 A'}
+            </strong>
+            <b aria-label="当前图回合比分">
+              {score?.teamA.mapScore ?? '–'} : {score?.teamB.mapScore ?? '–'}
+            </b>
+            <strong title={score?.teamB.name ?? match?.entryBName}>
+              {score?.teamB.name ?? match?.entryBName ?? '队伍 B'}
+            </strong>
+          </div>
+          <div className="workspace-context__meta">
+            <small className="workspace-score-detail" title={score?.seriesScoreText ?? undefined}>
+              {score?.currentMapName ?? '地图待确认'}
+              {score?.seriesScoreText ? ` · 系列 ${score.seriesScoreText}` : ''}
+            </small>
+            <p className="workspace-pov" title={pov ?? undefined}>
+              视角 · {pov ?? '等待观战数据'}
+            </p>
+          </div>
+        </>
+      ) : (
+        <p>尚未选择比赛，可先准备音画与音乐。</p>
+      )}
       <div className="workspace-context__actions">
         <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
         {!connectionInRadar ? <MatchConnectionControl /> : null}
@@ -185,17 +192,14 @@ function ContextPanel({
           onOpen={openPreparation}
         />
       </div>
-      {program?.map.phase !== 'warmup' ? (
-        <SyncHealthAlert
-          health={connection?.syncHealth}
-          matchId={operator?.matchContext.summary?.matchId}
-          isSource={Boolean(
-            connection?.activeMatchId &&
-            connection.activeSourceMatchId === connection.activeMatchId,
-          )}
-          onOpen={openPreparation}
-        />
-      ) : null}
+      <SyncHealthAlert
+        health={connection?.syncHealth}
+        matchId={operator?.matchContext.summary?.matchId}
+        isSource={Boolean(
+          connection?.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
+        )}
+        onOpen={openPreparation}
+      />
       {seriesBinding?.ownership?.status === 'attention' ? (
         <StatusBanner tone="warning">
           {seriesBinding.ownership.reason === 'previous_execution'
@@ -218,33 +222,29 @@ function ContextPanel({
           </Button>
           {visibleIssueError ? <span role="alert">{visibleIssueError}</span> : null}
         </StatusBanner>
-      ) : seriesBinding?.ownership?.status === 'associated' ? (
-        <StatusPill tone="success">地图执行已关联本场</StatusPill>
       ) : null}
-      {program?.map.phase !== 'warmup' ? (
-        <LiveRosterAlert
-          alert={rosterAlert}
-          matchId={operator?.matchContext.summary?.matchId}
-          suppressAutomatic={connection?.syncHealth?.status === 'attention'}
-          recovered={
-            operator?.runtime.telemetryFreshness === 'fresh' &&
-            operator.identity.state === 'matched' &&
-            operator.activeLineup.state === 'complete' &&
-            operator.activeLineup.retainedCount === 0 &&
-            !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
-          }
-          onReview={() =>
-            void openIssue({
-              id: 'live-roster',
-              summary: '上场选手／账号与网站首发不一致',
-              detail: '',
-              action: '核对网站名单',
-              path: '/matches?tab=roster',
-            })
-          }
-          error={visibleIssueError}
-        />
-      ) : null}
+      <LiveRosterAlert
+        alert={rosterAlert}
+        matchId={operator?.matchContext.summary?.matchId}
+        suppressAutomatic={connection?.syncHealth?.status === 'attention'}
+        recovered={
+          operator?.runtime.telemetryFreshness === 'fresh' &&
+          operator.identity.state === 'matched' &&
+          operator.activeLineup.state === 'complete' &&
+          operator.activeLineup.retainedCount === 0 &&
+          !operator.identity.issues.some((issue) => issue.code === 'lineup_differs_from_expected')
+        }
+        onReview={() =>
+          void openIssue({
+            id: 'live-roster',
+            summary: '上场选手／账号与网站首发不一致',
+            detail: '',
+            action: '核对网站名单',
+            path: '/matches?tab=roster',
+          })
+        }
+        error={visibleIssueError}
+      />
       {attentionIssues.length > 0 ? (
         <div className="workspace-attention" data-multiple={attentionIssues.length > 1}>
           <span role="status" title={attentionIssues.map((issue) => issue.summary).join('；')}>
@@ -312,6 +312,7 @@ function ObsConfidence() {
 }
 
 function WorkspaceLeftContent() {
+  const [musicError, setMusicError] = useState('');
   const connection = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const observer = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
@@ -383,13 +384,13 @@ function WorkspaceLeftContent() {
                             ? `准备第 ${plannedMap.mapOrder} 图`
                             : '准备下一图'
                           : payload?.runtime.telemetryFreshness === 'fresh'
-                            ? '本图已连接 · 等待雷达画面'
+                            ? '游戏数据接收中 · 等待雷达画面'
                             : observer?.programCommandQueued
                               ? '等待本图数据'
                               : payload?.runtime.telemetryFreshness === 'stale' &&
                                   !connection?.waitingForMap
                                 ? '游戏数据已中断'
-                                : '等待第一图 GOTV'}
+                                : '填写 GoTV 后接收比赛画面'}
                   </strong>
                   <p>
                     {guidance?.phase === 'match_end'
@@ -397,12 +398,12 @@ function WorkspaceLeftContent() {
                       : guidance?.phase === 'map_end' && connection?.waitingForMap
                         ? '连接已提交，请等待游戏数据'
                         : guidance?.phase === 'map_end'
-                          ? '填写本图新的 GOTV'
+                          ? '填写本图新的 GoTV'
                           : payload?.runtime.telemetryFreshness === 'fresh'
                             ? '等待雷达画面更新'
                             : observer?.programCommandQueued
                               ? '连接已提交，请等待游戏数据'
-                              : '连接 GOTV 后显示比赛画面'}
+                              : '连接 GoTV 后显示比赛画面'}
                   </p>
                   {interrupted ? (
                     <Button onClick={() => void openPreparation('/settings?tab=gsi')}>
@@ -419,7 +420,18 @@ function WorkspaceLeftContent() {
         <div className="workspace-left__details">
           <ObserverHints />
           <div className="workspace-left__context">
-            <MusicControls compact />
+            <MusicControls
+              compact
+              onAddMusic={() => {
+                setMusicError('');
+                void openPreparation('/settings?tab=music').catch((reason: unknown) =>
+                  setMusicError(
+                    reason instanceof Error ? reason.message : '声音设置未能打开，请重试。',
+                  ),
+                );
+              }}
+            />
+            {musicError ? <StatusBanner tone="warning">{musicError}</StatusBanner> : null}
             <ContextPanel
               connectionInRadar={connectionInRadar}
               operator={payload}
@@ -445,23 +457,9 @@ function WorkspaceDockContent() {
   const obs = useObsStatus();
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-  const [entryNotice, setEntryNotice] = useState('');
+  const preparation = usePreparationStatus();
+  const entryNotice = preparation?.message ?? '';
   const [dockDetail, setDockDetail] = useState<'notices' | 'display' | 'tools' | null>(null);
-  useEffect(() => {
-    let changed = false;
-    const status = (event: Event) => {
-      changed = true;
-      setEntryNotice(String((event as CustomEvent).detail ?? ''));
-    };
-    window.addEventListener('mizar-entry-status', status);
-    if (window.__TAURI_INTERNALS__)
-      void desktopInvoke<string>('workbench_status')
-        .then((message) => {
-          if (!changed) setEntryNotice(message);
-        })
-        .catch(() => {});
-    return () => window.removeEventListener('mizar-entry-status', status);
-  }, []);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const layoutRequest = useRef(0);
@@ -695,6 +693,17 @@ function WorkspaceDockContent() {
               配置运镜
             </Button>
           ) : null}
+          <Button
+            onClick={() =>
+              void action(() =>
+                window.__TAURI_INTERNALS__
+                  ? desktopInvoke('open_tool', { tool: 'game-picture' })
+                  : openPreparation('/workspace/game-picture'),
+              )
+            }
+          >
+            调整游戏画质
+          </Button>
           <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
             HUD 编辑器
           </Button>
@@ -795,10 +804,14 @@ function WorkspaceDockContent() {
         onClose={() => setDockDetail(null)}
       >
         {entryNotice ? (
-          <StatusBanner tone="warning">
-            {entryNotice} <Button onClick={() => setEntryNotice('')}>关闭</Button>{' '}
-            <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>{' '}
-            <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
+          <StatusBanner tone={preparation?.running || preparation?.cancelled ? 'info' : 'warning'}>
+            {entryNotice}
+            {!preparation?.running && !preparation?.cancelled ? (
+              <Button onClick={() => void action(() => retryPendingPreparation())}>重试准备</Button>
+            ) : null}
+            {!preparation?.cancelled && !preparation?.entered ? (
+              <Button onClick={() => void action(() => cancelProductionEntry())}>取消准备</Button>
+            ) : null}
           </StatusBanner>
         ) : null}
       </Dialog>
@@ -967,12 +980,31 @@ export function WorkspaceReview() {
   if (new URLSearchParams(window.location.search).get('kind') === 'exit') return <ExitReview />;
   return (
     <div className="workspace-review-native">
-      <WorkspaceLeftContent />
+      <WorkspaceReviewDetails />
       <section className="workspace-review-empty">
         <h1>本场核对</h1>
         <p>当前没有需要处理的提醒，或数据仍在加载。</p>
         <Button onClick={() => void closeReviewWindow()}>关闭窗口</Button>
       </section>
     </div>
+  );
+}
+
+function WorkspaceReviewDetails() {
+  const operator = useLocalChannelClient('operator');
+  const program = useLocalChannelClient('program');
+  const state = useSyncExternalStore(
+    operator.subscribe,
+    operator.getSnapshot,
+    operator.getSnapshot,
+  );
+  const live = useSyncExternalStore(program.subscribe, program.getSnapshot, program.getSnapshot);
+  return (
+    <ContextPanel
+      operator={state.state === 'live' ? (state.current?.payload ?? null) : null}
+      program={live.state === 'live' ? (live.current?.payload ?? null) : null}
+      programCursor={live.state === 'live' ? (live.current?.cursor ?? null) : null}
+      connectionInRadar
+    />
   );
 }

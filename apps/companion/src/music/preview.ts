@@ -1,3 +1,4 @@
+import { musicFailure } from './failure.js';
 import type { MusicPreviewRequest, MusicPreviewStatus } from '@mizar/protocol/music';
 import type { ObsRpc } from '../obs/reconcile.js';
 import { ownedMusicInput } from './obs-provider.js';
@@ -154,7 +155,7 @@ export class MusicPreview {
     this.stopping = false;
     this.status = { ...this.status!, phase: 'stopped', message: '试听已停止。' };
   }
-  unavailable() {
+  unavailable(error: unknown = new Error('music_obs_unavailable')) {
     if (
       !this.request ||
       (this.stopping &&
@@ -162,14 +163,15 @@ export class MusicPreview {
     )
       return;
     const hadMedia = Boolean(this.uuid);
-    this.event('failed', 'obs_disconnected');
-    this.cancel('obs_disconnected');
+    const failure = musicFailure(error);
+    this.event('failed', failure.code);
+    this.cancel(failure.code);
     this.status = {
       ...this.status!,
       phase: this.uuid ? 'cleanup' : 'failed',
       message: hadMedia
         ? '试听停止未确认，请在 OBS 停止 音效来源；重连后优先清理。'
-        : 'OBS 连接不可用，未开始试听。请检查 OBS 连接和 音效来源。',
+        : failure.message,
     };
   }
   async reconcile(
@@ -190,16 +192,7 @@ export class MusicPreview {
     if (this.stopping) {
       const revision = this.revision;
       const current = () => valid() && this.stopping && this.revision === revision;
-      const name = await ownedMusicInput(
-        obs,
-        this.store,
-        'stinger',
-        false,
-        current,
-        false,
-        false,
-        false,
-      );
+      const name = await ownedMusicInput(obs, this.store, 'stinger', false, current, false, false);
       if (!current()) return;
       if (name && this.store.state.sources.stinger === this.uuid) {
         const args = { inputUuid: this.uuid };

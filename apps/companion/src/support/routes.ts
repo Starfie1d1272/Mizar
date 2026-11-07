@@ -1,3 +1,5 @@
+import type { IncidentParticipant } from './retention.js';
+import { SupportExports } from './export-job.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { RetainedDiagnosticBatch } from './delivery.js';
 import type { registerDiagnosticDelivery } from './delivery-routes.js';
@@ -9,9 +11,13 @@ import {
   failedObsNativeEvidence,
   type ObsNativeEvidence,
 } from '../obs/native-evidence.js';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { arch, platform, release } from 'node:os';
-import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
+import {
+  checkLocalWebOrigin,
+  isLoopbackBindHost,
+  type LocalWebOriginPolicy,
+} from '../local-web/origin-policy.js';
 import type { LocalWebHostDiagnostics } from '../local-web/websocket-transport.js';
 import type { ObsStatus } from '../obs/adapter.js';
 import { PROGRAM_SCENES, type ProgramSceneState } from '@mizar/protocol/program-scenes';
@@ -134,11 +140,66 @@ function windowGeometry(value: unknown) {
   );
 }
 
+const desktopSchema = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  properties: {
+    gsi: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        ...Object.fromEntries(
+          [
+            'detected',
+            'installed',
+            'conflict',
+            'fileConflict',
+            'endpointConflict',
+            'readFailed',
+          ].map((key) => [key, { type: 'boolean' }]),
+        ),
+        collectionStatus: { type: 'string', enum: collectionStates },
+        candidateCount: { type: 'integer', minimum: 0, maximum: 10000 },
+        conflictCount: { type: 'integer', minimum: 0, maximum: 10000 },
+        issueCodes: {
+          type: 'array',
+          maxItems: 16,
+          items: { type: 'string', enum: cs2IssueCodes },
+        },
+        lastOperation: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          required: ['code', 'stage'],
+          properties: {
+            code: { type: 'string', enum: cs2IssueCodes },
+            stage: { type: 'string', enum: cs2Stages },
+          },
+        },
+      },
+    },
+    cs2: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        collectionStatus: { type: 'string', enum: collectionStates },
+        found: { type: 'boolean' },
+        managed: { type: 'boolean' },
+        geometry: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          properties: windowGeometryProperties,
+        },
+      },
+    },
+  },
+};
+
 export function registerSupportRoutes(
   app: FastifyInstance,
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
     readonly logsDirectory?: string;
+    readonly exportParticipants?: () => IncidentParticipant[];
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly observer?: () => ReturnType<WorkspaceObserver['view']> | null;
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
@@ -167,6 +228,315 @@ export function registerSupportRoutes(
     readonly nativeObs?: () => Promise<ObsNativeEvidence>;
   },
 ) {
+  function captureSnapshot(
+    desktop: Record<string, unknown>,
+    nativeSummary: unknown,
+    obs: ObsStatus | undefined,
+  ) {
+    const program = options.program?.();
+    const context = options.programContext?.();
+    const gsi = record(desktop.gsi);
+    const cs2 = record(desktop.cs2);
+    const bool = (value: unknown) => (typeof value === 'boolean' ? value : null);
+    const recorder = options.recorder();
+    const hosts = options.hosts();
+    return {
+      asOf: new Date().toISOString(),
+      ...{
+        diagnosticDelivery: (() => {
+          const status = options.diagnosticDelivery?.();
+          const available = status?.available ?? false;
+          const delivery = status?.delivery;
+          const errorCodes = [
+            'not_configured',
+            'local_queue_unavailable',
+            'state_unreadable',
+            'consent_policy_changed',
+            'delivery_failed',
+            'session_budget_waiting_for_capacity',
+            'queue_write_unconfirmed',
+            'journal_unreadable',
+            'queue_budget_local_journal_retained',
+            'manifest_budget_local_journal_retained',
+            'retired_identity_sync_required',
+            'server_retention_expired_local_copy_retained',
+            'receipt_size_or_body',
+            'receipt_size_budget',
+            'invalid_enrollment_ack',
+            'invalid_batch_permit',
+            'batch_integrity_failed',
+            'withdrawal_pending',
+          ];
+          return {
+            available,
+            configured: available ? (delivery?.configured ?? null) : null,
+            consent: available ? (delivery?.consent ?? null) : null,
+            paused: available ? (delivery?.paused ?? null) : null,
+            consentAt: available ? (delivery?.consentAt ?? null) : null,
+            closedReason: available ? (delivery?.closedReason ?? null) : null,
+            lastAttemptAt: available ? (delivery?.lastAttemptAt ?? null) : null,
+            lastConfirmedAt: available ? (delivery?.lastConfirmedAt ?? null) : null,
+            transportFailure: available ? (delivery?.transportFailure ?? null) : null,
+            omitted: available ? (delivery?.omitted ?? null) : null,
+            omissionReasons:
+              available && delivery
+                ? Object.fromEntries(
+                    Object.entries(delivery.omissionReasons).filter(([reason]) =>
+                      [
+                        'consent_policy_changed',
+                        'invalid_source_cursor',
+                        'chat_not_collected',
+                        'event_size_budget',
+                        'memory_budget_recoverable_from_local_journal',
+                        'unreadable_journal_record',
+                        'truncated_sealed_journal_record',
+                        'batch_size_budget',
+                        'source_sequence_gap',
+                        'installation_lease_closed',
+                        'server_retention_expired',
+                        'batch_retention_expired',
+                        'automatic_window_expired',
+                        'payload_clock_future',
+                        'payload_creation_time_missing',
+                      ].includes(reason),
+                    ),
+                  )
+                : null,
+            deletionPending: available ? (delivery?.deletionPending ?? null) : null,
+            queuedBatches: available ? (delivery?.queuedBatches ?? null) : null,
+            blockedBatches: available ? (delivery?.blockedBatches ?? null) : null,
+            queuedBytes: available ? (delivery?.queuedBytes ?? null) : null,
+            pendingBytes: available ? (delivery?.pendingBytes ?? null) : null,
+            acknowledged: available ? (delivery?.acknowledged ?? null) : null,
+            failures: available ? (delivery?.failures ?? null) : null,
+            error: status?.error ? (choice(status.error, errorCodes) ?? 'other') : null,
+            nextAttemptAt: available ? (delivery?.nextAttemptAt ?? null) : null,
+          };
+        })(),
+        observer: options.observer?.() ?? null,
+        nativeObs: nativeSummary,
+        program: program
+          ? {
+              active: program.active,
+              preparing: program.preparing?.target ?? null,
+              mode: program.director?.mode ?? null,
+              gameplayAvailable: program.available.includes('gameplay'),
+              contextFreshness: choice(context?.contextFreshness, ['unbound', 'fresh', 'stale']),
+              identity: choice(context?.identity, [
+                'unbound',
+                'resolving',
+                'matched',
+                'degraded',
+                'mismatch',
+              ]),
+              binding: choice(context?.binding, ['unbound', 'bound', 'needs_operator']),
+            }
+          : null,
+        runtime: options.runtimeSummary(),
+        businessLog: options.businessLogStatus?.() ?? 'not_configured',
+        gsi: {
+          ingressConfigured: options.gsiConfigured,
+          source: 'desktop-host-via-browser',
+          detected: bool(gsi.detected),
+          installed: bool(gsi.installed),
+          conflict: bool(gsi.conflict),
+          fileConflict: bool(gsi.fileConflict),
+          endpointConflict: bool(gsi.endpointConflict),
+          readFailed: bool(gsi.readFailed),
+          collectionStatus: choice(gsi.collectionStatus, collectionStates),
+          candidateCount: typeof gsi.candidateCount === 'number' ? count(gsi.candidateCount) : null,
+          conflictCount: typeof gsi.conflictCount === 'number' ? count(gsi.conflictCount) : null,
+          issueCodes: Array.isArray(gsi.issueCodes)
+            ? gsi.issueCodes
+                .map((code) => choice(code, cs2IssueCodes))
+                .filter((code) => code !== null)
+            : [],
+          lastOperation:
+            gsi.lastOperation === null || gsi.lastOperation === undefined
+              ? null
+              : {
+                  code: choice(record(gsi.lastOperation).code, cs2IssueCodes),
+                  stage: choice(record(gsi.lastOperation).stage, cs2Stages),
+                },
+        },
+        cs2: {
+          source: 'desktop-host-via-browser',
+          collectionStatus: choice(cs2.collectionStatus, collectionStates),
+          found: bool(cs2.found),
+          managed: bool(cs2.managed),
+          geometry: windowGeometry(cs2.geometry),
+        },
+        obs:
+          obs === undefined
+            ? null
+            : {
+                connection: choice(obs.connection, [
+                  'connected',
+                  'unavailable',
+                  'password_required',
+                  'invalid_password',
+                ]),
+                streaming: bool(obs.streaming),
+                recording: bool(obs.recording),
+                connectionFailure: obs.connectionFailure ?? null,
+                currentScene:
+                  PROGRAM_SCENES.find((scene) => obsSceneName(scene.id) === obs.currentScene)?.id ??
+                  null,
+                sceneAligned:
+                  program && obs.connection === 'connected'
+                    ? obs.currentScene === obsSceneName(program.active)
+                    : null,
+                programEvidence: obs.programEvidence ?? null,
+                findings: obs.findings
+                  .slice(0, 32)
+                  .map(({ code }) => choice(code, findingCodes) ?? 'unknown_finding'),
+              },
+        browserHosts: {
+          active: {
+            obs: count(hosts.active.obs),
+            browser: count(hosts.active.browser),
+            unknown: count(hosts.active.unknown),
+          },
+          totals: {
+            connected: count(hosts.totals.connected),
+            disconnected: count(hosts.totals.disconnected),
+            connectionLimitRejected: count(hosts.totals.connectionLimitRejected),
+            slowConsumerTerminated: count(hosts.totals.slowConsumerTerminated),
+          },
+        },
+        recorder: {
+          state: choice(recorder.state, [
+            'recording',
+            'degraded',
+            'failed',
+            'finalizing',
+            'closed',
+          ]),
+          pendingFrames: count(recorder.pendingFrames),
+          pendingBytes: count(recorder.pendingBytes),
+          frameCount: count(recorder.frameCount),
+          droppedFrames: count(recorder.droppedFrames),
+          incomplete: bool(recorder.incomplete),
+          lastErrorCode: choice(recorder.lastErrorCode, recorderCodes),
+        },
+        delivery: options
+          .delivery()
+          .slice(0, 32)
+          .map((item) => ({
+            state: choice(item.state, ['idle', 'sending', 'closing', 'closed']),
+            inFlight: bool(item.inFlight),
+            hasPendingLatest: bool(item.hasPendingLatest),
+            offered: count(item.offered),
+            sent: count(item.sent),
+            coalesced: count(item.coalesced),
+            failed: count(item.failed),
+          })),
+      },
+    };
+  }
+  const exports = options.logsDirectory
+    ? new SupportExports(options.logsDirectory, options.exportParticipants)
+    : null;
+  app.post(
+    '/debug/support-exports',
+    {
+      bodyLimit: 4096,
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            hostPinId: { type: 'string', maxLength: 36 },
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+            desktop: desktopSchema,
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed)
+        return reply.code(403).send({ error: 'origin' });
+      if (!exports) return reply.code(503).send({ error: 'logs_unavailable' });
+      const body = record(request.body);
+      if (
+        body.hostPinId !== undefined &&
+        (typeof body.hostPinId !== 'string' ||
+          !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(body.hostPinId))
+      )
+        return reply.code(400).send({ error: 'host_pin_id_invalid' });
+      const range: { from?: string; to?: string } = {};
+      for (const key of ['from', 'to'] as const) {
+        if (body[key] !== undefined) {
+          if (typeof body[key] !== 'string' || !Number.isFinite(Date.parse(body[key] as string)))
+            return reply.code(400).send({ error: 'range_invalid' });
+          range[key] = new Date(body[key] as string).toISOString();
+        }
+      }
+      if (range.from && range.to && range.from > range.to)
+        return reply.code(400).send({ error: 'range_invalid' });
+      try {
+        return reply.code(202).send(
+          await exports.begin(
+            range,
+            async () => ({
+              ...captureSnapshot(
+                record(body.desktop),
+                null,
+                await options.obs().catch(() => undefined),
+              ),
+              artifact: {
+                gitSha: digest(options.artifact?.gitSha, 40),
+                artifactSha256: digest(options.artifact?.artifactSha256, 64),
+              },
+              pendingEvidence: {
+                included: false,
+                reason:
+                  'memory-only-uncommitted; producer pin sourceState describes the fixed committed boundary',
+              },
+            }),
+            body.hostPinId as string | undefined,
+          ),
+        );
+      } catch (error) {
+        return reply.code(409).send({ error: String(error) });
+      }
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    '/debug/support-exports/:id/cancel',
+    async (request, reply) => {
+      if (!checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed)
+        return reply.code(403).send({ error: 'origin' });
+      return { cancelled: await exports?.cancel(request.params.id) };
+    },
+  );
+  const allowedExportRead = (request: FastifyRequest) =>
+    checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed ||
+    (request.headers.origin === undefined &&
+      request.headers['sec-fetch-site'] === 'same-origin' &&
+      options.originPolicy.mode === 'loopback' &&
+      isLoopbackBindHost(request.hostname));
+  app.get<{ Params: { id: string } }>('/debug/support-exports/:id', async (request, reply) => {
+    if (!allowedExportRead(request)) return reply.code(403).send({ error: 'origin' });
+    const job = exports?.status(request.params.id);
+    return job ?? reply.code(404).send({ error: 'export_unknown' });
+  });
+  app.get<{ Params: { id: string; name: string } }>(
+    '/debug/support-exports/:id/files/:name',
+    async (request, reply) => {
+      if (!allowedExportRead(request)) return reply.code(403).send({ error: 'origin' });
+      try {
+        if (!exports) return reply.code(503).send({ error: 'logs_unavailable' });
+        const handle = await exports.attachment(request.params.id, request.params.name);
+        reply.header('content-disposition', `attachment; filename="${request.params.name}"`);
+        reply.type(request.params.name.endsWith('.zip') ? 'application/zip' : 'application/json');
+        return reply.send(handle.createReadStream({ autoClose: true }));
+      } catch {
+        return reply.code(404).send({ error: 'export_unavailable' });
+      }
+    },
+  );
   let exporting = false;
   app.post(
     '/debug/support-bundle',
@@ -180,59 +550,7 @@ export function registerSupportRoutes(
             from: { type: 'string', format: 'date-time' },
             to: { type: 'string', format: 'date-time' },
             focusSessionId: { type: 'string', maxLength: 128 },
-            desktop: {
-              type: ['object', 'null'],
-              additionalProperties: false,
-              properties: {
-                gsi: {
-                  type: ['object', 'null'],
-                  additionalProperties: false,
-                  properties: {
-                    ...Object.fromEntries(
-                      [
-                        'detected',
-                        'installed',
-                        'conflict',
-                        'fileConflict',
-                        'endpointConflict',
-                        'readFailed',
-                      ].map((key) => [key, { type: 'boolean' }]),
-                    ),
-                    collectionStatus: { type: 'string', enum: collectionStates },
-                    candidateCount: { type: 'integer', minimum: 0, maximum: 10000 },
-                    conflictCount: { type: 'integer', minimum: 0, maximum: 10000 },
-                    issueCodes: {
-                      type: 'array',
-                      maxItems: 16,
-                      items: { type: 'string', enum: cs2IssueCodes },
-                    },
-                    lastOperation: {
-                      type: ['object', 'null'],
-                      additionalProperties: false,
-                      required: ['code', 'stage'],
-                      properties: {
-                        code: { type: 'string', enum: cs2IssueCodes },
-                        stage: { type: 'string', enum: cs2Stages },
-                      },
-                    },
-                  },
-                },
-                cs2: {
-                  type: ['object', 'null'],
-                  additionalProperties: false,
-                  properties: {
-                    collectionStatus: { type: 'string', enum: collectionStates },
-                    found: { type: 'boolean' },
-                    managed: { type: 'boolean' },
-                    geometry: {
-                      type: ['object', 'null'],
-                      additionalProperties: false,
-                      properties: windowGeometryProperties,
-                    },
-                  },
-                },
-              },
-            },
+            desktop: desktopSchema,
           },
         },
       },
@@ -267,14 +585,7 @@ export function registerSupportRoutes(
           relatedLogFiles: obsRelatedLogFiles = [],
           ...nativeSummary
         } = nativeObs;
-        const program = options.program?.();
-        const context = options.programContext?.();
         const desktop = record(record(request.body).desktop);
-        const gsi = record(desktop.gsi);
-        const cs2 = record(desktop.cs2);
-        const bool = (value: unknown) => (typeof value === 'boolean' ? value : null);
-        const recorder = options.recorder();
-        const hosts = options.hosts();
         const exportedAt = new Date().toISOString();
         const gitSha = digest(options.artifact?.gitSha, 40);
         const businessHistory = readBusinessHistory(options.logsDirectory);
@@ -366,202 +677,7 @@ export function registerSupportRoutes(
             'OBS 摘要保留分类故障与最新状态，附件包含扫描范围内全部允许的技术事件与固定操作原因，不是完整 OBS 原日志，不含原始私人正文；scan 标明读取字节和缺失范围，附件 omittedEvents 与时间范围标明附件限额遗漏。',
             '本文件不是 Windows + CS2 + OBS 的真实验收通过证明。',
           ],
-          snapshot: {
-            diagnosticDelivery: (() => {
-              const status = options.diagnosticDelivery?.();
-              const available = status?.available ?? false;
-              const delivery = status?.delivery;
-              const errorCodes = [
-                'not_configured',
-                'local_queue_unavailable',
-                'state_unreadable',
-                'consent_policy_changed',
-                'delivery_failed',
-                'session_budget_waiting_for_capacity',
-                'queue_write_unconfirmed',
-                'journal_unreadable',
-                'queue_budget_local_journal_retained',
-                'manifest_budget_local_journal_retained',
-                'retired_identity_sync_required',
-                'server_retention_expired_local_copy_retained',
-                'receipt_size_or_body',
-                'receipt_size_budget',
-                'invalid_enrollment_ack',
-                'invalid_batch_permit',
-                'batch_integrity_failed',
-                'withdrawal_pending',
-              ];
-              return {
-                available,
-                configured: available ? (delivery?.configured ?? null) : null,
-                consent: available ? (delivery?.consent ?? null) : null,
-                paused: available ? (delivery?.paused ?? null) : null,
-                consentAt: available ? (delivery?.consentAt ?? null) : null,
-                closedReason: available ? (delivery?.closedReason ?? null) : null,
-                lastAttemptAt: available ? (delivery?.lastAttemptAt ?? null) : null,
-                lastConfirmedAt: available ? (delivery?.lastConfirmedAt ?? null) : null,
-                transportFailure: available ? (delivery?.transportFailure ?? null) : null,
-                omitted: available ? (delivery?.omitted ?? null) : null,
-                omissionReasons:
-                  available && delivery
-                    ? Object.fromEntries(
-                        Object.entries(delivery.omissionReasons).filter(([reason]) =>
-                          [
-                            'consent_policy_changed',
-                            'invalid_source_cursor',
-                            'chat_not_collected',
-                            'event_size_budget',
-                            'memory_budget_recoverable_from_local_journal',
-                            'unreadable_journal_record',
-                            'truncated_sealed_journal_record',
-                            'batch_size_budget',
-                            'source_sequence_gap',
-                            'installation_lease_closed',
-                            'server_retention_expired',
-                            'batch_retention_expired',
-                            'automatic_window_expired',
-                            'payload_clock_future',
-                            'payload_creation_time_missing',
-                          ].includes(reason),
-                        ),
-                      )
-                    : null,
-                deletionPending: available ? (delivery?.deletionPending ?? null) : null,
-                queuedBatches: available ? (delivery?.queuedBatches ?? null) : null,
-                blockedBatches: available ? (delivery?.blockedBatches ?? null) : null,
-                queuedBytes: available ? (delivery?.queuedBytes ?? null) : null,
-                pendingBytes: available ? (delivery?.pendingBytes ?? null) : null,
-                acknowledged: available ? (delivery?.acknowledged ?? null) : null,
-                failures: available ? (delivery?.failures ?? null) : null,
-                error: status?.error ? (choice(status.error, errorCodes) ?? 'other') : null,
-                nextAttemptAt: available ? (delivery?.nextAttemptAt ?? null) : null,
-              };
-            })(),
-            observer: options.observer?.() ?? null,
-            nativeObs: nativeSummary,
-            program: program
-              ? {
-                  active: program.active,
-                  preparing: program.preparing?.target ?? null,
-                  mode: program.director?.mode ?? null,
-                  gameplayAvailable: program.available.includes('gameplay'),
-                  contextFreshness: choice(context?.contextFreshness, [
-                    'unbound',
-                    'fresh',
-                    'stale',
-                  ]),
-                  identity: choice(context?.identity, [
-                    'unbound',
-                    'resolving',
-                    'matched',
-                    'degraded',
-                    'mismatch',
-                  ]),
-                  binding: choice(context?.binding, ['unbound', 'bound', 'needs_operator']),
-                }
-              : null,
-            runtime: options.runtimeSummary(),
-            businessLog: options.businessLogStatus?.() ?? 'not_configured',
-            gsi: {
-              ingressConfigured: options.gsiConfigured,
-              source: 'desktop-host-via-browser',
-              detected: bool(gsi.detected),
-              installed: bool(gsi.installed),
-              conflict: bool(gsi.conflict),
-              fileConflict: bool(gsi.fileConflict),
-              endpointConflict: bool(gsi.endpointConflict),
-              readFailed: bool(gsi.readFailed),
-              collectionStatus: choice(gsi.collectionStatus, collectionStates),
-              candidateCount:
-                typeof gsi.candidateCount === 'number' ? count(gsi.candidateCount) : null,
-              conflictCount:
-                typeof gsi.conflictCount === 'number' ? count(gsi.conflictCount) : null,
-              issueCodes: Array.isArray(gsi.issueCodes)
-                ? gsi.issueCodes
-                    .map((code) => choice(code, cs2IssueCodes))
-                    .filter((code) => code !== null)
-                : [],
-              lastOperation:
-                gsi.lastOperation === null || gsi.lastOperation === undefined
-                  ? null
-                  : {
-                      code: choice(record(gsi.lastOperation).code, cs2IssueCodes),
-                      stage: choice(record(gsi.lastOperation).stage, cs2Stages),
-                    },
-            },
-            cs2: {
-              source: 'desktop-host-via-browser',
-              collectionStatus: choice(cs2.collectionStatus, collectionStates),
-              found: bool(cs2.found),
-              managed: bool(cs2.managed),
-              geometry: windowGeometry(cs2.geometry),
-            },
-            obs:
-              obs === undefined
-                ? null
-                : {
-                    connection: choice(obs.connection, [
-                      'connected',
-                      'unavailable',
-                      'password_required',
-                      'invalid_password',
-                    ]),
-                    streaming: bool(obs.streaming),
-                    recording: bool(obs.recording),
-                    connectionFailure: obs.connectionFailure ?? null,
-                    currentScene:
-                      PROGRAM_SCENES.find((scene) => obsSceneName(scene.id) === obs.currentScene)
-                        ?.id ?? null,
-                    sceneAligned:
-                      program && obs.connection === 'connected'
-                        ? obs.currentScene === obsSceneName(program.active)
-                        : null,
-                    programEvidence: obs.programEvidence ?? null,
-                    findings: obs.findings
-                      .slice(0, 32)
-                      .map(({ code }) => choice(code, findingCodes) ?? 'unknown_finding'),
-                  },
-            browserHosts: {
-              active: {
-                obs: count(hosts.active.obs),
-                browser: count(hosts.active.browser),
-                unknown: count(hosts.active.unknown),
-              },
-              totals: {
-                connected: count(hosts.totals.connected),
-                disconnected: count(hosts.totals.disconnected),
-                connectionLimitRejected: count(hosts.totals.connectionLimitRejected),
-                slowConsumerTerminated: count(hosts.totals.slowConsumerTerminated),
-              },
-            },
-            recorder: {
-              state: choice(recorder.state, [
-                'recording',
-                'degraded',
-                'failed',
-                'finalizing',
-                'closed',
-              ]),
-              pendingFrames: count(recorder.pendingFrames),
-              pendingBytes: count(recorder.pendingBytes),
-              frameCount: count(recorder.frameCount),
-              droppedFrames: count(recorder.droppedFrames),
-              incomplete: bool(recorder.incomplete),
-              lastErrorCode: choice(recorder.lastErrorCode, recorderCodes),
-            },
-            delivery: options
-              .delivery()
-              .slice(0, 32)
-              .map((item) => ({
-                state: choice(item.state, ['idle', 'sending', 'closing', 'closed']),
-                inFlight: bool(item.inFlight),
-                hasPendingLatest: bool(item.hasPendingLatest),
-                offered: count(item.offered),
-                sent: count(item.sent),
-                coalesced: count(item.coalesced),
-                failed: count(item.failed),
-              })),
-          },
+          snapshot: captureSnapshot(desktop, nativeSummary, obs),
           logs,
           attachments: { obsLogs: obsLogAttachments },
         };

@@ -58,7 +58,14 @@ export type ObsOutputCommand = z.infer<typeof obsOutputCommandSchema>;
 export type ObsOutputKind = ObsOutputCommand['output'];
 export type ObsOutputPhase =
   'unknown' | 'idle' | 'starting' | 'active' | 'stopping' | 'reconnecting' | 'paused';
+export interface ObsOutputResult {
+  readonly action: 'start' | 'stop';
+  readonly state: 'accepted' | 'pending' | 'started' | 'stopped' | 'failed' | 'unknown';
+  readonly code?: string;
+  readonly message?: string;
+}
 export interface ObsOutputStatus {
+  readonly result?: ObsOutputResult;
   readonly phase: ObsOutputPhase;
   readonly active: boolean | null;
   readonly pending: 'start' | 'stop' | null;

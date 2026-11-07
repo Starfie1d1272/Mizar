@@ -1,3 +1,4 @@
+import { desktopInvoke } from '../workspace/client';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useState } from 'react';
 import { Button, Checkbox, Select, StatusBanner } from '../ui';
@@ -33,18 +34,53 @@ export function DiagnosticProblemReport() {
     if (busy) return;
     setBusy(true);
     setMessage(null);
+    let hostPinId: string | undefined;
+    let committed = false;
     try {
-      await command('/operator/diagnostics/report', {
+      if (window.__TAURI_INTERNALS__) {
+        hostPinId = crypto.randomUUID();
+        await desktopInvoke('diagnostic_pin', {
+          action: 'prepare',
+          pinId: hostPinId,
+          kind: 'incident',
+        });
+      }
+      let receipt = await command('/operator/diagnostics/report', {
         category,
+        ...(hostPinId ? { hostPinId } : {}),
         observedAt: new Date(Date.now() - Number(minutesAgo) * 60000).toISOString(),
       });
-      setMessage({ error: false, text: '已记录问题时间。' });
+      const outcome = receipt as {
+        requiresHostCommit?: boolean;
+        evidenceRetained?: boolean;
+        message?: string;
+      };
+      if (hostPinId && outcome.requiresHostCommit) {
+        committed = true; // An uncertain native response must not release a possibly committed pin.
+        await desktopInvoke('diagnostic_pin', {
+          action: 'commit',
+          pinId: hostPinId,
+          kind: 'incident',
+        });
+        committed = true;
+        receipt = await command('/operator/diagnostics/report/confirm', { pinId: hostPinId });
+      }
+      setMessage({
+        error: !(receipt as { evidenceRetained?: boolean }).evidenceRetained,
+        text: receipt.message ?? '标记已记录，固定范围尚未确认。请立即导出。',
+      });
     } catch (error) {
       setMessage({
         error: true,
         text: error instanceof Error ? error.message : '问题时间未能保存。',
       });
     } finally {
+      if (hostPinId && !committed)
+        await desktopInvoke('diagnostic_pin', {
+          action: 'release',
+          pinId: hostPinId,
+          kind: 'incident',
+        }).catch(() => undefined);
       setBusy(false);
     }
   }
@@ -76,7 +112,9 @@ export function DiagnosticProblemReport() {
         保存问题标记
       </Button>
       {message ? (
-        <StatusBanner tone={message.error ? 'danger' : 'success'}>{message.text}</StatusBanner>
+        <StatusBanner tone={message.error ? 'warning' : 'success'}>
+          {message.text} <a href="#support-export">立即导出诊断包</a>
+        </StatusBanner>
       ) : null}
     </details>
   );

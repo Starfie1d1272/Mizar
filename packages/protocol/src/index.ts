@@ -87,3 +87,5 @@ export type {
   BroadcastStatsPresentation,
   BroadcastStatsProgram,
 } from './broadcast-stats-presentation.js';
+
+export * from './diagnostics.js';

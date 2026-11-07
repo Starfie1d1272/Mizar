@@ -36,10 +36,8 @@ import {
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
 import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
-import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
-import { SpectatorWorkflow } from './SpectatorWorkflow';
 import './preparation.css';
 
 const tabs = {
@@ -216,8 +214,6 @@ export function PreparationPage() {
     >('/local/v1/readiness');
 
   const problems = (capabilities ?? []).filter((item) => !item.ready && item.action);
-  const pending = (capabilities ?? []).filter((item) => !item.ready && !item.action);
-  const completed = (capabilities ?? []).filter((item) => item.ready);
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
@@ -315,7 +311,7 @@ export function PreparationPage() {
               ? '正在自动准备工作台…'
               : production?.mode === 'hidden'
                 ? '返回工作台'
-                : '启动并进入工作台'}
+                : '进入工作台'}
           </Button>
         </header>
         {production?.mode === 'preparation' ? (
@@ -401,7 +397,7 @@ export function PreparationPage() {
                   <div className="preparation-task-header">
                     <div>
                       <h2>选择比赛</h2>
-                      <p>先选择已有比赛，或创建本地比赛；只检查画面可用 Demo 试播。</p>
+                      <p>可先进入工作台准备 OBS、音画和音乐，再选择比赛。</p>
                     </div>
                   </div>
                   <div className="preparation-actions">
@@ -608,40 +604,9 @@ export function PreparationPage() {
               </nav>
             ) : null}
             <div className="preparation-overview">
-              {match ? (
+              {problems.length ? (
                 <Panel>
-                  <div className="preparation-check-heading">
-                    <h2>开播检查</h2>
-                    <StatusPill
-                      tone={
-                        capabilities === null
-                          ? 'info'
-                          : problems.length
-                            ? 'warning'
-                            : pending.length
-                              ? 'info'
-                              : 'success'
-                      }
-                    >
-                      {capabilities === null
-                        ? '读取中'
-                        : problems.length
-                          ? `${problems.length} 项待处理`
-                          : pending.length
-                            ? '待确认'
-                            : '已就绪'}
-                    </StatusPill>
-                  </div>
-                  {completed.length ? (
-                    <div className="preparation-completed" aria-label="已完成检查">
-                      {completed.map(({ label }) => (
-                        <span key={label}>
-                          <span aria-hidden="true">✓ </span>
-                          {label === '比赛上下文' ? '比赛资料' : label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                  <h2>需要处理</h2>
                   {problems.map(({ label, reason, href, action: nextAction }) => (
                     <a
                       className="preparation-readiness"
@@ -670,17 +635,6 @@ export function PreparationPage() {
                       <span className="mizar-button">{label === 'OBS' ? '配置' : '检查'}</span>
                     </a>
                   ))}
-                  {pending.length ? (
-                    <details className="preparation-pending">
-                      <summary>待确认 · {pending.length} 项</summary>
-                      {pending.map(({ label, reason, href }) => (
-                        <a key={label} href={href}>
-                          <strong>{label}</strong>
-                          <span>{reason}</span>
-                        </a>
-                      ))}
-                    </details>
-                  ) : null}
                 </Panel>
               ) : null}
               <Panel className="preparation-quick-tools">
@@ -697,7 +651,6 @@ export function PreparationPage() {
               <DemoTestPanel forceExpanded={demoOpen} />
             </Dialog>
 
-            <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match && production && production.mode !== 'preparation' ? (
               <ProductionStatus matchId={match.matchId} />
             ) : null}
@@ -850,9 +803,7 @@ export function PreparationPage() {
                 </header>
                 <LocalOverlayControls />
               </Panel>
-              <Panel>
-                <SpectatorHudCommands />
-              </Panel>
+              <Panel></Panel>
             </div>
           )
         ) : (

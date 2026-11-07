@@ -5,6 +5,7 @@ mod cs2_config_identity;
 mod cs2_console;
 mod cs2_diagnostics;
 mod cs2_frame_rate;
+mod cs2_frame_rate_live;
 mod cs2_host;
 mod cs2_preferences;
 mod cs2_session;
@@ -456,7 +457,7 @@ async fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> Result<serde_json::Value, String> {
     match state.tracker.try_lock() {
         Ok(tracker) => Ok(
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.layout_aligned, "layoutAligned": tracker.layout_aligned, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
         ),
         Err(std::sync::TryLockError::WouldBlock) => {
             Err("游戏窗口操作正在进行，请稍后重试。".into())
@@ -1350,28 +1351,105 @@ async fn gsi_status(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-async fn save_support_bundle(app: tauri::AppHandle, contents: String) -> Result<bool, String> {
-    support_export::validate(&contents)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(file) = app
+async fn probe_cs2_frame_rate(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    cs2_host::probe_frame_rate(app).await
+}
+
+#[tauri::command]
+async fn control_cs2_frame_rate(
+    app: tauri::AppHandle,
+    action: String,
+    frame_rate_limit: Option<u16>,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<serde_json::Value, String> {
+    cs2_host::control_frame_rate(
+        app,
+        action,
+        frame_rate_limit,
+        diagnostic_operation_id,
+        diagnostic_task_id,
+        diagnostic_trigger,
+    )
+    .await
+}
+
+#[tauri::command]
+fn persist_diagnostic_events(
+    log: tauri::State<'_, DesktopLog>,
+    events: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    log.persist_document_events(&events)
+}
+
+#[tauri::command]
+fn diagnostic_pin(
+    log: tauri::State<'_, DesktopLog>,
+    action: String,
+    pin_id: String,
+    kind: String,
+) -> Result<serde_json::Value, String> {
+    log.diagnostic_pin(&action, &pin_id, &kind)
+}
+
+#[tauri::command]
+async fn save_support_bundle(
+    app: tauri::AppHandle,
+    export_id: String,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    diagnostic_log.event(
+        "support_save",
+        "begin",
+        Some(
+            &serde_json::json!({
+                "exportId": export_id,
+                "operationId": diagnostic_operation_id,
+            })
+            .to_string(),
+        ),
+    );
+    let state_root = app.state::<DesktopLog>().state_root.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let prepared = support_export::prepare_generated(&state_root, &export_id)?;
+        let Some(directory) = app
             .dialog()
             .file()
-            .set_title("保存 Mizar 诊断包")
-            .set_file_name(format!(
-                "mizar-support-{}.json",
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ))
-            .add_filter("Mizar 诊断包", &["json"])
-            .blocking_save_file()
+            .set_title("选择 Mizar 诊断包保存目录")
+            .blocking_pick_folder()
         else {
             return Ok(false);
         };
-        let path = file.into_path().map_err(|_| "保存位置无效，请重新选择。")?;
-        support_export::save(&path, &contents)?;
+        let path = directory
+            .into_path()
+            .map_err(|_| "保存位置无效，请重新选择。")?;
+        prepared.save(&path)?;
         Ok(true)
     })
     .await
-    .map_err(|_| "保存窗口未能打开，请重试。".to_string())?
+    .map_err(|_| "保存窗口未能打开，请重试。".to_string())
+    .and_then(|result| result);
+    if matches!(result, Ok(false)) {
+        diagnostic_log.event(
+            "support_save",
+            "cancelled",
+            Some(
+                &serde_json::json!({
+                    "operationId": diagnostic_operation_id,
+                })
+                .to_string(),
+            ),
+        );
+    } else {
+        diagnostic_log.native_outcome(
+            "save_support_bundle",
+            diagnostic_operation_id.as_deref(),
+            &result,
+        );
+    }
+    result
 }
 
 #[tauri::command]
@@ -1484,7 +1562,7 @@ fn run_desktop(
         .manage(updates::PendingUpdate::new(update_stage))
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
+            if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),

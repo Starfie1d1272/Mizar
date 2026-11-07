@@ -81,7 +81,7 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
     Ok(result)
 }
 
-fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
+fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
     let mut ts = tokens(text)?;
     if ts
         .iter()
@@ -103,8 +103,7 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
         return Err("视频配置格式不支持，未修改游戏设置。".into());
     }
     let close = ts.pop().unwrap().start;
-    let mut map = BTreeMap::new();
-    let mut duplicate = None;
+    let mut map: BTreeMap<String, Vec<Token>> = BTreeMap::new();
     let mut pairs = ts.into_iter().skip(2);
     while let Some(key) = pairs.next() {
         let mut value = pairs.next().ok_or("视频配置不完整。")?;
@@ -112,46 +111,34 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Token>, usize), String> {
         if !key.quoted || !value.quoted {
             return Err("cs2_video.txt：包含嵌套字段，未修改配置；可保持原游戏设置继续。".into());
         }
-        if let Some(previous) = map.get(&key.value) {
-            let previous: &Token = previous;
-            // Only known field names are exposed. Never include user values.
-            let name = if quality_preset(Quality::VeryHigh).contains_key(&key.value) {
+        let entries = map.entry(key.value.clone()).or_default();
+        if entries
+            .first()
+            .is_some_and(|previous| previous.value != value.value)
+        {
+            let known = sized_quality_preset(
+                Quality::VeryHigh,
+                VideoSize {
+                    width: 1920,
+                    height: 1080,
+                },
+            );
+            let name = if known.contains_key(&key.value) {
                 key.value.as_str()
             } else {
                 "其他字段"
             };
-            let kind = if previous.value == value.value {
-                "同值重复"
-            } else {
-                "冲突重复"
-            };
-            if duplicate.is_none() || kind == "冲突重复" {
-                duplicate = Some(format!(
-                    "cs2_video.txt / {name}：{kind}，未修改配置；请检查备份，或保持原游戏设置继续。"
-                ));
-            }
-            continue;
+            return Err(format!("cs2_video.txt / {name}：冲突重复，未修改配置；请选择备份恢复，或保持原游戏设置继续。"));
         }
-        map.insert(key.value, value);
-    }
-    if let Some(error) = duplicate {
-        return Err(error);
+        // Retain every token so all transaction paths edit the logical field.
+        entries.push(value);
     }
     Ok((map, close))
 }
 
+/// Rendering only: no resolution or window mode ownership.
 pub fn quality_preset(quality: Quality) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
-    for (key, value) in [
-        ("defaultres", DISPLAY_WIDTH),
-        ("defaultresheight", DISPLAY_HEIGHT),
-        ("aspectratiomode", "1"),
-        ("fullscreen", "0"),
-        ("coop_fullscreen", "0"),
-        ("nowindowborder", "1"),
-    ] {
-        values.insert(format!("setting.{key}"), value.into());
-    }
     if quality != Quality::Preserve {
         // CS2's native presets; numeric field maxima are not quality presets.
         let (shader, filtering, msaa, shadow, texture, particle, ao, hdr, fsr) = match quality {
@@ -179,10 +166,27 @@ pub fn quality_preset(quality: Quality) -> BTreeMap<String, String> {
     values
 }
 
-pub fn sized_quality_preset(quality: Quality, size: VideoSize) -> BTreeMap<String, String> {
-    let mut values = quality_preset(quality);
+/// Launch geometry is independent of rendering quality.
+pub fn launch_geometry(size: VideoSize) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    for (key, value) in [
+        ("defaultres", DISPLAY_WIDTH),
+        ("defaultresheight", DISPLAY_HEIGHT),
+        ("aspectratiomode", "1"),
+        ("fullscreen", "0"),
+        ("coop_fullscreen", "0"),
+        ("nowindowborder", "1"),
+    ] {
+        values.insert(format!("setting.{key}"), value.into());
+    }
     values.insert("setting.defaultres".into(), size.width.to_string());
     values.insert("setting.defaultresheight".into(), size.height.to_string());
+    values
+}
+
+pub fn sized_quality_preset(quality: Quality, size: VideoSize) -> BTreeMap<String, String> {
+    let mut values = quality_preset(quality);
+    values.extend(launch_geometry(size));
     values
 }
 
@@ -222,7 +226,9 @@ pub fn apply(text: &str, desired: &BTreeMap<String, String>) -> Result<String, S
     let mut added = String::new();
     for (key, value) in desired {
         if let Some(old) = map.get(key) {
-            edits.push((old.start, old.end, format!("\"{value}\"")));
+            for token in old {
+                edits.push((token.start, token.end, format!("\"{value}\"")));
+            }
         } else {
             added.push_str(&format!("\t\"{key}\"\t\"{value}\"{newline}"));
         }
@@ -256,16 +262,20 @@ pub fn restore(
             }
             return Err("游戏视频配置已变更，请保留备份并检查后重试。".into());
         };
-        if before.get(key).map(|x| &x.value) == Some(&value.value) {
+        if before.get(key).map(|x| &x[0].value) == Some(&value[0].value) {
             continue;
         }
         // These fields belong to the temporary session. The game can persist a
         // new resolution after Host resizing; ending production restores their
         // pre-session values while preserving unrelated fields.
         if let Some(old) = before.get(key) {
-            edits.push((value.start, value.end, format!("\"{}\"", old.value)));
+            for token in value {
+                edits.push((token.start, token.end, format!("\"{}\"", old[0].value)));
+            }
         } else {
-            edits.push((value.key_start, value.end, String::new()));
+            for token in value {
+                edits.push((token.key_start, token.end, String::new()));
+            }
         }
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
@@ -281,11 +291,17 @@ pub fn restore(
 /// selected, unambiguous backup rather than choosing a current duplicate.
 pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String> {
     let (before, _) = fields(backup)?;
-    let known = quality_preset(Quality::VeryHigh);
+    let known = sized_quality_preset(
+        Quality::VeryHigh,
+        VideoSize {
+            width: 1920,
+            height: 1080,
+        },
+    );
     let desired: BTreeMap<_, _> = before
         .iter()
         .filter(|(key, _)| known.contains_key(*key))
-        .map(|(key, value)| (key.clone(), value.value.clone()))
+        .map(|(key, value)| (key.clone(), value[0].value.clone()))
         .collect();
     for key in [
         "setting.defaultres",

@@ -92,7 +92,7 @@ export function productionReadiness(
       operator.runtime.telemetryFreshness === 'fresh',
       operator.runtime.telemetryFreshness === 'stale' ? '数据已中断' : '等待实时数据',
       '/settings?tab=gsi',
-      operator.matchContext.summary !== null ? '检查 CS2 与 GSI' : null,
+      operator.runtime.telemetryFreshness === 'stale' ? '检查游戏连接' : null,
     ),
     obsReadiness(obs, scenes.active),
   ];
