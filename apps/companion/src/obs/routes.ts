@@ -382,17 +382,15 @@ export function registerObsRoutes(
         }
         const parsed = z.string().uuid().safeParse(body?.preparationId);
         if (!parsed.success) return reply.code(400).send({ error: 'capture_warmup_invalid' });
-        if (!valid() || !connected())
+        const current = () => valid() && connected() && !preparationCancelled(parsed.data);
+        if (!current())
           return reply
             .code(409)
             .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
-        const result = await options.adapter.beginCaptureWarmup(
-          parsed.data,
-          () => valid() && connected(),
-        );
-        id = result.transactionId;
-        if (!valid() || !connected()) {
-          await options.adapter.releaseCaptureWarmup(id);
+        const result = await options.adapter.beginCaptureWarmup(parsed.data, current);
+        if ('transactionId' in result) id = result.transactionId;
+        if (!current()) {
+          if (id) await options.adapter.releaseCaptureWarmup(id);
           return reply
             .code(409)
             .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });

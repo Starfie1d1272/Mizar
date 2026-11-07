@@ -4,9 +4,14 @@ import {
   OBS_HEIGHT,
   OBS_WIDTH,
   obsDesiredScenes,
+  obsSceneName,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
-import { assertNoVideoOutput, ObsPreparationWriteBlocked } from './video-transaction.js';
+import {
+  assertNoVideoOutput,
+  ObsPreparationWriteBlocked,
+  ObsVideoError,
+} from './video-transaction.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 
 export interface ObsRpc {
@@ -58,7 +63,7 @@ function isCs2Window(value: unknown): value is string {
   );
 }
 
-async function cs2CaptureWindow(obs: ObsRpc, preferred?: unknown): Promise<string> {
+async function cs2CaptureWindow(obs: ObsRpc) {
   const properties = await obs.call('GetInputPropertiesListPropertyItems', {
     inputName: OBS_CAPTURE_INPUT,
     propertyName: 'window',
@@ -66,14 +71,77 @@ async function cs2CaptureWindow(obs: ObsRpc, preferred?: unknown): Promise<strin
   const windows = objects(properties.propertyItems).filter(
     (item) => item.itemEnabled !== false && isCs2Window(item.itemValue),
   );
-  const available =
-    windows.find((item) => item.itemValue === preferred) ??
-    (windows.length === 1 ? windows[0] : undefined);
-  return typeof available?.itemValue === 'string'
-    ? available.itemValue
-    : isCs2Window(preferred)
-      ? preferred
-      : CS2_WINDOW_FALLBACK;
+  return {
+    source: windows.length === 1 ? ('enumerated' as const) : ('unresolved' as const),
+    candidateCount: windows.length,
+    window: windows.length === 1 ? (windows[0]!.itemValue as string) : null,
+  };
+}
+
+/** Recheck only the managed capture target after CS2 starts, before creating a warmup item. */
+export async function prepareCaptureWindow(obs: ObsRpc): Promise<boolean> {
+  const changed = () =>
+    new ObsVideoError(
+      'capture_target_changed',
+      'OBS 游戏采集目标已变化，请停止输出后检查并修复 Mizar 场景，再重试准备。',
+    );
+  const identity = async () => {
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
+      throw changed();
+    if ((await obs.call('GetSceneList')).currentProgramSceneName !== obsSceneName('waiting'))
+      throw changed();
+    const inputs = objects((await obs.call('GetInputList')).inputs).filter(
+      (item) => item.inputName === OBS_CAPTURE_INPUT,
+    );
+    if (
+      inputs.length !== 1 ||
+      inputs[0]?.inputKind !== 'game_capture' ||
+      typeof inputs[0]?.inputUuid !== 'string'
+    )
+      throw changed();
+    return inputs[0].inputUuid;
+  };
+  const uuid = await identity();
+  const read = async () =>
+    (await obs.call('GetInputSettings', { inputUuid: uuid })).inputSettings as
+      Record<string, unknown> | undefined;
+  const before = await read();
+  if (before?.capture_mode !== 'window') throw changed();
+  const target = await cs2CaptureWindow(obs);
+  if (target.candidateCount > 1)
+    throw new ObsVideoError(
+      'capture_target_ambiguous',
+      'OBS 检测到多个 CS2 窗口，未自动选择。请关闭多余游戏窗口，再重试准备。',
+    );
+  if (target.source !== 'enumerated') return false;
+  if (before.window === target.window) return true;
+  await assertNoVideoOutput(obs);
+  const current = await read();
+  const latest = await cs2CaptureWindow(obs);
+  if (
+    current?.capture_mode !== before.capture_mode ||
+    current.window !== before.window ||
+    latest.source !== 'enumerated' ||
+    latest.window !== target.window ||
+    (await identity()) !== uuid
+  )
+    throw changed();
+  await guardedPreparationWrites(obs).call('SetInputSettings', {
+    inputUuid: uuid,
+    inputSettings: { window: target.window },
+    overlay: true,
+  });
+  const confirmed = await read();
+  const actual = await cs2CaptureWindow(obs);
+  if (
+    confirmed?.capture_mode !== 'window' ||
+    confirmed.window !== target.window ||
+    actual.source !== 'enumerated' ||
+    actual.window !== target.window ||
+    (await identity()) !== uuid
+  )
+    throw changed();
+  return true;
 }
 
 // OBS WebSocket returns collection names as strings, unlike scene/input lists.
@@ -265,14 +333,17 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
     const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
     const settings = capture.inputSettings as Record<string, unknown> | undefined;
-    const currentWindow = await cs2CaptureWindow(obs, settings?.window);
+    const currentWindow = await cs2CaptureWindow(obs);
     if (
       settings?.capture_mode !== 'window' ||
       !isCs2Window(settings.window) ||
-      (currentWindow !== CS2_WINDOW_FALLBACK && settings.window !== currentWindow) ||
+      (currentWindow.source === 'enumerated' && settings.window !== currentWindow.window) ||
       settings.priority !== 2
     )
-      findings.push({ code: 'capture_drift', message: 'Mizar 游戏采集来源未指向 CS2。' });
+      findings.push({
+        code: 'capture_drift',
+        message: 'Mizar 游戏采集目标已失效，请停止输出后修复场景。',
+      });
   }
   for (const scene of desired) {
     if (!sceneNames.includes(scene.sceneName)) {
@@ -431,13 +502,12 @@ export async function repairObsConfiguration(
       throw new Error('Mizar 浏览器来源名称冲突，未执行修复。');
   }
   if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture') {
-    const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
-    const settings = capture.inputSettings as Record<string, unknown> | undefined;
+    const target = await cs2CaptureWindow(obs);
     await obs.call('SetInputSettings', {
       inputName: OBS_CAPTURE_INPUT,
       inputSettings: {
         capture_mode: 'window',
-        window: await cs2CaptureWindow(obs, settings?.window),
+        ...(target.source === 'enumerated' ? { window: target.window } : {}),
         priority: 2,
         capture_cursor: false,
       },
@@ -464,11 +534,13 @@ export async function repairObsConfiguration(
         sceneItemEnabled: true,
       });
       inputKinds.set(OBS_CAPTURE_INPUT, 'game_capture');
-      await obs.call('SetInputSettings', {
-        inputName: OBS_CAPTURE_INPUT,
-        inputSettings: { window: await cs2CaptureWindow(obs) },
-        overlay: true,
-      });
+      const target = await cs2CaptureWindow(obs);
+      if (target.source === 'enumerated')
+        await obs.call('SetInputSettings', {
+          inputName: OBS_CAPTURE_INPUT,
+          inputSettings: { window: target.window },
+          overlay: true,
+        });
     }
     if (!inputKinds.has(scene.browserInput)) {
       await obs.call('CreateInput', {

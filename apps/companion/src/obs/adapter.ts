@@ -67,6 +67,7 @@ import {
   ensureObsConfiguration,
   alignPreparationScene,
   guardedPreparationWrites,
+  prepareCaptureWindow,
   repairObsConfiguration,
   refreshObsBrowserSources,
   switchObsScene,
@@ -2144,14 +2145,34 @@ export class ObsAdapter {
     return this.serial(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
   }
   beginCaptureWarmup(preparationId: string, valid: () => boolean) {
+    const generation = this.programGeneration;
     return this.configurationMutation(async () => {
       if (!this.captureWarmup)
         throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
-      const lease = await this.captureWarmupGuard();
-      return this.withObs(
-        (obs, endpoint) => this.captureWarmup!.begin(obs, endpoint, preparationId, valid, lease),
-        30_000,
-      );
+      const preparationLease = await this.captureWarmupGuard();
+      const recovery = this.recoveryGeneration;
+      const outputEpoch = this.outputs.preparationOutputEpoch();
+      const current = () =>
+        valid() &&
+        generation === this.programGeneration &&
+        recovery === this.recoveryGeneration &&
+        outputEpoch === this.outputs.preparationOutputEpoch() &&
+        this.outputs.captureWarmupBlockReason() === null;
+      return this.withObs(async (connection, endpoint) => {
+        if (!current())
+          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 准备请求已失效，请重试。');
+        await this.captureWarmup!.recoverBeforePreparation(connection, endpoint, preparationLease);
+        const obs = guardedObs(connection, current);
+        if (!(await prepareCaptureWindow(obs)))
+          return {
+            state: 'waiting' as const,
+            reason: 'target_unavailable' as const,
+            message: 'OBS 尚未发现可用的 CS2 窗口，请确认游戏已启动，再重试准备。',
+          };
+        // Our target write emits InputSettingsChanged. Acquire the warmup lease afterwards.
+        const lease = await this.captureWarmupGuard();
+        return this.captureWarmup!.begin(connection, endpoint, preparationId, current, lease);
+      }, 30_000);
     });
   }
   releaseCaptureWarmup(id: string): Promise<void> {
