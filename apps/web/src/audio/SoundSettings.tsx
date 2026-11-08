@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { MusicSettings } from '../music/MusicSettings';
 import { ObsAudioRouting } from '../preparation/ObsAudioRouting';
 import { ObsGameAudioPolicy } from '../preparation/ObsGameAudioPolicy';
-import { useObsPreparation, prepareObs } from '../workspace/obs-preparation';
+import { useObsPreparation } from '../workspace/obs-preparation';
 import { useObsStatus } from '../workspace/obs-client';
 import { Button, Panel, StatusBanner } from '../ui';
 import { Mixer } from './Mixer';
@@ -81,9 +81,17 @@ export function SoundSettings() {
               onClick={() => {
                 setBusy(true);
                 setMessage('');
-                void prepareObs()
-                  .then(() => setMessage('已重新处理自动配置，请核对音频检查结果。'))
-                  .catch(() => setMessage('音频自动配置未完成，请检查 OBS。'))
+                void fetch('/operator/obs/audio-setup', { method: 'POST' })
+                  .then(async (response) => {
+                    if (!response.ok) {
+                      const result = (await response.json()) as { message?: string };
+                      throw new Error(result.message ?? '音频自动配置未完成，请检查 OBS。');
+                    }
+                    setMessage('已处理默认音频来源，请在 OBS 核对设备、音轨并录制试听。');
+                  })
+                  .catch((error: unknown) =>
+                    setMessage(error instanceof Error ? error.message : '音频自动配置未完成。'),
+                  )
                   .finally(() => setBusy(false));
               }}
             >

@@ -67,18 +67,28 @@ export function ObsAudioRouting() {
       clearInterval(timer);
     };
   }, [status?.waitingIndependent, status?.transition, commentaryPreparing]);
+  async function cancelWaitBeforeChoice() {
+    if (status?.waitingIndependent) await switchMode('cancel');
+  }
   async function setMode(mode: 'autoTeamspeak' | 'disabled') {
     if (!commentary) return;
+    await cancelWaitBeforeChoice();
     const response = await fetch('/operator/obs/remote-commentary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, revision: commentary.revision }),
     });
     await refreshCommentary();
-    if (!response.ok) throw new Error('设置未确认，请核对后重试。');
+    if (!response.ok) {
+      const result = (await response.json()) as { message?: string };
+      throw new Error(result.message ?? '设置未确认，请核对后重试。');
+    }
     setApplications(null);
     setApplication('');
-    if (mode === 'autoTeamspeak') await prepareCommentary();
+    if (status?.desktop) {
+      setCommentaryPreparing(false);
+      setMessage('分离采集的选择已保存，当前仍使用桌面混音。');
+    } else if (mode === 'autoTeamspeak') await prepareCommentary();
     else setCommentaryPreparing(false);
   }
   async function listApplications() {
@@ -94,16 +104,21 @@ export function ObsAudioRouting() {
   }
   async function selectApplication() {
     if (!applications || !application) return;
+    await cancelWaitBeforeChoice();
     const response = await fetch('/operator/obs/remote-commentary/application', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ revision: applications.revision, selectionId: application }),
     });
-    if (!response.ok) throw new Error('应用列表已变化，请重新读取并选择。');
+    if (!response.ok) {
+      const result = (await response.json()) as { message?: string };
+      throw new Error(result.message ?? '应用列表已变化，请重新读取并选择。');
+    }
     setApplications(null);
     setApplication('');
     await refreshCommentary();
-    await prepareCommentary();
+    if (status?.desktop) setMessage('分离采集的应用已保存，当前仍使用桌面混音。');
+    else await prepareCommentary();
   }
   function commentaryReady(current: ObsAudioRoutingStatus) {
     return (
@@ -123,17 +138,20 @@ export function ObsAudioRouting() {
       if (commentaryReady(current)) setMessage('解说来源已绑定。');
       else {
         setCommentaryPreparing(true);
-        setMessage('');
+        setMessage('请在来源就绪后点击“再次尝试切回独立分路”。');
       }
       return;
     }
-    const configured = await fetch('/operator/obs/ensure', { method: 'POST' });
-    if (!configured.ok) throw new Error('应用选择已保存，场景配置待处理。');
+    const configured = await fetch('/operator/obs/commentary-prepare', { method: 'POST' });
+    if (!configured.ok) {
+      const result = (await configured.json()) as { message?: string };
+      throw new Error(result.message ?? '解说音频尚未准备，请检查 OBS。');
+    }
     const result = (await configured.json()) as { findings: { code: string; message: string }[] };
     const pending =
       result.findings.find((finding) => finding.code === 'commentary_pending') ??
       result.findings[0];
-    setMessage(pending?.message ?? '应用选择已保存，场景音频已准备。');
+    setMessage(pending?.message ?? '解说音频配置已准备，请让解说说话并录制试听。');
   }
   async function refresh() {
     const response = await fetch('/local/v1/obs/audio-routing', { cache: 'no-store' });
@@ -169,7 +187,10 @@ export function ObsAudioRouting() {
       const result = (await response.json()) as { error?: string; message?: string };
       if (result.error === 'audio_desktop_choice_required') setChooseDesktop(true);
       await refresh().catch(() => undefined);
-      throw new Error(result.message ?? '切换未确认，请检查 OBS。');
+      throw new Error(
+        result.message ??
+          '切换结果未确认，请立即在 OBS 核对当前音源与直播电平；如无声请手动恢复可用来源。',
+      );
     }
     const result = (await response.json()) as { monitorPending?: boolean; waiting?: boolean };
     if (cancelling) setCommentaryPreparing(false);
@@ -180,7 +201,7 @@ export function ObsAudioRouting() {
       cancelling
         ? '已取消等待。'
         : result.waiting
-          ? '等待解说应用后切回，桌面混音仍可用。'
+          ? '解说来源尚未就绪，桌面混音仍可用。准备好后请再次点击切回。'
           : result.monitorPending
             ? '已切换桌面混音；音乐仍播出，本机监听暂缓。'
             : mode === 'desktop'
@@ -212,7 +233,30 @@ export function ObsAudioRouting() {
       <h3>音频模式</h3>
       <p>
         桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制，本机监听的音乐也可能进入混音。
+        下方选择的是 OBS 来源，不是 Windows 播放设备；来源名称不能证明采集了哪个设备。
       </p>
+      <details>
+        <summary>核对播放设备（包括 Sonar Chat / Gaming）</summary>
+        <ol>
+          <li>
+            停止直播与录像后，在 TeamSpeak 的播放设置和 Windows 音量混合器中核对实际输出设备。 Sonar
+            Chat 与 Gaming 是不同设备；只采集其中一路不会自动包含另一路。
+          </li>
+          <li>
+            在 OBS 打开所选音频输出采集来源的属性，核对设备，不要仅凭来源名称或“默认”判断。
+            若游戏与解说输出到不同设备，请保留独立分路，或先在播放端明确混合到同一设备。
+          </li>
+          <li>
+            不要修改个人场景共用来源的设备。需要另一个设备时，在 OBS 创建仅供 Mizar
+            使用的音频输出采集来源，先保持场景项禁用；切换到桌面混音时可读取并选择该来源。
+            当前已是桌面混音时不能直接换来源，需先切回独立分路；不要额外启用全局桌面音频。
+          </li>
+          <li>
+            切换后让远端解说说话，并分别播放游戏和音乐，录制试听确认三者齐全且没有重复声音。
+            核对失败时保留原有可用配置，不要在直播中试切模式。
+          </li>
+        </ol>
+      </details>
       <Button disabled={busy} onClick={() => void run(refresh)}>
         读取 OBS 音频来源
       </Button>
@@ -221,11 +265,11 @@ export function ObsAudioRouting() {
           <p>
             当前模式：
             {status.transition
-              ? '正在核对切换状态'
+              ? '上次切换待核对'
               : status.waitingIndependent
                 ? status.desktop
-                  ? '桌面混音，等待解说应用后切回'
-                  : '独立分路，等待解说应用后启用'
+                  ? '桌面混音，等待解说来源（就绪后需手动切回）'
+                  : '独立分路，等待解说来源（就绪后需手动启用）'
                 : status.desktop
                   ? '桌面混音'
                   : !status.bindings.game &&
@@ -234,9 +278,17 @@ export function ObsAudioRouting() {
                     ? '未确认，请检查 OBS'
                     : '独立分路'}
           </p>
-          {chooseDesktop && (
+          {status.desktop && (
+            <p>
+              当前 OBS 桌面来源：
+              {status.candidates.find((candidate) => candidate.uuid === status.desktop?.inputUuid)
+                ?.name ?? '未找到，请检查 OBS'}
+              。更换来源需先切回独立分路；无法切回时请在 OBS 核对当前来源。
+            </p>
+          )}
+          {!status.transition && !status.desktop && !status.waitingIndependent && (
             <Select
-              label="桌面音频来源"
+              label="OBS 桌面音频来源（不是播放设备）"
               value={desktopSelection}
               disabled={busy}
               onChange={(event) => setDesktopSelection(event.target.value)}
@@ -251,31 +303,38 @@ export function ObsAudioRouting() {
                 ))}
             </Select>
           )}{' '}
-          <Button
-            disabled={
-              busy ||
-              Boolean(status.desktop && !status.transition && !status.waitingIndependent) ||
-              (chooseDesktop && !desktopSelection && !status.waitingIndependent)
-            }
-            onClick={() =>
-              void run(() => switchMode(status.waitingIndependent ? 'cancel' : 'desktop'))
-            }
-          >
-            {status.waitingIndependent ? '取消等待' : '切换桌面混音'}
-          </Button>{' '}
-          <Button
-            disabled={
-              busy || Boolean(status.waitingIndependent) || (!status.desktop && !status.transition)
-            }
-            onClick={() => void run(() => switchMode('independent'))}
-          >
-            切回独立分路
-          </Button>
+          {status.transition ? (
+            <p role="alert">
+              上次切换结果未确认。请立即在 OBS
+              核对直播电平和当前音源；如无声，先手动恢复可用来源，勿反复切换。
+            </p>
+          ) : (
+            <>
+              <Button
+                disabled={
+                  busy ||
+                  Boolean(status.desktop && !status.waitingIndependent) ||
+                  (chooseDesktop && !desktopSelection && !status.waitingIndependent)
+                }
+                onClick={() =>
+                  void run(() => switchMode(status.waitingIndependent ? 'cancel' : 'desktop'))
+                }
+              >
+                {status.waitingIndependent ? '取消等待' : '切换桌面混音'}
+              </Button>{' '}
+              <Button
+                disabled={busy || (!status.desktop && !status.waitingIndependent)}
+                onClick={() => void run(() => switchMode('independent'))}
+              >
+                {status.waitingIndependent ? '再次尝试切回独立分路' : '切回独立分路'}
+              </Button>
+            </>
+          )}
         </>
       )}
       <h3>远端解说音频</h3>
       <p className="obs-audio-commentary-current">
-        当前：
+        分离采集选择：
         {commentary
           ? (
               {
@@ -292,7 +351,7 @@ export function ObsAudioRouting() {
       <Button
         disabled={
           busy ||
-          Boolean(status?.desktop || status?.transition) ||
+          Boolean(status?.transition || (status?.desktop && status.bindings.remoteCommentary)) ||
           !commentary ||
           commentary.preference.mode === 'autoTeamspeak'
         }
@@ -303,16 +362,20 @@ export function ObsAudioRouting() {
       <Button
         disabled={
           busy ||
-          Boolean(status?.desktop || status?.transition) ||
+          !status?.desktop ||
+          Boolean(status.transition) ||
           !commentary ||
           commentary.preference.mode === 'disabled'
         }
         onClick={() => void run(() => setMode('disabled'))}
       >
-        停用远端解说
+        切回时停用分离解说
       </Button>{' '}
       <Button
-        disabled={busy || Boolean(status?.desktop || status?.transition)}
+        disabled={
+          busy ||
+          Boolean(status?.transition || (status?.desktop && status.bindings.remoteCommentary))
+        }
         onClick={() => void run(listApplications)}
       >
         选择其他应用
@@ -347,7 +410,21 @@ export function ObsAudioRouting() {
           {applications.candidates.length === 0 && <p>未检测到应用窗口，请启动应用后重新读取。</p>}
         </div>
       )}
-      <p>音频分路完成前，新来源保持禁用；已有桌面声音保留。</p>
+      {!status?.desktop &&
+        !status?.transition &&
+        !status?.waitingIndependent &&
+        commentary?.preference.mode !== 'disabled' && (
+          <Button disabled={busy} onClick={() => void run(prepareCommentary)}>
+            重新准备解说音频
+          </Button>
+        )}
+      <p>
+        桌面混音时可以停用分离解说；尚未绑定解说来源时也可预先选择应用。
+        已有绑定的应用不能在桌面模式下更换；请先恢复原应用并切回独立分路，再更换。选择停用后切回分离采集将不包含远端解说。
+        停用分离解说不会移除桌面混音中的语音；如需停止它，请在语音应用中静音。
+        当前是独立分路时，可在上方混音器静音远端解说。 完成切换后请让其他解说说话并录制试听，同时在
+        OBS 核对直播音轨和实际播放设备。 来源已绑定不代表语音已被采集。
+      </p>
       {commentaryPreparing && !message && (
         <p role="status">
           {status?.waitingIndependent ? '等待解说应用接入。' : '正在准备解说音频。'}

@@ -138,6 +138,21 @@ export function registerObsRoutes(
         .send({ error: 'audio_policy_unavailable', message: '控制权未恢复，请稍后核对。' });
     }
   });
+  app.post('/operator/obs/commentary-prepare', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return { ok: true, findings: await options.adapter.prepareCommentaryAudio() };
+    } catch (error) {
+      return reply.code(409).send({
+        error: 'commentary_prepare_unavailable',
+        message:
+          error instanceof Error && error.message === 'audio_video_requires_full_preparation'
+            ? '音频绑定包含画面来源或已失效，请在 OBS 核对，或停止输出后使用完整场景准备。'
+            : '解说音频尚未准备，请停止直播和录制后检查 OBS 来源。',
+      });
+    }
+  });
   app.get('/local/v1/obs/remote-commentary', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
@@ -156,8 +171,15 @@ export function registerObsRoutes(
     if (!result.success) return reply.code(400).send({ error: 'commentary_invalid' });
     try {
       return await options.adapter.setCommentaryMode(result.data.mode, result.data.revision);
-    } catch {
-      return reply.code(409).send({ error: 'commentary_changed' });
+    } catch (error) {
+      return reply.code(409).send({
+        error: 'commentary_changed',
+        message:
+          error instanceof Error &&
+          error.message === 'commentary_binding_change_requires_independent'
+            ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
+            : '设置未确认，请核对后重试。',
+      });
     }
   });
   app.post(
@@ -189,8 +211,15 @@ export function registerObsRoutes(
           parsed.data.selectionId,
           parsed.data.revision,
         );
-      } catch {
-        return reply.code(409).send({ error: 'commentary_changed' });
+      } catch (error) {
+        return reply.code(409).send({
+          error: 'commentary_changed',
+          message:
+            error instanceof Error &&
+            error.message === 'commentary_binding_change_requires_independent'
+              ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
+              : '设置未确认，请重新读取应用并核对。',
+        });
       }
     },
   );
@@ -249,7 +278,7 @@ export function registerObsRoutes(
                   : error instanceof Error &&
                       error.message.startsWith('audio_global_path_unresolved:')
                     ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
-                    : '切换未确认，请检查 OBS 音频后重试。',
+                    : '切换结果未确认，请立即在 OBS 核对直播电平和当前音源；如无声，请手动恢复可用来源，勿反复切换。',
       });
     }
   });
