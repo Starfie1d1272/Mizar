@@ -91,7 +91,13 @@ export function MatchConnectionDialog() {
         const mode = await desktopInvoke<{ useMulnx: boolean | null }>('observer_command', {
           action: 'connection-mode',
         });
-        if (mode.useMulnx === null || (mode.useMulnx && view?.gameAutomation?.autoConnect)) return;
+        if (
+          mode.useMulnx === null ||
+          (mode.useMulnx &&
+            view?.gameAutomation?.autoConnect &&
+            !['not-sent', 'unknown', 'unavailable'].includes(runtime?.gameCommandState ?? ''))
+        )
+          return;
       }
       const expectedRevision = requireConnectionRevision(view?.revision);
       const value = (await command('/operator/observer-assist', {
@@ -117,6 +123,7 @@ export function MatchConnectionDialog() {
     view?.revision,
     view?.gameAutomation?.autoConnect,
     read.updatedAt,
+    runtime?.gameCommandState,
   ]);
   const submit = async () => {
     if (operation.current || !intent) return;
@@ -302,6 +309,15 @@ export function MatchConnectionDialog() {
             此连接已被新的操作替换。填写新连接前请核对当前目标。
           </StatusBanner>
         ) : null}
+        {saved && !replaced && runtime?.gameCommandState && runtime.gameCommandState !== 'queued' ? (
+          <StatusBanner tone="warning">
+            {runtime.gameCommandState === 'unknown'
+              ? '游戏连接命令可能已送达，请先在 CS2 内核对。重新提交可能中断当前观战。'
+              : runtime.gameCommandState === 'not-sent'
+                ? '游戏连接命令未送达。可重新填写连接后再试，或在游戏内手动连接。'
+                : '无法安全保存游戏连接的提交状态，未自动发送。可在游戏内手动连接。'}
+          </StatusBanner>
+        ) : null}
         {manualCommand ? (
           <section>
             <p>复制并返回游戏，在控制台粘贴并按回车。若控制台已关闭，按 ~ 打开：</p>
@@ -402,7 +418,11 @@ export function MatchConnectionDialog() {
             onClick={() => {
               setRegisteredAt(null);
               setNextMap(false);
-              setRegisterCurrent(null);
+              setRegisterCurrent(
+                runtime?.gameCommandState === 'not-sent' || runtime?.gameCommandState === 'unknown'
+                  ? false
+                  : null,
+              );
               setInput('');
               setRevision(undefined);
               setEarlyEndpoint('');
@@ -412,7 +432,11 @@ export function MatchConnectionDialog() {
               setIntent(crypto.randomUUID());
             }}
           >
-            填写下一次连接
+            {runtime?.gameCommandState === 'not-sent'
+              ? '重新填写并重试游戏连接'
+              : runtime?.gameCommandState === 'unknown'
+                ? '核对后重新填写连接'
+                : '填写下一次连接'}
           </Button>
         ) : null}
       </main>

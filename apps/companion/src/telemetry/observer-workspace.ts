@@ -15,6 +15,8 @@ import {
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 import { MatchNameSync, matchNames } from './match-names.js';
+import { reserveObserverConnect } from './observer-connect-intent.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import type { MatchContextBinding } from '../match-context/lkg-store.js';
 import observerComponent from './observer-component.json' with { type: 'json' };
 
@@ -443,6 +445,9 @@ export function registerWorkspaceObserver(
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
   let observerKey = '';
   let connectedGame = '';
+  let gameCommand:
+    | { game: string; intent: string; state: 'not-sent' | 'unknown' | 'queued' | 'unavailable' }
+    | undefined;
   let seamlessGame = '';
   let hiddenGame = '';
   let appliedPolicy = '';
@@ -506,12 +511,7 @@ export function registerWorkspaceObserver(
         connection?.earlyEndpoint,
         connection?.password,
       ]),
-      connect: JSON.stringify([
-        game,
-        connection?.programEndpoint,
-        connection?.password,
-        settings?.mapConnection?.id,
-      ]),
+      connect: JSON.stringify([value.game, settings?.mapConnection?.id]),
       hud: game,
     };
   };
@@ -598,6 +598,12 @@ export function registerWorkspaceObserver(
       ...observer.view(),
       gameReady: Boolean(host && leased()),
       programCommandQueued: Boolean(host && connectedGame === keys(host).connect),
+      gameCommandState:
+        gameCommand &&
+        gameCommand.intent === settings?.mapConnection?.id &&
+        gameCommand.game === host?.game
+          ? gameCommand.state
+          : null,
       pending: pending > 0,
       recovering: lease?.recovering ?? false,
       error: lastError,
@@ -792,16 +798,98 @@ export function registerWorkspaceObserver(
             throw new Error('observer_hud_snapshot_required');
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
-          if (connect && connection) {
+          if (connect && connection && settings.mapConnection) {
             operation.stage = 'game';
-            await sendObserverGameCommand(
-              observerConnectCommand(
-                connection,
-                Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
-              ),
-            );
-            connectedGame = key.connect;
-            if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
+            const intent = settings.mapConnection.id;
+            const safeError = (error: unknown) => {
+              try {
+                return diagnosticValue(error, '', new Set(), [
+                  connection.earlyEndpoint,
+                  connection.programEndpoint,
+                  connection.earlyEndpoint.split(':')[0] ?? '',
+                  connection.programEndpoint.split(':')[0] ?? '',
+                  connection.password,
+                  observerConnectCommand(connection, false),
+                ]);
+              } catch {
+                return { message: 'diagnostic_unavailable' };
+              }
+            };
+            const logConnectError = (stage: string, code: string, error: unknown) => {
+              try {
+                app.log.warn({ stage, code, error: safeError(error) }, '游戏连接提交未确认');
+              } catch {
+                // Diagnostic failure must not change the command outcome.
+              }
+            };
+            if (gameCommand?.intent !== intent || gameCommand.game !== value.game) {
+              let reservation: 'reserved' | 'previous' | undefined;
+              try {
+                reservation = await reserveObserverConnect(
+                  settings.connectIntentDirectory(),
+                  value.game,
+                  intent,
+                );
+              } catch (error) {
+                const errorCode = (error as NodeJS.ErrnoException)?.code;
+                const code =
+                  error instanceof Error &&
+                  [
+                    'observer_connect_reservation_unavailable',
+                    'observer_connect_reservation_full',
+                  ].includes(error.message)
+                    ? error.message
+                    : ['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ENOSPC', 'EROFS', 'EIO'].includes(
+                          errorCode ?? '',
+                        )
+                      ? errorCode!
+                      : 'observer_connect_reservation_unclassified';
+                gameCommand = { game: value.game, intent, state: 'unavailable' };
+                logConnectError('observer_game_connect_reservation', code, error);
+              }
+              if (reservation) {
+                gameCommand = {
+                  game: value.game,
+                  intent,
+                  state: reservation === 'reserved' ? 'not-sent' : 'unknown',
+                };
+                if (reservation === 'reserved' && current()) {
+                  // Once submission starts, a lost response cannot justify replay.
+                  gameCommand.state = 'unknown';
+                  try {
+                    await sendObserverGameCommand(
+                      observerConnectCommand(
+                        connection,
+                        Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
+                      ),
+                      current,
+                    );
+                    gameCommand.state = 'queued';
+                    connectedGame = key.connect;
+                    if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
+                  } catch (error) {
+                    const code =
+                      error instanceof Error &&
+                      [
+                        'observer_game_control_connect',
+                        'observer_game_control_cancelled',
+                        'observer_game_control_timeout',
+                        'observer_game_control_unavailable',
+                        'observer_game_control_closed',
+                        'observer_game_command_rejected',
+                      ].includes(error.message)
+                        ? error.message
+                        : 'observer_game_control_unclassified';
+                    if (
+                      code === 'observer_game_control_connect' ||
+                      code === 'observer_game_control_cancelled'
+                    )
+                      gameCommand.state = 'not-sent';
+                    logConnectError('observer_game_connect', code, error);
+                  }
+                }
+              }
+            }
           } else if (hide) {
             operation.stage = 'hud';
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
