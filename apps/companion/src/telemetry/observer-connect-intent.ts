@@ -25,8 +25,7 @@ export async function reserveObserverConnect(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   // Never evict a marker without proving that its game can no longer return.
-  if ((await readdir(directory)).length >= 1024)
-    throw new Error('observer_connect_reservation_full');
+  if ((await readdir(directory)).length >= 1024) throw new Error('observer_connect_reservation_full');
   let file;
   try {
     file = await open(join(directory, key), 'wx', 0o600);

@@ -309,7 +309,10 @@ export function MatchConnectionDialog() {
             此连接已被新的操作替换。填写新连接前请核对当前目标。
           </StatusBanner>
         ) : null}
-        {saved && !replaced && runtime?.gameCommandState && runtime.gameCommandState !== 'queued' ? (
+        {saved &&
+        !replaced &&
+        runtime?.gameCommandState &&
+        runtime.gameCommandState !== 'queued' ? (
           <StatusBanner tone="warning">
             {runtime.gameCommandState === 'unknown'
               ? '游戏连接命令可能已送达，请先在 CS2 内核对。重新提交可能中断当前观战。'
