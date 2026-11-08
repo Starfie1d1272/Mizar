@@ -128,7 +128,9 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
             } else {
                 "其他字段"
             };
-            return Err(format!("cs2_video.txt / {name}：冲突重复，未修改配置；请选择备份恢复，或保持原游戏设置继续。"));
+            return Err(format!(
+                "cs2_video.txt / {name}：冲突重复，未修改配置；可使用当前设置继续。"
+            ));
         }
         // Retain every token so all transaction paths edit the logical field.
         entries.push(value);

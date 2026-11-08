@@ -607,7 +607,6 @@ pub struct ManagedCs2 {
     log: crate::startup_log::DesktopLog,
     message: Option<String>,
     launch_observation: Option<Value>,
-    can_preserve: bool,
     selected_backup: Option<Value>,
     camera: Arc<Mutex<Option<CameraLease>>>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
@@ -719,7 +718,6 @@ impl ManagedCs2 {
             log,
             message: None,
             launch_observation: None,
-            can_preserve: false,
             selected_backup: None,
             camera: Arc::new(Mutex::new(None)),
             mulnx_launcher: None,
@@ -1030,6 +1028,22 @@ impl ManagedCs2 {
         // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
         Ok(json!({"processes": processes, "url": "http://127.0.0.1:3000/"}))
     }
+    /// Request capability only; every launch repeats discovery, these guards and backup.
+    /// Never run PowerShell or create recovery work while polling status.
+    fn check_preserved_start(&self) -> Result<(), String> {
+        self.store.check_start_recovery()?;
+        if !fs::symlink_metadata(self.log.state_root.join("data/mulnx-launch/pending.json"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            || self.mulnx_launcher_running()?
+        {
+            return Err("请先确认并结束原启动请求，再使用当前设置启动。".into());
+        }
+        if any_cs2_running(&self.log)? {
+            return Err("请先正常退出 CS2，再使用当前设置启动。".into());
+        }
+        Ok(())
+    }
+
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;
         let owned_running = pending
@@ -1075,7 +1089,7 @@ impl ManagedCs2 {
             false
         };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": pending.is_none() && self.check_preserved_start().is_ok(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1767,8 +1781,8 @@ impl ManagedCs2 {
         if preparation_id.is_some_and(|id| !valid_preparation_id(id)) {
             return Err("启动事务标识无效。".into());
         }
-        if preserve && !self.can_preserve {
-            return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
+        if preserve {
+            self.check_preserved_start()?;
         }
         if let Some(value) = self.store.load()? {
             if owned_process(&value, &self.log)?.is_some() {
@@ -1804,9 +1818,12 @@ impl ManagedCs2 {
             }
         };
         let mut journal = if preserve {
+            // The status action is only an invitation. Rediscovery above and these
+            // current transaction/process checks, not an earlier failure, authorize it.
+            self.check_preserved_start()?;
+            steam.validate(&self.log)?;
             self.store.prepare_preserved(&video, &executable)?
         } else {
-            self.can_preserve = false;
             self.store.backup_originals(&video)?;
             match self.store.prepare_backed_up(
                 &video,
@@ -1815,18 +1832,21 @@ impl ManagedCs2 {
             ) {
                 Ok(value) => value,
                 Err(error) => {
-                    self.can_preserve = self.store.load()?.is_none();
                     self.message = Some(error.clone());
                     self.log.event(
                         "cs2_launch",
                         "failure",
                         Some(&format!("stage=prepare; {error}")),
                     );
-                    return Err(error);
+                    return Err(if self.check_preserved_start().is_ok() {
+                        "游戏设置未能自动调整。可展开“使用当前游戏设置”继续，本机 HUD 仍可使用。"
+                            .into()
+                    } else {
+                        "游戏设置准备未完成，请先恢复本次设置后重试。".into()
+                    });
                 }
             }
         };
-        self.can_preserve = false;
         if prepare_only {
             journal["mulnxLaunch"] = json!(true);
         }
@@ -2286,7 +2306,6 @@ impl ManagedCs2 {
         self.store
             .import_selected_backup(&video, &executable, backup, original, frame)?;
         self.selected_backup = None;
-        self.can_preserve = false;
         self.message = Some("所选设置已恢复，恢复前的原件已保存。".into());
         Ok(())
     }

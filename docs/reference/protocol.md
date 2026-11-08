@@ -225,7 +225,7 @@ LAN 公共查看仅注册 program、radar 和节目时间轴的 program-cue。HT
 
 应用内更新的安装资格不要求 OBS 已安装或启动。OBS 未连接时仅以成功的 Windows 进程查询确认不存在 obs64/obs32 进程来放行；运行中的未知 OBS 状态、推流或录制继续阻止安装，查询失败保留脱敏原因。页面资格与 Host 安装计划分别核对，不复用页面较早的无进程结果。
 
-桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
+桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。其中 `canPreserve` 仅表示可请求使用当前设置启动，不表示已备份或已完成启动检查，也不参与恢复成功判定；Host 在动作提交时重新验证身份、未完成事务和原始备份。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
 
 桌面私有命令 `select_cs2_installation` 仅接受 `executable` 布尔选项，由 Host 打开原生选择框并验证、保存安装根目录；取消返回 false，不安装 GSI。`open_cs2_config_directory` 不接受路径，重新解析当前配置位置后打开文件夹。`gsi_status` 在既有布尔状态外返回 `readFailed`、有限问题列表、候选数、冲突文件与最近操作阶段。路径仅供本机设置页显示；支持包摘要保留问题码与阶段，完整日志保留实际技术路径、参数及相关配置，凭据值被替换。
 

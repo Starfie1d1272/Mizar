@@ -12,6 +12,7 @@ export interface Cs2ConfigStatus {
   demoCameraRequestId?: string | null;
   observerHudPending?: boolean;
   spectatorWarning?: string | null;
+  /** May request an unchanged-settings launch; Host rechecks identity and backups on submission. */
   canPreserve?: boolean;
   preserveSettings?: boolean;
   pending: boolean;

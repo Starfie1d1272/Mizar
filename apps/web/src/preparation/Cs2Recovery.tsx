@@ -23,7 +23,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
   async function run(
     action: (task: ControlTask) => Promise<unknown>,
     success = '恢复检查已完成。',
-    expected: 'restored' | 'workspace' = 'restored',
+    expected: 'restored' | 'spectator' | 'cleanup' | 'workspace' = 'restored',
   ) {
     if (busy || phase) return;
     setBusy(true);
@@ -38,26 +38,27 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
       const outcome = await action(task);
       acknowledged = true;
       const after = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
-      const workspaceExit = await desktopInvoke<WorkspaceExitStatus>(
-        'workspace_exit_status',
-        undefined,
-        task,
-      );
+      const workspaceExit =
+        expected === 'restored'
+          ? await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status', undefined, task)
+          : null;
+      const idle = !after.busy && !after.running && !after.pending && after.phase !== 'uncertain';
       const restored =
-        !after.busy &&
-        !after.running &&
-        !after.pending &&
+        idle &&
         !after.spectatorRecoveryPending &&
         !after.demoCleanupPending &&
-        !after.canPreserve &&
-        after.phase !== 'uncertain' &&
+        workspaceExit !== null &&
         !workspaceExit.busy &&
         !workspaceExit.message &&
         !workspaceExit.windowMessage;
       const confirmed =
         expected === 'restored'
           ? restored
-          : outcome === 'confirmed' && after.running === true && !after.busy;
+          : expected === 'spectator'
+            ? idle && !after.spectatorRecoveryPending
+            : expected === 'cleanup'
+              ? idle && !after.demoCleanupPending
+              : outcome === 'confirmed' && after.running === true && !after.busy;
       task.finish(
         confirmed
           ? 'confirmed'
@@ -168,6 +169,25 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         {feedback ? <p>{feedback}</p> : null}
       </StatusBanner>
     );
+  const preserveAction =
+    status?.canPreserve && production ? (
+      <details>
+        <summary>使用当前游戏设置</summary>
+        <p>不自动调整画质、帧率和游戏窗口布局。本机 HUD 仍可使用。</p>
+        <Button
+          disabled={busy || Boolean(phase)}
+          onClick={() =>
+            void run(
+              (task) => productionAction('enter', production, true, task),
+              '已使用当前游戏设置打开工作台。',
+              'workspace',
+            )
+          }
+        >
+          使用当前设置打开工作台
+        </Button>
+      </details>
+    ) : null;
   if (
     !status?.pending &&
     !status?.spectatorRecoveryPending &&
@@ -177,7 +197,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
     !status?.message &&
     !exit?.windowMessage
   )
-    return null;
+    return preserveAction;
   const uncertain = status?.phase === 'uncertain';
   const endsProduction = Boolean(production && production.mode !== 'preparation');
   return (
@@ -186,12 +206,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
         exit?.windowMessage ||
         status?.spectatorRecoveryPending ||
         status?.demoCleanupPending ||
-        status?.canPreserve ||
         (status?.pending &&
           !uncertain &&
           (!status.running || (Boolean(status.message) && !status.preserveSettings)))
           ? 'warning'
-          : phase || uncertain || status?.running
+          : phase || uncertain || status?.running || status?.message
             ? 'info'
             : 'success'
       }
@@ -217,24 +236,17 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                   : status?.demoCleanupPending
                     ? '原设置已恢复，试播文件待清理'
                     : status?.canPreserve
-                      ? '未应用游戏设置，原始配置已备份'
+                      ? '游戏启动设置'
                       : '原设置已恢复'}
         </strong>
         {exit?.windowMessage ? <p role="alert">{exit.windowMessage}</p> : null}
-        {status?.canPreserve ? (
-          <p>
-            {status.message} 保持原设置继续时，不应用自动画质、帧率和游戏窗口布局，本机 HUD
-            覆盖停用。
-          </p>
-        ) : null}
         {status?.pending ? (
           <p>
-            {status.message ||
-              (uncertain
-                ? 'Steam 启动结果待确认，请先检查游戏和 Steam 启动请求。'
-                : status.preserveSettings
-                  ? '已保持原游戏设置；结束制作会关闭本次游戏，保留游戏期间的新设置及原始备份。'
-                  : '结束制作会关闭本次游戏并恢复配置；异常退出后可在这里重试。')}
+            {uncertain
+              ? 'Steam 启动结果待确认，请先检查游戏和 Steam 启动请求。'
+              : status.preserveSettings
+                ? '已保持原游戏设置；结束制作会关闭本次游戏，保留游戏期间的新设置及原始备份。'
+                : '结束制作会关闭本次游戏并恢复配置；异常退出后可在这里重试。'}
           </p>
         ) : null}
         {uncertain ? (
@@ -245,13 +257,10 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
           />
         ) : null}
         {status?.spectatorRecoveryPending ? (
-          <p>{status.message || '观战原值备份仍保留，帧率和画质恢复不受影响。'}</p>
+          <p>{status.spectatorWarning || '只恢复 Mizar 的观战设置，不改动原游戏画面设置。'}</p>
         ) : null}
         {status?.demoCleanupPending ? (
-          <p>
-            {status.message ||
-              '原画质和帧率已恢复；改动的试播文件及清理记录仍保留，可重试或打开备份目录检查。'}
-          </p>
+          <p>原画质和帧率已恢复；试播文件仍待清理，可重试或打开备份目录检查。</p>
         ) : null}
         {status?.pending ? (
           <p>
@@ -268,21 +277,14 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                   : '恢复配置备份只恢复设置，不会启动或关闭游戏。'}
           </p>
         ) : null}
+        {status?.message ? (
+          <details>
+            <summary>上次操作详情</summary>
+            <p>{status.message}</p>
+          </details>
+        ) : null}
+        {preserveAction}
         <div className="preparation-actions">
-          {status?.canPreserve && production ? (
-            <Button
-              disabled={busy || Boolean(phase)}
-              onClick={() =>
-                void run(
-                  (task) => productionAction('enter', production, true, task),
-                  '已保持原游戏设置打开工作台。',
-                  'workspace',
-                )
-              }
-            >
-              保持原游戏设置继续
-            </Button>
-          ) : null}
           {status?.mulnxLaunchResumable && production ? (
             <Button
               disabled={busy || Boolean(phase)}
@@ -316,8 +318,11 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
             <Button
               disabled={busy || Boolean(phase) || Boolean(status.running)}
               onClick={() =>
-                void run((task) =>
-                  desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }, task),
+                void run(
+                  (task) =>
+                    desktopInvoke('restore_cs2_backup', { confirmSteamCancelled: false }, task),
+                  '试播文件已清理。',
+                  'cleanup',
                 )
               }
             >
@@ -330,12 +335,15 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
                 busy || Boolean(phase) || Boolean(status.running) || (uncertain && !cancelled)
               }
               onClick={() =>
-                void run((task) =>
-                  desktopInvoke(
-                    'restore_cs2_backup',
-                    { confirmSteamCancelled: uncertain && cancelled },
-                    task,
-                  ),
+                void run(
+                  (task) =>
+                    desktopInvoke(
+                      'restore_cs2_backup',
+                      { confirmSteamCancelled: uncertain && cancelled },
+                      task,
+                    ),
+                  '观战原值已恢复。',
+                  'spectator',
                 )
               }
             >
