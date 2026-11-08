@@ -1,3 +1,4 @@
+import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
 import type { IncidentParticipant } from './retention.js';
 import { SupportExports } from './export-job.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
@@ -431,6 +432,72 @@ export function registerSupportRoutes(
           additionalProperties: false,
           properties: {
             hostPinId: { type: 'string', maxLength: 36 },
+            hostPinCoverage: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['status', 'phase', 'observedAt', 'budgetMs'],
+              properties: {
+                status: { type: 'string', enum: ['committed', 'failed', 'timeout'] },
+                phase: { type: 'string', enum: ['admission', 'prepare', 'commit'] },
+                observedAt: { type: 'string', format: 'date-time' },
+                budgetMs: { type: 'integer', minimum: 0, maximum: 8000 },
+              },
+            },
+            documentHandoff: {
+              type: 'object',
+              additionalProperties: false,
+              required: [
+                'documentId',
+                'throughSequence',
+                'observedAt',
+                'transport',
+                'stopReason',
+                'pendingRecords',
+                'firstPendingSequence',
+                'lastPendingSequence',
+                'unconfirmedRecordsObserved',
+                'deliveryFailureAttemptsObserved',
+                'budgetMs',
+                'attempts',
+              ],
+              properties: {
+                documentId: { type: ['string', 'null'], format: 'uuid' },
+                observedAt: { type: 'string', format: 'date-time' },
+                transport: { type: 'string', enum: ['host', 'http'] },
+                stopReason: {
+                  type: 'string',
+                  enum: ['drained', 'deadline', 'attempt-limit', 'no-progress'],
+                },
+                ...Object.fromEntries(
+                  [
+                    'throughSequence',
+                    'pendingRecords',
+                    'unconfirmedRecordsObserved',
+                    'deliveryFailureAttemptsObserved',
+                  ].map((key) => [
+                    key,
+                    {
+                      type: 'integer',
+                      minimum: 0,
+                      maximum: Number.MAX_SAFE_INTEGER,
+                    },
+                  ]),
+                ),
+                firstPendingSequence: {
+                  type: ['integer', 'null'],
+                  minimum: 1,
+                  maximum: Number.MAX_SAFE_INTEGER,
+                },
+                lastPendingSequence: {
+                  type: ['integer', 'null'],
+                  minimum: 1,
+                  maximum: Number.MAX_SAFE_INTEGER,
+                },
+                budgetMs: { type: 'integer', minimum: 0, maximum: 3000 },
+                attempts: { type: 'integer', minimum: 0, maximum: 16 },
+              },
+            },
+
             from: { type: 'string', format: 'date-time' },
             to: { type: 'string', format: 'date-time' },
             desktop: desktopSchema,
@@ -480,10 +547,24 @@ export function registerSupportRoutes(
               },
             }),
             body.hostPinId as string | undefined,
+            body.documentHandoff as DocumentHandoffCoverage | undefined,
+            body.hostPinCoverage as HostPinCoverage | undefined,
           ),
         );
       } catch (error) {
-        return reply.code(409).send({ error: String(error) });
+        // An existing/duplicate job with this ID may still be using its pin.
+        // Only these pre-admission failures can supply a cleanup acknowledgement.
+        const rejectedHostPinId =
+          error instanceof Error &&
+          ['export_busy', 'export_cache_job_budget'].includes(error.message) &&
+          typeof body.hostPinId === 'string' &&
+          exports.canReleaseRejectedHostPin(body.hostPinId)
+            ? body.hostPinId
+            : undefined;
+        return reply.code(409).send({
+          error: String(error),
+          ...(rejectedHostPinId ? { rejectedHostPinId } : {}),
+        });
       }
     },
   );

@@ -87,3 +87,27 @@ export function isDocumentDiagnosticEvent(value: unknown): value is DiagnosticEv
     value.coverage.occurrences > 0
   );
 }
+
+/** Requesting document's bounded handoff report, not a cross-document persistence proof. */
+export interface DocumentHandoffCoverage {
+  documentId: string | null;
+  throughSequence: number;
+  observedAt: string;
+  transport: 'host' | 'http';
+  stopReason: 'drained' | 'deadline' | 'attempt-limit' | 'no-progress';
+  pendingRecords: number;
+  firstPendingSequence: number | null;
+  lastPendingSequence: number | null;
+  unconfirmedRecordsObserved: number;
+  deliveryFailureAttemptsObserved: number;
+  budgetMs: number;
+  attempts: number;
+}
+
+/** Client-observed pin outcome; only the producer's durable receipt proves the range. */
+export interface HostPinCoverage {
+  status: 'committed' | 'failed' | 'timeout';
+  phase: 'admission' | 'prepare' | 'commit';
+  observedAt: string;
+  budgetMs: number;
+}

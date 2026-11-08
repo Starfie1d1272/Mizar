@@ -1,3 +1,4 @@
+import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
 import { readHostPin, type IncidentParticipant, type PinReceipt } from './retention.js';
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants } from 'node:fs';
@@ -42,10 +43,16 @@ export class SupportExports {
     const job = this.jobs.get(id);
     return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now()) ? job : null;
   }
+  /** Only after a request was explicitly rejected; never authorizes retrying the same ID. */
+  canReleaseRejectedHostPin(id: string) {
+    return idPattern.test(id) && this.active?.id !== id && !this.jobs.has(id);
+  }
   async begin(
     range: { from?: string; to?: string },
     snapshot: unknown,
     hostPinId?: string,
+    documentHandoff?: DocumentHandoffCoverage,
+    hostPinCoverage?: HostPinCoverage,
   ): Promise<ExportJob> {
     if (this.active) throw new Error('export_busy');
     for (const [id, cached] of this.jobs)
@@ -61,7 +68,15 @@ export class SupportExports {
     active.task = (async () => {
       const diskBudgetBytes = await this.prepareCache();
       this.assertActive(job);
-      await this.build(job, range, snapshot, diskBudgetBytes, hostPinId);
+      await this.build(
+        job,
+        range,
+        snapshot,
+        diskBudgetBytes,
+        hostPinId,
+        documentHandoff,
+        hostPinCoverage,
+      );
     })()
       .catch(async (error: unknown) => {
         if (job.phase !== 'cancelled') job.phase = 'failed';
@@ -135,6 +150,8 @@ export class SupportExports {
     snapshot: unknown,
     diskBudgetBytes: number,
     hostPinId?: string,
+    documentHandoff?: DocumentHandoffCoverage,
+    hostPinCoverage?: HostPinCoverage,
   ) {
     const collectionStarted = performance.now();
     const handles: FileHandle[] = [];
@@ -163,6 +180,21 @@ export class SupportExports {
         reason: String(error),
         cause: diagnosticValue(error),
         scope: 'source unavailable; retained original and unknown range',
+      });
+    if (!documentHandoff)
+      gap('document', 'handoff', new Error('document_handoff_coverage_unreported'));
+    else if (
+      documentHandoff.pendingRecords > 0 ||
+      documentHandoff.unconfirmedRecordsObserved > 0 ||
+      documentHandoff.stopReason !== 'drained'
+    )
+      gaps.push({
+        source: 'document',
+        phase: 'handoff',
+        reason: 'document_handoff_unconfirmed',
+        cause: documentHandoff,
+        scope:
+          'requesting document only; unconfirmed at reported cutoff, not proof of omission from pinned files; lifetime loss may fall outside selected time range',
       });
     const output = join(this.directory, job.exportId);
     await mkdir(output, { mode: 0o700 });
@@ -239,7 +271,15 @@ export class SupportExports {
           gap(participant.producerId, phase, error);
         }
       }
-      if (hostPinId) {
+      if (hostPinCoverage && (hostPinCoverage.status !== 'committed' || !hostPinId))
+        gaps.push({
+          source: 'host',
+          phase: 'pin',
+          reason: 'host_pin_unconfirmed',
+          cause: hostPinCoverage,
+          scope: 'client-reported outcome; abandoned or unavailable pin is not used',
+        });
+      if (hostPinId && (!hostPinCoverage || hostPinCoverage.status === 'committed')) {
         try {
           hostPin = await readHostPin(this.logs, hostPinId, 'export');
           if (hostPin.status !== 'committed') throw new Error('host_pin_uncommitted');
@@ -323,6 +363,11 @@ export class SupportExports {
         asOf,
         atomic: false,
         producerPins: receipts,
+        documentHandoff: {
+          clientReported: true,
+          coverage: documentHandoff ?? null,
+        },
+        hostPinCoverage: { clientReported: true, coverage: hostPinCoverage ?? null },
         hostPin: hostPin
           ? {
               pinId: hostPin.pinId,
@@ -348,7 +393,7 @@ export class SupportExports {
         },
         unknown: [
           'cross-process snapshot is not atomic',
-          'unhanded document events',
+          'other documents and events created after the requesting document cutoff',
           'unflushed producer buffers',
         ],
       };
