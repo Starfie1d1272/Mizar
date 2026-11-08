@@ -81,7 +81,7 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
     Ok(result)
 }
 
-fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
+fn parsed_fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
     let mut ts = tokens(text)?;
     if ts
         .iter()
@@ -89,7 +89,7 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
         .take(ts.len().saturating_sub(3))
         .any(|t| !t.quoted && (t.value == "{" || t.value == "}"))
     {
-        return Err("cs2_video.txt：包含嵌套字段，未修改配置；可保持原游戏设置继续。".into());
+        return Err("cs2_video.txt：包含嵌套字段，无法安全调整窗口，原配置未修改。".into());
     }
     if ts.len() < 3
         || !ts[0].quoted
@@ -109,13 +109,18 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
         let mut value = pairs.next().ok_or("视频配置不完整。")?;
         value.key_start = key.start;
         if !key.quoted || !value.quoted {
-            return Err("cs2_video.txt：包含嵌套字段，未修改配置；可保持原游戏设置继续。".into());
+            return Err("cs2_video.txt：包含嵌套字段，无法安全调整窗口，原配置未修改。".into());
         }
-        let entries = map.entry(key.value.clone()).or_default();
-        if entries
-            .first()
-            .is_some_and(|previous| previous.value != value.value)
-        {
+        // Retain all occurrences, including conflicting geometry originals.
+        map.entry(key.value).or_default().push(value);
+    }
+    Ok((map, close))
+}
+
+fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
+    let (map, close) = parsed_fields(text)?;
+    for (key, values) in &map {
+        if values.iter().any(|value| value.value != values[0].value) {
             let known = sized_quality_preset(
                 Quality::VeryHigh,
                 VideoSize {
@@ -123,17 +128,15 @@ fn fields(text: &str) -> Result<(BTreeMap<String, Vec<Token>>, usize), String> {
                     height: 1080,
                 },
             );
-            let name = if known.contains_key(&key.value) {
-                key.value.as_str()
+            let name = if known.contains_key(key) {
+                key.as_str()
             } else {
                 "其他字段"
             };
             return Err(format!(
-                "cs2_video.txt / {name}：冲突重复，未修改配置；可使用当前设置继续。"
+                "cs2_video.txt / {name}：冲突重复，未修改配置；可保留画质与帧率并调整窗口。"
             ));
         }
-        // Retain every token so all transaction paths edit the logical field.
-        entries.push(value);
     }
     Ok((map, close))
 }
@@ -214,6 +217,35 @@ pub fn supported_preset(values: &BTreeMap<String, String>) -> bool {
 
 pub fn apply(text: &str, desired: &BTreeMap<String, String>) -> Result<String, String> {
     let (map, close) = fields(text)?;
+    edit_fields(text, desired, map, close)
+}
+
+/// An explicit window target owns every occurrence, never a guessed original value.
+pub fn apply_geometry(text: &str, desired: &BTreeMap<String, String>) -> Result<String, String> {
+    if !supported_geometry(desired) {
+        return Err("窗口几何恢复范围无效。".into());
+    }
+    let (map, close) = parsed_fields(text)?;
+    edit_fields(text, desired, map, close)
+}
+
+pub fn supported_geometry(values: &BTreeMap<String, String>) -> bool {
+    let size = (|| {
+        VideoSize::new(
+            values.get("setting.defaultres")?.parse().ok()?,
+            values.get("setting.defaultresheight")?.parse().ok()?,
+        )
+        .ok()
+    })();
+    size.is_some_and(|size| *values == launch_geometry(size))
+}
+
+fn edit_fields(
+    text: &str,
+    desired: &BTreeMap<String, String>,
+    map: BTreeMap<String, Vec<Token>>,
+    close: usize,
+) -> Result<String, String> {
     for required in [
         "setting.defaultres",
         "setting.defaultresheight",
@@ -286,6 +318,92 @@ pub fn restore(
         output.replace_range(start..end, &value);
     }
     Ok(output)
+}
+
+/// Restore only still-owned geometry. A changed value or deletion is an external
+/// takeover, not permission to overwrite it. Original duplicate values and count
+/// survive game normalization without interpreting which original was effective.
+pub fn restore_geometry(
+    original: &str,
+    applied: &str,
+    current: &str,
+    owned: &BTreeMap<String, String>,
+) -> Result<(String, bool), String> {
+    if apply_geometry(original, owned)? != applied {
+        return Err("窗口几何原件与应用记录不一致。".into());
+    }
+    if current == applied {
+        return Ok((original.into(), false));
+    }
+    let (before, _) = parsed_fields(original)?;
+    let (now, _) = parsed_fields(current)?;
+    let newline = if current.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut edits = Vec::new();
+    let mut yielded = false;
+    for (key, target) in owned {
+        let Some(values) = now.get(key) else {
+            yielded |= before.contains_key(key);
+            continue;
+        };
+        if values.iter().any(|value| &value.value != target) {
+            // A conflicting current duplicate means the logical field was taken over.
+            yielded |= !before.get(key).is_some_and(|old| {
+                old.iter()
+                    .map(|v| &v.value)
+                    .eq(values.iter().map(|v| &v.value))
+            });
+            continue;
+        }
+        match before.get(key) {
+            Some(old) if old.len() == values.len() => {
+                for (previous, value) in old.iter().zip(values) {
+                    edits.push((
+                        value.start,
+                        value.end,
+                        original[previous.start..previous.end].to_owned(),
+                    ));
+                }
+            }
+            Some(old) => {
+                let mut restored = original[old[0].start..old[0].end].to_owned();
+                for value in &old[1..] {
+                    restored.push_str(&format!(
+                        "{newline}\"{key}\" {}",
+                        &original[value.start..value.end]
+                    ));
+                }
+                edits.push((values[0].start, values[0].end, restored));
+                for value in &values[1..] {
+                    edits.push((
+                        value.key_start,
+                        value.key_start + key.len() + 2,
+                        String::new(),
+                    ));
+                    edits.push((value.start, value.end, String::new()));
+                }
+            }
+            None => {
+                for value in values {
+                    edits.push((
+                        value.key_start,
+                        value.key_start + key.len() + 2,
+                        String::new(),
+                    ));
+                    edits.push((value.start, value.end, String::new()));
+                }
+            }
+        }
+    }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut output = current.to_owned();
+    for (start, end, value) in edits {
+        output.replace_range(start..end, &value);
+    }
+    Ok((output, yielded))
 }
 
 /// Explicit backup import owns only recognized video settings. Preserve every

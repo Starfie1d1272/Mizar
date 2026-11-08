@@ -1,3 +1,5 @@
+import { hostDeliveryParticipant } from './host-delivery-pin.js';
+import { type IncidentParticipant, type PinReceipt } from './retention.js';
 import { diagnosticSegmentNames } from './segments.js';
 import { technicalProjection, sourceCoversProjection } from './technical-projection.js';
 import {
@@ -491,6 +493,15 @@ export class DiagnosticDelivery {
   private nextCollectionAt: number;
   private collectionScheduled = false;
   private sourceRevision = 0;
+  private readonly cleanupAbort = new AbortController();
+  private readonly pendingPinReleases = new Map<
+    string,
+    {
+      pinId: string;
+      participant: IncidentParticipant;
+      reported: boolean;
+    }
+  >();
   constructor(
     private readonly directory: string,
     private readonly journal: SessionJournal,
@@ -500,6 +511,7 @@ export class DiagnosticDelivery {
       now?: () => number;
       allowTestEndpoint?: boolean;
       onConsent?: () => Promise<void>;
+      participants?: () => IncidentParticipant[];
     } = {},
   ) {
     this.endpoint = diagnosticsEndpoint(options.endpoint, options.allowTestEndpoint);
@@ -717,7 +729,9 @@ export class DiagnosticDelivery {
       manualOnlyBatches: this.state.queue.filter(
         (value) => value.serverExpired && !value.acknowledgedAt,
       ).length,
-      error: this.error,
+      error: [...this.pendingPinReleases.values()].some((pin) => pin.reported)
+        ? 'ack_pin_release_pending'
+        : this.error,
       scope:
         'technical diagnostics; not anonymous; cloud completeness is bounded by explicitly reported local and server budgets',
     };
@@ -1431,92 +1445,189 @@ export class DiagnosticDelivery {
   }
   /** A wire is a transport projection. Release only the exact acknowledged batch whose
    * stable identities and retained canonical facts still cover every transmitted event. */
-  private async releaseAcknowledged(batch: Batch) {
-    if (batch.index.eventSchemaVersion !== 2) return false;
-    const bytes = await secureRead(
-      this.queueDirectory,
-      `${batch.id}.gz`,
-      DELIVERY_LIMITS.compressedBytes,
-    ).catch((error: unknown) => {
-      if (missing(error)) return null;
-      throw error;
-    });
-    // An ACK was durably committed before an earlier unlink. Finish only its state cleanup.
-    if (bytes) {
-      if (checksum(bytes) !== batch.id) throw new Error('acknowledged_batch_integrity');
-      const decoded = await decodeDiagnosticBatch(bytes);
-      const pending = new Map<string, Record<string, unknown>[]>();
-      for (const value of decoded.events!) {
-        const event = value as Record<string, unknown>;
-        if (event.schema !== 'mizar-diagnostic-event/2' || typeof event.eventId !== 'string')
-          return false;
-        pending.set(event.eventId, [...(pending.get(event.eventId) ?? []), event]);
+  private async releaseAcknowledged(batches: readonly Batch[]): Promise<Set<string>> {
+    const released = new Set<string>();
+    await this.releaseAcknowledgedPins();
+    // Retry cleanup before acquiring anything else: failed release cannot accumulate
+    // indefinitely many live pins or requests in this process.
+    if (this.pendingPinReleases.size || this.closed) return released;
+    const pinId = randomUUID();
+    const receipts: PinReceipt[] = [];
+    const eligible = new Map<string, { batch: Batch; bytes: Buffer | null; remaining: number }>();
+    const pending = new Map<string, { batchId: string; event: Record<string, unknown> }[]>();
+    try {
+      for (const batch of batches) {
+        if (batch.index.eventSchemaVersion !== 2) continue;
+        try {
+          const bytes = await secureRead(
+            this.queueDirectory,
+            `${batch.id}.gz`,
+            DELIVERY_LIMITS.compressedBytes,
+          ).catch((error: unknown) => {
+            if (missing(error)) return null;
+            throw error;
+          });
+          // Durable ACK + missing wire can finish a previous interrupted unlink.
+          if (!bytes) {
+            eligible.set(batch.id, { batch, bytes, remaining: 0 });
+            continue;
+          }
+          if (checksum(bytes) !== batch.id) throw new Error('acknowledged_batch_integrity');
+          const decoded = await decodeDiagnosticBatch(bytes);
+          const events = decoded.events as Record<string, unknown>[];
+          if (
+            events.some(
+              (event) =>
+                event.schema !== 'mizar-diagnostic-event/2' || typeof event.eventId !== 'string',
+            )
+          )
+            continue;
+          eligible.set(batch.id, { batch, bytes, remaining: events.length });
+          for (const event of events) {
+            const id = String(event.eventId);
+            pending.set(id, [...(pending.get(id) ?? []), { batchId: batch.id, event }]);
+          }
+        } catch {
+          // One corrupt/unreadable batch must not starve later acknowledged entries.
+        }
       }
       const cover = (value: unknown) => {
         if (!value || typeof value !== 'object') return;
         const source = value as Record<string, unknown>;
-        const variants = pending.get(String(source.eventId));
-        if (variants) {
-          const remaining = variants.filter((event) => !sourceCoversProjection(source, event));
-          if (remaining.length) pending.set(String(source.eventId), remaining);
-          else pending.delete(String(source.eventId));
-        }
-      };
-      for (const name of await diagnosticSegmentNames(this.directory)) {
-        if (!pending.size) break;
-        try {
-          for await (const line of sourceLines(this.directory, name)) cover(JSON.parse(line));
-        } catch {
-          /* Unverified remainder cannot prove coverage. Other safe sources can. */
-        }
-      }
-      const performance = join(this.directory, 'performance-pending');
-      const names = await safePath(performance)
-        .then((path) => readdir(path))
-        .catch((error: unknown) => {
-          if (missing(error)) return [];
-          throw error;
+        const id = String(source.eventId);
+        const variants = pending.get(id);
+        if (!variants) return;
+        const remaining = variants.filter(({ batchId, event }) => {
+          if (!sourceCoversProjection(source, event)) return true;
+          eligible.get(batchId)!.remaining--;
+          return false;
         });
-      for (const name of names) {
-        if (!pending.size) break;
-        if (!/^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz$/.test(name)) continue;
+        if (remaining.length) pending.set(id, remaining);
+        else pending.delete(id);
+      };
+      const participants = pending.size
+        ? [
+            ...(this.options.participants?.() ?? [this.journal.deliveryParticipant()]),
+            ...([...pending.values()].some((events) =>
+              events.some(({ event }) => ['host', 'document'].includes(String(event.producerKind))),
+            )
+              ? [hostDeliveryParticipant(this.directory, this.cleanupAbort.signal)]
+              : []),
+          ]
+        : [];
+      for (const participant of participants) {
+        if (!pending.size || this.closed) break;
+        // One pin vector and one canonical pass for this entire (at most four) batch
+        // round. No repeated prepare/hash/Host handshake per acknowledged wire.
+        this.pendingPinReleases.set(`${pinId}:${participant.producerId}`, {
+          pinId,
+          participant,
+          reported: false,
+        });
+        let receipt: PinReceipt;
         try {
-          const raw = await decompress(await secureRead(performance, name, 1536 * 1024), {
-            maxOutputLength: 1024 * 1024,
+          const prepared = await participant.prepare(pinId);
+          receipt = await participant.commit(pinId);
+          if (
+            receipt.pinId !== pinId ||
+            receipt.producerId !== participant.producerId ||
+            receipt.kind !== 'delivery' ||
+            receipt.status !== 'committed' ||
+            receipt.expiresAt === null ||
+            receipt.expiresAt <= Date.now() ||
+            JSON.stringify(receipt.segments) !== JSON.stringify(prepared.segments)
+          )
+            throw new Error('ack_pin_receipt_invalid');
+          receipts.push(receipt);
+        } catch (error) {
+          this.journal.record('diagnostic_delivery_pin_failed', {
+            pinId,
+            producerId: participant.producerId,
+            error: diagnosticValue(error),
           });
-          const values: unknown = JSON.parse(raw.toString('utf8'));
-          if (Array.isArray(values)) for (const value of values) cover(value);
-        } catch {
-          /* Keep the wire unless all facts have a verified canonical source. */
+          continue;
+        }
+        for (const segment of receipt.segments) {
+          if (!pending.size || this.closed) break;
+          try {
+            // Only bytes covered by the original producer's committed pin prove
+            // anything. Verify the same immutable bytes that are decoded.
+            const raw = await secureRead(this.directory, segment.name, 2 * 1024 * 1024);
+            if (raw.length !== segment.bytes || checksum(raw) !== segment.sha256) continue;
+            if (segment.name.startsWith('performance-pending/')) {
+              const expanded = await decompress(raw, { maxOutputLength: 1024 * 1024 });
+              const values: unknown = JSON.parse(expanded.toString('utf8'));
+              if (Array.isArray(values)) for (const value of values) cover(value);
+            } else {
+              for (const line of raw.toString('utf8').split('\n'))
+                if (line) cover(JSON.parse(line));
+            }
+          } catch {
+            /* An unreadable/changed source cannot prove coverage. */
+          }
+          await yieldIO();
         }
       }
-      if (pending.size) return false;
+      for (const { batch, bytes, remaining } of eligible.values()) {
+        if (remaining || this.closed) continue;
+        try {
+          await this.transaction(async () => {
+            if (this.closed || receipts.some((receipt) => receipt.expiresAt! <= Date.now()))
+              throw new Error('ack_cleanup_expired');
+            const current = this.state.queue.find((value) => value.id === batch.id);
+            if (!current?.acknowledgedAt || current.index.eventSchemaVersion !== 2)
+              throw new Error('acknowledged_batch_changed');
+            if (bytes) {
+              const actual = await secureRead(
+                this.queueDirectory,
+                `${batch.id}.gz`,
+                DELIVERY_LIMITS.compressedBytes,
+              );
+              if (checksum(actual) !== batch.id) throw new Error('acknowledged_batch_integrity');
+              await unlink(await safePath(this.queueDirectory, `${batch.id}.gz`));
+            }
+            const previous = this.state.queue;
+            this.state.queue = previous.filter((value) => value.id !== batch.id);
+            try {
+              await this.save();
+            } catch (error) {
+              this.state.queue = previous;
+              throw error;
+            }
+            this.recoveryNeeded = true;
+          });
+          released.add(batch.id);
+        } catch {
+          /* Keep the queue reference for retry, including an interrupted unlink. */
+        }
+      }
+      return released;
+    } finally {
+      // Keep every hold until all unlinks/state transactions settle, not just until
+      // the read finishes. An elapsed deadline during unlink does not revoke it.
+      await this.releaseAcknowledgedPins();
     }
-    await this.transaction(async () => {
-      const current = this.state.queue.find((value) => value.id === batch.id);
-      if (!current?.acknowledgedAt || current.index.eventSchemaVersion !== 2)
-        throw new Error('acknowledged_batch_changed');
-      if (bytes) {
-        const actual = await secureRead(
-          this.queueDirectory,
-          `${batch.id}.gz`,
-          DELIVERY_LIMITS.compressedBytes,
-        );
-        if (checksum(actual) !== batch.id) throw new Error('acknowledged_batch_integrity');
-        await unlink(await safePath(this.queueDirectory, `${batch.id}.gz`));
-      }
-      const previous = this.state.queue;
-      this.state.queue = previous.filter((value) => value.id !== batch.id);
-      try {
-        await this.save();
-      } catch (error) {
-        this.state.queue = previous;
-        throw error;
-      }
-      this.recoveryNeeded = true;
-    });
-    return true;
   }
+  private async releaseAcknowledgedPins() {
+    for (const [key, pending] of this.pendingPinReleases) {
+      try {
+        await pending.participant.release(pending.pinId);
+        this.pendingPinReleases.delete(key);
+      } catch (error) {
+        this.error = 'ack_pin_release_pending';
+        if (!pending.reported)
+          this.journal.record('diagnostic_delivery_pin_release_failed', {
+            pinId: pending.pinId,
+            producerId: pending.participant.producerId,
+            error: diagnosticValue(error),
+          });
+        pending.reported = true;
+      }
+    }
+    if (!this.pendingPinReleases.size && this.error === 'ack_pin_release_pending')
+      this.error = null;
+  }
+
   private collectAcknowledged() {
     this.cleaningAcknowledged ??= (async () => {
       const candidates = this.state.queue.filter(
@@ -1526,21 +1637,24 @@ export class DiagnosticDelivery {
       // A retained batch must not starve later reclaimable entries. Capture the
       // next position before release mutates the queue, with at most four attempts.
       const start = next < 0 ? 0 : next;
+      const selected: Batch[] = [];
       for (let i = 0; i < Math.min(4, candidates.length); i++) {
-        const batch = candidates[(start + i) % candidates.length]!;
+        selected.push(candidates[(start + i) % candidates.length]!);
         this.acknowledgedScanNext = candidates[(start + i + 1) % candidates.length]!.id;
-        if (this.closed) return;
-        try {
-          const released = await this.releaseAcknowledged(batch);
-          if (!released) this.error = 'ack_history_release_pending';
-          else if (
-            this.error === 'ack_history_release_pending' ||
-            this.error === 'queue_budget_local_journal_retained'
-          )
-            this.error = null;
-        } catch {
-          this.error = 'ack_history_release_pending';
-        }
+      }
+      try {
+        const released = await this.releaseAcknowledged(selected);
+        if (this.pendingPinReleases.size) this.error = 'ack_pin_release_pending';
+        else if (released.size < selected.length) this.error = 'ack_history_release_pending';
+        else if (
+          this.error === 'ack_history_release_pending' ||
+          this.error === 'queue_budget_local_journal_retained'
+        )
+          this.error = null;
+      } catch {
+        this.error = this.pendingPinReleases.size
+          ? 'ack_pin_release_pending'
+          : 'ack_history_release_pending';
       }
     })().finally(() => {
       this.cleaningAcknowledged = undefined;
@@ -1896,11 +2010,14 @@ export class DiagnosticDelivery {
   }
   async close() {
     this.closed = true;
+    this.cleanupAbort.abort();
     clearInterval(this.timer);
     this.unsubscribe?.();
     this.abort?.abort();
     await this.sending;
     await this.cleaningAcknowledged;
+    await this.releaseAcknowledgedPins();
     await this.transaction(() => this.persist());
+    if (this.pendingPinReleases.size) throw new Error('ack_pin_release_pending');
   }
 }

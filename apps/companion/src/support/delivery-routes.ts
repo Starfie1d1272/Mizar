@@ -19,6 +19,7 @@ export function registerDiagnosticDelivery(
     fetch?: typeof fetch;
     onConsent?: () => Promise<void>;
     incidentParticipants?: () => IncidentParticipant[];
+    deliveryParticipants?: () => IncidentParticipant[];
     onReport?: (report: { category: string; observedAt: string }) => void;
   },
 ) {
@@ -72,6 +73,7 @@ export function registerDiagnosticDelivery(
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
           ...(options.onConsent ? { onConsent: options.onConsent } : {}),
+          participants: options.deliveryParticipants ?? (() => [journal.deliveryParticipant()]),
         });
         await delivery.initialize();
         ready = true;

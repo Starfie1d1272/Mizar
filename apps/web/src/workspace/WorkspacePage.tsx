@@ -52,8 +52,8 @@ import {
 import { Button, StatusPill, StatusBanner, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { LiveRosterAlert } from './LiveRosterAlert';
-import { SyncHealthAlert, type SyncHealth } from './SyncHealthAlert';
-import { RivalHubLiveSourcePanel } from './RivalHubLiveSourcePanel';
+import type { SyncHealth } from './sync-health';
+import { RivalHubLiveSourcePanel, RivalHubSyncReview } from './RivalHubLiveSourcePanel';
 import { LocalOverlayControls } from '../preparation/LocalOverlayControls';
 import {
   useCs2Status,
@@ -67,8 +67,10 @@ import './workspace.css';
 const previewSettled = () => {};
 
 async function openPreparation(path: string) {
-  if (window.__TAURI_INTERNALS__) await desktopInvoke('open_main', { path });
-  else if (!window.open(path, 'mizar-preparation'))
+  if (window.__TAURI_INTERNALS__) {
+    await desktopInvoke('open_main', { path });
+    await closeReviewWindow();
+  } else if (!window.open(path, 'mizar-preparation'))
     throw new Error('处理页面未能打开，请允许弹出窗口后重试。');
 }
 
@@ -192,14 +194,6 @@ function ContextPanel({
           onOpen={openPreparation}
         />
       </div>
-      <SyncHealthAlert
-        health={connection?.syncHealth}
-        matchId={operator?.matchContext.summary?.matchId}
-        isSource={Boolean(
-          connection?.activeMatchId && connection.activeSourceMatchId === connection.activeMatchId,
-        )}
-        onOpen={openPreparation}
-      />
       {seriesBinding?.ownership?.status === 'attention' ? (
         <StatusBanner tone="warning">
           {seriesBinding.ownership.reason === 'previous_execution'
@@ -681,7 +675,7 @@ function WorkspaceDockContent() {
           </Button>
         </div>
         <ObsOutputControls onError={setErrorMessage} />
-        <RivalHubLiveSourcePanel compact action={action} onMessage={setMessage} />
+        <RivalHubLiveSourcePanel compact />
         {entryNotice ? (
           <Button onClick={() => setDockDetail('notices')}>启动准备 · 查看状态</Button>
         ) : null}
@@ -737,7 +731,7 @@ function WorkspaceDockContent() {
                       found: boolean;
                       managed: boolean;
                       message?: string | null;
-                      geometry?: { preserveSettings?: boolean; alignmentRetries?: number };
+                      geometry?: { alignmentRetries?: number };
                     }>('cs2_host_status').catch(() => null);
                     if (request !== layoutRequest.current) return;
                     if (!status || status.layoutPending) continue;
@@ -746,19 +740,13 @@ function WorkspaceDockContent() {
                       setMessage('已确认 CS2 窗口对齐；工作台面板布局请求已提交。');
                       return;
                     }
-                    if (
-                      !status.found ||
-                      status.geometry?.preserveSettings ||
-                      status.geometry?.alignmentRetries === 0
-                    ) {
+                    if (!status.found || status.geometry?.alignmentRetries === 0) {
                       setMessage('');
                       setErrorMessage(
-                        status.geometry?.preserveSettings
-                          ? '本次启动保留原游戏设置，未接管游戏窗口布局。需要自动布局时请先正常退出游戏，在准备中心完成恢复后选择自动设置启动。'
-                          : status.message ||
-                              (!status.found
-                                ? '尚未找到 CS2。打开游戏后再恢复布局。'
-                                : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
+                        status.message ||
+                          (!status.found
+                            ? '尚未找到 CS2。打开游戏后再恢复布局。'
+                            : '工作台面板布局请求已提交，CS2 窗口对齐尚未确认。'),
                       );
                       return;
                     }
@@ -801,7 +789,7 @@ function WorkspaceDockContent() {
       </Dialog>
       <Dialog
         open={dockDetail === 'notices'}
-        title="启动准备状态"
+        title={preparation?.running ? '启动准备状态' : '上次准备结果'}
         onClose={() => setDockDetail(null)}
       >
         {entryNotice ? (
@@ -972,11 +960,7 @@ function ExitReview() {
           <>
             <Button
               variant="primary"
-              onClick={() =>
-                void openPreparation('/')
-                  .then(() => closeReviewWindow())
-                  .catch((reason) => setError(String(reason)))
-              }
+              onClick={() => void openPreparation('/').catch((reason) => setError(String(reason)))}
             >
               返回准备中心处理
             </Button>
@@ -1011,6 +995,12 @@ function ExitReview() {
 }
 
 export function WorkspaceReview() {
+  if (new URLSearchParams(window.location.search).get('kind') === 'sync')
+    return (
+      <div className="workspace-review-native">
+        <RivalHubSyncReview />
+      </div>
+    );
   if (new URLSearchParams(window.location.search).get('kind') === 'exit') return <ExitReview />;
   return (
     <div className="workspace-review-native">

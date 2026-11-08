@@ -23,6 +23,7 @@ import type {
   ObsAudioBindCommand,
   ObsAudioRole,
   ObsOutputCommand,
+  ObsOutputPhase,
   ObsOutputsStatus,
 } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
@@ -106,6 +107,8 @@ export interface ObsStatus {
   readonly currentScene: string | null;
   readonly port: number;
   readonly streaming: boolean | null;
+  /** Absent on older observations; consumers must treat absence as unknown. */
+  readonly streamPhase?: ObsOutputPhase;
   readonly recording: boolean | null;
   readonly passwordConfigured: boolean;
   readonly video: null | { readonly canvas: string; readonly output: string; readonly fps: number };
@@ -230,19 +233,42 @@ export class ObsAdapter {
       idle(this.outputs.snapshot());
   }
 
-  async outputStatus(): Promise<ObsOutputsStatus> {
-    return this.outputs.read().catch(() => this.outputs.snapshot());
+  private async preparationStatus(): Promise<NonNullable<ObsOutputsStatus['preparation']> | null> {
+    const capture = await this.captureWarmup?.status().catch(() => 'cleanup_pending' as const);
+    return capture ?? (this.configurationPending ? 'checking' : null);
   }
 
-  async outputCommand(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
-    try {
-      await this.outputs.command(command);
-    } catch (error) {
-      const config = await this.configStore.read();
-      this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
-      throw error;
-    }
-    return this.outputs.snapshot();
+  async outputStatus(): Promise<ObsOutputsStatus> {
+    const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
+    return { ...outputs, preparation: await this.preparationStatus() };
+  }
+
+  outputCommand(
+    command: ObsOutputCommand,
+    valid: () => boolean = () => true,
+  ): Promise<ObsOutputsStatus> {
+    return this.serial(async () => {
+      try {
+        if (!valid())
+          throw new ObsOutputError('obs_output_stale', '输出请求已取消，未发送到 OBS。');
+        if (command.action === 'start') {
+          const preparation = await this.preparationStatus();
+          if (preparation)
+            throw new ObsOutputError(
+              'obs_output_busy',
+              preparation === 'checking'
+                ? '正在检查 OBS 游戏画面，请等待准备完成后开始输出。'
+                : 'OBS 游戏画面检查未完成，请重新检查后开始输出。',
+            );
+        }
+        await this.outputs.command(command, valid);
+      } catch (error) {
+        const config = await this.configStore.read();
+        this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
+        throw error;
+      }
+      return { ...this.outputs.snapshot(), preparation: await this.preparationStatus() };
+    });
   }
 
   private configurationMutation<T>(run: () => Promise<T>): Promise<T> {
@@ -796,6 +822,7 @@ export class ObsAdapter {
       currentScene: null,
       port: config.port,
       streaming: null,
+      streamPhase: 'unknown',
       recording: null,
       passwordConfigured: Boolean(config.password),
       video: null,
@@ -830,6 +857,7 @@ export class ObsAdapter {
               status = {
                 ...status,
                 streaming: outputs.stream.active,
+                streamPhase: outputs.stream.phase,
                 recording: outputs.record.active,
               };
               if (outputs.stream.active === null || outputs.record.active === null)
@@ -973,6 +1001,26 @@ export class ObsAdapter {
         (obs, endpoint) => this.configurationFindings(obs, endpoint),
         12_000,
       );
+      return this.findings;
+    });
+  }
+  recoverCaptureWarmup(valid: () => boolean): Promise<readonly ObsFinding[]> {
+    return this.configurationMutation(async () => {
+      if (!valid())
+        throw new ObsCaptureWarmupError('capture_warmup_changed', '制作状态已变化，请重新检查。');
+      if (!this.captureWarmup)
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      const pending = (await this.captureWarmup.status()) !== null;
+      const lease = pending ? await this.captureWarmupGuard() : undefined;
+      this.findings = await this.withObs(async (obs, endpoint) => {
+        if (lease)
+          await this.captureWarmup!.recoverBeforePreparation(
+            obs,
+            endpoint,
+            () => valid() && lease(),
+          );
+        return this.configurationFindings(guardedObs(obs, valid), endpoint);
+      }, 12_000);
       return this.findings;
     });
   }
@@ -2148,6 +2196,11 @@ export class ObsAdapter {
             audio_video_path_unresolved:
               '画面来源仍附带采集声音，请将它选为对应音频分路，或关闭附带音频后重试。',
             audio_bindings_incomplete: '已选择的音频来源已失效，请在声音设置中重新选择。',
+            audio_game_target_changed:
+              '游戏声音来源的目标已变化，请在声音设置中重新选择游戏声音并录制试听。',
+            audio_game_capture_missing:
+              '未找到游戏画面来源，请先核对游戏采集，再选择游戏声音来源。',
+            audio_game_missing: '游戏声音来源已不存在，请在声音设置中重新选择并录制试听。',
           };
           const uncertain = await readCommentarySwitch(`${this.commentary.journal}.switch`)
             .then((value) => value?.phase === 'sent')
@@ -2155,11 +2208,12 @@ export class ObsAdapter {
           this.findings = [
             ...this.findings,
             {
-              code: 'commentary_pending',
-              message: uncertain
-                ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
-                : (audioHelp[audioReason] ??
-                  '场景已准备，音频分路待完成。请检查远端解说来源后重试。'),
+              code: audioReason.startsWith('audio_game_') ? audioReason : 'commentary_pending',
+              message:
+                audioHelp[audioReason] ??
+                (uncertain
+                  ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
+                  : '场景已准备，音频分路尚未确认。请在声音设置中核对来源并录制试听。'),
             },
           ];
         }
@@ -2232,9 +2286,13 @@ export class ObsAdapter {
   }
   beginCaptureWarmup(preparationId: string, valid: () => boolean) {
     const generation = this.programGeneration;
-    return this.configurationMutation(async () => {
+    return this.serial(async () => {
       if (!this.captureWarmup)
-        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      if (!valid())
+        throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 准备请求已失效，请重试。');
+      await this.outputs.read();
+      if (this.outputs.hasRunningOutput()) return { transactionId: null, startedAt: Date.now() };
       const preparationLease = await this.captureWarmupGuard();
       const recovery = this.recoveryGeneration;
       const outputEpoch = this.outputs.preparationOutputEpoch();
@@ -2262,9 +2320,10 @@ export class ObsAdapter {
     });
   }
   releaseCaptureWarmup(id: string): Promise<void> {
-    return this.configurationMutation(async () => {
+    return this.serial(async () => {
       if (!this.captureWarmup)
-        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      // A completed release stays successful even if output started afterwards.
       if (!(await this.captureWarmup.pending(id))) return;
       const lease = await this.captureWarmupGuard();
       return this.withObs(
@@ -2278,18 +2337,26 @@ export class ObsAdapter {
   }
   captureInitialization(
     diagnostic: ObsCaptureDiagnostic,
-    id: string,
+    id: string | null,
   ): Promise<CaptureInitialization> {
-    return this.serial(() =>
-      this.withObs(async (obs) => {
-        if (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id)))
-          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+    return this.serial(async () => {
+      await this.outputs.read();
+      const observing = id === null || this.outputs.hasRunningOutput();
+      return this.withObs(async (obs) => {
+        if (!observing && (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id!))))
+          throw new ObsCaptureWarmupError(
+            'capture_warmup_changed',
+            'OBS 游戏画面检查已中断，请重新检测。',
+          );
         const result = await readCaptureInitialization(obs, diagnostic);
-        if (!(await this.captureWarmup.confirm(obs, id)))
-          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+        if (!observing && !(await this.captureWarmup!.confirm(obs, id!)))
+          throw new ObsCaptureWarmupError(
+            'capture_warmup_changed',
+            'OBS 游戏画面检查已中断，请重新检测。',
+          );
         return result;
-      }),
-    );
+      });
+    });
   }
   setBpCompactVisible(visible: boolean, valid: () => boolean = () => true): Promise<void> {
     return this.serial(async () => {

@@ -73,7 +73,9 @@ async function profile(directory, minutes) {
   await journal.flush();
   const sourceDirectory = logs;
   const hostRunId = randomUUID();
-  const hostFile = `desktop-${randomUUID()}.ndjson`;
+  // Match DesktopLog's 1 MiB rotation target, below the 2 MiB receipt ceiling.
+  const hostSegmentLimit = 1024 * 1024;
+  const hostSegments = [{ name: `desktop-${randomUUID()}.ndjson`, bytes: 0 }];
   const documentRunId = randomUUID();
   let hostSequence = 0,
     documentSequence = 0,
@@ -109,8 +111,7 @@ async function profile(directory, minutes) {
     event('document', documentRunId, ++documentSequence, kind, evidence, outcome);
   const writeHost = async (kind, evidence, outcome = 'observed', taskId = null) => {
     const record = event('host', hostRunId, ++hostSequence, kind, evidence, outcome);
-    await appendFile(
-      join(logs, hostFile),
+    const line =
       JSON.stringify({
         ...record,
         taskId,
@@ -119,8 +120,16 @@ async function profile(directory, minutes) {
         startupSessionId: hostRunId,
         stage: kind,
         result: outcome,
-      }) + '\n',
-    );
+      }) + '\n';
+    const bytes = Buffer.byteLength(line);
+    assert(bytes <= hostSegmentLimit, 'synthetic Host record exceeds rotation target');
+    let segment = hostSegments.at(-1);
+    if (segment.bytes + bytes > hostSegmentLimit) {
+      segment = { name: `desktop-${randomUUID()}.ndjson`, bytes: 0 };
+      hostSegments.push(segment);
+    }
+    await appendFile(join(logs, segment.name), line);
+    segment.bytes += bytes;
   };
   let virtual = 0;
   let utc = Date.now();
@@ -427,7 +436,18 @@ async function profile(directory, minutes) {
         // does not. Observe its durable cursor reaching this input boundary;
         // otherwise a fast CI host closes with unread source bytes and measures
         // an incomplete workload. No extra collector or export is substituted.
-        const sourceBytes = (await stat(join(sourceDirectory, hostFile))).size;
+        const sources = await Promise.all(
+          hostSegments.map(async ({ name, bytes }) => {
+            const source = await stat(join(sourceDirectory, name));
+            assert.equal(source.size, bytes);
+            return {
+              identity: createHash('sha256')
+                .update(`${source.dev}:${source.ino}:${source.birthtimeMs}`)
+                .digest('hex'),
+              bytes,
+            };
+          }),
+        );
         const deadline = performance.now() + 5000;
         for (;;) {
           const cursor = await readFile(join(sourceDirectory, 'native-source-cursor.json'), 'utf8')
@@ -436,7 +456,14 @@ async function profile(directory, minutes) {
               if (error.code === 'ENOENT') return { cursors: [] };
               throw error;
             });
-          if (cursor.cursors.some((entry) => entry.offset === sourceBytes)) break;
+          if (
+            sources.every((source) =>
+              cursor.cursors.some(
+                (entry) => entry.identity === source.identity && entry.offset === source.bytes,
+              ),
+            )
+          )
+            break;
           assert(
             performance.now() < deadline,
             'actual ProgramChatNativeInput did not commit minute input',
@@ -456,7 +483,14 @@ async function profile(directory, minutes) {
     // Native receipt is a synthetic fixture; the actual route/owner validates its
     // fixed bytes and SHA. This is not evidence of Rust/Windows pin execution.
     const hostPinId = randomUUID();
-    const hostBytes = await readFile(join(logs, hostFile));
+    const pinnedHostSegments = await Promise.all(
+      hostSegments.map(async ({ name, bytes }) => {
+        const body = await readFile(join(logs, name));
+        assert.equal(body.length, bytes);
+        assert(bytes <= hostSegmentLimit);
+        return { name, bytes, sha256: createHash('sha256').update(body).digest('hex') };
+      }),
+    );
     await mkdir(join(logs, 'host-pins'));
     await writeFile(
       join(logs, 'host-pins', hostPinId + '.json'),
@@ -468,13 +502,7 @@ async function profile(directory, minutes) {
         kind: 'export',
         state: 'committed',
         expiresAt: new Date(Date.now() + 600000).toISOString(),
-        segments: [
-          {
-            name: hostFile,
-            bytes: hostBytes.length,
-            sha256: createHash('sha256').update(hostBytes).digest('hex'),
-          },
-        ],
+        segments: pinnedHostSegments,
       }),
     );
     const admitted = await app.inject({
@@ -587,7 +615,7 @@ async function profile(directory, minutes) {
     const output = {
       schema: 'mizar-final-collector-capacity/2',
       scope:
-        'actual buildApp HTTP/GSI/document event/2, app-owned journal/performance spool and one paused delivery; modeled current Host event/2 envelopes in one bounded segment plus chat-only ProgramChat input; actual export route and offline reader. Accelerated input clock, real timers/batching, IO catch-up per virtual minute and post-close retained-source recovery: not a wall-clock two-hour run or live cloud cadence qualification; no account requests or Windows/CS2/Rust-writer claims',
+        'actual buildApp HTTP/GSI/document event/2, app-owned journal/performance spool and one paused delivery; modeled current Host event/2 envelopes rotated at the production 1 MiB target plus chat-only ProgramChat input; actual export route and offline reader. Accelerated input clock, real timers/batching, IO catch-up per virtual minute and post-close retained-source recovery: not a wall-clock two-hour run or live cloud cadence qualification; no account requests or Windows/CS2/Rust-writer claims',
       minutes,
       epoch,
       rates: {
@@ -627,7 +655,9 @@ async function profile(directory, minutes) {
       host: {
         runId: hostRunId,
         events: hostSequence,
-        bytes: hostBytes.length,
+        bytes: pinnedHostSegments.reduce((total, segment) => total + segment.bytes, 0),
+        segments: pinnedHostSegments.length,
+        largestSegmentBytes: Math.max(...pinnedHostSegments.map((segment) => segment.bytes)),
         consoleRecords,
         nativeOperations: nativeOps,
         chatRecords,
@@ -676,9 +706,12 @@ async function profile(directory, minutes) {
       chat_not_collected: chatRecords,
       source_sequence_gap: chatRecords,
     });
-    for (const line of hostBytes.toString('utf8').trim().split('\n')) {
-      const record = JSON.parse(line);
-      if (record.kind !== 'program_all_chat') assert(wireIds.has(record.eventId));
+    for (const { name } of pinnedHostSegments) {
+      const source = await readFile(join(logs, name), 'utf8');
+      for (const line of source.trim().split('\n')) {
+        const record = JSON.parse(line);
+        if (record.kind !== 'program_all_chat') assert(wireIds.has(record.eventId));
+      }
     }
     for (let sequence = 1; sequence <= documentSequence; sequence++)
       assert(wireIds.has(`${documentRunId}:${sequence}`));

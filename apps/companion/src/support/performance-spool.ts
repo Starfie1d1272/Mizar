@@ -494,7 +494,7 @@ export class PerformanceSpool {
       records: records.length,
     });
   }
-  incidentParticipant(kind: 'incident' | 'export' = 'incident'): IncidentParticipant {
+  incidentParticipant(kind: 'incident' | 'export' | 'delivery' = 'incident'): IncidentParticipant {
     return {
       producerId: 'performance',
       prepare: async (pinId) => {

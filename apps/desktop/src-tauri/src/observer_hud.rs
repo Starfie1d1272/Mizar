@@ -230,6 +230,35 @@ pub fn pending(log: &DesktopLog) -> bool {
     file(log).exists() && !crate::observer_workspace::active()
 }
 
+/// A process-only convar record cannot require game writes after all CS2
+/// processes have exited. Preserve unreadable records and disable automatic HUD
+/// writes for the next managed session instead of blocking unrelated startup.
+pub fn prepare_launch(log: &DesktopLog) -> Result<Option<String>, String> {
+    let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
+    if managed_cs2::any_cs2_running(log)? {
+        return Err("请先退出 CS2，再处理上次 HUD 记录。".into());
+    }
+    let record = match load(log) {
+        Ok(Some(record)) => record,
+        Ok(None) => return Ok(None),
+        Err(error) => return Ok(Some(error)),
+    };
+    // Identity inspection is still mandatory for a readable record. Never turn
+    // a live or uncertain process into permission to discard recovery evidence.
+    if managed_cs2::verified_session_process(&record, log)?.is_some() {
+        return Err("请先退出此前游戏实例，再处理 HUD 记录。".into());
+    }
+    match fs::remove_file(file(log)) {
+        Ok(()) => Ok(None),
+        Err(error) => Ok(Some(log.preserve_error(
+            "observer_hud",
+            None,
+            &error,
+            "上次 HUD 记录无法清理，原记录仍保留。".into(),
+        ))),
+    }
+}
+
 pub fn restore(log: &DesktopLog) -> Result<(), String> {
     let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
     let Some(record) = load(log)? else {

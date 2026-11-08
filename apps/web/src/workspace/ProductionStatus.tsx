@@ -2,7 +2,7 @@ import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { useLocalRead, type Production } from '../preparation/client';
 import type { DemoTestView } from '../preparation/demo-test';
 import { desktopInvoke } from './client';
-import { useObsStatus } from './obs-client';
+import { obsStreamLabel, useObsStatus } from './obs-client';
 import { useState } from 'react';
 import './workspace.css';
 
@@ -21,15 +21,13 @@ export function ProductionStatus({
   const guidance = matchId !== undefined && response?.matchId !== matchId ? null : response;
   const connected = obs?.connection === 'connected';
   const obsText =
-    !obs || !connected
-      ? '无法确认'
-      : obs.streaming
-        ? obs.sceneAligned !== true ||
-          obs.findings.length > 0 ||
-          obs.captureDiagnostic?.state === 'needs_attention'
-          ? '需检查'
-          : '直播中'
-        : '未推流';
+    obs?.streamPhase === 'active' && connected
+      ? obs.sceneAligned !== true ||
+        obs.findings.length > 0 ||
+        obs.captureDiagnostic?.state === 'needs_attention'
+        ? '需检查'
+        : '直播中'
+      : obsStreamLabel(obs);
   const platformText = !guidance
     ? '无法确认'
     : ({ live: '已开播', offline: '未开播', unknown: '无法确认', unconfigured: '未设置' } as const)[
@@ -40,25 +38,23 @@ export function ProductionStatus({
     (production?.mode === 'live' || production?.mode === 'hidden') &&
     guidance.phase === 'live' &&
     connected &&
-    obs?.streaming === false;
+    obs?.streamPhase === 'idle';
   return (
     <section
       className={`production-status${compact ? ' production-status--compact' : ''}`}
       aria-label="当前任务与直播状态"
     >
       <div className="production-status__signals" aria-label="直播状态">
-        <span data-tone={obsText === '直播中' ? 'success' : 'muted'}>
-          OBS{' '}
-          {guidance?.phase === 'match_end'
-            ? connected
-              ? obs?.streaming
-                ? '直播中'
-                : '未直播'
-              : '无法确认'
-            : obsText}
-        </span>
+        <span data-tone={obsText === '直播中' ? 'success' : 'muted'}>OBS {obsText}</span>
         {guidance?.phase === 'match_end' ? (
-          <span>录像 {connected ? (obs?.recording ? '进行中' : '已停止') : '无法确认'}</span>
+          <span>
+            录像{' '}
+            {connected && typeof obs?.recording === 'boolean'
+              ? obs.recording
+                ? '进行中'
+                : '已停止'
+              : '无法确认'}
+          </span>
         ) : null}
         <span data-tone={platformText === '已开播' ? 'success' : 'muted'}>
           Bilibili {platformText}

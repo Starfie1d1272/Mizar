@@ -72,6 +72,7 @@ export interface ObsOutputStatus {
   readonly revision: string;
 }
 export interface ObsOutputsStatus {
+  readonly preparation?: 'checking' | 'cleanup_pending' | null;
   readonly stream: ObsOutputStatus;
   readonly record: ObsOutputStatus;
 }

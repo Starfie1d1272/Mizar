@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { parseBoundaryCapture, type BoundaryCaptureOperation } from './boundary-capture.js';
 import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 import {
   archiveDigest,
@@ -37,6 +38,7 @@ export interface OutboxHistory {
 
 export interface OutboxCommit {
   readonly active: OutboxFile;
+  readonly boundaryCapture?: BoundaryCaptureOperation;
   readonly history?: readonly OutboxHistory[];
   readonly damagedScopes?: readonly string[];
 }
@@ -227,7 +229,8 @@ export class OutboxRepository {
         CREATE INDEX IF NOT EXISTS history_scope ON history(scope);
         CREATE INDEX IF NOT EXISTS history_key ON history(item_key);
         CREATE INDEX IF NOT EXISTS history_delivery ON history(json_extract(payload, '$.event.cursor.producerInstanceId'), json_extract(payload, '$.event.cursor.liveSessionId'), json_extract(payload, '$.event.matchId'));
-        CREATE TABLE IF NOT EXISTS damaged_scopes (scope TEXT PRIMARY KEY);`);
+        CREATE TABLE IF NOT EXISTS damaged_scopes (scope TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS boundary_captures (sequence INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, request TEXT NOT NULL, receipt TEXT);`);
       const repository = new OutboxRepository(db);
       if (!db.prepare("SELECT value FROM metadata WHERE key = 'imported'").get()) {
         const imported = await readLegacy(legacyPath);
@@ -249,13 +252,114 @@ export class OutboxRepository {
       operation();
       this.db.exec('COMMIT');
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      let rollbackError: unknown;
+      try {
+        this.db.exec('ROLLBACK');
+      } catch (rollback) {
+        rollbackError = rollback;
+      }
+      if (rollbackError !== undefined)
+        throw new AggregateError([error, rollbackError], 'outbox_transaction_unconfirmed', {
+          cause: error,
+        });
       throw error;
     }
   }
 
   commit(value: OutboxCommit): void {
-    this.transaction(() => this.write(value));
+    this.transaction(() => {
+      if (value.boundaryCapture && this.boundaryCaptureReceipt(value.boundaryCapture))
+        throw new Error('boundary_capture_already_committed');
+      this.write(value);
+      if (value.boundaryCapture) {
+        const changed = this.db
+          .prepare(
+            'UPDATE boundary_captures SET receipt = ? WHERE id = ? AND request = ? AND receipt IS NULL',
+          )
+          .run(
+            value.active.commit!.sha256,
+            value.boundaryCapture.id,
+            JSON.stringify(value.boundaryCapture.request),
+          );
+        if (Number(changed.changes) !== 1) throw new Error('boundary_capture_journal_missing');
+        this.db.exec(`DELETE FROM boundary_captures WHERE receipt IS NOT NULL AND sequence NOT IN
+          (SELECT sequence FROM boundary_captures WHERE receipt IS NOT NULL ORDER BY sequence DESC LIMIT 192)`);
+        this.db.exec(`DELETE FROM boundary_captures WHERE sequence IN
+          (SELECT sequence FROM
+            (SELECT sequence, sum(length(CAST(request AS BLOB))) OVER (ORDER BY sequence DESC) AS bytes
+             FROM boundary_captures WHERE receipt IS NOT NULL)
+           WHERE bytes > 4000000)`);
+      }
+    });
+  }
+
+  /** Same SQLite owner; staged requests survive a process interruption without advancing the cursor. */
+  stageBoundaryCaptures(operations: readonly BoundaryCaptureOperation[], inputLost = false): void {
+    this.transaction(() => {
+      if (inputLost)
+        this.db
+          .prepare("INSERT OR IGNORE INTO metadata VALUES ('boundary_capture_input_lost', '1')")
+          .run();
+      for (const operation of operations) {
+        if (parseBoundaryCapture(operation.request).id !== operation.id)
+          throw new Error('boundary_capture_identity_invalid');
+        const existing = this.db
+          .prepare('SELECT request FROM boundary_captures WHERE id = ?')
+          .get(operation.id) as { request: string } | undefined;
+        const request = JSON.stringify(operation.request);
+        if (existing && existing.request !== request) throw new Error('boundary_capture_conflict');
+        if (!existing)
+          this.db
+            .prepare('INSERT INTO boundary_captures (id, request) VALUES (?, ?)')
+            .run(operation.id, request);
+      }
+      const size = this.db
+        .prepare(
+          'SELECT count(*) AS count, coalesce(sum(length(CAST(request AS BLOB))), 0) AS bytes FROM boundary_captures WHERE receipt IS NULL',
+        )
+        .get() as { count: number; bytes: number };
+      if (size.count > 128 || size.bytes > 4_000_000)
+        throw new Error('boundary_capture_capacity_exhausted');
+    });
+  }
+
+  boundaryCaptureInputLost(): boolean {
+    return Boolean(
+      this.db.prepare("SELECT value FROM metadata WHERE key = 'boundary_capture_input_lost'").get(),
+    );
+  }
+
+  pendingBoundaryCaptures(): BoundaryCaptureOperation[] {
+    const size = this.db
+      .prepare(
+        'SELECT count(*) AS count, coalesce(sum(length(CAST(request AS BLOB))), 0) AS bytes FROM boundary_captures WHERE receipt IS NULL',
+      )
+      .get() as { count: number; bytes: number };
+    if (size.count > 128 || size.bytes > 4_000_000)
+      throw new Error('boundary_capture_capacity_exhausted');
+    return (
+      this.db
+        .prepare(
+          'SELECT id, request FROM boundary_captures WHERE receipt IS NULL ORDER BY sequence',
+        )
+        .all() as { id: string; request: string }[]
+    ).map((row) => {
+      const operation = parseBoundaryCapture(JSON.parse(row.request));
+      if (operation.id !== row.id) throw new Error('boundary_capture_identity_invalid');
+      return operation;
+    });
+  }
+
+  boundaryCaptureReceipt(operation: BoundaryCaptureOperation): string | undefined {
+    const row = this.db
+      .prepare('SELECT request, receipt FROM boundary_captures WHERE id = ?')
+      .get(operation.id) as { request: string; receipt: string | null } | undefined;
+    if (!row) return undefined;
+    if (row.request !== JSON.stringify(operation.request))
+      throw new Error('boundary_capture_conflict');
+    if (row.receipt !== null && !/^[a-f0-9]{64}$/.test(row.receipt))
+      throw new Error('boundary_capture_receipt_invalid');
+    return row.receipt ?? undefined;
   }
 
   private write(value: OutboxCommit): void {

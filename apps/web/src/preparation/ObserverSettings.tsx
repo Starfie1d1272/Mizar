@@ -10,6 +10,8 @@ import { Button, Checkbox, Field, Panel, StatusBanner } from '../ui';
 import { command, useLocalRead, openTool } from './client';
 import { desktopInvoke } from '../workspace/client';
 import {
+  observerFailureReason,
+  observerNeedsRecovery,
   resumeObserverReceiver,
   type ConnectionPreparationView,
   type ObserverRuntimeView,
@@ -31,6 +33,13 @@ export function ObserverSettingsPanel() {
     [error, setError] = useState(''),
     [saved, setSaved] = useState(false);
   const settings = draft ?? view?.settings ?? DEFAULT_OBSERVER_SETTINGS;
+  const needsRecovery = Boolean(
+    view?.settings.enabled &&
+    !view.receiverPaused &&
+    runtime &&
+    !runtime.pending &&
+    observerNeedsRecovery(runtime),
+  );
   const edit = (value: Partial<ObserverSettings>) => {
     setDraft({ ...settings, ...value });
     setSaved(false);
@@ -99,10 +108,7 @@ export function ObserverSettingsPanel() {
         production?.mode === 'live' &&
         window.__TAURI_INTERNALS__ &&
         runtime?.retryAvailable &&
-        (view?.receiverPaused ||
-          runtime.error ||
-          runtime.failed ||
-          ['failed', 'ended', 'stopped'].includes(runtime.health.state)) ? (
+        (view?.receiverPaused || needsRecovery) ? (
           <Button
             disabled={busy || runtime?.pending}
             onClick={() => {
@@ -110,6 +116,7 @@ export function ObserverSettingsPanel() {
               setBusy(true);
               setError('');
               void resumeObserverReceiver(view)
+                .then((result) => setError(result?.warning ?? ''))
                 .catch((reason: unknown) =>
                   setError(reason instanceof Error ? reason.message : '提示接收未完成，请重试。'),
                 )
@@ -120,10 +127,8 @@ export function ObserverSettingsPanel() {
           </Button>
         ) : null}
         {runtime?.pending ? <p role="status">正在准备提前提示…</p> : null}
-        {error || runtime?.error ? (
-          <StatusBanner tone="warning">
-            {error || '提前提示未能准备完成，请核对本图 GoTV 后重试。'}
-          </StatusBanner>
+        {error || needsRecovery ? (
+          <StatusBanner tone="warning">{error || observerFailureReason(runtime!)}</StatusBanner>
         ) : saved ? (
           <StatusBanner tone="success">设置已保存。</StatusBanner>
         ) : null}

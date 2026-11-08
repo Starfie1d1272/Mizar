@@ -313,6 +313,7 @@ export class DebugEvidenceStore {
           'operator-wire-validation-failed',
           'assist-wire-validation-failed',
           'observer-assist-diagnostic-sink-failed',
+          'output-snapshot_projection_failed',
         ].includes(code)
           ? code
           : 'other_runtime_diagnostic',

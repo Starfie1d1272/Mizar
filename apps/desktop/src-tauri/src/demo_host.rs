@@ -1,8 +1,7 @@
 //! Demo entry operations shared by the workspace entry owner.
 use crate::{
-    cs2_activity, demo_test, entry_intent::EntryIntent, host_state::HostState, managed_cs2,
-    mulnx_launch, production_exit, startup_log::DesktopLog, updates, window_presentation,
-    workspace_presentation,
+    cs2_activity, demo_test, entry_intent::EntryIntent, managed_cs2, mulnx_launch, production_exit,
+    startup_log::DesktopLog, updates, window_presentation, workspace_presentation,
 };
 use std::sync::Mutex;
 use tauri::Manager;
@@ -207,12 +206,7 @@ pub(crate) async fn start(
                     );
                     let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用，请恢复试播。")?;
                     return match result {
-                        Ok(_) => {
-                            if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                                tracker.preserve_settings = cs2.preserve_settings();
-                            }
-                            Ok(starting)
-                        }
+                        Ok(_) => Ok(starting),
                         Err(error) => {
                             if !cs2.demo_launch_attempted()? {
                                 if let Err(recovery) = cs2.cancel_unsubmitted_mulnx_demo() {
@@ -224,12 +218,7 @@ pub(crate) async fn start(
                     };
                 }
                 match cs2.start_demo(&path, &id, preserve_settings.unwrap_or(false)) {
-                    Ok(true) => {
-                        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                            tracker.preserve_settings = cs2.preserve_settings();
-                        }
-                        Ok(starting)
-                    }
+                    Ok(true) => Ok(starting),
                     Ok(false) => Err("Demo 启动请求未提交，请结束试播后重试。".into()),
                     Err(error) => {
                         // A durable attempted launch can still arrive late through

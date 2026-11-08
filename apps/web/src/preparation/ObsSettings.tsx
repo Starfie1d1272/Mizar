@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { ObsCaptureGuidance } from '../workspace/ObsCaptureGuidance';
-import { beginObsConfiguration, obsCommand, useObsStatus } from '../workspace/obs-client';
+import {
+  beginObsConfiguration,
+  obsCommand,
+  obsStreamLabel,
+  useObsStatus,
+} from '../workspace/obs-client';
 import { desktopInvoke } from '../workspace/client';
 import { useLocalRead } from './client';
 
@@ -153,14 +158,7 @@ export function ObsSettings() {
                 ? 'OBS 密码无效'
                 : 'OBS 未连接'}
           </StatusPill>
-          <span>
-            直播 ·{' '}
-            {connected && typeof obs.streaming === 'boolean'
-              ? obs.streaming
-                ? '进行中'
-                : '未开始'
-              : '待确认'}
-          </span>
+          <span>直播 · {obsStreamLabel(obs)}</span>
           <span>
             录制 ·{' '}
             {connected && typeof obs.recording === 'boolean'
@@ -432,10 +430,14 @@ export function ObsSettings() {
                                 ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
                                 : obs.findings.some((item) => item.code === 'transition_missing')
                                   ? '请在 OBS「场景转场」中添加淡化和直接切换。'
-                                  : obs.findings.some((item) => item.code.includes('audio'))
-                                    ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
-                                    : (obs.findings[0]?.message ??
-                                      'Mizar 配置检查通过，请核对实际音画。')}
+                                  : obs.findings.some((item) => item.code.startsWith('audio_game_'))
+                                    ? obs.findings.find((item) =>
+                                        item.code.startsWith('audio_game_'),
+                                      )?.message
+                                    : obs.findings.some((item) => item.code.includes('audio'))
+                                      ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                      : (obs.findings[0]?.message ??
+                                        'Mizar 配置检查通过，请核对实际音画。')}
                     </StatusBanner>
                   )}
                   {sceneRepairNeeded && !sceneRepairBlocked && !preparing ? (

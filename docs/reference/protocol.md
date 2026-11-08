@@ -118,7 +118,7 @@ RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认�
 
 授权响应的可选 `authorizedUser` 与赛程的可选 `viewer`（仅 `userId`、`displayName`）、行级 `assignedToViewer` 仅用于连接状态及操作员比赛库；新鲜赛程更新身份和认领标记，字段缺失保持未知。身份和认领信息不进入 Core、通用比赛事实、HUD、雷达或公开输出。排序只置顶本人认领的未结束比赛，历史比赛仍置底；刷新保留有效的手动选择。
 
-`POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；十人当前首发未到齐时不消耗界面自动认领次数，后端认领继续核对现场模式、在线资料和快照身份。
+`POST /operator/rivalhub/refresh` 使用已配对凭据刷新当前关联比赛，不接收浏览器凭据或任意 URL。与每 10 秒自动刷新共用单个在途请求；不同比赛的待确认选择不被后台刷新覆盖。`GET /local/v1/rivalhub-connection` 包含关联的 `activeMatchId`、`sourceReady`、`sourceBlockedReason`、`lastRefreshAt`、`refreshError` 与受限网站工作台地址。关联 ID 不证明推送资格；界面通过固定入口显式启用本场同步，后端继续核对现场模式、在线资料、当前十人名单和快照身份。
 
 `GET /local/v1/obs` 保留实际节目场景、Mizar 预期场景及是否对齐，并增加只读 `programEvidence`：当前集合归属、注册场景与包装类型、预期来源的存在／启用状态，以及游戏采集类型、目标程序类别、目标窗口可选状态、可选 CS2 窗口数、OBS 报告活动与来源尺寸。检查期间场景或集合变化标记 `changed`；查询失败为 null，保持连接事实并记录脱敏原始错误，不解释为没有来源。完整帧健康与实际捕获进程身份保持未验证，不从活动或尺寸推断钩子成功，不将全屏包装未使用游戏源解释为故障。支持包保留这些有限值、节目控制模式、资料有效性、身份与地图绑定状态，不导出任意场景名、窗口标题、输入设置或凭据。
 
@@ -126,9 +126,11 @@ RivalHub 集成使用赛事级凭据、数据源认领和授权修订号。认�
 
 OBS 支持采证按固定本机目录分块扫描近期会话，摘要保留分类错误计数、故障代表与最新事件。支持包 `attachments.obsLogs` 提供扫描范围内允许的技术事件全集，附件是技术事件记录，保留允许的固定操作、原因、错误码和事件消息，区分黑名单拒绝、互斥量、捕获文件加载、窗口进程查询及各挂钩事件；它不是完整 OBS 原日志，省略未识别的私人正文、标题、路径与凭据。事件绝对时间从会话起始日期和全部日志时间顺序恢复，跨午夜顺序不明或时钟回拨时标为未知，不使用文件修改日期把旧错误刷新为当前错误。读取、单行、摘要、附件和最终导出均有上限；`scan` 记录读取／文件字节、缺失字节范围、忽略行和截断原因，附件记录遗漏事件数量及首尾时间。最终摘要预算截断与前期扫描截断分别标记，不能用 `exportTruncated=false` 声称完整。保存集合选择合并 OBS 的 Basic 与 BasicWindow 字段，读取成功仅表示持久文件存在。
 
-`GET /local/v1/obs/outputs` 返回 Companion 观察的直播与录像输出状态：`phase`、可空 `active`、在途 `pending` 和 `revision`。OBS 输出事件与首次连接／重连快照共用状态；断线或核实失败为 `unknown`，不能解释为已停止。客户端轻量轮询此本机视图，不直接连接 OBS。
+`GET /local/v1/obs/outputs` 返回 Companion 观察的直播与录像输出状态：`phase`、可空 `active`、在途 `pending` 和 `revision`。OBS 输出事件与首次连接／重连快照共用状态；断线或核实失败为 `unknown`，不能解释为已停止。客户端轻量轮询此本机视图，不直接连接 OBS。直播的 `active` 只表示 OBS 占用输出，不单独证明连接已建立；`phase: active` 需要当前连接代际的 STARTED／RECONNECTED 事件或连续读取到新增发送字节，延时缓冲保持 `starting`。断线、重连和新启动清除旧发送证据，STOPPED 在本次启动未确认时返回失败，不推断平台拒绝原因。可选 `preparation` 仅投影现有捕获租约的 `checking / cleanup_pending` 状态，不另存准备任务。
 
 `POST /operator/obs/output` 仅允许本机回环模式与可信 Origin，接收严格的 `{output: "stream" | "record", action: "start" | "stop", expectedRevision}`；修订号使用该输出最近快照的 UUID。不接受 Toggle 或任意 RPC。同一输出只允许一个在途操作，配置、场景修复、音频配置与启停互斥；冲突、过期、未连接及结果未确认返回 `409` 与稳定错误码。RPC 成功后仍等待事件／查询核实实际输出；超时不自动重发，重连只读取状态。OBS 拒绝码按有限类别提示：忙碌、输出未启用并需检查配置、状态已变化或其它明确拒绝；未收到可确认结果时仍为结果未确认，不从超时推断配置缺失。原始拒绝码与原因经现有脱敏 cause 链记录，不直接回显 OBS 原文。命令只使用 OBS 已保存设置，不改变制作生命周期；结束本次制作不会隐式停止 OBS 输出。
+
+`POST /operator/obs/capture-recover` 接受可信本机 Origin 和当前 `expectedRevision`，沿原捕获所有者及配置／输出串行队列，使用新的空闲输出租约核对并回收已有受管项目，再返回当前 findings、captureDiagnostic 与 outputs。不改变当前节目场景、不创建新项目、不重启游戏；未知归属、用户变换或运行输出仍保留记录并返回具体原因。工作台「重新检查游戏画面」直接调用此入口，清理完成不代表实际画面已确认，也不授予新的准备任务。
 
 POST /operator/obs/ensure 在输出停止时自动创建／启用 Mizar 集合、补齐场景、按当前编排选择初始节目并准备默认音频；返回最终 findings。已有自定义音频或游戏捕获音频时只检查，名称冲突不覆盖。初始化请求超时边界为 30 秒，浏览器请求边界为 40 秒；失败不撤销已成功的步骤，重试按现状补齐。
 
@@ -225,7 +227,7 @@ LAN 公共查看仅注册 program、radar 和节目时间轴的 program-cue。HT
 
 应用内更新的安装资格不要求 OBS 已安装或启动。OBS 未连接时仅以成功的 Windows 进程查询确认不存在 obs64/obs32 进程来放行；运行中的未知 OBS 状态、推流或录制继续阻止安装，查询失败保留脱敏原因。页面资格与 Host 安装计划分别核对，不复用页面较早的无进程结果。
 
-桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。其中 `canPreserve` 仅表示可请求使用当前设置启动，不表示已备份或已完成启动检查，也不参与恢复成功判定；Host 在动作提交时重新验证身份、未完成事务和原始备份。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
+桌面私有命令 `set_cs2_preferences` 接收 `qualityPreset`（`very-high / high / medium / preserve`）与 `frameRateLimit`（`60 / 30 / 0`），`cs2_config_status` 返回相同字段及既有恢复状态。其中 `canPreserve` 仅表示可请求保留画质与帧率启动，窗口几何仍临时受管，不表示已备份或已完成启动检查，也不参与恢复成功判定；Host 在动作提交时重新验证身份、未完成事务、原始备份与应用后的窗口配置字节。私有 `mulnx-prepare` 的可选 `windowGeometry` 只接收来自本次 journal 的正整数、16:9 宽高（各不超过 32768），不接收任意参数文本；更新或清理请求禁止携带该目标，Demo 沿用同一几何约束。只有 Host 解析配置路径、应用设置与保存恢复记录；命令不接受路径或控制台文本。进行中的启动、受管理游戏或待恢复记录阻止修改选项。旧 `preserveQuality` 本机偏好迁移到对应画质及默认 60 帧／秒，不增加公开数据字段。
 
 桌面私有命令 `select_cs2_installation` 仅接受 `executable` 布尔选项，由 Host 打开原生选择框并验证、保存安装根目录；取消返回 false，不安装 GSI。`open_cs2_config_directory` 不接受路径，重新解析当前配置位置后打开文件夹。`gsi_status` 在既有布尔状态外返回 `readFailed`、有限问题列表、候选数、冲突文件与最近操作阶段。路径仅供本机设置页显示；支持包摘要保留问题码与阶段，完整日志保留实际技术路径、参数及相关配置，凭据值被替换。
 
@@ -281,7 +283,9 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 `GET /local/v1/rivalhub-connection` 的 `syncHealth` 是仅供制作人员的连接健康投影，不进入正式节目或网站输出。沿用当前关联、现场资格与公开输出身份；有明确绑定地图、完整当前首发与正式 live 观测后开始 15 秒宽限。状态区分未启用、主动停用、其他设备归属、等待、网站正在接收与需要处理；只有当前认领、生产实例、会话、输入代际和地图执行的新 LIVE 接受回执确认恢复。可靠开局确认、认领成功、普通丢帧、旧执行回执和手动补分均不确认恢复。异常标识跨短暂读取缺失与重试保持，真实恢复后下一次异常生成新标识；切比赛或执行重新宽限。
 
-`POST /operator/rivalhub/source/retry` 复用本机来源校验与现场、名单、权限守卫。有当前开局确认时解除实时发送退避，下一次只发送最新快照；未确认开局时重新认领本场，等待新遥测建立当前授权的可靠开局，不重放历史赛果。LIVE 在收到 HTTP 响应前发生明确的连接重置、连接拒绝、网络不可达、暂态 DNS 故障或超时时，采用 1 秒起、最高 2 秒的退避；服务器拒绝、响应异常、广播失败及其它未确认原因继续采用最高 8 秒退避。失败类别切换重新计数，成功接收或切换地图执行清除旧退避；新执行仍须等待其可靠开局确认。退避结束只发送最新快照，不缓存或重发旧帧。认领与停止操作在服务端互斥；主动停止禁止本场新产生的实时和可靠发送，持久交接后仅收尾已有可靠队列；远端释放失败仍保留本地禁发，只有明确重新认领成功才解除。其他设备归属按比赛限定；HTTP 403 只证明请求被拒，不能据此猜测另一台设备或来源已释放。现有诊断与可靠赛果守卫保持独立。
+本机连接视图的 `sourceReady / sourceBlockedCode / sourceBlockedAction / sourceBlockedReason` 来自当前输出资格与来源守卫；只读资格不制造有效快照。可靠输出存储初始化失败时返回 `output_unavailable` 与诊断入口，禁止认领、恢复和发送重试；独立有效的本机快照仍可读取。该状态不能用本机边界重试解除，保留原记录并在修复后重启。`sourceCommandPending` 仅表示既有来源命令仍在处理，界面等待其结束，不自动重放结果未知的命令。`claim / resume / retry / release` 均固定 `matchId / contextRevision`，过期请求拒绝。`POST /operator/rivalhub/source/retry` 复用本机来源校验与现场、名单、权限守卫。有当前开局确认时解除实时发送退避，下一次只发送最新快照；未确认开局时重新认领本场，等待新遥测建立当前授权的可靠开局，不重放历史赛果。LIVE 在收到 HTTP 响应前发生明确的连接重置、连接拒绝、网络不可达、暂态 DNS 故障或超时时，采用 1 秒起、最高 2 秒的退避；服务器拒绝、响应异常、广播失败及其它未确认原因继续采用最高 8 秒退避。失败类别切换重新计数，成功接收或切换地图执行清除旧退避；新执行仍须等待其可靠开局确认。退避结束只发送最新快照，不缓存或重发旧帧。认领与停止操作在服务端互斥；主动停止禁止本场新产生的实时和可靠发送，持久交接后仅收尾已有可靠队列；远端释放失败仍保留本地禁发，只有明确重新认领成功才解除。其他设备归属按比赛限定；HTTP 403 只证明请求被拒，不能据此猜测另一台设备或来源已释放。现有诊断与可靠赛果守卫保持独立。
+
+`POST /operator/rivalhub/output/retry` 是本机同步记录的独立恢复入口，接受当前 `matchId / contextRevision`，前后均核对本场；仅允许回环与可信 Origin。它只重试原边界及待写事件的本地持久化，不认领来源、恢复远端授权或主动发送，不要求当前快照、配对或现场发布就绪。来源无效返回 403，目标变化或记录仍未确认返回 409，恢复能力未接入返回 503。200 的 `ok: true` 仅确认本机记录已核对，仍须等待当前数据与网站实际接收。存在此类待确认记录时，连接视图优先返回 `sourceBlockedCode: output_persistence_pending` 和 `sourceBlockedAction: output-retry`，保留 `sourceReady: false`，界面提供“重试保存同步记录”；来源认领的权限与当前执行守卫保持不变。
 
 `POST /operator/rivalhub/source/resume` 固定 matchId/contextRevision，核对当前制作与输入范围，在原 sourceCommands 串行区先清算旧 scope，再合法复用或默认不接管地认领。等待当前执行可靠开始 ACK 与预期 LIVE accepted 才确认正在同步。进入或返回工作台不隐式执行该命令，主动停止仍有独立恢复入口；目标变化使在途恢复失效，已产生但过期的认领按原身份交接。
 
@@ -309,6 +313,8 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ### 观战连接命令
 
+Host 私有观察器控制接口沿用 `x-runtime-token` 与 Origin 限制。`prepare` 复用或 `start` 成功签发的 `leaseToken` 与配置修订不同，仅用于本次意图的续租与停止，不进入浏览器视图或日志正文。续租仍须核对受管实例、会话与退出代次；过期旧租约不作用于新意图。六秒失联停收后，只允许三十秒内同一有效意图恢复接收一次；主动停止或正常结束不自动重启，不重新提交游戏连接。本机观察器视图的 `stopReason` 区分 `paused / production-ended / connection-changed / disabled / host-invalid / lease-expired`，`recovering` 仅表示同一恢复尝试进行中；组件清理失败优先保留。手动恢复沿用既有接收恢复与 Host 启动入口，停止原因进入当前尝试证据与诊断包。
+
 端点使用规范十进制 IPv4 与有效端口；IPv4 各分段除单独的 `0` 外不得有前导零。普通输入、高级端点和命令 formatter 使用同一校验，拒绝不规范地址，不静默改写。
 
 本机观战配置接受裸数字 IPv4:port，或只含一次 `connect` 与可选一次 `password` 的受限命令；两条命令可交换顺序，支持大小写、外围空格、参数引号和一个尾分号。拒绝重复／额外命令、无效端口与注入字符，密码字符范围保持不变。27025／27026 固定映射为早源／节目源；其他端点需要显式高级配置。`@mizar/protocol/assist` 的 `formatObserverConnection` 统一输出 connect 在前、password 在后的安全节目源命令；空密码和含空格密码使用引号；高级端点往返解析需保留原显式早源与节目源配置。
@@ -321,7 +327,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。
 
-工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，并拒绝已取消的准备；游戏窗口尚未出现时返回 `state: waiting`、`reason: target_unavailable`，不创建临时捕获。唯一实际窗口核对及必要的目标修复完成后，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
+工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，并拒绝已取消的准备；游戏窗口尚未出现时返回 `state: waiting`、`reason: target_unavailable`，不创建临时捕获。唯一实际窗口核对及必要的目标修复完成后，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。临时租约仍存在时，输出启停与配置使用同一串行边界，开始输出返回准备中或待清理；未知清理结果不能当作已释放。已有输出时捕获准备只读核对，不添加临时项目。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
 
 Host 的私有 `/operator/runtime/mulnx-prepare` 可带 `captureCompatibility`，仅对本次受管工作台启动临时补入捕获兼容参数；原 `launchOptions` 由既有所有权记录恢复，不能覆盖期间的用户修改。
 

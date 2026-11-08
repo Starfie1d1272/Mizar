@@ -7,6 +7,8 @@ import { desktopInvoke } from '../workspace/client';
 import { ToolShell } from '../patterns';
 import { usePreparationStatus } from './AutomaticPreparation';
 import {
+  observerFailureReason,
+  observerNeedsRecovery,
   requireConnectionRevision,
   resumeObserverReceiver,
   type ObserverRuntimeView,
@@ -65,15 +67,15 @@ export function MatchConnectionDialog() {
           : 'connect');
   const enabled = view?.settings.enabled === true;
   const paused = enabled && Boolean(view?.receiverPaused);
-  const failed = Boolean(
-    enabled &&
-    !paused &&
-    (runtime?.error ||
-      runtime?.failed ||
-      ['failed', 'ended', 'stopped'].includes(runtime?.health.state ?? '')),
+  const failed =
+    enabled && !paused && !runtime?.pending && Boolean(runtime && observerNeedsRecovery(runtime));
+  const ended = Boolean(
+    runtime && !runtime.pending && !failed && ['ended', 'stopped'].includes(runtime.health.state),
   );
-  const healthy = Boolean(
-    !busy && submitted && (!enabled || (!paused && !failed && runtime?.health.state === 'live')),
+  const canReturn = Boolean(
+    !busy &&
+    submitted &&
+    (!enabled || (!paused && !failed && (runtime?.health.state === 'live' || ended))),
   );
   const manualCommand =
     submitted && manual?.revision === view?.revision && !runtime?.programCommandQueued
@@ -155,9 +157,11 @@ export function MatchConnectionDialog() {
         setRegisteredAt(Date.now());
         task.event('registered', { revision: currentRevision });
       }
-      if (saved && view) await resumeObserverReceiver(view, task);
-      else if (window.__TAURI_INTERNALS__) {
-        await desktopInvoke(
+      if (saved && view) {
+        const result = await resumeObserverReceiver(view, task);
+        if (result?.warning) setError(result.warning);
+      } else if (window.__TAURI_INTERNALS__) {
+        const result = await desktopInvoke<{ warning?: string | null }>(
           'observer_command',
           {
             action: 'start-configured',
@@ -165,6 +169,7 @@ export function MatchConnectionDialog() {
           },
           task,
         );
+        if (result.warning) setError(result.warning);
       }
       task.finish('unconfirmed', {
         registration: 'confirmed',
@@ -273,17 +278,23 @@ export function MatchConnectionDialog() {
             </Button>
           </StatusBanner>
         ) : null}
-        {saved && !replaced ? (
-          <p role="status">
+        {saved && !replaced && (!failed || !error) ? (
+          <p role={failed ? 'alert' : 'status'}>
             {!enabled
               ? '连接已保存。提前提示当前未开启。'
               : paused
                 ? '提前提示接收已暂停，游戏连接与本图地址保留。'
-                : runtime?.health.state === 'live'
-                  ? '正在接收比赛数据，提前提示会在数据就绪后显示。'
-                  : preparation?.running
-                    ? '连接已保存，游戏就绪后会继续。'
-                    : '连接已保存，正在等待比赛数据。'}
+                : failed
+                  ? observerFailureReason(runtime!)
+                  : ended
+                    ? '本次观战连接已结束。'
+                    : runtime?.pending
+                      ? '正在准备提前提示…'
+                      : runtime?.health.state === 'live'
+                        ? '正在接收比赛数据，提前提示会在数据就绪后显示。'
+                        : preparation?.running
+                          ? '连接已保存，游戏就绪后会继续。'
+                          : '连接已保存，正在等待比赛数据。'}
           </p>
         ) : null}
         {replaced ? (
@@ -321,7 +332,7 @@ export function MatchConnectionDialog() {
           </section>
         ) : null}
         {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
-        {healthy ? (
+        {canReturn ? (
           <Button
             variant="primary"
             onClick={() => {

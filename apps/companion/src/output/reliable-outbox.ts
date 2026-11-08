@@ -1,4 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
+import {
+  BoundaryCaptureError,
+  parseBoundaryCapture,
+  type BoundaryCaptureOperation,
+} from './boundary-capture.js';
 import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/output';
 import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 import { durableJsonByteLength } from '../match-context/durable-json.js';
@@ -111,7 +117,26 @@ export class ReliableOutbox {
   private boundaryGap: true | undefined;
   private boundaryGaps: readonly BoundaryScope[] = [];
   private boundaryOverflowOwners: readonly string[] = [];
-  private boundaryCaptureFailed = false;
+  private boundaryCaptureLost = false;
+  private readonly pendingBoundaryCaptures = new Map<string, BoundaryCaptureOperation>();
+  private readonly durableBoundaryCaptures = new Set<string>();
+  private activeBoundaryCapture: BoundaryCaptureOperation | undefined;
+  private get boundaryCaptureFailed(): boolean {
+    return (
+      this.boundaryCaptureLost ||
+      [...this.pendingBoundaryCaptures.keys()].some((id) =>
+        this.unconfirmedWrites.has(`boundary:${id}`),
+      )
+    );
+  }
+
+  getBoundaryCaptureRecovery(): { pending: number; durable: number; lost: boolean } {
+    return {
+      pending: this.pendingBoundaryCaptures.size,
+      durable: this.durableBoundaryCaptures.size,
+      lost: this.boundaryCaptureLost,
+    };
+  }
   private readonly queue = new SerialCommitQueue();
   private readonly unconfirmedWrites = new Set<string>();
   private durabilityContext: string | undefined;
@@ -123,7 +148,12 @@ export class ReliableOutbox {
   private readonly revoking = new Map<string, { source: ExactSource; count: number }>();
   private readonly pendingEnqueues = new Map<
     string,
-    { event: ReliableEventV1; source?: ExactSource | null; retry: () => Promise<boolean> }
+    {
+      event: ReliableEventV1;
+      source?: ExactSource | null;
+      bytes: number;
+      retry: () => Promise<boolean>;
+    }
   >();
 
   private noteUnconfirmedWrite(key: string): void {
@@ -215,6 +245,12 @@ export class ReliableOutbox {
     let file: OutboxFile;
     try {
       file = database.active();
+      this.boundaryCaptureLost = database.boundaryCaptureInputLost();
+      for (const operation of database.pendingBoundaryCaptures()) {
+        this.pendingBoundaryCaptures.set(operation.id, operation);
+        this.durableBoundaryCaptures.add(operation.id);
+        this.noteUnconfirmedWrite(`boundary:${operation.id}`);
+      }
     } catch (error) {
       database.close();
       throw error;
@@ -707,7 +743,8 @@ export class ReliableOutbox {
       (!gap.liveSessionId || !scope.liveSessionId || gap.liveSessionId === scope.liveSessionId) &&
       (!gap.ownerFingerprint ||
         !scope.ownerFingerprint ||
-        gap.ownerFingerprint === scope.ownerFingerprint) &&
+        gap.ownerFingerprint === scope.ownerFingerprint ||
+        (gap.matchId !== undefined && gap.matchId === scope.matchId)) &&
       (gap.runtimeSeq === undefined ||
         scope.runtimeSeq === undefined ||
         gap.runtimeSeq <= scope.runtimeSeq) &&
@@ -724,8 +761,11 @@ export class ReliableOutbox {
   }
 
   hasBoundaryGap(scope?: BoundaryScope): boolean {
+    return this.boundaryCaptureFailed || this.hasStoredBoundaryGap(scope);
+  }
+
+  private hasStoredBoundaryGap(scope?: BoundaryScope): boolean {
     return (
-      this.boundaryCaptureFailed ||
       this.boundaryGap === true ||
       (scope
         ? scope.ownerFingerprint
@@ -759,17 +799,90 @@ export class ReliableOutbox {
     scope?: BoundaryScope,
     source?: ExactSource | null,
   ): Promise<void> {
-    return this.queue.run(async () => {
-      await this.archiveLegacyTerminals();
-      if (source) source = parseSource(source);
-      for (const event of [...events, ...intents.map((intent) => intent.event)]) {
-        if (source !== null) this.assertSourceOpen(event, source);
-        if (this.repository().byKey(event.idempotencyKey).length)
-          throw new Error('boundary_duplicate');
+    // Freeze before yielding; callers may advance runtime, binding or authority immediately.
+    let operation: BoundaryCaptureOperation;
+    try {
+      operation = parseBoundaryCapture(
+        JSON.parse(
+          JSON.stringify({
+            events,
+            intents,
+            continuity,
+            missing,
+            at: now.toISOString(),
+            scope,
+            source,
+            reference: this.continuityReference ?? this.currentEvents().at(-1),
+          }),
+        ),
+      );
+      if (!this.pendingBoundaryCaptures.has(operation.id)) {
+        if (
+          this.pendingBoundaryCaptures.size >= RELIABLE_OUTBOX_MAX_PENDING ||
+          durableJsonByteLength([...this.pendingBoundaryCaptures.values(), operation]) > 4_000_000
+        )
+          throw new Error('boundary_capture_capacity_exhausted');
+        this.pendingBoundaryCaptures.set(operation.id, operation);
       }
-      try {
-        if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
-        const at = now.toISOString();
+    } catch (error) {
+      // The original request cannot be retained: no future successful write can erase this gap.
+      this.boundaryCaptureLost = true;
+      return Promise.reject(error);
+    }
+    return this.queue.run(() => this.captureBoundaryOperation(operation));
+  }
+
+  private async captureBoundaryOperation(operation: BoundaryCaptureOperation): Promise<void> {
+    const { request } = operation;
+    const { events, intents, continuity, missing, scope, source } = request;
+    const key = `boundary:${operation.id}`;
+    let stage: BoundaryCaptureError['stage'] = 'journal';
+    try {
+      await this.durableOperation(key, async () => {
+        // Stage the complete ordered backlog together, including a prior failed journal write.
+        if (
+          this.boundaryCaptureLost ||
+          [...this.pendingBoundaryCaptures.keys()].some(
+            (id) => !this.durableBoundaryCaptures.has(id),
+          )
+        )
+          this.repository().stageBoundaryCaptures(
+            [...this.pendingBoundaryCaptures.values()],
+            this.boundaryCaptureLost,
+          );
+        for (const id of this.pendingBoundaryCaptures.keys()) this.durableBoundaryCaptures.add(id);
+        if (this.boundaryCaptureLost) throw new Error('boundary_capture_input_lost');
+        stage = 'verify';
+        if (this.repository().boundaryCaptureReceipt(operation)) {
+          // A COMMIT response may have been lost. Read authoritative state, never overwrite it.
+          const file = this.repository().active();
+          this.records = file.records;
+          this.boundaryIntents = file.boundaryIntents ?? [];
+          this.boundaryGap = file.boundaryGap;
+          this.boundaryGaps = file.boundaryGaps ?? [];
+          this.boundaryOverflowOwners = file.boundaryOverflowOwners ?? [];
+          this.continuity = file.continuity;
+          this.continuityReference = file.continuityReference;
+          return;
+        }
+        if (this.pendingBoundaryCaptures.keys().next().value !== operation.id)
+          throw new Error('boundary_capture_waiting');
+        this.activeBoundaryCapture = operation;
+        stage = 'preflight';
+        await this.archiveLegacyTerminals();
+        for (const event of [...events, ...intents.map((intent) => intent.event)]) {
+          if (source !== null) this.assertSourceOpen(event, source);
+          if (
+            this.repository().byKey(event.idempotencyKey).length ||
+            this.records.some((record) => record.event.idempotencyKey === event.idempotencyKey) ||
+            this.boundaryIntents.some(
+              (intent) => intent.event.idempotencyKey === event.idempotencyKey,
+            )
+          )
+            throw new Error('boundary_duplicate');
+        }
+        stage = 'commit';
+        const at = request.at;
         const added = events.map((event) =>
           parseRecord({
             event,
@@ -854,7 +967,7 @@ export class ReliableOutbox {
             overflowOwners = [...overflowOwners, scope.ownerFingerprint];
         }
         if (gap && !scope) throw new Error('boundary_gap_scope_unavailable');
-        const frozen = gap || this.hasBoundaryGap(scope);
+        const frozen = gap || this.hasStoredBoundaryGap(scope);
         await this.commit(
           overflow || records.length > RELIABLE_OUTBOX_MAX_RECORDS ? this.records : records,
           frozen ? this.continuity : (continuity ?? this.continuity),
@@ -862,10 +975,39 @@ export class ReliableOutbox {
           this.boundaryGap,
           gaps,
           overflowOwners,
+          [],
+          operation,
         );
-      } catch (error) {
-        this.boundaryCaptureFailed = true;
-        throw error;
+        stage = 'verify';
+        if (!this.repository().boundaryCaptureReceipt(operation))
+          throw new Error('boundary_capture_receipt_missing');
+      });
+      // Only the original operation's atomic receipt clears its write failure.
+      this.unconfirmedWrites.delete(key);
+      this.pendingBoundaryCaptures.delete(operation.id);
+      this.durableBoundaryCaptures.delete(operation.id);
+    } catch (error) {
+      this.noteUnconfirmedWrite(key);
+      throw new BoundaryCaptureError(operation.id, stage, request, error);
+    } finally {
+      this.activeBoundaryCapture = undefined;
+    }
+  }
+
+  retryPendingBoundaryCaptures(drain = false): Promise<void> {
+    return this.queue.run(async () => {
+      if (this.boundaryCaptureLost && !this.pendingBoundaryCaptures.size) {
+        this.repository().stageBoundaryCaptures([], true);
+        throw new Error('boundary_capture_input_lost');
+      }
+      // A running app repairs at most four transactions per tick. Startup/shutdown may
+      // drain the bounded backlog, yielding between each SQLite transaction for local consumers.
+      for (const operation of [...this.pendingBoundaryCaptures.values()].slice(
+        0,
+        drain ? RELIABLE_OUTBOX_MAX_PENDING : 4,
+      )) {
+        await this.captureBoundaryOperation(operation);
+        await setImmediate();
       }
     });
   }
@@ -1021,6 +1163,12 @@ export class ReliableOutbox {
     ] as const);
     if (!replaying && this.pendingEnqueues.size) await this.retryPendingEnqueues();
     return this.runDurable(operationKey, async () => {
+      // Retain legitimate one-shot results while their preceding boundary is unconfirmed.
+      // Do not classify a transient write failure as a missing historical fact.
+      if (this.boundaryCaptureFailed) {
+        this.noteUnconfirmedWrite(operationKey);
+        throw new Error('boundary_capture_pending');
+      }
       // Preserve original accepted work before committing unrelated later events.
       if (!replaying && this.pendingEnqueues.size) {
         this.noteUnconfirmedWrite(operationKey);
@@ -1095,19 +1243,38 @@ export class ReliableOutbox {
           ? this.records.map((item) => (item === rejected[0] ? proofQueued : item))
           : [...this.records, proofQueued];
       }
-      const records = this.trim([...existing, next]);
+      // A repaired boundary may already be stored after this original result's cursor.
+      // Restore its causal position in the existing queue, never change the event itself.
+      const before = existing.findIndex(
+        (record) =>
+          record.status === 'pending' &&
+          this.sameDeliveryScope(record, next) &&
+          record.event.cursor.runtimeSeq > valid.cursor.runtimeSeq,
+      );
+      const records = this.trim(
+        before < 0
+          ? [...existing, next]
+          : [...existing.slice(0, before), next, ...existing.slice(before)],
+      );
       if (records.length > RELIABLE_OUTBOX_MAX_RECORDS) throw new Error('reliable_outbox_full');
+      const checkpoint = continuity ?? {
+        matchId: valid.matchId,
+        contextRevision: valid.contextRevision,
+        cursor: valid.cursor,
+        mapName: valid.mapName,
+        savedAt: at,
+      };
+      const keepCheckpoint =
+        replaying &&
+        this.continuity &&
+        (this.continuity.cursor.producerInstanceId !== checkpoint.cursor.producerInstanceId ||
+          this.continuity.cursor.liveSessionId !== checkpoint.cursor.liveSessionId ||
+          this.continuity.cursor.runtimeSeq >= checkpoint.cursor.runtimeSeq);
       await this.commit(
         records,
-        this.hasBoundaryGap(scope) || this.getBoundaryIntents(scope).length
+        keepCheckpoint || this.hasBoundaryGap(scope) || this.getBoundaryIntents(scope).length
           ? this.continuity
-          : (continuity ?? {
-              matchId: valid.matchId,
-              contextRevision: valid.contextRevision,
-              cursor: valid.cursor,
-              mapName: valid.mapName,
-              savedAt: at,
-            }),
+          : checkpoint,
       );
       return true;
     }).then(
@@ -1116,14 +1283,49 @@ export class ReliableOutbox {
         return result;
       },
       (error: unknown) => {
-        if (this.unconfirmedWrites.has(operationKey))
+        if (this.unconfirmedWrites.has(operationKey)) {
+          const bytes = durableJsonByteLength(retryArgs);
+          if (
+            !this.pendingEnqueues.has(operationKey) &&
+            (this.pendingEnqueues.size >= RELIABLE_OUTBOX_MAX_PENDING ||
+              [...this.pendingEnqueues.values()].reduce(
+                (total, item) => total + item.bytes,
+                bytes,
+              ) > 4_000_000)
+          ) {
+            this.boundaryCaptureLost = true;
+            throw new Error('outbox_pending_enqueue_capacity_exhausted', { cause: error });
+          }
           this.pendingEnqueues.set(operationKey, {
             event: retryArgs[0],
+            bytes,
             ...(retryArgs[6] === undefined ? {} : { source: retryArgs[6] }),
             retry: () => this.enqueue(...retryArgs, true),
           });
+        }
         throw error;
       },
+    );
+  }
+
+  private sameDeliveryScope(
+    a: { event: ReliableEventV1; source?: ExactSource | null },
+    b: { event: ReliableEventV1; source?: ExactSource | null },
+  ): boolean {
+    return (
+      a.event.matchId === b.event.matchId &&
+      a.event.cursor.producerInstanceId === b.event.cursor.producerInstanceId &&
+      a.event.cursor.liveSessionId === b.event.cursor.liveSessionId &&
+      (!a.source || !b.source || sourceKey(a.source) === sourceKey(b.source))
+    );
+  }
+
+  hasUnconfirmedWrites(): boolean {
+    return (
+      this.unconfirmedWrites.size > 0 ||
+      this.boundaryCaptureFailed ||
+      this.pendingBoundaryCaptures.size > 0 ||
+      this.pendingEnqueues.size > 0
     );
   }
 
@@ -1149,6 +1351,7 @@ export class ReliableOutbox {
       for (const pending of [...this.pendingEnqueues.values()]) {
         try {
           await pending.retry();
+          await setImmediate();
         } catch {
           break;
         } // Keep every original request; retry storage later, not a newer replacement.
@@ -1233,6 +1436,19 @@ export class ReliableOutbox {
         );
         for (const record of this.records) {
           if (record.status !== 'pending') {
+            next.push(record);
+            continue;
+          }
+          // An original fact still waiting for a local write cannot be overtaken by
+          // a later boundary/start in the same delivery scope. Other scopes continue.
+          if (
+            [...this.pendingEnqueues.values()].some(
+              (pending) =>
+                pending.event.kind !== 'map_player_snapshot' &&
+                this.sameDeliveryScope(pending, record) &&
+                pending.event.cursor.runtimeSeq <= record.event.cursor.runtimeSeq,
+            )
+          ) {
             next.push(record);
             continue;
           }
@@ -1592,9 +1808,9 @@ export class ReliableOutbox {
 
   async flushForShutdown(): Promise<void> {
     await this.queue.flush();
+    await this.retryPendingBoundaryCaptures(true);
     await this.retryPendingEnqueues();
-    if (this.unconfirmedWrites.size || this.boundaryCaptureFailed || this.pendingEnqueues.size)
-      throw new Error('outbox_durable_write_unconfirmed');
+    if (this.hasUnconfirmedWrites()) throw new Error('outbox_durable_write_unconfirmed');
   }
 
   async close(): Promise<void> {
@@ -1637,8 +1853,10 @@ export class ReliableOutbox {
     boundaryGaps = this.boundaryGaps,
     boundaryOverflowOwners = this.boundaryOverflowOwners,
     history: readonly OutboxHistory[] = [],
+    boundaryCapture?: BoundaryCaptureOperation,
   ): Promise<void> {
-    if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
+    if (this.boundaryCaptureFailed && !this.activeBoundaryCapture)
+      throw new Error('boundary_capture_blocked');
     const continuityReference =
       records.at(-1)?.event ??
       boundaryIntents.at(-1)?.event ??
@@ -1676,7 +1894,11 @@ export class ReliableOutbox {
     };
     const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     await this.trackDurability(`snapshot:${key}`, async () =>
-      this.repository().commit({ active: file, history }),
+      this.repository().commit({
+        active: file,
+        history,
+        ...(boundaryCapture ? { boundaryCapture } : {}),
+      }),
     );
     const previous = this.records;
     this.records = records;

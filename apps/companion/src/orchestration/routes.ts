@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { orchestrationPresetSchema, CAMERA_STAGES } from '@mizar/protocol/orchestration';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MusicStore } from '../music/store.js';
-import type { MulnxTool } from './tool.js';
+import { mulnxWindowGeometrySchema, type MulnxTool } from './tool.js';
 import type { CameraDirector } from './director.js';
 
 export const nativeCs2PathSchema = z
@@ -260,9 +260,11 @@ export function registerOrchestrationRoutes(
           preparation: z.strictObject({ id: z.uuid(), revision: z.uuid() }).optional(),
           cleanup: z.boolean().default(false),
           consoleCapture: z.boolean().default(false),
+          protectPreviousConsole: z.boolean().default(false),
           update: z.boolean().default(false),
           spectatorCfg: z.boolean().default(false),
           captureCompatibility: z.boolean().default(false),
+          windowGeometry: mulnxWindowGeometrySchema.optional(),
           demoCfg: z
             .string()
             .regex(/^mizar_demo_[0-9a-f-]{36}\.cfg$/i)
@@ -274,7 +276,12 @@ export function registerOrchestrationRoutes(
         if (
           !(session?.canPrepare?.(body.preparation) || (body.cleanup && session?.canCleanup?.())) ||
           (body.cleanup &&
-            (body.update || body.spectatorCfg || body.demoCfg || body.captureCompatibility)) ||
+            (body.update ||
+              body.spectatorCfg ||
+              body.demoCfg ||
+              body.captureCompatibility ||
+              body.windowGeometry !== undefined)) ||
+          (body.update && body.windowGeometry !== undefined) ||
           (body.preparation && (body.update || body.demoCfg))
         )
           throw new Error('mulnx_preparation_required');
@@ -292,6 +299,8 @@ export function registerOrchestrationRoutes(
         body.demoCfg ?? undefined,
         body.captureCompatibility,
         verify,
+        body.windowGeometry,
+        body.protectPreviousConsole,
       );
       verify();
       if (previous !== tool.selectionId) {

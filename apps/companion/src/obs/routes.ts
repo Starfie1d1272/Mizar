@@ -38,7 +38,7 @@ const outputMessages: Record<ObsOutputError['code'], string> = {
 };
 function outputFailure(error: ObsOutputError) {
   const code = Object.hasOwn(outputMessages, error.code) ? error.code : 'obs_output_failed';
-  return { error: code, message: outputMessages[code] };
+  return { error: code, message: error.message || outputMessages[code] };
 }
 
 export function registerObsRoutes(
@@ -288,9 +288,18 @@ export function registerObsRoutes(
     if (!parsed.success)
       return reply.code(400).send({ error: 'obs_output_invalid', message: 'OBS 操作格式有误。' });
     try {
-      return { ok: true, outputs: await options.adapter.outputCommand(parsed.data) };
+      return {
+        ok: true,
+        outputs: await options.adapter.outputCommand(
+          parsed.data,
+          () => !request.raw.aborted && !reply.raw.destroyed,
+        ),
+      };
     } catch (error) {
-      if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
+      if (error instanceof ObsOutputError)
+        return reply
+          .code(409)
+          .send({ ...outputFailure(error), outputs: await options.adapter.outputStatus() });
       return reply
         .code(409)
         .send({ error: 'obs_output_failed', message: 'OBS 操作未完成，请重新核对状态。' });
@@ -322,7 +331,7 @@ export function registerObsRoutes(
       .object({
         expectedRevision: z.unknown(),
         since: z.number().finite(),
-        transactionId: z.string().uuid(),
+        transactionId: z.string().uuid().nullable(),
       })
       .strict()
       .safeParse(request.body);
@@ -331,10 +340,13 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'capture_check_invalid' });
     const valid = options.preparationValid(body.data.expectedRevision);
     if (!valid()) return reply.code(409).send({ error: 'preparation_changed' });
-    if (!(await options.adapter.captureWarmupMatches(body.data.transactionId, body.data.since)))
+    if (
+      body.data.transactionId !== null &&
+      !(await options.adapter.captureWarmupMatches(body.data.transactionId, body.data.since))
+    )
       return reply
         .code(409)
-        .send({ error: 'capture_warmup_changed', message: 'OBS 临时采集已失效，请重试。' });
+        .send({ error: 'capture_warmup_changed', message: 'OBS 游戏画面检查已中断，请重新检查。' });
     const diagnostic = await captureDiagnostic(true, body.data.since);
     try {
       const status = await options.adapter.captureInitialization(
@@ -388,7 +400,7 @@ export function registerObsRoutes(
             .code(409)
             .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
         const result = await options.adapter.beginCaptureWarmup(parsed.data, current);
-        if ('transactionId' in result) id = result.transactionId;
+        if ('transactionId' in result && result.transactionId) id = result.transactionId;
         if (!current()) {
           if (id) await options.adapter.releaseCaptureWarmup(id);
           return reply
@@ -418,7 +430,7 @@ export function registerObsRoutes(
         );
         return reply.code(409).send({
           error: 'capture_warmup_failed',
-          message: 'OBS 临时采集未确认，请检查状态后重试。',
+          message: 'OBS 游戏画面检查未完成，请重新检查；仍失败时导出诊断。',
         });
       }
     });
@@ -512,6 +524,7 @@ export function registerObsRoutes(
   }
   for (const action of [
     'check',
+    'capture-recover',
     'ensure',
     'audio-setup',
     'repair',
@@ -522,7 +535,7 @@ export function registerObsRoutes(
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
-        if (action === 'ensure' || action === 'repair' || action === 'check') {
+        if (['ensure', 'repair', 'check', 'capture-recover'].includes(action)) {
           request.log.info(
             { event: 'obs', stage: 'obs_preparation_start', action },
             'OBS preparation started',
@@ -552,7 +565,9 @@ export function registerObsRoutes(
                 )
               : action === 'repair'
                 ? await options.adapter.repair(options.activeScene, () => valid() && connected())
-                : await options.adapter.check();
+                : action === 'capture-recover'
+                  ? await options.adapter.recoverCaptureWarmup(() => valid() && connected())
+                  : await options.adapter.check();
           request.log.info(
             {
               event: 'obs',
@@ -571,11 +586,16 @@ export function registerObsRoutes(
             if (!valid() || !connected())
               return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
           }
+          const outputs =
+            action === 'capture-recover' ? await options.adapter.outputStatus() : undefined;
+          if (action === 'capture-recover' && (!valid() || !connected()))
+            return reply.code(409).send({ message: '制作状态已变化，请重新检查。' });
           return {
             ok: true,
             findings,
             ...readiness,
             captureDiagnostic: diagnostic,
+            ...(outputs ? { outputs } : {}),
           };
         }
         if (action === 'audio-setup') {
@@ -591,7 +611,7 @@ export function registerObsRoutes(
         }
       } catch (error: unknown) {
         if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
-        if (error instanceof ObsVideoError)
+        if (error instanceof ObsVideoError || error instanceof ObsCaptureWarmupError)
           return reply.code(409).send({ error: error.code, message: error.message });
         if (error instanceof ObsActionError)
           return reply.code(409).send({

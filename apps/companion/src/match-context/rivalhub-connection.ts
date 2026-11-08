@@ -602,11 +602,15 @@ export class RivalHubConnection {
     if (matchId && this.stoppedMatchId === matchId) return result('stopped');
     if (this.activeDeviceName && this.activeDeviceMatchId === matchId)
       return result('other_device');
+    const controlFailure =
+      snapshot && this.controlFailureScope === this.failureScope(snapshot)
+        ? this.controlFailure
+        : null;
     // Only a current, bound formal execution can start a watch. Warmup and
     // unbound practice/demo inputs never establish an expected website stream.
     if (snapshot && snapshot.map.phase !== 'live') {
       this.syncWatch = null;
-      return result('inactive');
+      return result('inactive', controlFailure);
     }
     if (
       snapshot?.map.phase === 'live' &&
@@ -625,7 +629,7 @@ export class RivalHubConnection {
         };
     }
     const watch = this.syncWatch;
-    if (!watch) return result('inactive');
+    if (!watch) return result('inactive', controlFailure);
     const current =
       snapshot &&
       this.source?.matchId === snapshot.matchId &&
@@ -646,9 +650,7 @@ export class RivalHubConnection {
     }
     const reason =
       boundaryStatus ??
-      (snapshot && this.controlFailureScope === this.failureScope(snapshot)
-        ? this.controlFailure
-        : null) ??
+      controlFailure ??
       (!snapshot
         ? 'input_unavailable'
         : !this.source
@@ -1775,11 +1777,16 @@ export class RivalHubConnection {
     };
   }
 
-  async claim(snapshot: LiveSnapshotV1, contextRevision: string, takeover: boolean) {
+  async claim(
+    snapshot: LiveSnapshotV1,
+    contextRevision: string,
+    takeover: boolean,
+    isCurrent: () => boolean = () => true,
+  ) {
     this.requireSourceState();
     const generation = this.bindingGeneration;
     return this.sourceCommands.run(() =>
-      this.claimLocked(snapshot, contextRevision, takeover, generation),
+      this.claimLocked(snapshot, contextRevision, takeover, generation, isCurrent),
     );
   }
 

@@ -34,7 +34,7 @@ struct Task {
     camera_uncertain: bool,
     entered: bool,
     enter_attempted: bool,
-    presented: bool,
+    panel_epoch: Option<u64>,
     video_transaction: Option<String>,
     message: String,
 }
@@ -414,9 +414,6 @@ async fn prepare_obs(
         let result: Result<(), String> = async {
             check(&app, &id)?;
             let mut obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
-            if task.obs_owned && obs["connection"] == "connected" && obs["sceneAligned"] == false {
-                return Err("OBS 场景已由操作者接管，未自动切换。".into());
-            }
             if obs["connection"] != "connected" {
                 if obs["connection"] == "password_required"
                     || obs["connection"] == "invalid_password"
@@ -447,6 +444,32 @@ async fn prepare_obs(
                 if obs["connection"] != "connected" {
                     return Err("OBS 未能连接，请检查后重试。".into());
                 }
+            }
+            let outputs = http(&app, "GET", "/local/v1/obs/outputs", json!({})).await?;
+            let observing = ["stream", "record"].iter().any(|kind| {
+                let output = &outputs[*kind];
+                output["active"] == true
+                    || matches!(
+                        output["phase"].as_str(),
+                        Some("starting" | "stopping" | "reconnecting" | "paused")
+                    )
+            });
+            if observing {
+                // An existing output is observed, never reinitialized or switched by preparation.
+                let checked = http(&app, "POST", "/operator/obs/check", json!({})).await?;
+                if let Some(finding) = checked["blockingFindings"]
+                    .as_array()
+                    .and_then(|items| items.first())
+                {
+                    return Err(finding["message"]
+                        .as_str()
+                        .unwrap_or("OBS 当前配置尚未确认，请在 OBS 核对。")
+                        .to_string());
+                }
+                return check(&app, &id);
+            }
+            if task.obs_owned && obs["sceneAligned"] == false {
+                return Err("OBS 场景已由操作者接管，未自动切换。".into());
             }
             http(
                 &app,
@@ -700,8 +723,11 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let task = snapshot()?
         .filter(|t| t.id == id)
         .ok_or("准备任务不存在。")?;
-    if !task.presented {
-        crate::workspace_presentation::panels(app.clone(), id.clone()).await?;
+    if task.panel_epoch.is_none() {
+        let epoch = crate::workspace_presentation::panels(app.clone(), id.clone()).await?;
+        update(&id, |task| {
+            task.panel_epoch = task.panel_epoch.max(Some(epoch))
+        });
     }
     publish(&app, &id, "正在准备游戏和 OBS，可先填写 GoTV。".into());
     let mut errors = Vec::new();
@@ -720,6 +746,23 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         let followup: Result<(), String> = async {
             update(&id, |t| t.game = true);
             check(&app, &id)?;
+            // The game may be used while OBS capture or camera preparation is still pending.
+            // Use the latest explicit panel entry, not the snapshot from before
+            // game startup. Hidden/reopened windows may have a newer intent.
+            if let Some(epoch) = snapshot()?
+                .filter(|task| task.id == id)
+                .and_then(|task| task.panel_epoch)
+            {
+                if let Err(error) = crate::workspace_presentation::finish_preparation(
+                    app.clone(),
+                    id.clone(),
+                    epoch,
+                )
+                .await
+                {
+                    errors.push(error);
+                }
+            }
             let connection = http(&app, "GET", "/local/v1/observer-assist", json!({})).await?;
             if connection["mapConnection"].is_object() {
                 diagnostic(
@@ -738,24 +781,15 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                     connection["revision"].as_str().map(str::to_owned),
                 )
                 .await
-                .map(|_| ());
+                .map(|value| {
+                    if let Some(warning) = value["warning"].as_str() {
+                        errors.push(warning.to_owned());
+                    }
+                });
                 diagnostic_result(&app, &id, "connection", &result);
                 if let Err(error) = result {
                     errors.push(error);
                 }
-            }
-            // The game may be used while OBS capture or camera preparation is still pending.
-            if !task.presented {
-                crate::workspace_presentation::present(
-                    app.clone(),
-                    true,
-                    Some(id.clone()),
-                    None,
-                    None,
-                    None,
-                )
-                .await?;
-                update(&id, |t| t.presented = true);
             }
             Ok(())
         }
@@ -799,7 +833,10 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
             if warmup["state"] == "waiting" {
                 return Err(warmup["message"].as_str().unwrap_or("OBS 尚未发现可用的 CS2 窗口，请确认游戏已启动，再重试准备。").to_string());
             }
-            let transaction = warmup["transactionId"].as_str().ok_or("游戏捕获准备未确认。")?.to_owned();
+            let transaction = warmup["transactionId"].as_str().map(str::to_owned);
+            if transaction.is_none() && !warmup["transactionId"].is_null() {
+                return Err("游戏捕获准备未确认。".into());
+            }
             let since = warmup["startedAt"].clone();
             let capture = async {
                 let mut message = "OBS 游戏捕获未确认，请检查后重试。";
@@ -817,11 +854,16 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                 }
                 Err(message.to_string())
             }.await;
-            let release = http(&app, "POST", "/operator/obs/capture-warmup-release", json!({"transactionId":transaction})).await;
+            let release = if let Some(transaction) = transaction {
+                http(&app, "POST", "/operator/obs/capture-warmup-release", json!({"transactionId":transaction})).await
+            } else {
+                Ok(Value::Null)
+            };
             match (capture, release) {
                 (Ok(()), Ok(_)) => Ok(()),
                 (Err(error), Ok(_)) | (Ok(()), Err(error)) => Err(error),
-                (Err(first), Err(second)) => Err(format!("{first} 临时捕获来源清理未确认：{second}")),
+                (Err(first), Err(second)) if first == second => Err(first),
+                (Err(first), Err(second)) => Err(format!("{first} 临时采集仍待清理：{second}")),
             }
         }.await;
         diagnostic_result(&app, &id, "capture", &result);
@@ -831,7 +873,13 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         }
     }
     check(&app, &id)?;
-    publish(&app, &id, errors.join("；"));
+    let mut unique = Vec::new();
+    for error in errors {
+        if !unique.contains(&error) {
+            unique.push(error);
+        }
+    }
+    publish(&app, &id, unique.join("；"));
     Ok(())
 }
 fn spawn(app: tauri::AppHandle, id: String) {
@@ -965,7 +1013,7 @@ fn preparation_start(
         camera_uncertain: false,
         entered: false,
         enter_attempted: false,
-        presented: false,
+        panel_epoch: None,
         video_transaction: None,
         message: "正在准备游戏和 OBS…".into(),
     });
@@ -1325,7 +1373,12 @@ pub(crate) async fn enter(
                                 json!({"action":"enter","expectedRevision":view.revision}),
                             )?;
                         }
-                        crate::workspace_presentation::panels(app.clone(), task.id.clone()).await?;
+                        let epoch =
+                            crate::workspace_presentation::panels(app.clone(), task.id.clone())
+                                .await?;
+                        update(&task.id, |task| {
+                            task.panel_epoch = task.panel_epoch.max(Some(epoch))
+                        });
                         if !task.running {
                             update(&task.id, |task| task.preserve |= preserve_settings);
                             preparation_retry(app, task.id)?;

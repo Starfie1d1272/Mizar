@@ -1,5 +1,4 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
-use crate::host_state::HostState;
 use crate::{
     cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
     preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
@@ -328,15 +327,11 @@ pub(crate) async fn start(
                             }),
                         };
                         guard.check()?;
-                        let result = cs2.start_preparation(
+                        cs2.start_preparation(
                             preserve_settings.unwrap_or(false),
                             preparation_id.as_deref(),
                             &guard,
-                        );
-                        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                            tracker.preserve_settings = cs2.preserve_settings();
-                        }
-                        result
+                        )
                     },
                 )
             }

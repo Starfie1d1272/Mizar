@@ -964,7 +964,9 @@ async fn present_workbench_panels(
     app: tauri::AppHandle,
     preparation_id: String,
 ) -> Result<(), String> {
-    workspace_presentation::panels(app, preparation_id).await
+    workspace_presentation::panels(app, preparation_id)
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1376,21 +1378,27 @@ async fn control_cs2_frame_rate(
 }
 
 #[tauri::command]
-fn persist_diagnostic_events(
+async fn persist_diagnostic_events(
     log: tauri::State<'_, DesktopLog>,
     events: Vec<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    log.persist_document_events(&events)
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.persist_document_events(&events))
+        .await
+        .map_err(|error| format!("诊断持久写入任务未完成：{error}"))?
 }
 
 #[tauri::command]
-fn diagnostic_pin(
+async fn diagnostic_pin(
     log: tauri::State<'_, DesktopLog>,
     action: String,
     pin_id: String,
     kind: String,
 ) -> Result<serde_json::Value, String> {
-    log.diagnostic_pin(&action, &pin_id, &kind)
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.diagnostic_pin(&action, &pin_id, &kind))
+        .await
+        .map_err(|error| format!("诊断固定任务未完成：{error}"))?
 }
 
 #[tauri::command]
@@ -1553,7 +1561,6 @@ fn run_desktop(
     let camera_state = managed.camera_state();
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
-    tracker.preserve_settings = managed.preserve_settings();
     let running = Arc::new(AtomicBool::new(true));
     let worker = Arc::new(Mutex::new(None::<thread::JoinHandle<()>>));
     let setup_worker = worker.clone();
@@ -1700,6 +1707,14 @@ fn run_desktop(
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
+            let observer_running = worker_running.clone();
+            let observer_host = host.clone();
+            thread::spawn(move || {
+                while observer_running.load(Ordering::Acquire) {
+                    observer_workspace::pulse(&observer_host);
+                    thread::sleep(Duration::from_secs(2));
+                }
+            });
             let camera_running = worker_running.clone();
             let camera_log = setup_log.clone();
             thread::spawn(move || {
@@ -1749,10 +1764,8 @@ fn run_desktop(
                         if let Some(_operation) = observer_workspace::try_operation() {
                           if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
                             cs2.poll();
-                            observer_workspace::pulse_locked(&host, &cs2);
                             workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
-                                tracker.preserve_settings = cs2.preserve_settings();
                                 tracker.set_owner(cs2.workspace_process().ok().flatten());
                             }
                           }

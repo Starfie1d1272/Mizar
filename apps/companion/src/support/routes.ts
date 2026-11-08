@@ -234,6 +234,8 @@ export function registerSupportRoutes(
             'delivery_failed',
             'session_budget_waiting_for_capacity',
             'queue_write_unconfirmed',
+            'ack_history_release_pending',
+            'ack_pin_release_pending',
             'journal_unreadable',
             'queue_budget_local_journal_retained',
             'manifest_budget_local_journal_retained',
@@ -283,6 +285,9 @@ export function registerSupportRoutes(
                 : null,
             deletionPending: available ? (delivery?.deletionPending ?? null) : null,
             queuedBatches: available ? (delivery?.queuedBatches ?? null) : null,
+            retainedAcknowledgedBatches: available
+              ? (delivery?.retainedAcknowledgedBatches ?? null)
+              : null,
             blockedBatches: available ? (delivery?.blockedBatches ?? null) : null,
             queuedBytes: available ? (delivery?.queuedBytes ?? null) : null,
             pendingBytes: available ? (delivery?.pendingBytes ?? null) : null,

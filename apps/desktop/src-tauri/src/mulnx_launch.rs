@@ -376,6 +376,8 @@ fn prepare_launcher(
     demo_cfg: Option<&str>,
     capture_compatibility: bool,
     preparation_id: Option<&str>,
+    window_geometry: Option<crate::cs2_video::VideoSize>,
+    console_journal: Option<&Value>,
 ) -> Result<Value, String> {
     let preparation = preparation_id
         .map(crate::preparation_task::mulnx_context)
@@ -389,6 +391,8 @@ fn prepare_launcher(
         capture_compatibility,
         preparation,
         false,
+        window_geometry,
+        console_journal,
     )
 }
 
@@ -459,7 +463,7 @@ fn launch_operation(
         .map_err(|_| "CS2 正忙，请稍后重试。")?
         .status()?;
     if preserve && status["canPreserve"] != true {
-        return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
+        return Err("请先完成未结束的启动或恢复，再保留画质与帧率启动。".into());
     }
     if status["pending"] == true
         || status["demoCleanupPending"] == true
@@ -584,6 +588,8 @@ fn launch_operation(
         None,
         false,
         preparation_id,
+        None,
+        None,
     )?;
     if update_only {
         no_game()?;
@@ -610,10 +616,10 @@ fn launch_operation(
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     no_game()?;
-    crate::observer_hud::preflight(log, status["preferMulnx"] == true)?;
+    // Optional HUD automation is checked at its command boundary after launch.
+    // Its consent/readback failure must not block the game itself.
     std::fs::create_dir_all(&results).map_err(|e| e.to_string())?;
     let pending = results.join("pending.json");
-    crate::cs2_session::atomic_write(&pending, b"{}")?;
     let recover_unsubmitted = || -> Result<(), String> {
         let mut cs2 = managed.lock().map_err(|_| "CS2 状态不可用。".to_string())?;
         match preparation_id {
@@ -639,6 +645,25 @@ fn launch_operation(
             )
         }
     };
+    // The configuration journal already owns recovery. Register this launch only
+    // after preparation, so its own pending marker cannot masquerade as an old request.
+    if let Err(error) = guard.commit(|| crate::cs2_session::atomic_write(&pending, b"{}")) {
+        return crate::preparation_gate::recover_unsubmitted(
+            Err(error),
+            demo.is_some(),
+            &recover_unsubmitted,
+        );
+    }
+    let dimension = |key: &str| {
+        journal["owned"][key]
+            .as_str()
+            .and_then(|value| value.parse::<i32>().ok())
+            .ok_or("工作台窗口尺寸记录缺失。")
+    };
+    let window_geometry = crate::cs2_video::VideoSize::new(
+        dimension("setting.defaultres")?,
+        dimension("setting.defaultresheight")?,
+    )?;
     let spectator_cfg = journal["spectatorCfg"] == true;
     let demo_cfg = journal["demoPlaybackCfg"]["name"].as_str();
     let configured = match prepare_launcher(
@@ -649,6 +674,8 @@ fn launch_operation(
         demo_cfg,
         true,
         preparation_id,
+        Some(window_geometry),
+        Some(&journal),
     ) {
         Ok(configured) => configured,
         Err(error) => {
@@ -769,7 +796,16 @@ fn launch_operation(
         log.event("mulnx_launch_confirmation", "begin", None);
         let result = loop {
             let actual =
-                confirmation_lock(&managed, deadline, || guard.check())?.mulnx_handoff_status()?;
+                confirmation_lock(&managed, deadline, || guard.check())?.observe_mulnx_handoff()?;
+            let Some(actual) = actual else {
+                // The request is already submitted. Wait for the same bounded
+                // confirmation; an unreadable image grants no game authority.
+                std::thread::sleep(
+                    Duration::from_millis(250)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+                continue;
+            };
             if let Some(processes) = actual["processes"].as_array() {
                 if processes.len() == 1 {
                     let process = &processes[0];
@@ -785,9 +821,7 @@ fn launch_operation(
                             .verified_mulnx_process(pid, created, &executable)?;
                         let positioned = guard.commit(|| {
                             let position = || {
-                                crate::workspace_presentation::position_starting_game(
-                                    app, owner, preserve,
-                                )
+                                crate::workspace_presentation::position_starting_game(app, owner)
                             };
                             if guard.exit.is_some() {
                                 position()

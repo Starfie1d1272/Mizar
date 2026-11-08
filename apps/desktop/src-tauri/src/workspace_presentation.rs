@@ -85,7 +85,7 @@ pub(crate) async fn present(
     diagnostic_result
 }
 
-pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
+pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Result<u64, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ticket = app
             .state::<production_exit::ExitGate>()
@@ -124,12 +124,21 @@ pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Res
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         app.run_on_main_thread(move || {
             let mut panels_result = Ok(());
+            let mut epoch = 0;
             let result = host
                 .state::<production_exit::ExitGate>()
                 .publish(ticket, || {
                     let state = host.state::<HostState>();
-                    state.panels_only.store(true, Ordering::Release);
-                    state.visible.store(true, Ordering::Release);
+                    {
+                        let _presentation = state
+                            .overlay_presentation
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        epoch = state.workspace_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+                        state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
+                        state.panels_only.store(true, Ordering::Release);
+                        state.visible.store(true, Ordering::Release);
+                    }
                     apply_layout(&host, layout);
                     panels_result = (|| {
                         for label in ["workspace-left", "workspace-dock"] {
@@ -146,7 +155,7 @@ pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Res
                 host.state::<DesktopLog>()
                     .event("workspace_panel_entry", "failure", Some(error));
             }
-            let _ = sender.send(result.and(panels_result));
+            let _ = sender.send(result.and(panels_result).map(|()| epoch));
         })
         .map_err(|e| e.to_string())?;
         receiver
@@ -155,6 +164,61 @@ pub(crate) async fn panels(app: tauri::AppHandle, preparation_id: String) -> Res
     })
     .await
     .map_err(|_| "工作台面板未能打开。".to_string())?
+}
+
+/// Complete background readiness only for the panels the user still wants.
+/// Unlike explicit entry, this must never hide Main or request game focus.
+pub(crate) async fn finish_preparation(
+    app: tauri::AppHandle,
+    preparation_id: String,
+    epoch: u64,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<preparation_gate::PreparationGate>()
+            .check(Some(&preparation_id))?;
+        let ticket = preparation_gate::preparation_ticket(&app, &preparation_id)?;
+        let state = app.state::<HostState>();
+        if !state.visible.load(Ordering::Acquire)
+            || state.workspace_epoch.load(Ordering::Acquire) != epoch
+            || !state.panels_only.load(Ordering::Acquire)
+        {
+            return Ok(());
+        }
+        let process = app
+            .state::<Mutex<managed_cs2::ManagedCs2>>()
+            .try_lock()
+            .map_err(|_| "CS2 正忙，请稍后重试准备。")?
+            .workspace_process()?;
+        if app.state::<cs2_activity::Activity>().phase() != "idle"
+            || process.as_ref().is_none_or(|process| !process.is_running())
+        {
+            return Ok(());
+        }
+        ensure_live_windows(&app, true).map_err(|error| error.to_string())?;
+        let host = app.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let result = host
+                .state::<production_exit::ExitGate>()
+                .publish(ticket, || {
+                    let shown = host.state::<cs2_activity::Activity>().phase() == "idle"
+                        && process.as_ref().is_some_and(|process| process.is_running())
+                        && show_workspace_if_current(&host, Some(epoch));
+                    host.state::<DesktopLog>().event(
+                        "workspace_preparation_presentation",
+                        if shown { "success" } else { "superseded" },
+                        Some(&format!("workspaceEpoch={epoch}")),
+                    );
+                });
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv()
+            .map_err(|_| "工作台准备呈现未能完成。".to_string())?
+    })
+    .await
+    .map_err(|_| "工作台准备呈现未能完成。".to_string())?
 }
 
 pub(crate) fn open_main(
@@ -173,6 +237,14 @@ pub(crate) fn open_main(
         let window = app
             .get_webview_window("main")
             .ok_or("准备中心窗口不可用，请通过托盘退出后重新打开 Mizar。")?;
+        {
+            let state = app.state::<HostState>();
+            let _presentation = state
+                .overlay_presentation
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
+        }
         window
             .navigate(format!("{BASE}{path}").parse().map_err(|error| {
                 command_log.preserve_error(
@@ -470,7 +542,6 @@ pub(crate) fn placement(window: &tauri::WebviewWindow, rect: Rect) {
 pub(crate) fn position_starting_game(
     app: &tauri::AppHandle,
     process: managed_cs2::WorkspaceProcess,
-    preserve: bool,
 ) -> Result<bool, String> {
     let state = app.state::<HostState>();
     if !state.visible.load(Ordering::Acquire) {
@@ -478,7 +549,6 @@ pub(crate) fn position_starting_game(
     }
     let mut tracker = state.tracker.lock().map_err(|_| "游戏窗口状态不可用。")?;
     tracker.set_owner(Some(process));
-    tracker.preserve_settings = preserve;
     tracker.tick();
     if let Some(failure) = tracker.alignment_event() {
         app.state::<DesktopLog>().event(
@@ -718,13 +788,24 @@ pub(crate) fn trusted_navigation(url: &tauri::Url) -> bool {
 }
 
 pub(crate) fn show_workspace(app: &tauri::AppHandle) {
+    show_workspace_if_current(app, None);
+}
+
+fn show_workspace_if_current(app: &tauri::AppHandle, expected_epoch: Option<u64>) -> bool {
     let state = app.state::<HostState>();
-    state.panels_only.store(false, Ordering::Release);
     {
         let _presentation = state
             .overlay_presentation
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if expected_epoch.is_some_and(|epoch| {
+            state.workspace_epoch.load(Ordering::Acquire) != epoch
+                || !state.visible.load(Ordering::Acquire)
+                || !state.panels_only.load(Ordering::Acquire)
+        }) {
+            return false;
+        }
+        state.panels_only.store(false, Ordering::Release);
         state.workspace_epoch.fetch_add(1, Ordering::AcqRel);
         state.overlay_epoch.fetch_add(1, Ordering::AcqRel);
         state.visible.store(true, Ordering::Release);
@@ -741,6 +822,7 @@ pub(crate) fn show_workspace(app: &tauri::AppHandle) {
         }
     }
     // The existing worker presents the HUD after the exit publication gate is released.
+    true
 }
 
 pub(crate) fn hide_workspace(app: &tauri::AppHandle) -> Result<(), String> {
@@ -975,6 +1057,63 @@ pub(crate) fn present_review(
     window.set_focus().map_err(|e| e.to_string())
 }
 
+fn size_connection_window(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let monitor = app
+        .get_webview_window("workspace-left")
+        .filter(|_| app.state::<HostState>().visible.load(Ordering::Relaxed))
+        .or_else(|| app.get_webview_window("main"))
+        .and_then(|owner| owner.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "无法确定连接窗口所在屏幕。".to_string())?;
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    // Use logical content dimensions, leaving room for the native frame and taskbar.
+    let margin = (24.0 * scale).round() as u32;
+    // Move to the selected monitor before measuring its native frame at that DPI.
+    window
+        .set_position(tauri::PhysicalPosition::new(
+            area.position.x + margin as i32,
+            area.position.y + margin as i32,
+        ))
+        .map_err(|error| error.to_string())?;
+    let width =
+        ((680.0 * scale).round() as u32).min(area.size.width.saturating_sub(margin * 2).max(1));
+    let height =
+        ((640.0 * scale).round() as u32).min(area.size.height.saturating_sub(margin * 2).max(1));
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    let outer = window.outer_size().map_err(|error| error.to_string())?;
+    let frame_width = outer.width.saturating_sub(width);
+    let frame_height = outer.height.saturating_sub(height);
+    window
+        .set_size(tauri::PhysicalSize::new(
+            width.min(
+                area.size
+                    .width
+                    .saturating_sub(frame_width + margin * 2)
+                    .max(1),
+            ),
+            height.min(
+                area.size
+                    .height
+                    .saturating_sub(frame_height + margin * 2)
+                    .max(1),
+            ),
+        ))
+        .map_err(|error| error.to_string())?;
+    let outer = window.outer_size().map_err(|error| error.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(
+            area.position.x + (area.size.width.saturating_sub(outer.width) / 2) as i32,
+            area.position.y + (area.size.height.saturating_sub(outer.height) / 2) as i32,
+        ))
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) async fn open_tool(
     app: tauri::AppHandle,
     tool: String,
@@ -994,7 +1133,7 @@ pub(crate) async fn open_tool(
         app.state::<production_exit::ExitGate>().check()?;
     }
     app.state::<updates::PendingUpdate>().check()?;
-    let (label, title, path) = match tool.as_str() {
+    let (label, mut title, path) = match tool.as_str() {
         "hud" => ("tool-hud", "HUD 工作台", "/operator/hud"),
         "bp" => ("tool-bp", "正式 BP 控制", "/operator/bp"),
         "diagnostics" => ("tool-diagnostics", "运行诊断", "/debug"),
@@ -1008,7 +1147,14 @@ pub(crate) async fn open_tool(
     if tool == "review" {
         if !exit_review && !app.state::<HostState>().visible.load(Ordering::Relaxed) { return Err("工作台已隐藏，请返回工作台后重新打开核对窗口。".into()); }
         let kind = preset_id.as_deref().unwrap_or("preflight");
-        if !matches!(kind, "preflight" | "roster" | "sync" | "issues" | "exit") { return Err("核对页面无法识别。".into()); }
+        title = match kind {
+            "preflight" => "本图资料",
+            "roster" => "上场名单核对",
+            "sync" => "网站同步",
+            "issues" => "当前问题",
+            "exit" => "结束制作需要处理",
+            _ => return Err("核对页面无法识别。".into()),
+        };
         target.query_pairs_mut().append_pair("kind", kind);
     }
     if tool == "hud" {
@@ -1025,8 +1171,15 @@ pub(crate) async fn open_tool(
                 window.eval(&format!("window.dispatchEvent(new CustomEvent('mizar:hud-select-preset', {{detail:{detail}}}));"))
                     .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "HUD 预设未能打开。"))?;
             }
-        } else if tool == "review" && window.url().ok().as_ref() != Some(&target) {
-            return Err("请先完成或关闭当前任务，再打开其他任务。".into());
+        } else if tool == "review" {
+            // Review kinds are read-only views. Window existence is not a business lock.
+            // Editors (including GoTV) keep separate windows and their own draft guards.
+            if window.url().ok().as_ref() != Some(&target) {
+                window.navigate(target.clone())
+                    .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "核对页面未能切换。"))?;
+            }
+            window.set_title(&format!("Mizar · {title}"))
+                .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "核对窗口标题未能更新。"))?;
         } else if !matches!(tool.as_str(), "review" | "connection" | "game-picture") {
             window.navigate(target.clone())
                 .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能恢复。"))?;
@@ -1038,13 +1191,22 @@ pub(crate) async fn open_tool(
         return Ok(());
     }
     let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target))
-        .visible(tool != "review")
+        .visible(!matches!(tool.as_str(), "review" | "connection"))
         .title(format!("Mizar · {title}"))
         .inner_size(1280.0, 800.0)
         .on_navigation(trusted_navigation)
         .build()
         .map_err(|error| command_log.preserve_error("open_tool", native_operation_id.as_deref(), &error, "工具窗口未能打开。"))?;
     if tool == "review" { present_review(&app, &window)?; }
+    if tool == "connection" {
+        if let Err(error) = size_connection_window(&app, &window) {
+            // The page was never shown: do not leave an unusable hidden window behind.
+            let _ = window.destroy();
+            return Err(error);
+        }
+        window_presentation::set_visible(&window, true).map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
     Ok(())
 
     }.await;

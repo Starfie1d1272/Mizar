@@ -331,7 +331,7 @@ export function Settings({ tab }: { tab: string }) {
                 </>
               )}
               <section aria-label="配置与恢复">
-                <Cs2Recovery production={production} />
+                <Cs2Recovery production={production} showManagedDetails />
               </section>
             </Panel>
             <Panel className="settings-card game-settings-maintenance">

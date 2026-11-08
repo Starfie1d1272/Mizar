@@ -4,8 +4,17 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, TryLockError,
+    },
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
+
+mod metadata;
+use metadata::{
+    delivery_request_active, pin_protection, process_instance, read_delivery_json, read_pin_json,
+    recover_pin_metadata, remove_missing_ok, write_delivery_json,
 };
 
 thread_local! {
@@ -38,9 +47,51 @@ const MESSAGE_LIMIT: usize = 8192;
 #[derive(Clone)]
 pub struct DesktopLog {
     inner: Arc<Mutex<LogFile>>,
+    deferred: Arc<DeferredLog>,
+    started: Instant,
     pub directory: PathBuf,
     pub state_root: PathBuf,
     pub session_id: String,
+}
+
+const DEFERRED_LOG_BYTES: usize = 512 * 1024;
+const DEFERRED_LOG_EVENTS: usize = 256;
+#[derive(Clone)]
+struct DeferredEvent {
+    stage: String,
+    result: String,
+    detail: Option<String>,
+    context: Value,
+    observed_at: String,
+    monotonic_ms: u128,
+    bytes: usize,
+}
+#[derive(Default)]
+struct DeferredQueue {
+    entries: std::collections::VecDeque<DeferredEvent>,
+    bytes: usize,
+}
+#[derive(Default)]
+struct DeferredLog {
+    queue: Mutex<DeferredQueue>,
+    overflow: AtomicU64,
+    contended: AtomicU64,
+    failed: AtomicU64,
+    total_lost: AtomicU64,
+    lost_bytes: AtomicU64,
+    first_lost_ms: AtomicU64,
+    last_lost_ms: AtomicU64,
+}
+fn add_count(counter: &AtomicU64, count: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    while let Err(value) = counter.compare_exchange_weak(
+        current,
+        current.saturating_add(count),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        current = value;
+    }
 }
 
 struct LogFile {
@@ -52,7 +103,116 @@ struct LogFile {
     segment_name: String,
     document_segment_name: String,
     active_segments: Vec<String>,
+    // In-flight seal/hash work belongs to this same producer, not another ledger.
+    pin_work: std::collections::HashMap<String, Vec<String>>,
     write_poisoned: bool,
+    retention_issue: Option<String>,
+}
+
+struct PinWork {
+    inner: Arc<Mutex<LogFile>>,
+    pin_id: String,
+}
+impl Drop for PinWork {
+    fn drop(&mut self) {
+        if let Ok(mut log) = self.inner.lock() {
+            log.pin_work.remove(&self.pin_id);
+        }
+    }
+}
+fn pin_source_name(name: &str) -> bool {
+    name.strip_prefix("desktop-")
+        .or_else(|| name.strip_prefix("document-"))
+        .and_then(|name| name.strip_suffix(".ndjson"))
+        .is_some_and(|id| diagnostic_uuid(Some(id)).is_some())
+}
+fn hash_pin_sources(
+    directory: &Path,
+    sources: &[Value],
+    verify: bool,
+) -> Result<Vec<Value>, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    if sources.len() > 4096 {
+        return Err("诊断固定源超出预算。".into());
+    }
+    let mut segments = Vec::new();
+    for segment in sources {
+        let name = segment["name"]
+            .as_str()
+            .filter(|name| pin_source_name(name))
+            .ok_or("固定文件路径无效。")?;
+        let size = segment["bytes"]
+            .as_u64()
+            .filter(|size| *size <= 2 * 1024 * 1024)
+            .ok_or("固定大小无效。")?;
+        let path = directory.join(name);
+        #[cfg(windows)]
+        let _parents =
+            crate::support_export::hold_directories(directory).map_err(|e| e.to_string())?;
+        let (mut file, _) = crate::support_export::checked(&path).map_err(|e| e.to_string())?;
+        if file.metadata().map_err(|e| e.to_string())?.len() != size {
+            return Err("固定文件已变化。".into());
+        }
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        let mut read = 0u64;
+        loop {
+            let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            if read > size {
+                return Err("固定文件已变化。".into());
+            }
+            hash.update(&buffer[..n]);
+        }
+        if read != size {
+            return Err("固定文件已变化。".into());
+        }
+        let digest = format!("{:x}", hash.finalize());
+        if verify && segment["sha256"] != digest {
+            return Err("固定文件摘要不匹配。".into());
+        }
+        segments.push(json!({"name":name,"bytes":size,"sha256":digest}));
+    }
+    Ok(segments)
+}
+fn pin_identity(
+    receipt: &Value,
+    pin_id: &str,
+    kind: &str,
+    owner: Option<&Value>,
+) -> Result<(), String> {
+    if receipt["schema"] != "mizar-producer-pin/2"
+        || receipt["producerKind"] != "host"
+        || receipt["pinId"] != pin_id
+        || receipt["kind"] != kind
+        || (kind == "delivery" && receipt.get("deliveryOwner") != owner)
+    {
+        return Err("诊断固定回执不匹配。".into());
+    }
+    Ok(())
+}
+fn pin_current(receipt: &Value) -> Result<(), String> {
+    if !matches!(receipt["state"].as_str(), Some("prepared" | "committed")) {
+        return Err("诊断固定状态无效。".into());
+    }
+    if receipt["expiresAt"].is_null()
+        && receipt["state"] == "committed"
+        && matches!(receipt["kind"].as_str(), Some("incident" | "active"))
+    {
+        return Ok(());
+    }
+    let deadline = receipt["expiresAt"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .ok_or("诊断固定租约无效。")?;
+    if deadline <= Utc::now() {
+        return Err("诊断固定租约已到期，请重新固定。".into());
+    }
+    Ok(())
 }
 
 fn reserve_segment(directory: &Path, prefix: &str) -> io::Result<String> {
@@ -314,19 +474,50 @@ impl DesktopLog {
                 segment_name: reserve_segment(&directory, "desktop")?,
                 document_segment_name: reserve_segment(&directory, "document")?,
                 active_segments: Vec::new(),
+                pin_work: std::collections::HashMap::new(),
                 write_poisoned: false,
+                retention_issue: None,
             })),
+            deferred: Arc::new(DeferredLog::default()),
+            started: Instant::now(),
             directory,
             state_root,
             session_id,
         };
-        logger.write("process_start", "success", None)?;
+        let recovery = recover_pin_metadata(&logger.directory);
+        logger.event("process_start", "success", None);
+        match recovery {
+            Ok(outcomes) if !outcomes.is_empty() => {
+                let result = if outcomes.iter().any(|item| item["result"] == "retained") {
+                    "partial"
+                } else {
+                    "success"
+                };
+                logger.event(
+                    "native_diagnostic_metadata_recovery",
+                    result,
+                    Some(&json!({"files":outcomes}).to_string()),
+                );
+            }
+            Err(error) => logger.event(
+                "native_diagnostic_metadata_recovery",
+                "partial",
+                Some(&json!({"reason":error.to_string()}).to_string()),
+            ),
+            _ => (),
+        }
+        let retention_issue = logger.inner.lock().ok().and_then(|log| log.retention_issue.clone());
+        if let Some(reason) = retention_issue {
+            logger.event(
+                "native_diagnostic_retention_paused",
+                "partial",
+                Some(&json!({"reason":reason,"action":"preserve-originals"}).to_string()),
+            );
+        }
+        logger.start_delivery_pins();
         Ok(logger)
     }
 
-    fn write(&self, stage: &str, result: &str, detail: Option<&str>) -> io::Result<()> {
-        self.write_mode(stage, result, detail, false)
-    }
     pub fn committed_event(
         &self,
         stage: &str,
@@ -342,10 +533,29 @@ impl DesktopLog {
         detail: Option<&str>,
         durable: bool,
     ) -> io::Result<()> {
+        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let monotonic_ms = self.started.elapsed().as_millis();
         let mut log = self
             .inner
             .lock()
             .map_err(|_| io::Error::other("desktop log lock unavailable"))?;
+        Self::write_locked(
+            &mut log,
+            stage,
+            result,
+            detail,
+            durable,
+            Some((&observed_at, monotonic_ms)),
+        )
+    }
+    fn write_locked(
+        log: &mut LogFile,
+        stage: &str,
+        result: &str,
+        detail: Option<&str>,
+        durable: bool,
+        observed_at: Option<(&str, u128)>,
+    ) -> io::Result<()> {
         // Preserve each navigation in the full retained product log.
         if stage == "main_page_load" && result == "success" {
             log.page_loads = log.page_loads.saturating_add(1);
@@ -374,13 +584,13 @@ impl DesktopLog {
                         .as_nanos()
                 );
                 for (index, text) in chunks.iter().enumerate() {
-                    Self::write_entry(&mut log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable)?;
+                    Self::write_entry(log, stage, result, Some(&json!({"detailId":detail_id,"part":index + 1,"parts":chunks.len(),"text":text}).to_string()), durable, observed_at)?;
                 }
                 return Ok(());
             }
-            Self::write_entry(&mut log, stage, result, Some(&clean), durable)
+            Self::write_entry(log, stage, result, Some(&clean), durable, observed_at)
         } else {
-            Self::write_entry(&mut log, stage, result, None, durable)
+            Self::write_entry(log, stage, result, None, durable, observed_at)
         }
     }
 
@@ -390,6 +600,7 @@ impl DesktopLog {
         result: &str,
         detail: Option<&str>,
         durable: bool,
+        observed_at: Option<(&str, u128)>,
     ) -> io::Result<()> {
         log.sequence += 1;
         let mut entry = log.identity.clone();
@@ -408,9 +619,10 @@ impl DesktopLog {
         entry["parentOperationId"] = Value::Null;
         entry["attemptId"] = Value::Null;
         entry["scope"] = Value::Null;
-        entry["monotonicMs"] = Value::Null;
+        entry["monotonicMs"] =
+            observed_at.map_or(Value::Null, |(_, milliseconds)| json!(milliseconds));
         entry["sourceInterval"] = Value::Null;
-        entry["coverage"] = json!({"durability":"committed","unknown":["cross-process-clock-order"],"excluded":[],"replayCount":0,"occurrences":1});
+        entry["coverage"] = json!({"durability":"committed","unknown":["cross-process-clock-order","native-memory-only-tail"],"excluded":[],"replayCount":0,"occurrences":1});
         entry["trigger"] = json!("system");
         entry["taskId"] = Value::Null;
         entry["operationId"] = Value::Null;
@@ -421,9 +633,15 @@ impl DesktopLog {
                 }
             }
         });
-        entry["time"] = json!(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        entry["time"] = json!(observed_at
+            .map(|(time, _)| time.to_owned())
+            .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)));
         entry["observedAt"] = entry["time"].clone();
-        entry["recordedAt"] = entry["time"].clone();
+        entry["recordedAt"] = json!(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        if stage == "native_diagnostic_coverage_gap" {
+            entry["coverage"]["unknown"] =
+                json!(["cross-process-clock-order", "native-event-buffer-loss"]);
+        }
         entry["stage"] = json!(stage);
         entry["result"] = json!(result);
         entry["evidence"] = detail
@@ -433,6 +651,9 @@ impl DesktopLog {
                     .unwrap_or_else(|_| json!({"text":redact_text(text)}))
             })
             .unwrap_or(Value::Null);
+        if stage == "native_diagnostic_coverage_gap" {
+            entry["sourceInterval"] = json!({"from":entry["evidence"]["firstObservedAt"],"to":entry["evidence"]["lastObservedAt"]});
+        }
         if stage == "main_page_load" && result == "success" {
             entry["occurrences"] = json!(1);
         }
@@ -496,7 +717,7 @@ impl DesktopLog {
         // Dedicated document carrier: retries preserve identity and readers deduplicate by eventId.
         let mut path = self.directory.join(&log.document_segment_name);
         if fs::metadata(&path).map_or(0, |m| m.len()) + bytes.len() as u64 > LOG_LIMIT {
-            Self::collect_segments(&log, bytes.len() as u64).map_err(|e| e.to_string())?;
+            Self::collect_segments(&mut log, bytes.len() as u64).map_err(|e| e.to_string())?;
             let current = log.document_segment_name.clone();
             log.active_segments.push(current);
             log.document_segment_name =
@@ -507,52 +728,29 @@ impl DesktopLog {
             return Err("诊断文档保留空间已满。".into());
         }
         if fs::metadata(&path).map_err(|e| e.to_string())?.len() == 0 {
-            Self::collect_segments(&log, LOG_LIMIT).map_err(|e| e.to_string())?;
+            Self::collect_segments(&mut log, LOG_LIMIT).map_err(|e| e.to_string())?;
         }
         append_committed(&mut log, &path, &bytes).map_err(|e| e.to_string())?;
         Ok(json!({"eventIds":ids}))
     }
 
-    fn collect_segments(log: &LogFile, incoming: u64) -> io::Result<()> {
+    fn collect_segments(log: &mut LogFile, incoming: u64) -> io::Result<()> {
         use std::collections::HashSet;
         let mut protected: HashSet<String> = log.active_segments.iter().cloned().collect();
         protected.insert(log.segment_name.clone());
         protected.insert(log.document_segment_name.clone());
-        let mut extra = HashSet::new();
-        let pins = log.directory.join("host-pins");
-        if pins.exists() {
-            for entry in fs::read_dir(&pins)? {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !(name.ends_with(".json") || name.ends_with(".partial")) {
-                    continue;
-                }
-                let meta = fs::symlink_metadata(entry.path())?;
-                if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
-                    return Err(io::Error::other("unsafe host pin"));
-                }
-                let receipt: Value = serde_json::from_slice(&fs::read(entry.path())?)?;
-                if receipt["expiresAt"]
-                    .as_str()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .is_some_and(|t| t < Utc::now())
-                {
-                    continue;
-                }
-                for segment in receipt["segments"]
-                    .as_array()
-                    .ok_or_else(|| io::Error::other("invalid host pin"))?
-                {
-                    let name = segment["name"]
-                        .as_str()
-                        .ok_or_else(|| io::Error::other("invalid host pin name"))?;
-                    protected.insert(name.to_owned());
-                    if receipt["kind"] == "incident" && receipt["state"] == "committed" {
-                        extra.insert(name.to_owned());
-                    }
-                }
+        protected.extend(log.pin_work.values().flatten().cloned());
+        let (extra, may_delete) = match pin_protection(&log.directory) {
+            Ok((pinned, extra)) => {
+                protected.extend(pinned);
+                log.retention_issue = None;
+                (extra, true)
             }
-        }
+            Err(error) => {
+                log.retention_issue = Some(error.to_string());
+                (HashSet::new(), false)
+            }
+        };
         let mut files = Vec::new();
         let mut ordinary = 0u64;
         for entry in fs::read_dir(&log.directory)? {
@@ -574,7 +772,7 @@ impl DesktopLog {
         }
         files.sort();
         for (time, name, bytes) in files {
-            if protected.contains(&name) {
+            if !may_delete || protected.contains(&name) {
                 continue;
             }
             if ordinary + incoming <= 100 * 1024 * 1024
@@ -604,22 +802,37 @@ impl DesktopLog {
             ordinary = ordinary.saturating_sub(bytes);
         }
         if ordinary + incoming > 100 * 1024 * 1024 {
-            return Err(io::Error::other("host pinned retention budget"));
+            return Err(io::Error::other(if may_delete {
+                "host pinned retention budget"
+            } else {
+                "host retention paused: pin protection requires recovery"
+            }));
         }
         Ok(())
     }
 
-    /// Prepare/commit/release only this producer's evidence, in its writer serial section.
+    /// Pin state and collection use this producer's lock. Full source hashing
+    /// happens outside it, protected by the same owner's in-flight source set.
     pub fn diagnostic_pin(&self, action: &str, pin_id: &str, kind: &str) -> Result<Value, String> {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
+        if kind == "delivery" {
+            return Err("诊断交付固定仅允许内部生产者请求。".into());
+        }
+        self.diagnostic_pin_owned(action, pin_id, kind, None)
+    }
+
+    fn diagnostic_pin_owned(
+        &self,
+        action: &str,
+        pin_id: &str,
+        kind: &str,
+        delivery_owner: Option<Value>,
+    ) -> Result<Value, String> {
         if diagnostic_uuid(Some(pin_id)).is_none()
             || !["incident", "export", "delivery", "active"].contains(&kind)
             || !["prepare", "commit", "release"].contains(&action)
         {
             return Err("诊断固定请求无效。".into());
         }
-        let mut log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
         let directory = self.directory.join("host-pins");
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let meta = fs::symlink_metadata(&directory).map_err(|e| e.to_string())?;
@@ -627,130 +840,124 @@ impl DesktopLog {
             return Err("诊断固定路径无效。".into());
         }
         let path = directory.join(format!("{pin_id}.json"));
-        if action == "prepare" && path.exists() {
-            let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || metadata.len() > 1024 * 1024
-            {
-                return Err("诊断固定回执无效。".into());
+        let (mut receipt, previous, _work) = {
+            let mut log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
+            if log.pin_work.contains_key(pin_id) || log.pin_work.len() >= 4 {
+                return Err("诊断固定操作进行中。".into());
             }
-            let previous: Value =
-                serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            if previous["pinId"] != pin_id || previous["kind"] != kind {
-                return Err("诊断固定回执不匹配。".into());
+            if path.with_extension("partial").try_exists().map_err(|e| e.to_string())? {
+                return Err("诊断固定记录尚待恢复，请重启 Mizar 后重试。".into());
             }
-            return Ok(previous);
-        }
-        if action == "release" {
-            match fs::remove_file(&path) {
-                Ok(()) => (),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.to_string()),
+            let previous = read_pin_json(&path).map_err(|e| e.to_string())?;
+            if let Some(receipt) = &previous {
+                // Validate the on-disk identity on ALL actions, including release.
+                // Changing the caller's kind cannot revoke another kind's hold.
+                pin_identity(receipt, pin_id, kind, delivery_owner.as_ref())?;
+            }
+            if action == "release" {
+                if previous
+                    .as_ref()
+                    .is_some_and(|receipt| receipt["kind"] == "delivery")
+                    && delivery_request_active(&self.directory, previous.as_ref().unwrap())
+                        .map_err(|e| e.to_string())?
+                {
+                    return Err("诊断交付固定仍由活动请求持有。".into());
+                }
+                remove_missing_ok(&path).map_err(|e| e.to_string())?;
+                return Ok(json!({"pinId":pin_id,"state":"released"}));
+            }
+            if action == "prepare" {
+                if let Some(previous) = previous {
+                    pin_current(&previous)?;
+                    return Ok(previous);
+                }
+            }
+            let receipt = if action == "prepare" {
+                let mut segments = Vec::new();
+                for entry in fs::read_dir(&self.directory).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if !pin_source_name(&name) {
+                        continue;
+                    }
+                    let meta = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+                    if !meta.is_file() || meta.file_type().is_symlink() {
+                        return Err("诊断固定源无效。".into());
+                    }
+                    if meta.len() == 0 {
+                        continue;
+                    }
+                    if meta.len() > 2 * 1024 * 1024 || segments.len() >= 4096 {
+                        return Err("诊断固定源超出预算。".into());
+                    }
+                    segments.push(json!({"name":name,"bytes":meta.len()}));
+                }
+                // Seal live carriers before dropping the producer lock; the
+                // source names are never reused while background hashing runs.
+                if segments
+                    .iter()
+                    .any(|segment| segment["name"] == log.segment_name)
+                {
+                    let next =
+                        reserve_segment(&log.directory, "desktop").map_err(|e| e.to_string())?;
+                    let sealed = std::mem::replace(&mut log.segment_name, next);
+                    log.active_segments.push(sealed);
+                }
+                if segments
+                    .iter()
+                    .any(|segment| segment["name"] == log.document_segment_name)
+                {
+                    let next =
+                        reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
+                    let sealed = std::mem::replace(&mut log.document_segment_name, next);
+                    log.active_segments.push(sealed);
+                }
+                let mut receipt = json!({"sourceState":self.deferred_source_state(),"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments});
+                if let Some(owner) = &delivery_owner {
+                    receipt["deliveryOwner"] = owner.clone();
+                }
+                receipt
+            } else {
+                let receipt = previous.clone().ok_or("诊断固定回执缺失。")?;
+                pin_current(&receipt)?;
+                receipt
             };
-            return Ok(json!({"pinId":pin_id,"state":"released"}));
-        }
-        let mut receipt = if action == "prepare" {
-            let mut segments = Vec::new();
-            for entry in fs::read_dir(&self.directory).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !(name.starts_with("desktop-") || name.starts_with("document-"))
-                    || !name.ends_with(".ndjson")
-                {
-                    continue;
-                }
-                let before = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-                if !before.is_file() || before.file_type().is_symlink() {
-                    return Err("诊断固定源无效。".into());
-                }
-                let mut file = fs::File::open(entry.path()).map_err(|e| e.to_string())?;
-                let mut hash = Sha256::new();
-                let mut size = 0u64;
-                let mut buffer = [0u8; 65536];
-                loop {
-                    let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
-                    }
-                    size += n as u64;
-                    hash.update(&buffer[..n]);
-                }
-                if size != before.len() {
-                    return Err("诊断固定源已变化。".into());
-                }
-                segments.push(
-                    json!({"name":name,"bytes":size,"sha256":format!("{:x}",hash.finalize())}),
-                );
-            }
-            // Seal both live carriers. Their names are never reused after receipt publication.
-            let next_host =
-                reserve_segment(&log.directory, "desktop").map_err(|e| e.to_string())?;
-            let next_document =
-                reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
-            let sealed = log.segment_name.clone();
-            log.active_segments.push(sealed);
-            let sealed_document = log.document_segment_name.clone();
-            log.active_segments.push(sealed_document);
-            log.segment_name = next_host;
-            log.document_segment_name = next_document;
-            json!({"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments})
-        } else {
-            let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
-                return Err("诊断固定回执无效。".into());
-            }
-            let receipt: Value =
-                serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            if receipt["schema"] != "mizar-producer-pin/2"
-                || receipt["pinId"] != pin_id
-                || receipt["kind"] != kind
-            {
-                return Err("诊断固定回执不匹配。".into());
-            }
-            receipt
+            let sources = receipt["segments"]
+                .as_array()
+                .filter(|sources| sources.len() <= 4096)
+                .ok_or("固定范围无效。")?;
+            let names: Result<Vec<String>, String> = sources
+                .iter()
+                .map(|source| {
+                    source["name"]
+                        .as_str()
+                        .filter(|name| pin_source_name(name))
+                        .map(str::to_owned)
+                        .ok_or_else(|| "固定文件路径无效。".into())
+                })
+                .collect();
+            log.pin_work.insert(pin_id.to_owned(), names?);
+            (
+                receipt,
+                previous,
+                PinWork {
+                    inner: self.inner.clone(),
+                    pin_id: pin_id.to_owned(),
+                },
+            )
         };
-        if action == "commit" {
-            if receipt["expiresAt"]
-                .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .is_some_and(|time| time <= Utc::now())
-            {
-                return Err("诊断固定租约已到期，请重新固定。".into());
-            }
-            for segment in receipt["segments"].as_array().ok_or("固定范围无效。")? {
-                let name = segment["name"].as_str().ok_or("固定文件无效。")?;
-                if name.contains(['/', '\\'])
-                    || !(name.starts_with("desktop-") || name.starts_with("document-"))
-                    || !name.ends_with(".ndjson")
-                {
-                    return Err("固定文件路径无效。".into());
-                }
-                let path = self.directory.join(name);
-                let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-                if !meta.is_file()
-                    || meta.file_type().is_symlink()
-                    || meta.len() != segment["bytes"].as_u64().ok_or("固定大小无效。")?
-                {
-                    return Err("固定文件已变化。".into());
-                }
-                let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
-                let mut hash = Sha256::new();
-                let mut buffer = [0u8; 65536];
-                loop {
-                    let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
-                    }
-                    hash.update(&buffer[..n]);
-                }
-                if segment["sha256"] != format!("{:x}", hash.finalize()) {
-                    return Err("固定文件摘要不匹配。".into());
-                }
-            }
+        // No DesktopLog mutex is held across these full-source reads. A slow
+        // hash cannot serialize every native command's normal event logging.
+        receipt["segments"] = json!(hash_pin_sources(
+            &self.directory,
+            receipt["segments"].as_array().ok_or("固定范围无效。")?,
+            action == "commit"
+        )?);
+        let _log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
+        if read_pin_json(&path).map_err(|e| e.to_string())? != previous {
+            return Err("诊断固定回执已变化。".into());
         }
+        pin_current(&receipt)?;
         if action == "commit" && kind == "incident" {
             let reservation_path = self.directory.join("incident-pins.json");
             let metadata = fs::symlink_metadata(&reservation_path).map_err(|e| e.to_string())?;
@@ -791,32 +998,198 @@ impl DesktopLog {
         }
         if action == "commit" {
             receipt["state"] = json!("committed");
-            if kind != "export" {
+            if kind != "export" && kind != "delivery" {
                 receipt["expiresAt"] = Value::Null;
             }
         }
-        let temporary = directory.join(format!("{pin_id}.partial"));
-        if let Ok(meta) = fs::symlink_metadata(&temporary) {
-            if !meta.is_file() || meta.file_type().is_symlink() {
-                return Err("诊断固定暂存路径无效。".into());
-            }
-            fs::remove_file(&temporary).map_err(|e| e.to_string())?;
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|e| e.to_string())?;
-        file.write_all(&serde_json::to_vec(&receipt).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
-        #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
-        fs::rename(temporary, path).map_err(|e| e.to_string())?;
+        crate::support_export::write_metadata(&path, &receipt).map_err(|e| e.to_string())?;
         Ok(receipt)
+    }
+
+    fn start_delivery_pins(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        let directory = self.directory.clone();
+        let state_root = self.state_root.clone();
+        let session_id = self.session_id.clone();
+        let deferred = self.deferred.clone();
+        let started = self.started;
+        // The original producer seals/commits under its lock; full-source
+        // hashing in this background thread does not hold that writer lock.
+        let _ = std::thread::Builder::new()
+            .name("diagnostic-delivery-pins".into())
+            .spawn(move || {
+                let mut last_error = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let Some(inner) = weak.upgrade() else { break };
+                    let owner = Self {
+                        inner,
+                        deferred: deferred.clone(),
+                        started,
+                        directory: directory.clone(),
+                        state_root: state_root.clone(),
+                        session_id: session_id.clone(),
+                    };
+                    // I/O failures leave the wire and original evidence untouched.
+                    // Never recursively log a diagnostic writer failure through
+                    // that same writer. Pin cleanup remains independent of drain.
+                    let before = owner.drain_deferred();
+                    let pins = owner.poll_delivery_pins();
+                    let after = owner.drain_deferred();
+                    match before.and(pins).and(after) {
+                        Ok(()) => last_error = None,
+                        Err(error) => {
+                            let detail = error.to_string();
+                            if last_error.as_ref() != Some(&detail) {
+                                eprintln!("诊断后台写入/固定失败：{detail}");
+                                last_error = Some(detail);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    fn poll_delivery_pins(&self) -> io::Result<()> {
+        let directory = self.directory.join("host-delivery-pins");
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let metadata = fs::symlink_metadata(&directory)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::other("unsafe delivery request directory"));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for (index, entry) in entries.enumerate() {
+            if index >= 256 {
+                return Err(io::Error::other("delivery request inventory budget"));
+            }
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            let id = name
+                .strip_suffix(".response.json")
+                .or_else(|| name.strip_suffix(".json"));
+            if let Some(id) = id.filter(|id| diagnostic_uuid(Some(id)).is_some()) {
+                ids.insert(id.to_owned());
+            }
+        }
+        // Responses can be removed by the caller before the next poll. Include
+        // native receipts so no completed operation leaves an orphan ledger file.
+        if let Ok(pins) = fs::read_dir(self.directory.join("host-pins")) {
+            for (index, entry) in pins.enumerate() {
+                if index >= 256 {
+                    return Err(io::Error::other("delivery pin inventory budget"));
+                }
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(id) = name
+                    .strip_suffix(".json")
+                    .filter(|id| diagnostic_uuid(Some(id)).is_some())
+                {
+                    if read_pin_json(&entry.path())?
+                        .as_ref()
+                        .is_some_and(|pin| pin["kind"] == "delivery")
+                    {
+                        ids.insert(id.to_owned());
+                    }
+                }
+            }
+        }
+        for pin_id in ids {
+            let path = directory.join(format!("{pin_id}.json"));
+            let response_path = directory.join(format!("{pin_id}.response.json"));
+            let request = read_delivery_json(&path)?;
+            let receipt_path = self
+                .directory
+                .join("host-pins")
+                .join(format!("{pin_id}.json"));
+            let receipt = read_pin_json(&receipt_path)?;
+            if let Some(receipt) = &receipt {
+                if receipt["kind"] == "delivery"
+                    && !delivery_request_active(&self.directory, receipt)?
+                    && (receipt["state"] == "committed"
+                        || request.is_none()
+                        || receipt["expiresAt"]
+                            .as_str()
+                            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                            .is_some_and(|at| at <= Utc::now()))
+                {
+                    self.diagnostic_pin_owned(
+                        "release",
+                        &pin_id,
+                        "delivery",
+                        receipt.get("deliveryOwner").cloned(),
+                    )
+                    .map_err(io::Error::other)?;
+                }
+            }
+            let Some(request) = request else {
+                remove_missing_ok(&response_path)?;
+                continue;
+            };
+            if request["schema"] != "mizar-host-delivery-request/1"
+                || request["pinId"] != pin_id
+                || diagnostic_uuid(request["requestId"].as_str()).is_none()
+                || !matches!(request["action"].as_str(), Some("prepare" | "commit"))
+            {
+                continue;
+            }
+            let Some(pid) = request["ownerPid"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|pid| *pid > 0)
+            else {
+                continue;
+            };
+            let identity = process_instance(pid)?;
+            let requested_instance = request["ownerInstance"].as_str();
+            if identity.is_none()
+                || (requested_instance.is_some() && identity.as_deref() != requested_instance)
+            {
+                remove_missing_ok(&path)?;
+                remove_missing_ok(&response_path)?;
+                continue;
+            }
+            if read_delivery_json(&response_path)?
+                .as_ref()
+                .is_some_and(|response| response["requestId"] == request["requestId"])
+            {
+                continue;
+            }
+            let Some(deadline) = request["expiresAt"]
+                .as_i64()
+                .filter(|deadline| *deadline <= Utc::now().timestamp_millis() + 10_000)
+            else {
+                continue;
+            };
+            // An elapsed response deadline refuses new work. A committed live hold
+            // is retained until its caller withdraws it after unlink/failure.
+            if deadline <= Utc::now().timestamp_millis() {
+                if receipt
+                    .as_ref()
+                    .is_none_or(|receipt| receipt["state"] != "committed")
+                {
+                    remove_missing_ok(&path)?;
+                    remove_missing_ok(&response_path)?;
+                }
+                continue;
+            }
+            let action = request["action"].as_str().unwrap();
+            let instance = identity.unwrap();
+            let owner = json!({"pid":pid,"instance":instance});
+            let result = if action == "commit" && requested_instance != Some(instance.as_str()) {
+                Err("交付固定进程实例不匹配。".to_owned())
+            } else {
+                self.diagnostic_pin_owned(action, &pin_id, "delivery", Some(owner))
+            };
+            let mut response = json!({"schema":"mizar-host-delivery-response/1","pinId":pin_id,"requestId":request["requestId"],"ownerPid":pid,"ownerInstance":instance});
+            if let Err(error) = result {
+                response["error"] = json!(error.chars().take(512).collect::<String>());
+            }
+            write_delivery_json(&response_path, &response)?;
+        }
+        Ok(())
     }
 
     /// Scope synchronous native work only; async/spawned work must enter its own scope.
@@ -857,9 +1230,177 @@ impl DesktopLog {
     }
 
     pub fn event(&self, stage: &str, result: &str, detail: Option<&str>) {
-        if let Err(error) = self.write(stage, result, detail) {
-            eprintln!("桌面日志写入失败：{error}");
+        let observed = Utc::now();
+        let observed_at = observed.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let observed_ms = observed.timestamp_millis().max(0) as u64;
+        let monotonic_ms = self.started.elapsed().as_millis();
+        let input_bytes = stage
+            .len()
+            .saturating_add(result.len())
+            .saturating_add(detail.map_or(0, str::len));
+        match self.inner.try_lock() {
+            Ok(mut log) => {
+                if let Err(error) = Self::write_locked(
+                    &mut log,
+                    stage,
+                    result,
+                    detail,
+                    false,
+                    Some((&observed_at, monotonic_ms)),
+                ) {
+                    self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
+                    eprintln!("桌面日志写入失败：{error}");
+                }
+            }
+            Err(TryLockError::WouldBlock) => {
+                // Do not wait behind a pin's metadata I/O on the native invoke
+                // thread. Preserve a bounded original plus its event-time context.
+                let bytes = stage
+                    .len()
+                    .saturating_add(result.len())
+                    .saturating_add(detail.map_or(0, str::len))
+                    .saturating_add(1024);
+                if bytes > 128 * 1024 {
+                    self.note_deferred_loss(&self.deferred.overflow, input_bytes, observed_ms);
+                    return;
+                }
+                let Ok(mut queue) = self.deferred.queue.try_lock() else {
+                    self.note_deferred_loss(&self.deferred.contended, input_bytes, observed_ms);
+                    return;
+                };
+                if queue.entries.len() >= DEFERRED_LOG_EVENTS
+                    || queue.bytes + bytes > DEFERRED_LOG_BYTES
+                {
+                    self.note_deferred_loss(&self.deferred.overflow, input_bytes, observed_ms);
+                    return;
+                }
+                queue.bytes += bytes;
+                queue.entries.push_back(DeferredEvent {
+                    stage: stage.to_owned(),
+                    result: result.to_owned(),
+                    detail: detail.map(str::to_owned),
+                    context: TASK_CONTEXT.with(|slot| slot.borrow().clone()),
+                    observed_at,
+                    monotonic_ms,
+                    bytes,
+                });
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
+            }
         }
+    }
+
+    fn note_deferred_loss(&self, reason: &AtomicU64, bytes: usize, observed_ms: u64) {
+        let mut first = self.deferred.first_lost_ms.load(Ordering::Relaxed);
+        while first == 0 || observed_ms < first {
+            match self.deferred.first_lost_ms.compare_exchange_weak(
+                first,
+                observed_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(value) => first = value,
+            }
+        }
+        self.deferred
+            .last_lost_ms
+            .fetch_max(observed_ms, Ordering::Relaxed);
+        add_count(&self.deferred.lost_bytes, bytes as u64);
+        add_count(&self.deferred.total_lost, 1);
+        add_count(reason, 1);
+    }
+
+    fn deferred_source_state(&self) -> Value {
+        let as_of = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let pending = self
+            .deferred
+            .queue
+            .try_lock()
+            .ok()
+            .map(|queue| (queue.entries.len(), queue.bytes));
+        let timestamp = |value: u64| {
+            if value == 0 {
+                None
+            } else {
+                chrono::DateTime::from_timestamp_millis(value as i64)
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::Millis, true))
+            }
+        };
+        json!({"asOf":as_of,
+            "memoryOnly":{"included":false,"events":pending.map(|value| value.0),"bytes":pending.map(|value| value.1),"reason":"not-durably-committed"},
+            "unreportedLoss":{"overflow":self.deferred.overflow.load(Ordering::Relaxed),"contended":self.deferred.contended.load(Ordering::Relaxed),"writeFailed":self.deferred.failed.load(Ordering::Relaxed)},
+            "lossTotals":{"reason":"native_event_loss_cumulative","count":self.deferred.total_lost.load(Ordering::Relaxed),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed))}})
+    }
+
+    fn drain_deferred(&self) -> io::Result<()> {
+        let mut log = match self.inner.try_lock() {
+            Ok(log) => log,
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(io::Error::other("desktop log lock unavailable"))
+            }
+        };
+        let counts = [
+            self.deferred.overflow.swap(0, Ordering::Relaxed),
+            self.deferred.contended.swap(0, Ordering::Relaxed),
+            self.deferred.failed.swap(0, Ordering::Relaxed),
+        ];
+        if counts.iter().any(|count| *count > 0) {
+            let timestamp = |value: u64| {
+                chrono::DateTime::from_timestamp_millis(value as i64)
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::Millis, true))
+            };
+            // count/bytes/range are cumulative for this Host run; dropped is the
+            // new loss since the previous gap. Use already-approved projection
+            // fields so cloud/support evidence cannot silently erase the gap.
+            let detail = json!({"reason":"native_event_loss_cumulative","failureKind":"diagnostic_io","count":self.deferred.total_lost.load(Ordering::Relaxed),"dropped":counts.iter().fold(0u64, |sum,count| sum.saturating_add(*count)),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed)),"bufferOverflow":counts[0],"bufferContended":counts[1],"writeFailed":counts[2]}).to_string();
+            if let Err(error) = Self::write_locked(
+                &mut log,
+                "native_diagnostic_coverage_gap",
+                "unconfirmed",
+                Some(&detail),
+                false,
+                None,
+            ) {
+                add_count(&self.deferred.overflow, counts[0]);
+                add_count(&self.deferred.contended, counts[1]);
+                add_count(&self.deferred.failed, counts[2]);
+                return Err(error);
+            }
+        }
+        // The queue lock is never held during disk I/O. A failed write keeps the
+        // original at the head for retry; ordinary callers remain non-blocking.
+        for _ in 0..16 {
+            let event = self
+                .deferred
+                .queue
+                .lock()
+                .map_err(|_| io::Error::other("deferred log lock unavailable"))?
+                .entries
+                .front()
+                .cloned();
+            let Some(event) = event else { break };
+            let _context =
+                TaskContextGuard(TASK_CONTEXT.with(|slot| slot.replace(event.context.clone())));
+            Self::write_locked(
+                &mut log,
+                &event.stage,
+                &event.result,
+                event.detail.as_deref(),
+                false,
+                Some((&event.observed_at, event.monotonic_ms)),
+            )?;
+            let mut queue = self
+                .deferred
+                .queue
+                .lock()
+                .map_err(|_| io::Error::other("deferred log lock unavailable"))?;
+            queue.entries.pop_front();
+            queue.bytes = queue.bytes.saturating_sub(event.bytes);
+        }
+        Ok(())
     }
 
     pub fn step<T, E: std::fmt::Display + std::fmt::Debug>(
@@ -925,6 +1466,7 @@ impl DesktopLog {
                         std::backtrace::Backtrace::force_capture()
                     )),
                     false,
+                    None,
                 );
             }
             previous(info);

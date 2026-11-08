@@ -31,7 +31,11 @@ export async function resumeObserverReceiver(view: ConnectionPreparationView, ta
     task,
   );
   if (window.__TAURI_INTERNALS__)
-    await desktopInvoke('observer_command', { action: 'start-configured', expectedRevision }, task);
+    return desktopInvoke<{ warning?: string | null }>(
+      'observer_command',
+      { action: 'start-configured', expectedRevision },
+      task,
+    );
 }
 /** Refuse incomplete replies rather than silently dropping the concurrency guard. */
 export function requireConnectionRevision(value: unknown): string {
@@ -49,6 +53,15 @@ export type ObserverRuntimeView = {
   active: boolean;
   failed: boolean;
   pending: boolean;
+  recovering?: boolean;
+  stopReason?:
+    | 'paused'
+    | 'production-ended'
+    | 'connection-changed'
+    | 'disabled'
+    | 'host-invalid'
+    | 'lease-expired'
+    | null;
   error: 'observer_operation_failed' | null;
   retryAvailable: boolean;
   health: {
@@ -57,7 +70,20 @@ export type ObserverRuntimeView = {
   };
   terminal?: { reason?: string; stage?: string; attemptId?: string; spawnCode?: string };
 };
+export function observerNeedsRecovery(view: ObserverRuntimeView) {
+  if (view.error || view.failed || view.health.state === 'failed') return true;
+  if (view.stopReason) return ['lease-expired', 'host-invalid'].includes(view.stopReason);
+  return (
+    ['stopped', 'ended'].includes(view.health.state) && view.terminal?.reason !== 'source-hltv-stop'
+  );
+}
 export function observerFailureReason(view: ObserverRuntimeView) {
+  if (view.terminal?.stage === 'cleanup')
+    return '提前提示收尾未完成，请导出诊断并重启 Mizar 后重试。';
+  if (!view.failed && view.stopReason === 'lease-expired')
+    return '与工作台的连接暂时中断，请重新连接。';
+  if (!view.failed && view.stopReason === 'host-invalid')
+    return '游戏或工作台已变化，请确认游戏仍在运行后重新连接。';
   const code = view.terminal?.reason ?? view.health.lastErrorCode;
   if (code === 'initialization-timeout' || code === 'phase-timeout')
     return '提前提示连接超时，请核对地址与服务器状态。';
@@ -71,8 +97,6 @@ export function observerFailureReason(view: ObserverRuntimeView) {
     return '提前提示运行环境检查失败，请检查安装包完整性并导出诊断。';
   if (view.terminal?.stage === 'spawn')
     return '提前提示进程未能启动，请检查安装包与系统访问权限，并导出诊断。';
-  if (view.terminal?.stage === 'cleanup')
-    return '提前提示收尾未完成，请导出诊断并重启 Mizar 后重试。';
   if (view.terminal?.stage === 'parser-initialization')
     return '提前提示未能开始接收数据，请重试；仍失败时请导出诊断。';
   return '提前提示接收未完成，请重试；仍失败时请导出诊断。';

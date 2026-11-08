@@ -586,7 +586,18 @@ pub fn cleanup_mulnx(
     cs2: &std::path::Path,
     preparation: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    prepare_mulnx_with_demo(log, cs2, false, false, None, false, preparation, true)
+    prepare_mulnx_with_demo(
+        log,
+        cs2,
+        false,
+        false,
+        None,
+        false,
+        preparation,
+        true,
+        None,
+        None,
+    )
 }
 
 pub fn prepare_mulnx_with_demo(
@@ -598,11 +609,46 @@ pub fn prepare_mulnx_with_demo(
     capture_compatibility: bool,
     preparation: Option<serde_json::Value>,
     cleanup: bool,
+    window_geometry: Option<crate::cs2_video::VideoSize>,
+    console_journal: Option<&serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
-    let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
-    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
+    // Prewarming/cleanup never enables capture. Only this prepared launch can,
+    // and a changed or unreadable consent setting degrades capture alone.
+    let console_capture = console_journal.is_some_and(|journal| {
+        if journal["consoleDiagnostics"]["version"] != 1 {
+            return false;
+        }
+        match crate::cs2_console::settings(log) {
+            Ok(config)
+                if config["enabled"] == true
+                    && config["generation"] == journal["consoleDiagnostics"]["generation"] =>
+            {
+                true
+            }
+            result => {
+                log.event(
+                    "cs2_console_prepare",
+                    "interrupted",
+                    Some(
+                        &serde_json::json!({
+                            "reason":"consent_changed_before_mulnx_launch",
+                            "current":format!("{result:?}"),"condebugRequested":false
+                        })
+                        .to_string(),
+                    ),
+                );
+                false
+            }
+        }
+    });
+    let protect_previous_console =
+        console_journal.is_some_and(|journal| !journal["consoleDiagnosticsWarning"].is_null());
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
+    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
+    if let Some(size) = window_geometry {
+        body["windowGeometry"] = serde_json::json!({"width":size.width,"height":size.height});
+    }
     if let Some(preparation) = preparation {
         body["preparation"] = preparation;
     }

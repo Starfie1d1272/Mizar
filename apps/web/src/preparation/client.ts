@@ -276,11 +276,12 @@ export async function productionAction(
   preserveSettings = false,
   parentTask?: ControlTask,
   external?: ExternalGameIdentity,
+  confirmation?: { confirmSteamCancelled: boolean },
 ) {
   const task = new ControlTask(
     `production_${action}`,
     'user',
-    { ...state, preserveSettings, external },
+    { ...state, preserveSettings, external, confirmation },
     parentTask,
   );
   const entryAbort =
@@ -288,7 +289,7 @@ export async function productionAction(
   if (entryAbort) pendingEntry = entryAbort;
   try {
     if (window.__TAURI_INTERNALS__ && action === 'finish') {
-      await desktopInvoke('finish_workspace', undefined, task);
+      await desktopInvoke('finish_workspace', confirmation, task);
       const [production, source] = await Promise.all([
         fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
           .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))

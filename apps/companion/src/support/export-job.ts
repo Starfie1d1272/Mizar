@@ -243,6 +243,19 @@ export class SupportExports {
         try {
           hostPin = await readHostPin(this.logs, hostPinId, 'export');
           if (hostPin.status !== 'committed') throw new Error('host_pin_uncommitted');
+          const state = hostPin.sourceState as
+            | {
+                memoryOnly: { events: number | null };
+                unreportedLoss: Record<string, number>;
+              }
+            | undefined;
+          if (
+            state &&
+            (state.memoryOnly.events === null ||
+              state.memoryOnly.events > 0 ||
+              Object.values(state.unreportedLoss).some((count) => count > 0))
+          )
+            gap('host', 'coverage', new Error('host_memory_only_or_unreported_loss'));
         } catch (error) {
           hostPin = null;
           gap('host', 'pin', error);
@@ -315,6 +328,7 @@ export class SupportExports {
               pinId: hostPin.pinId,
               status: hostPin.status,
               confirmedAt: hostPin.confirmedAt,
+              sourceState: hostPin.sourceState,
               segments: hostPin.segments,
             }
           : { status: 'unconfirmed' },

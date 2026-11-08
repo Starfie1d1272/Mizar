@@ -69,7 +69,7 @@ D1 维护已登记写入者数量。并发撤回先封禁身份，再删除正�
 采集频率、队列容量、接收限额或清理策略变更时，须针对当前实现重新量测并保存报告。合成输入和本地运行结果不能证明线上额度或 Windows / CS2 实机表现。
 
 
-既有 `scripts/diagnostics/measure-capacity.mjs` 使用当前 document event/2 HTTP 合同；Host 合成输入沿当前 DesktopLog 的 event/2 字段与独立固定分段，ProgramChat 只计聊天输入，不再把技术控制台和 Host 操作复制进 SessionJournal。应用只有一个实际待传队列；应用关闭后通过当前恢复流程补扫保留的 Host 与性能来源，并逐个核对 Host 非聊天事件和文档 eventId。聊天正文的排除及其传输序号缺口分别保留计数，不把这些排除称为技术事件丢失。
+既有 `scripts/diagnostics/measure-capacity.mjs` 使用当前 document event/2 HTTP 合同；Host 合成输入沿当前 DesktopLog 的 event/2 字段，在追加前按一 MiB 目标轮转，导出回执逐段记录长度与摘要；每分钟等待所有源文件的身份和字节游标持久确认，不能只凭某个相同偏移判定已读完。ProgramChat 只计聊天输入，不再把技术控制台和 Host 操作复制进 SessionJournal。应用只有一个实际待传队列；应用关闭后通过当前恢复流程补扫保留的 Host 与性能来源，并逐个核对 Host 非聊天事件和文档 eventId。聊天正文的排除及其传输序号缺口分别保留计数，不把这些排除称为技术事件丢失。
 
 可在仓库根目录复测有界样本，先按工作区构建图准备 Companion 依赖，再运行：
 

@@ -412,6 +412,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
         '发送队列无法打开，网站同步不可用；原始数据保留。',
       ),
+    onBoundaryCaptureError: (error, evidence) =>
+      app.log.error(
+        {
+          event: 'outbox',
+          operation: 'boundary_capture',
+          ...evidence,
+          err: outboxLocalError(error),
+        },
+        '网站同步边界尚未确认保存，保留原请求重试；本机画面继续。',
+      ),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
       const connection = options.rivalhubConnection;
@@ -1913,6 +1923,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       canFetchStats: () => production.statsActive(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
+      currentSnapshotStatus: () => outputService.currentStatus(true),
+      retryOutputPersistence: async () => {
+        await outputService.retry({ localOnly: true });
+        return outputService.isPersistenceConfirmed();
+      },
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
@@ -2332,6 +2347,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
     onConsent: recordConfiguration,
+    deliveryParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.deliveryParticipant()] : []),
+      ...(performanceContext ? [performanceContext.deliveryParticipant()] : []),
+    ],
     incidentParticipants: () => [
       ...(sessionJournal ? [sessionJournal.incidentParticipant()] : []),
       ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
