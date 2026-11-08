@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OBSWebSocketError } from 'obs-websocket-js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -22,6 +23,7 @@ const registrySchema = z
     instance: z.string().min(1),
     collectionIdentity: z.string().min(1),
     roles: z.record(z.string(), identitySchema),
+    pending: z.record(z.string(), z.string()).optional(),
     registration: z
       .object({
         instance: z.enum(['required', 'submitted', 'confirmed']),
@@ -34,10 +36,38 @@ const registrySchema = z
 type Identity = z.infer<typeof identitySchema>;
 type Registry = z.infer<typeof registrySchema>;
 const rows = (value: unknown): Row[] => (Array.isArray(value) ? (value as Row[]) : []);
-const conflict = () =>
-  new Error('OBS 资源身份未确认。请保留现有来源，在停止所有输出后检查场景配置。');
+const conflict = () => new Error('OBS 资源身份未确认。请保留现有来源并检查 Mizar 场景配置。');
+const markerArgs = {
+  realm: 'OBS_WEBSOCKET_DATA_REALM_GLOBAL',
+  slotName: 'mizar.resource-owner.v1',
+};
+
+// obs-websocket 5.6 CreateInput/CreateScene validate these before creation.
+// https://github.com/obsproject/obs-websocket/tree/5.6.3/src/requesthandler
+// GenericError (205), creation/action/processing failures (700–702), transport
+// errors and unknown codes do not prove that OBS left no resource behind.
+const rejectedBeforeCreate = new Set([
+  203, // MissingRequestType
+  204, // UnknownRequestType
+  207, // NotReady
+  300, // MissingRequestField
+  301, // MissingRequestData
+  401, // InvalidRequestFieldType
+  403, // RequestFieldEmpty
+  601, // ResourceAlreadyExists
+]);
+function createWasRejected(type: string, error: unknown): error is OBSWebSocketError {
+  return (
+    error instanceof OBSWebSocketError &&
+    (rejectedBeforeCreate.has(error.code) ||
+      // CreateInput validates its target scene and input kind before creating either resource.
+      (type === 'CreateInput' && [600, 602, 605].includes(error.code)))
+  );
+}
 
 // Shared across every bind (and store instance), not just calls on one RPC wrapper.
+// Only registration transitions hold this lock, never the create request itself:
+// an OBS request whose reply was lost may never settle after disconnect.
 const initializationLocks = new Map<string, Promise<void>>();
 async function exclusiveInitialization<T>(key: string, run: () => Promise<T>): Promise<T> {
   const previous = initializationLocks.get(key) ?? Promise.resolve();
@@ -93,39 +123,23 @@ export class ManagedObsResources {
     await task;
   }
 
-  private async registerMarkers(raw: ObsRpc, registry: Registry): Promise<void> {
-    if (!registry.registration) return;
-    for (const [key, realm, value] of [
-      ['instance', 'OBS_WEBSOCKET_DATA', registry.instance],
-      ['collection', 'SCENE_COLLECTION', registry.collectionIdentity],
-    ] as const) {
-      if (
-        (await raw.call('GetSceneCollectionList')).currentSceneCollectionName !==
-        registry.collection
-      )
-        throw conflict();
-      const args = { realm, slotName: 'mizar.resource-owner.v1' };
-      const actual = (await raw.call('GetPersistentData', args)).slotValue;
-      if (actual === value) {
-        registry.registration[key] = 'confirmed';
-        await this.save(registry);
-        continue;
-      }
-      // A submitted-but-unconfirmed write is observed, never blindly sent again.
-      if (registry.registration[key] !== 'required' || (typeof actual === 'string' && actual))
-        throw new Error('OBS 资源身份登记结果尚未确认，未重复写入。请保留现有配置并重新检查。');
-      await assertNoVideoOutput(raw);
-      registry.registration[key] = 'submitted';
+  private async registerMarker(raw: ObsRpc, registry: Registry): Promise<void> {
+    const actual = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+    if (actual !== registry.instance) {
+      if (actual !== null && actual !== undefined && actual !== '') throw conflict();
+      // A fixed marker value is idempotent. Unlike CreateInput, a lost reply may
+      // be retried after observing the same empty slot, using the reserved value.
+      registry.registration = { instance: 'submitted', collection: 'confirmed' };
       await this.save(registry);
       let submissionFailure: unknown;
       try {
-        await raw.call('SetPersistentData', { ...args, slotValue: value });
+        await raw.call('SetPersistentData', { ...markerArgs, slotValue: registry.instance });
       } catch (error) {
         submissionFailure = error;
       }
       let observed: unknown;
       try {
-        observed = (await raw.call('GetPersistentData', args)).slotValue;
+        observed = (await raw.call('GetPersistentData', markerArgs)).slotValue;
       } catch (error) {
         throw new AggregateError(
           submissionFailure === undefined ? [error] : [submissionFailure, error],
@@ -133,16 +147,18 @@ export class ManagedObsResources {
           { cause: error },
         );
       }
-      if (observed !== value)
-        throw new Error('OBS 资源身份登记结果尚未确认。', { cause: submissionFailure });
-      registry.registration[key] = 'confirmed';
+      if (observed !== registry.instance)
+        throw new Error('OBS 资源身份登记结果尚未确认，请重试配置场景。', {
+          cause: submissionFailure,
+        });
+    }
+    if (registry.registration) {
+      delete registry.registration;
       await this.save(registry);
     }
-    delete registry.registration;
-    await this.save(registry);
   }
 
-  /** All consumers use role labels locally; only verified UUIDs cross the OBS boundary. */
+  /** Owned role aliases resolve to UUIDs; unregistered read requests stay read-only. */
   async bind(raw: ObsRpc, endpoint: string, baseUrl: string): Promise<ObsRpc> {
     const desired = obsDesiredScenes(baseUrl);
     const specs = new Map<string, { role: string; kind: string; legacy: string; path?: string }>();
@@ -172,47 +188,84 @@ export class ManagedObsResources {
       path: '/program/bp-compact',
     });
     let registry: Registry | undefined;
-    let loaded = false;
-    let inputRows: Row[] = [],
-      sceneRows: Row[] = [];
-    const verifyScope = async () => {
-      const collection = await raw.call('GetSceneCollectionList');
-      if (collection.currentSceneCollectionName !== OBS_COLLECTION) throw conflict();
-      if (registry) {
-        const marker = await raw.call('GetPersistentData', {
-          realm: 'OBS_WEBSOCKET_DATA',
-          slotName: 'mizar.resource-owner.v1',
-        });
-        if (marker.slotValue !== registry.instance) throw conflict();
-        const collectionMarker = await raw.call('GetPersistentData', {
-          realm: 'SCENE_COLLECTION',
-          slotName: 'mizar.resource-owner.v1',
-        });
-        if (collectionMarker.slotValue !== registry.collectionIdentity) throw conflict();
-      }
-    };
-    let loading: Promise<void> | undefined;
-    const initializeOnce = async () => {
-      if (loaded) return;
+    let observed = false;
+    const load = async () => {
       registry = (await this.load()).find(
         (item) => item.endpoint === endpoint && item.collection === OBS_COLLECTION,
       );
-      if (registry?.registration) await this.registerMarkers(raw, registry);
-      await verifyScope();
-      inputRows = rows((await raw.call('GetInputList')).inputs);
-      sceneRows = rows((await raw.call('GetSceneList')).scenes);
-      if (!registry) {
-        // Adoption is performed only once, with a complete structural proof, never a prefix.
+    };
+    const inventory = async () => ({
+      inputs: rows((await raw.call('GetInputList')).inputs),
+      scenes: rows((await raw.call('GetSceneList')).scenes),
+    });
+    const collection = async () => {
+      if ((await raw.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
+        throw conflict();
+    };
+    const verifyInventory = ({ inputs, scenes }: Awaited<ReturnType<typeof inventory>>) => {
+      let present = 0;
+      for (const [role, identity] of Object.entries(registry!.roles)) {
+        const spec = [...specs].find(([, value]) => value.role === role);
+        if (!spec || spec[1].kind !== identity.kind) throw conflict();
+        const candidates = identity.kind === 'scene' ? scenes : inputs;
+        const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
+        const nameKey = identity.kind === 'scene' ? 'sceneName' : 'inputName';
+        const found = candidates.find((item) => item[uuidKey] === identity.uuid);
+        if (found) {
+          if (identity.kind !== 'scene' && found.inputKind !== identity.kind) throw conflict();
+          present++;
+        }
+        if (candidates.some((item) => item[nameKey] === spec[0] && item[uuidKey] !== identity.uuid))
+          throw conflict();
+      }
+      // A same-named replacement collection is not the previously owned graph.
+      if (Object.keys(registry!.roles).length && !present) throw conflict();
+    };
+    const verifyScope = async () => {
+      await collection();
+      if (
+        !registry ||
+        (await raw.call('GetPersistentData', markerArgs)).slotValue !== registry.instance
+      )
+        throw conflict();
+      verifyInventory(await inventory());
+    };
+    const observe = async () => {
+      if (!observed) {
+        await load();
+        if (registry && !registry.registration) await verifyScope();
+        observed = true;
+      }
+      return !!registry && !registry.registration;
+    };
+    const adopt = () =>
+      exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
+        await load();
+        await collection();
+        if (registry) {
+          // Existing identities and unfinished intents are never replaced by names.
+          verifyInventory(await inventory());
+          if (registry.registration) await this.registerMarker(raw, registry);
+          await verifyScope();
+          observed = true;
+          return;
+        }
+        await assertNoVideoOutput(raw);
+        const { inputs, scenes } = await inventory();
         const roles: Record<string, Identity> = {};
         for (const [name, spec] of specs) {
           if (spec.kind === 'scene') continue;
-          const candidates = inputRows.filter(
+          const candidates = inputs.filter(
             (item) => item.inputName === name || item.inputName === spec.legacy,
           );
           if (!candidates.length) continue;
           if (candidates.length !== 1) throw conflict();
           const input = candidates[0]!;
-          if (input.inputKind !== spec.kind || typeof input.inputUuid !== 'string')
+          if (
+            input.inputKind !== spec.kind ||
+            typeof input.inputUuid !== 'string' ||
+            !input.inputUuid
+          )
             throw conflict();
           const settings = (await raw.call('GetInputSettings', { inputUuid: input.inputUuid }))
             .inputSettings as Row | undefined;
@@ -238,83 +291,71 @@ export class ManagedObsResources {
             !/^.+:.+:cs2\.exe$/i.test(String(settings.window))
           )
             throw conflict();
-          roles[spec.role] = { uuid: input.inputUuid, kind: spec.kind, version: 0 };
+          roles[spec.role] = { uuid: input.inputUuid, kind: spec.kind, version: 1 };
         }
+        const attached = new Set<string>();
         for (const scene of desired) {
           const spec = specs.get(scene.sceneName)!;
-          const candidates = sceneRows.filter(
+          const candidates = scenes.filter(
             (item) => item.sceneName === scene.sceneName || item.sceneName === spec.legacy,
           );
           if (!candidates.length) continue;
-          if (candidates.length !== 1 || typeof candidates[0]!.sceneUuid !== 'string')
+          if (
+            candidates.length !== 1 ||
+            typeof candidates[0]!.sceneUuid !== 'string' ||
+            !candidates[0]!.sceneUuid
+          )
             throw conflict();
           const uuid = candidates[0]!.sceneUuid as string;
           const items = rows((await raw.call('GetSceneItemList', { sceneUuid: uuid })).sceneItems);
           if (
-            !scene.sources.every(
-              (name) =>
-                roles[specs.get(name)!.role] &&
-                items.some((item) => item.sourceUuid === roles[specs.get(name)!.role]!.uuid),
-            )
+            !scene.sources.every((name) => {
+              const role = specs.get(name)!.role;
+              if (!roles[role] || !items.some((item) => item.sourceUuid === roles[role]!.uuid))
+                return false;
+              attached.add(role);
+              return true;
+            })
           )
             throw conflict();
-          roles[spec.role] = { uuid, kind: 'scene', version: 0 };
+          roles[spec.role] = { uuid, kind: 'scene', version: 1 };
         }
-        // A capture source alone is not proof of ownership.
+        // A plausible source name/settings without its expected graph is not ownership.
         if (
-          roles.capture &&
-          !desired.some(
-            (scene) => scene.composition === 'gameplay_overlay' && roles[`scene:${scene.id}`],
+          Object.entries(roles).some(
+            ([role, value]) =>
+              value.kind !== 'scene' && role !== 'bp-compact' && !attached.has(role),
           )
         )
           throw conflict();
-        await assertNoVideoOutput(raw);
-        const readMarker = async (realm: string) =>
-          (await raw.call('GetPersistentData', { realm, slotName: 'mizar.resource-owner.v1' }))
-            .slotValue;
-        const marker = await readMarker('OBS_WEBSOCKET_DATA');
-        const collectionMarker = await readMarker('SCENE_COLLECTION');
-        const hasInstance = typeof marker === 'string' && marker.length > 0;
-        const hasCollection = typeof collectionMarker === 'string' && collectionMarker.length > 0;
+        if (roles['bp-compact']) {
+          const scene = roles['scene:gameplay'];
+          if (
+            !scene ||
+            !rows((await raw.call('GetSceneItemList', { sceneUuid: scene.uuid })).sceneItems).some(
+              (item) => item.sourceUuid === roles['bp-compact']!.uuid,
+            )
+          )
+            throw conflict();
+        }
+        const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+        if (marker !== null && marker !== undefined && marker !== '' && typeof marker !== 'string')
+          throw conflict();
         registry = {
           endpoint,
           collection: OBS_COLLECTION,
-          instance: hasInstance ? marker : randomUUID(),
-          collectionIdentity: hasCollection ? collectionMarker : randomUUID(),
+          instance: typeof marker === 'string' && marker ? marker : randomUUID(),
+          // Local registry identity, NOT an OBS profile or a remote collection marker.
+          collectionIdentity: randomUUID(),
           roles,
-          registration: {
-            instance: hasInstance ? 'confirmed' : 'required',
-            collection: hasCollection ? 'confirmed' : 'required',
-          },
+          registration: { instance: 'required', collection: 'confirmed' },
         };
-        // Reserve the exact intended marker identities before any external write.
+        await collection();
         await this.save(registry);
-        await this.registerMarkers(raw, registry);
+        await this.registerMarker(raw, registry);
         await verifyScope();
-      }
-      for (const [role, identity] of Object.entries(registry.roles)) {
-        const name = [...specs].find(([, spec]) => spec.role === role)?.[0];
-        if (!name) throw conflict();
-        const candidates = identity.kind === 'scene' ? sceneRows : inputRows;
-        const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
-        const nameKey = identity.kind === 'scene' ? 'sceneName' : 'inputName';
-        const found = candidates.find((item) => item[uuidKey] === identity.uuid);
-        if (found && identity.kind !== 'scene' && found.inputKind !== identity.kind)
-          throw conflict();
-        if (candidates.some((item) => item[nameKey] === name && item[uuidKey] !== identity.uuid))
-          throw conflict();
-      }
-      loaded = true;
-    };
-    const initialize = (): Promise<void> => {
-      loading ??= exclusiveInitialization(`${endpoint}|${OBS_COLLECTION}`, initializeOnce).catch(
-        (error: unknown) => {
-          loading = undefined;
-          throw error;
-        },
-      );
-      return loading;
-    };
+        observed = true;
+      });
     const canonical = (value: unknown): unknown => {
       if (Array.isArray(value)) return value.map(canonical);
       if (!value || typeof value !== 'object') return value;
@@ -338,28 +379,10 @@ export class ManagedObsResources {
     };
     return {
       ...raw,
-      confirmManagedMigration: async () => {
-        await initialize();
-        await verifyScope();
-        const inputs = rows((await raw.call('GetInputList')).inputs);
-        const scenes = rows((await raw.call('GetSceneList')).scenes);
-        let changed = false;
-        for (const identity of Object.values(registry!.roles)) {
-          const present =
-            identity.kind === 'scene'
-              ? scenes.some((item) => item.sceneUuid === identity.uuid)
-              : inputs.some(
-                  (item) => item.inputUuid === identity.uuid && item.inputKind === identity.kind,
-                );
-          if (present && identity.version === 0) {
-            identity.version = 1;
-            changed = true;
-          }
-        }
-        if (changed) await this.save(registry!);
-      },
+      observeManagedResources: observe,
+      adoptManagedResources: adopt,
       ownershipScope: async () => {
-        await initialize();
+        if (!(await observe())) throw conflict();
         await verifyScope();
         return `${endpoint}|${OBS_COLLECTION}|${registry!.instance}|${registry!.collectionIdentity}`;
       },
@@ -370,8 +393,8 @@ export class ManagedObsResources {
           )
         ) {
           if (type !== 'GetSceneCollectionList') {
-            loaded = false;
-            loading = undefined;
+            observed = false;
+            registry = undefined;
           }
           return raw.call(type, args);
         }
@@ -381,8 +404,13 @@ export class ManagedObsResources {
           if (/^(Create|Set|Remove|Press|Trigger)/.test(type)) throw conflict();
           return raw.call(type, args);
         }
-        await initialize();
-        if (/^(Create|Set|Remove|Press|Trigger)/.test(type)) await verifyScope();
+        const owned = await observe();
+        const mutating = /^(Create|Set|Remove|Press|Trigger)/.test(type);
+        if (!owned) {
+          if (mutating) throw conflict();
+          return raw.call(type, args);
+        }
+        if (mutating) await verifyScope();
         const data = { ...args };
         for (const prefix of ['scene', 'input', 'source']) {
           const name = data[`${prefix}Name`];
@@ -394,7 +422,6 @@ export class ManagedObsResources {
             continue;
           const identity = registry!.roles[specs.get(name)!.role];
           if (!identity) throw conflict();
-          await verifyScope();
           data[`${prefix}Uuid`] = identity.uuid;
           delete data[`${prefix}Name`];
         }
@@ -404,21 +431,84 @@ export class ManagedObsResources {
             : type === 'CreateScene'
               ? data.sceneName
               : undefined;
-        if (typeof creating === 'string' && specs.has(creating)) {
-          await assertNoVideoOutput(raw);
-          await verifyScope();
+        const creatingSpec = typeof creating === 'string' ? specs.get(creating) : undefined;
+        let reservation: Registry | undefined;
+        if (creatingSpec) {
+          await exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
+            await load();
+            if (!registry || registry.registration) throw conflict();
+            if (registry.pending?.[creatingSpec.role])
+              throw new Error('OBS 来源创建结果尚未确认，未重复创建。请保留现有来源并检查诊断。');
+            await assertNoVideoOutput(raw);
+            await verifyScope();
+            const identity = registry.roles[creatingSpec.role];
+            if (identity) {
+              const listed = await inventory();
+              const candidates = identity.kind === 'scene' ? listed.scenes : listed.inputs;
+              const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
+              if (candidates.some((item) => item[uuidKey] === identity.uuid)) throw conflict();
+            }
+            const next = {
+              ...registry,
+              pending: { ...registry.pending, [creatingSpec.role]: creating as string },
+            };
+            await this.save(next);
+            registry = reservation = next;
+          });
         }
+        const saveCreation = async (change: (current: Registry) => Registry) =>
+          exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
+            const current = (await this.load()).find(
+              (item) => item.endpoint === endpoint && item.collection === OBS_COLLECTION,
+            );
+            if (
+              !current ||
+              current.instance !== reservation?.instance ||
+              current.collectionIdentity !== reservation.collectionIdentity
+            )
+              throw conflict();
+            const next = change(current);
+            await this.save(next);
+            registry = next;
+          });
+        const finishReservation = (current: Registry) => {
+          if (!creatingSpec || current.pending?.[creatingSpec.role] !== creating) throw conflict();
+          const next = { ...current, pending: { ...current.pending } };
+          delete next.pending[creatingSpec.role];
+          return next;
+        };
         if (/^(CreateSceneItem|RemoveSceneItem|SetInputName|SetSceneName)$/.test(type)) {
           await assertNoVideoOutput(raw);
           await verifyScope();
         }
-        const result = await raw.call(type, args ? data : undefined);
-        if (typeof creating === 'string' && specs.has(creating)) {
-          const spec = specs.get(creating)!;
+        let result: Row;
+        try {
+          result = await raw.call(type, args ? data : undefined);
+        } catch (error) {
+          if (creatingSpec && createWasRejected(type, error)) {
+            try {
+              // Commit the rejection before allowing another attempt. A failed save
+              // must leave both disk and the bound view pending, even in this process.
+              await saveCreation(finishReservation);
+            } catch (persistenceError) {
+              throw new AggregateError(
+                [error, persistenceError],
+                'OBS 已拒绝创建，但拒绝结果未能保存，请检查诊断后重试。',
+                { cause: persistenceError },
+              );
+            }
+          }
+          // Preserve the protocol code/comment for the existing OBS diagnostics.
+          throw error;
+        }
+        if (creatingSpec) {
+          const spec = creatingSpec;
           const uuid = result[spec.kind === 'scene' ? 'sceneUuid' : 'inputUuid'];
-          if (typeof uuid !== 'string') throw conflict();
-          registry!.roles[spec.role] = { uuid, kind: spec.kind, version: 0 };
-          await this.save(registry!);
+          if (typeof uuid !== 'string' || !uuid) throw conflict();
+          await saveCreation((current) => ({
+            ...finishReservation(current),
+            roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 0 } },
+          }));
           await verifyScope();
           const listed =
             spec.kind === 'scene'
@@ -440,23 +530,14 @@ export class ManagedObsResources {
             )
               throw conflict();
           }
-          registry!.roles[spec.role]!.version = 1;
-          await this.save(registry!);
-        }
-        if (type === 'SetInputSettings' && typeof data.inputUuid === 'string') {
-          const entry = Object.values(registry!.roles).find((item) => item.uuid === data.inputUuid);
-          if (entry && entry.version === 0) {
-            const actual = (await raw.call('GetInputSettings', { inputUuid: entry.uuid }))
-              .inputSettings as Row | undefined;
-            const requested = data.inputSettings as Row | undefined;
-            if (
-              requested &&
-              Object.entries(requested).every(([key, value]) => actual?.[key] === value)
-            ) {
-              entry.version = 1;
-              await this.save(registry!);
-            }
-          }
+          await saveCreation((current) => {
+            if (current.roles[spec.role]?.uuid !== uuid || current.pending?.[spec.role])
+              throw conflict();
+            return {
+              ...current,
+              roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 1 } },
+            };
+          });
         }
         return canonical(result) as Row;
       },

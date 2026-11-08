@@ -67,3 +67,16 @@ D1 维护已登记写入者数量。并发撤回先封禁身份，再删除正�
 ## 集成采集容量验收
 
 采集频率、队列容量、接收限额或清理策略变更时，须针对当前实现重新量测并保存报告。合成输入和本地运行结果不能证明线上额度或 Windows / CS2 实机表现。
+
+
+既有 `scripts/diagnostics/measure-capacity.mjs` 使用当前 document event/2 HTTP 合同；Host 合成输入沿当前 DesktopLog 的 event/2 字段，在追加前按一 MiB 目标轮转，导出回执逐段记录长度与摘要；每分钟等待所有源文件的身份和字节游标持久确认，不能只凭某个相同偏移判定已读完。ProgramChat 只计聊天输入，不再把技术控制台和 Host 操作复制进 SessionJournal。应用只有一个实际待传队列；应用关闭后通过当前恢复流程补扫保留的 Host 与性能来源，并逐个核对 Host 非聊天事件和文档 eventId。聊天正文的排除及其传输序号缺口分别保留计数，不把这些排除称为技术事件丢失。
+
+可在仓库根目录复测有界样本，先按工作区构建图准备 Companion 依赖，再运行：
+
+```sh
+node --import ./apps/companion/node_modules/tsx/dist/loader.mjs scripts/diagnostics/measure-capacity.mjs /tmp/capacity.json --profile-only --minutes=2 --artifacts=/tmp/capacity-artifacts
+```
+
+`--minutes` 在样本模式可设 1–120；省略参数的原完整模型仍使用 120 分钟输入及后续本地云端模拟。短样本不运行每日多用户、共享 IP 或积压容量模型，也不能据此批准云端配额。`--artifacts` 可选，保留实际导出路由生成的 ZIP 与内部清单；工具调用当前离线读取器验证正文、控制台记录与聊天排除。报告记录源码与文件摘要、实际字节、批数、导出测量及输入频率。
+
+所有输入时间均为加速模型，真实采集定时器与批次时钟不随模型时间加速；报告中的补扫是当前保留源恢复，不能称为实际两小时的发送节奏。Host 正文与 pin 回执是按现行合同生成的公开合成输入，不证明 Windows 原生 writer、游戏或保存对话框执行。实际网络发送被暂停且拦截；样本执行无外部账户请求。全量容量结论仍须另看当前完整模型与实机报告，不沿用旧版容量数字。

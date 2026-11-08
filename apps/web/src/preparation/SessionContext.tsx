@@ -3,7 +3,7 @@ import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import { Button, StatusPill } from '../ui';
 import { desktopInvoke } from '../workspace/client';
-import { useObsStatus } from '../workspace/obs-client';
+import { obsStreamLabel, useObsStatus } from '../workspace/obs-client';
 import { useLocalRead, productionAction, type Production } from './client';
 import './session-context.css';
 
@@ -40,11 +40,14 @@ export function SessionContext({ returnToWorkspace = false }: { returnToWorkspac
       <span>{match?.format.toUpperCase()}</span>
       <div className="session-context__outputs">
         <span>OBS · {obs?.connection === 'connected' ? '已连接' : '未连接'}</span>
+        <span>直播 · {obsStreamLabel(obs)}</span>
         <span>
-          直播 · {obs?.connection !== 'connected' ? '待确认' : obs.streaming ? '进行中' : '未开始'}
-        </span>
-        <span>
-          录像 · {obs?.connection !== 'connected' ? '待确认' : obs.recording ? '进行中' : '未开始'}
+          录像 ·{' '}
+          {obs?.connection !== 'connected' || obs.recording === null
+            ? '待确认'
+            : obs.recording
+              ? '进行中'
+              : '未开始'}
         </span>
       </div>
       {returnToWorkspace ? (

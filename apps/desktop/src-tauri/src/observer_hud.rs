@@ -230,6 +230,35 @@ pub fn pending(log: &DesktopLog) -> bool {
     file(log).exists() && !crate::observer_workspace::active()
 }
 
+/// A process-only convar record cannot require game writes after all CS2
+/// processes have exited. Preserve unreadable records and disable automatic HUD
+/// writes for the next managed session instead of blocking unrelated startup.
+pub fn prepare_launch(log: &DesktopLog) -> Result<Option<String>, String> {
+    let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
+    if managed_cs2::any_cs2_running(log)? {
+        return Err("请先退出 CS2，再处理上次 HUD 记录。".into());
+    }
+    let record = match load(log) {
+        Ok(Some(record)) => record,
+        Ok(None) => return Ok(None),
+        Err(error) => return Ok(Some(error)),
+    };
+    // Identity inspection is still mandatory for a readable record. Never turn
+    // a live or uncertain process into permission to discard recovery evidence.
+    if managed_cs2::verified_session_process(&record, log)?.is_some() {
+        return Err("请先退出此前游戏实例，再处理 HUD 记录。".into());
+    }
+    match fs::remove_file(file(log)) {
+        Ok(()) => Ok(None),
+        Err(error) => Ok(Some(log.preserve_error(
+            "observer_hud",
+            None,
+            &error,
+            "上次 HUD 记录无法清理，原记录仍保留。".into(),
+        ))),
+    }
+}
+
 pub fn restore(log: &DesktopLog) -> Result<(), String> {
     let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
     let Some(record) = load(log)? else {
@@ -247,136 +276,4 @@ pub fn restore(log: &DesktopLog) -> Result<(), String> {
         }
     }
     fs::remove_file(file(log)).map_err(|e| e.to_string())
-}
-
-/// A finite read-only probe on the already-consented console.
-pub(crate) fn probe_frame_rate(log: &DesktopLog, executable: &Path) -> Result<f64, String> {
-    frame_rate_command(log, executable, &frame_rate_marker()?, None)
-}
-
-pub(crate) fn frame_rate_marker() -> Result<String, String> {
-    Ok(format!(
-        "MIZAR_FPS_{:032x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos()
-    ))
-}
-
-/// The caller durably reserves every write attempt before this function.
-pub(crate) fn frame_rate_command(
-    log: &DesktopLog,
-    executable: &Path,
-    marker: &str,
-    value: Option<f64>,
-) -> Result<f64, String> {
-    if !regex::Regex::new(r"^MIZAR_FPS_[a-f0-9]{32}$")
-        .unwrap()
-        .is_match(marker)
-        || value.is_some_and(|v| !v.is_finite() || !(0.0..=10000.0).contains(&v))
-    {
-        return Err("帧率命令参数无效。".into());
-    }
-    let attempt = frame_rate_attempt_id(marker);
-    log.with_attempt(Some(&attempt), || {
-        let result = frame_rate_command_inner(log, executable, marker, value);
-        log.native_outcome("fps_max_command_readback", None, &result);
-        result
-    })
-}
-
-pub(crate) fn frame_rate_attempt_id(marker: &str) -> String {
-    let hex = marker.strip_prefix("MIZAR_FPS_").unwrap_or(marker);
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    )
-}
-
-fn frame_rate_command_inner(
-    log: &DesktopLog,
-    executable: &Path,
-    marker: &str,
-    value: Option<f64>,
-) -> Result<f64, String> {
-    let root = crate::host_runtime::bundle_root()?;
-    let mut command = Command::new(root.join("resources/runtime/node.exe"));
-    command
-        .arg(root.join("resources/app/dist/telemetry/observer-game-control.js"))
-        .args(["--frame-rate-query", marker])
-        .env_remove("NODE_OPTIONS")
-        .env_remove("NODE_PATH")
-        .creation_flags(0x08000000);
-    if let Some(value) = value {
-        command.arg(value.to_string());
-    }
-    crate::powershell::run(command, log, "游戏帧率读回", Duration::from_secs(12))?;
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        if let Some(value) = frame_rate_receipt(executable, marker)? {
-            return Ok(value);
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Err("尚未收到本次游戏帧率读回；请复查，不会重复写入。".into())
-}
-
-/// Re-read the original attempt's unique receipt without replaying its command.
-pub(crate) fn frame_rate_receipt(executable: &Path, marker: &str) -> Result<Option<f64>, String> {
-    let path = cs2_console::path(executable)?;
-    let mut reader = match fs::File::open(&path) {
-        Ok(reader) => reader,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
-    let length = reader.metadata().map_err(|e| e.to_string())?.len();
-    reader
-        .seek(SeekFrom::Start(length.saturating_sub(65536)))
-        .map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    reader
-        .take(65536)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&bytes);
-    let boundary = |suffix: &str| {
-        regex::Regex::new(&format!(
-            r"(?m)^(?:\[[^\]\r\n]{{1,80}}\]\s*)*{}{}\r?$",
-            regex::escape(marker),
-            suffix
-        ))
-        .unwrap()
-    };
-    let start = boundary("");
-    let end = boundary("_END");
-    let value = regex::Regex::new(
-        r#"(?im)^(?:\[[^\]\r\n]{1,80}\]\s*)*\s*"?fps_max"?\s*(?:=|:)\s*"?([0-9]+(?:\.[0-9]+)?)\b"#,
-    )
-    .unwrap();
-    let Some(first) = start.find(&text) else {
-        return Ok(None);
-    };
-    let tail = &text[first.end()..];
-    let Some(last) = end.find(tail) else {
-        return Ok(None);
-    };
-    let values: Vec<f64> = value
-        .captures_iter(&tail[..last.start()])
-        .filter_map(|c| c[1].parse().ok())
-        .collect();
-    if let Some(current) = values
-        .first()
-        .copied()
-        .filter(|v| v.is_finite() && (0.0..=10000.0).contains(v))
-    {
-        if values.iter().all(|v| *v == current) {
-            return Ok(Some(current));
-        }
-    }
-    Err("游戏帧率读回缺失或不一致，本次结果尚未确认。".into())
 }

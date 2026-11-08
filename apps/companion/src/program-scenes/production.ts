@@ -315,7 +315,6 @@ export function createProduction(options: ProductionDependencies) {
     // Ordinary return is window presentation only, not a new production session.
     if (body.action === 'enter' && mode !== 'preparation') {
       mode = 'live';
-      revision = randomUUID();
       return { ok: true as const, value: view() };
     }
     busy = true;
@@ -487,7 +486,7 @@ export function createProduction(options: ProductionDependencies) {
       committed = true;
       // Hiding the workspace while preparing changes no production state and
       // must not invalidate the preparation owner's in-flight operations.
-      if (body?.action !== 'hide' || mode !== 'preparation') revision = randomUUID();
+      if (body?.action !== 'hide') revision = randomUUID();
       if (entering) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
@@ -578,7 +577,9 @@ export function createProduction(options: ProductionDependencies) {
       return () => generation === sessionGeneration && mode !== 'preparation' && !shuttingDown;
     },
     canControl: () => !busy && !shuttingDown,
-    automaticAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    sessionAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    automaticAllowed: () =>
+      production.sessionAllowed() && (options.obs?.hasCurrentPreparation() ?? true),
     preparationValid: (expectedRevision: unknown) => {
       const generation = preparationGeneration;
       return () =>
@@ -589,6 +590,20 @@ export function createProduction(options: ProductionDependencies) {
         !updatePending &&
         !trialPending;
     },
+    canPrepareMulnx: (task?: { id: string; revision: string }) =>
+      task
+        ? mode !== 'preparation' &&
+          !busy &&
+          !shuttingDown &&
+          !exitFrozen &&
+          !updatePending &&
+          !trialPending &&
+          lastEnteredId === task.id &&
+          revision === task.revision &&
+          !preparationCancelled(task.id)
+        : mode === 'preparation',
+    // Exit restores owned launch options before finishing the production state.
+    canCleanupMulnx: () => mode === 'preparation' || (exitFrozen && shuttingDown),
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||

@@ -2,15 +2,18 @@ import { readHostPin, type IncidentParticipant, type PinReceipt } from './retent
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants } from 'node:fs';
 import { mkdir, open, lstat, readdir, rm, type FileHandle } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { atomicJson, safePath } from '../resource-store/files.js';
 import { diagnosticSegmentPattern } from './segments.js';
-import { archiveWorkerSource } from './archive-worker.js';
-const legacy =
-  /^(?:session\.ndjson(?:\.[0-9]+)?|desktop(?:\.[0-9]+)?\.ndjson|desktop\.ndjson\.[0-9]+|business(?:\.ndjson(?:\.[0-9]+)?|-history\.json)|supervisor\.ndjson(?:\.[0-9]+)?|companion(?:\.stderr)?\.log(?:\.[0-9]+)?)$/;
+import { diagnosticValue } from './session-journal.js';
+import type { ArchiveWorkerData } from './archive-worker.js';
+const currentProcessLogs = /^(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?$/;
+const CACHE_LIMIT = 256 * 1024 * 1024;
+const MANIFEST_RESERVE = 1024 * 1024;
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 export interface ExportJob {
   exportId: string;
@@ -20,12 +23,14 @@ export interface ExportJob {
   error?: string;
   expiresAt?: string;
   parts?: { name: string; bytes: number; sha256: string }[];
+  knownGaps?: number;
+  downloadName?: string;
 }
 /** One bounded build. HTTP carries only status and trusted binary attachment routes. */
 export class SupportExports {
-  private job: ExportJob | undefined;
-  private task: Promise<void> | undefined;
-  private worker: Worker | undefined;
+  private readonly jobs = new Map<string, ExportJob>();
+  private active:
+    { id: string; outputCreated?: boolean; task?: Promise<void>; worker?: Worker } | undefined;
   readonly directory: string;
   constructor(
     private readonly logs: string,
@@ -34,70 +39,104 @@ export class SupportExports {
     this.directory = join(dirname(logs), 'support-export');
   }
   status(id: string) {
-    return id === this.job?.exportId ? this.job : null;
+    const job = this.jobs.get(id);
+    return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now()) ? job : null;
   }
   async begin(
     range: { from?: string; to?: string },
     snapshot: unknown,
     hostPinId?: string,
   ): Promise<ExportJob> {
-    if (this.task) throw new Error('export_busy');
+    if (this.active) throw new Error('export_busy');
+    for (const [id, cached] of this.jobs)
+      if (cached.expiresAt && Date.parse(cached.expiresAt) <= Date.now()) this.jobs.delete(id);
+    if (this.jobs.size >= 64) throw new Error('export_cache_job_budget');
+    const id = hostPinId ?? randomUUID();
+    if (!idPattern.test(id) || this.jobs.has(id)) throw new Error('export_identity_conflict');
+    const job: ExportJob = { exportId: id, phase: 'collecting', inputBytes: 0, outputBytes: 0 };
+    // Admission is owned before the first asynchronous boundary, including cache inspection.
+    const active = { id } as NonNullable<SupportExports['active']>;
+    this.active = active;
+    this.jobs.set(id, job);
+    active.task = (async () => {
+      const diskBudgetBytes = await this.prepareCache();
+      this.assertActive(job);
+      await this.build(job, range, snapshot, diskBudgetBytes, hostPinId);
+    })()
+      .catch(async (error: unknown) => {
+        if (job.phase !== 'cancelled') job.phase = 'failed';
+        job.error = String(error);
+        job.expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+        // Only this admitted job owns this output. Never clean another export's directory.
+        if (active.outputCreated)
+          await safePath(join(this.directory, id))
+            .then((path) => rm(path, { recursive: true, force: true }))
+            .catch(() => undefined);
+      })
+      .finally(() => {
+        if (this.active === active) this.active = undefined;
+      });
+    return job;
+  }
+  private assertActive(job: ExportJob) {
+    if (this.active?.id !== job.exportId || job.phase === 'cancelled')
+      throw new Error('export_cancelled');
+  }
+  private async prepareCache() {
     await safePath(dirname(this.directory));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await safePath(this.directory);
+    let used = 0;
+    const size = async (path: string): Promise<number> => {
+      const stat = await lstat(path);
+      if (stat.isFile() && stat.nlink === 1) {
+        await safePath(dirname(path), basename(path));
+        return stat.size;
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('export_cache_unsafe');
+      await safePath(path);
+      let bytes = 0;
+      for (const name of await readdir(path)) bytes += await size(join(path, name));
+      return bytes;
+    };
     for (const name of await readdir(this.directory)) {
-      if (!idPattern.test(name)) continue;
+      if (!idPattern.test(name)) throw new Error('export_cache_unknown_entry');
       const path = await safePath(join(this.directory, name));
       const stat = await lstat(path);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-      if (Date.now() - stat.mtimeMs <= 15 * 60_000) continue;
-      let lease: FileHandle | undefined;
-      try {
-        lease = await open(
-          join(path, 'saving.lease'),
-          constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-          0o600,
-        );
-        await safePath(join(this.directory, name));
-        // Only an exclusively held lease permits cleanup; a saver wins by creating the same file.
-        await lease.close();
-        lease = undefined;
-        await rm(path, { recursive: true });
-      } catch (error) {
-        await lease?.close();
-        if (
-          (error as NodeJS.ErrnoException).code !== 'EEXIST' &&
-          (error as NodeJS.ErrnoException).code !== 'ENOENT'
-        )
-          throw error;
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('export_cache_unsafe');
+      if (Date.now() - stat.mtimeMs > 15 * 60_000) {
+        let lease: FileHandle | undefined;
+        try {
+          lease = await open(
+            join(path, 'saving.lease'),
+            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+            0o600,
+          );
+          await safePath(path);
+          await lease.close();
+          lease = undefined;
+          await rm(path, { recursive: true });
+          this.jobs.delete(name);
+          continue;
+        } catch (error) {
+          await lease?.close();
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
       }
+      used += await size(path);
     }
-    const job: ExportJob = {
-      exportId: hostPinId ?? randomUUID(),
-      phase: 'collecting',
-      inputBytes: 0,
-      outputBytes: 0,
-    };
-    this.job = job;
-    this.task = this.build(job, range, snapshot, hostPinId)
-      .catch((error) => {
-        if (job.phase !== 'cancelled') job.phase = 'failed';
-        job.error = String(error);
-        void rm(join(this.directory, job.exportId), { recursive: true, force: true }).catch(
-          () => undefined,
-        );
-      })
-      .finally(() => {
-        this.task = undefined;
-      });
-    return job;
+    const remaining = CACHE_LIMIT - used - MANIFEST_RESERVE;
+    if (remaining <= 0) throw new Error('export_cache_budget');
+    return remaining;
   }
   private async build(
     job: ExportJob,
     range: { from?: string; to?: string },
     snapshot: unknown,
+    diskBudgetBytes: number,
     hostPinId?: string,
   ) {
+    const collectionStarted = performance.now();
     const handles: FileHandle[] = [];
     const participants = this.participants();
     const receipts: PinReceipt[] = [];
@@ -108,12 +147,34 @@ export class SupportExports {
       bytes: number;
       rawAttachment?: boolean;
       rawIndex?: boolean;
-      secrets?: readonly string[];
+      secrets?: string[];
     }[] = [];
-    const gaps: { source: string; reason: string }[] = [];
+    const gaps: {
+      source: string;
+      reason: string;
+      phase?: string;
+      cause?: unknown;
+      scope?: string;
+    }[] = [];
+    const gap = (source: string, phase: string, error: unknown) =>
+      gaps.push({
+        source,
+        phase,
+        reason: String(error),
+        cause: diagnosticValue(error),
+        scope: 'source unavailable; retained original and unknown range',
+      });
     const output = join(this.directory, job.exportId);
     await mkdir(output, { mode: 0o700 });
-    const capture = async (directory: string, name: string, prefix = '', rawIndex = false) => {
+    if (this.active?.id === job.exportId) this.active.outputCreated = true;
+    this.assertActive(job);
+    const capture = async (
+      directory: string,
+      name: string,
+      prefix = '',
+      rawIndex = false,
+      rawAttachment = false,
+    ) => {
       try {
         const path = await safePath(directory, name);
         const before = await lstat(path);
@@ -151,6 +212,7 @@ export class SupportExports {
           fd: handle.fd,
           bytes: expected?.bytes ?? actual.size,
           rawIndex,
+          rawAttachment,
         });
       } catch (error) {
         gaps.push({ source: prefix + name, reason: String(error) });
@@ -158,58 +220,86 @@ export class SupportExports {
     };
     try {
       for (const participant of participants) {
-        const prepared = await participant.prepare(job.exportId);
-        receipts.push({
-          ...(await participant.commit(job.exportId)),
-          sourceState: prepared.sourceState,
-        });
+        this.assertActive(job);
+        let phase = 'prepare';
+        try {
+          const prepared = await participant.prepare(job.exportId);
+          phase = 'commit';
+          const committed = await participant.commit(job.exportId);
+          if (
+            committed.pinId !== job.exportId ||
+            committed.producerId !== participant.producerId ||
+            committed.kind !== 'export' ||
+            committed.status !== 'committed' ||
+            JSON.stringify(committed.segments) !== JSON.stringify(prepared.segments)
+          )
+            throw new Error('export_pin_receipt_invalid');
+          receipts.push({ ...committed, sourceState: prepared.sourceState });
+        } catch (error) {
+          gap(participant.producerId, phase, error);
+        }
       }
-      hostPin = hostPinId ? await readHostPin(this.logs, hostPinId, 'export') : null;
+      if (hostPinId) {
+        try {
+          hostPin = await readHostPin(this.logs, hostPinId, 'export');
+          if (hostPin.status !== 'committed') throw new Error('host_pin_uncommitted');
+          const state = hostPin.sourceState as
+            | {
+                memoryOnly: { events: number | null };
+                unreportedLoss: Record<string, number>;
+              }
+            | undefined;
+          if (
+            state &&
+            (state.memoryOnly.events === null ||
+              state.memoryOnly.events > 0 ||
+              Object.values(state.unreportedLoss).some((count) => count > 0))
+          )
+            gap('host', 'coverage', new Error('host_memory_only_or_unreported_loss'));
+        } catch (error) {
+          hostPin = null;
+          gap('host', 'pin', error);
+        }
+      }
       const companionPin = receipts.find((receipt) => receipt.producerId === 'companion');
       const performancePin = receipts.find((receipt) => receipt.producerId === 'performance');
       const pinned = (receipt: { segments: { name: string }[] } | null | undefined, name: string) =>
-        !receipt || receipt.segments.some((segment) => segment.name === name);
-      await safePath(this.logs);
-      // Complete local sources precede narrower technical carriers, preserving conflicting variants.
-      for (const name of (await readdir(this.logs)).sort())
-        if (
-          (legacy.test(name) || diagnosticSegmentPattern.test(name)) &&
-          (!name.startsWith('session-') || pinned(companionPin, name)) &&
-          (!/^(?:desktop|document)-/.test(name) || pinned(hostPin, name))
-        )
-          await capture(this.logs, name);
-      if ((await readdir(this.logs)).includes('host-retention.ndjson'))
-        await capture(this.logs, 'host-retention.ndjson', 'retention/', true);
+        receipt?.segments.some((segment) => segment.name === name) ?? false;
+      try {
+        await safePath(this.logs);
+        const names = (await readdir(this.logs)).sort();
+        for (const name of names) {
+          this.assertActive(job);
+          if (diagnosticSegmentPattern.test(name)) {
+            const pin = name.startsWith('session-') ? companionPin : hostPin;
+            if (pinned(pin, name)) await capture(this.logs, name);
+            else gap(name, 'pin', new Error('source_not_safely_fixed'));
+          } else if (currentProcessLogs.test(name)) await capture(this.logs, name, '', false, true);
+        }
+        if (names.includes('host-retention.ndjson'))
+          await capture(this.logs, 'host-retention.ndjson', 'attachments/retention/', false, true);
+        if (names.includes('incident-pins.json'))
+          await capture(this.logs, 'incident-pins.json', 'retention/', true);
+      } catch (error) {
+        gap('logs', 'enumerate', error);
+      }
       for (const [folder, pattern] of [
-        ['performance-pending', /^[a-f0-9-]{36}\.[a-f0-9]{4}\.(?:json|gz)$/],
-        ['marked-incidents', /^[a-f0-9-]{36}\.json$/],
+        ['performance-pending', /^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz$/],
         ['diagnostic-outbox', /^[a-f0-9]{64}\.gz$/],
       ] as const) {
-        const directory = join(this.logs, folder);
         try {
-          await safePath(directory);
-          for (const name of (await readdir(directory)).sort())
-            if (
-              pattern.test(name) &&
-              (folder !== 'performance-pending' ||
-                !name.endsWith('.gz') ||
-                pinned(performancePin, folder + '/' + name))
-            )
-              await capture(directory, name, folder + '/');
+          const directory = await safePath(join(this.logs, folder));
+          for (const name of (await readdir(directory)).sort()) {
+            if (!pattern.test(name)) continue;
+            if (folder === 'performance-pending' && !pinned(performancePin, folder + '/' + name)) {
+              gap(folder + '/' + name, 'pin', new Error('source_not_safely_fixed'));
+              continue;
+            }
+            await capture(directory, name, folder + '/');
+          }
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-            gaps.push({ source: folder, reason: String(error) });
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap(folder, 'enumerate', error);
         }
-      }
-      const migrationDirectory = join(this.logs, 'diagnostic-migration');
-      try {
-        await safePath(migrationDirectory);
-        for (const name of await readdir(migrationDirectory))
-          if (name === 'inventory.json' || /^aliases-[a-f0-9-]{36}\.ndjson$/.test(name))
-            await capture(migrationDirectory, name, 'diagnostic-migration/', true);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-          gaps.push({ source: 'diagnostic-migration', reason: String(error) });
       }
       const nativeObs = await collectObsNativeEvidence({
         includeRelatedLogs: true,
@@ -220,16 +310,14 @@ export class SupportExports {
             fd: source.handle.fd,
             bytes: source.bytes,
             rawAttachment: true,
-            secrets: source.secrets,
+            secrets: [...source.secrets],
           });
         },
+      }).catch((error: unknown) => {
+        gap('obs', 'collect', error);
+        return { status: 'unavailable' };
       });
-      if (hostPin)
-        for (const segment of hostPin.segments) {
-          const source = sources.find((source) => source.name === segment.name);
-          if (!source || source.bytes !== segment.bytes)
-            throw new Error('host_pin_snapshot_incomplete');
-        }
+      this.assertActive(job);
       const asOf = new Date().toISOString();
       const vector = {
         asOf,
@@ -240,13 +328,23 @@ export class SupportExports {
               pinId: hostPin.pinId,
               status: hostPin.status,
               confirmedAt: hostPin.confirmedAt,
+              sourceState: hostPin.sourceState,
               segments: hostPin.segments,
             }
           : { status: 'unconfirmed' },
         sources: sources.map(({ name, bytes }) => ({ name, bytes })),
         current: {
-          snapshot: typeof snapshot === 'function' ? await snapshot() : snapshot,
+          snapshot:
+            typeof snapshot === 'function'
+              ? await Promise.resolve()
+                  .then(() => snapshot())
+                  .catch((error: unknown) => {
+                    gap('snapshot', 'collect', error);
+                    return { status: 'unavailable' };
+                  })
+              : snapshot,
           nativeObs,
+          frameRateLive: await this.frameRateSnapshot(gap),
         },
         unknown: [
           'cross-process snapshot is not atomic',
@@ -254,9 +352,18 @@ export class SupportExports {
           'unflushed producer buffers',
         ],
       };
+      const collectionMs = performance.now() - collectionStarted;
       await new Promise<void>((resolve, reject) => {
-        const worker = new Worker(archiveWorkerSource, {
-          eval: true,
+        const entry = new URL('./archive-worker-entry.js', import.meta.url);
+        const workerEntry = import.meta.url.endsWith('.ts')
+          ? new URL(
+              'data:text/javascript,' +
+                encodeURIComponent(
+                  `import { tsImport } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href)}; await tsImport(${JSON.stringify(new URL('./archive-worker-entry.ts', import.meta.url).href)}, ${JSON.stringify(import.meta.url)});`,
+                ),
+            )
+          : entry;
+        const worker = new Worker(workerEntry, {
           execArgv: [],
           resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
           workerData: {
@@ -266,51 +373,147 @@ export class SupportExports {
             exportId: job.exportId,
             range,
             snapshot: vector,
-            fflate: createRequire(import.meta.url).resolve('fflate'),
-          },
+            diskBudgetBytes,
+            collectionMs,
+          } satisfies ArchiveWorkerData,
         });
-        this.worker = worker;
+        if (this.active?.id === job.exportId) this.active.worker = worker;
         if (job.phase === 'cancelled') void worker.terminate();
         let settled = false;
+        let finishing = false;
         worker.on('message', (message: ExportJob & Record<string, unknown>) => {
+          if (this.active?.id !== job.exportId || job.phase === 'cancelled') return;
           if (message.phase === 'failed') {
             settled = true;
             reject(new Error(message.error));
           } else if (message.phase === 'ready') {
+            finishing = true;
             const readyAt = Date.now();
-            void atomicJson(join(output, 'generated.json'), {
+            const downloadName = `mizar-support-${new Date(readyAt).toISOString().replaceAll(':', '-')}.zip`;
+            const manifest = {
               schema: 'mizar-support-export/2',
               createdAt: new Date(readyAt).toISOString(),
               expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
               ...message,
+              measurements: { ...(message.measurements as Record<string, unknown>), collectionMs },
+              downloadName,
               exportId: job.exportId,
-            }).then(() => {
-              Object.assign(job, message, {
-                exportId: job.exportId,
-                expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-              });
-              settled = true;
-              resolve();
-            }, reject);
+            };
+            if (Buffer.byteLength(JSON.stringify(manifest)) > MANIFEST_RESERVE) {
+              reject(new Error('export_manifest_budget'));
+              return;
+            }
+            void atomicJson(join(output, 'generated.json'), manifest)
+              .then(() => {
+                this.assertActive(job);
+                Object.assign(job, message, {
+                  downloadName,
+                  exportId: job.exportId,
+                  expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
+                });
+                settled = true;
+                resolve();
+              })
+              .catch(reject);
           } else Object.assign(job, message, { exportId: job.exportId });
         });
         worker.on('error', reject);
         worker.on('exit', (code) => {
-          if (code && !settled) reject(new Error(`export_worker_exit_${code}`));
+          if (!settled && (!finishing || code !== 0 || job.phase === 'cancelled'))
+            reject(new Error(`export_worker_exit_${code}`));
         });
       });
     } finally {
-      this.worker = undefined;
+      if (this.active?.id === job.exportId) delete this.active.worker;
       await Promise.all(handles.map((handle) => handle.close()));
       await Promise.all(
         participants.map((participant) => participant.release(job.exportId).catch(() => undefined)),
       );
     }
   }
+  private async frameRateSnapshot(gap: (source: string, phase: string, error: unknown) => void) {
+    const name = 'frame-rate-live.json';
+    let file: FileHandle | undefined;
+    try {
+      const directory = await safePath(join(dirname(this.logs), 'data'));
+      const path = await safePath(directory, name);
+      const before = await lstat(path);
+      if (!before.isFile() || before.nlink !== 1 || before.size > 4096)
+        throw new Error('frame_rate_source_unsafe');
+      file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const stat = await file.stat();
+      if (
+        stat.ino !== before.ino ||
+        stat.dev !== before.dev ||
+        stat.nlink !== 1 ||
+        stat.size !== before.size
+      )
+        throw new Error('frame_rate_source_changed');
+      const value = JSON.parse(
+        await file.readFile('utf8'),
+        (key: string, item: unknown, context?: { source?: string }) =>
+          key === 'created' && typeof item === 'number' ? context?.source : item,
+      ) as Record<string, unknown>;
+      const after = await file.stat();
+      if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs)
+        throw new Error('frame_rate_source_changed');
+      const marker = (item: unknown) =>
+        typeof item === 'string' && /^MIZAR_FPS_[a-f0-9]{32}$/.test(item);
+      if (
+        value.version !== 1 ||
+        !Number.isInteger(value.pid) ||
+        Number(value.pid) <= 0 ||
+        Number(value.pid) > 0xffffffff ||
+        typeof value.created !== 'string' ||
+        !/^[1-9][0-9]{0,19}$/.test(value.created) ||
+        BigInt(value.created) > 0xffffffffffffffffn ||
+        !marker(value.attemptId) ||
+        (value.restoreAttemptId !== undefined && !marker(value.restoreAttemptId)) ||
+        (value.phase === 'restore_pending' && !marker(value.restoreAttemptId)) ||
+        ![
+          'apply_pending',
+          'applied',
+          'restore_pending',
+          'restored',
+          'relinquished',
+          'ended',
+        ].includes(String(value.phase)) ||
+        typeof value.original !== 'number' ||
+        !Number.isFinite(value.original) ||
+        value.original < 0 ||
+        value.original > 10000 ||
+        (value.applied !== 30 && value.applied !== 60)
+      )
+        throw new Error('frame_rate_source_invalid');
+      return {
+        status: 'available',
+        asOf: new Date().toISOString(),
+        ...Object.fromEntries(
+          [
+            'version',
+            'pid',
+            'created',
+            'original',
+            'applied',
+            'attemptId',
+            'restoreAttemptId',
+            'phase',
+          ].map((key) => [key, value[key] ?? null]),
+        ),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'not_present' };
+      gap(name, 'snapshot', error);
+      return { status: 'unavailable' };
+    } finally {
+      await file?.close();
+    }
+  }
   async cancel(id: string) {
-    if (this.job?.exportId !== id || this.job.phase === 'ready') return false;
-    this.job.phase = 'cancelled';
-    await this.worker?.terminate();
+    const job = this.jobs.get(id);
+    if (this.active?.id !== id || !job || job.phase === 'ready') return false;
+    job.phase = 'cancelled';
+    await this.active.worker?.terminate();
     return true;
   }
   async attachment(id: string, name: string) {

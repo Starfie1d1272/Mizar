@@ -288,12 +288,9 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
           </Button>
           {game?.canPreserve ? (
             <>
-              <p>
-                配置接管未完成，可保持原游戏设置继续；此时不应用自动画质、帧率、窗口布局和本机 HUD
-                覆盖。
-              </p>
+              <p>可保留画质与帧率继续；游戏仍调整为工作台窗口布局，本机 HUD 仍可使用。</p>
               <Button disabled={startDisabled} onClick={() => void start(true)}>
-                保持原设置启动试播
+                保留画质与帧率启动试播
               </Button>
             </>
           ) : null}

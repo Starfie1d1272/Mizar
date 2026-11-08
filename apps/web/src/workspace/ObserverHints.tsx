@@ -2,9 +2,10 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useLocalChannelClient } from '../realtime';
 import { Button, StatusPill } from '../ui';
 import { useLocalRead, openTool } from '../preparation/client';
-import { desktopInvoke } from './client';
 import {
   observerFailureReason,
+  observerNeedsRecovery,
+  resumeObserverReceiver,
   type ObserverRuntimeView,
   type ConnectionPreparationView,
 } from '../preparation/observer-preparation';
@@ -24,7 +25,12 @@ export function ObserverHints() {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const observer = state.state === 'live' ? state.current?.payload.observer : undefined;
   const awaitingTooLong = Boolean(
+    configuration?.settings.enabled &&
+    configuration.mapConnection &&
     configuration?.connectionRequestedAt &&
+    !configuration.receiverPaused &&
+    runtime?.active &&
+    !runtime.pending &&
     now - configuration.connectionRequestedAt > 60_000 &&
     observer?.state !== 'ready' &&
     observer?.state !== 'paused',
@@ -46,48 +52,27 @@ export function ObserverHints() {
       .filter((hint) => hint.remainingSeconds > 0)
       .sort((a, b) => b.remainingSeconds - a.remainingSeconds) ?? [];
   const enabled = Boolean(configuration?.settings.enabled);
-  const needsRecovery =
-    enabled &&
-    Boolean(
-      runtime?.error ||
-      runtime?.failed ||
-      ['failed', 'ended', 'stopped'].includes(runtime?.health?.state ?? ''),
-    );
+  const paused = Boolean(configuration?.receiverPaused);
+  const needsRecovery = enabled && !paused && Boolean(runtime && observerNeedsRecovery(runtime));
   const pending = enabled && runtime?.pending;
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
-  if (!configuration?.connection || (!observer && !enabled)) return null;
+  if (!enabled || !configuration?.connection || !configuration.mapConnection) return null;
+  if (runtime && !runtime.active && !pending && !paused && !needsRecovery && !error) return null;
   if (
     observer?.state === 'ready' &&
     hints.length === 0 &&
     !pending &&
+    !paused &&
     !needsRecovery &&
     !reconnecting &&
     !connecting &&
     !error
   )
     return null;
-  const labels = {
-    connecting: '连接提前提示',
-    paused: '比赛暂停',
-    unavailable:
-      observer?.waitingReason === 'calibration-pending'
-        ? '正在校准延迟'
-        : observer?.waitingReason === 'calibration-reacquiring'
-          ? '正在重新校准延迟'
-          : observer?.waitingReason === 'source-stale'
-            ? '等待提前提示数据'
-            : observer?.waitingReason === 'identity-unavailable'
-              ? '等待当前选手身份'
-              : observer?.waitingReason === 'source-map-mismatch'
-                ? '等待提前提示切换当前地图'
-                : observer?.waitingReason === 'map-missing'
-                  ? '等待当前地图'
-                  : '等待节目数据',
-  };
   return (
     <section className="workspace-observer-assist" aria-label="私有提前提示">
-      {awaitingTooLong && !needsRecovery ? (
+      {awaitingTooLong && !needsRecovery && !reconnecting ? (
         <p role="status">
           仍未收到可用于提前提示的有效数据，请复查本图连接与游戏状态。
           <Button
@@ -99,8 +84,32 @@ export function ObserverHints() {
           </Button>
         </p>
       ) : null}
-      {pending ? (
-        <StatusPill tone="info">正在准备提前提示</StatusPill>
+      {paused ? (
+        <>
+          <StatusPill tone="info">提前提示接收已暂停</StatusPill>
+          {window.__TAURI_INTERNALS__ ? (
+            <Button
+              disabled={retrying || !runtime?.retryAvailable}
+              onClick={() => {
+                if (retrying || !runtime?.retryAvailable) return;
+                setRetrying(true);
+                setError('');
+                void resumeObserverReceiver(configuration)
+                  .then((result) => setError(result?.warning ?? ''))
+                  .catch((reason: unknown) =>
+                    setError(reason instanceof Error ? reason.message : '提示接收未完成，请重试。'),
+                  )
+                  .finally(() => setRetrying(false));
+              }}
+            >
+              {retrying ? '正在恢复…' : '恢复提前提示接收'}
+            </Button>
+          ) : null}
+        </>
+      ) : pending ? (
+        <StatusPill tone="info">
+          {runtime?.recovering ? '正在恢复提前提示' : '正在准备提前提示'}
+        </StatusPill>
       ) : needsRecovery ? (
         <>
           <StatusPill
@@ -110,13 +119,15 @@ export function ObserverHints() {
                 : 'warning'
             }
           >
-            {runtime?.failed || runtime?.health.state === 'failed'
-              ? '提前提示连接失败'
-              : runtime?.error
-                ? '提前提示准备失败'
-                : runtime?.health.state === 'ended'
-                  ? '提前提示连接已结束'
-                  : '提前提示接收已停止'}
+            {runtime?.stopReason === 'lease-expired' || runtime?.stopReason === 'host-invalid'
+              ? '提前提示已中断'
+              : runtime?.failed || runtime?.health.state === 'failed'
+                ? '提前提示连接失败'
+                : runtime?.error
+                  ? '提前提示准备失败'
+                  : runtime?.health.state === 'ended'
+                    ? '提前提示连接已结束'
+                    : '提前提示接收已停止'}
           </StatusPill>
           <p>
             {runtime?.error && !runtime.failed
@@ -131,7 +142,8 @@ export function ObserverHints() {
                 if (retrying || runtime?.pending || !runtime?.retryAvailable) return;
                 setRetrying(true);
                 setError('');
-                void desktopInvoke('observer_command', { action: 'start-configured' })
+                void resumeObserverReceiver(configuration)
+                  .then((result) => setError(result?.warning ?? ''))
                   .catch((reason: unknown) =>
                     setError(
                       reason instanceof Error ? reason.message : '提前提示重试未完成，请重试。',
@@ -140,7 +152,7 @@ export function ObserverHints() {
                   .finally(() => setRetrying(false));
               }}
             >
-              {retrying ? '正在重试…' : '重新连接提前提示'}
+              {retrying ? '正在重试…' : '重新连接'}
             </Button>
           ) : null}
         </>
@@ -150,28 +162,13 @@ export function ObserverHints() {
             ? '正在重连提前提示'
             : connecting
               ? '正在连接提前提示'
-              : observer
-                ? labels[observer.state as keyof typeof labels]
-                : '辅助状态待确认'}
+              : observer?.state === 'paused'
+                ? '比赛暂停'
+                : '正在接收比赛数据…'}
         </StatusPill>
       ) : null}
-      {observer?.state === 'ready' && !pending && !needsRecovery && !reconnecting && !connecting ? (
-        <>
-          <StatusPill tone="info">
-            {observer.effectiveDelaySeconds == null
-              ? '节目时钟'
-              : `延迟 ${observer.effectiveDelaySeconds.toFixed(1)} 秒`}{' '}
-            ·
-            {observer.calibrationState === 'measured'
-              ? '实时校准'
-              : observer.calibrationState === 'held'
-                ? '保持上次校准'
-                : '尚未校准'}
-          </StatusPill>
-        </>
-      ) : null}
       {error ? <p role="alert">{error}</p> : null}
-      {hints.length && !pending && !needsRecovery && !reconnecting && !connecting ? (
+      {hints.length && !paused && !pending && !needsRecovery && !reconnecting && !connecting ? (
         <ol className="observer-hints">
           {hints.map((hint) => (
             <li key={hint.id}>

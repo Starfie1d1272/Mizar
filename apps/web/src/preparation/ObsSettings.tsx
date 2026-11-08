@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
 import { Button, Field, Panel, StatusBanner, StatusPill } from '../ui';
 import { ObsCaptureGuidance } from '../workspace/ObsCaptureGuidance';
-import { beginObsConfiguration, obsCommand, useObsStatus } from '../workspace/obs-client';
+import {
+  beginObsConfiguration,
+  obsCommand,
+  obsStreamLabel,
+  useObsStatus,
+} from '../workspace/obs-client';
 import { desktopInvoke } from '../workspace/client';
 import { useLocalRead } from './client';
 
@@ -66,9 +71,7 @@ export function ObsSettings() {
             configuration.current === null &&
             latestConfiguration.current === session
           )
-            window.dispatchEvent(
-              new CustomEvent('mizar:obs-configuration-finished', { detail: result.message }),
-            );
+            window.dispatchEvent(new Event('mizar:obs-configuration-finished'));
         })
         .catch(() => {
           if (
@@ -77,12 +80,7 @@ export function ObsSettings() {
             configuration.current === null &&
             latestConfiguration.current === session
           )
-            window.dispatchEvent(
-              new CustomEvent('mizar:obs-configuration-finished', {
-                detail:
-                  'OBS 配置已结束，但实例状态未能确认。请在 OBS 中核对推流与录制，再手动关闭。',
-              }),
-            );
+            window.dispatchEvent(new Event('mizar:obs-configuration-finished'));
         });
     };
   }, []);
@@ -90,7 +88,34 @@ export function ObsSettings() {
   const preparation = useObsPreparation();
   const preparing = preparation.phase === 'running';
   const connected = obs?.connection === 'connected';
-  const outputActive = Boolean(connected && (obs.streaming !== false || obs.recording !== false));
+  const authenticationRequired =
+    obs?.facts?.authentication === 'required' || obs?.facts?.authentication === 'rejected';
+  const executableMissing = obs?.facts?.executable === 'not_found';
+  const processStopped = obs?.facts?.process === 'stopped';
+  const listenerRefused = obs?.facts?.listener === 'refused';
+  const connectionGuidance = executableMissing
+    ? '未找到 OBS。请选择已安装的 OBS 程序；尚未安装时请先安装 OBS。'
+    : processStopped
+      ? 'OBS 尚未运行，请先打开 OBS。'
+      : authenticationRequired
+        ? 'OBS 已响应，需要核对密码。在「工具 → WebSocket 服务器设置」复制密码后粘贴到下方。'
+        : listenerRefused
+          ? '此端口尚未监听。请在 OBS「工具 → WebSocket 服务器设置」启用服务器，并核对端口。'
+          : obs?.connectionFailure === 'timeout'
+            ? '等待 OBS 响应超时。请确认 OBS 能正常操作，再重新检查连接。'
+            : '正在确认 OBS 连接。请确认 OBS 已打开，并启用 WebSocket 服务器。';
+  async function selectExecutable() {
+    const path = await desktopInvoke<string | null>('select_obs_executable');
+    if (path) await obsCommand('configure', { executablePath: path });
+  }
+  const outputActive = Boolean(connected && (obs.streaming === true || obs.recording === true));
+  const outputUnknown = Boolean(
+    connected &&
+    (typeof obs.streaming !== 'boolean' ||
+      typeof obs.recording !== 'boolean' ||
+      obs.findings.some((item) => item.code === 'output_query_failed')),
+  );
+  const outputBlocked = outputActive || outputUnknown;
   async function action(run: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
@@ -126,20 +151,21 @@ export function ObsSettings() {
     <div className="obs-settings">
       <div className="obs-settings-summary">
         <div>
-          <StatusPill tone={connected ? 'success' : 'warning'}>
+          <StatusPill tone={connected ? 'success' : 'info'}>
             {connected
               ? 'OBS 已连接'
               : obs?.connection === 'invalid_password'
                 ? 'OBS 密码无效'
                 : 'OBS 未连接'}
           </StatusPill>
-          <span>
-            直播 ·{' '}
-            {connected && obs.streaming !== null ? (obs.streaming ? '进行中' : '未开始') : '待确认'}
-          </span>
+          <span>直播 · {obsStreamLabel(obs)}</span>
           <span>
             录制 ·{' '}
-            {connected && obs.recording !== null ? (obs.recording ? '进行中' : '未开始') : '待确认'}
+            {connected && typeof obs.recording === 'boolean'
+              ? obs.recording
+                ? '进行中'
+                : '未开始'
+              : '待确认'}
           </span>
         </div>
         <Button disabled={busy || preparing} onClick={() => void action(() => obsCommand('open'))}>
@@ -153,7 +179,7 @@ export function ObsSettings() {
       {connected && !preparing && preparation.phase === 'failed' ? (
         <StatusBanner tone="warning">
           {preparation.message}
-          <Button disabled={busy || outputActive} onClick={() => void action(prepareObs)}>
+          <Button disabled={busy || outputBlocked} onClick={() => void action(prepareObs)}>
             重试自动配置
           </Button>
         </StatusBanner>
@@ -161,26 +187,57 @@ export function ObsSettings() {
       {connected && outputActive && obs.findings.length > 0 ? (
         <StatusBanner tone="info">正在直播或录制，停止输出后可配置 Mizar 场景。</StatusBanner>
       ) : null}
+      {outputUnknown && !outputActive ? (
+        <StatusBanner tone="info">
+          OBS 已连接，但直播或录制状态尚未确认。请在 OBS 核对后重新检查，确认未输出后再配置场景。
+          <Button
+            disabled={busy || preparing}
+            onClick={() => void action(() => obsCommand('check'))}
+          >
+            重新检查输出状态
+          </Button>
+        </StatusBanner>
+      ) : null}
       <div className="obs-settings-columns">
         <div className="obs-settings-column">
           <Panel className="settings-card">
             <h2>OBS 控制连接</h2>
             <p>连接后，Mizar 可以自动切换节目并读取直播与录制状态。</p>
-            {obs && obs.connection !== 'connected' ? (
-              <StatusBanner tone="warning">
-                {obs.connection === 'invalid_password' || obs.connection === 'password_required'
-                  ? '尚未连接 OBS。请在 OBS 的 WebSocket 服务器设置中重新复制密码，粘贴后保存并测试连接；连接成功后再检查场景。'
-                  : obs.connectionFailure === 'refused'
-                    ? 'OBS 拒绝连接。请打开 OBS，启用 WebSocket 服务器并核对端口，再保存并测试连接。场景配置尚未确认。'
-                    : obs.connectionFailure === 'timeout'
-                      ? '等待 OBS 响应超时。请确认 OBS 正常响应，再保存并测试连接。场景配置尚未确认。'
-                      : 'OBS 连接状态和具体原因尚未确认。请检查 WebSocket 设置并查看诊断；连接成功后再检查场景。'}
+            {!connected ? (
+              <StatusBanner tone={authenticationRequired || executableMissing ? 'warning' : 'info'}>
+                {connectionGuidance}
+                {executableMissing ? (
+                  <a href="https://obsproject.com/download" target="_blank" rel="noreferrer">
+                    前往 OBS 官网下载
+                  </a>
+                ) : null}
+                {!authenticationRequired ? (
+                  <Button
+                    variant="primary"
+                    disabled={busy || preparing}
+                    onClick={() =>
+                      void action(
+                        executableMissing && window.__TAURI_INTERNALS__
+                          ? selectExecutable
+                          : processStopped
+                            ? () => obsCommand('open')
+                            : () => obsCommand('check'),
+                      )
+                    }
+                  >
+                    {executableMissing && window.__TAURI_INTERNALS__
+                      ? '选择 OBS 程序'
+                      : processStopped
+                        ? '打开 OBS'
+                        : '重新检查连接'}
+                  </Button>
+                ) : null}
               </StatusBanner>
             ) : null}
 
-            <details key={String(connected)} open={!connected}>
-              <summary>{connected ? '修改连接设置' : '填写连接信息'}</summary>
-              <p>在 OBS「工具 → WebSocket 服务器设置」启用服务器，并复制端口与密码。</p>
+            <details key={String(authenticationRequired)} open={authenticationRequired}>
+              <summary>{authenticationRequired ? '填写 OBS 密码' : '端口与密码设置'}</summary>
+              <p>使用 OBS「工具 → WebSocket 服务器设置」中显示的端口与密码。</p>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -359,7 +416,7 @@ export function ObsSettings() {
                       </>
                     ) : null}
                   </details>
-                  {preparing || (programIssue && !obs.findings.length) ? null : (
+                  {preparing || outputUnknown || (programIssue && !obs.findings.length) ? null : (
                     <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
                       {(obs.streaming || obs.recording) && obs.findings.length > 0
                         ? 'OBS 正在输出，当前配置问题请在停止推流与录制后处理。'
@@ -373,18 +430,21 @@ export function ObsSettings() {
                                 ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
                                 : obs.findings.some((item) => item.code === 'transition_missing')
                                   ? '请在 OBS「场景转场」中添加淡化和直接切换。'
-                                  : obs.findings.length
-                                    ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
-                                    : 'Mizar 配置检查通过，请核对实际音画。'}
+                                  : obs.findings.some((item) => item.code.startsWith('audio_game_'))
+                                    ? obs.findings.find((item) =>
+                                        item.code.startsWith('audio_game_'),
+                                      )?.message
+                                    : obs.findings.some((item) => item.code.includes('audio'))
+                                      ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                      : (obs.findings[0]?.message ??
+                                        'Mizar 配置检查通过，请核对实际音画。')}
                     </StatusBanner>
                   )}
                   {sceneRepairNeeded && !sceneRepairBlocked && !preparing ? (
                     <Button
                       variant="primary"
                       loading={busy || preparing}
-                      disabled={
-                        busy || preparing || obs.streaming !== false || obs.recording !== false
-                      }
+                      disabled={busy || preparing || outputBlocked}
                       onClick={() =>
                         void action(async () => {
                           await prepareObs();

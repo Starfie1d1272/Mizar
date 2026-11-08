@@ -1,18 +1,36 @@
-.match-connection-dialog[open] {
+.workbench-tool {
   display: grid;
   gap: var(--mizar-layout-gap);
-  width: 100%;
+  width: min(100%, 64rem);
+  margin: 0 auto;
+  padding: var(--mizar-layout-padding);
   box-sizing: border-box;
 }
-.match-connection-dialog > * {
+.workbench-tool > * {
   min-width: 0;
 }
-.match-connection-dialog p {
+.workbench-tool :is(h1, h2, p) {
   margin: 0;
+}
+.workbench-tool h1 {
+  font-size: var(--mizar-type-size-heading);
+  line-height: var(--mizar-type-line-body);
+}
+.workbench-tool h2 {
+  font-size: var(--mizar-type-size-title);
+}
+.workbench-tool p {
   color: var(--mizar-fg-secondary);
   overflow-wrap: anywhere;
 }
-.match-connection-dialog details[open] {
+.workbench-tool .settings-card,
+.workbench-tool details[open] {
   display: grid;
+  gap: var(--mizar-layout-gap);
+}
+.workbench-tool .settings-save-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--mizar-layout-compact);
+  align-items: end;
 }

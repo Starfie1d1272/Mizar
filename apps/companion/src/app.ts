@@ -37,9 +37,9 @@ import { MulnxProvider } from './orchestration/provider.js';
 import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
 import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
-import { startDiagnosticMigration } from './support/migration.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
+import { isDocumentDiagnosticEvent } from '@mizar/protocol';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
 import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
@@ -412,6 +412,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
         '发送队列无法打开，网站同步不可用；原始数据保留。',
       ),
+    onBoundaryCaptureError: (error, evidence) =>
+      app.log.error(
+        {
+          event: 'outbox',
+          operation: 'boundary_capture',
+          ...evidence,
+          err: outboxLocalError(error),
+        },
+        '网站同步边界尚未确认保存，保留原请求重试；本机画面继续。',
+      ),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
       const connection = options.rivalhubConnection;
@@ -511,11 +521,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       : (options.logger ?? false),
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     requestTimeout: GSI_REQUEST_TIMEOUT_MS,
-  });
-  let diagnosticMigration: ReturnType<typeof startDiagnosticMigration> | undefined;
-  app.addHook('onReady', () => {
-    if (options.supportLogsDirectory && sessionJournal)
-      diagnosticMigration = startDiagnosticMigration(options.supportLogsDirectory, sessionJournal);
   });
   const performanceContext = sessionJournal
     ? new PerformanceWindow(
@@ -1111,10 +1116,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
-    managedBoundary?: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>['boundary'],
     managedSourceId?: string,
-    managedActivation = false,
-    mutationContext?: ReturnType<OutputService['captureRuntimeMutationContext']>,
+    managedOwner?: { matchId: string },
   ): boolean => {
     const processingStarted = performance.now();
     latestInput = observation.receive;
@@ -1122,7 +1125,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const source = programRuntime.getCurrentState().programSource;
       const lastAccepted = source.lastAccepted;
       if (
-        !managedActivation &&
+        !managedOwner &&
         lastAccepted !== undefined &&
         observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
           programRuntime.getSnapshot().continuityPolicy.staleAfterMs
@@ -1134,26 +1137,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         });
         publishRuntimeCommit(changed);
       }
-      outputService.beforeRuntimeMutation(mutationContext);
-      const accepted = programRuntime.acceptObservation(
-        observation,
-        Boolean(
-          managedSourceId &&
-          !managedActivation &&
-          !managedSource.sourceMatchesSelection(managedSourceId),
-        ),
-      );
-      let result =
-        managedBoundary && accepted.disposition.kind === 'accepted'
-          ? {
-              ...accepted,
-              transitions: [...managedBoundary.transitions, ...accepted.transitions],
-              executionBoundary: {
-                before: managedBoundary.executionBoundary.before,
-                after: accepted.executionBoundary.after,
-              },
-            }
-          : accepted;
+      outputService.beforeRuntimeMutation();
+      const accepted =
+        managedOwner && managedSourceId
+          ? programRuntime.acceptManagedObservation(
+              managedOwner.matchId,
+              managedSourceId,
+              observation,
+            )
+          : programRuntime.acceptObservation(
+              observation,
+              Boolean(managedSourceId && !managedSource.sourceMatchesSelection(managedSourceId)),
+            );
+      let result = accepted;
       if (result.disposition.kind === 'ignored')
         performanceContext?.trigger('observation_ignored', {
           receive: observation.receive,
@@ -1777,7 +1773,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
         production:
-          production.automaticAllowed() &&
+          production.sessionAllowed() &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
         mapConfirmed: !waitingObserverMap,
@@ -1847,7 +1843,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         controlToken: options.productRuntime?.controlToken,
         configure: production.configureCameraSession,
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
-        canPrepare: () => production.get().mode === 'preparation',
+        canPrepare: production.canPrepareMulnx,
+        canCleanup: production.canCleanupMulnx,
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
@@ -1926,6 +1923,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       canFetchStats: () => production.statsActive(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
+      currentSnapshotStatus: () => outputService.currentStatus(true),
+      retryOutputPersistence: async () => {
+        await outputService.retry({ localOnly: true });
+        return outputService.isPersistenceConfirmed();
+      },
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
@@ -1997,12 +1999,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
   observerEligible = () =>
-    production.automaticAllowed() && !production.isTrialPending() && !demoTest.get().active;
+    production.sessionAllowed() && !production.isTrialPending() && !demoTest.get().active;
   registerObserverSettings(
     app,
     observerSettings,
     localWebTransport.getOriginPolicy(),
     observerEligible,
+    () => {
+      const program = projectionCoordinator.getCurrent().program;
+      return (
+        observerEligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name)
+      );
+    },
   );
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {
@@ -2307,28 +2315,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   contextTimer?.unref();
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
-  app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
+  app.post('/debug/control-event', { bodyLimit: 32 * 1024 }, async (request, reply) => {
     if (
       !checkLocalWebOrigin(localWebTransport.getOriginPolicy(), request.headers.origin).allowed ||
       localWebTransport.getOriginPolicy().mode !== 'loopback'
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    sessionJournal?.record('browser_control', request.body);
-    const body = request.body as { operation?: string; time?: string; browserDocumentId?: string };
+    const body = request.body;
+    if (!isDocumentDiagnosticEvent(body))
+      return reply.code(400).send({ error: 'document_event_invalid' });
+    if (!sessionJournal) return reply.code(503).send({ error: 'diagnostic_writer_unavailable' });
+    await sessionJournal.recordDocumentCommitted(body);
     if (
-      body &&
-      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(
-        body.operation ?? '',
-      ) &&
-      (body.operation !== 'browser_performance' ||
-        (body as { evidence?: { anomalyCount?: number } }).evidence?.anomalyCount)
+      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(body.kind) &&
+      (body.kind !== 'browser_performance' ||
+        (body.evidence as { anomalyCount?: number } | null)?.anomalyCount)
     )
       performanceContext?.trigger('browser_anomaly', {
-        operation: body.operation,
-        observedAt: body.time,
-        browserDocumentId: body.browserDocumentId,
+        operation: body.kind,
+        observedAt: body.observedAt,
+        browserDocumentId: body.producerRunId,
         contextCapturedAt: new Date().toISOString(),
-        originalEvidence: (body as { evidence?: unknown }).evidence,
+        originalEvidence: body.evidence,
       });
     return reply.code(204).send();
   });
@@ -2339,6 +2347,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
     onConsent: recordConfiguration,
+    deliveryParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.deliveryParticipant()] : []),
+      ...(performanceContext ? [performanceContext.deliveryParticipant()] : []),
+    ],
     incidentParticipants: () => [
       ...(sessionJournal ? [sessionJournal.incidentParticipant()] : []),
       ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
@@ -2362,32 +2374,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     observer: () => options.workspaceObserver?.view() ?? null,
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
-    flushBusinessLog: async () => {
-      await nativeSource?.poll();
-      recordPerformanceWindow('export');
-      await performanceContext?.flush();
-      await businessJournal?.flush();
-      await sessionJournal?.flush();
-    },
-    sessionLogHealth: () =>
-      sessionJournal
-        ? {
-            ...sessionJournal.health(),
-            performanceContext: performanceContext?.health() ?? null,
-            migration: diagnosticMigration?.health() ?? null,
-          }
-        : null,
     exportParticipants: () => [
       ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
       ...(performanceContext ? [performanceContext.exportParticipant()] : []),
     ],
-    pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
-    pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
     diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
-    retainedDiagnosticBatches: () => diagnosticDelivery.retainedBatches(),
-    beginPerformanceExport: () =>
-      performanceContext?.beginExport() ?? Promise.resolve(async () => {}),
-    ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
@@ -2406,13 +2397,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   if (options.gsiToken !== undefined) {
-    let pendingManagedBoundary:
-      | {
-          sourceId: string;
-          result: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>;
-          mutationContext: ReturnType<OutputService['captureRuntimeMutationContext']>;
-        }
-      | undefined;
     registerGsiIngress(app, {
       gsiToken: options.gsiToken,
       classifySource: (sourceId) => managedSource.classify(sourceId),
@@ -2466,39 +2450,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           (!sourceId && managedSource.unverifiedExternal())
         )
           programRuntime.markSourceUnverified();
-        if (pendingManagedBoundary && pendingManagedBoundary.sourceId !== sourceId)
-          pendingManagedBoundary = undefined;
-        const owner = managedSource.ownerForFirstObservation(sourceId);
-        if (owner && sourceId && observation.telemetry.map?.name && !pendingManagedBoundary) {
-          const mutationContext = outputService.captureRuntimeMutationContext();
-          const activation = programRuntime.activateManagedSource(
-            owner.matchId,
-            sourceId,
-            observation,
-          );
-          if (activation)
-            pendingManagedBoundary = { sourceId, result: activation, mutationContext };
-        }
-        const boundary =
-          pendingManagedBoundary && pendingManagedBoundary.sourceId === sourceId
-            ? pendingManagedBoundary.result.boundary
-            : undefined;
-        const activating = Boolean(sourceId && pendingManagedBoundary?.sourceId === sourceId);
-        if (
-          dispatchObservation(
-            observation,
-            undefined,
-            boundary,
-            sourceId,
-            activating,
-            activating ? pendingManagedBoundary?.mutationContext : undefined,
-          ) &&
-          activating &&
-          sourceId
-        ) {
+        const owner = observation.telemetry.map?.name
+          ? managedSource.ownerForFirstObservation(sourceId)
+          : undefined;
+        if (dispatchObservation(observation, undefined, sourceId, owner) && owner && sourceId)
           managedSource.confirmFirstObservation(sourceId);
-          pendingManagedBoundary = undefined;
-        }
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {
@@ -2631,7 +2587,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         failures.push(error);
       }
     };
-    await closeStep(() => diagnosticMigration?.stop());
     clearInterval(performanceTimer);
     clearInterval(contextTimer);
     clearInterval(directorTimer);

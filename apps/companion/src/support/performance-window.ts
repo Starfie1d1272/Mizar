@@ -78,7 +78,6 @@ export class PerformanceWindow {
   private readonly spool: PerformanceSpool | undefined;
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
-  private exportSnapshot: ReturnType<typeof performanceRecordEvent>[] | undefined;
   private nextAttemptAt = 0;
   private writeFailures = 0;
   private writeError: unknown = null;
@@ -272,7 +271,7 @@ export class PerformanceWindow {
     }
     clearTimeout(this.batchTimer);
     this.batchTimer = undefined;
-    this.writing = this.journal.withSystem(() =>
+    const writing = this.journal.withSystem(() =>
       this.drain()
         .catch((error: unknown) => {
           this.writeFailures++;
@@ -280,7 +279,7 @@ export class PerformanceWindow {
           if (this.nextAttemptAt <= Date.now()) this.nextAttemptAt = Date.now() + 1000;
         })
         .finally(() => {
-          this.writing = undefined;
+          if (this.writing === writing) this.writing = undefined;
           if (!this.closed && (this.pending.length || this.spool?.health().unreadableFiles)) {
             clearTimeout(this.retryTimer);
             this.retryTimer = setTimeout(
@@ -297,6 +296,7 @@ export class PerformanceWindow {
           }
         }),
     );
+    this.writing = writing;
   }
   private remove(ids: string[]) {
     const committed = new Set(ids);
@@ -394,30 +394,33 @@ export class PerformanceWindow {
     this.startWriter(true);
     await this.writing;
   }
-  exportMemory() {
-    return (
-      this.exportSnapshot ??
-      this.pending.map((item) =>
-        performanceRecordEvent(diagnosticValue(item.record) as PendingPerformanceRecord),
-      )
-    );
-  }
   incidentParticipant(): IncidentParticipant {
     return this.evidenceParticipant('incident');
   }
   exportParticipant(): IncidentParticipant {
     return this.evidenceParticipant('export');
   }
-  private evidenceParticipant(kind: 'incident' | 'export'): IncidentParticipant {
-    const serialize = async <T>(operation: () => Promise<T>): Promise<T> => {
+  deliveryParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('delivery');
+  }
+  private evidenceParticipant(kind: 'incident' | 'export' | 'delivery'): IncidentParticipant {
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
       this.exporting++;
-      await this.writing;
-      try {
-        return await operation();
-      } finally {
-        this.exporting--;
-        if (!this.closed) this.startWriter();
-      }
+      // Pins and body writes mutate the same retained ledger. Reserve their
+      // position synchronously; waiting for a writer alone does not serialize pins.
+      const task = (this.writing ?? Promise.resolve()).then(operation);
+      const writing = task
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => {
+          if (this.writing === writing) this.writing = undefined;
+          this.exporting--;
+          if (!this.closed) this.startWriter();
+        });
+      this.writing = writing;
+      return task;
     };
     const source = () => {
       if (!this.spool) throw new Error('performance_source_unavailable');
@@ -436,37 +439,6 @@ export class PerformanceWindow {
         })),
       commit: (pinId) => serialize(() => source().commit(pinId)),
       release: (pinId) => serialize(() => source().release(pinId)),
-    };
-  }
-  async beginExport(): Promise<() => Promise<void>> {
-    this.exporting++;
-    await this.writing;
-    this.exportSnapshot = this.exportMemory();
-    let release: (() => Promise<void>) | undefined;
-    try {
-      release = await this.spool?.pin();
-    } catch (error) {
-      this.writeError = diagnosticValue(error);
-      this.writeFailures++;
-    }
-    if (release) {
-      this.exporting--;
-      this.startWriter();
-    }
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      try {
-        await release?.();
-      } catch (error) {
-        this.writeError = diagnosticValue(error);
-        this.writeFailures++;
-      } finally {
-        this.exportSnapshot = undefined;
-        if (!release) this.exporting--;
-        if (!this.closed) this.startWriter();
-      }
     };
   }
 }

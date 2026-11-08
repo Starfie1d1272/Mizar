@@ -531,13 +531,29 @@ pub fn finish_managed_game(
     cleanup_results(local, source)
 }
 
-/// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.
-pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
+/// Replacement belongs to this preparation task, even after its workspace session opens.
+pub fn prepare_external_entry(
+    log: &DesktopLog,
+    expected_revision: &str,
+    preparation_id: &str,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
     let view = crate::lifecycle_contract::production_view(&view)?;
-    if code != 200 || view.mode != "preparation" || view.revision != expected_revision {
-        return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
+    if code != 200 || view.revision != expected_revision {
+        return Err("制作状态已变化，请重新打开工作台。".into());
+    }
+    if view.mode != "preparation" {
+        let (code, status) = request(
+            log,
+            "GET",
+            &format!("/local/v1/preparation-status?preparationId={preparation_id}"),
+            "",
+            deadline,
+        )?;
+        if code != 200 || !crate::lifecycle_contract::cancellation_entered(&status)? {
+            return Err("游戏启动任务已变化，请重新打开工作台。".into());
+        }
     }
     disconnect_camera(log)?;
     invalidate_local_match_exit(log)
@@ -565,13 +581,23 @@ pub fn check_obs_entry(log: &DesktopLog, preparation_id: &str) -> Result<(), Str
 }
 
 /// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn prepare_mulnx(
+pub fn cleanup_mulnx(
     log: &DesktopLog,
     cs2: &std::path::Path,
-    update: bool,
-    spectator_cfg: bool,
+    preparation: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    prepare_mulnx_with_demo(log, cs2, update, spectator_cfg, None, false)
+    prepare_mulnx_with_demo(
+        log,
+        cs2,
+        false,
+        false,
+        None,
+        false,
+        preparation,
+        true,
+        None,
+        None,
+    )
 }
 
 pub fn prepare_mulnx_with_demo(
@@ -581,11 +607,52 @@ pub fn prepare_mulnx_with_demo(
     spectator_cfg: bool,
     demo_cfg: Option<&str>,
     capture_compatibility: bool,
+    preparation: Option<serde_json::Value>,
+    cleanup: bool,
+    window_geometry: Option<crate::cs2_video::VideoSize>,
+    console_journal: Option<&serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
-    let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility}).to_string()));
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility}).to_string();
+    // Prewarming/cleanup never enables capture. Only this prepared launch can,
+    // and a changed or unreadable consent setting degrades capture alone.
+    let console_capture = console_journal.is_some_and(|journal| {
+        if journal["consoleDiagnostics"]["version"] != 1 {
+            return false;
+        }
+        match crate::cs2_console::settings(log) {
+            Ok(config)
+                if config["enabled"] == true
+                    && config["generation"] == journal["consoleDiagnostics"]["generation"] =>
+            {
+                true
+            }
+            result => {
+                log.event(
+                    "cs2_console_prepare",
+                    "interrupted",
+                    Some(
+                        &serde_json::json!({
+                            "reason":"consent_changed_before_mulnx_launch",
+                            "current":format!("{result:?}"),"condebugRequested":false
+                        })
+                        .to_string(),
+                    ),
+                );
+                false
+            }
+        }
+    });
+    let protect_previous_console =
+        console_journal.is_some_and(|journal| !journal["consoleDiagnosticsWarning"].is_null());
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
+    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
+    if let Some(size) = window_geometry {
+        body["windowGeometry"] = serde_json::json!({"width":size.width,"height":size.height});
+    }
+    if let Some(preparation) = preparation {
+        body["preparation"] = preparation;
+    }
+    let body = body.to_string();
     let (code, value) = request_with_identity(
         log,
         "POST",

@@ -47,7 +47,8 @@ export class ObsCaptureWarmupError extends Error {
   }
 }
 const error = (code: string, message: string) => new ObsCaptureWarmupError(code, message);
-const lost = () => error('capture_warmup_changed', 'OBS 状态已变化，临时采集保留待核对，请重试。');
+const lost = () =>
+  error('capture_warmup_changed', 'OBS 游戏画面检查已中断，请重新检查；仍失败时导出诊断。');
 const safeTransform = (value: unknown) => {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -65,14 +66,17 @@ const stableTransform = (value: unknown): Record<string, unknown> | null => {
       .sort(([a], [b]) => a.localeCompare(b)),
   );
 };
-async function identity(obs: ObsRpc): Promise<{ sceneUuid: string; sourceUuid: string }> {
+async function identity(
+  obs: ObsRpc,
+  requireCurrentScene = true,
+): Promise<{ sceneUuid: string; sourceUuid: string }> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     throw lost();
   const scenes = await obs.call('GetSceneList');
   const waiting = obsSceneName('waiting');
   const current = objects(scenes.scenes).filter((scene) => scene.sceneName === waiting);
   if (
-    scenes.currentProgramSceneName !== waiting ||
+    (requireCurrentScene && scenes.currentProgramSceneName !== waiting) ||
     current.length !== 1 ||
     typeof current[0]?.sceneUuid !== 'string'
   )
@@ -137,11 +141,16 @@ export class ObsCaptureWarmup {
       journal.phase === 'enabled'
     );
   }
+  async status(): Promise<'checking' | 'cleanup_pending' | null> {
+    const journal = await this.read();
+    if (!journal) return null;
+    return this.active?.id === journal.id && this.active.valid() ? 'checking' : 'cleanup_pending';
+  }
   async pending(id: string): Promise<boolean> {
     return (await this.read())?.id === id;
   }
   async matches(id: string, since: number): Promise<boolean> {
-    return this.active?.startedAt === since && (await this.valid(id));
+    return this.active?.id === id && this.active.startedAt === since && (await this.pending(id));
   }
   async confirm(obs: ObsRpc, id: string): Promise<boolean> {
     if (!(await this.valid(id))) return false;
@@ -180,7 +189,7 @@ export class ObsCaptureWarmup {
     const previous = await this.read();
     if (previous) {
       if (this.active?.id === previous.id && this.active.valid())
-        throw error('capture_warmup_busy', 'OBS 临时采集正在使用，请等待当前准备完成。');
+        throw error('capture_warmup_busy', '正在检查 OBS 游戏画面，请等待检查完成。');
       this.active = undefined;
       await this.release(obs, endpoint, previous.id, lease);
     }
@@ -330,10 +339,7 @@ export class ObsCaptureWarmup {
         if (!lease()) throw lost();
         await this.release(obs, endpoint, journal.id, lease);
       } catch {
-        throw error(
-          'capture_warmup_pending',
-          'OBS 临时采集状态待核对，已保留恢复记录；请在输出停止后重试。',
-        );
+        throw error('capture_warmup_pending', 'OBS 游戏画面检查未完成，请在输出停止后重新检查。');
       }
       throw cause;
     }
@@ -341,7 +347,7 @@ export class ObsCaptureWarmup {
   async release(obs: ObsRpc, endpoint: string, id: string, lease: () => boolean): Promise<void> {
     const journal = await this.read();
     if (!journal || journal.id !== id) return;
-    if (this.active?.id === id) lease = this.active.valid;
+    if (this.active?.id === id && this.active.valid()) lease = this.active.valid;
     this.active = undefined;
     if (
       !lease() ||
@@ -351,7 +357,8 @@ export class ObsCaptureWarmup {
     )
       throw lost();
     await assertNoVideoOutput(obs);
-    const latest = await identity(obs);
+    // Reclaim the item we own without requiring its scene to remain on air.
+    const latest = await identity(obs, false);
     if (latest.sceneUuid !== journal.sceneUuid || latest.sourceUuid !== journal.sourceUuid)
       throw lost();
     const items = objects(

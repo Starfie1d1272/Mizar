@@ -28,6 +28,8 @@ export class ObserverSettingsStore {
   private scope: string | undefined;
   private connectionRequestedAt: number | null = null;
   waitingForMap = false;
+  receiverPaused = false;
+  receiverRevision = 0;
   revision = randomUUID();
   private listeners = new Set<(kind: SettingsChange) => void>();
   private writing = Promise.resolve();
@@ -56,7 +58,7 @@ export class ObserverSettingsStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
-  view() {
+  view(isObserving = false) {
     return {
       settings: this.settings,
       connectionRequestedAt: this.connectionRequestedAt,
@@ -64,6 +66,8 @@ export class ObserverSettingsStore {
       revision: this.revision,
       mapConnection: this.mapConnection ?? null,
       waitingForMap: this.waitingForMap,
+      receiverPaused: this.receiverPaused,
+      suggestedConnectionMode: isObserving ? 'register-current' : 'connect',
       connection: this.connection
         ? {
             earlyEndpoint: this.connection.earlyEndpoint,
@@ -91,6 +95,7 @@ export class ObserverSettingsStore {
             : undefined;
 
       this.settings = value;
+      if (kind === 'enabled' && value.enabled) this.setReceiverPaused(false);
       if (nameChanged) this.changed('name');
       if (kind) this.changed(kind);
     });
@@ -112,6 +117,7 @@ export class ObserverSettingsStore {
     const connection = observerConnectionSchema.parse(value);
     if (JSON.stringify(this.connection) === JSON.stringify(connection)) return;
     this.connection = connection;
+    this.setReceiverPaused(false);
     this.mapConnection = undefined;
     this.waitingForMap = false;
     this.changed('connection');
@@ -137,6 +143,7 @@ export class ObserverSettingsStore {
     if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
       throw new Error('seamless_connection_changed');
     this.connection = connection;
+    this.setReceiverPaused(false);
     this.connectionRequestedAt = Date.now();
     this.mapConnection = { id, mode, nextMap: nextMap || mode === 'seamless' };
     this.changed('map');
@@ -157,13 +164,21 @@ export class ObserverSettingsStore {
     this.connectionRequestedAt = null;
     this.mapConnection = undefined;
     this.waitingForMap = false;
+    this.setReceiverPaused(false);
     this.changed('connection');
   }
   endProduction() {
     if (!this.mapConnection && !this.waitingForMap) return;
     this.mapConnection = undefined;
     this.waitingForMap = false;
+    this.setReceiverPaused(true);
     this.changed('connection');
+  }
+  /** Receiver control does not invalidate a pending or accepted game connection. */
+  setReceiverPaused(paused: boolean) {
+    if (this.receiverPaused === paused) return;
+    this.receiverPaused = paused;
+    this.receiverRevision++;
   }
   subscribe(listener: (kind: SettingsChange) => void) {
     this.listeners.add(listener);
@@ -184,9 +199,10 @@ export function registerObserverSettings(
   store: ObserverSettingsStore,
   policy: LocalWebOriginPolicy,
   canRegisterCurrent: () => boolean = () => true,
+  isObserving: () => boolean = () => false,
 ) {
   app.get('/local/v1/observer-assist', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(store.view()),
+    reply.header('cache-control', 'no-store').send(store.view(isObserving())),
   );
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
@@ -205,6 +221,11 @@ export function registerObserverSettings(
     }),
     z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
     z.strictObject({ action: z.literal('copy-connection'), expectedRevision: z.uuid() }),
+    z.strictObject({
+      action: z.literal('resume-receiver'),
+      id: z.uuid(),
+      expectedRevision: z.uuid(),
+    }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
     if (policy.mode !== 'loopback' || !checkLocalWebOrigin(policy, request.headers.origin).allowed)
@@ -220,7 +241,15 @@ export function registerObserverSettings(
         .header('cache-control', 'no-store')
         .send({ command: formatObserverConnection(connection) });
     }
-    if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
+    if (parsed.data.action === 'resume-receiver') {
+      if (
+        parsed.data.expectedRevision !== store.revision ||
+        parsed.data.id !== store.mapConnection?.id ||
+        !canRegisterCurrent()
+      )
+        return reply.code(409).send({ message: '本图连接已变化，请重新打开后确认。' });
+      store.setReceiverPaused(false);
+    } else if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
     else if (parsed.data.action === 'configure-game')
       await store.configureGame(parsed.data.settings);
     else {
@@ -247,6 +276,6 @@ export function registerObserverSettings(
         }
       } else store.setConnection(parsed.data.connection);
     }
-    return store.view();
+    return store.view(isObserving());
   });
 }

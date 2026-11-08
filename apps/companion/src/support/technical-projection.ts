@@ -7,6 +7,19 @@ const scalarFields = new Set([
   'name',
   'code',
   'reason',
+  'stopReason',
+  'expected',
+  'linkedMatchId',
+  'snapshotAvailable',
+  'outputBlockedReason',
+  'sourceBlockedCode',
+  'snapshotMatchId',
+  'identity',
+  'telemetryFresh',
+  'contextFresh',
+  'canonicalTeams',
+  'lineupComplete',
+  'observedLineupReady',
   'stage',
   'phase',
   'result',
@@ -72,6 +85,8 @@ const scalarFields = new Set([
 const nestedFields = new Set([
   'error',
   'cause',
+  'diagnostic',
+  'syncHealth',
   'correlation',
   'coverage',
   'timing',
@@ -139,9 +154,9 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
   );
   if (excludedKind) exclusions.add('private-source-kind');
   const evidence = permitted && !excludedKind ? fields(input.evidence, exclusions) : {};
-  // Business envelopes carry technical facts one level below their source metadata.
+  // Current business and ControlTask envelopes carry facts below their source metadata.
   // Apply the exact same narrow field policy, never copy the nested body wholesale.
-  if (permitted && !excludedKind && kind === 'business_evidence') {
+  if (permitted && !excludedKind && (kind === 'business_evidence' || kind === 'task')) {
     const nestedEvidence = object(input.evidence).evidence;
     if (nestedEvidence != null) evidence.evidence = fields(nestedEvidence, exclusions);
   }
@@ -205,4 +220,66 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
         ? input.appVersion
         : null,
   };
+}
+
+/** Prove a known /2 technical projection is covered without depending on today's
+ * optional projection fields. Stable identity and every transmitted fact must match. */
+export function sourceCoversProjection(
+  source: Record<string, unknown>,
+  projected: Record<string, unknown>,
+): boolean {
+  const projection = object(projected.projection);
+  if (
+    source.schema !== 'mizar-diagnostic-event/2' ||
+    projected.schema !== source.schema ||
+    projection.policyVersion !== 2 ||
+    projection.sourceEventId !== projected.eventId ||
+    source.projection
+  )
+    return false;
+  for (const key of ['eventId', 'producerKind', 'producerRunId', 'sequence', 'kind'])
+    if (source[key] !== projected[key]) return false;
+  const subset = (value: unknown, full: unknown): boolean => {
+    if (value === null || typeof value !== 'object') return value === full;
+    if (!Array.isArray(value) && Object.keys(value).length === 0) return true;
+    if (!full || typeof full !== 'object' || Array.isArray(value) !== Array.isArray(full))
+      return false;
+    return Object.entries(value).every(([key, item]) =>
+      subset(item, (full as Record<string, unknown>)[key]),
+    );
+  };
+  // Fields omitted by the technical policy cannot add evidence. Nonidentical facts stay retained.
+  return (
+    subset(projected.evidence, source.evidence) &&
+    (projected.scope === null || subset(projected.scope, source.scope)) &&
+    [
+      'phase',
+      'outcome',
+      'taskId',
+      'operationId',
+      'parentOperationId',
+      'attemptId',
+      'monotonicMs',
+    ].every((key) => projected[key] == null || projected[key] === source[key]) &&
+    (projected.sourceInterval == null ||
+      ['from', 'to'].every((key) => {
+        const value = object(projected.sourceInterval)[key];
+        const full = object(source.sourceInterval)[key];
+        return value === null
+          ? full === null
+          : typeof value === 'string' &&
+              typeof full === 'string' &&
+              Number.isFinite(Date.parse(value)) &&
+              Date.parse(value) === Date.parse(full);
+      })) &&
+    (projected.appVersion == null || projected.appVersion === source.appVersion) &&
+    Number(object(projected.coverage).occurrences ?? 1) ===
+      Number(object(source.coverage).occurrences ?? 1) &&
+    ['observedAt', 'recordedAt'].every(
+      (key) =>
+        projected[key] === null ||
+        (typeof source[key] === 'string' &&
+          Date.parse(String(source[key])) === Date.parse(String(projected[key]))),
+    )
+  );
 }

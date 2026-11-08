@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { Button } from '../ui';
-import { ReviewDialog, isReviewWindow, closeReviewWindow } from './ReviewDialog';
+import { ReviewDialog, isReviewWindow } from './ReviewDialog';
 import { currentRosterEvidence, type LiveRosterConnection } from './live-roster-model';
-import type { SyncHealth } from './SyncHealthAlert';
+import type { SyncHealth } from './sync-health';
 import './preflight-review.css';
 
 type Props = {
@@ -20,10 +20,7 @@ export function PreflightReview({ operator, program, cursor, onOpen }: Props) {
   const [error, setError] = useState('');
   const { current, complete } = currentRosterEvidence(operator, program, cursor);
   if (!operator?.matchContext.summary) return null;
-  const close = () => {
-    setOpen(false);
-    void closeReviewWindow();
-  };
+  const close = () => setOpen(false);
   return (
     <>
       <Button onClick={() => setOpen(true)}>查看本图资料</Button>

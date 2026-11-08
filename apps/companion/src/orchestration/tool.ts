@@ -12,7 +12,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import {
   readMulnxMirror,
   mirrorArchive,
@@ -47,6 +47,109 @@ const releaseSchema = z.object({
   size: z.number().int().positive(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
+/** Only the native session's persisted window target may supply this value. */
+export const mulnxWindowGeometrySchema = z
+  .strictObject({
+    width: z.number().int().positive().max(32768),
+    height: z.number().int().positive().max(32768),
+  })
+  .refine(({ width, height }) => width * 9 === height * 16);
+export type MulnxWindowGeometry = z.infer<typeof mulnxWindowGeometrySchema>;
+
+/** Keep unknown arguments byte-for-byte. Refuse ambiguous quoting/option syntax
+ * rather than rely on the game's ordering of duplicate display arguments. */
+function launchOptionTokens(options: string) {
+  if (
+    [...options].some((character) => {
+      const code = character.charCodeAt(0);
+      return (code < 32 && code !== 9) || code === 127;
+    })
+  )
+    throw new Error('mulnx_window_options_unsupported');
+  const tokens: { start: number; end: number; value: string }[] = [];
+  let index = 0;
+  while (index < options.length) {
+    if (/[ \t]/.test(options[index]!)) {
+      index++;
+      continue;
+    }
+    const start = index;
+    let value = '';
+    let quoted = false;
+    while (index < options.length && (quoted || !/[ \t]/.test(options[index]!))) {
+      let slashes = 0;
+      while (options[index] === '\\') {
+        slashes++;
+        index++;
+      }
+      if (options[index] === "'" && !quoted) throw new Error('mulnx_window_options_unsupported');
+      if (options[index] === '"') {
+        value += '\\'.repeat(Math.floor(slashes / 2));
+        if (slashes % 2) value += '"';
+        else {
+          // Adjacent quotes inside a quoted value differ across Windows parsers.
+          if (quoted && options[index + 1] === '"')
+            throw new Error('mulnx_window_options_unsupported');
+          quoted = !quoted;
+        }
+        index++;
+      } else {
+        value += '\\'.repeat(slashes);
+        if (index < options.length && (quoted || !/[ \t]/.test(options[index]!)))
+          value += options[index++];
+      }
+    }
+    if (quoted) throw new Error('mulnx_window_options_unsupported');
+    tokens.push({ start, end: index, value });
+  }
+  return tokens;
+}
+
+function windowLaunchOptions(options: string, geometry: MulnxWindowGeometry): string {
+  const tokens = launchOptionTokens(options);
+  const modes = /^-(?:fullscreen|full|window|windowed|sw|noborder|border)$/i;
+  const sizes = /^-(?:w|width|h|height)$/i;
+  const removed: { start: number; end: number }[] = [];
+  for (let position = 0; position < tokens.length; position++) {
+    const token = tokens[position]!;
+    if (
+      /^\+(?:mat_setvideomode|r_fullscreen)(?:$|[=:])/i.test(token.value) ||
+      token.value.toLowerCase() === '%command%'
+    )
+      throw new Error('mulnx_window_options_unsupported');
+    if (!modes.test(token.value) && !sizes.test(token.value)) {
+      if (
+        /^-(?:fullscreen|full|window|windowed|sw|noborder|border|w|width|h|height)[=:]/i.test(
+          token.value,
+        )
+      )
+        throw new Error('mulnx_window_options_unsupported');
+      continue;
+    }
+    // A quoted/escaped flag may be a command's string argument, not an option.
+    if (
+      options.slice(token.start, token.end) !== token.value ||
+      (position > 0 && /^\+exec$/i.test(tokens[position - 1]!.value))
+    )
+      throw new Error('mulnx_window_options_unsupported');
+    removed.push(token);
+    if (sizes.test(token.value)) {
+      const size = tokens[++position];
+      if (!size || !/^\d+$/.test(size.value)) throw new Error('mulnx_window_options_unsupported');
+      removed.push(size);
+    }
+  }
+  let retained = '';
+  let cursor = 0;
+  for (const token of removed) {
+    retained += options.slice(cursor, token.start);
+    cursor = token.end;
+  }
+  retained += options.slice(cursor);
+  const target = `-windowed -noborder -w ${geometry.width} -h ${geometry.height}`;
+  return retained ? `${target} ${retained}` : target;
+}
+
 /** Preserve the official launch options; refuse unfamiliar YAML instead of
  * silently enabling capture without an effective engine flag. */
 function launchOptionsValue(source: string): string {
@@ -445,6 +548,52 @@ export class MulnxTool {
     if (!this.downloadAbort) throw new Error('mulnx_download_not_active');
     this.downloadAbort.abort();
   }
+  /** Restore only our existing launch-option transaction, including during exit.
+   * This path never installs, selects a release, or configures other files. */
+  cleanupLaunchOptions(cs2Path: string, verify: () => void) {
+    return this.run('mulnx_cleanup', async () => {
+      verify();
+      if (!this.installed) throw new Error('mulnx_cleanup_installation_unavailable');
+      const root = join(this.directory, this.installed.directory, 'MulNX');
+      const ownership = join(root, 'mizar-console-options.json');
+      let owned: { original: string; managed: string; previous?: string | undefined };
+      try {
+        owned = z
+          .object({
+            original: z.string().max(65536),
+            managed: z.string().max(65536),
+            previous: z.string().max(65536).optional(),
+          })
+          .parse(await readJson(root, 'mizar-console-options.json'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { cleaned: true };
+        throw error;
+      }
+      const path = await safePath(root, 'CS2Injector/CS2BootLoader/Config/config.yaml');
+      const stat = await lstat(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 64 * 1024)
+        throw new Error('mulnx_launcher_config_invalid');
+      const original = await readFile(path, 'utf8');
+      const document = parseDocument(original, { uniqueKeys: true });
+      const executable: unknown = document.get('path');
+      if (
+        document.errors.length ||
+        document.warnings.length ||
+        typeof executable !== 'string' ||
+        win32.normalize(executable).toLowerCase() !== win32.normalize(cs2Path).toLowerCase()
+      )
+        throw new Error('mulnx_cleanup_identity_changed');
+      launchOptionsValue(original);
+      const line = original.match(/^launchOptions\s*:.*$/m)![0];
+      if (![owned.original, owned.managed, owned.previous].includes(line))
+        throw new Error('mulnx_console_ownership_conflict');
+      const updated = original.replace(/^launchOptions\s*:.*$/m, owned.original);
+      await this.replaceManaged(path, original, updated, verify);
+      verify();
+      await rm(ownership);
+      return { cleaned: true };
+    });
+  }
   prepare(
     cs2Path: string,
     consoleCapture = false,
@@ -452,8 +601,15 @@ export class MulnxTool {
     spectatorCfg = false,
     demoCfg?: string,
     captureCompatibility = false,
+    verify: () => void = () => {},
+    windowGeometry?: MulnxWindowGeometry,
+    protectPreviousConsole = false,
   ) {
     return this.run('mulnx_prepare', async () => {
+      verify();
+      const geometry =
+        windowGeometry === undefined ? undefined : mulnxWindowGeometrySchema.parse(windowGeometry);
+      if (geometry && update) throw new Error('mulnx_window_geometry_update_forbidden');
       // Called only by the authenticated native host after its process and install checks.
       // Entry uses prepared local bytes. The explicit update action owns network discovery.
       let launcherUnavailable = false;
@@ -494,7 +650,7 @@ export class MulnxTool {
           !this.installed ||
           this.installed.release.sha256 !== release.sha256
         )
-          await this.install(release);
+          await this.install(release, verify);
       } catch (error) {
         if (!preparingBundle) throw error;
         throw new Error(
@@ -502,6 +658,7 @@ export class MulnxTool {
           { cause: error },
         );
       }
+      verify();
       const root = join(this.directory, this.installed!.directory, 'MulNX');
       await this.configureLauncher(
         root,
@@ -510,23 +667,38 @@ export class MulnxTool {
         spectatorCfg,
         demoCfg,
         captureCompatibility,
+        verify,
+        geometry,
+        protectPreviousConsole,
       );
       const launcher = await safePath(root, 'CS2Injector/CS2Injector.exe');
+      verify();
       return { launcher, version: this.installed!.release.tag };
     });
   }
-  private async replaceManaged(path: string, original: string, updated: string) {
+  private async replaceManaged(
+    path: string,
+    original: string,
+    updated: string,
+    verify: () => void,
+  ) {
     if (original === updated) return;
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, updated, { flag: 'wx' });
       if ((await readFile(path, 'utf8')) !== original) throw new Error('mulnx_config_conflict');
+      verify();
       await rename(temporary, path);
     } finally {
       await rm(temporary, { force: true });
     }
   }
-  private async configureReflection(root: string, relative: string, key: string) {
+  private async configureReflection(
+    root: string,
+    relative: string,
+    key: string,
+    verify: () => void,
+  ) {
     const path = await safePath(root, relative);
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 256 * 1024)
@@ -538,9 +710,9 @@ export class MulnxTool {
     if (!value || typeof value !== 'object' || Array.isArray(value))
       throw new Error('mulnx_config_invalid');
     document.set(key, false);
-    await this.replaceManaged(path, original, document.toString());
+    await this.replaceManaged(path, original, document.toString(), verify);
   }
-  private async configureFirstDemo(root: string) {
+  private async configureFirstDemo(root: string, verify: () => void) {
     const relative = 'CS2OBTool/AutoCfgLoad/FirstPlayDemo';
     let directory: string;
     try {
@@ -556,7 +728,7 @@ export class MulnxTool {
       if (stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024)
         throw new Error('mulnx_first_demo_config_invalid');
       const original = await readFile(path, 'utf8');
-      await this.replaceManaged(path, original, firstDemoOptions(original));
+      await this.replaceManaged(path, original, firstDemoOptions(original), verify);
     }
   }
   private async configureLauncher(
@@ -566,14 +738,10 @@ export class MulnxTool {
     spectatorCfg = false,
     demoCfg?: string,
     captureCompatibility = false,
+    verify: () => void = () => {},
+    windowGeometry?: MulnxWindowGeometry,
+    protectPreviousConsole = false,
   ) {
-    await this.configureReflection(root, 'Config/CS2OBTool_Refl.yaml', 'UISystem.ifDrawMid');
-    await this.configureReflection(
-      root,
-      'Config/CS2Injector_Refl.yaml',
-      'CS2HelperController.injectReshade',
-    );
-    await this.configureFirstDemo(root);
     const auto = await readFile(
       await safePath(root, 'CS2Injector/CS2BootLoader/Config/auto.yaml'),
       'utf8',
@@ -626,6 +794,16 @@ export class MulnxTool {
     const originalLine = owned?.original ?? line;
     const baseline = withPath.replace(/^launchOptions\s*:.*$/m, originalLine);
     let options = launchOptionsValue(baseline);
+    if (
+      protectPreviousConsole &&
+      (consoleCapture ||
+        launchOptionTokens(options).some(({ value }) =>
+          /^(?:-condebug|-conclearlog|\+con_logfile|\+con_logfile_open)(?:$|[=:])/i.test(value),
+        ))
+    )
+      throw new Error(
+        '上一场原始控制台未能归档，而 MulNX 原始启动参数仍会写入或清空日志。请先归档 console.log，或移除 -condebug、-conclearlog 及 con_logfile 启动参数后重试；原日志和配置备份已保留。',
+      );
     if (captureCompatibility && !/(?:^|\s)-allow_third_party_software(?:\s|$)/i.test(options))
       options = `${options} -allow_third_party_software`.trim();
     if (consoleCapture && !/(?:^|\s)-condebug(?:\s|$)/i.test(options))
@@ -640,10 +818,33 @@ export class MulnxTool {
         throw new Error('mulnx_demo_config_invalid');
       options = `${options} +exec ${demoCfg}`.trim();
     }
+    if (windowGeometry) options = windowLaunchOptions(options, windowGeometry);
     const baselineOptions = launchOptionsValue(baseline);
     const managedLine =
       options === baselineOptions ? originalLine : `launchOptions: ${JSON.stringify(options)}`;
     const updated = withPath.replace(/^launchOptions\s*:.*$/m, managedLine);
+    // Both the managed file and its restoration must stay readable by this owner.
+    if (
+      Buffer.byteLength(updated, 'utf8') > 64 * 1024 ||
+      Buffer.byteLength(baseline, 'utf8') > 64 * 1024 ||
+      originalLine.length > 65536 ||
+      managedLine.length > 65536
+    )
+      throw new Error('mulnx_launcher_config_invalid');
+    await this.configureReflection(
+      root,
+      'Config/CS2OBTool_Refl.yaml',
+      'UISystem.ifDrawMid',
+      verify,
+    );
+    await this.configureReflection(
+      root,
+      'Config/CS2Injector_Refl.yaml',
+      'CS2HelperController.injectReshade',
+      verify,
+    );
+    await this.configureFirstDemo(root, verify);
+    verify();
     if (managedLine !== originalLine || owned) {
       // The previous accepted line makes both sides of an interrupted rename recoverable.
       await atomicJson(ownership, { original: originalLine, managed: managedLine, previous: line });
@@ -653,6 +854,7 @@ export class MulnxTool {
       await writeFile(temporary, updated, { flag: 'wx' });
       if ((await readFile(config, 'utf8')) !== original)
         throw new Error('mulnx_console_ownership_conflict');
+      verify();
       await rename(temporary, config);
       if (managedLine === originalLine) await rm(ownership, { force: true });
       else await atomicJson(ownership, { original: originalLine, managed: managedLine });
@@ -725,9 +927,10 @@ export class MulnxTool {
       this.checkResult = sameMulnxAsset(installed.release, this.latest) ? 'current' : 'available';
   }
 
-  private async install(release: MulnxRelease) {
+  private async install(release: MulnxRelease, verify: () => void) {
     const prepared = await this.prepareReleaseFiles(release);
     const installed = await this.selectReleaseFiles(prepared.preparedId);
+    verify();
     await this.publishSelection(installed);
   }
 

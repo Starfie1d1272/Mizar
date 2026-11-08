@@ -46,19 +46,13 @@ const record = z
   })
   .strict();
 export type PendingPerformanceRecord = z.infer<typeof record>;
-const packet = z
-  .object({
-    schema: z.literal('mizar-performance-pending/1'),
-    windowId: z.uuid(),
-    part: z.number().int().min(0).max(65535),
-    firstTime: z.iso.datetime(),
-    lastTime: z.iso.datetime(),
-    expandedBytes: z.number().int().min(1).max(PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    gzipBase64: z.string().max(1450 * 1024),
-  })
-  .strict();
-type Packet = z.infer<typeof packet>;
+type Packet = {
+  windowId: string;
+  part: number;
+  firstTime: string;
+  lastTime: string;
+  expandedBytes: number;
+};
 type Entry = {
   name: string;
   bytes: number;
@@ -67,7 +61,7 @@ type Entry = {
   part: number;
   firstTime: string;
 };
-const filePattern = /^([a-f0-9-]{36})\.([a-f0-9]{4})\.(?:json|gz)$/i;
+const filePattern = /^([a-f0-9-]{36})\.([a-f0-9]{4})\.gz$/i;
 
 export function performanceRecordEvent(value: PendingPerformanceRecord) {
   const sampleTimes = Array.isArray(value.evidence.samples)
@@ -122,8 +116,6 @@ export class PerformanceSpool {
   private readonly retained: ProducerRetention;
   private entries: Entry[] = [];
   private initialized = false;
-  private pins = new Map<string, number>();
-  private acknowledged = new Set<string>();
   private unreadable = new Map<string, { bytes: number; error: unknown; retryAt: number }>();
   constructor(logDirectory: string) {
     this.directory = join(logDirectory, 'performance-pending');
@@ -184,67 +176,42 @@ export class PerformanceSpool {
         if (!result.bytesRead) throw new Error('performance_spool_incomplete_read');
         offset += result.bytesRead;
       }
-      if (name.endsWith('.gz')) {
-        const raw = await decompress(bytes, {
-          maxOutputLength: PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes,
-        });
-        const events = JSON.parse(raw.toString('utf8')) as {
-          eventId: string;
-          windowId: string;
-          stage: string;
-          evidence: Record<string, unknown> & { sourceRecord: Record<string, unknown> };
-        }[];
-        const records = z
-          .array(record)
-          .min(1)
-          .max(8192)
-          .parse(
-            events.map((event) => ({
-              id: event.eventId,
-              windowId: event.windowId,
-              stage: event.stage,
-              source: Object.fromEntries(
-                Object.entries(event.evidence.sourceRecord).filter(([key]) => key !== 'id'),
-              ),
-              evidence: Object.fromEntries(
-                Object.entries(event.evidence).filter(([key]) => key !== 'sourceRecord'),
-              ),
-            })),
-          );
-        const match = filePattern.exec(name)!;
-        if (records.some((record) => record.windowId !== match[1]))
-          throw new Error('performance_spool_identity_mismatch');
-        const value: Packet = {
-          schema: 'mizar-performance-pending/1',
-          windowId: records[0]!.windowId,
-          part: parseInt(match[2]!, 16),
-          firstTime: records[0]!.source.time,
-          lastTime: records.at(-1)!.source.time,
-          expandedBytes: raw.length,
-          sha256: checksum(raw),
-          gzipBase64: '',
-        };
-        return { packet: value, records, bytes: bytes.length };
-      }
-      const value = packet.parse(JSON.parse(bytes.toString('utf8')));
-      if (name !== `${value.windowId}.${value.part.toString(16).padStart(4, '0')}.json`)
-        throw new Error('performance_spool_identity_mismatch');
-      const raw = await decompress(Buffer.from(value.gzipBase64, 'base64'), {
+      const raw = await decompress(bytes, {
         maxOutputLength: PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes,
       });
-      if (raw.length !== value.expandedBytes || checksum(raw) !== value.sha256)
-        throw new Error('performance_spool_integrity');
+      const events = JSON.parse(raw.toString('utf8')) as {
+        eventId: string;
+        windowId: string;
+        stage: string;
+        evidence: Record<string, unknown> & { sourceRecord: Record<string, unknown> };
+      }[];
       const records = z
         .array(record)
         .min(1)
         .max(8192)
-        .parse(JSON.parse(raw.toString('utf8')));
-      if (
-        records.some((item) => item.windowId !== value.windowId) ||
-        records[0]?.source.time !== value.firstTime ||
-        records.at(-1)?.source.time !== value.lastTime
-      )
-        throw new Error('performance_spool_record_mismatch');
+        .parse(
+          events.map((event) => ({
+            id: event.eventId,
+            windowId: event.windowId,
+            stage: event.stage,
+            source: Object.fromEntries(
+              Object.entries(event.evidence.sourceRecord).filter(([key]) => key !== 'id'),
+            ),
+            evidence: Object.fromEntries(
+              Object.entries(event.evidence).filter(([key]) => key !== 'sourceRecord'),
+            ),
+          })),
+        );
+      const match = filePattern.exec(name)!;
+      if (records.some((record) => record.windowId !== match[1]))
+        throw new Error('performance_spool_identity_mismatch');
+      const value: Packet = {
+        windowId: records[0]!.windowId,
+        part: parseInt(match[2]!, 16),
+        firstTime: records[0]!.source.time,
+        lastTime: records.at(-1)!.source.time,
+        expandedBytes: raw.length,
+      };
       return { packet: value, records, bytes: bytes.length };
     } finally {
       await file.close();
@@ -433,17 +400,10 @@ export class PerformanceSpool {
     }
     await syncDirectory(this.directory);
     await this.register(name, records);
-    const run = records[0]!.source.sessionId;
-    await this.retained.releasePin(run);
-    await this.retained.preparePin({
-      pinId: run,
-      kind: 'active',
-      names: this.retained
-        .snapshot()
-        .segments.filter((segment) => segment.producerRunId === run)
-        .map((segment) => segment.name),
-    });
-    await this.retained.commitPin(run);
+    await this.retained.protectActiveSegment(
+      records[0]!.source.sessionId,
+      'performance-pending/' + name,
+    );
     const entry = {
       name,
       windowId,
@@ -534,7 +494,7 @@ export class PerformanceSpool {
       records: records.length,
     });
   }
-  incidentParticipant(kind: 'incident' | 'export' = 'incident'): IncidentParticipant {
+  incidentParticipant(kind: 'incident' | 'export' | 'delivery' = 'incident'): IncidentParticipant {
     return {
       producerId: 'performance',
       prepare: async (pinId) => {
@@ -549,112 +509,21 @@ export class PerformanceSpool {
       release: (pinId) => this.retained.releasePin(pinId),
     };
   }
-  async oldest(): Promise<{ name: string; records: PendingPerformanceRecord[] } | null> {
-    await this.initialize();
-    await this.retryUnreadable();
-    const sorted = this.entries
-      .filter((entry) => !this.acknowledged.has(entry.name))
-      .sort((a, b) => a.firstTime.localeCompare(b.firstTime) || a.part - b.part);
-    for (const first of sorted) {
-      try {
-        return { name: first.name, records: (await this.read(first.name)).records };
-      } catch (error) {
-        await this.failed(first.name, error);
-      }
-    }
-    return null;
-  }
-  async acknowledge(name: string, ids: string[]): Promise<void> {
-    const value = await this.read(name);
-    if (
-      value.records.length !== ids.length ||
-      value.records.some((record, index) => record.id !== ids[index])
-    )
-      throw new Error('performance_spool_ack_mismatch');
-    if (this.pins.has(name)) {
-      this.acknowledged.add(name);
-      return;
-    }
-    await this.remove(name);
-  }
-  private async remove(name: string) {
-    await safePath(this.directory, name);
-    await unlink(join(this.directory, name));
-    await syncDirectory(this.directory);
-    this.entries = this.entries.filter((entry) => entry.name !== name);
-    this.acknowledged.delete(name);
-  }
-  async pin(): Promise<() => Promise<void>> {
-    await this.initialize();
-    const names = [...this.entries.map((entry) => entry.name), ...this.unreadable.keys()];
-    for (const name of names) this.pins.set(name, (this.pins.get(name) ?? 0) + 1);
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      const failures: unknown[] = [];
-      for (const name of names) {
-        const count = (this.pins.get(name) ?? 1) - 1;
-        if (count) this.pins.set(name, count);
-        else {
-          this.pins.delete(name);
-          if (this.acknowledged.has(name)) {
-            try {
-              await this.remove(name);
-            } catch (error) {
-              this.acknowledged.delete(name);
-              failures.push(error);
-            }
-          }
-        }
-      }
-      if (failures.length) throw new AggregateError(failures, 'performance_export_release_failed');
-    };
-  }
   health() {
     return {
       files: this.entries.length,
-      pendingFiles: this.entries.filter((entry) => !this.acknowledged.has(entry.name)).length,
-      exportPinnedFiles: this.pins.size,
+      pendingFiles: this.entries.length,
+      exportPinnedFiles: new Set(
+        this.retained
+          .snapshot()
+          .pins.filter((pin) => pin.kind === 'export')
+          .flatMap((pin) => pin.segments.map((segment) => segment.name)),
+      ).size,
       unreadableFiles: this.unreadable.size,
       sourceErrors: [...this.unreadable].map(([name, value]) => ({ name, error: value.error })),
       bytes: this.used(),
       expandedBytes: this.entries.reduce((bytes, item) => bytes + item.expandedBytes, 0),
       limits: PERFORMANCE_SPOOL_LIMITS,
     };
-  }
-  async *export(): AsyncGenerator<{
-    name: string;
-    bytes: Buffer;
-    sourceBytes: number;
-    status?: 'unreadable';
-  }> {
-    await this.initialize();
-    for (const entry of this.entries) {
-      let value;
-      try {
-        value = await this.read(entry.name);
-      } catch (error) {
-        await this.failed(entry.name, error);
-        continue;
-      }
-      yield {
-        name: `performance-pending/${entry.windowId}.${entry.part.toString(16).padStart(4, '0')}.ndjson`,
-        sourceBytes: value.bytes,
-        bytes: Buffer.from(
-          value.records
-            .map((record) => JSON.stringify(performanceRecordEvent(record)) + '\n')
-            .join(''),
-        ),
-      };
-      await yieldIO();
-    }
-    for (const [name, value] of this.unreadable)
-      yield {
-        name: `performance-pending/${name}`,
-        bytes: Buffer.alloc(0),
-        sourceBytes: value.bytes,
-        status: 'unreadable',
-      };
   }
 }

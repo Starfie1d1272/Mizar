@@ -9,7 +9,13 @@ import {
 import { Button, Checkbox, Field, Panel, StatusBanner } from '../ui';
 import { command, useLocalRead, openTool } from './client';
 import { desktopInvoke } from '../workspace/client';
-import { type ConnectionPreparationView, type ObserverRuntimeView } from './observer-preparation';
+import {
+  observerFailureReason,
+  observerNeedsRecovery,
+  resumeObserverReceiver,
+  type ConnectionPreparationView,
+  type ObserverRuntimeView,
+} from './observer-preparation';
 import { useCs2Status } from './cs2-status';
 
 type ObserverView = ConnectionPreparationView & {
@@ -27,6 +33,13 @@ export function ObserverSettingsPanel() {
     [error, setError] = useState(''),
     [saved, setSaved] = useState(false);
   const settings = draft ?? view?.settings ?? DEFAULT_OBSERVER_SETTINGS;
+  const needsRecovery = Boolean(
+    view?.settings.enabled &&
+    !view.receiverPaused &&
+    runtime &&
+    !runtime.pending &&
+    observerNeedsRecovery(runtime),
+  );
   const edit = (value: Partial<ObserverSettings>) => {
     setDraft({ ...settings, ...value });
     setSaved(false);
@@ -63,10 +76,10 @@ export function ObserverSettingsPanel() {
         </Button>
       </Panel>
       <Panel className="settings-card">
-        <h2>私有观察辅助</h2>
-        <p>使用早源已经发生的事件，提示延迟节目即将出现的击杀，帮助提前选人和准备镜头。</p>
+        <h2>提前提示</h2>
+        <p>在击杀出现在节目画面前提示，帮助提前选人和准备镜头。</p>
         <Checkbox
-          label="启用私有观察辅助"
+          label="启用提前提示"
           checked={settings.enabled}
           onChange={(e) => edit({ enabled: e.target.checked })}
           disabled={busy || runtime?.pending || !view}
@@ -82,40 +95,40 @@ export function ObserverSettingsPanel() {
           onChange={(e) => edit({ leadSeconds: Number(e.target.value) })}
           message="希望在击杀到达节目画面前多久看到提示。"
         />
-        <p>两路回合倒计时稳定校准后显示提示；未校准时等待可靠数据。</p>
+        <p>收到可靠比赛数据后自动显示提示。</p>
         <Button
           variant="primary"
           disabled={busy || runtime?.pending || !view}
           aria-busy={busy}
           onClick={() => void save()}
         >
-          保存观察辅助设置
+          保存提示设置
         </Button>
         {settings.enabled &&
         production?.mode === 'live' &&
         window.__TAURI_INTERNALS__ &&
-        runtime?.retryAvailable ? (
+        runtime?.retryAvailable &&
+        (view?.receiverPaused || needsRecovery) ? (
           <Button
             disabled={busy || runtime?.pending}
             onClick={() => {
-              if (busy || runtime?.pending) return;
+              if (busy || runtime?.pending || !view) return;
               setBusy(true);
               setError('');
-              void desktopInvoke('observer_command', { action: 'start-configured' })
+              void resumeObserverReceiver(view)
+                .then((result) => setError(result?.warning ?? ''))
                 .catch((reason: unknown) =>
-                  setError(reason instanceof Error ? reason.message : '早源重试未完成，请重试。'),
+                  setError(reason instanceof Error ? reason.message : '提示接收未完成，请重试。'),
                 )
                 .finally(() => setBusy(false));
             }}
           >
-            重新连接早源
+            {view?.receiverPaused ? '恢复提前提示接收' : '重试提前提示接收'}
           </Button>
         ) : null}
-        {runtime?.pending ? <p role="status">正在准备观察辅助…</p> : null}
-        {error || runtime?.error ? (
-          <StatusBanner tone="warning">
-            {error || '观察辅助准备失败，请核对本图连接后重新连接早源。'}
-          </StatusBanner>
+        {runtime?.pending ? <p role="status">正在准备提前提示…</p> : null}
+        {error || needsRecovery ? (
+          <StatusBanner tone="warning">{error || observerFailureReason(runtime!)}</StatusBanner>
         ) : saved ? (
           <StatusBanner tone="success">设置已保存。</StatusBanner>
         ) : null}
@@ -154,7 +167,7 @@ export function GameAutomationSettingsPanel() {
       ) : null}
       <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本图观战连接。</p>
       <Checkbox
-        label="自动连接本场节目源"
+        label="自动连接已提交的 GoTV"
         checked={settings.autoConnect}
         disabled={busy || !view || !useMulnx}
         onChange={(event) => setDraft({ ...settings, autoConnect: event.target.checked })}

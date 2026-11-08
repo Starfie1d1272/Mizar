@@ -2,7 +2,7 @@ import { gameBackgroundReady } from './game-background.js';
 import { prepareCaptureAudio } from './capture-audio-preparation.js';
 import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
-import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
+import type { ObsCaptureDiagnostic, ObsConnectionFacts } from '@mizar/protocol/obs';
 import {
   assertNoVideoOutput,
   ObsPreparationWriteBlocked,
@@ -23,6 +23,7 @@ import type {
   ObsAudioBindCommand,
   ObsAudioRole,
   ObsOutputCommand,
+  ObsOutputPhase,
   ObsOutputsStatus,
 } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
@@ -102,9 +103,12 @@ export function obsErrorEvidence(error: unknown, password = ''): unknown {
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly connectionFailure?: ReturnType<typeof obsFailureKind>;
+  readonly facts?: ObsConnectionFacts;
   readonly currentScene: string | null;
   readonly port: number;
   readonly streaming: boolean | null;
+  /** Absent on older observations; consumers must treat absence as unknown. */
+  readonly streamPhase?: ObsOutputPhase;
   readonly recording: boolean | null;
   readonly passwordConfigured: boolean;
   readonly video: null | { readonly canvas: string; readonly output: string; readonly fps: number };
@@ -229,19 +233,42 @@ export class ObsAdapter {
       idle(this.outputs.snapshot());
   }
 
-  async outputStatus(): Promise<ObsOutputsStatus> {
-    return this.outputs.read().catch(() => this.outputs.snapshot());
+  private async preparationStatus(): Promise<NonNullable<ObsOutputsStatus['preparation']> | null> {
+    const capture = await this.captureWarmup?.status().catch(() => 'cleanup_pending' as const);
+    return capture ?? (this.configurationPending ? 'checking' : null);
   }
 
-  async outputCommand(command: ObsOutputCommand): Promise<ObsOutputsStatus> {
-    try {
-      await this.outputs.command(command);
-    } catch (error) {
-      const config = await this.configStore.read();
-      this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
-      throw error;
-    }
-    return this.outputs.snapshot();
+  async outputStatus(): Promise<ObsOutputsStatus> {
+    const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
+    return { ...outputs, preparation: await this.preparationStatus() };
+  }
+
+  outputCommand(
+    command: ObsOutputCommand,
+    valid: () => boolean = () => true,
+  ): Promise<ObsOutputsStatus> {
+    return this.serial(async () => {
+      try {
+        if (!valid())
+          throw new ObsOutputError('obs_output_stale', '输出请求已取消，未发送到 OBS。');
+        if (command.action === 'start') {
+          const preparation = await this.preparationStatus();
+          if (preparation)
+            throw new ObsOutputError(
+              'obs_output_busy',
+              preparation === 'checking'
+                ? '正在检查 OBS 游戏画面，请等待准备完成后开始输出。'
+                : 'OBS 游戏画面检查未完成，请重新检查后开始输出。',
+            );
+        }
+        await this.outputs.command(command, valid);
+      } catch (error) {
+        const config = await this.configStore.read();
+        this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
+        throw error;
+      }
+      return { ...this.outputs.snapshot(), preparation: await this.preparationStatus() };
+    });
   }
 
   private configurationMutation<T>(run: () => Promise<T>): Promise<T> {
@@ -783,97 +810,159 @@ export class ObsAdapter {
 
   private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
-    let connected = false;
+    let facts: ObsConnectionFacts = {
+      executable: 'unknown',
+      process: 'unknown',
+      listener: 'unknown',
+      authentication: 'unknown',
+      resources: 'unknown',
+    };
+    let status: ObsStatus = {
+      connection: 'unavailable',
+      currentScene: null,
+      port: config.port,
+      streaming: null,
+      streamPhase: 'unknown',
+      recording: null,
+      passwordConfigured: Boolean(config.password),
+      video: null,
+      findings: [],
+      programEvidence: null,
+    };
+    const findings: ObsFinding[] = [];
+    const query = async (code: string, message: string, read: () => Promise<void>) => {
+      try {
+        await read();
+      } catch (error) {
+        this.diagnostic(`obs_${code}`, obsErrorEvidence(error, config.password));
+        findings.push({ code, message });
+      }
+    };
     try {
-      const status = await this.withObs(async (obs, endpoint) => {
-        connected = true;
-        const [scene, outputs, video, findings] = await Promise.all([
-          obs.call('GetCurrentProgramScene'),
-          this.outputs.read(),
-          obs.call('GetVideoSettings'),
-          this.configurationFindings(obs, endpoint).catch((error: unknown) => {
-            this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
-            return [
-              {
-                code: 'configuration_check_failed',
-                message: 'OBS 已连接，但场景或音频检查失败。请查看诊断后重新检查。',
-              },
-            ];
+      await this.withObs(async (obs, endpoint) => {
+        status = { ...status, connection: 'connected' };
+        facts = { ...facts, process: 'running', listener: 'reachable', authentication: 'accepted' };
+        await Promise.all([
+          query('scene_query_failed', 'OBS 已连接，但当前场景尚未确认。请重新检查。', async () => {
+            const scene = await obs.call('GetCurrentProgramScene');
+            if (typeof scene.currentProgramSceneName !== 'string')
+              throw new Error('obs_scene_response_invalid');
+            status = { ...status, currentScene: scene.currentProgramSceneName };
           }),
+          query(
+            'output_query_failed',
+            'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
+            async () => {
+              const outputs = await this.outputs.read();
+              status = {
+                ...status,
+                streaming: outputs.stream.active,
+                streamPhase: outputs.stream.phase,
+                recording: outputs.record.active,
+              };
+              if (outputs.stream.active === null || outputs.record.active === null)
+                throw new Error('obs_output_state_unknown');
+            },
+          ),
+          query('video_query_failed', 'OBS 已连接，但视频设置尚未确认。请重新检查。', async () => {
+            const video = await obs.call('GetVideoSettings');
+            const values = [
+              video.baseWidth,
+              video.baseHeight,
+              video.outputWidth,
+              video.outputHeight,
+              video.fpsNumerator,
+              video.fpsDenominator,
+            ];
+            if (
+              !values.every(
+                (value) => typeof value === 'number' && Number.isFinite(value) && value > 0,
+              )
+            )
+              throw new Error('obs_video_response_invalid');
+            status = {
+              ...status,
+              video: {
+                canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
+                output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
+                fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
+              },
+            };
+          }),
+          query(
+            'configuration_check_failed',
+            'OBS 已连接，但场景或音频检查未完成。请重新检查。',
+            async () => {
+              const configuration = await this.configurationFindings(obs, endpoint);
+              findings.push(...configuration);
+              facts = {
+                ...facts,
+                resources: obsFindingReadiness(configuration).blockingFindings.length
+                  ? 'needs_configuration'
+                  : 'ready',
+              };
+            },
+          ),
         ]);
-        if (outputs.stream.active === null || outputs.record.active === null)
-          findings.push({
-            code: 'output_query_failed',
-            message: 'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
-          });
-        const currentScene =
-          typeof scene.currentProgramSceneName === 'string' ? scene.currentProgramSceneName : null;
-        return {
-          connection: 'connected',
-          currentScene,
-          port: config.port,
-          streaming: outputs.stream.active,
-          recording: outputs.record.active,
-          passwordConfigured: Boolean(config.password),
-          video: {
-            canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
-            output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
-            fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
-          },
-          findings,
-        } satisfies ObsStatus;
-      });
-      this.findings = [...status.findings];
-      // Evidence gets a separate session and deadline after base facts are confirmed.
-      // Its failure cannot consume the base session's deadline or change connection facts.
-      let evidenceTimeout: ReturnType<typeof setTimeout> | undefined;
-      const programEvidence = await Promise.race([
+      }, 2500);
+    } catch (error) {
+      const kind = obsFailureKind(error);
+      if (status.connection === 'connected') {
+        findings.push({
+          code: 'status_query_failed',
+          message: 'OBS 已连接，但部分状态查询未完成。请重新检查，不必修改密码。',
+        });
+      } else {
+        status = {
+          ...status,
+          connection:
+            kind === 'authentication'
+              ? config.password
+                ? 'invalid_password'
+                : 'password_required'
+              : 'unavailable',
+          connectionFailure: kind,
+        };
+        facts = {
+          ...facts,
+          listener:
+            kind === 'authentication' ? 'reachable' : kind === 'refused' ? 'refused' : 'unknown',
+          authentication:
+            kind === 'authentication' ? (config.password ? 'rejected' : 'required') : 'unknown',
+        };
+        if (process.platform === 'win32') {
+          await Promise.all([
+            query('process_query_failed', 'OBS 运行状态尚未确认。', async () => {
+              const running = await isObsProcessRunning();
+              facts = { ...facts, process: running ? 'running' : 'stopped' };
+            }),
+            query('executable_query_failed', 'OBS 程序位置尚未确认。', async () => {
+              const path = await discoverObsExecutable(config.executablePath);
+              facts = { ...facts, executable: path ? 'found' : 'not_found' };
+            }),
+          ]);
+        }
+      }
+    }
+    this.findings = [...findings];
+    // Evidence has its own deadline and cannot erase confirmed base observations.
+    let programEvidence: ObsProgramEvidence | null = null;
+    if (status.connection === 'connected') {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      programEvidence = await Promise.race([
         this.withObs(
           (obs) => readObsProgramEvidence(obs, this.browserBaseUrl, status.currentScene),
           PROGRAM_EVIDENCE_MS,
           'obs_program_check',
         ).catch(() => null),
         new Promise<null>((resolve) => {
-          // Also bound config/cleanup work; withObs may still be disconnecting after its RPC timeout.
-          evidenceTimeout = setTimeout(() => {
-            this.diagnostic('obs_program_check', {
-              message: 'OBS 节目取证超时，未能在期限内完成。',
-            });
-            resolve(null);
-          }, PROGRAM_EVIDENCE_MS + 50);
+          timer = setTimeout(() => resolve(null), PROGRAM_EVIDENCE_MS + 50);
         }),
       ]).finally(() => {
-        if (evidenceTimeout) clearTimeout(evidenceTimeout);
+        if (timer) clearTimeout(timer);
       });
-      return { ...status, programEvidence };
-    } catch (error: unknown) {
-      const kind = obsFailureKind(error);
-      return {
-        connection: connected
-          ? 'connected'
-          : kind === 'authentication'
-            ? config.password
-              ? 'invalid_password'
-              : 'password_required'
-            : 'unavailable',
-        connectionFailure: kind,
-        currentScene: null,
-        port: config.port,
-        streaming: null,
-        recording: null,
-        passwordConfigured: Boolean(config.password),
-        video: null,
-        findings: connected
-          ? [
-              {
-                code: 'status_query_failed',
-                message: 'OBS 已连接，但状态查询未完成。请重新检查，不必修改密码。',
-              },
-            ]
-          : [],
-        programEvidence: null,
-      };
     }
+    return { ...status, facts, findings: [...findings], programEvidence };
   }
 
   private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
@@ -912,6 +1001,26 @@ export class ObsAdapter {
         (obs, endpoint) => this.configurationFindings(obs, endpoint),
         12_000,
       );
+      return this.findings;
+    });
+  }
+  recoverCaptureWarmup(valid: () => boolean): Promise<readonly ObsFinding[]> {
+    return this.configurationMutation(async () => {
+      if (!valid())
+        throw new ObsCaptureWarmupError('capture_warmup_changed', '制作状态已变化，请重新检查。');
+      if (!this.captureWarmup)
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      const pending = (await this.captureWarmup.status()) !== null;
+      const lease = pending ? await this.captureWarmupGuard() : undefined;
+      this.findings = await this.withObs(async (obs, endpoint) => {
+        if (lease)
+          await this.captureWarmup!.recoverBeforePreparation(
+            obs,
+            endpoint,
+            () => valid() && lease(),
+          );
+        return this.configurationFindings(guardedObs(obs, valid), endpoint);
+      }, 12_000);
       return this.findings;
     });
   }
@@ -2087,6 +2196,11 @@ export class ObsAdapter {
             audio_video_path_unresolved:
               '画面来源仍附带采集声音，请将它选为对应音频分路，或关闭附带音频后重试。',
             audio_bindings_incomplete: '已选择的音频来源已失效，请在声音设置中重新选择。',
+            audio_game_target_changed:
+              '游戏声音来源的目标已变化，请在声音设置中重新选择游戏声音并录制试听。',
+            audio_game_capture_missing:
+              '未找到游戏画面来源，请先核对游戏采集，再选择游戏声音来源。',
+            audio_game_missing: '游戏声音来源已不存在，请在声音设置中重新选择并录制试听。',
           };
           const uncertain = await readCommentarySwitch(`${this.commentary.journal}.switch`)
             .then((value) => value?.phase === 'sent')
@@ -2094,11 +2208,12 @@ export class ObsAdapter {
           this.findings = [
             ...this.findings,
             {
-              code: 'commentary_pending',
-              message: uncertain
-                ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
-                : (audioHelp[audioReason] ??
-                  '场景已准备，音频分路待完成。请检查远端解说来源后重试。'),
+              code: audioReason.startsWith('audio_game_') ? audioReason : 'commentary_pending',
+              message:
+                audioHelp[audioReason] ??
+                (uncertain
+                  ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
+                  : '场景已准备，音频分路尚未确认。请在声音设置中核对来源并录制试听。'),
             },
           ];
         }
@@ -2171,9 +2286,13 @@ export class ObsAdapter {
   }
   beginCaptureWarmup(preparationId: string, valid: () => boolean) {
     const generation = this.programGeneration;
-    return this.configurationMutation(async () => {
+    return this.serial(async () => {
       if (!this.captureWarmup)
-        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      if (!valid())
+        throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 准备请求已失效，请重试。');
+      await this.outputs.read();
+      if (this.outputs.hasRunningOutput()) return { transactionId: null, startedAt: Date.now() };
       const preparationLease = await this.captureWarmupGuard();
       const recovery = this.recoveryGeneration;
       const outputEpoch = this.outputs.preparationOutputEpoch();
@@ -2201,9 +2320,10 @@ export class ObsAdapter {
     });
   }
   releaseCaptureWarmup(id: string): Promise<void> {
-    return this.configurationMutation(async () => {
+    return this.serial(async () => {
       if (!this.captureWarmup)
-        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 临时采集不可用。');
+        throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
+      // A completed release stays successful even if output started afterwards.
       if (!(await this.captureWarmup.pending(id))) return;
       const lease = await this.captureWarmupGuard();
       return this.withObs(
@@ -2217,18 +2337,26 @@ export class ObsAdapter {
   }
   captureInitialization(
     diagnostic: ObsCaptureDiagnostic,
-    id: string,
+    id: string | null,
   ): Promise<CaptureInitialization> {
-    return this.serial(() =>
-      this.withObs(async (obs) => {
-        if (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id)))
-          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+    return this.serial(async () => {
+      await this.outputs.read();
+      const observing = id === null || this.outputs.hasRunningOutput();
+      return this.withObs(async (obs) => {
+        if (!observing && (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id!))))
+          throw new ObsCaptureWarmupError(
+            'capture_warmup_changed',
+            'OBS 游戏画面检查已中断，请重新检测。',
+          );
         const result = await readCaptureInitialization(obs, diagnostic);
-        if (!(await this.captureWarmup.confirm(obs, id)))
-          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 临时采集已失效，请重试。');
+        if (!observing && !(await this.captureWarmup!.confirm(obs, id!)))
+          throw new ObsCaptureWarmupError(
+            'capture_warmup_changed',
+            'OBS 游戏画面检查已中断，请重新检测。',
+          );
         return result;
-      }),
-    );
+      });
+    });
   }
   setBpCompactVisible(visible: boolean, valid: () => boolean = () => true): Promise<void> {
     return this.serial(async () => {

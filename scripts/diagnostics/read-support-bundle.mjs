@@ -1,14 +1,13 @@
-import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { gunzipSync, inflateRawSync } from 'node:zlib';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 
 // Read locally; never upload or execute bundle content. Redirect stdout to retain the full timeline.
 const path = process.argv[2];
 if (!path)
   throw new Error(
-    'Usage: node scripts/diagnostics/read-support-bundle.mjs bundle.json > timeline.ndjson',
+    'Usage: node scripts/diagnostics/read-support-bundle.mjs part-1.zip|generated.json > timeline.ndjson',
   );
 if ((await stat(path)).size > 256 * 1024 * 1024) throw new Error('Bundle exceeds transport budget');
 const input = await readFile(path);
@@ -18,8 +17,17 @@ if (input[0] === 0x50 && input[1] === 0x4b) {
 }
 const bundle = JSON.parse(input.toString('utf8'));
 if (bundle.schema === 'mizar-support-export/2') {
-  if (!Array.isArray(bundle.parts) || !bundle.parts.length || bundle.parts.length > 32)
+  if (
+    typeof bundle.exportId !== 'string' ||
+    !bundle.exportId ||
+    !Array.isArray(bundle.parts) ||
+    !bundle.parts.length ||
+    bundle.parts.length > 32
+  )
     throw new Error('Invalid total manifest');
+  if (bundle.parts.reduce((sum, part) => sum + part.bytes, 0) > 256 * 1024 * 1024)
+    throw new Error('Export exceeds transport budget');
+  // Validate every part before emitting any timeline: a missing later part is not partial success.
   for (let index = 0; index < bundle.parts.length; index++) {
     const part = bundle.parts[index];
     if (part.name !== `part-${index + 1}.zip`) throw new Error('Invalid part name');
@@ -29,11 +37,19 @@ if (bundle.schema === 'mizar-support-export/2') {
     const bytes = await readFile(file);
     if (createHash('sha256').update(bytes).digest('hex') !== part.sha256)
       throw new Error(`Part checksum mismatch: ${part.name}`);
-    await readZip(bytes, file, bundle.exportId, index + 1);
+    await readZip(bytes, file, bundle.exportId, index + 1, bundle.parts.length, false);
+  }
+  for (let index = 0; index < bundle.parts.length; index++) {
+    const file = join(dirname(path), bundle.parts[index].name);
+    const bytes = await readFile(file);
+    if (createHash('sha256').update(bytes).digest('hex') !== bundle.parts[index].sha256)
+      throw new Error('Part changed during read');
+    await readZip(bytes, file, bundle.exportId, index + 1, bundle.parts.length);
   }
   process.exit(0);
 }
-async function readZip(bytes, source, bundleId, partIndex) {
+throw new Error('Unsupported support export; expected a current ZIP or generated manifest');
+async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit = true) {
   if (bytes.length > 18_874_368) throw new Error('ZIP exceeds part budget');
   let end = -1;
   for (let n = bytes.length - 22; n >= Math.max(0, bytes.length - 65557); n--)
@@ -42,7 +58,17 @@ async function readZip(bytes, source, bundleId, partIndex) {
       break;
     }
   if (end < 0) throw new Error('ZIP directory missing');
+  if (
+    bytes.readUInt16LE(end + 4) ||
+    bytes.readUInt16LE(end + 6) ||
+    bytes.readUInt16LE(end + 8) !== bytes.readUInt16LE(end + 10) ||
+    end + 22 + bytes.readUInt16LE(end + 20) !== bytes.length
+  )
+    throw new Error('Invalid ZIP end');
   const count = bytes.readUInt16LE(end + 10);
+  const directoryStart = bytes.readUInt32LE(end + 16);
+  if (directoryStart + bytes.readUInt32LE(end + 12) !== end)
+    throw new Error('Invalid ZIP directory size');
   let offset = bytes.readUInt32LE(end + 16),
     expanded = 0;
   const entries = new Map();
@@ -50,6 +76,7 @@ async function readZip(bytes, source, bundleId, partIndex) {
     if (offset + 46 > bytes.length || bytes.readUInt32LE(offset) !== 0x02014b50)
       throw new Error('Invalid ZIP directory');
     const method = bytes.readUInt16LE(offset + 10),
+      checksum = bytes.readUInt32LE(offset + 16),
       compressed = bytes.readUInt32LE(offset + 20),
       size = bytes.readUInt32LE(offset + 24),
       nameLength = bytes.readUInt16LE(offset + 28),
@@ -62,6 +89,10 @@ async function readZip(bytes, source, bundleId, partIndex) {
       size > 2 * 1024 * 1024 ||
       (expanded += size) > 256 * 1024 * 1024 ||
       entries.has(name) ||
+      name.startsWith('/') ||
+      name.split('/').some((segment) => !segment) ||
+      offset > end ||
+      bytes.readUInt16LE(offset - 46 - nameLength - extra - comment + 8) & 1 ||
       !/^[-a-zA-Z0-9_/.]+$/.test(name) ||
       name.includes('..')
     )
@@ -69,7 +100,13 @@ async function readZip(bytes, source, bundleId, partIndex) {
     if (local + 30 > bytes.length || bytes.readUInt32LE(local) !== 0x04034b50)
       throw new Error('Invalid ZIP entry header');
     const start = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
-    if (start + compressed > bytes.length) throw new Error('Incomplete ZIP entry');
+    if (
+      start + compressed > directoryStart ||
+      bytes.readUInt16LE(local + 8) !== method ||
+      bytes.subarray(local + 30, local + 30 + bytes.readUInt16LE(local + 26)).toString('utf8') !==
+        name
+    )
+      throw new Error('Incomplete ZIP entry');
     const data =
       method === 0
         ? bytes.subarray(start, start + compressed)
@@ -79,21 +116,42 @@ async function readZip(bytes, source, bundleId, partIndex) {
             })
           : null;
     if (!data || data.length !== size) throw new Error('ZIP entry size mismatch');
+    // Coverage cannot carry its own SHA; CRC validates every entry, including this metadata.
+    if (crc32(data) !== checksum) throw new Error(`ZIP entry CRC mismatch: ${name}`);
     entries.set(name, data);
   }
+  if (offset !== end) throw new Error('ZIP directory count mismatch');
   const metadata = JSON.parse(entries.get('bundle.json')?.toString('utf8') ?? 'null');
   if (
     metadata?.schema !== 'mizar-support-bundle/2' ||
+    typeof metadata.bundleId !== 'string' ||
+    !metadata.bundleId ||
     (bundleId && metadata.bundleId !== bundleId) ||
     (partIndex && metadata.partIndex !== partIndex)
   )
     throw new Error('ZIP bundle identity mismatch');
-  if (!bundleId)
-    process.stderr.write(
-      'Single part only: completeness requires generated.json and every listed ZIP.\n',
+  const expectedIndex = partIndex ?? 1;
+  const last = expectedIndex === partCount;
+  if (
+    metadata.partIndex !== expectedIndex ||
+    metadata.complete !== last ||
+    metadata.partCount !== (last ? partCount : null)
+  )
+    throw new Error(
+      'Incomplete ZIP set: final metadata requires the total manifest and every listed part',
     );
   const coverage = JSON.parse(entries.get('coverage.json')?.toString('utf8') ?? 'null');
+  if (
+    coverage?.schema !== 'mizar-support-coverage/2' ||
+    !Array.isArray(coverage.entries) ||
+    !Array.isArray(coverage.gaps)
+  )
+    throw new Error('Missing final coverage');
+  const indexed = new Set();
   for (const entry of coverage?.entries ?? []) {
+    if (indexed.has(entry.name) || entry.name === 'coverage.json')
+      throw new Error('Invalid entry index');
+    indexed.add(entry.name);
     const data = entries.get(entry.name);
     if (
       !data ||
@@ -102,6 +160,12 @@ async function readZip(bytes, source, bundleId, partIndex) {
     )
       throw new Error('ZIP entry digest mismatch');
   }
+  if (
+    indexed.size !== entries.size - 1 ||
+    [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
+  )
+    throw new Error('Unindexed ZIP entry');
+  if (!emit) return;
   for (const [name, data] of entries)
     if (name.startsWith('events/') && name.endsWith('.ndjson'))
       for (const line of data.toString('utf8').split('\n'))
@@ -119,299 +183,3 @@ async function readZip(bytes, source, bundleId, partIndex) {
     }) + '\n',
   );
 }
-if (bundle.schema !== 'mizar-support-bundle/1' || !Array.isArray(bundle.fullLogs?.files))
-  throw new Error('Full log archive missing (legacy or invalid bundle)');
-const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-let timeline = [];
-const failures = [];
-const fragments = new Map();
-const consoleLines = new Map();
-function collectConsole(entry, file) {
-  if (entry?.stage !== 'cs2_console_records' || typeof entry.detail !== 'string') return;
-  let detail;
-  try {
-    detail = JSON.parse(entry.detail);
-  } catch {
-    return;
-  }
-  if (
-    detail?.source !== 'owned-cs2-technical-console' ||
-    detail.rawFileIncluded !== false ||
-    !Array.isArray(detail.records)
-  )
-    return;
-  for (const record of detail.records) {
-    if (
-      !record ||
-      typeof record.sourceRecordId !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(record.sourceRecordId) ||
-      !Number.isInteger(record.part) ||
-      !Number.isInteger(record.parts) ||
-      record.part < 1 ||
-      record.parts > 64 ||
-      record.part > record.parts ||
-      typeof record.text !== 'string' ||
-      Buffer.byteLength(record.text) > 1024
-    ) {
-      failures.push({ name: file.name, status: 'invalid_console_part' });
-      continue;
-    }
-    const group = consoleLines.get(record.sourceRecordId) ?? {
-      expected: record.parts,
-      parts: new Map(),
-    };
-    const candidate = {
-      file: file.name,
-      ...record,
-      sourceDurability: file.durability ?? 'session-log',
-      sourceScope: file.scope,
-      sourceHostStartupSessionId: entry.startupSessionId,
-      binding: detail.binding,
-    };
-    if (group.expected !== record.parts) {
-      failures.push({ name: file.name, status: 'inconsistent_console_parts' });
-      continue;
-    }
-    const previous = group.parts.get(record.part);
-    if (!previous || priority(candidate) < priority(previous))
-      group.parts.set(record.part, candidate);
-    consoleLines.set(record.sourceRecordId, group);
-  }
-}
-for (const file of bundle.fullLogs.files) {
-  if (!['read', 'incomplete_last_line', 'incomplete_snapshot'].includes(file.status)) {
-    failures.push({
-      name: file.name,
-      status: file.status,
-      error: file.error,
-      durability: file.durability,
-      scope: file.scope,
-    });
-    continue;
-  }
-  const parts = file.volumes.map((volume, index) => {
-    if (
-      volume.index !== index ||
-      !Number.isInteger(volume.bytes) ||
-      volume.bytes < 0 ||
-      volume.bytes > 1024 * 1024
-    )
-      throw new Error(`Invalid/missing volume: ${file.name}/${index}`);
-    const bytes = gunzipSync(Buffer.from(volume.gzipBase64, 'base64'), {
-      maxOutputLength: 1024 * 1024,
-    });
-    if (bytes.length !== volume.bytes || hash(bytes) !== volume.sha256)
-      throw new Error(`Volume integrity failure: ${file.name}/${index}`);
-    return bytes;
-  });
-  const bytes = Buffer.concat(parts);
-  if (hash(bytes) !== file.sha256) throw new Error(`File integrity failure: ${file.name}`);
-  if (file.status === 'incomplete_last_line' || file.status === 'incomplete_snapshot')
-    failures.push({
-      name: file.name,
-      status: file.status,
-      error: file.error,
-      durability: file.durability,
-      scope: file.scope,
-    });
-  if (file.format === 'obs-log-text/1') {
-    const offset = Number(file.utcOffsetMinutes);
-    const origin = Date.parse(file.sessionStartedAt);
-    const valid = Number.isFinite(origin) && Number.isInteger(offset) && Math.abs(offset) <= 840;
-    let day = valid ? Math.floor((origin + offset * 60000) / 86400000) * 86400000 : 0;
-    let previousClock = null;
-    let lastTime = null;
-    let uncertain = !valid;
-    let sourceLine = 0;
-    for (const line of bytes.toString('utf8').split('\n')) {
-      sourceLine++;
-      const stamp = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?:/.exec(line);
-      if (stamp) {
-        const hour = Number(stamp[1]),
-          minute = Number(stamp[2]),
-          second = Number(stamp[3]);
-        const clock =
-          ((hour * 60 + minute) * 60 + second) * 1000 + Number((stamp[4] ?? '').padEnd(3, '0'));
-        if (hour > 23 || minute > 59 || second > 59) uncertain = true;
-        if (previousClock !== null && clock < previousClock - 1000) {
-          if (previousClock >= 20 * 3600000 && clock <= 4 * 3600000) day += 86400000;
-          else uncertain = true;
-        }
-        previousClock = clock;
-        lastTime = uncertain ? null : new Date(day + clock - offset * 60000).toISOString();
-      }
-      timeline.push({
-        file: file.name,
-        sourceLine,
-        stage: 'obs_log_line',
-        time: lastTime,
-        timestampStatus: uncertain
-          ? 'uncertain'
-          : stamp
-            ? 'source-local-clock'
-            : 'inherited-or-unavailable',
-        text: line,
-      });
-    }
-    continue;
-  }
-  if (file.name.endsWith('.json')) {
-    const value = JSON.parse(bytes.toString('utf8'));
-    for (const group of value.groups ?? [])
-      for (const event of group.events ?? []) timeline.push({ file: file.name, ...event });
-    continue;
-  }
-  let session = null;
-  for (const line of bytes.toString('utf8').split('\n').filter(Boolean)) {
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      event = { stage: 'unstructured_or_partial_record', text: line };
-    }
-    collectConsole(event, file);
-    if (event.stage === 'native_host_records' && Array.isArray(event.evidence?.entries))
-      for (const copied of event.evidence.entries) collectConsole(copied?.entry, file);
-    const rawDetail = event.error ?? event.detail;
-    if (typeof rawDetail === 'string') {
-      try {
-        const detail = JSON.parse(rawDetail);
-        if (
-          typeof detail.detailId === 'string' &&
-          Number.isInteger(detail.part) &&
-          Number.isInteger(detail.parts)
-        ) {
-          const group = fragments.get(detail.detailId) ?? {
-            event: { file: file.name, ...event },
-            expected: detail.parts,
-            parts: new Map(),
-          };
-          group.parts.set(detail.part, detail.text);
-          fragments.set(detail.detailId, group);
-        }
-      } catch {
-        /* Non-JSON native details remain in the timeline. */
-      }
-    }
-    session = event.startupSessionId ?? session;
-    const source = event.stage?.startsWith('performance_anomaly_')
-      ? event.evidence?.sourceRecord
-      : null;
-    const validSource =
-      source &&
-      typeof source.id === 'string' &&
-      /^[a-f0-9-]{36}$/i.test(source.id) &&
-      typeof source.time === 'string' &&
-      Number.isFinite(Date.parse(source.time));
-    timeline.push({
-      file: file.name,
-      ...event,
-      startupSessionId: session,
-      sourceDurability: file.durability ?? 'session-log',
-      sourceScope: file.scope,
-      ...(validSource
-        ? {
-            time: source.time,
-            persistedAt: event.sequence ? event.time : null,
-            sourceRecordId: source.id,
-            sourceStartupSessionId: source.sessionId,
-            sourceHostStartupSessionId: source.hostSessionId,
-            sourceSequence: source.recordSequence,
-            sourceQueuedAfterSequence: source.queuedAfterSequence,
-            sourceMonotonicMs: source.monotonicMs,
-            sourceDurability: file.durability ?? 'session-log',
-          }
-        : {}),
-    });
-  }
-}
-for (const [id, group] of fragments) {
-  if (
-    group.parts.size !== group.expected ||
-    [...group.parts.keys()].some((index) => index < 1 || index > group.expected)
-  ) {
-    failures.push({
-      detailId: id,
-      status: 'missing_detail_parts',
-      expected: group.expected,
-      included: group.parts.size,
-    });
-    continue;
-  }
-  const text = [...group.parts.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([, text]) => text)
-    .join('');
-  timeline.push({ ...group.event, reconstructedDetail: text, detailId: id, reconstructed: true });
-}
-for (const [id, group] of consoleLines) {
-  const parts = [...group.parts.entries()].sort(([a], [b]) => a - b);
-  const first = parts[0]?.[1];
-  if (!first) continue;
-  const missing = Array.from({ length: group.expected }, (_, index) => index + 1).filter(
-    (index) => !group.parts.has(index),
-  );
-  if (missing.length)
-    failures.push({ sourceRecordId: id, status: 'missing_console_parts', missing });
-  timeline.push({
-    ...first,
-    stage: 'cs2_console_line',
-    sourceRecordId: `console:${id}`,
-    text: parts.map(([, part]) => part.text).join(''),
-    part: undefined,
-    time:
-      typeof first.capturedAt === 'string' && Number.isFinite(Date.parse(first.capturedAt))
-        ? first.capturedAt
-        : null,
-    sourceAfterUtc: first.sourceAfterUtc,
-    timestampStatus: 'capture upper bound; exact engine event UTC unavailable',
-    complete: missing.length === 0,
-    missingParts: missing,
-    scope:
-      'recognized technical lines from a verified managed game; raw console/chat/unknown lines excluded',
-  });
-}
-const time = (event) => {
-  const value = Date.parse(event.recordedAt ?? event.timestamp ?? event.time);
-  return Number.isFinite(value) ? value : typeof event.time === 'number' ? event.time : 0;
-};
-// Keep the broad original local record ahead of any cloud-filtered retained
-// copy or unconfirmed memory duplicate. The archive itself preserves every copy.
-function priority(event) {
-  return (
-    { 'session-log': 0, 'durable-pending': 1, 'durable-outbox': 2, 'memory-only': 3 }[
-      event.sourceDurability ?? 'session-log'
-    ] ?? 4
-  );
-}
-const unique = new Map();
-const unkeyed = [];
-for (const event of timeline) {
-  const identity = event.sourceRecordId
-    ? `source:${event.sourceRecordId}`
-    : event.startupSessionId && Number.isSafeInteger(event.sequence)
-      ? `journal:${event.startupSessionId}:${event.sequence}:${event.reconstructed ? 'reconstructed' : 'original'}`
-      : null;
-  if (!identity) {
-    unkeyed.push(event);
-    continue;
-  }
-  const previous = unique.get(identity);
-  if (!previous || priority(event) < priority(previous)) unique.set(identity, event);
-}
-timeline = [...unkeyed, ...unique.values()];
-timeline.sort(
-  (a, b) =>
-    time(a) - time(b) ||
-    (a.sourceSequence ?? a.sequence ?? 0) - (b.sourceSequence ?? b.sequence ?? 0),
-);
-for (const event of timeline) process.stdout.write(JSON.stringify(event) + '\n');
-process.stderr.write(
-  JSON.stringify({
-    records: timeline.length,
-    sessions: bundle.fullLogs.sessions,
-    files: failures,
-    health: bundle.sessionLogHealth,
-    completeness: bundle.fullLogs.completeness,
-  }) + '\n',
-);

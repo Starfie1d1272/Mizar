@@ -72,6 +72,7 @@ export interface ObsOutputStatus {
   readonly revision: string;
 }
 export interface ObsOutputsStatus {
+  readonly preparation?: 'checking' | 'cleanup_pending' | null;
   readonly stream: ObsOutputStatus;
   readonly record: ObsOutputStatus;
 }
@@ -92,4 +93,13 @@ export interface ObsCaptureDiagnostic {
     readonly code: number | null;
   } | null;
   readonly owner: 'unknown';
+}
+
+/** Independent observations for setup guidance. Unknown is never inferred as stopped. */
+export interface ObsConnectionFacts {
+  readonly executable: 'found' | 'not_found' | 'unknown';
+  readonly process: 'running' | 'stopped' | 'unknown';
+  readonly listener: 'reachable' | 'refused' | 'unknown';
+  readonly authentication: 'accepted' | 'required' | 'rejected' | 'unknown';
+  readonly resources: 'ready' | 'needs_configuration' | 'unknown';
 }

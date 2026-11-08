@@ -1,5 +1,4 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
-use crate::host_state::HostState;
 use crate::{
     cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
     preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
@@ -160,11 +159,12 @@ pub(crate) async fn launch_mulnx(
                     let ticket = preparation_gate::preparation_ticket(&app, id)?;
                     app.state::<preparation_gate::PreparationGate>()
                         .commit(Some(id), || {
-                            app.state::<production_exit::ExitGate>()
-                                .commit(ticket, || mulnx_launch::resume(&app, &log))
+                            app.state::<production_exit::ExitGate>().commit(ticket, || {
+                                mulnx_launch::resume(&app, &log, preparation_id.as_deref())
+                            })
                         })
                 }
-                None => mulnx_launch::resume(&app, &log),
+                None => mulnx_launch::resume(&app, &log, preparation_id.as_deref()),
             }
         } else {
             mulnx_launch::launch(
@@ -243,7 +243,7 @@ pub(crate) async fn replace(
         }
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        production_exit::prepare_external_entry(&log, &expected_revision)?;
+        production_exit::prepare_external_entry(&log, &expected_revision, &preparation_id)?;
         cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard)
     })
     .await
@@ -327,15 +327,11 @@ pub(crate) async fn start(
                             }),
                         };
                         guard.check()?;
-                        let result = cs2.start_preparation(
+                        cs2.start_preparation(
                             preserve_settings.unwrap_or(false),
                             preparation_id.as_deref(),
                             &guard,
-                        );
-                        if let Ok(mut tracker) = app.state::<HostState>().tracker.lock() {
-                            tracker.preserve_settings = cs2.preserve_settings();
-                        }
-                        result
+                        )
                     },
                 )
             }

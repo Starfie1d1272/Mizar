@@ -368,13 +368,11 @@ test('support bundle exports classified queue recovery without remote body or cr
   registerSupportRoutes(app, {
     originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
     logsDirectory: dir,
-    flushBusinessLog: () => journal.flush(),
     runtimeSummary: () => ({}) as never,
     recorder: () => ({}) as never,
     delivery: () => [],
     hosts: () => ({ active: {}, totals: {} }) as never,
     obs: async () => undefined,
-    nativeObs: async () => ({}) as never,
     gsiConfigured: false,
   });
   const response = await app.inject({

@@ -19,16 +19,6 @@ pub const LAUNCH_ARGS: &[&str] = &[
     "-allow_third_party_software",
     "-worldwide",
 ];
-// Preserving video settings still requires the capture compatibility flag for
-// this launch. These arguments never change Steam's saved launch options.
-const PRESERVED_LAUNCH_ARGS: &[&str] = &[
-    "-applaunch",
-    "730",
-    "-console",
-    "-allow_third_party_software",
-    "-worldwide",
-];
-
 const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
 
 // Fixed scripts only: no paths supplied by the webview are interpolated as code.
@@ -77,7 +67,7 @@ $nativeSteam = $env:MIZAR_NATIVE_STEAM | ConvertFrom-Json
     Ok(output)
 }
 
-fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
+pub(crate) fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
     Ok(!cs2_pids(log)?.is_empty())
 }
 
@@ -99,6 +89,165 @@ impl SteamLaunch {
         }
         Ok(())
     }
+}
+
+impl SteamLaunch {
+    fn validate_window_options(
+        &self,
+        size: crate::cs2_video::VideoSize,
+        protect_previous_console: bool,
+        log: &crate::startup_log::DesktopLog,
+    ) -> Result<(), String> {
+        let output = powershell(
+            r#"
+$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam
+$path = Join-Path (Split-Path -Parent $context.executable) ('userdata\' + $context.account + '\config\localconfig.vdf')
+$options = ''
+if (Test-Path -LiteralPath $path -ErrorAction Stop) {
+  $file = Get-Item -LiteralPath $path -ErrorAction Stop
+  if (!$file.PSIsContainer -and $file.Length -le 8MB) {
+    $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
+    $tokens = @([regex]::Matches($text, '"(?:\\.|[^"\\])*"|[{}]|//[^\r\n]*|[^\s{}"]+') | ForEach-Object { $_.Value } | Where-Object { -not $_.StartsWith('//') })
+    $data = Read-SteamVdfObject $tokens @{ Index = 0 }
+    foreach ($key in @('UserLocalConfigStore','Software','Valve','Steam','apps','730')) {
+      if ($null -eq $data) { break }
+      if ($data -isnot [hashtable]) { throw 'steam-launch-options-invalid' }
+      $data = $data[$key]
+    }
+    if ($null -ne $data) {
+      if ($data -isnot [hashtable]) { throw 'steam-launch-options-invalid' }
+      if ($data.ContainsKey('LaunchOptions')) {
+        if ($data.LaunchOptions -isnot [string] -or $data.LaunchOptions.Length -gt 65536) { throw 'steam-launch-options-invalid' }
+        $options = $data.LaunchOptions
+      }
+    }
+  } else { throw 'steam-launch-options-invalid' }
+}
+@{account=$context.account; options=$options} | ConvertTo-Json -Compress
+"#,
+            &self.process,
+            Some(self.account),
+            log,
+        )?;
+        let value = crate::powershell::parse(log, "Steam 窗口启动参数核验", &output)?;
+        if value["account"].as_u64() != Some(u64::from(self.account)) {
+            return Err(steam_failure(log, "steam-account-unavailable"));
+        }
+        check_steam_window_options(
+            value["options"]
+                .as_str()
+                .ok_or("无法核实 Steam 启动参数。")?,
+            size,
+            protect_previous_console,
+        )
+    }
+}
+
+// Saved Steam options are read-only. Use Windows' own argument parser rather
+// than rejecting valid quoting or guessing the priority of duplicate switches.
+fn check_steam_window_options(
+    options: &str,
+    size: crate::cs2_video::VideoSize,
+    protect_previous_console: bool,
+) -> Result<(), String> {
+    use windows::{
+        core::PCWSTR,
+        Win32::{
+            Foundation::{LocalFree, HLOCAL},
+            UI::Shell::CommandLineToArgvW,
+        },
+    };
+    let error = "无法安全核实 Steam 窗口启动参数，请检查 CS2 的启动选项后重试。";
+    if options.len() > 65536 || options.contains(['\r', '\n', '\0']) {
+        return Err(error.into());
+    }
+    let command: Vec<u16> = format!("cs2.exe {options}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut count = 0;
+    let arguments = unsafe { CommandLineToArgvW(PCWSTR(command.as_ptr()), &mut count) };
+    if arguments.is_null() {
+        return Err(error.into());
+    }
+    let words = if (1..=257).contains(&count) {
+        unsafe { std::slice::from_raw_parts(arguments.add(1), (count - 1) as usize) }
+            .iter()
+            .map(|word| unsafe { word.to_string() }.map(|word| word.to_ascii_lowercase()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| error.to_string())
+    } else {
+        Err(error.to_string())
+    };
+    unsafe { LocalFree(Some(HLOCAL(arguments.cast()))) };
+    let words = words?;
+    check_steam_window_arguments(&words, size)?;
+    if protect_previous_console {
+        check_console_preserving_arguments(&words)?;
+    }
+    Ok(())
+}
+
+// We cannot override Steam's saved options without changing the user's settings.
+// Only this explicit conflict, not optional archive failure, may stop submission.
+fn check_console_preserving_arguments(words: &[String]) -> Result<(), String> {
+    if words.iter().any(|word| {
+        let flag = word.split(['=', ':']).next().unwrap_or(word);
+        matches!(
+            flag,
+            "-condebug" | "-conclearlog" | "+con_logfile" | "+con_logfile_open"
+        )
+    }) {
+        return Err("上一场原始控制台未能归档，而 Steam 已保存的启动选项仍会写入或清空日志。请先归档 console.log，或移除 -condebug、-conclearlog 及 con_logfile 启动参数后重试；原日志和配置备份已保留。".into());
+    }
+    Ok(())
+}
+
+fn check_steam_window_arguments(
+    words: &[String],
+    size: crate::cs2_video::VideoSize,
+) -> Result<(), String> {
+    let error = "Steam 已保存的窗口启动参数与工作台冲突。请在 Steam 的 CS2 启动选项中移除全屏和尺寸覆盖后重试；启动前的配置修改仍可恢复。";
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i].as_str();
+        if matches!(
+            word,
+            "-fullscreen" | "-full" | "-border" | "+mat_setvideomode" | "+r_fullscreen"
+        ) || word == "%command%"
+        {
+            return Err(error.into());
+        }
+        let expected = match word {
+            "-w" | "-width" => Some(size.width),
+            "-h" | "-height" => Some(size.height),
+            _ => None,
+        };
+        if let Some(expected) = expected {
+            i += 1;
+            if words.get(i).and_then(|value| value.parse::<i32>().ok()) != Some(expected) {
+                return Err(error.into());
+            }
+        } else if word.split_once('=').is_some_and(|(flag, _)| {
+            matches!(
+                flag,
+                "-w" | "-width"
+                    | "-h"
+                    | "-height"
+                    | "-fullscreen"
+                    | "-full"
+                    | "-windowed"
+                    | "-window"
+                    | "-sw"
+                    | "-noborder"
+                    | "-border"
+            )
+        }) {
+            return Err(error.into());
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 fn discover(
@@ -286,6 +435,15 @@ fn identity(
     process: &Process,
     log: &crate::startup_log::DesktopLog,
 ) -> Result<(u64, PathBuf), String> {
+    read_identity(process, log)?
+        .ok_or_else(|| "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into())
+}
+/// A temporarily unreadable image is unknown, never proof that the process is absent.
+/// Only the submitted-launch observer may wait for another complete observation.
+fn read_identity(
+    process: &Process,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<Option<(u64, PathBuf)>, String> {
     let mut created = FileTime::default();
     let mut exit = FileTime::default();
     let mut kernel = FileTime::default();
@@ -302,18 +460,23 @@ fn identity(
     let mut buffer = vec![0u16; 32768];
     let mut len = buffer.len() as u32;
     if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut len) } == 0 {
-        return Err(identity_failure(
+        let code = unsafe { GetLastError() };
+        let message = identity_failure(
             log,
             process,
             "QueryFullProcessImageNameW",
             "无法确认进程程序路径。",
             Some(((created.high as u64) << 32) | created.low as u64),
-        ));
+        );
+        if code == 5 && unsafe { WaitForSingleObject(process.0, 0) } == 258 {
+            return Ok(None);
+        }
+        return Err(message);
     }
-    Ok((
+    Ok(Some((
         ((created.high as u64) << 32) | created.low as u64,
         PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
-    ))
+    )))
 }
 fn identity_failure(
     log: &crate::startup_log::DesktopLog,
@@ -607,7 +770,6 @@ pub struct ManagedCs2 {
     log: crate::startup_log::DesktopLog,
     message: Option<String>,
     launch_observation: Option<Value>,
-    can_preserve: bool,
     selected_backup: Option<Value>,
     camera: Arc<Mutex<Option<CameraLease>>>,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
@@ -719,7 +881,6 @@ impl ManagedCs2 {
             log,
             message: None,
             launch_observation: None,
-            can_preserve: false,
             selected_backup: None,
             camera: Arc::new(Mutex::new(None)),
             mulnx_launcher: None,
@@ -1008,13 +1169,23 @@ impl ManagedCs2 {
         Ok(!process_pids("CS2Injector.exe", &self.log)?.is_empty())
     }
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
+        self.observe_mulnx_handoff()?
+            .ok_or_else(|| "CS2 程序路径暂时无法读取，请稍后重试准备；本次启动记录仍保留。".into())
+    }
+    /// None retains the whole unknown snapshot, including possible extra instances.
+    pub(crate) fn observe_mulnx_handoff(&self) -> Result<Option<Value>, String> {
         let owned = self.workspace_process()?;
         let mut processes = Vec::new();
         for pid in cs2_pids(&self.log)? {
             let Some(process) = open(pid, &self.log)? else {
                 continue;
             };
-            let (created, executable) = identity(&process, &self.log)?;
+            if unsafe { WaitForSingleObject(process.0, 0) } == 0 {
+                continue;
+            }
+            let Some((created, executable)) = read_identity(&process, &self.log)? else {
+                return Ok(None);
+            };
             if unsafe { WaitForSingleObject(process.0, 0) } != 258
                 || !executable
                     .file_name()
@@ -1028,8 +1199,26 @@ impl ManagedCs2 {
             processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed}));
         }
         // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
-        Ok(json!({"processes": processes, "url": "http://127.0.0.1:3000/"}))
+        Ok(Some(
+            json!({"processes": processes, "url": "http://127.0.0.1:3000/"}),
+        ))
     }
+    /// Request capability only; every launch repeats discovery, these guards and backup.
+    /// Never run PowerShell or create recovery work while polling status.
+    fn check_preserved_start(&self) -> Result<(), String> {
+        self.store.check_start_recovery()?;
+        if !fs::symlink_metadata(self.log.state_root.join("data/mulnx-launch/pending.json"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            || self.mulnx_launcher_running()?
+        {
+            return Err("请先确认并结束原启动请求，再使用当前设置启动。".into());
+        }
+        if any_cs2_running(&self.log)? {
+            return Err("请先正常退出 CS2，再使用当前设置启动。".into());
+        }
+        Ok(())
+    }
+
     pub fn status(&self) -> Result<Value, String> {
         let pending = self.store.load()?;
         let owned_running = pending
@@ -1075,7 +1264,7 @@ impl ManagedCs2 {
             false
         };
         Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": self.can_preserve && pending.is_none(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
+            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": pending.is_none() && self.check_preserved_start().is_ok(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
     pub fn preferences(
@@ -1247,7 +1436,12 @@ impl ManagedCs2 {
                 return Err("请先关闭 CS2 和 MulNX 启动器，再恢复配置。".into());
             }
             let executable = value["executable"].as_str().ok_or("游戏路径记录缺失。")?;
-            crate::production_exit::prepare_mulnx(&self.log, Path::new(executable), false, false)?;
+            // An unsubmitted launch can be recovered while its workspace is
+            // already live. Only its own still-active preparation grants access.
+            let preparation = value["preparationId"]
+                .as_str()
+                .and_then(|id| crate::preparation_task::mulnx_context(id).ok());
+            crate::production_exit::cleanup_mulnx(&self.log, Path::new(executable), preparation)?;
             std::fs::remove_file(self.log.state_root.join("data/mulnx-launch/pending.json"))
                 .map_err(|_| "MulNX 启动记录无法清理，原备份仍保留。")?;
         }
@@ -1263,11 +1457,9 @@ impl ManagedCs2 {
                 value["pid"] = json!(pid);
                 value["created"] = json!(created);
                 self.store.save(&value)?;
-                self.message = if value["preserveSettings"] == true {
-                    Some("已保持原游戏设置；未应用自动画质、帧率和游戏窗口布局，本机 HUD 覆盖已停用。".into())
-                } else {
-                    None
-                };
+                // Running and preserveSettings already describe a successful launch.
+                // Retire the pending-launch message; do not turn success into recovery feedback.
+                self.message = None;
             } else if !confirm_steam_cancelled {
                 self.message = Some("正在等待 Steam 启动 CS2；配置较低或网络较慢时可能需要更久。Mizar 会继续跟踪；如需取消，请先取消 Steam 启动请求，再恢复备份。".into());
                 return Ok(());
@@ -1374,7 +1566,7 @@ impl ManagedCs2 {
             self.message = Some(format!(
                 "{} {}",
                 if value["preserveSettings"] == true {
-                    "本次启动已结束，游戏设置保持不变；观战原值仍待恢复。"
+                    "本次受管设置已恢复，画质与帧率未接管；观战原值仍待恢复。"
                 } else {
                     "帧率与画质已恢复，观战原值仍待恢复。"
                 },
@@ -1489,12 +1681,6 @@ impl ManagedCs2 {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
     }
-    pub fn preserve_settings(&self) -> bool {
-        // Corrupt/unreadable journals must also prevent automatic game layout.
-        self.store.load().map_or(true, |value| {
-            value.is_some_and(|v| v["preserveSettings"] == true)
-        })
-    }
     pub fn start(&mut self) -> Result<bool, String> {
         self.start_with_settings(false)
     }
@@ -1591,6 +1777,7 @@ impl ManagedCs2 {
         {
             return Err("游戏身份已变化，未提交启动。".into());
         }
+        self.store.validate_video_launch()?;
         if journal["spectatorCfg"] == true {
             self.store.validate_spectator_launch()?;
             self.store.spectator_load_attempted(true)?;
@@ -1762,8 +1949,8 @@ impl ManagedCs2 {
         if preparation_id.is_some_and(|id| !valid_preparation_id(id)) {
             return Err("启动事务标识无效。".into());
         }
-        if preserve && !self.can_preserve {
-            return Err("请先检查配置接管结果，再选择保持原游戏设置继续。".into());
+        if preserve {
+            self.check_preserved_start()?;
         }
         if let Some(value) = self.store.load()? {
             if owned_process(&value, &self.log)?.is_some() {
@@ -1781,9 +1968,9 @@ impl ManagedCs2 {
             self.retry_source_retire()?;
             self.retry_source_cancel()?;
         }
-        if !preserve {
-            // Finish any legacy runtime journal before a new native-toggle session.
-            crate::observer_hud::restore(&self.log)?;
+        let hud_recovery_warning = crate::observer_hud::prepare_launch(&self.log)?;
+        if let Some(error) = &hud_recovery_warning {
+            self.log.event("observer_hud", "degraded", Some(&json!({"stage":"prepare_launch", "code":"previous_record_unavailable", "error":error, "automaticHudWrites":false, "gameLaunchContinues":true}).to_string()));
         }
 
         let (executable, video, steam) = discover(&self.log)?;
@@ -1791,37 +1978,39 @@ impl ManagedCs2 {
             return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
         }
         self.message = None;
-        let size = if preserve {
-            None
-        } else {
-            {
-                Some(crate::windows_host::launch_viewport()?)
-            }
-        };
+        let size = crate::windows_host::launch_viewport()?;
+        if !prepare_only {
+            steam.validate_window_options(size, false, &self.log)?;
+        }
         let mut journal = if preserve {
-            self.store.prepare_preserved(&video, &executable)?
+            // The status action is only an invitation. Rediscovery above and these
+            // current transaction/process checks, not an earlier failure, authorize it.
+            self.check_preserved_start()?;
+            steam.validate(&self.log)?;
+            self.store.prepare_preserved(&video, &executable, size)?
         } else {
-            self.can_preserve = false;
             self.store.backup_originals(&video)?;
-            match self.store.prepare_backed_up(
-                &video,
-                &executable,
-                size.ok_or("工作台游戏尺寸缺失。")?,
-            ) {
+            match self.store.prepare_backed_up(&video, &executable, size) {
                 Ok(value) => value,
                 Err(error) => {
-                    self.can_preserve = self.store.load()?.is_none();
                     self.message = Some(error.clone());
                     self.log.event(
                         "cs2_launch",
                         "failure",
                         Some(&format!("stage=prepare; {error}")),
                     );
-                    return Err(error);
+                    return Err(if self.check_preserved_start().is_ok() {
+                        "游戏设置未能自动调整。可展开“保留画质与帧率”继续，本机 HUD 仍可使用。"
+                            .into()
+                    } else {
+                        "游戏设置准备未完成，请先恢复本次设置后重试。".into()
+                    });
                 }
             }
         };
-        self.can_preserve = false;
+        if let Some(error) = hud_recovery_warning {
+            journal["hudRecoveryWarning"] = json!(error);
+        }
         if prepare_only {
             journal["mulnxLaunch"] = json!(true);
         }
@@ -1884,16 +2073,16 @@ impl ManagedCs2 {
             Ok(Some(prepared)) => journal["consoleDiagnostics"] = prepared,
             Ok(None) => (),
             Err(error) => {
-                if error.starts_with("raw_console_preservation_failed:") {
-                    self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":false}).to_string()));
-                    journal["consoleDiagnosticsWarning"] =
-                        json!({"code":"raw_preservation_failed","error":error});
-                    self.store.save(&journal)?;
-                    return Err(format!("上一场原始控制台尚未安全保存，已停止启动 CS2。请归档 console-history 或检查磁盘后重试。{error}"));
-                }
-                self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"condebugRequested":false,"gameLaunchContinues":true}).to_string()));
-                journal["consoleDiagnosticsWarning"] =
-                    json!({"code":"source_prepare_failed","error":error});
+                // Optional evidence must not gate gameplay. Keep the old raw file
+                // untouched and disable this launch's capture, including MulNX.
+                journal["consoleDiagnostics"] = Value::Null;
+                let code = if error.starts_with("raw_console_preservation_failed:") {
+                    "raw_preservation_failed"
+                } else {
+                    "source_prepare_failed"
+                };
+                self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"code":code,"condebugRequested":false,"gameLaunchContinues":true}).to_string()));
+                journal["consoleDiagnosticsWarning"] = json!({"code":code,"error":error});
             }
         }
         self.store.save(&journal)?;
@@ -1987,20 +2176,20 @@ impl ManagedCs2 {
                     .parent()
                     .ok_or("Steam 程序目录无效。")?,
             );
-            if let Some(size) = size {
-                command.args(LAUNCH_ARGS).args([
-                    "-w",
-                    &size.width.to_string(),
-                    "-h",
-                    &size.height.to_string(),
+            command.args(LAUNCH_ARGS).args([
+                "-w",
+                &size.width.to_string(),
+                "-h",
+                &size.height.to_string(),
+            ]);
+            if !preserve {
+                command.args([
                     "+fps_max",
                     &journal["frameRateLimit"]
                         .as_u64()
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
                 ]);
-            } else {
-                command.args(PRESERVED_LAUNCH_ARGS);
             }
             if journal["spectatorCfg"] == true {
                 match self.store.spectator_load_attempted(true) {
@@ -2048,18 +2237,23 @@ impl ManagedCs2 {
             self.log.event("cs2_launch_arguments", "begin", Some(&json!({
                 "program": command.get_program().to_string_lossy(),
                 "arguments": command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect::<Vec<_>>(),
-                "preserveSettings": size.is_none(), "runtime":"unverified",
+                "preserveSettings": preserve, "runtime":"unverified",
                 "argumentsScope":"requested-steam-command",
                 "steamInheritedArguments":"unobserved", "actualGameArguments":"unobserved"
             }).to_string()));
-            // Recheck the account and saved key identity immediately before submission.
-            steam.validate(&self.log)?;
+            // Recheck the account, saved Steam arguments and key identity before submission.
+            steam.validate_window_options(
+                size,
+                !journal["consoleDiagnosticsWarning"].is_null(),
+                &self.log,
+            )?;
             if any_cs2_running(&self.log)? {
                 return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
             }
             if journal["spectatorCfg"] == true {
                 self.store.validate_spectator_launch()?;
             }
+            self.store.validate_video_launch()?;
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
             let mut time = FileTime::default();
@@ -2281,7 +2475,6 @@ impl ManagedCs2 {
         self.store
             .import_selected_backup(&video, &executable, backup, original, frame)?;
         self.selected_backup = None;
-        self.can_preserve = false;
         self.message = Some("所选设置已恢复，恢复前的原件已保存。".into());
         Ok(())
     }
@@ -2329,7 +2522,7 @@ impl ManagedCs2 {
                     }
                     // A crash can leave +exec in MulNX even after a game PID was recorded.
                     // Reconcile the owned launch option before clearing the key backup.
-                    crate::production_exit::prepare_mulnx(&self.log, &executable, false, false)
+                    crate::production_exit::cleanup_mulnx(&self.log, &executable, None)
                         .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
                     self.store.mark_mulnx_options_clean()?;
                     if any_cs2_running(&self.log)?

@@ -5,7 +5,7 @@ import {
 } from './retention.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import type { FastifyInstance } from 'fastify';
-import { DiagnosticDelivery, type RetainedDiagnosticBatch } from './delivery.js';
+import { DiagnosticDelivery } from './delivery.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
@@ -19,6 +19,7 @@ export function registerDiagnosticDelivery(
     fetch?: typeof fetch;
     onConsent?: () => Promise<void>;
     incidentParticipants?: () => IncidentParticipant[];
+    deliveryParticipants?: () => IncidentParticipant[];
     onReport?: (report: { category: string; observedAt: string }) => void;
   },
 ) {
@@ -58,10 +59,21 @@ export function registerDiagnosticDelivery(
     // Diagnostics initialization never holds service readiness or live controls.
     initializing = (async () => {
       try {
+        await incidentPins?.recover(participants(), (pinId) => [
+          hostIncidentParticipant(directory, pinId),
+        ]);
+      } catch (error) {
+        journal.record('problem_report_pin_failure', {
+          phase: 'recover',
+          error: diagnosticValue(error),
+        });
+      }
+      try {
         delivery = new DiagnosticDelivery(directory, journal, {
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
           ...(options.onConsent ? { onConsent: options.onConsent } : {}),
+          participants: options.deliveryParticipants ?? (() => [journal.deliveryParticipant()]),
         });
         await delivery.initialize();
         ready = true;
@@ -263,13 +275,6 @@ export function registerDiagnosticDelivery(
       error: ready ? (delivery?.status().error ?? null) : failure,
       delivery: ready ? (delivery?.status() ?? null) : null,
     }),
-    async retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
-      await initializing;
-      if (!options.directory) return [];
-      if (!ready || !delivery)
-        return [{ id: null, sourceBytes: 0, error: failure ?? 'queue_not_ready' }];
-      return delivery.retainedBatches();
-    },
     async close() {
       closing = true;
       ready = false;

@@ -1,8 +1,20 @@
 .product-shell.mizar-tool-shell {
-  display: block;
-  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--mizar-bg-canvas);
   color: var(--mizar-fg-primary);
+}
+.mizar-tool-shell[data-context='true'] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.mizar-tool-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 .mizar-tool-heading,
 .mizar-tool-brand {
@@ -28,19 +40,6 @@
   z-index: 100;
 }
 
-.product-shell.mizar-tool-shell[data-fill='true'] {
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.mizar-tool-shell[data-fill='true'] > header,
-.mizar-tool-shell[data-fill='true'] > .session-context {
-  flex-shrink: 0;
-}
-.mizar-tool-shell[data-fill='true'] > #tool-content {
-  flex: 1;
-  min-height: 0;
+.mizar-tool-shell[data-fill='true'] > .mizar-tool-content {
   overflow: hidden;
 }

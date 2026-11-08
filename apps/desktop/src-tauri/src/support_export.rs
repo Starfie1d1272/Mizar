@@ -130,7 +130,10 @@ fn verify_handle_path(file: &File, path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-fn checked(path: &Path) -> io::Result<(File, String)> {
+pub(crate) fn checked(path: &Path) -> io::Result<(File, String)> {
+    checked_access(path, false)
+}
+fn checked_access(path: &Path, removing: bool) -> io::Result<(File, String)> {
     parents(path)?;
     let before = fs::symlink_metadata(path)?;
     if !before.is_file() || !plain(&before) {
@@ -142,7 +145,12 @@ fn checked(path: &Path) -> io::Result<(File, String)> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(0x00200000).share_mode(0x1);
+        if removing {
+            options.access_mode(0x80000000 | 0x00010000);
+        }
     }
+    #[cfg(not(windows))]
+    let _ = removing;
     let file = options.open(path)?;
     let file_id = identity(&file)?;
     #[cfg(windows)]
@@ -166,7 +174,7 @@ fn checked(path: &Path) -> io::Result<(File, String)> {
 // so a checked Windows directory cannot be renamed or replaced while reading.
 // FILE_FLAG_OPEN_REPARSE_POINT prevents following the final component.
 #[cfg(windows)]
-fn hold_directories(path: &Path) -> io::Result<Vec<File>> {
+pub(crate) fn hold_directories(path: &Path) -> io::Result<Vec<File>> {
     use std::os::windows::fs::OpenOptionsExt;
     let mut ancestors: Vec<_> = path.ancestors().collect();
     ancestors.reverse();
@@ -287,6 +295,141 @@ fn publish(_output: Pending, _target: &Path) -> io::Result<()> {
     Err(io::Error::other("native diagnostic save requires Windows"))
 }
 
+/// Internal diagnostic metadata uses the same checked handles as export saving.
+pub(crate) fn remove_metadata(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    let _parents = hold_directories(
+        path.parent()
+            .ok_or_else(|| io::Error::other("diagnostic parent missing"))?,
+    )?;
+    let (file, id) = match checked_access(path, true) {
+        Ok(value) => value,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    remove_open_metadata(path, &file, &id)
+}
+
+fn remove_open_metadata(path: &Path, file: &File, id: &str) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        let _ = (path, id);
+        let delete: u8 = 1;
+        if unsafe {
+            SetFileInformationByHandle(file.as_raw_handle(), 4, &delete as *const _ as *const _, 1)
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let (named, named_id) = checked(path)?;
+        if named_id != id {
+            return Err(io::Error::other("diagnostic metadata identity changed"));
+        }
+        let _ = (file, named);
+        fs::remove_file(path)
+    }
+}
+pub(crate) fn write_metadata(path: &Path, value: &serde_json::Value) -> io::Result<()> {
+    parents(path)?;
+    #[cfg(windows)]
+    let _parents = hold_directories(
+        path.parent()
+            .ok_or_else(|| io::Error::other("diagnostic parent missing"))?,
+    )?;
+    let temporary = path.with_extension("partial");
+    remove_metadata(&temporary)?;
+    let mut output = create_pending(&temporary, false)?;
+    serde_json::to_writer(&mut output.0, value)?;
+    output.0.sync_all()?;
+    // Once complete, retain the replacement across publish errors or process exit.
+    // The owner can recover this receipt; deleting it after removing the old one
+    // would discard the only durable protection record.
+    output.1 = true;
+    remove_metadata(path)?;
+    #[cfg(windows)]
+    {
+        publish(output, path)
+    }
+    #[cfg(not(windows))]
+    {
+        let (_, named_id) = checked(&temporary)?;
+        if identity(&output.0)? != named_id {
+            return Err(io::Error::other("diagnostic metadata identity changed"));
+        }
+        fs::rename(&temporary, path)?;
+        output.1 = true;
+        Ok(())
+    }
+}
+
+/// Publish an already validated, complete internal receipt without overwriting
+/// an existing target. Keep the original temporary file on every failure.
+pub(crate) fn recover_metadata(
+    temporary: &Path,
+    target: &Path,
+    expected: &serde_json::Value,
+    previous: Option<&serde_json::Value>,
+) -> io::Result<()> {
+    if temporary.parent() != target.parent() {
+        return Err(io::Error::other("diagnostic recovery directory mismatch"));
+    }
+    #[cfg(windows)]
+    let _parents = hold_directories(
+        target
+            .parent()
+            .ok_or_else(|| io::Error::other("diagnostic parent missing"))?,
+    )?;
+    let (mut file, id) = checked_access(temporary, true)?;
+    let actual: serde_json::Value =
+        serde_json::from_slice(&bounded_read(&mut file, MANIFEST_LIMIT)?)?;
+    if &actual != expected {
+        return Err(io::Error::other("diagnostic recovery source changed"));
+    }
+    match (previous, checked_access(target, true)) {
+        (Some(previous), Ok((mut old, old_id))) => {
+            let actual: serde_json::Value =
+                serde_json::from_slice(&bounded_read(&mut old, MANIFEST_LIMIT)?)?;
+            if &actual != previous {
+                return Err(io::Error::other("diagnostic recovery target changed"));
+            }
+            if previous == expected {
+                return remove_open_metadata(temporary, &file, &id);
+            }
+            remove_open_metadata(target, &old, &old_id)?;
+            // Close the exact deleted target before renaming on Windows.
+            drop(old);
+        }
+        (None, Err(error)) if error.kind() == io::ErrorKind::NotFound => (),
+        (_, Err(error)) => return Err(error),
+        (None, Ok(_)) => return Err(io::Error::other("diagnostic recovery target appeared")),
+    }
+    #[cfg(windows)]
+    {
+        let _ = id;
+        publish(Pending(file, true), target)
+    }
+    #[cfg(not(windows))]
+    {
+        if target.try_exists()? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "diagnostic recovery target exists",
+            ));
+        }
+        let (_, named_id) = checked(temporary)?;
+        if id != named_id {
+            return Err(io::Error::other("diagnostic metadata identity changed"));
+        }
+        let _ = file;
+        fs::rename(temporary, target)
+    }
+}
+
 fn bounded_read(file: &mut File, limit: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
@@ -330,6 +473,7 @@ pub struct PreparedExport {
     export_id: String,
     files: Vec<(String, u64, String, File)>,
     manifest_bytes: Vec<u8>,
+    single_file_name: Option<String>,
     _manifest: File,
     _lease: Pending,
     _directories: Vec<File>,
@@ -426,7 +570,18 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
     if manifest["outputBytes"].as_u64() != Some(total) {
         return Err(io::Error::other("export total does not match its parts"));
     }
+    let single_file_name = if files.len() == 1 {
+        Some(format!(
+            "mizar-support-{}.zip",
+            chrono::DateTime::from_timestamp_millis(created)
+                .ok_or_else(|| io::Error::other("invalid export creation time"))?
+                .format("%Y-%m-%dT%H-%M-%SZ")
+        ))
+    } else {
+        None
+    };
     Ok(PreparedExport {
+        single_file_name,
         export_id: export_id.to_owned(),
         files,
         manifest_bytes,
@@ -436,6 +591,9 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
     })
 }
 impl PreparedExport {
+    pub fn suggested_filename(&self) -> Option<&str> {
+        self.single_file_name.as_deref()
+    }
     /// Destination must come exclusively from the native dialog.
     pub fn save(self, destination: &Path) -> Result<(), String> {
         self.save_inner(destination).map_err(save_error)
@@ -446,20 +604,40 @@ impl PreparedExport {
             export_id,
             files,
             manifest_bytes,
+            single_file_name,
             _manifest,
             _lease,
             _directories,
         } = self;
-        let _destination_guard = hold_directories(destination)?;
-        let target = destination.join(format!("mizar-support-{export_id}"));
-        match fs::create_dir(&target) {
-            Ok(()) => (),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error),
+        let single = single_file_name.is_some();
+        let target = if single {
+            destination
+                .parent()
+                .ok_or_else(|| io::Error::other("save destination has no parent"))?
+                .to_path_buf()
+        } else {
+            destination.join(format!("mizar-support-{export_id}"))
+        };
+        let parent = if single {
+            target.as_path()
+        } else {
+            destination
+        };
+        let _destination_guard = hold_directories(parent)?;
+        if !single {
+            match fs::create_dir(&target) {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error),
+            }
         }
         let _target_guard = hold_directories(&target)?;
         for (name, bytes, digest, mut input) in files {
-            let final_path = target.join(&name);
+            let final_path = if single {
+                destination.to_path_buf()
+            } else {
+                target.join(&name)
+            };
             match fs::symlink_metadata(&final_path) {
                 Ok(_) => {
                     let (mut existing, _) = checked(&final_path)?;
@@ -478,6 +656,11 @@ impl PreparedExport {
             transfer(&mut input, Some(&mut pending.0), bytes, &digest)?;
             pending.0.sync_all()?;
             publish(pending, &final_path)?;
+        }
+        // A single ZIP already contains final coverage and indexes. The trusted source
+        // manifest stays private in the cache and is needed only for multi-volume delivery.
+        if single {
+            return Ok(());
         }
         // The manifest is the completion marker; publish only after every part succeeds.
         let final_path = target.join("generated.json");

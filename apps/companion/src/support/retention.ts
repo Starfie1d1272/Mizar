@@ -6,7 +6,7 @@ import { atomicJson, safePath } from '../resource-store/files.js';
 
 const UUID = /^[a-f0-9-]{36}$/;
 const immutableName =
-  /^(?:(?:session|desktop|document|migrated)-[a-f0-9-]{36}\.ndjson|performance-pending\/[a-f0-9-]{36}\.[a-f0-9]{4}\.gz)$/;
+  /^(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|performance-pending\/[a-f0-9-]{36}\.[a-f0-9]{4}\.gz)$/;
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 const META_LIMIT = 4 * 1024 * 1024;
 export interface SegmentMetadata {
@@ -115,6 +115,7 @@ async function describe(
 export class ProducerRetention {
   private state: ProducerInventory;
   private ready = false;
+  private readonly deliveryHolds = new Set<string>();
   private readonly name: string;
   constructor(
     private readonly root: string,
@@ -168,10 +169,13 @@ export class ProducerRetention {
     } catch (error) {
       if (!missing(error)) throw error;
     }
-    // Export leases cannot survive the owning process. Prepared incident reservations
-    // remain recoverable until their explicit deadline; committed incident pins never expire.
+    // Export and delivery leases cannot survive their owning process. Prepared
+    // incident reservations remain recoverable until their explicit deadline;
+    // committed incident pins never expire.
     this.state.pins = this.state.pins.filter(
-      (pin) => pin.kind !== 'export' && (pin.expiresAt === null || pin.expiresAt > now),
+      (pin) =>
+        !['export', 'delivery'].includes(pin.kind) &&
+        (pin.expiresAt === null || pin.expiresAt > now),
     );
     await this.finishDeletes();
     await this.save();
@@ -195,6 +199,37 @@ export class ProducerRetention {
       throw error;
     }
     return structuredClone(segment);
+  }
+  /** Extend the active run with the segment just registered in this same producer queue.
+   * Immutable bytes were verified by registerSegment; export/incident boundaries recheck them. */
+  async protectActiveSegment(pinId: string, name: string): Promise<void> {
+    await this.initialize();
+    if (!UUID.test(pinId)) throw new Error('retention_pin_invalid');
+    const segment = this.state.segments.find((value) => value.name === name);
+    if (!segment || segment.producerRunId !== pinId || this.state.deleting.includes(name))
+      throw new Error('retention_source_unregistered');
+    const previous = structuredClone(this.state.pins);
+    let pin = this.state.pins.find((value) => value.pinId === pinId);
+    if (pin && pin.kind !== 'active') throw new Error('retention_pin_identity_conflict');
+    if (!pin) {
+      pin = {
+        pinId,
+        producerId: this.producerId,
+        kind: 'active',
+        status: 'committed',
+        expiresAt: null,
+        segments: [],
+        confirmedAt: new Date().toISOString(),
+      };
+      this.state.pins.push(pin);
+    }
+    if (!pin.segments.some((value) => value.name === name)) pin.segments.push(segment);
+    try {
+      await this.save();
+    } catch (error) {
+      this.state.pins = previous;
+      throw error;
+    }
   }
   async preparePin(request: {
     pinId: string;
@@ -268,7 +303,7 @@ export class ProducerRetention {
     }
     const previous = structuredClone(receipt);
     receipt.status = 'committed';
-    if (receipt.kind !== 'export') receipt.expiresAt = null;
+    if (!['export', 'delivery'].includes(receipt.kind)) receipt.expiresAt = null;
     receipt.confirmedAt = new Date().toISOString();
     try {
       await this.save();
@@ -276,6 +311,9 @@ export class ProducerRetention {
       Object.assign(receipt, previous);
       throw error;
     }
+    // A running ACK transaction owns this hold through unlink, even after its
+    // admission deadline. A restarted producer discards delivery leases.
+    if (receipt.kind === 'delivery') this.deliveryHolds.add(pinId);
     return structuredClone(receipt);
   }
   async releasePin(pinId: string): Promise<void> {
@@ -288,6 +326,7 @@ export class ProducerRetention {
       this.state.pins = previous;
       throw error;
     }
+    this.deliveryHolds.delete(pinId);
   }
   private async finishDeletes() {
     for (const name of [...this.state.deleting]) {
@@ -361,7 +400,7 @@ export class ProducerRetention {
     const now = options.now ?? Date.now();
     await this.initialize(now);
     this.state.pins = this.state.pins.filter(
-      (pin) => pin.expiresAt === null || pin.expiresAt > now,
+      (pin) => this.deliveryHolds.has(pin.pinId) || pin.expiresAt === null || pin.expiresAt > now,
     );
     const pinned = new Set(
       this.state.pins.flatMap((pin) => pin.segments.map((value) => value.name)),
@@ -423,6 +462,7 @@ export interface IncidentReservation {
   status: 'preparing' | 'reserved' | 'committed' | 'partial';
   receipts: PinReceipt[];
   unavailable: string[];
+  failures?: { producerId: string; phase: string; at: string; cause: unknown }[];
 }
 /** One shared eight-mark/64MiB budget. Producers retain sole authority over their files. */
 export class IncidentPinCoordinator {
@@ -505,8 +545,8 @@ export class IncidentPinCoordinator {
             throw new Error('incident_receipt_invalid');
           mark.receipts.push(receipt);
           await this.save();
-        } catch {
-          mark.unavailable.push(producerId);
+        } catch (error) {
+          this.failure(mark, producerId, 'prepare', error);
         }
       }
       const physical = new Map<string, number>();
@@ -553,13 +593,36 @@ export class IncidentPinCoordinator {
       };
     });
   }
+  private failure(mark: IncidentReservation, producerId: string, phase: string, error: unknown) {
+    const reason = phase === 'prepare' ? producerId : `${producerId}:${phase}-unconfirmed`;
+    if (!mark.unavailable.includes(reason)) mark.unavailable.push(reason);
+    const cause = (value: unknown): unknown =>
+      value instanceof Error
+        ? {
+            name: value.name,
+            message: value.message,
+            ...('code' in value ? { code: value.code } : {}),
+            ...(value.cause === undefined ? {} : { cause: cause(value.cause) }),
+          }
+        : String(value);
+    mark.failures ??= [];
+    // Bounded attempt history; current blockers are represented separately.
+    if (mark.failures.length < 64)
+      mark.failures.push({ producerId, phase, at: new Date().toISOString(), cause: cause(error) });
+  }
   private async commit(mark: IncidentReservation, participants: IncidentParticipant[]) {
     for (let index = 0; index < mark.receipts.length; index++) {
       const prior = mark.receipts[index]!;
-      if (prior.status === 'committed') continue;
+      if (prior.status === 'committed') {
+        mark.unavailable = mark.unavailable.filter(
+          (reason) =>
+            reason !== prior.producerId && reason !== `${prior.producerId}:commit-unconfirmed`,
+        );
+        continue;
+      }
       const participant = participants.find((value) => value.producerId === prior.producerId);
       if (!participant) {
-        mark.unavailable.push(prior.producerId);
+        if (!mark.unavailable.includes(prior.producerId)) mark.unavailable.push(prior.producerId);
         continue;
       }
       try {
@@ -573,8 +636,12 @@ export class IncidentPinCoordinator {
         )
           throw new Error('incident_commit_receipt_invalid');
         mark.receipts[index] = receipt;
-      } catch {
-        mark.unavailable.push(`${prior.producerId}:commit-unconfirmed`);
+        mark.unavailable = mark.unavailable.filter(
+          (reason) =>
+            reason !== prior.producerId && reason !== `${prior.producerId}:commit-unconfirmed`,
+        );
+      } catch (error) {
+        this.failure(mark, prior.producerId, 'commit', error);
       }
       await this.save();
     }
@@ -616,11 +683,15 @@ export class IncidentPinCoordinator {
     });
   }
   /** Resume only persisted reservations; never invent a Host acknowledgment after restart. */
-  recover(participants: IncidentParticipant[]) {
+  recover(
+    participants: IncidentParticipant[],
+    external: (pinId: string) => IncidentParticipant[] = () => [],
+  ) {
     return this.run(async () => {
       await this.initialize();
       for (const mark of this.state.marks) {
-        if (mark.status === 'reserved') await this.commit(mark, participants);
+        if (mark.status === 'reserved' || mark.status === 'partial')
+          await this.commit(mark, [...participants, ...external(mark.pinId)]);
         if (mark.status === 'preparing') {
           mark.status = 'partial';
           mark.unavailable.push('interrupted-before-shared-reservation');
@@ -639,7 +710,7 @@ export class IncidentPinCoordinator {
 export async function readHostPin(
   root: string,
   pinId: string,
-  kind: 'incident' | 'export' = 'incident',
+  kind: 'incident' | 'export' | 'delivery' = 'incident',
 ): Promise<PinReceipt> {
   if (!UUID.test(pinId)) throw new Error('host_pin_id_invalid');
   const raw = await boundedJson<{
@@ -651,6 +722,17 @@ export async function readHostPin(
     state: string;
     expiresAt: string | null;
     segments: { name: string; bytes: number; sha256: string }[];
+    sourceState?: {
+      asOf: string;
+      memoryOnly: { events: number | null; bytes: number | null };
+      unreportedLoss: { overflow: number; contended: number; writeFailed: number };
+      lossTotals?: {
+        count: number;
+        bytes: number;
+        firstObservedAt: string | null;
+        lastObservedAt: string | null;
+      };
+    };
   }>(root, `host-pins/${pinId}.json`);
   if (
     raw.schema !== 'mizar-producer-pin/2' ||
@@ -667,7 +749,15 @@ export async function readHostPin(
     throw new Error('host_pin_receipt_invalid');
   const segments: RetainedSegment[] = [];
   for (const value of raw.segments) {
-    if (!/^(desktop|document)-/.test(value.name)) throw new Error('host_pin_source_invalid');
+    if (
+      !immutableName.test(value.name) ||
+      !/^(desktop|document)-/.test(value.name) ||
+      !Number.isSafeInteger(value.bytes) ||
+      value.bytes < 0 ||
+      value.bytes > 2 * 1024 * 1024 ||
+      !/^[a-f0-9]{64}$/.test(value.sha256)
+    )
+      throw new Error('host_pin_source_invalid');
     const actual = await describe(root, value.name);
     if (actual.bytes !== value.bytes || actual.sha256 !== value.sha256)
       throw new Error('host_pin_source_changed');
@@ -683,6 +773,61 @@ export async function readHostPin(
       sealedAt: 'unknown',
     });
   }
+  let sourceState: PinReceipt['sourceState'];
+  if (raw.sourceState) {
+    const state = raw.sourceState;
+    const count = (value: unknown, maximum = Number.MAX_SAFE_INTEGER) =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+    if (
+      !state.memoryOnly ||
+      !state.unreportedLoss ||
+      !Number.isFinite(Date.parse(state.asOf)) ||
+      !(state.memoryOnly.events === null || count(state.memoryOnly.events, 256)) ||
+      !(state.memoryOnly.bytes === null || count(state.memoryOnly.bytes, 512 * 1024)) ||
+      ![
+        state.unreportedLoss.overflow,
+        state.unreportedLoss.contended,
+        state.unreportedLoss.writeFailed,
+      ].every((value) => count(value))
+    )
+      throw new Error('host_deferred_coverage_invalid');
+    const totals = state.lossTotals;
+    const timestamp = (value: unknown) =>
+      value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+    if (
+      totals &&
+      (!count(totals.count) ||
+        !count(totals.bytes) ||
+        !timestamp(totals.firstObservedAt) ||
+        !timestamp(totals.lastObservedAt))
+    )
+      throw new Error('host_deferred_coverage_invalid');
+    sourceState = {
+      asOf: state.asOf,
+      memoryOnly: {
+        included: false,
+        events: state.memoryOnly.events,
+        bytes: state.memoryOnly.bytes,
+        reason: 'not-durably-committed',
+      },
+      unreportedLoss: {
+        overflow: state.unreportedLoss.overflow,
+        contended: state.unreportedLoss.contended,
+        writeFailed: state.unreportedLoss.writeFailed,
+      },
+      ...(totals
+        ? {
+            lossTotals: {
+              reason: 'native_event_loss_cumulative',
+              count: totals.count,
+              bytes: totals.bytes,
+              firstObservedAt: totals.firstObservedAt,
+              lastObservedAt: totals.lastObservedAt,
+            },
+          }
+        : {}),
+    };
+  }
   return {
     pinId,
     producerId: 'host',
@@ -691,6 +836,7 @@ export async function readHostPin(
     expiresAt: raw.expiresAt === null ? null : Date.parse(raw.expiresAt),
     segments,
     confirmedAt: 'native-durable-receipt',
+    ...(sourceState ? { sourceState } : {}),
   };
 }
 export function hostIncidentParticipant(root: string, pinId: string): IncidentParticipant {
