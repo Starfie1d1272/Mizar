@@ -1149,7 +1149,10 @@ export class RivalHubConnection {
       if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
     })();
     void handoff
-      .then(() => this.sourceCommands.run(() => this.cleanup(false)), () => undefined)
+      .then(
+        () => this.sourceCommands.run(() => this.cleanup(false)),
+        () => undefined,
+      )
       .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
     return handoff;
   }

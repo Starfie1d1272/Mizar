@@ -70,7 +70,14 @@ function sourceStateUnavailable(error: unknown): boolean {
 }
 
 type ProductionAction =
-  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'retry-handoff' | 'invalid';
+  | 'enter'
+  | 'hide'
+  | 'finish'
+  | 'shutdown'
+  | 'begin-exit'
+  | 'cancel-exit'
+  | 'retry-handoff'
+  | 'invalid';
 type ProductionCommand = {
   action: ProductionAction;
   expectedRevision: string | null;
@@ -118,7 +125,9 @@ export function createProduction(options: ProductionDependencies) {
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      const pending = retry ? options.source.retryExitHandoffs?.() : options.source.handoffForExit();
+      const pending = retry
+        ? options.source.retryExitHandoffs?.()
+        : options.source.handoffForExit();
       if (!pending) throw new Error('数据源交接重试不可用。');
       handoffPromise = pending.then(
         () => {
