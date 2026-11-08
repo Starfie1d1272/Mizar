@@ -91,6 +91,7 @@ export function createProduction(options: ProductionDependencies) {
   let revision = randomUUID();
   let busy = false;
   let shuttingDown = false;
+  let exitIntentGeneration = 0;
   let updatePending = false;
   let trialPending = false;
   let preparationGeneration = 0;
@@ -287,6 +288,7 @@ export function createProduction(options: ProductionDependencies) {
       options.observer.endProduction();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      exitIntentGeneration++;
       shuttingDown = true;
       try {
         await startHandoff();
@@ -302,7 +304,13 @@ export function createProduction(options: ProductionDependencies) {
       }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
+      exitIntentGeneration++;
       shuttingDown = false;
+      // An older handoff may still complete, but it must not settle a later exit.
+      releaseGeneration++;
+      if (releaseHandoffState === 'pending') releaseHandoffState = 'unconfirmed';
+      handoffStarted = false;
+      handoffPromise = undefined;
       return { ok: true as const, value: view() };
     }
     if (
@@ -340,6 +348,7 @@ export function createProduction(options: ProductionDependencies) {
     }
     busy = true;
     const shutdown = body?.action === 'shutdown';
+    const shutdownIntent = shutdown ? ++exitIntentGeneration : null;
     if (shutdown) shuttingDown = true;
     let committed = false;
     const entering = body?.action === 'enter' && mode === 'preparation';
@@ -544,7 +553,7 @@ export function createProduction(options: ProductionDependencies) {
               : ('productionFailure' as const);
       return { ok: false as const, failure, message };
     } finally {
-      if (shutdown && !committed) shuttingDown = false;
+      if (shutdown && !committed && shutdownIntent === exitIntentGeneration) shuttingDown = false;
       busy = false;
     }
   }

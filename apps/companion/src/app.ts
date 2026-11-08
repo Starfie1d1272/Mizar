@@ -1921,7 +1921,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.rivalhubConnection)
     registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
-      canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
+      canClaim: () =>
+        !production.isTrialPending() &&
+        production.sessionAllowed() &&
+        production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
       canFetchStats: () => production.statsActive(),
       controller: matchContextController,

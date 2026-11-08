@@ -256,21 +256,33 @@ export function PreparationPage() {
           rivalhub?.sourceCleanup?.claimIntent) ? (
           <StatusBanner tone="warning">
             {handoffError || '网站数据源收尾尚未确认，请查看连接状态。'}
-            {production.releaseHandoffState === 'unconfirmed' ? (
+            {production.releaseHandoffState === 'unconfirmed' ||
+            (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ? (
               <Button
-                disabled={handoffRetrying || Boolean(exit?.busy)}
+                disabled={
+                  handoffRetrying ||
+                  Boolean(exit?.busy) ||
+                  production.releaseHandoffState === 'pending'
+                }
                 onClick={() => {
                   setHandoffRetrying(true);
                   setHandoffError('');
-                  void fetch('/operator/production', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      action: 'retry-handoff',
-                      expectedRevision: production.revision,
-                    }),
-                    signal: AbortSignal.timeout(10000),
-                  })
+                  const retryFrozenOnly = production.releaseHandoffState !== 'unconfirmed';
+                  void fetch(
+                    retryFrozenOnly
+                      ? '/operator/rivalhub/source/retry-handoff'
+                      : '/operator/production',
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(
+                        retryFrozenOnly
+                          ? {}
+                          : { action: 'retry-handoff', expectedRevision: production.revision },
+                      ),
+                      signal: AbortSignal.timeout(10000),
+                    },
+                  )
                     .then(async (response) => {
                       if (!response.ok) {
                         const body = (await response.json().catch(() => ({}))) as {

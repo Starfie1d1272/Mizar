@@ -536,8 +536,12 @@ export class RivalHubConnection {
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
   private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
-  private readonly exitHandoffs = new Map<string, ExactSource>();
+  private readonly exitHandoffs = new Map<
+    string,
+    { identity: ExactSource; cause: 'finish' | 'switch' | 'recovery' }
+  >();
   private readonly sourceCommands = new SerialCommitQueue();
+  private claimOperationsInFlight = 0;
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
@@ -1023,6 +1027,23 @@ export class RivalHubConnection {
 
   private async reconcileIntent(deadline: number): Promise<void> {
     const state = await this.sourceState.snapshot();
+    if (!state.intent || !this.scopeMatches(state.intent.scope) || Date.now() >= deadline) return;
+    const claimedFrom = this.source;
+    const installation = this.installation;
+    this.claimOperationsInFlight++;
+    try {
+      await this.reconcileIntentForState(state, deadline, claimedFrom, installation);
+    } finally {
+      this.claimOperationsInFlight--;
+    }
+  }
+
+  private async reconcileIntentForState(
+    state: Awaited<ReturnType<RivalHubSourceState['snapshot']>>,
+    deadline: number,
+    claimedFrom: Source | null,
+    installation: Installation | null,
+  ): Promise<void> {
     const intent = state.intent;
     if (!intent || !this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
     const query = new URLSearchParams({
@@ -1095,12 +1116,11 @@ export class RivalHubConnection {
         intent.id,
         found.authorityRevision as number,
       );
-      await this.sourceState.handoff(identity, 'recovery');
-      // Reconciliation can also run in the original process after a lost
-      // idempotent response. Fence its live source so the output owner can
-      // finish its existing reliable tail before cleanup releases it.
-      if (this.source && JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity))
-        this.source.draining = true;
+      const key = this.trackExitHandoff(identity, 'recovery');
+      // A failed write must still leave the original source ready for a later drain.
+      this.freezePreviousClaimSource(identity, claimedFrom, installation);
+      await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
+      this.exitHandoffs.delete(key);
     }
   }
 
@@ -1115,7 +1135,7 @@ export class RivalHubConnection {
       source.draining = true;
       source.paused = true;
       const identity = this.exactSource(source);
-      this.exitHandoffs.set(JSON.stringify(identity), identity);
+      this.trackExitHandoff(identity, 'finish');
       if (!this.settleSource) return Promise.reject(new Error('可靠事件范围尚未冻结。'));
       // settle() enters the output owner's fence synchronously; false remains pending.
       void this.settle(identity);
@@ -1125,7 +1145,12 @@ export class RivalHubConnection {
     const handoff = (async () => {
       await this.persistExitHandoffs();
       await this.updateCleanupSummary();
-      if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
+      if (
+        this.cleanupSummary.claimIntent ||
+        this.claimOperationsInFlight > 0 ||
+        this.exitHandoffs.size > 0
+      )
+        throw new Error('数据源认领结果待核对。');
     })();
     void handoff
       .then(
@@ -1142,11 +1167,17 @@ export class RivalHubConnection {
       return Promise.reject(new Error('rivalhub_source_state_unavailable'));
     if (this.exitHandoffs.size && !this.settleSource)
       return Promise.reject(new Error('可靠事件范围尚未冻结。'));
-    for (const identity of this.exitHandoffs.values()) void this.settle(identity);
+    const identities = [...this.exitHandoffs.values()].map(({ identity }) => identity);
     const handoff = (async () => {
       await this.persistExitHandoffs();
+      for (const identity of identities) void this.settle(identity);
       await this.updateCleanupSummary();
-      if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
+      if (
+        this.cleanupSummary.claimIntent ||
+        this.claimOperationsInFlight > 0 ||
+        this.exitHandoffs.size > 0
+      )
+        throw new Error('数据源认领结果待核对。');
     })();
     void handoff
       .then(
@@ -1157,11 +1188,17 @@ export class RivalHubConnection {
     return handoff;
   }
 
+  private trackExitHandoff(identity: ExactSource, cause: 'finish' | 'switch' | 'recovery'): string {
+    const key = JSON.stringify(identity);
+    if (!this.exitHandoffs.has(key)) this.exitHandoffs.set(key, { identity, cause });
+    return key;
+  }
+
   private async persistExitHandoffs(): Promise<void> {
-    for (const [key, identity] of this.exitHandoffs) {
+    for (const [key, { identity, cause }] of this.exitHandoffs) {
       const state = await this.sourceState.snapshot();
       const record = state.records.find((item) => JSON.stringify(item.identity) === key);
-      if (record) await this.sourceState.handoff(identity, 'finish');
+      if (record) await this.sourceState.handoff(identity, cause);
       else if (
         !state.watermarks.some(
           (item) =>
@@ -1846,6 +1883,21 @@ export class RivalHubConnection {
     generation: number,
     isCurrent: () => boolean = () => true,
   ) {
+    this.claimOperationsInFlight++;
+    try {
+      return await this.claimLockedOnce(snapshot, contextRevision, takeover, generation, isCurrent);
+    } finally {
+      this.claimOperationsInFlight--;
+    }
+  }
+
+  private async claimLockedOnce(
+    snapshot: LiveSnapshotV1,
+    contextRevision: string,
+    takeover: boolean,
+    generation: number,
+    isCurrent: () => boolean,
+  ) {
     if (
       !this.installation ||
       snapshot.competitionId !== this.installation.competitionId ||
@@ -1872,7 +1924,19 @@ export class RivalHubConnection {
       producerInstanceId: snapshot.cursor.producerInstanceId,
       liveSessionId: snapshot.cursor.liveSessionId,
     };
+    const hasPendingHandoff = () =>
+      [...this.exitHandoffs.values()].some(
+        ({ identity }) =>
+          identity.baseUrl === scope.baseUrl &&
+          identity.competitionId === scope.competitionId &&
+          identity.installationId === scope.installationId &&
+          identity.matchId === scope.matchId &&
+          identity.producerInstanceId === scope.producerInstanceId &&
+          identity.liveSessionId === scope.liveSessionId,
+      );
+    if (hasPendingHandoff()) throw new Error('原数据源交接未确认，请先重试交接。');
     const durableState = await this.sourceState.snapshot();
+    if (hasPendingHandoff()) throw new Error('原数据源交接未确认，请先重试交接。');
     const matchingRecords = durableState.records.filter(
       (record) =>
         record.identity.baseUrl === scope.baseUrl &&
@@ -1901,7 +1965,8 @@ export class RivalHubConnection {
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,
     );
-    if (this.source) this.source.paused = true;
+    const claimedFrom = this.source;
+    if (claimedFrom) claimedFrom.paused = true;
     await this.updateCleanupSummary();
     this.business('business_claim', snapshot, { contextRevision, reason: 'claim_attempt' });
     try {
@@ -1964,17 +2029,26 @@ export class RivalHubConnection {
           throw new Error('数据源授权响应无效，等待核对。');
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
         if (generation !== this.bindingGeneration || !isCurrent()) {
-          await this.sourceState.handoff(identity, 'switch');
-          // The previous source may still own an unsettled tail. Keep its
-          // exact identity fenced until its own cleanup has confirmed release.
-          if (this.source) {
-            this.source.draining = true;
-            this.source.paused = true;
-          }
-          await this.updateCleanupSummary();
+          await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
-        await this.updateCleanupSummary();
+        try {
+          await this.updateCleanupSummary();
+        } catch (error) {
+          try {
+            await this.handoffStaleClaim(identity, claimedFrom, installation);
+          } catch (handoffError) {
+            throw new AggregateError([error, handoffError], '数据源交接未确认。', {
+              cause: handoffError,
+            });
+          }
+          throw error;
+        }
+        // Exit can invalidate the claim while the summary is read.
+        if (generation !== this.bindingGeneration || !isCurrent()) {
+          await this.handoffStaleClaim(identity, claimedFrom, installation);
+          throw new Error('比赛已变化，原数据源待释放。');
+        }
         this.resumeSource?.(scope);
         this.stoppedMatchId = null;
         this.controlFailure = null;
@@ -2023,6 +2097,44 @@ export class RivalHubConnection {
       });
       throw error;
     }
+  }
+
+  private freezePreviousClaimSource(
+    identity: ExactSource,
+    claimedFrom: Source | null,
+    installation: Installation | null,
+  ): void {
+    if (
+      claimedFrom &&
+      installation &&
+      this.source === claimedFrom &&
+      this.installation === installation &&
+      identity.baseUrl === installation.baseUrl &&
+      identity.competitionId === installation.competitionId &&
+      identity.installationId === installation.installationId &&
+      claimedFrom.matchId === identity.matchId &&
+      claimedFrom.producerInstanceId === identity.producerInstanceId &&
+      claimedFrom.liveSessionId === identity.liveSessionId
+    ) {
+      // confirmClaim may also have retired the previous authority of this scope.
+      claimedFrom.draining = true;
+      claimedFrom.paused = true;
+    }
+  }
+
+  private async handoffStaleClaim(
+    identity: ExactSource,
+    claimedFrom: Source | null,
+    installation: Installation,
+  ): Promise<void> {
+    // Keep the confirmed identity and its cause until the handoff is durable.
+    const key = this.trackExitHandoff(identity, 'switch');
+    this.freezePreviousClaimSource(identity, claimedFrom, installation);
+    await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
+    this.exitHandoffs.delete(key);
+    void this.sourceCommands
+      .run(() => this.cleanup(false))
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
   }
 
   async release(): Promise<void> {

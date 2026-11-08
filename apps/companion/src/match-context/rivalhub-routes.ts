@@ -743,6 +743,29 @@ export function registerRivalHubConnectionRoutes(
     options.connection.retryLive();
     return { ok: true, message: '已请求重试；等待当前比赛的新数据确认网站接收。' };
   });
+  app.post(
+    '/operator/rivalhub/source/retry-handoff',
+    { bodyLimit: 1024 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ message: '本机页面来源无效。' });
+      if (options.connection.view().sourceState === 'unavailable')
+        return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+      if (!options.connection.view().sourceCleanup?.handoffPending)
+        return reply.code(409).send({ message: '数据源交接状态已变化，请重新检查。' });
+      if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+      try {
+        sourceCommand = options.connection.retryExitHandoffs();
+        await sourceCommand;
+        return { pending: true, message: '本地交接已记录，正在核对网站数据源释放。' };
+      } catch (error) {
+        request.log.error({ err: error }, 'RivalHub handoff retry failed');
+        return reply.code(502).send({ message: '数据源交接仍未确认，请稍后再试。' });
+      } finally {
+        sourceCommand = null;
+      }
+    },
+  );
   app.post('/operator/rivalhub/source/release', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
