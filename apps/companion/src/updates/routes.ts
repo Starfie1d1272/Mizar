@@ -166,7 +166,12 @@ export function registerUpdateRoutes(
     const body = request.body as { action?: unknown; sessionId?: unknown } | null;
     const action = body?.action;
     if (action === 'startup') {
-      if (typeof body?.sessionId !== 'string' || !/^[a-f0-9]{32}-[a-f0-9]{8}$/.test(body.sessionId))
+      if (
+        typeof body?.sessionId !== 'string' ||
+        !/^(?:[a-f0-9]{32}-[a-f0-9]{8}|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.test(
+          body.sessionId,
+        )
+      )
         return reply.code(400).send({ error: 'update_action_invalid' });
       manager.desktopStartup(body.sessionId);
       return { accepted: true };

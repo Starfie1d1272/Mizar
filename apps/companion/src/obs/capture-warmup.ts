@@ -41,12 +41,14 @@ export class ObsCaptureWarmupError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'ObsCaptureWarmupError';
   }
 }
-const error = (code: string, message: string) => new ObsCaptureWarmupError(code, message);
+const error = (code: string, message: string, options?: ErrorOptions) =>
+  new ObsCaptureWarmupError(code, message, options);
 const lost = () =>
   error('capture_warmup_changed', 'OBS 游戏画面检查已中断，请重新检查；仍失败时导出诊断。');
 const safeTransform = (value: unknown) => {
@@ -335,11 +337,19 @@ export class ObsCaptureWarmup {
         await rm(this.path);
         throw cause;
       }
+      // A missing create receipt is reconciled only by a later explicit recovery.
+      // The current RPC may still complete after its response is lost.
+      if (journal.phase === 'creating' && journal.itemId === null)
+        throw error('capture_warmup_pending', 'OBS 游戏画面检查未完成，请在输出停止后重新检查。', {
+          cause,
+        });
       try {
         if (!lease()) throw lost();
         await this.release(obs, endpoint, journal.id, lease);
-      } catch {
-        throw error('capture_warmup_pending', 'OBS 游戏画面检查未完成，请在输出停止后重新检查。');
+      } catch (recovery) {
+        throw error('capture_warmup_pending', 'OBS 游戏画面检查未完成，请在输出停止后重新检查。', {
+          cause: new AggregateError([cause, recovery], 'Capture warmup and cleanup failed'),
+        });
       }
       throw cause;
     }
@@ -349,13 +359,7 @@ export class ObsCaptureWarmup {
     if (!journal || journal.id !== id) return;
     if (this.active?.id === id && this.active.valid()) lease = this.active.valid;
     this.active = undefined;
-    if (
-      !lease() ||
-      endpoint !== journal.endpoint ||
-      journal.itemId === null ||
-      !['created', 'transformed', 'enabling', 'enabled'].includes(journal.phase)
-    )
-      throw lost();
+    if (!lease() || endpoint !== journal.endpoint) throw lost();
     await assertNoVideoOutput(obs);
     // Reclaim the item we own without requiring its scene to remain on air.
     const latest = await identity(obs, false);
@@ -364,6 +368,34 @@ export class ObsCaptureWarmup {
     const items = objects(
       (await obs.call('GetSceneItemList', { sceneUuid: journal.sceneUuid })).sceneItems,
     );
+    if (journal.phase === 'creating' && journal.itemId === null) {
+      // CreateSceneItem was sent disabled. Its response may have been lost, so a
+      // new item cannot safely be identified as ours and must never be deleted.
+      // Once every possible new matching item is disabled, abandoning this
+      // journal is safe even if OBS eventually completes that disabled create.
+      const unsafeCandidate = items.some(
+        (item) =>
+          typeof item.sceneItemId !== 'number' ||
+          typeof item.sourceUuid !== 'string' ||
+          (item.sourceUuid === journal.sourceUuid &&
+            !journal.baselineIds.includes(item.sceneItemId) &&
+            item.sceneItemEnabled !== false),
+      );
+      if (unsafeCandidate)
+        throw error(
+          'capture_warmup_ownership_unknown',
+          '无法确认临时游戏来源归属。请在 OBS 等待场景中禁用或移除新增的游戏来源后重试。',
+        );
+      await assertNoVideoOutput(obs);
+      if (!lease()) throw lost();
+      await rm(this.path);
+      return;
+    }
+    if (
+      journal.itemId === null ||
+      !['created', 'transformed', 'enabling', 'enabled'].includes(journal.phase)
+    )
+      throw lost();
     const item = items.find((candidate) => candidate.sceneItemId === journal.itemId);
     if (!item) {
       await rm(this.path);

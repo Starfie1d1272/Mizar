@@ -1512,7 +1512,12 @@ export class ReliableOutbox {
               );
             })
           ) {
-            next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+            next.push({
+              ...record,
+              status: 'superseded',
+              supersessionReason: 'rejected_start_result',
+              updatedAt: now.toISOString(),
+            });
             changed = true;
             continue;
           }
@@ -1525,7 +1530,12 @@ export class ReliableOutbox {
             )
           ) {
             invalidatedStarts.push(record.event.idempotencyKey);
-            next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+            next.push({
+              ...record,
+              status: 'superseded',
+              supersessionReason: 'boundary_unconfirmed_start',
+              updatedAt: now.toISOString(),
+            });
             changed = true;
             continue;
           }
@@ -1558,7 +1568,12 @@ export class ReliableOutbox {
               ...this.revokedSources.flatMap((archive) => archive.records),
             ].find((r) => r.event.idempotencyKey === mapEndedKey);
             if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
-              next.push({ ...record, status: 'superseded', updatedAt: now.toISOString() });
+              next.push({
+                ...record,
+                status: 'superseded',
+                supersessionReason: 'map_end_unavailable',
+                updatedAt: now.toISOString(),
+              });
               changed = true;
               continue;
             }
@@ -1691,6 +1706,7 @@ export class ReliableOutbox {
             const superseded: ReliableOutboxRecord = {
               ...item,
               status: 'superseded',
+              supersessionReason: 'boundary_unconfirmed_start',
               updatedAt: now.toISOString(),
             };
             changed.push(superseded);
@@ -1779,6 +1795,7 @@ export class ReliableOutbox {
         return {
           ...record,
           status: expired ? 'expired' : 'superseded',
+          ...(!expired ? { supersessionReason: 'current_scope_failed' as const } : {}),
           updatedAt: now.toISOString(),
         };
       });
@@ -1793,7 +1810,12 @@ export class ReliableOutbox {
         record.status === 'pending' &&
         !this.isRevokedEvent(record.event, record.source) &&
         selected(record.event)
-          ? { ...record, status: 'superseded' as const, updatedAt: now.toISOString() }
+          ? {
+              ...record,
+              status: 'superseded' as const,
+              supersessionReason: 'scope_superseded' as const,
+              updatedAt: now.toISOString(),
+            }
           : record,
       );
       const changed = records.filter((record, index) => record !== this.records[index]);
@@ -1916,7 +1938,7 @@ export class ReliableOutbox {
           accepted: 'receiver_accepted',
           rejected: 'delivery_rejected_unknown',
           expired: 'retention_expired',
-          superseded: record.dispositionReason ?? 'current_scope_failed',
+          superseded: record.dispositionReason ?? record.supersessionReason ?? 'current_scope_failed',
           pending: record.attempts === 0 ? 'queued' : 'retry_unknown',
         }[record.status],
       );

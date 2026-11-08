@@ -98,6 +98,12 @@ export interface ReliableOutboxRecord {
   readonly lineupSteam64?: readonly string[];
   readonly rejection?: ReliableRejection;
   readonly dispositionReason?: 'boundary_unconfirmed_result';
+  readonly supersessionReason?:
+    | 'rejected_start_result'
+    | 'boundary_unconfirmed_start'
+    | 'map_end_unavailable'
+    | 'current_scope_failed'
+    | 'scope_superseded';
   readonly boundaryQualification?: {
     readonly planFingerprint: string;
     readonly authorityFingerprint: string;
@@ -320,6 +326,20 @@ export function parseRecord(input: unknown): ReliableOutboxRecord {
   )
     throw new Error('outbox_disposition_invalid');
   if (
+    item.supersessionReason !== undefined &&
+    (typeof item.supersessionReason !== 'string' ||
+      ![
+        'rejected_start_result',
+        'boundary_unconfirmed_start',
+        'map_end_unavailable',
+        'current_scope_failed',
+        'scope_superseded',
+      ].includes(item.supersessionReason) ||
+      item.status !== 'superseded' ||
+      item.dispositionReason !== undefined)
+  )
+    throw new Error('outbox_supersession_invalid');
+  if (
     item.receiverOutcome !== undefined &&
     (item.receiverOutcome !== 'needs_attention' || item.status !== 'accepted')
   )
@@ -387,6 +407,12 @@ export function parseRecord(input: unknown): ReliableOutboxRecord {
     ...(item.dispositionReason === 'boundary_unconfirmed_result'
       ? { dispositionReason: 'boundary_unconfirmed_result' as const }
       : {}),
+    ...(item.supersessionReason === undefined
+      ? {}
+      : {
+          supersessionReason:
+            item.supersessionReason as NonNullable<ReliableOutboxRecord['supersessionReason']>,
+        }),
     ...(rejection === undefined ? {} : { rejection }),
     ...(typeof item.recoveryBoundaryKey === 'string'
       ? { recoveryBoundaryKey: item.recoveryBoundaryKey }

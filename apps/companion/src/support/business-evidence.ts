@@ -117,6 +117,7 @@ export function businessEvidence(value: unknown) {
       'match_started',
       'map_started',
       'map_ended',
+      'map_player_snapshot',
       'series_ended',
       'source_generation_changed',
       'map_epoch_changed',
@@ -145,6 +146,14 @@ export function businessEvidence(value: unknown) {
       'awaiting_observation',
       'blocked',
       'proof_queued',
+    ]),
+    dispositionReason: pick(input.dispositionReason, ['boundary_unconfirmed_result']),
+    supersessionReason: pick(input.supersessionReason, [
+      'rejected_start_result',
+      'boundary_unconfirmed_start',
+      'map_end_unavailable',
+      'current_scope_failed',
+      'scope_superseded',
     ]),
     rejectionReason: pick(input.rejectionReason, [
       'context_stale',

@@ -327,7 +327,7 @@ Host 私有观察器控制接口沿用 `x-runtime-token` 与 Origin 限制。`pr
 
 OBS 自动准备使用中文场景与来源名称：游戏画面、游戏声音、其他解说、桌面声音、麦克风、音乐和音效。旧版固定名称在停止输出后原位更新，已记录的音频来源按 UUID 复用；名称冲突时保留已有来源并提示处理，自动创建的音频来源使用可读数字后缀。来源配置、音轨和实际声音仍需在 OBS 试听核对。
 
-工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，并拒绝已取消的准备；游戏窗口尚未出现时返回 `state: waiting`、`reason: target_unavailable`，不创建临时捕获。唯一实际窗口核对及必要的目标修复完成后，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。临时租约仍存在时，输出启停与配置使用同一串行边界，开始输出返回准备中或待清理；未知清理结果不能当作已释放。已有输出时捕获准备只读核对，不添加临时项目。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
+工作台启动使用本机 `POST /operator/obs/video-preflight`、`video-prepare` 与 `video-restore` 管理配置档绑定的视频设置事务；准备带制作修订，恢复带事务 ID。`POST /operator/obs/capture-warmup` 带制作修订和准备事务 ID，并拒绝已取消的准备；游戏窗口尚未出现时返回 `state: waiting`、`reason: target_unavailable`，不创建临时捕获。唯一实际窗口核对及必要的目标修复完成后，返回临时捕获租约及开始时间；`capture-initialization` 使用该租约和时间检查本次捕获，`capture-warmup-release` 按租约清理。临时租约仍存在时，输出启停与配置使用同一串行边界，开始输出返回准备中或待清理；未知清理结果不能当作已释放。若临时项目创建的回执丢失，只有在输出停止、端点与场景及来源身份匹配，且新增同源项目均确认禁用时才可放弃该租约；无法证明归属的项目不自动删除，发现不安全或身份不明的项目需先在 OBS 核对。已有输出时捕获准备只读核对，不添加临时项目。捕获确认不依赖比赛 GSI；未显示的来源、零尺寸、过期日志和无法唯一确认的窗口均不证明捕获成功。`GET /local/v1/obs` 与准备中心共享 OBS 就绪判断，保留静音和音轨提醒。
 
 Host 的私有 `/operator/runtime/mulnx-prepare` 可带 `captureCompatibility`，仅对本次受管工作台启动临时补入捕获兼容参数；原 `launchOptions` 由既有所有权记录恢复，不能覆盖期间的用户修改。
 
