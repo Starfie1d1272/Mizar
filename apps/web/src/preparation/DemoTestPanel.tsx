@@ -23,6 +23,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
   const [teamBName, setTeamBName] = useState('队伍 B');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [audioWarning, setAudioWarning] = useState('');
   const operation = useRef(false);
   const form = useRef<HTMLFormElement>(null);
   const attemptedEntry = useRef<string | null>(null);
@@ -39,6 +40,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     operation.current = true;
     setBusy(true);
     setMessage('');
+    setAudioWarning('');
     try {
       await action();
     } catch (error) {
@@ -52,7 +54,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
   const start = (preserveSettings = false) =>
     run(async () => {
       if (!selected || !editor.revision || !activePreset) return;
-      if (!(await checkObsBeforeLaunch(true))) return;
+      if (!(await checkObsBeforeLaunch(true, undefined, undefined, setAudioWarning))) return;
       if (activePreset !== editor.document?.activePreset.sourceId) {
         const result = await mutateHudConfig({
           kind: 'activate-preset',
@@ -297,6 +299,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
         </form>
       )}
       {!desktop ? <p>请在 Mizar 桌面准备中心选择并启动本地 Demo。</p> : null}
+      {audioWarning ? <StatusBanner tone="warning">{audioWarning}</StatusBanner> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
       {shown && !trial?.active && editor.error ? (
         <StatusBanner tone="warning">画面设置暂不可用，请检查本地服务后重试。</StatusBanner>

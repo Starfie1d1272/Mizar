@@ -19,7 +19,10 @@ export function SoundSettings() {
   const outputActive = connected && (obs.streaming !== false || obs.recording !== false);
   const findings =
     obs?.findings.filter(
-      (item) => item.code.startsWith('audio_') || item.code === 'game_audio_missing',
+      (item) =>
+        item.code.startsWith('audio_') ||
+        item.code === 'game_audio_missing' ||
+        item.code === 'commentary_pending',
     ) ?? [];
   const unchecked = obs?.findings.some((item) =>
     [

@@ -53,8 +53,26 @@ export class RemoteCommentary {
       this.state = schema.parse(JSON.parse(await readFile(this.path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      const initial: State = { revision: randomUUID(), preference: { mode: 'autoTeamspeak' } };
       await mkdir(dirname(this.path), { recursive: true });
+      // Write the marker first. If initialization is interrupted before the
+      // preference file is linked, reuse its revision rather than losing the
+      // distinction between an initial default and an explicit choice.
+      const marker = `${this.path}.unconfigured`;
+      const markerTemp = `${marker}.${randomUUID()}.tmp`;
+      let revision: string = randomUUID();
+      try {
+        await writeFile(markerTemp, revision, { flag: 'wx', mode: 0o600 });
+        await link(markerTemp, marker);
+      } catch (markerError) {
+        if ((markerError as NodeJS.ErrnoException).code !== 'EEXIST') throw markerError;
+        revision = z
+          .string()
+          .uuid()
+          .parse(await readFile(marker, 'utf8'));
+      } finally {
+        await rm(markerTemp, { force: true });
+      }
+      const initial: State = { revision, preference: { mode: 'autoTeamspeak' } };
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try {
         await writeFile(temp, `${JSON.stringify(initial)}\n`, { flag: 'wx', mode: 0o600 });
@@ -71,6 +89,16 @@ export class RemoteCommentary {
   }
   async get(): Promise<State> {
     return structuredClone(await this.load());
+  }
+  /** Existing preference files without a matching initial marker are user choices. */
+  async unconfigured(): Promise<boolean> {
+    const state = await this.load();
+    try {
+      return (await readFile(`${this.path}.unconfigured`, 'utf8')) === state.revision;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
   }
   async set(value: CommentaryPreference, revision: string): Promise<State> {
     const operation = this.queue.then(async () => {

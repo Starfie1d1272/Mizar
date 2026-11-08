@@ -151,6 +151,7 @@ export function ObsAudioRouting() {
       throw new Error(result.message ?? '解说音频尚未准备，请检查 OBS。');
     }
     const result = (await configured.json()) as { findings: { code: string; message: string }[] };
+    await refresh();
     const pending =
       result.findings.find((finding) => finding.code === 'commentary_pending') ??
       result.findings[0];
@@ -243,8 +244,9 @@ export function ObsAudioRouting() {
     <div>
       <h3>音频模式</h3>
       <p>
-        桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制，本机监听的音乐也可能进入混音。
-        下方选择的是 OBS 来源，不是 Windows 播放设备；来源名称不能证明采集了哪个设备。
+        桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制。 OBS
+        中的音乐若同时直出并监听到该设备，可能重复收音，请核对监听并录制试听。 下方选择的是 OBS
+        来源，不是 Windows 播放设备；来源名称不能证明采集了哪个设备。
       </p>
       <details>
         <summary>核对播放设备（包括 Sonar Chat / Gaming）</summary>
@@ -326,7 +328,10 @@ export function ObsAudioRouting() {
                 <option value="desktop">桌面混音（新设置推荐）</option>
                 <option value="independent">独立分路</option>
               </Select>
-              <p>这里只选择切换目标，点击下方按钮后才会更改 OBS 音频。</p>
+              <p>
+                选择目标本身不会切换模式。场景准备可能先添加默认桌面音频和麦克风，请在 OBS
+                核对设备。
+              </p>
               {targetMode === 'desktop' && !status.desktop && (
                 <Select
                   label="OBS 桌面音频来源（不是播放设备）"
@@ -349,14 +354,32 @@ export function ObsAudioRouting() {
                   busy ||
                   (targetMode === 'desktop' && Boolean(status.desktop)) ||
                   (targetMode === 'desktop' && chooseDesktop && !desktopSelection) ||
-                  (targetMode === 'independent' && !status.desktop)
+                  (targetMode === 'independent' &&
+                    !status.desktop &&
+                    (Boolean(
+                      status.bindings.game ||
+                      status.bindings.remoteCommentary ||
+                      status.bindings.microphone,
+                    ) ||
+                      !commentary ||
+                      commentary.preference.mode === 'disabled'))
                 }
-                onClick={() => void run(() => switchMode(targetMode))}
+                onClick={() =>
+                  void run(() =>
+                    targetMode === 'independent' && !status.desktop
+                      ? prepareCommentary()
+                      : switchMode(targetMode),
+                  )
+                }
               >
-                {targetMode === 'desktop' ? '切换桌面混音' : '切回独立分路'}
+                {targetMode === 'desktop'
+                  ? '切换桌面混音'
+                  : status.desktop
+                    ? '切回独立分路'
+                    : '准备独立分路'}
               </Button>
               {targetMode === 'independent' && !status.desktop && (
-                <p>当前不是桌面混音。请在下方准备或核对独立分路。</p>
+                <p>请先启动解说应用，再确认准备独立分路；实际声音仍需录制试听。</p>
               )}
             </>
           )}
@@ -382,8 +405,7 @@ export function ObsAudioRouting() {
         disabled={
           busy ||
           Boolean(status?.transition || (status?.desktop && status.bindings.remoteCommentary)) ||
-          !commentary ||
-          commentary.preference.mode === 'autoTeamspeak'
+          !commentary
         }
         onClick={() => void run(() => setMode('autoTeamspeak'))}
       >

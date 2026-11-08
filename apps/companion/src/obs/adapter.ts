@@ -152,6 +152,9 @@ export class ObsAdapter {
   private findings: ObsFinding[] = [
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
   ];
+  private audioPreparationWarnings: Partial<
+    Record<'setup' | 'routing' | 'commentary', ObsFinding>
+  > = {};
   private commentaryTimer: ReturnType<typeof setTimeout> | undefined;
   private commentaryTask: Promise<void> | undefined;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -763,15 +766,30 @@ export class ObsAdapter {
     visual?: ObsFinding[],
   ): Promise<ObsFinding[]> {
     const findings = visual ?? (await checkObsConfiguration(obs, this.browserBaseUrl));
-    return findings.some((item) =>
-      ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
+    if (
+      findings.some((item) =>
+        ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
+      )
     )
-      ? findings
-      : [
-          ...findings,
-          ...(await checkObsAudio(obs)),
-          ...(await this.bindingFindings(obs, endpoint)),
-        ];
+      return findings;
+    try {
+      const audio = [...(await checkObsAudio(obs)), ...(await this.bindingFindings(obs, endpoint))];
+      if (await this.audioRouting?.modePending())
+        audio.push({
+          code: 'commentary_pending',
+          message: '音频模式切换待核对，请在声音设置和 OBS 中检查。',
+        });
+      for (const warning of Object.values(this.audioPreparationWarnings))
+        if (warning && !audio.some((item) => item.code === warning.code)) audio.push(warning);
+      return [...findings, ...audio];
+    } catch (error) {
+      this.diagnostic('obs_audio_check', obsErrorEvidence(error));
+      return [
+        ...findings,
+        ...Object.values(this.audioPreparationWarnings),
+        { code: 'audio_check_failed', message: 'OBS 音频检查未完成，请在声音设置和 OBS 中核对。' },
+      ];
+    }
   }
 
   private async readStatus(): Promise<ObsStatus> {
@@ -1181,7 +1199,16 @@ export class ObsAdapter {
     return this.configurationMutation(() =>
       this.audioConfiguration.run(async (connection, endpoint, observer) => {
         if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
-        const obs = guardedObs(connection, valid);
+        const guarded = guardedObs(connection, valid);
+        let obsWriteAttempted = false;
+        let metadataCommitAttempted = false;
+        const obs: ObsRpc = {
+          ...guarded,
+          call: (type, data) => {
+            if (/^(Create|Set|Remove)/.test(type)) obsWriteAttempted = true;
+            return guarded.call(type, data);
+          },
+        };
         const completedPath = `${this.commentary!.journal}.migration-mode`;
         let monitorPending = false;
         const before = await this.audioRouting!.modeRecoveryState();
@@ -1433,7 +1460,11 @@ export class ObsAdapter {
                     await migration.recover(obs, endpoint, observer, true);
                     throw new Error('audio_mode_target_changed');
                   }
-                  if (desktop) await migration.saveModeBackup(completedPath, modeId);
+                  if (desktop) {
+                    metadataCommitAttempted = true;
+                    await migration.saveModeBackup(completedPath, modeId);
+                  }
+                  metadataCommitAttempted = true;
                   await music.commitDesktopMonitorOriginals(
                     plan.musicBefore,
                     plan.musicAfter,
@@ -1467,7 +1498,29 @@ export class ObsAdapter {
               },
             );
           },
-        );
+        ).catch(async (error: unknown) => {
+          // Clear only if no OBS write or mode metadata commit was attempted.
+          // An unknown write or uncertain journal remains pending for review.
+          if (!obsWriteAttempted && !metadataCommitAttempted) {
+            try {
+              const current = await this.audioRouting!.modeRecoveryState();
+              const transition = current.transition;
+              if (
+                current.revision === revision &&
+                transition &&
+                transition !== true &&
+                transition.endpoint === endpoint
+              ) {
+                const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
+                await migration.discardUnsentMode(transition.id);
+                await this.audioRouting!.commitModeTransition(transition.id, 'before');
+              }
+            } catch {
+              // Uncertain storage or journal state remains visible for review.
+            }
+          }
+          throw error;
+        });
         return { monitorPending };
       }),
     );
@@ -1698,7 +1751,7 @@ export class ObsAdapter {
           )
             throw new Error('audio_video_requires_full_preparation');
         }
-        return configureIndependentAudio(
+        const findings = await configureIndependentAudio(
           obs,
           endpoint,
           observer,
@@ -1721,6 +1774,10 @@ export class ObsAdapter {
           },
           async () => (await this.audioRouting?.managedBindings(obs, endpoint)) ?? null,
         );
+        const pending = findings.find((item) => item.code === 'commentary_pending');
+        if (pending) this.audioPreparationWarnings.commentary = pending;
+        else delete this.audioPreparationWarnings.commentary;
+        return findings;
       }),
     );
   }
@@ -2236,23 +2293,60 @@ export class ObsAdapter {
             ].includes(item.code),
           )
         )
-          return { findings: visual, ready: false };
+          return { findings: visual, ready: false, audioReady: false };
         if (entry) await prepareCaptureAudio(obs);
         await alignPreparationScene(obs, activeScene, current);
         let audio: ObsFinding[];
-        if (
-          (await this.audioRouting?.enabled()) ||
-          (await this.audioRouting?.desktopBinding()) ||
-          (await this.audioRouting?.modePending())
-        ) {
-          audio = await checkObsAudio(obs);
-          audio.push(...(await this.bindingFindings(obs, endpoint)));
-        } else audio = await ensureObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
-        return { findings: [...visual, ...audio], ready: true };
+        let audioReady = true;
+        try {
+          if (
+            (await this.audioRouting?.enabled()) ||
+            (await this.audioRouting?.desktopBinding()) ||
+            (await this.audioRouting?.modePending())
+          ) {
+            audio = await checkObsAudio(obs);
+            audio.push(...(await this.bindingFindings(obs, endpoint)));
+          } else audio = await ensureObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
+        } catch (error) {
+          if (!current()) throw error;
+          if (error instanceof ObsVideoError) throw error;
+          this.diagnostic('obs_audio_prepare', obsErrorEvidence(error));
+          audioReady = false;
+          this.audioPreparationWarnings.setup = {
+            code: 'audio_prepare_failed',
+            message: '音频准备未确认，请在声音设置和 OBS 中核对。',
+          };
+          audio = [this.audioPreparationWarnings.setup];
+        }
+        return { findings: [...visual, ...audio], ready: true, audioReady };
       }, 30_000);
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       this.findings = prepared.findings;
-      if (await this.audioRouting?.modePending())
+      if (prepared.ready && prepared.audioReady) delete this.audioPreparationWarnings.setup;
+      let audioRoutingReady = true;
+      let modePending = false;
+      let desktopBinding = false;
+      let defaultDesktop = false;
+      try {
+        modePending = Boolean(await this.audioRouting?.modePending());
+        desktopBinding = Boolean(await this.audioRouting?.desktopBinding());
+        defaultDesktop = Boolean(
+          this.commentary &&
+          (await this.commentary.owner.unconfigured()) &&
+          (await this.audioRouting?.neverConfigured()),
+        );
+        delete this.audioPreparationWarnings.routing;
+      } catch (error) {
+        if (!current()) throw error;
+        audioRoutingReady = false;
+        this.diagnostic('obs_audio_routing', obsErrorEvidence(error));
+        this.audioPreparationWarnings.routing = {
+          code: 'audio_routing_unavailable',
+          message: '音频路由未确认，请在声音设置和 OBS 中核对。',
+        };
+        this.findings = [...this.findings, this.audioPreparationWarnings.routing];
+      }
+      if (modePending)
         this.findings = [
           ...this.findings,
           {
@@ -2262,9 +2356,12 @@ export class ObsAdapter {
         ];
       if (
         prepared.ready &&
+        prepared.audioReady &&
         this.commentary &&
-        !(await this.audioRouting?.desktopBinding()) &&
-        !(await this.audioRouting?.modePending())
+        audioRoutingReady &&
+        !defaultDesktop &&
+        !desktopBinding &&
+        !modePending
       ) {
         try {
           const commentary = await this.audioConfiguration.run((connection, endpoint, observer) =>
@@ -2295,6 +2392,9 @@ export class ObsAdapter {
                 null,
             ),
           );
+          const pending = commentary.find((item) => item.code === 'commentary_pending');
+          if (pending) this.audioPreparationWarnings.commentary = pending;
+          else delete this.audioPreparationWarnings.commentary;
           this.findings = [...this.findings, ...commentary];
         } catch (error) {
           if (!current()) throw error;
@@ -2318,17 +2418,15 @@ export class ObsAdapter {
           const uncertain = await readCommentarySwitch(`${this.commentary.journal}.switch`)
             .then((value) => value?.phase === 'sent')
             .catch(() => true);
-          this.findings = [
-            ...this.findings,
-            {
-              code: audioReason.startsWith('audio_game_') ? audioReason : 'commentary_pending',
-              message:
-                audioHelp[audioReason] ??
-                (uncertain
-                  ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
-                  : '场景已准备，音频分路尚未确认。请在声音设置中核对来源并录制试听。'),
-            },
-          ];
+          this.audioPreparationWarnings.commentary = {
+            code: audioReason.startsWith('audio_game_') ? audioReason : 'commentary_pending',
+            message:
+              audioHelp[audioReason] ??
+              (uncertain
+                ? '解说来源切换结果待核对，请在 OBS 中检查后处理。'
+                : '场景已准备，音频分路尚未确认。请在声音设置中核对来源并录制试听。'),
+          };
+          this.findings = [...this.findings, this.audioPreparationWarnings.commentary];
         }
       }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
@@ -2611,10 +2709,20 @@ export class ObsAdapter {
     return this.configurationMutation(async () => {
       if ((await this.audioRouting?.enabled()) || (await this.audioRouting?.desktopBinding()))
         throw new ObsActionError('audio_routing_enabled');
-      await this.withObs(
-        (obs) => setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl),
-        12_000,
-      );
+      await this.withObs(async (obs) => {
+        await setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
+        const findings = await checkObsAudio(obs);
+        if (
+          findings.some(
+            (item) =>
+              item.code === 'audio_missing' ||
+              item.code === 'game_audio_missing' ||
+              item.code.startsWith('audio_scene:'),
+          )
+        )
+          throw new Error('audio_setup_unconfirmed');
+      }, 12_000);
+      delete this.audioPreparationWarnings.setup;
     });
   }
   async launchTarget(): Promise<string> {

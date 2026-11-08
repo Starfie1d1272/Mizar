@@ -145,6 +145,17 @@ export class ObsAudioRouting {
     }
     return this.state;
   }
+  /** Only a store that has never been saved or explicitly bound is fresh. */
+  async neverConfigured() {
+    const state = await this.load();
+    return Boolean(
+      this.automaticEligible &&
+      !state.desktop &&
+      !state.transition &&
+      !state.waitingIndependent &&
+      !roles.some((role) => state.bindings[role]),
+    );
+  }
   async enabled() {
     const state = await this.load();
     return roles.some((role) => state.bindings[role] !== null);

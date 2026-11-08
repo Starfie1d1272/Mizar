@@ -202,6 +202,17 @@ export class AudioMigration {
         throw new Error('audio_migration_backup_conflict', { cause: error });
     }
   }
+  /** Discard only a mode journal whose writes have not been dispatched. */
+  async discardUnsentMode(modeId: string): Promise<void> {
+    const journal = await this.pending();
+    if (!journal) return;
+    if (
+      journal.modeId !== modeId ||
+      journal.fields.some((entry) => entry.phase !== 'prepared' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_write_uncertain');
+    await rm(this.path);
+  }
   async clearMode(modeId: string): Promise<void> {
     const journal = await this.pending();
     if (!journal) return;
