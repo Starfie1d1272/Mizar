@@ -107,9 +107,13 @@ type ReadyExport = {
   parts: { name: string }[];
   knownGaps?: number;
   downloadName?: string;
+  cleanupStatus?: 'unconfirmed';
 };
 const gapNotice = (job: ReadyExport) =>
-  job.knownGaps ? ` 部分记录缺失或覆盖范围未确认（${job.knownGaps} 处），详情在诊断包内。` : '';
+  (job.knownGaps ? ` 部分记录缺失或覆盖范围未确认（${job.knownGaps} 处），详情在诊断包内。` : '') +
+  (job.cleanupStatus === 'unconfirmed'
+    ? ' 诊断包可用，但临时资源清理未确认，可能仍占用本机存储。'
+    : '');
 function download(job: ReadyExport, name: string) {
   const link = document.createElement('a');
   link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
@@ -280,6 +284,7 @@ export function SupportExport() {
         expiresAt?: string;
         knownGaps?: number;
         downloadName?: string;
+        cleanupStatus?: 'unconfirmed';
       };
       if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
       setProgress(job);
@@ -307,6 +312,7 @@ export function SupportExport() {
         expiresAt: job.expiresAt,
         ...(job.knownGaps === undefined ? {} : { knownGaps: job.knownGaps }),
         ...(job.downloadName === undefined ? {} : { downloadName: job.downloadName }),
+        ...(job.cleanupStatus === 'unconfirmed' ? { cleanupStatus: job.cleanupStatus } : {}),
       };
       setReadyJob(ready);
       stage = 'save';

@@ -26,6 +26,7 @@ export interface ExportJob {
   parts?: { name: string; bytes: number; sha256: string }[];
   knownGaps?: number;
   downloadName?: string;
+  cleanupStatus?: 'unconfirmed';
 }
 /** One bounded build. HTTP carries only status and trusted binary attachment routes. */
 export class SupportExports {
@@ -36,7 +37,11 @@ export class SupportExports {
   constructor(
     private readonly logs: string,
     private readonly participants: () => IncidentParticipant[] = () => [],
-    private readonly onDiagnostic?: (error: unknown, exportId: string) => void,
+    private readonly onDiagnostic?: (
+      error: unknown,
+      exportId: string,
+      stage?: 'build' | 'cleanup',
+    ) => void,
   ) {
     this.directory = join(dirname(logs), 'support-export');
   }
@@ -410,7 +415,7 @@ export class SupportExports {
         ],
       };
       const collectionMs = performance.now() - collectionStarted;
-      await new Promise<void>((resolve, reject) => {
+      const message = await new Promise<ExportJob & Record<string, unknown>>((resolve, reject) => {
         const entry = new URL('./archive-worker-entry.js', import.meta.url);
         const workerEntry = import.meta.url.endsWith('.ts')
           ? new URL(
@@ -436,73 +441,118 @@ export class SupportExports {
         });
         if (this.active?.id === job.exportId) this.active.worker = worker;
         if (job.phase === 'cancelled') void worker.terminate();
-        let settled = false;
-        let finishing = false;
+        let result: (ExportJob & Record<string, unknown>) | undefined;
+        let workerError: Error | undefined;
         worker.on('message', (message: ExportJob & Record<string, unknown>) => {
           if (this.active?.id !== job.exportId || job.phase === 'cancelled') return;
-          if (message.phase === 'failed') {
-            settled = true;
-            reject(new Error(message.error));
-          } else if (message.phase === 'ready') {
-            finishing = true;
-            const readyAt = Date.now();
-            const downloadName = `mizar-support-${new Date(readyAt).toISOString().replaceAll(':', '-')}.zip`;
-            const manifest = {
-              schema: 'mizar-support-export/2',
-              createdAt: new Date(readyAt).toISOString(),
-              expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-              ...message,
-              measurements: { ...(message.measurements as Record<string, unknown>), collectionMs },
-              downloadName,
-              exportId: job.exportId,
-            };
-            if (Buffer.byteLength(JSON.stringify(manifest)) > MANIFEST_RESERVE) {
-              reject(new Error('export_manifest_budget'));
-              return;
-            }
-            void atomicJson(join(output, 'generated.json'), manifest)
-              .then(() => {
-                this.assertActive(job);
-                readyResult = {
-                  ...message,
-                  downloadName,
-                  exportId: job.exportId,
-                  expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-                };
-                settled = true;
-                resolve();
-              })
-              .catch(reject);
-          } else Object.assign(job, message, { exportId: job.exportId });
+          if (message.phase === 'failed') workerError ??= new Error(message.error);
+          else if (message.phase === 'ready') result = message;
+          else if (!result && !workerError) Object.assign(job, message, { exportId: job.exportId });
         });
-        worker.on('error', reject);
-        worker.on('exit', (code) => {
-          if (!settled && (!finishing || code !== 0 || job.phase === 'cancelled'))
-            reject(new Error(`export_worker_exit_${code}`));
+        worker.on('error', (error) => {
+          workerError ??=
+            error instanceof Error ? error : new Error('export_worker_error', { cause: error });
+        });
+        // A message or error is not proof that the worker has stopped using
+        // shared input descriptors. Cleanup and Host pin settlement wait for exit.
+        worker.once('exit', (code) => {
+          if (job.phase === 'cancelled') reject(new Error('export_cancelled'));
+          else if (workerError) reject(workerError);
+          else if (code !== 0 || !result) reject(new Error(`export_worker_exit_${code}`));
+          else resolve(result);
         });
       });
+      this.assertActive(job);
+      const readyAt = Date.now();
+      const downloadName = `mizar-support-${new Date(readyAt).toISOString().replaceAll(':', '-')}.zip`;
+      const manifest = {
+        schema: 'mizar-support-export/2',
+        createdAt: new Date(readyAt).toISOString(),
+        expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
+        ...message,
+        measurements: {
+          ...(message.measurements as Record<string, unknown>),
+          collectionMs,
+        },
+        downloadName,
+        exportId: job.exportId,
+      };
+      if (Buffer.byteLength(JSON.stringify(manifest)) > MANIFEST_RESERVE)
+        throw new Error('export_manifest_budget');
+      await atomicJson(join(output, 'generated.json'), manifest);
+      this.assertActive(job);
+      readyResult = {
+        ...message,
+        downloadName,
+        exportId: job.exportId,
+        expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
+      };
     } catch (error) {
       failed = true;
       primaryError = error;
     } finally {
       if (this.active?.id === job.exportId) delete this.active.worker;
-      const closed = await Promise.allSettled(handles.map((handle) => handle.close()));
-      const released = await Promise.allSettled(
-        participants.map((participant) => participant.release(job.exportId)),
+      const closed = await Promise.allSettled(
+        handles.map((handle) => Promise.resolve().then(() => handle.close())),
       );
-      cleanupFailures = [...closed, ...released]
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => result.reason);
+      const released = await Promise.allSettled(
+        participants.map((participant) =>
+          Promise.resolve().then(() => participant.release(job.exportId)),
+        ),
+      );
+      cleanupFailures = [
+        ...closed.flatMap((result) =>
+          result.status === 'rejected'
+            ? [new Error('export_input_close_failed', { cause: result.reason })]
+            : [],
+        ),
+        ...released.flatMap((result, index) =>
+          result.status === 'rejected'
+            ? [
+                Object.assign(
+                  new Error('export_participant_release_failed', {
+                    cause: result.reason,
+                  }),
+                  {
+                    producerId: participants[index]!.producerId,
+                  },
+                ),
+              ]
+            : [],
+        ),
+      ];
+    }
+    if (!failed) {
+      try {
+        this.assertActive(job);
+      } catch (error) {
+        // Cancellation during cleanup remains primary without dropping any
+        // close/release failures collected after the artifact was generated.
+        failed = true;
+        primaryError = error;
+      }
     }
     if (failed && cleanupFailures.length)
       throw new AggregateError([primaryError, ...cleanupFailures], 'export_cleanup_failed', {
         cause: primaryError,
       });
     if (failed) throw primaryError;
-    if (cleanupFailures.length) throw new AggregateError(cleanupFailures, 'export_cleanup_failed');
-    this.assertActive(job);
     if (!readyResult) throw new Error('export_result_missing');
     Object.assign(job, readyResult);
+    if (cleanupFailures.length) {
+      // The archive and manifest are already complete; cleanup uncertainty is
+      // separate from missing evidence and must not delete a usable artifact.
+      job.cleanupStatus = 'unconfirmed';
+      try {
+        this.onDiagnostic?.(
+          new AggregateError(cleanupFailures, 'export_cleanup_unconfirmed'),
+          job.exportId,
+          'cleanup',
+        );
+      } catch {
+        // Diagnostics cannot invalidate the completed archive.
+      }
+    }
   }
   private async frameRateSnapshot(gap: (source: string, phase: string, error: unknown) => void) {
     const name = 'frame-rate-live.json';

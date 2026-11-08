@@ -421,16 +421,20 @@ export function registerSupportRoutes(
     };
   }
   const exports = options.logsDirectory
-    ? new SupportExports(options.logsDirectory, options.exportParticipants, (error, exportId) =>
-        app.log.error(
-          {
+    ? new SupportExports(
+        options.logsDirectory,
+        options.exportParticipants,
+        (error, exportId, stage = 'build') => {
+          const evidence = {
             event: 'support_export',
-            stage: 'build',
+            stage,
             exportId,
             diagnostic: { error: diagnosticValue(error) },
-          },
-          'Support export failed',
-        ),
+          };
+          if (stage === 'cleanup')
+            app.log.warn(evidence, 'Support export ready; cleanup unconfirmed');
+          else app.log.error(evidence, 'Support export failed');
+        },
       )
     : null;
   app.post(
