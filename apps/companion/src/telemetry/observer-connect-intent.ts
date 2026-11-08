@@ -24,7 +24,9 @@ export async function reserveObserverConnect(
   });
   await safePath(directory);
   await syncDirectory(dirname(directory));
-  const key = createHash('sha256').update(JSON.stringify([game, intentId])).digest('hex');
+  const key = createHash('sha256')
+    .update(JSON.stringify([game, intentId]))
+    .digest('hex');
   try {
     await lstat(join(directory, key));
     return 'previous';
