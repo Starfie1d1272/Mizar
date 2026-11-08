@@ -19,6 +19,15 @@ export function installBlockReason(
   if (scenes.preparing || scenes.active !== 'waiting' || scenes.director?.mode === 'manual')
     return '结束节目制作后可更新。';
   if (obs?.streaming || obs?.recording) return '停止 OBS 推流或录制后可更新。';
+  if (
+    obs?.connection === 'connected' &&
+    (obs.streaming !== false ||
+      obs.recording !== false ||
+      obs.streamPhase !== 'idle' ||
+      obs.recordPhase !== 'idle' ||
+      obs.outputPending !== false)
+  )
+    return 'OBS 推流或录制状态尚未确认或正在变化，请在 OBS 核对后重试。';
   if ((!obs || obs.connection !== 'connected') && !obsProcessAbsent)
     return obsProcessAbsent === false
       ? 'OBS 正在运行但未连接，请关闭 OBS，或连接后核对推流与录制再更新。'

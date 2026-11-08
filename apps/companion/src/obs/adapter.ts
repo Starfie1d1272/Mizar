@@ -109,6 +109,10 @@ export interface ObsStatus {
   /** Absent on older observations; consumers must treat absence as unknown. */
   readonly streamPhase?: ObsOutputPhase;
   readonly recording: boolean | null;
+  /** Absent on older observations; consumers must treat absence as unknown. */
+  readonly recordPhase?: ObsOutputPhase;
+  /** True while a stream or recording command is in flight. */
+  readonly outputPending?: boolean;
   readonly passwordConfigured: boolean;
   readonly video: null | { readonly canvas: string; readonly output: string; readonly fps: number };
   readonly findings: readonly ObsFinding[];
@@ -813,12 +817,15 @@ export class ObsAdapter {
       streaming: null,
       streamPhase: 'unknown',
       recording: null,
+      recordPhase: 'unknown',
+      outputPending: true,
       passwordConfigured: Boolean(config.password),
       video: null,
       findings: [],
       programEvidence: null,
     };
     const findings: ObsFinding[] = [];
+    let outputsObserved = false;
     const query = async (code: string, message: string, read: () => Promise<void>) => {
       try {
         await read();
@@ -843,11 +850,14 @@ export class ObsAdapter {
             'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
             async () => {
               const outputs = await this.outputs.read();
+              outputsObserved = true;
               status = {
                 ...status,
                 streaming: outputs.stream.active,
                 streamPhase: outputs.stream.phase,
                 recording: outputs.record.active,
+                recordPhase: outputs.record.phase,
+                outputPending: outputs.stream.pending !== null || outputs.record.pending !== null,
               };
               if (outputs.stream.active === null || outputs.record.active === null)
                 throw new Error('obs_output_state_unknown');
@@ -950,6 +960,18 @@ export class ObsAdapter {
       ]).finally(() => {
         if (timer) clearTimeout(timer);
       });
+    }
+    // Other status reads can take time. Use the latest observed output events.
+    if (outputsObserved) {
+      const outputs = this.outputs.snapshot();
+      status = {
+        ...status,
+        streaming: outputs.stream.active,
+        streamPhase: outputs.stream.phase,
+        recording: outputs.record.active,
+        recordPhase: outputs.record.phase,
+        outputPending: outputs.stream.pending !== null || outputs.record.pending !== null,
+      };
     }
     return { ...status, facts, findings: [...findings], programEvidence };
   }
