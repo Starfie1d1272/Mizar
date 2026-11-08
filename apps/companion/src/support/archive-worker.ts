@@ -1,4 +1,5 @@
 import { sourceCoversProjection } from './technical-projection.js';
+import { diagnosticValue } from './session-journal.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
@@ -162,7 +163,7 @@ export function runArchiveWorker(
     try {
       return action();
     } catch (error) {
-      throw new OutputFailure(String(error));
+      throw new OutputFailure('export_output_failed', { cause: error });
     }
   }
   function writeAll(handle: number, data: Uint8Array) {
@@ -679,8 +680,12 @@ export function runArchiveWorker(
     if (!n) throw Error('snapshot_short_read');
     return n;
   }
+  let failed = false,
+    indexCreated = false,
+    primaryError: unknown;
   try {
     output(() => fs.mkdirSync(indexDirectory, { mode: 0o700 }));
+    indexCreated = true;
     begin();
     for (const source of d.sources) {
       report({ phase: 'encoding', inputBytes: processedBytes, outputBytes: totalBytes });
@@ -796,11 +801,39 @@ export function runArchiveWorker(
       );
     add('snapshots/current.json', Buffer.from(JSON.stringify(redact(d.snapshot))));
     finish(true);
-    output(() => {
-      if (factsFd !== undefined) fs.closeSync(factsFd);
-      factsFd = undefined;
-      fs.rmSync(indexDirectory, { recursive: true });
+  } catch (error) {
+    failed = true;
+    primaryError = error;
+  }
+  // A completed archive is independent of temporary-index cleanup. Attempt
+  // each close/removal even if another fails, without replacing the build error.
+  const cleanupFailures: Error[] = [];
+  const cleanup = (reason: string, action: () => void) => {
+    try {
+      action();
+    } catch (cause) {
+      cleanupFailures.push(new Error(reason, { cause }));
+    }
+  };
+  if (fd !== undefined) cleanup('export_output_close_failed', () => fs.closeSync(fd!));
+  if (factsFd !== undefined)
+    cleanup('export_identity_facts_close_failed', () => fs.closeSync(factsFd!));
+  if (indexCreated)
+    cleanup('export_identity_index_remove_failed', () =>
+      fs.rmSync(indexDirectory, { recursive: true, force: true }),
+    );
+  const secrets = d.sources.flatMap((source) => source.secrets ?? []);
+  const diagnostics = {
+    cleanupFailures: diagnosticValue(cleanupFailures, '', new Set(), secrets),
+  };
+  if (failed)
+    report({
+      phase: 'failed',
+      error: diagnosticValue(String(primaryError), '', new Set(), secrets),
+      diagnostic: diagnosticValue(primaryError, '', new Set(), secrets),
+      ...diagnostics,
     });
+  else
     report({
       phase: 'ready',
       knownGaps: gaps.length,
@@ -814,14 +847,6 @@ export function runArchiveWorker(
       inputBytes: processedBytes,
       outputBytes: totalBytes,
       measurements: measurements(),
+      ...diagnostics,
     });
-  } catch (error) {
-    try {
-      if (fd !== undefined) fs.closeSync(fd);
-      if (factsFd !== undefined) fs.closeSync(factsFd);
-    } catch {
-      /* Preserve the first output failure. */
-    }
-    report({ phase: 'failed', error: String(redact(String(error))) });
-  }
 }

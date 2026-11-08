@@ -266,7 +266,7 @@ export class SupportExports {
     let readyResult: (ExportJob & Record<string, unknown>) | undefined;
     let failed = false;
     let primaryError: unknown;
-    let cleanupFailures: unknown[];
+    const cleanupFailures: unknown[] = [];
     try {
       for (const participant of participants) {
         this.assertActive(job);
@@ -442,22 +442,38 @@ export class SupportExports {
         if (this.active?.id === job.exportId) this.active.worker = worker;
         if (job.phase === 'cancelled') void worker.terminate();
         let result: (ExportJob & Record<string, unknown>) | undefined;
-        let workerError: Error | undefined;
+        const workerErrors: Error[] = [];
         worker.on('message', (message: ExportJob & Record<string, unknown>) => {
-          if (this.active?.id !== job.exportId || job.phase === 'cancelled') return;
-          if (message.phase === 'failed') workerError ??= new Error(message.error);
-          else if (message.phase === 'ready') result = message;
-          else if (!result && !workerError) Object.assign(job, message, { exportId: job.exportId });
+          if (this.active?.id !== job.exportId || this.active.worker !== worker) return;
+          // Worker diagnostics never enter the public status or generated manifest.
+          // Collect terminal failures even after cancellation, but ignore late progress/ready.
+          const { cleanupFailures: workerCleanup, diagnostic, ...status } = message;
+          if (Array.isArray(workerCleanup)) cleanupFailures.push(...workerCleanup);
+          if (status.phase === 'failed')
+            workerErrors.push(new Error(status.error, { cause: diagnostic }));
+          else if (job.phase !== 'cancelled') {
+            if (status.phase === 'ready') result = status;
+            else if (!result && !workerErrors.length)
+              Object.assign(job, status, { exportId: job.exportId });
+          }
         });
         worker.on('error', (error) => {
-          workerError ??=
-            error instanceof Error ? error : new Error('export_worker_error', { cause: error });
+          workerErrors.push(new Error('export_worker_error', { cause: error }));
         });
         // A message or error is not proof that the worker has stopped using
         // shared input descriptors. Cleanup and Host pin settlement wait for exit.
         worker.once('exit', (code) => {
-          if (job.phase === 'cancelled') reject(new Error('export_cancelled'));
-          else if (workerError) reject(workerError);
+          if (job.phase === 'cancelled') {
+            const cancelled = new Error('export_cancelled');
+            reject(
+              workerErrors.length
+                ? new AggregateError([cancelled, ...workerErrors], 'export_cancelled', {
+                    cause: cancelled,
+                  })
+                : cancelled,
+            );
+          } else if (workerErrors.length)
+            reject(new AggregateError(workerErrors, 'export_worker_failed'));
           else if (code !== 0 || !result) reject(new Error(`export_worker_exit_${code}`));
           else resolve(result);
         });
@@ -500,7 +516,7 @@ export class SupportExports {
           Promise.resolve().then(() => participant.release(job.exportId)),
         ),
       );
-      cleanupFailures = [
+      cleanupFailures.push(
         ...closed.flatMap((result) =>
           result.status === 'rejected'
             ? [new Error('export_input_close_failed', { cause: result.reason })]
@@ -520,7 +536,7 @@ export class SupportExports {
               ]
             : [],
         ),
-      ];
+      );
     }
     if (!failed) {
       try {
