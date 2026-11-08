@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ObsAudioRole, ObsAudioRoutingStatus } from '@mizar/protocol/obs';
 import { Button, Select } from '../ui';
 
@@ -31,6 +31,9 @@ export function ObsAudioRouting() {
     candidates: { id: string; label: string }[];
   } | null>(null);
   const [application, setApplication] = useState('');
+  // This is only a suggested target; no OBS configuration changes until confirmed.
+  const [targetMode, setTargetMode] = useState<'desktop' | 'independent'>('desktop');
+  const targetInitialized = useRef(false);
   const [desktopSelection, setDesktopSelection] = useState('');
   const [chooseDesktop, setChooseDesktop] = useState(false);
   async function refreshCommentary() {
@@ -157,6 +160,10 @@ export function ObsAudioRouting() {
     const response = await fetch('/local/v1/obs/audio-routing', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取 OBS 音频来源，请检查连接。');
     const current = (await response.json()) as ObsAudioRoutingStatus;
+    if (!targetInitialized.current) {
+      targetInitialized.current = true;
+      setTargetMode(current.desktop ? 'independent' : 'desktop');
+    }
     setStatus(current);
     return current;
   }
@@ -186,6 +193,8 @@ export function ObsAudioRouting() {
     if (!response.ok) {
       const result = (await response.json()) as { error?: string; message?: string };
       if (result.error === 'audio_desktop_choice_required') setChooseDesktop(true);
+      // The refreshed list has new short-lived selection IDs.
+      setDesktopSelection('');
       await refresh().catch(() => undefined);
       throw new Error(
         result.message ??
@@ -197,6 +206,8 @@ export function ObsAudioRouting() {
     await refresh();
     setDesktopSelection('');
     setChooseDesktop(false);
+    if (!cancelling && !result.waiting)
+      setTargetMode(mode === 'desktop' ? 'independent' : 'desktop');
     setMessage(
       cancelling
         ? '已取消等待。'
@@ -286,48 +297,67 @@ export function ObsAudioRouting() {
               。更换来源需先切回独立分路；无法切回时请在 OBS 核对当前来源。
             </p>
           )}
-          {!status.transition && !status.desktop && !status.waitingIndependent && (
-            <Select
-              label="OBS 桌面音频来源（不是播放设备）"
-              value={desktopSelection}
-              disabled={busy}
-              onChange={(event) => setDesktopSelection(event.target.value)}
-            >
-              <option value="">自动选择桌面音频来源</option>
-              {status.candidates
-                .filter((candidate) => candidate.kind === 'wasapi_output_capture')
-                .map((candidate) => (
-                  <option key={candidate.selectionId} value={candidate.selectionId}>
-                    {candidate.name}
-                  </option>
-                ))}
-            </Select>
-          )}{' '}
           {status.transition ? (
             <p role="alert">
               上次切换结果未确认。请立即在 OBS
               核对直播电平和当前音源；如无声，先手动恢复可用来源，勿反复切换。
             </p>
+          ) : status.waitingIndependent ? (
+            <>
+              <Button disabled={busy} onClick={() => void run(() => switchMode('cancel'))}>
+                取消等待
+              </Button>{' '}
+              <Button disabled={busy} onClick={() => void run(() => switchMode('independent'))}>
+                再次尝试切回独立分路
+              </Button>
+            </>
           ) : (
             <>
+              <Select
+                label="切换目标"
+                value={targetMode}
+                disabled={busy}
+                onChange={(event) => {
+                  setTargetMode(event.target.value as 'desktop' | 'independent');
+                  setDesktopSelection('');
+                  setChooseDesktop(false);
+                }}
+              >
+                <option value="desktop">桌面混音（新设置推荐）</option>
+                <option value="independent">独立分路</option>
+              </Select>
+              <p>这里只选择切换目标，点击下方按钮后才会更改 OBS 音频。</p>
+              {targetMode === 'desktop' && !status.desktop && (
+                <Select
+                  label="OBS 桌面音频来源（不是播放设备）"
+                  value={desktopSelection}
+                  disabled={busy}
+                  onChange={(event) => setDesktopSelection(event.target.value)}
+                >
+                  <option value="">自动选择桌面音频来源</option>
+                  {status.candidates
+                    .filter((candidate) => candidate.kind === 'wasapi_output_capture')
+                    .map((candidate) => (
+                      <option key={candidate.selectionId} value={candidate.selectionId}>
+                        {candidate.name}
+                      </option>
+                    ))}
+                </Select>
+              )}{' '}
               <Button
                 disabled={
                   busy ||
-                  Boolean(status.desktop && !status.waitingIndependent) ||
-                  (chooseDesktop && !desktopSelection && !status.waitingIndependent)
+                  (targetMode === 'desktop' && Boolean(status.desktop)) ||
+                  (targetMode === 'desktop' && chooseDesktop && !desktopSelection) ||
+                  (targetMode === 'independent' && !status.desktop)
                 }
-                onClick={() =>
-                  void run(() => switchMode(status.waitingIndependent ? 'cancel' : 'desktop'))
-                }
+                onClick={() => void run(() => switchMode(targetMode))}
               >
-                {status.waitingIndependent ? '取消等待' : '切换桌面混音'}
-              </Button>{' '}
-              <Button
-                disabled={busy || (!status.desktop && !status.waitingIndependent)}
-                onClick={() => void run(() => switchMode('independent'))}
-              >
-                {status.waitingIndependent ? '再次尝试切回独立分路' : '切回独立分路'}
+                {targetMode === 'desktop' ? '切换桌面混音' : '切回独立分路'}
               </Button>
+              {targetMode === 'independent' && !status.desktop && (
+                <p>当前不是桌面混音。请在下方准备或核对独立分路。</p>
+              )}
             </>
           )}
         </>
