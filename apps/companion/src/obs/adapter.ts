@@ -779,6 +779,11 @@ export class ObsAdapter {
           code: 'commentary_pending',
           message: '音频模式切换待核对，请在声音设置和 OBS 中检查。',
         });
+      if (
+        this.audioPreparationWarnings.routing?.code === 'audio_bindings_required' &&
+        (await this.audioRouting?.managedBindings(obs, endpoint).catch(() => null))
+      )
+        delete this.audioPreparationWarnings.routing;
       for (const warning of Object.values(this.audioPreparationWarnings))
         if (warning && !audio.some((item) => item.code === warning.code)) audio.push(warning);
       return [...findings, ...audio];
@@ -1521,6 +1526,14 @@ export class ObsAdapter {
           }
           throw error;
         });
+        if (mode === 'desktop') {
+          const after = await this.audioRouting!.modeRecoveryState();
+          if (after.desktop && !after.transition) {
+            delete this.audioPreparationWarnings.commentary;
+            if (this.audioPreparationWarnings.routing?.code === 'audio_bindings_required')
+              delete this.audioPreparationWarnings.routing;
+          }
+        }
         return { monitorPending };
       }),
     );
@@ -1726,6 +1739,8 @@ export class ObsAdapter {
           state.independentCommentaryDisabled
         )
           throw new Error('audio_mode_pending');
+        if (await this.audioRouting!.requiresManualBindings())
+          throw new Error('audio_bindings_required');
         if (
           Object.values(state.bindings).some(
             (binding) => binding && ['game_capture', 'window_capture'].includes(binding.inputKind),
@@ -2327,15 +2342,24 @@ export class ObsAdapter {
       let modePending = false;
       let desktopBinding = false;
       let defaultDesktop = false;
+      let manualBindingsRequired = false;
       try {
         modePending = Boolean(await this.audioRouting?.modePending());
         desktopBinding = Boolean(await this.audioRouting?.desktopBinding());
         defaultDesktop = Boolean(
           this.commentary &&
           (await this.commentary.owner.unconfigured()) &&
-          (await this.audioRouting?.neverConfigured()),
+          (await this.audioRouting?.hasNoEstablishedMode()),
         );
-        delete this.audioPreparationWarnings.routing;
+        manualBindingsRequired = Boolean(await this.audioRouting?.requiresManualBindings());
+        if (manualBindingsRequired && !defaultDesktop) {
+          this.audioPreparationWarnings.routing = {
+            code: 'audio_bindings_required',
+            message: '旧配置尚未登记音频分路，请在声音设置中手动绑定来源。',
+          };
+          this.findings = [...this.findings, this.audioPreparationWarnings.routing];
+        } else if (this.audioPreparationWarnings.routing?.code !== 'audio_bindings_required')
+          delete this.audioPreparationWarnings.routing;
       } catch (error) {
         if (!current()) throw error;
         audioRoutingReady = false;
@@ -2359,6 +2383,7 @@ export class ObsAdapter {
         prepared.audioReady &&
         this.commentary &&
         audioRoutingReady &&
+        !manualBindingsRequired &&
         !defaultDesktop &&
         !desktopBinding &&
         !modePending

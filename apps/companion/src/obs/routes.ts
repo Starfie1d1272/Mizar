@@ -144,12 +144,31 @@ export function registerObsRoutes(
     try {
       return { ok: true, findings: await options.adapter.prepareCommentaryAudio() };
     } catch (error) {
+      request.log.error(
+        {
+          event: 'obs',
+          stage: 'commentary_prepare',
+          diagnostic: {
+            error: obsErrorEvidence(
+              error,
+              (await options.configStore.read().catch(() => undefined))?.password,
+            ),
+          },
+        },
+        'OBS commentary preparation failed',
+      );
       return reply.code(409).send({
         error: 'commentary_prepare_unavailable',
         message:
           error instanceof Error && error.message === 'audio_video_requires_full_preparation'
             ? '音频绑定包含画面来源或已失效，请在 OBS 核对，或停止输出后使用完整场景准备。'
-            : '解说音频尚未准备，请停止直播和录制后检查 OBS 来源。',
+            : error instanceof Error && error.message === 'audio_bindings_required'
+              ? '旧配置尚未登记音频分路，请在声音设置中手动绑定游戏、解说和麦克风来源。'
+              : error instanceof ObsVideoError && error.code === 'video_output_active'
+                ? 'OBS 视频输出正在运行，请停止对应输出后重试。'
+                : error instanceof ObsVideoError && error.code === 'outputs_unknown'
+                  ? '无法确认 OBS 输出状态，请检查连接后重试。'
+                  : '解说音频准备未确认，请检查 OBS 来源和诊断后重试。',
       });
     }
   });

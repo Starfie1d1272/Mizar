@@ -47,6 +47,23 @@ export class RemoteCommentary {
   private state?: State;
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly path: string) {}
+  private async initialRevision(revision: string): Promise<string> {
+    const marker = `${this.path}.unconfigured`;
+    const markerTemp = `${marker}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(markerTemp, revision, { flag: 'wx', mode: 0o600 });
+      await link(markerTemp, marker);
+      return revision;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      return z
+        .string()
+        .uuid()
+        .parse(await readFile(marker, 'utf8'));
+    } finally {
+      await rm(markerTemp, { force: true });
+    }
+  }
   private async load(): Promise<State> {
     if (this.state) return this.state;
     try {
@@ -57,21 +74,7 @@ export class RemoteCommentary {
       // Write the marker first. If initialization is interrupted before the
       // preference file is linked, reuse its revision rather than losing the
       // distinction between an initial default and an explicit choice.
-      const marker = `${this.path}.unconfigured`;
-      const markerTemp = `${marker}.${randomUUID()}.tmp`;
-      let revision: string = randomUUID();
-      try {
-        await writeFile(markerTemp, revision, { flag: 'wx', mode: 0o600 });
-        await link(markerTemp, marker);
-      } catch (markerError) {
-        if ((markerError as NodeJS.ErrnoException).code !== 'EEXIST') throw markerError;
-        revision = z
-          .string()
-          .uuid()
-          .parse(await readFile(marker, 'utf8'));
-      } finally {
-        await rm(markerTemp, { force: true });
-      }
+      const revision = await this.initialRevision(randomUUID());
       const initial: State = { revision, preference: { mode: 'autoTeamspeak' } };
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try {
@@ -90,13 +93,14 @@ export class RemoteCommentary {
   async get(): Promise<State> {
     return structuredClone(await this.load());
   }
-  /** Existing preference files without a matching initial marker are user choices. */
+  /** Legacy auto-TeamSpeak preferences may have been created by a read alone. */
   async unconfigured(): Promise<boolean> {
     const state = await this.load();
+    if (state.preference.mode !== 'autoTeamspeak') return false;
     try {
       return (await readFile(`${this.path}.unconfigured`, 'utf8')) === state.revision;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
       throw error;
     }
   }
@@ -106,6 +110,9 @@ export class RemoteCommentary {
       if (current.revision !== revision) throw new Error('commentary_revision_changed');
       const next = schema.parse({ revision: randomUUID(), preference: value });
       await mkdir(dirname(this.path), { recursive: true });
+      // Record the previous revision before the explicit choice is committed.
+      // This also distinguishes future choices from legacy read-created defaults.
+      await this.initialRevision(current.revision);
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try {
         await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
