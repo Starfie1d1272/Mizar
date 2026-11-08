@@ -968,11 +968,6 @@ export class DiagnosticDelivery {
       value.stage = value.kind ?? '';
       const time = diagnosticSourceUtc(value.observedAt);
       if (!time || !this.state.consentAt || time < this.state.consentAt) return;
-      if (
-        !this.state.sessions[cursorId] &&
-        Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
-      )
-        this.state.sessions[cursorId] = { from: 0, queued: 0 };
     }
     if (
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.startupSessionId) ||
@@ -984,6 +979,17 @@ export class DiagnosticDelivery {
       this.omitted('invalid_source_cursor');
       return;
     }
+    // Invalid records and new chat-only sources must not consume producer slots.
+    // Existing cursors deduplicate old chat records before counting their exclusion.
+    if (!this.state.sessions[cursorId] && /chat/i.test(value.stage)) {
+      this.omitted('chat_not_collected');
+      return;
+    }
+    if (
+      !this.state.sessions[cursorId] &&
+      Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
+    )
+      this.state.sessions[cursorId] = { from: 0, queued: 0 };
     const cursor = this.state.sessions[cursorId];
     if (!cursor) {
       // Never treat a producer rejected by the cursor budget as a completed scan.
