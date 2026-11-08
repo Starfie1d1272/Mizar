@@ -1726,6 +1726,8 @@ export class ObsAdapter {
       this.withObs(async (obs, endpoint) => {
         await this.audioRouting!.bind(obs, command, endpoint, async (binding) => {
           if (command.role !== 'remoteCommentary' || !this.commentary) return;
+          if ((await readCommentarySwitch(`${this.commentary.journal}.switch`))?.phase === 'sent')
+            throw new Error('commentary_switch_recovery_required');
           const current = await this.commentary.owner.get();
           await this.commentary.owner.set(
             binding
@@ -2368,11 +2370,7 @@ export class ObsAdapter {
       try {
         modePending = Boolean(await this.audioRouting?.modePending());
         desktopBinding = Boolean(await this.audioRouting?.desktopBinding());
-        defaultDesktop = Boolean(
-          this.commentary &&
-          (await this.commentary.owner.unconfigured()) &&
-          (await this.audioRouting?.hasNoEstablishedMode()),
-        );
+        defaultDesktop = Boolean(await this.audioRouting?.hasNoEstablishedMode());
         manualBindingsRequired = Boolean(await this.audioRouting?.requiresManualBindings());
         if (manualBindingsRequired && !defaultDesktop) {
           this.audioPreparationWarnings.routing = {

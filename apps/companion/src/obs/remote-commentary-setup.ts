@@ -35,7 +35,9 @@ export async function prepareRemoteCommentary(
     { code: 'commentary_pending', message },
   ];
   if ((await readCommentarySwitch(`${journal}.switch`))?.phase === 'sent')
-    return pending('上次解说来源切换结果待核对，请在 OBS 中检查后处理。');
+    return pending(
+      '上次解说来源切换结果未确认，Mizar 暂不能更改解说选择。请在 OBS 核对音源和电平、录制试听，并保存诊断包排查。',
+    );
   if (state.preference.mode === 'disabled') {
     await rm(`${journal}.waiting`, { force: true });
     return [];

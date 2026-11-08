@@ -36,6 +36,8 @@ const outputMessages: Record<ObsOutputError['code'], string> = {
   obs_output_failed: 'OBS 操作未完成，请检查 OBS 配置与版本，再查看诊断。',
   obs_output_unconfirmed: '操作结果尚未确认，请等待 OBS 重新连接后核对，勿重复操作。',
 };
+const commentaryRecoveryMessage =
+  '上次解说来源切换结果未确认，Mizar 暂不能更改解说选择。请在 OBS 核对音源和电平、录制试听，并保存诊断包排查。';
 function outputFailure(error: ObsOutputError) {
   const code = Object.hasOwn(outputMessages, error.code) ? error.code : 'obs_output_failed';
   return { error: code, message: error.message || outputMessages[code] };
@@ -197,7 +199,9 @@ export function registerObsRoutes(
           error instanceof Error &&
           error.message === 'commentary_binding_change_requires_independent'
             ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
-            : '设置未确认，请核对后重试。',
+            : error instanceof Error && error.message === 'commentary_switch_recovery_required'
+              ? commentaryRecoveryMessage
+              : '设置未确认，请核对后重试。',
       });
     }
   });
@@ -237,7 +241,9 @@ export function registerObsRoutes(
             error instanceof Error &&
             error.message === 'commentary_binding_change_requires_independent'
               ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
-              : '设置未确认，请重新读取应用并核对。',
+              : error instanceof Error && error.message === 'commentary_switch_recovery_required'
+                ? commentaryRecoveryMessage
+                : '设置未确认，请重新读取应用并核对。',
         });
       }
     },
@@ -285,7 +291,7 @@ export function registerObsRoutes(
             : 'audio_mode_unavailable',
         message:
           error instanceof Error && error.message === 'audio_desktop_choice_required'
-            ? '检测到多个桌面播放设备，请选择要采集的设备。'
+            ? '检测到多个 OBS 桌面音频来源，请选择来源并在 OBS 核对其播放设备。'
             : error instanceof Error && error.message === 'audio_commentary_unavailable'
               ? '解说来源尚未就绪，桌面混音仍可用。'
               : error instanceof Error &&
@@ -319,10 +325,13 @@ export function registerObsRoutes(
     try {
       await options.adapter.bindAudio(parsed.data);
       return { ok: true };
-    } catch {
+    } catch (error) {
       return reply.code(409).send({
         error: 'audio_binding_changed',
-        message: '绑定结果未确认，请刷新 OBS 来源后核对。',
+        message:
+          error instanceof Error && error.message === 'commentary_switch_recovery_required'
+            ? commentaryRecoveryMessage
+            : '绑定结果未确认，请刷新 OBS 来源后核对。',
       });
     }
   });

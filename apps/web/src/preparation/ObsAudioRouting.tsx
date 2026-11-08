@@ -81,16 +81,27 @@ export function ObsAudioRouting() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, revision: commentary.revision }),
     });
-    await refreshCommentary();
     if (!response.ok) {
+      await refreshCommentary().catch(() => undefined);
       const result = (await response.json()) as { message?: string };
       throw new Error(result.message ?? '设置未确认，请核对后重试。');
     }
+    await refreshCommentary().catch(() => {
+      throw new Error('选择已保存，但解说设置刷新失败；请重新读取后核对。');
+    });
     setApplications(null);
     setApplication('');
-    if (status?.desktop) {
+    const current = await refresh().catch(() => {
+      throw new Error('选择已保存，但音频状态刷新失败；请重新读取 OBS 音频来源。');
+    });
+    if (current.desktop) {
       setCommentaryPreparing(false);
-      setMessage('分离采集的选择已保存，当前仍使用桌面混音。');
+      setMessage('分离采集的选择已保存。需要独立分路时，请在上方选择并切回。');
+    } else if (!Object.values(current.bindings).some(Boolean)) {
+      setCommentaryPreparing(false);
+      setMessage(
+        '分离采集的选择已保存。请在上方准备独立分路；若提示旧配置未登记，请先在下方“手动绑定与来源详情”中绑定。',
+      );
     } else if (mode === 'autoTeamspeak') await prepareCommentary();
     else setCommentaryPreparing(false);
   }
@@ -119,8 +130,17 @@ export function ObsAudioRouting() {
     }
     setApplications(null);
     setApplication('');
-    await refreshCommentary();
-    if (status?.desktop) setMessage('分离采集的应用已保存，当前仍使用桌面混音。');
+    await refreshCommentary().catch(() => {
+      throw new Error('应用已保存，但解说设置刷新失败；请重新读取后核对。');
+    });
+    const current = await refresh().catch(() => {
+      throw new Error('应用已保存，但音频状态刷新失败；请重新读取 OBS 音频来源。');
+    });
+    if (current.desktop) setMessage('分离采集的应用已保存。需要独立分路时，请在上方选择并切回。');
+    else if (!Object.values(current.bindings).some(Boolean))
+      setMessage(
+        '分离采集的应用已保存。请在上方准备独立分路；若提示旧配置未登记，请先在下方“手动绑定与来源详情”中绑定。',
+      );
     else await prepareCommentary();
   }
   function commentaryReady(current: ObsAudioRoutingStatus) {
@@ -229,8 +249,9 @@ export function ObsAudioRouting() {
       body: JSON.stringify({ role, selectionId, revision: status.revision }),
     });
     if (!response.ok) {
-      await refresh();
-      throw new Error('绑定结果未确认，请核对刷新后的状态再操作。');
+      const result = (await response.json()) as { message?: string };
+      await refresh().catch(() => undefined);
+      throw new Error(result.message ?? '绑定结果未确认，请核对刷新后的状态再操作。');
     }
     try {
       await refresh();
@@ -302,7 +323,8 @@ export function ObsAudioRouting() {
           {status.transition ? (
             <p role="alert">
               上次切换结果未确认。请立即在 OBS
-              核对直播电平和当前音源；如无声，先手动恢复可用来源，勿反复切换。
+              核对直播电平和当前音源；如无声，先手动恢复可用来源并录制试听。Mizar
+              暂不能继续切换，请保存诊断包排查，勿反复切换。
             </p>
           ) : status.waitingIndependent ? (
             <>
