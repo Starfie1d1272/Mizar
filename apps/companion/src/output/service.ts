@@ -1560,8 +1560,19 @@ export class OutputService {
     ) {
       // The sink revalidates this exact durable authority, never the current selection's claim.
       // Missing authority pauses delivery; changing selection does not cancel accepted work.
+      // Check the event's original delivery identity, not the current binding or authority.
+      const cursor = event.cursor;
+      const originalScope: BoundaryScope = {
+        matchId: event.matchId,
+        producerInstanceId: cursor.producerInstanceId,
+        ...(cursor.liveSessionId ? { liveSessionId: cursor.liveSessionId } : {}),
+        runtimeSeq: cursor.runtimeSeq,
+        programSourceGeneration: cursor.programSourceGeneration,
+        mapEpoch: cursor.mapEpoch,
+      };
       return (
         !this.quarantined &&
+        !this.outbox?.hasBoundaryGap(originalScope) &&
         (event.kind !== 'map_started' || recorded.lineupSteam64?.length === 10) &&
         !this.outbox?.hasUnconfirmedBoundary(event) &&
         !this.outbox
