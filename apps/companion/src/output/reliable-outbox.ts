@@ -1938,7 +1938,8 @@ export class ReliableOutbox {
           accepted: 'receiver_accepted',
           rejected: 'delivery_rejected_unknown',
           expired: 'retention_expired',
-          superseded: record.dispositionReason ?? record.supersessionReason ?? 'current_scope_failed',
+          superseded:
+            record.dispositionReason ?? record.supersessionReason ?? 'current_scope_failed',
           pending: record.attempts === 0 ? 'queued' : 'retry_unknown',
         }[record.status],
       );

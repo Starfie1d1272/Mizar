@@ -410,8 +410,9 @@ export function parseRecord(input: unknown): ReliableOutboxRecord {
     ...(item.supersessionReason === undefined
       ? {}
       : {
-          supersessionReason:
-            item.supersessionReason as NonNullable<ReliableOutboxRecord['supersessionReason']>,
+          supersessionReason: item.supersessionReason as NonNullable<
+            ReliableOutboxRecord['supersessionReason']
+          >,
         }),
     ...(rejection === undefined ? {} : { rejection }),
     ...(typeof item.recoveryBoundaryKey === 'string'
