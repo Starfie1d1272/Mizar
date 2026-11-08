@@ -41,8 +41,10 @@ export function Settings({ tab }: { tab: string }) {
     window.__TAURI_INTERNALS__ ? '/local/v1/production' : null,
   );
   const readiness =
-    useLocalRead<{ label: string; ready: boolean; reason: string }[]>('/local/v1/readiness');
-  const gameData = readiness?.find((item) => item.label === 'CS2 / GSI');
+    useLocalRead<{ id: string; label: string; ready: boolean; reason: string }[]>(
+      '/local/v1/readiness',
+    );
+  const gameData = readiness?.find((item) => item.id === 'game-data');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [gsi, setGsi] = useState<{
@@ -416,8 +418,8 @@ export function Settings({ tab }: { tab: string }) {
                 ) : null}
                 <p>
                   支持选择 CS2 安装根目录、game\bin\win64 文件夹或
-                  cs2.exe。更换安装位置前，请先恢复当前 GSI
-                  配置；受管理游戏退出并恢复设置后才能更换。
+                  cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；由 Mizar
+                  启动的游戏结束并恢复设置后才能更换。
                 </p>
                 <p className="settings-conflict-files">
                   {gsi?.cfgPath ??

@@ -691,6 +691,13 @@ pub fn restored(record: &Value, current: &str) -> Result<String, String> {
     if record["kind"] == "convars" {
         let before = fps_field(original)?;
         let now = fps_fields(current)?;
+        let current_value = fps_number(&now[0].value)?;
+        let applied_value = fps_number(&fps_field(applied)?.value)?;
+        // This startup transaction owns only its own logical value. A later
+        // in-game edit belongs to the operator, including equal duplicate tokens.
+        if current_value != applied_value && current_value != fps_number(&before.value)? {
+            return Ok(current.to_string());
+        }
         let mut result = current.to_string();
         for token in now.into_iter().rev() {
             result.replace_range(token.start..token.end, &original[before.start..before.end]);

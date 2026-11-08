@@ -67,24 +67,6 @@ export function ObserverHints() {
     !error
   )
     return null;
-  const labels = {
-    connecting: '连接提前提示',
-    paused: '比赛暂停',
-    unavailable:
-      observer?.waitingReason === 'calibration-pending'
-        ? '正在校准延迟'
-        : observer?.waitingReason === 'calibration-reacquiring'
-          ? '正在重新校准延迟'
-          : observer?.waitingReason === 'source-stale'
-            ? '等待提前提示数据'
-            : observer?.waitingReason === 'identity-unavailable'
-              ? '等待当前选手身份'
-              : observer?.waitingReason === 'source-map-mismatch'
-                ? '等待提前提示切换当前地图'
-                : observer?.waitingReason === 'map-missing'
-                  ? '等待当前地图'
-                  : '等待节目数据',
-  };
   return (
     <section className="workspace-observer-assist" aria-label="私有提前提示">
       {awaitingTooLong && !needsRecovery ? (
@@ -150,25 +132,10 @@ export function ObserverHints() {
             ? '正在重连提前提示'
             : connecting
               ? '正在连接提前提示'
-              : observer
-                ? labels[observer.state as keyof typeof labels]
-                : '辅助状态待确认'}
+              : observer?.state === 'paused'
+                ? '比赛暂停'
+                : '正在接收比赛数据…'}
         </StatusPill>
-      ) : null}
-      {observer?.state === 'ready' && !pending && !needsRecovery && !reconnecting && !connecting ? (
-        <>
-          <StatusPill tone="info">
-            {observer.effectiveDelaySeconds == null
-              ? '节目时钟'
-              : `延迟 ${observer.effectiveDelaySeconds.toFixed(1)} 秒`}{' '}
-            ·
-            {observer.calibrationState === 'measured'
-              ? '实时校准'
-              : observer.calibrationState === 'held'
-                ? '保持上次校准'
-                : '尚未校准'}
-          </StatusPill>
-        </>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {hints.length && !pending && !needsRecovery && !reconnecting && !connecting ? (

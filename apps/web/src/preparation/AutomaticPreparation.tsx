@@ -42,16 +42,14 @@ export function AutomaticPreparation() {
     if (!window.__TAURI_INTERNALS__) return;
     let active = true;
     let revision = 0;
-    const refresh = (event?: Event) => {
+    const refresh = () => {
       const requested = ++revision;
       void readObsConfigurationContext().then(
         ({ message }) => {
           if (active && requested === revision) setConfiguration(message);
         },
         () => {
-          const receipt = event instanceof CustomEvent ? event.detail : null;
-          if (active && requested === revision && typeof receipt === 'string')
-            setConfiguration(receipt);
+          if (active && requested === revision) setConfiguration('');
         },
       );
     };

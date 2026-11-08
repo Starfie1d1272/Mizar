@@ -330,6 +330,7 @@ pub struct PreparedExport {
     export_id: String,
     files: Vec<(String, u64, String, File)>,
     manifest_bytes: Vec<u8>,
+    single_file_name: Option<String>,
     _manifest: File,
     _lease: Pending,
     _directories: Vec<File>,
@@ -426,7 +427,18 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
     if manifest["outputBytes"].as_u64() != Some(total) {
         return Err(io::Error::other("export total does not match its parts"));
     }
+    let single_file_name = if files.len() == 1 {
+        Some(format!(
+            "mizar-support-{}.zip",
+            chrono::DateTime::from_timestamp_millis(created)
+                .ok_or_else(|| io::Error::other("invalid export creation time"))?
+                .format("%Y-%m-%dT%H-%M-%SZ")
+        ))
+    } else {
+        None
+    };
     Ok(PreparedExport {
+        single_file_name,
         export_id: export_id.to_owned(),
         files,
         manifest_bytes,
@@ -436,6 +448,9 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
     })
 }
 impl PreparedExport {
+    pub fn suggested_filename(&self) -> Option<&str> {
+        self.single_file_name.as_deref()
+    }
     /// Destination must come exclusively from the native dialog.
     pub fn save(self, destination: &Path) -> Result<(), String> {
         self.save_inner(destination).map_err(save_error)
@@ -446,20 +461,40 @@ impl PreparedExport {
             export_id,
             files,
             manifest_bytes,
+            single_file_name,
             _manifest,
             _lease,
             _directories,
         } = self;
-        let _destination_guard = hold_directories(destination)?;
-        let target = destination.join(format!("mizar-support-{export_id}"));
-        match fs::create_dir(&target) {
-            Ok(()) => (),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error),
+        let single = single_file_name.is_some();
+        let target = if single {
+            destination
+                .parent()
+                .ok_or_else(|| io::Error::other("save destination has no parent"))?
+                .to_path_buf()
+        } else {
+            destination.join(format!("mizar-support-{export_id}"))
+        };
+        let parent = if single {
+            target.as_path()
+        } else {
+            destination
+        };
+        let _destination_guard = hold_directories(parent)?;
+        if !single {
+            match fs::create_dir(&target) {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error),
+            }
         }
         let _target_guard = hold_directories(&target)?;
         for (name, bytes, digest, mut input) in files {
-            let final_path = target.join(&name);
+            let final_path = if single {
+                destination.to_path_buf()
+            } else {
+                target.join(&name)
+            };
             match fs::symlink_metadata(&final_path) {
                 Ok(_) => {
                     let (mut existing, _) = checked(&final_path)?;
@@ -478,6 +513,11 @@ impl PreparedExport {
             transfer(&mut input, Some(&mut pending.0), bytes, &digest)?;
             pending.0.sync_all()?;
             publish(pending, &final_path)?;
+        }
+        // A single ZIP already contains final coverage and indexes. The trusted source
+        // manifest stays private in the cache and is needed only for multi-volume delivery.
+        if single {
+            return Ok(());
         }
         // The manifest is the completion marker; publish only after every part succeeds.
         let final_path = target.join("generated.json");

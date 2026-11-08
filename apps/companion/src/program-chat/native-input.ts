@@ -6,7 +6,6 @@ import { atomicJson, safePath } from '../resource-store/files.js';
 import { ResourceStoreError } from '../resource-store/contract.js';
 import { diagnosticValue, type SessionJournal } from '../support/session-journal.js';
 
-const names = ['desktop.ndjson', 'desktop.1.ndjson', 'desktop.2.ndjson', 'desktop.3.ndjson'];
 const cursorName = 'native-source-cursor.json';
 export const NATIVE_SOURCE_LIMITS = {
   pollMs: 1000,
@@ -38,12 +37,7 @@ async function nativePath(directory: string, name: string): Promise<string> {
       error.code !== 'resource_path_unsafe'
     )
       throw error;
-    if (
-      name !== cursorName &&
-      !names.includes(name) &&
-      !/^desktop-[a-f0-9-]{36}\.ndjson$/.test(name)
-    )
-      throw error;
+    if (name !== cursorName && !/^desktop-[a-f0-9-]{36}\.ndjson$/.test(name)) throw error;
     await safePath(directory);
     const path = join(directory, name);
     const before = await lstat(path);
@@ -73,7 +67,7 @@ async function nativePath(directory: string, name: string): Promise<string> {
   }
 }
 
-/** Incremental observer of the four fixed Mizar Host files, never a caller-supplied path. */
+/** Incremental chat-only observer of current immutable Host segments, never caller-supplied paths. */
 export class ProgramChatNativeInput {
   private cursors: Cursor[] = [];
   private checkpointPending = false;
@@ -200,7 +194,6 @@ export class ProgramChatNativeInput {
     let sourceFailed = false;
     try {
       for (const name of [
-        ...names,
         ...(await readdir(this.directory)).filter((name) =>
           /^desktop-[a-f0-9-]{36}\.ndjson$/.test(name),
         ),
@@ -224,8 +217,8 @@ export class ProgramChatNativeInput {
         });
       }
       this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
-      // The journal commit precedes this checkpoint. A crash in between can replay
-      // stable sourceRecordIds, never skip evidence whose durable commit failed.
+      // Chat delivery precedes this checkpoint. A restart may replay an identity;
+      // ProgramChat applies its own current-generation and freshness constraints.
       if (this.checkpointPending || JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
         this.checkpointPending = true;
         try {
@@ -394,6 +387,7 @@ export class ProgramChatNativeInput {
           });
           continue;
         }
+        if (!['program_all_chat', 'program_all_chat_reset'].includes(entry.stage)) continue;
         // Keep I/O outside the malformed-record catch: a failed durable commit
         // aborts this poll and restores every source cursor for replay.
         const copied = {

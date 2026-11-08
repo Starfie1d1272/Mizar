@@ -461,6 +461,7 @@ function WorkspaceDockContent() {
   const entryNotice = preparation?.message ?? '';
   const [dockDetail, setDockDetail] = useState<'notices' | 'display' | 'tools' | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [finishOpen, setFinishOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const layoutRequest = useRef(0);
   const [overlayRecovering, setOverlayRecovering] = useState(false);
@@ -841,26 +842,59 @@ function WorkspaceDockContent() {
           </span>
         ) : null}
         <div className="workspace-footer-actions">
+          <Button disabled={busy} onClick={() => void action(() => openPreparation('/settings'))}>
+            返回设置
+          </Button>
           <Button
             className="workspace-exit"
             disabled={!production || busy || Boolean(exit?.busy)}
             aria-busy={busy || Boolean(exit?.busy)}
-            onClick={() =>
-              production &&
-              void action(async () => {
-                await cancelProductionEntry().catch(() => {});
-                await productionAction('finish', production);
-              }, true)
-            }
+            onClick={() => setFinishOpen(true)}
           >
-            {exit?.busy ? '正在退出…' : '退出工作台'}
+            {exit?.busy ? '正在结束…' : '结束本次制作'}
           </Button>
         </div>
       </footer>
       <Dialog
+        open={finishOpen}
+        title="结束本次制作？"
+        onClose={() => {
+          if (!busy) setFinishOpen(false);
+        }}
+        actions={
+          <>
+            <Button disabled={busy} onClick={() => setFinishOpen(false)}>
+              继续制作
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!production || busy}
+              onClick={() =>
+                production &&
+                void action(async () => {
+                  await productionAction('finish', production);
+                  setFinishOpen(false);
+                }, true)
+              }
+            >
+              结束本次制作
+            </Button>
+          </>
+        }
+      >
+        <p>
+          {window.__TAURI_INTERNALS__ ? '将关闭本次 CS2 并恢复由 Mizar 修改的设置，' : ''}
+          停止自动编排，并尝试将 OBS 切到等待画面。
+        </p>
+        <p>
+          网站同步将收尾，已接收的比赛记录继续等待确认，之后释放本次数据源。OBS
+          的直播和录制不会自动停止，请在 OBS 中确认。
+        </p>
+      </Dialog>
+      <Dialog
         open={detailsOpen}
         modal={false}
-        title={exit?.message ? '退出工作台需要处理' : '操作未完成'}
+        title={exit?.message ? '结束制作需要处理' : '操作未完成'}
         onClose={() => setDetailsOpen(false)}
         showCloseButton={false}
         actions={
@@ -931,7 +965,7 @@ function ExitReview() {
       <Dialog
         open
         modal={false}
-        title="退出工作台需要处理"
+        title="结束制作需要处理"
         className="workspace-review-dialog"
         onClose={() => void closeReviewWindow().catch((reason) => setError(String(reason)))}
         actions={

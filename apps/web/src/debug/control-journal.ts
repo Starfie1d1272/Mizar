@@ -63,38 +63,50 @@ export function sendControlEvidence(
     browserDocumentId ??= crypto.randomUUID();
     const context =
       evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
+    // ControlTask owns its terminal result inside the current task evidence envelope.
+    // Native command results may be objects/booleans; keep those in evidence only.
+    const taskEvidence =
+      operation === 'task' &&
+      (phase === 'terminal' || phase === 'step_terminal') &&
+      context.evidence &&
+      typeof context.evidence === 'object'
+        ? (context.evidence as Record<string, unknown>)
+        : null;
+    const result = taskEvidence ? taskEvidence.result : context.result;
+    const outcome =
+      typeof result === 'string' && result.length > 0 && result.length <= 160 ? result : null;
     const sequence = ++documentSequence;
+    const now = new Date().toISOString();
+    const event = {
+      schema: 'mizar-diagnostic-event/2',
+      eventId: `${browserDocumentId}:${sequence}`,
+      producerKind: 'document',
+      producerRunId: browserDocumentId,
+      sequence,
+      kind: operation,
+      phase,
+      outcome,
+      observedAt: now,
+      recordedAt: now,
+      monotonicMs: performance.now(),
+      sourceInterval: null,
+      taskId: context.taskId ?? null,
+      operationId: context.operationId ?? null,
+      parentOperationId: context.parentOperationId ?? null,
+      attemptId: context.attemptId ?? null,
+      scope: { page: location.pathname },
+      evidence,
+      coverage: {
+        durability: 'pending',
+        unknown: ['document-termination-before-handoff'],
+        excluded: controlDeliveryFailures
+          ? [`unhanded_records_or_attempt_failures:${controlDeliveryFailures}`]
+          : [],
+        replayCount: 0,
+        occurrences: 1,
+      },
+    };
     if (window.__TAURI_INTERNALS__) {
-      const now = new Date().toISOString();
-      const event = {
-        schema: 'mizar-diagnostic-event/2',
-        eventId: `${browserDocumentId}:${sequence}`,
-        producerKind: 'document',
-        producerRunId: browserDocumentId,
-        sequence,
-        kind: operation,
-        phase,
-        outcome: context.result ?? null,
-        observedAt: now,
-        recordedAt: now,
-        monotonicMs: performance.now(),
-        sourceInterval: null,
-        taskId: context.taskId ?? null,
-        operationId: context.operationId ?? null,
-        parentOperationId: context.parentOperationId ?? null,
-        attemptId: context.attemptId ?? null,
-        scope: { page: location.pathname },
-        evidence,
-        coverage: {
-          durability: 'pending',
-          unknown: ['document-termination-before-handoff'],
-          excluded: controlDeliveryFailures
-            ? [`unhanded_records_or_attempt_failures:${controlDeliveryFailures}`]
-            : [],
-          replayCount: 0,
-          occurrences: 1,
-        },
-      };
       if (hostQueue.length >= 256 || JSON.stringify(event).length > 32768) {
         controlDeliveryFailures++;
         return Promise.resolve();
@@ -119,14 +131,7 @@ export function sendControlEvidence(
       method: 'POST',
       signal: AbortSignal.timeout(3000),
       headers,
-      body: JSON.stringify({
-        operation,
-        phase,
-        time: new Date().toISOString(),
-        browserDocumentId,
-        deliveryFailuresBefore: controlDeliveryFailures,
-        evidence,
-      }),
+      body: JSON.stringify(event),
       keepalive: true,
     })
       .then((response) => {
@@ -308,17 +313,8 @@ export function nativeSnapshot(operation: string, result: unknown): void {
 export async function flushControlSnapshots(): Promise<void> {
   await Promise.allSettled(
     [...nativeSnapshots].map(([operation, evidence]) =>
-      fetch('/debug/control-event', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          operation,
-          phase: 'snapshot_aggregate',
-          time: new Date().toISOString(),
-          evidence: snapshotEvidence(evidence),
-        }),
-        signal: AbortSignal.timeout(2000),
-      }),
+      sendControlEvidence(operation, 'snapshot_aggregate', snapshotEvidence(evidence)),
     ),
   );
+  if (window.__TAURI_INTERNALS__) await handoffHost();
 }

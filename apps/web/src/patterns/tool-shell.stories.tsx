@@ -28,3 +28,7 @@ export const Tool: Story = {
     await expect(canvas.getByRole('textbox', { name: '预览名称' })).toHaveFocus();
   },
 };
+
+export const ResponsiveTool: Story = {
+  args: { ...Tool.args, title: 'GoTV 连接', responsive: true },
+};

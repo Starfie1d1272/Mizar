@@ -96,10 +96,30 @@ function supportGsi(value: unknown) {
   };
 }
 
+type ReadyExport = {
+  exportId: string;
+  expiresAt: string;
+  parts: { name: string }[];
+  knownGaps?: number;
+  downloadName?: string;
+};
+const gapNotice = (job: ReadyExport) =>
+  job.knownGaps ? ` 部分记录未能读取（${job.knownGaps} 处），详情在诊断包内。` : '';
+function download(job: ReadyExport, name: string) {
+  const link = document.createElement('a');
+  link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
+  link.download =
+    job.parts.length === 1 && name.endsWith('.zip') ? (job.downloadName ?? name) : name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 export function SupportExport() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [progress, setProgress] = useState<{
     exportId: string;
     phase: string;
@@ -107,42 +127,64 @@ export function SupportExport() {
     outputBytes?: number;
   } | null>(null);
   const controller = useRef<AbortController | null>(null);
-  const [hasReadyJob, setHasReadyJob] = useState(false);
-  const readyJob = useRef<{
-    exportId: string;
-    expiresAt: string;
-    parts: { name: string }[];
-  } | null>(null);
+  const [readyJob, setReadyJob] = useState<ReadyExport | null>(null);
+  const hasReadyJob = readyJob !== null;
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
 
-  async function exportBundle() {
-    if (busy) return;
+  async function exportBundle(regenerate = false) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setResult(null);
+    setProgress(null);
     controller.current = new AbortController();
     const signal = controller.current.signal;
     const deadline = Date.now() + 120_000;
     let stage: 'collect' | 'generate' | 'save' = 'collect';
     let hostPinId: string | undefined;
+    let deliveryJob = readyJob;
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
-      if (readyJob.current && Date.parse(readyJob.current.expiresAt) <= Date.now()) {
-        readyJob.current = null;
-        setHasReadyJob(false);
+      const cached =
+        !regenerate && readyJob && Date.parse(readyJob.expiresAt) > Date.now() ? readyJob : null;
+      if (readyJob && !cached) {
+        setReadyJob(null);
       }
-      if (desktop && readyJob.current) {
-        stage = 'save';
-        const saved = await desktopInvoke<boolean>('save_support_bundle', {
-          exportId: readyJob.current.exportId,
-        });
-        setResult({
-          error: false,
-          message: saved ? '诊断包已保存，请一并私下交付全部分卷及清单。' : '已取消保存。',
-        });
-        if (saved) {
-          readyJob.current = null;
-          setHasReadyJob(false);
+      const save = async (job: ReadyExport) => {
+        deliveryJob = job;
+        setProgress({ exportId: job.exportId, phase: 'saving' });
+        if (desktop) {
+          const saved = await desktopInvoke<boolean>('save_support_bundle', {
+            exportId: job.exportId,
+          });
+          setResult({
+            error: false,
+            message:
+              (saved
+                ? job.parts.length === 1
+                  ? '诊断包已保存，请私下交付维护者。'
+                  : `诊断包已保存，请一并交付 ${job.parts.length} 份 ZIP 和总清单。`
+                : '已取消保存，可重新保存同一份诊断包。') + gapNotice(job),
+          });
+        } else {
+          for (const name of [
+            ...job.parts.map((part) => part.name),
+            ...(job.parts.length > 1 ? ['generated.json'] : []),
+          ])
+            download(job, name);
+          setResult({
+            error: false,
+            message:
+              (job.parts.length === 1
+                ? '已发起诊断包下载，请在浏览器中确认文件。'
+                : `已发起 ${job.parts.length} 份 ZIP 和总清单的下载，请在浏览器中确认全部文件。`) +
+              gapNotice(job),
+          });
         }
+      };
+      if (cached) {
+        stage = 'save';
+        await save(cached);
         return;
       }
       const [gsi, cs2, consoleStatus] = desktop
@@ -162,17 +204,28 @@ export function SupportExport() {
       await flushPerformanceJournal();
       if (desktop) {
         hostPinId = crypto.randomUUID();
-        await desktopInvoke('diagnostic_pin', {
-          action: 'prepare',
-          pinId: hostPinId,
-          kind: 'export',
-        });
-        await desktopInvoke('diagnostic_pin', {
-          action: 'commit',
-          pinId: hostPinId,
-          kind: 'export',
-        });
+        try {
+          await desktopInvoke('diagnostic_pin', {
+            action: 'prepare',
+            pinId: hostPinId,
+            kind: 'export',
+          });
+          await desktopInvoke('diagnostic_pin', {
+            action: 'commit',
+            pinId: hostPinId,
+            kind: 'export',
+          });
+        } catch (error) {
+          // Companion verifies the fixed receipt itself and reports this producer's gap.
+          // Failure to pin Host evidence must not discard other safely fixed sources.
+          await sendControlEvidence('support_export_host_pin', 'failure', {
+            exportId: hostPinId,
+            error:
+              error instanceof Error ? { name: error.name, message: error.message } : String(error),
+          });
+        }
       }
+      if (signal.aborted) throw new Error('export_cancelled');
       stage = 'generate';
       const response = await fetch('/debug/support-exports', {
         method: 'POST',
@@ -208,6 +261,7 @@ export function SupportExport() {
         parts?: { name: string }[];
         expiresAt?: string;
         knownGaps?: number;
+        downloadName?: string;
       };
       setProgress(job);
       while (!['ready', 'failed', 'cancelled'].includes(job.phase)) {
@@ -225,39 +279,17 @@ export function SupportExport() {
       if (job.phase === 'cancelled') throw new Error('export_cancelled');
       if (job.phase === 'failed' || !job.parts?.length)
         throw new Error(job.error ?? 'invalid_bundle');
-      readyJob.current = job.expiresAt
-        ? { exportId: job.exportId, parts: job.parts, expiresAt: job.expiresAt }
-        : null;
-      setHasReadyJob(Boolean(readyJob.current));
+      if (!job.expiresAt) throw new Error('invalid_bundle');
+      const ready: ReadyExport = {
+        exportId: job.exportId,
+        parts: job.parts,
+        expiresAt: job.expiresAt,
+        ...(job.knownGaps === undefined ? {} : { knownGaps: job.knownGaps }),
+        ...(job.downloadName === undefined ? {} : { downloadName: job.downloadName }),
+      };
+      setReadyJob(ready);
       stage = 'save';
-      if (desktop) {
-        const saved = await desktopInvoke<boolean>('save_support_bundle', {
-          exportId: job.exportId,
-        });
-        if (saved) {
-          readyJob.current = null;
-          setHasReadyJob(false);
-        }
-        setResult({
-          error: false,
-          message: saved
-            ? `诊断包已保存（${job.parts.length} 份 ZIP 和总清单），请一并私下交付维护者。${job.knownGaps ? ` 有 ${job.knownGaps} 处来源缺口，详情已写入清单。` : ''}`
-            : '已取消保存。',
-        });
-      } else {
-        for (const name of [...job.parts.map((part) => part.name), 'generated.json']) {
-          const link = document.createElement('a');
-          link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
-          link.download = name;
-          document.body.append(link);
-          link.click();
-          link.remove();
-        }
-        setResult({
-          error: false,
-          message: `已发起 ${job.parts.length} 份 ZIP 和总清单的下载，请在浏览器中确认全部文件。${job.knownGaps ? ` 有 ${job.knownGaps} 处来源缺口，详情已写入清单。` : ''}`,
-        });
-      }
+      await save(ready);
     } catch (error) {
       const code = error instanceof Error ? error.message : '';
       setResult({
@@ -266,7 +298,8 @@ export function SupportExport() {
           code === 'export_cancelled' || signal.aborted
             ? '已取消生成诊断包。'
             : stage === 'save'
-              ? '诊断包已生成，但未能保存。请检查保存位置后重试保存。'
+              ? '诊断包已生成，但交付未完成。请重新保存或下载同一份诊断包。' +
+                (deliveryJob ? gapNotice(deliveryJob) : '')
               : code.startsWith('export_http_')
                 ? `本地服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
                 : code === 'invalid_bundle'
@@ -282,6 +315,7 @@ export function SupportExport() {
           pinId: hostPinId,
           kind: 'export',
         }).catch(() => undefined);
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -329,12 +363,16 @@ export function SupportExport() {
       </details>
       {busy && progress ? (
         <p role="status">
-          {progress.phase === 'collecting' ? '正在固定来源范围' : '正在生成诊断包'} · 已读取{' '}
-          {Math.round((progress.inputBytes ?? 0) / 1024)} KiB · 已输出{' '}
+          {progress.phase === 'saving'
+            ? '正在保存或下载诊断包'
+            : progress.phase === 'collecting'
+              ? '正在固定来源范围'
+              : '正在生成诊断包'}{' '}
+          · 已读取 {Math.round((progress.inputBytes ?? 0) / 1024)} KiB · 已输出{' '}
           {Math.round((progress.outputBytes ?? 0) / 1024)} KiB
         </p>
       ) : null}
-      {busy && progress?.phase !== 'ready' ? (
+      {busy && !['ready', 'saving'].includes(progress?.phase ?? '') ? (
         <Button
           onClick={() => {
             controller.current?.abort();
@@ -349,10 +387,9 @@ export function SupportExport() {
         <Button
           onClick={() => {
             {
-              readyJob.current = null;
-              setHasReadyJob(false);
+              setReadyJob(null);
             }
-            void exportBundle();
+            void exportBundle(true);
           }}
         >
           重新生成诊断包
@@ -362,10 +399,36 @@ export function SupportExport() {
         variant="primary"
         loading={busy}
         onClick={() => void exportBundle()}
-        aria-label={busy ? '正在生成诊断包' : '导出诊断包'}
+        aria-label={
+          busy
+            ? '正在处理诊断包'
+            : hasReadyJob
+              ? window.__TAURI_INTERNALS__
+                ? '重新保存'
+                : '重新下载'
+              : '保存诊断包'
+        }
       >
-        {hasReadyJob ? '重试保存' : '导出诊断包'}
+        {hasReadyJob ? (window.__TAURI_INTERNALS__ ? '重新保存' : '重新下载') : '保存诊断包'}
       </Button>
+      {!busy &&
+      hasReadyJob &&
+      !window.__TAURI_INTERNALS__ &&
+      readyJob &&
+      readyJob.parts.length > 1 ? (
+        <div aria-label="重新下载文件">
+          {[...readyJob.parts.map((part) => part.name), 'generated.json'].map((name) => (
+            <Button
+              key={name}
+              onClick={() => {
+                if (readyJob) download(readyJob, name);
+              }}
+            >
+              重新下载 {name}
+            </Button>
+          ))}
+        </div>
+      ) : null}
       {result === null ? null : (
         <StatusBanner tone={result.error ? 'danger' : 'info'}>{result.message}</StatusBanner>
       )}

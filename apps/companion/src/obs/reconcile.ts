@@ -14,9 +14,10 @@ import {
 } from './video-transaction.js';
 
 export interface ObsRpc {
-  /** Verified instance/endpoint/collection identity, provided only by the production adapter. */
+  /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
   ownershipScope?(): Promise<string>;
-  confirmManagedMigration?(): Promise<void>;
+  observeManagedResources?(): Promise<boolean>;
+  adoptManagedResources?(): Promise<void>;
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
   onTransitionVideoEnded?(listener: (transitionName: string) => void): () => void;
 }
@@ -292,6 +293,11 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
     });
     return findings;
   }
+  if (obs.observeManagedResources && !(await obs.observeManagedResources()))
+    findings.push({
+      code: 'resource_identity_missing',
+      message: 'Mizar 场景尚未登记，请配置场景。',
+    });
   const transitionKinds = new Set(
     objects((await obs.call('GetSceneTransitionList')).transitions).map(
       (item) => item.transitionKind,
@@ -441,6 +447,7 @@ export async function repairObsConfiguration(
   if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
   else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+  await obs.adoptManagedResources?.();
   const scenes = await obs.call('GetSceneList');
   const sceneNames = new Set(names(scenes.scenes, 'sceneName'));
   const inputs = await obs.call('GetInputList');
@@ -557,10 +564,7 @@ export async function repairObsConfiguration(
         });
     }
   }
-  const after = await checkObsConfiguration(obs, baseUrl);
-  if (!after.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
-    await obs.confirmManagedMigration?.();
-  return after;
+  return checkObsConfiguration(obs, baseUrl);
 }
 
 export async function switchObsScene(
@@ -693,7 +697,7 @@ export async function ensureObsConfiguration(
     return repaired;
   }
   const repairable = new Set([
-    'legacy_names',
+    'resource_identity_missing',
     'scene_missing',
     'source_missing',
     'url_drift',
@@ -704,7 +708,5 @@ export async function ensureObsConfiguration(
   ]);
   if (findings.some((finding) => repairable.has(finding.code)))
     return repairObsConfiguration(obs, baseUrl, { allowCollectionChange: false });
-  if (!findings.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
-    await obs.confirmManagedMigration?.();
   return findings;
 }

@@ -407,7 +407,9 @@ export default defineConfig({
       '/operator/bp-demo': 'http://127.0.0.1:3000',
       '/operator/series': 'http://127.0.0.1:3000',
       '/debug/runtime': 'http://127.0.0.1:3000',
-      '/debug/support-bundle': 'http://127.0.0.1:3000',
+      '/debug/support-exports': 'http://127.0.0.1:3000',
+      '/debug/control-event': 'http://127.0.0.1:3000',
+      '/debug/hosts': 'http://127.0.0.1:3000',
       '/local/protocol': 'http://127.0.0.1:3000',
       '/local/v1': {
         target: 'http://127.0.0.1:3000',

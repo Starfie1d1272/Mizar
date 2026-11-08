@@ -654,7 +654,14 @@ impl GameTracker {
                 layout = avoid_game_frame(layout, rect(outer));
             }
         }
-        self.alignment_retries = self.alignment_retries.saturating_sub(1);
+        self.alignment_retries = if self.layout_aligned {
+            0
+        } else {
+            self.alignment_retries.saturating_sub(1)
+        };
+        if self.alignment_retries == 0 {
+            self.explicit_layout = false;
+        }
         if self.alignment_retries == 0
             && self
                 .alignment_failure
@@ -687,8 +694,12 @@ impl GameTracker {
         if self.monitor == 0 || work.is_none() {
             return self.apply_locked_layout();
         }
-        if work != self.last_work_area && previous == self.window && self.last_work_area.is_some() {
-            // Moving monitors or changing DPI rearranges panels, not the game.
+        if work != self.last_work_area
+            && previous == self.window
+            && self.last_work_area.is_some()
+            && self.alignment_retries == 0
+        {
+            // After a request ends, monitor/DPI changes rearrange panels only.
             self.last_work_area = work;
             self.alignment_retries = 0;
             self.layout_aligned = false;
@@ -707,12 +718,16 @@ impl GameTracker {
             self.last_dpi = dpi;
             self.layout_aligned =
                 work.is_some_and(|area| client == Some(workspace_layout(area).game));
-            self.alignment_retries = 0;
-            self.alignment_failure = None;
-            self.explicit_layout = false;
+            // SetWindowPos is asynchronous. Intermediate client/DPI changes
+            // must not cancel the existing confirmation/correction budget.
+            if self.layout_aligned || self.alignment_retries == 0 {
+                self.alignment_retries = 0;
+                self.alignment_failure = None;
+                self.explicit_layout = false;
+            }
         }
-        // A bounded initial request can be rechecked, never rearmed by a
-        // native resolution/DPI change. HUD presentation uses actual geometry.
+        // Initial and explicit requests share one bounded confirmation budget.
+        // Once finished, external geometry changes never rearm that request.
         if !self.layout_aligned
             && self.alignment_retries > 0
             && self

@@ -765,12 +765,13 @@ export class ProgramRuntime {
     return this.managedSourceId;
   }
 
-  /** Called only for the first frame of a committed Host-verified managed source. */
-  activateManagedSource(
+  /** Activate and accept the first frame together, preserving the prior execution's owner. */
+  acceptManagedObservation(
     matchId: string,
     sourceId: string,
     observation: TelemetryObservation,
-  ): { boundary?: ProgramCommitResult } | undefined {
+  ): ProgramCommitResult {
+    const before = this.executionBoundary();
     const preview = reduceRuntime(
       this.state,
       {
@@ -780,7 +781,7 @@ export class ProgramRuntime {
       },
       this.continuityPolicy,
     );
-    if (preview.disposition.kind !== 'accepted') return undefined;
+    if (preview.disposition.kind !== 'accepted') return this.acceptObservation(observation);
     this.pendingSeriesEvents.length = 0;
     const boundary =
       this.state.map.epoch > 0 &&
@@ -804,20 +805,14 @@ export class ProgramRuntime {
     this.executionOwnerUnknown = false;
     this.unknownNewExecution = false;
     this.executionAwaitingObservation = true;
+    this.explicitSourceOwner = undefined;
     this.managedSourceId = sourceId;
-    this.commitFacts();
-    return boundary
-      ? {
-          boundary: {
-            ...boundary,
-            snapshot: this.getSnapshot(),
-            executionBoundary: {
-              before: boundary.executionBoundary.before,
-              after: this.executionBoundary(),
-            },
-          },
-        }
-      : {};
+    const accepted = this.acceptObservation(observation);
+    return {
+      ...accepted,
+      transitions: [...(boundary?.transitions ?? []), ...accepted.transitions],
+      executionBoundary: { before, after: accepted.executionBoundary.after },
+    };
   }
 
   private setSourceUnverified(): void {

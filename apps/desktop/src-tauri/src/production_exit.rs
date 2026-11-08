@@ -531,13 +531,29 @@ pub fn finish_managed_game(
     cleanup_results(local, source)
 }
 
-/// Switching to an external instance is explicit, preparation-only and disconnects old camera intent.
-pub fn prepare_external_entry(log: &DesktopLog, expected_revision: &str) -> Result<(), String> {
+/// Replacement belongs to this preparation task, even after its workspace session opens.
+pub fn prepare_external_entry(
+    log: &DesktopLog,
+    expected_revision: &str,
+    preparation_id: &str,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (code, view) = request(log, "GET", "/local/v1/production", "", deadline)?;
     let view = crate::lifecycle_contract::production_view(&view)?;
-    if code != 200 || view.mode != "preparation" || view.revision != expected_revision {
-        return Err("制作状态已变化，请回到准备中心重新选择外部游戏。".into());
+    if code != 200 || view.revision != expected_revision {
+        return Err("制作状态已变化，请重新打开工作台。".into());
+    }
+    if view.mode != "preparation" {
+        let (code, status) = request(
+            log,
+            "GET",
+            &format!("/local/v1/preparation-status?preparationId={preparation_id}"),
+            "",
+            deadline,
+        )?;
+        if code != 200 || !crate::lifecycle_contract::cancellation_entered(&status)? {
+            return Err("游戏启动任务已变化，请重新打开工作台。".into());
+        }
     }
     disconnect_camera(log)?;
     invalidate_local_match_exit(log)

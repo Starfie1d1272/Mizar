@@ -531,11 +531,16 @@ export function registerWorkspaceObserver(
   app.get('/local/v1/observer', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       ...observer.view(),
+      gameReady: Boolean(host && leased()),
       programCommandQueued: Boolean(host && connectedGame === keys(host).connect),
       pending: pending > 0,
       error: lastError,
       retryAvailable: Boolean(
-        settings?.settings.enabled && settings.configured() && canStart() && pending === 0,
+        settings?.settings.enabled &&
+        settings.mapConnection &&
+        settings.configured() &&
+        canStart() &&
+        pending === 0,
       ),
     }),
   );
@@ -587,7 +592,7 @@ export function registerWorkspaceObserver(
     try {
       const body = parsed.data;
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
-        return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
+        return reply.code(409).send({ message: '请先打开工作台，再连接提前提示。' });
       if (body.action === 'prepare') {
         if (body.expectedRevision && body.expectedRevision !== settings?.revision)
           return reply
@@ -608,7 +613,7 @@ export function registerWorkspaceObserver(
           return { ok: true, enabled: false };
         const connection = settings.configured();
         if (!connection && (settings.settings.enabled || (gameControl && gameControl.autoConnect)))
-          return reply.code(409).send({ message: '请在准备中心填写本场授权的观战连接。' });
+          return reply.code(409).send({ message: '请填写赛事方提供的 GoTV 命令。' });
         const key = identity(body);
         if (
           !prepared ||
@@ -669,8 +674,7 @@ export function registerWorkspaceObserver(
           if (settings.mapConnection?.mode === 'seamless' && !seamlessGame) seamlessGame = key.game;
           const connect = Boolean(
             gameControl?.autoConnect &&
-            settings.mapConnection?.mode !== 'register-current' &&
-            !(settings.mapConnection?.mode === 'seamless' && seamlessGame === key.game) &&
+            settings.mapConnection?.mode === 'connect' &&
             connectedGame !== key.connect,
           );
           const hide = Boolean(
@@ -726,6 +730,7 @@ export function registerWorkspaceObserver(
           lastError = null;
         });
       } else if (body.action === 'stop') {
+        settings?.endProduction();
         ++epoch;
         host = undefined;
         prepared = undefined;
@@ -755,7 +760,7 @@ export function registerWorkspaceObserver(
             : operation.stage === 'hud'
               ? 'CS2 原生 HUD 设置未确认，请检查游戏画面后重试。'
               : operation.stage === 'assist'
-                ? '观察辅助未能启动，请检查辅助设置后重试；游戏连接请在游戏内核对。'
+                ? '提前提示未能启动，请检查 GoTV 后重试；游戏连接请在游戏内核对。'
                 : '观战准备未完成，请检查游戏连接和设置后重试。',
       });
     }

@@ -349,7 +349,7 @@ async function profile(directory) {
         nativeOps++;
       }
       if (sequence % 1200 === 1199) {
-        // The producer clock advances 60 seconds while NativeSource's real timer
+        // The producer clock advances 60 seconds while ProgramChatNativeInput's real timer
         // does not. Observe its durable cursor reaching this input boundary;
         // otherwise a fast CI host closes with unread source bytes and measures
         // an incomplete workload. No extra collector or export is substituted.
@@ -363,7 +363,10 @@ async function profile(directory) {
               throw error;
             });
           if (cursor.cursors.some((entry) => entry.offset === sourceBytes)) break;
-          assert(performance.now() < deadline, 'actual NativeSource did not commit minute input');
+          assert(
+            performance.now() < deadline,
+            'actual ProgramChatNativeInput did not commit minute input',
+          );
           await waitForIO(50);
         }
         await journal.flush();
@@ -410,7 +413,7 @@ async function profile(directory) {
     const output = {
       schema: 'mizar-final-collector-capacity/1',
       scope:
-        'actual buildApp HTTP/GSI/browser collectors, performance window and durable spool plus app-owned NativeSource; real journal/disk/outbox; isolated injected journal root keeps the app-internal off-by-default uploader separate from the metered outbox; native input scales a real Rust-produced public fixture and runtime aggregates scale an actual public production snapshot at modeled rates, not 100 real games; accelerated time, IO catch-up each virtual minute; no account requests; no inference of game FPS or cloud CPU',
+        'actual buildApp HTTP/GSI/browser collectors, performance window and durable spool plus app-owned ProgramChatNativeInput; real journal/disk/outbox; isolated injected journal root keeps the app-internal off-by-default uploader separate from the metered outbox; native input scales a real Rust-produced public fixture and runtime aggregates scale an actual public production snapshot at modeled rates, not 100 real games; accelerated time, IO catch-up each virtual minute; no account requests; no inference of game FPS or cloud CPU',
       minutes: 120,
       epoch,
       rates: {
@@ -1325,7 +1328,7 @@ const sourceFiles = [
   'apps/companion/src/app.ts',
   'apps/companion/src/support/delivery.ts',
   'apps/companion/src/support/session-journal.ts',
-  'apps/companion/src/support/native-source.ts',
+  'apps/companion/src/program-chat/native-input.ts',
   'apps/companion/src/support/performance-window.ts',
   'apps/companion/src/support/performance-spool.ts',
   'apps/diagnostics-worker/src/index.ts',

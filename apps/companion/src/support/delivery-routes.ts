@@ -5,7 +5,7 @@ import {
 } from './retention.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import type { FastifyInstance } from 'fastify';
-import { DiagnosticDelivery, type RetainedDiagnosticBatch } from './delivery.js';
+import { DiagnosticDelivery } from './delivery.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
@@ -57,6 +57,16 @@ export function registerDiagnosticDelivery(
     const journal = options.journal;
     // Diagnostics initialization never holds service readiness or live controls.
     initializing = (async () => {
+      try {
+        await incidentPins?.recover(participants(), (pinId) => [
+          hostIncidentParticipant(directory, pinId),
+        ]);
+      } catch (error) {
+        journal.record('problem_report_pin_failure', {
+          phase: 'recover',
+          error: diagnosticValue(error),
+        });
+      }
       try {
         delivery = new DiagnosticDelivery(directory, journal, {
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
@@ -263,13 +273,6 @@ export function registerDiagnosticDelivery(
       error: ready ? (delivery?.status().error ?? null) : failure,
       delivery: ready ? (delivery?.status() ?? null) : null,
     }),
-    async retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
-      await initializing;
-      if (!options.directory) return [];
-      if (!ready || !delivery)
-        return [{ id: null, sourceBytes: 0, error: failure ?? 'queue_not_ready' }];
-      return delivery.retainedBatches();
-    },
     async close() {
       closing = true;
       ready = false;

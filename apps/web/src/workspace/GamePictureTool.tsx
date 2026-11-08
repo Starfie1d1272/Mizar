@@ -3,6 +3,8 @@ import { ControlTask } from '../debug/control-task';
 import { Cs2LaunchSettings } from '../preparation/Cs2LaunchSettings';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from './client';
+import { ToolShell } from '../patterns';
+import '../preparation/match-connection.css';
 
 interface FrameRateReading {
   status: 'confirmed' | 'unsupported' | 'unconfirmed';
@@ -24,7 +26,7 @@ export function GamePictureTool() {
     setError('');
     try {
       const focused = await desktopInvoke<boolean>('restore_cs2_focus');
-      if (!focused) setError('未能切回已核验的游戏窗口，请用 Alt+Tab 返回 CS2。');
+      if (!focused) setError('未能切回游戏，请用 Alt+Tab 返回 CS2。');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '请用 Alt+Tab 返回 CS2。');
     }
@@ -52,73 +54,69 @@ export function GamePictureTool() {
       });
     } catch (reason) {
       task.fail(reason);
-      setError(reason instanceof Error ? reason.message : '本次读回尚未确认，请返回游戏核对。');
+      setError(reason instanceof Error ? reason.message : '当前帧率尚未确认，请返回游戏核对。');
     } finally {
       setBusy(false);
     }
   }
   return (
-    <main className="settings-fields">
-      <Panel className="settings-card">
-        <h1>游戏画面</h1>
-        <p>
-          现场调整请返回 CS2，按 Esc 打开设置 → 视频。调整期间制作继续，本机 HUD 跟随实际游戏画面。
-        </p>
-        <Button variant="primary" onClick={() => void returnToGame()} disabled={!desktop}>
-          返回游戏
-        </Button>
-        <p>
-          当前版本尚未验证完整画质预设的直接热改，请使用游戏原生设置；下方偏好只影响下一次启动。
-        </p>
-        <details className="settings-details">
-          <summary>本次帧率上限</summary>
+    <ToolShell title="游戏画面" responsive>
+      <main className="workbench-tool">
+        <Panel className="settings-card">
+          <h1>游戏画面</h1>
           <p>
-            先读取当前值。仅在受管 MulNX
-            与已有本机控制台记录可用时调整30或60帧，不开启采集或改变启动方式。
+            现场调整请返回 CS2，按 Esc 打开设置 → 视频。调整期间制作继续，本机 HUD
+            跟随实际游戏画面。
           </p>
-          <p>
-            应用前保存原值，仅实际执行并读回一致后显示成功。退出前尝试恢复；检测到游戏内后续修改时保留人工设置。未知结果只能复查，不会重复写入。
-          </p>
-          <Button disabled={!desktop || busy} aria-busy={busy} onClick={() => void inspect()}>
-            {busy
-              ? '正在核对…'
-              : reading?.status === 'unconfirmed'
-                ? '复查原操作结果'
-                : '读取当前上限'}
+          <Button variant="primary" onClick={() => void returnToGame()} disabled={!desktop}>
+            返回游戏
           </Button>
-          {reading?.status === 'confirmed' && reading.canApply ? (
-            <div className="settings-save-row">
-              <Select
-                label="本次帧率上限"
-                value={limit}
-                disabled={busy}
-                onChange={(event) => setLimit(Number(event.target.value) as 30 | 60)}
-              >
-                <option value={60}>60 帧／秒</option>
-                <option value={30}>30 帧／秒</option>
-              </Select>
-              <Button disabled={busy} onClick={() => void inspect('apply')}>
-                应用并核对
-              </Button>
-            </div>
-          ) : null}
-          {reading?.canRestore ? (
-            <Button disabled={busy} onClick={() => void inspect('restore')}>
-              恢复本次原值并核对
+          <p>下方画质偏好只在下次启动生效。</p>
+          <details className="settings-details">
+            <summary>本次帧率上限</summary>
+            <p>MulNX 启动时可尝试在这里调整；不支持时请在 CS2 视频设置中调整。</p>
+            <p>结束制作时恢复原帧率；你之后在游戏内调整的值会保留。</p>
+            <Button disabled={!desktop || busy} aria-busy={busy} onClick={() => void inspect()}>
+              {busy
+                ? '正在核对…'
+                : reading?.status === 'unconfirmed'
+                  ? '复查原操作结果'
+                  : '读取当前上限'}
             </Button>
-          ) : null}
-          {reading ? (
-            <p role="status">
-              {reading.message}
-              {reading.status === 'confirmed'
-                ? ` 当前值：${reading.current === 0 ? '不限帧' : `${reading.current} 帧／秒`}。`
-                : ''}
-            </p>
-          ) : null}
-        </details>
-        {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
-      </Panel>
-      <Cs2LaunchSettings />
-    </main>
+            {reading?.status === 'confirmed' && reading.canApply ? (
+              <div className="settings-save-row">
+                <Select
+                  label="本次帧率上限"
+                  value={limit}
+                  disabled={busy}
+                  onChange={(event) => setLimit(Number(event.target.value) as 30 | 60)}
+                >
+                  <option value={60}>60 帧／秒</option>
+                  <option value={30}>30 帧／秒</option>
+                </Select>
+                <Button disabled={busy} onClick={() => void inspect('apply')}>
+                  应用并核对
+                </Button>
+              </div>
+            ) : null}
+            {reading?.canRestore ? (
+              <Button disabled={busy} onClick={() => void inspect('restore')}>
+                恢复本次原值并核对
+              </Button>
+            ) : null}
+            {reading ? (
+              <p role="status">
+                {reading.message}
+                {reading.status === 'confirmed'
+                  ? ` 当前值：${reading.current === 0 ? '不限帧' : `${reading.current} 帧／秒`}。`
+                  : ''}
+              </p>
+            ) : null}
+          </details>
+          {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
+        </Panel>
+        <Cs2LaunchSettings />
+      </main>
+    </ToolShell>
   );
 }

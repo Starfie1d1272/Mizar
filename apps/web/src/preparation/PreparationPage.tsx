@@ -6,7 +6,7 @@ import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import './production.css';
-import { AutomaticPreparation } from './AutomaticPreparation';
+import { AutomaticPreparation, usePreparationStatus } from './AutomaticPreparation';
 import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
@@ -29,7 +29,6 @@ import {
   openTool,
   productionAction,
   retryObsExit,
-  enterProductionManually,
   useLocalRead,
   type Production,
 } from './client';
@@ -52,7 +51,7 @@ const tabs = {
   '/settings': [
     ['gsi', '游戏与观战'],
     ['obs', 'OBS'],
-    ['observer', '观察辅助'],
+    ['observer', '提前提示'],
     ['music', '声音'],
     ['camera', '运镜'],
     ['rivalhub', 'RivalHub'],
@@ -118,12 +117,12 @@ export function PreparationPage() {
   const [obsRetryMessage, setObsRetryMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
-  const [entering, setEntering] = useState(false);
+  const preparation = usePreparationStatus();
+  const entering = Boolean(preparation?.running && !preparation.entered);
   const [submittingEntry, setSubmittingEntry] = useState(false);
   const [cancellingEntry, setCancellingEntry] = useState(false);
   const [cancelFailed, setCancelFailed] = useState(false);
   const [cancelError, setCancelError] = useState('');
-  const entryGeneration = useRef(0);
   const cancelling = useRef(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
@@ -148,33 +147,6 @@ export function PreparationPage() {
       setBusy(false);
     }
   }
-
-  useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      const generation = entryGeneration.current;
-      try {
-        const status = await desktopInvoke<{ running: boolean; message: string } | null>(
-          'preparation_status',
-        );
-        if (active && generation === entryGeneration.current) {
-          setEntering(status?.running ?? false);
-          if (!status) setCancelFailed(false);
-          if (status && !status.running && status.message) setMessage(status.message);
-        }
-      } catch {
-        /* The desktop may still be starting. */
-      }
-      if (active) timer = setTimeout(() => void poll(), 1000);
-    };
-    void poll();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, []);
 
   useEffect(() => {
     const enter = () => {
@@ -208,18 +180,25 @@ export function PreparationPage() {
     </div>
   );
 
-  const capabilities =
-    useLocalRead<
-      { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
-    >('/local/v1/readiness');
+  const capabilities = useLocalRead<
+    {
+      id: string;
+      label: string;
+      ready: boolean;
+      attention: boolean;
+      reason: string;
+      href: string;
+      action: string | null;
+    }[]
+  >('/local/v1/readiness');
 
-  const problems = (capabilities ?? []).filter((item) => !item.ready && item.action);
+  const problems = (capabilities ?? []).filter((item) => item.attention && item.action);
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
     music: '声音',
     camera: '运镜',
-    observer: '观察辅助',
+    observer: '提前提示',
     rivalhub: '赛事平台',
     advanced: '高级设置',
   };
@@ -229,6 +208,11 @@ export function PreparationPage() {
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
         <UpdateNotification />
+        {preparation?.message ? (
+          <StatusBanner tone={preparation.running ? 'info' : 'warning'}>
+            {preparation.message}
+          </StatusBanner>
+        ) : null}
         {production?.mode === 'preparation' && production.obsExitState === 'pending' ? (
           <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
         ) : null}
@@ -285,54 +269,29 @@ export function PreparationPage() {
             </h1>
           </div>
           <Button
-            variant={match ? 'primary' : 'secondary'}
+            variant="primary"
             disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
             onClick={() =>
               production &&
               void action(async () => {
-                entryGeneration.current += 1;
                 setSubmittingEntry(true);
                 try {
-                  const result = await productionAction('enter', production);
-                  if (
-                    result === 'confirmed' &&
-                    production.mode === 'preparation' &&
-                    window.__TAURI_INTERNALS__
-                  )
-                    setEntering(true);
+                  await productionAction('enter', production);
                 } finally {
-                  entryGeneration.current += 1;
                   setSubmittingEntry(false);
                 }
               })
             }
           >
             {entering || submittingEntry
-              ? '正在自动准备工作台…'
-              : production?.mode === 'hidden'
+              ? '正在打开工作台…'
+              : production?.mode !== 'preparation'
                 ? '返回工作台'
-                : '进入工作台'}
+                : '打开工作台'}
           </Button>
         </header>
         {production?.mode === 'preparation' ? (
-          <>
-            <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
-            {window.__TAURI_INTERNALS__ ? (
-              <Button
-                disabled={
-                  busy || cancellingEntry || entering || submittingEntry || Boolean(exit?.busy)
-                }
-                onClick={() =>
-                  void action(async () => {
-                    await enterProductionManually(production);
-                  })
-                }
-              >
-                手动进入工作台
-              </Button>
-            ) : null}
-            {window.__TAURI_INTERNALS__ ? <p>手动进入不会自动启动游戏或配置 OBS。</p> : null}
-          </>
+          <p>打开后自动准备游戏和 OBS，比赛资料可稍后选择。如已有 CS2，将正常关闭后重新启动。</p>
         ) : null}
         {entering || submittingEntry || cancellingEntry || cancelFailed ? (
           <Button
@@ -340,7 +299,6 @@ export function PreparationPage() {
             onClick={() => {
               if (cancelling.current) return;
               cancelling.current = true;
-              entryGeneration.current += 1;
               setCancellingEntry(true);
               setCancelError('');
               void cancelProductionEntry()
@@ -350,7 +308,6 @@ export function PreparationPage() {
                   setCancelError(error instanceof Error ? error.message : '操作未完成。');
                 })
                 .finally(() => {
-                  entryGeneration.current += 1;
                   cancelling.current = false;
                   setCancellingEntry(false);
                 });
@@ -607,11 +564,11 @@ export function PreparationPage() {
               {problems.length ? (
                 <Panel>
                   <h2>需要处理</h2>
-                  {problems.map(({ label, reason, href, action: nextAction }) => (
+                  {problems.map(({ id, label, reason, href, action: nextAction }) => (
                     <a
                       className="preparation-readiness"
                       data-tone="warning"
-                      key={label}
+                      key={id}
                       href={href}
                       aria-label={nextAction ?? `检查 ${label}`}
                     >
@@ -629,10 +586,10 @@ export function PreparationPage() {
                         <circle cx="12" cy="17" r="0.75" fill="currentColor" stroke="none" />
                       </svg>
                       <div>
-                        <strong>{label === '比赛上下文' ? '比赛资料' : label}</strong>
+                        <strong>{label}</strong>
                         <p>{reason}</p>
                       </div>
-                      <span className="mizar-button">{label === 'OBS' ? '配置' : '检查'}</span>
+                      <span className="mizar-button">{nextAction}</span>
                     </a>
                   ))}
                 </Panel>

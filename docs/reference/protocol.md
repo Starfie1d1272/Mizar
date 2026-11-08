@@ -128,7 +128,7 @@ OBS 支持采证按固定本机目录分块扫描近期会话，摘要保留分�
 
 `GET /local/v1/obs/outputs` 返回 Companion 观察的直播与录像输出状态：`phase`、可空 `active`、在途 `pending` 和 `revision`。OBS 输出事件与首次连接／重连快照共用状态；断线或核实失败为 `unknown`，不能解释为已停止。客户端轻量轮询此本机视图，不直接连接 OBS。
 
-`POST /operator/obs/output` 仅允许本机回环模式与可信 Origin，接收严格的 `{output: "stream" | "record", action: "start" | "stop", expectedRevision}`；修订号使用该输出最近快照的 UUID。不接受 Toggle 或任意 RPC。同一输出只允许一个在途操作，配置、场景修复、音频配置与启停互斥；冲突、过期、未连接及结果未确认返回 `409` 与稳定错误码。RPC 成功后仍等待事件／查询核实实际输出；超时不自动重发，重连只读取状态。OBS 拒绝码按有限类别提示：忙碌、输出未启用并需检查配置、状态已变化或其它明确拒绝；未收到可确认结果时仍为结果未确认，不从超时推断配置缺失。原始拒绝码与原因经现有脱敏 cause 链记录，不直接回显 OBS 原文。命令只使用 OBS 已保存设置，不改变制作生命周期；退出工作台不会隐式停止输出。
+`POST /operator/obs/output` 仅允许本机回环模式与可信 Origin，接收严格的 `{output: "stream" | "record", action: "start" | "stop", expectedRevision}`；修订号使用该输出最近快照的 UUID。不接受 Toggle 或任意 RPC。同一输出只允许一个在途操作，配置、场景修复、音频配置与启停互斥；冲突、过期、未连接及结果未确认返回 `409` 与稳定错误码。RPC 成功后仍等待事件／查询核实实际输出；超时不自动重发，重连只读取状态。OBS 拒绝码按有限类别提示：忙碌、输出未启用并需检查配置、状态已变化或其它明确拒绝；未收到可确认结果时仍为结果未确认，不从超时推断配置缺失。原始拒绝码与原因经现有脱敏 cause 链记录，不直接回显 OBS 原文。命令只使用 OBS 已保存设置，不改变制作生命周期；结束本次制作不会隐式停止 OBS 输出。
 
 POST /operator/obs/ensure 在输出停止时自动创建／启用 Mizar 集合、补齐场景、按当前编排选择初始节目并准备默认音频；返回最终 findings。已有自定义音频或游戏捕获音频时只检查，名称冲突不覆盖。初始化请求超时边界为 30 秒，浏览器请求边界为 40 秒；失败不撤销已成功的步骤，重试按现状补齐。
 
@@ -269,9 +269,9 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 ### 本机诊断历史
 
-诊断事件使用 `mizar-diagnostic-event/2`，定义见 [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)。Host、Companion 与文档保留原生产者身份和事件 ID，持久回执与业务动作成功不是同一概念。桌面文档调用有界 `persist_diagnostic_events`，Host 回执只确认该批事件已持久；纯浏览器继续使用受本机 Origin 限制的 `POST /debug/control-event`。
+诊断事件使用 `mizar-diagnostic-event/2`，定义见 [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)。Host、Companion 与文档保留原生产者身份和事件 ID，持久回执与业务动作成功不是同一概念。桌面文档调用有界 `persist_diagnostic_events`，Host 回执只确认该批事件已持久；纯浏览器通过受本机 Origin 限制的 `POST /debug/control-event` 交接同一文档 UUID、序号和 eventId，服务确认持久后返回 204；非法事件返回 400，无持久 writer 返回 503。
 
-`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。旧 `POST /debug/support-bundle` 暂保留独立 v1 响应适配，下一版本移除生成入口；旧文件读取不受影响。业务身份仅用于用户明确保存的本机包，不自动公开上传。
+`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。旧 `POST /debug/support-bundle` 不再注册；旧日志与旧 JSON 包由相应旧版本处理，不自动迁移或删除。业务身份仅用于用户明确保存的本机包，不自动公开上传。
 
 ### 本机网站同步健康
 

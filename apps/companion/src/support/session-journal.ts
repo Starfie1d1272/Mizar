@@ -1,3 +1,4 @@
+import { isDocumentDiagnosticEvent, type DiagnosticEvent } from '@mizar/protocol';
 import { diagnosticSegmentNames } from './segments.js';
 import { ProducerRetention, type IncidentParticipant } from './retention.js';
 import { diagnosticEnvelope } from './envelope.js';
@@ -178,7 +179,6 @@ export class SessionJournal {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private writeError: unknown = null;
   private inflightRecords = 0;
-  private inflightLines: string[] = [];
   private repair: { ino: number; dev: number; offset: number } | undefined;
   private size = 0;
   private segmentName = `session-${randomUUID()}.ndjson`;
@@ -258,10 +258,28 @@ export class SessionJournal {
       }
     });
   }
+  recordDocumentCommitted(value: unknown): Promise<string> {
+    if (!isDocumentDiagnosticEvent(value) || Buffer.byteLength(JSON.stringify(value)) > 32768)
+      return Promise.reject(new Error('document_event_invalid'));
+    if (this.closed) return Promise.reject(new Error('session_journal_closed'));
+    return new Promise((resolve, reject) => {
+      try {
+        this.enqueue(
+          value.kind,
+          value.evidence,
+          { resolve: () => resolve(value.eventId), reject },
+          value,
+        );
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
   private enqueue(
     stage: string,
     evidence: unknown,
     receipt?: { resolve: (sequence: number) => void; reject: (error: unknown) => void },
+    document?: DiagnosticEvent,
   ): void {
     const now = new Date().toISOString();
     const sequence = ++this.sequence;
@@ -306,6 +324,13 @@ export class SessionJournal {
         droppedBefore: this.dropped,
         writeFailuresBefore: this.failures,
         evidence: diagnosticValue(evidence),
+        ...(document
+          ? {
+              ...(diagnosticValue(document) as DiagnosticEvent),
+              coverage: { ...document.coverage, durability: 'committed' },
+              journal: { producerRunId: this.sessionId, sequence },
+            }
+          : {}),
       }) + '\n';
     const bytes = Buffer.byteLength(line);
     if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
@@ -338,7 +363,6 @@ export class SessionJournal {
           bytes += entry.bytes;
         } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
         this.inflightRecords = batch.length;
-        this.inflightLines = batch.map((entry) => entry.line);
         try {
           await this.append(batch.map((entry) => entry.line).join(''), bytes);
           this.committedSequence = batch[batch.length - 1]!.sequence;
@@ -370,7 +394,6 @@ export class SessionJournal {
           break;
         } finally {
           this.inflightRecords = 0;
-          this.inflightLines = [];
         }
       }
     } finally {
@@ -497,7 +520,7 @@ export class SessionJournal {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failures++;
     }
-    // Old rotating files are cold migration inputs, never deleted by the new writer.
+    // Previous-format files remain untouched and are not inputs to this writer.
     await atomicJson(join(this.directory, 'session-retention.json'), this.retention);
     await this.retained.initialize();
     for (const name of (await diagnosticSegmentNames(this.directory)).filter((name) =>
@@ -517,14 +540,15 @@ export class SessionJournal {
               JSON.parse(line) as {
                 producerRunId: string;
                 sequence: number;
+                journal?: { producerRunId: string; sequence: number };
                 observedAt: string | null;
               },
           );
         if (!events[0]?.producerRunId) continue;
         await this.retained.registerSegment(name, {
-          producerRunId: events[0].producerRunId,
-          firstSequence: events[0].sequence,
-          lastSequence: events.at(-1)!.sequence,
+          producerRunId: events[0].journal?.producerRunId ?? events[0].producerRunId,
+          firstSequence: events[0].journal?.sequence ?? events[0].sequence,
+          lastSequence: events.at(-1)!.journal?.sequence ?? events.at(-1)!.sequence,
           firstObservedAt: events[0].observedAt,
           lastObservedAt: events.at(-1)!.observedAt,
           records: events.length,
@@ -549,6 +573,7 @@ export class SessionJournal {
         (line) =>
           JSON.parse(line) as {
             sequence: number;
+            journal?: { producerRunId: string; sequence: number };
             observedAt: string | null;
             taskId?: string;
             kind?: string;
@@ -558,8 +583,8 @@ export class SessionJournal {
       );
     await this.retained.registerSegment(this.segmentName, {
       producerRunId: this.sessionId,
-      firstSequence: events[0]?.sequence ?? null,
-      lastSequence: events.at(-1)?.sequence ?? null,
+      firstSequence: events[0]?.journal?.sequence ?? events[0]?.sequence ?? null,
+      lastSequence: events.at(-1)?.journal?.sequence ?? events.at(-1)?.sequence ?? null,
       firstObservedAt: events[0]?.observedAt ?? null,
       lastObservedAt: events.at(-1)?.observedAt ?? null,
       records: events.length,
@@ -651,9 +676,6 @@ export class SessionJournal {
       rejectedAfterClose: this.rejectedAfterClose,
       retention: { ...this.retention, segments: this.retained.snapshot() },
     };
-  }
-  pendingEvidence(): readonly string[] {
-    return [...this.inflightLines, ...this.pending.map((entry) => entry.line)];
   }
   close() {
     if (!this.closing) {

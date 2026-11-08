@@ -5,7 +5,11 @@ export type ConnectionPreparationView = {
   settings: ObserverSettings;
   gameAutomation?: GameAutomationSettings;
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
-  mapConnection?: { id: string; mode: 'connect' | 'seamless' | 'register-current' } | null;
+  mapConnection?: {
+    id: string;
+    mode: 'connect' | 'seamless' | 'register-current';
+    nextMap: boolean;
+  } | null;
   waitingForMap?: boolean;
   gameRunning?: boolean;
   nextMapRequested?: boolean;
@@ -16,11 +20,13 @@ export function requireConnectionRevision(value: unknown): string {
     typeof value !== 'string' ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
   )
-    throw new Error('本图连接修订未确认，请重新打开连接入口后重试。');
+    throw new Error('本图连接状态未确认，请重新打开连接入口后重试。');
   return value;
 }
 /** Private runtime status; sourced from the existing observer owner. */
 export type ObserverRuntimeView = {
+  gameReady: boolean;
+  programCommandQueued: boolean;
   active: boolean;
   failed: boolean;
   pending: boolean;
@@ -37,20 +43,18 @@ export function observerFailureReason(view: ObserverRuntimeView) {
   if (code === 'initialization-timeout' || code === 'phase-timeout')
     return '提前提示连接超时，请核对地址与服务器状态。';
   if (code === 'source-hltv-stop') return '服务器已结束本次观战连接。';
-  if (code === 'native-start-failed') return '观察器启动失败，请检查游戏与组件状态。';
+  if (code === 'native-start-failed') return '提前提示启动失败，请检查游戏与组件状态。';
   if (code === 'output-directory-unavailable' || code === 'output-parent-unavailable')
     return '提前提示输出目录不可用，请检查 Mizar 数据目录是否可写，再重试。';
   if (code === 'configuration-boundary')
-    return '观察器未接受连接配置，请重新填写本场观战连接；若仍失败，请导出诊断。';
+    return '提前提示未接受连接配置，请重新填写本场观战连接；若仍失败，请导出诊断。';
   if (code?.startsWith('node-runtime-'))
-    return '观察器运行环境检查失败，请检查安装包完整性并导出诊断。';
+    return '提前提示运行环境检查失败，请检查安装包完整性并导出诊断。';
   if (view.terminal?.stage === 'spawn')
-    return '观察器进程未能启动，请检查安装包与系统访问权限，并导出诊断。';
+    return '提前提示进程未能启动，请检查安装包与系统访问权限，并导出诊断。';
   if (view.terminal?.stage === 'cleanup')
-    return '观察器收尾未完成，请导出诊断并重启 Mizar 后重试。';
+    return '提前提示收尾未完成，请导出诊断并重启 Mizar 后重试。';
   if (view.terminal?.stage === 'parser-initialization')
-    return '提前提示解析器初始化失败，请导出诊断并检查组件状态。';
-  const stage = view.terminal?.stage ?? '未知';
-  const id = view.terminal?.attemptId ?? '未提供';
-  return `提前提示接收未完成（阶段：${stage}，诊断编号：${id}），请导出诊断后重试。`;
+    return '提前提示未能开始接收数据，请重试；仍失败时请导出诊断。';
+  return '提前提示接收未完成，请重试；仍失败时请导出诊断。';
 }

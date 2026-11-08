@@ -1,10 +1,4 @@
 import { redactDiagnosticText } from '../updates/diagnostics.js';
-export const BUSINESS_LOG_FILES = [
-  'business.ndjson',
-  'business.ndjson.1',
-  'business.ndjson.2',
-  'business.ndjson.3',
-];
 export const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

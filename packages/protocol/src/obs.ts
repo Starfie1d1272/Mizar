@@ -93,3 +93,12 @@ export interface ObsCaptureDiagnostic {
   } | null;
   readonly owner: 'unknown';
 }
+
+/** Independent observations for setup guidance. Unknown is never inferred as stopped. */
+export interface ObsConnectionFacts {
+  readonly executable: 'found' | 'not_found' | 'unknown';
+  readonly process: 'running' | 'stopped' | 'unknown';
+  readonly listener: 'reachable' | 'refused' | 'unknown';
+  readonly authentication: 'accepted' | 'required' | 'rejected' | 'unknown';
+  readonly resources: 'ready' | 'needs_configuration' | 'unknown';
+}

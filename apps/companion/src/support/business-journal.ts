@@ -11,7 +11,7 @@ import {
   object,
   version,
 } from './business-evidence.js';
-export { businessEvidence, BUSINESS_LOG_FILES } from './business-evidence.js';
+export { businessEvidence } from './business-evidence.js';
 
 /** Diagnostics observe existing decisions; they never authorize or replay output. */
 export class BusinessJournal {

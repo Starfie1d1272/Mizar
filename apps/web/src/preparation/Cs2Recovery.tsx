@@ -97,7 +97,7 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
       <StatusBanner tone={exit.busy ? 'info' : 'warning'}>
         <div className="cs2-recovery" aria-label="工作台退出结果">
           <strong>
-            {exit.busy ? '正在退出工作台' : '退出工作台需要处理'} · {workspaceExitLabel(exit.stage)}
+            {exit.busy ? '正在结束制作' : '结束制作需要处理'} · {workspaceExitLabel(exit.stage)}
           </strong>
           <p role="status">
             {exit.busy ? '正在安全收尾，请等待结果。可以打开诊断查看进度。' : exit.message}
@@ -130,12 +130,12 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               }
             >
               {exit.busy
-                ? '正在退出…'
+                ? '正在结束…'
                 : uncertain
                   ? '恢复配置并重试退出'
                   : exit.stage === 'restoration' && status && !status.running
                     ? '重试恢复设置'
-                    : '重试退出工作台'}
+                    : '重试结束制作'}
             </Button>
             <Button
               onClick={() =>
@@ -233,8 +233,8 @@ export function Cs2Recovery({ production }: { production: Production | null }) {
               (uncertain
                 ? 'Steam 启动结果待确认，请先检查游戏和 Steam 启动请求。'
                 : status.preserveSettings
-                  ? '已保持原游戏设置；退出工作台会关闭本次游戏，保留游戏期间的新设置及原始备份。'
-                  : '退出工作台会关闭本次游戏并恢复配置；异常退出后可在这里重试。')}
+                  ? '已保持原游戏设置；结束制作会关闭本次游戏，保留游戏期间的新设置及原始备份。'
+                  : '结束制作会关闭本次游戏并恢复配置；异常退出后可在这里重试。')}
           </p>
         ) : null}
         {uncertain ? (

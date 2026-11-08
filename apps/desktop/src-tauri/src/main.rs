@@ -1412,20 +1412,60 @@ async fn save_support_bundle(
         ),
     );
     let state_root = app.state::<DesktopLog>().state_root.clone();
+    let save_log = diagnostic_log.clone();
+    let operation_id = diagnostic_operation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let prepared = support_export::prepare_generated(&state_root, &export_id)?;
-        let Some(directory) = app
-            .dialog()
-            .file()
-            .set_title("选择 Mizar 诊断包保存目录")
-            .blocking_pick_folder()
-        else {
+        let dialog_started = std::time::Instant::now();
+        let destination = match prepared.suggested_filename() {
+            Some(name) => app
+                .dialog()
+                .file()
+                .set_title("保存 Mizar 诊断包")
+                .set_file_name(name)
+                .add_filter("ZIP 诊断包", &["zip"])
+                .blocking_save_file(),
+            None => app
+                .dialog()
+                .file()
+                .set_title("选择 Mizar 诊断分卷保存目录")
+                .blocking_pick_folder(),
+        };
+        save_log.event(
+            "support_save",
+            "dialog",
+            Some(
+                &serde_json::json!({
+                    "exportId": export_id,
+                    "operationId": operation_id,
+                    "dialogMs": dialog_started.elapsed().as_millis(),
+                    "cancelled": destination.is_none(),
+                })
+                .to_string(),
+            ),
+        );
+        let Some(destination) = destination else {
             return Ok(false);
         };
-        let path = directory
+        let path = destination
             .into_path()
             .map_err(|_| "保存位置无效，请重新选择。")?;
-        prepared.save(&path)?;
+        let copy_started = std::time::Instant::now();
+        let saved = prepared.save(&path);
+        save_log.event(
+            "support_save",
+            "copy",
+            Some(
+                &serde_json::json!({
+                    "exportId": export_id,
+                    "operationId": operation_id,
+                    "copyMs": copy_started.elapsed().as_millis(),
+                    "success": saved.is_ok(),
+                })
+                .to_string(),
+            ),
+        );
+        saved?;
         Ok(true)
     })
     .await

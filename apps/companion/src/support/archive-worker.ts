@@ -1,184 +1,728 @@
-/** Executed in an isolated, finite-lifetime worker. Input descriptors are already safely opened. */
-export const archiveWorkerSource = String.raw`
-const { workerData: d, parentPort } = require('node:worker_threads');
-const fs = require('node:fs');
-const crypto = require('node:crypto');
-const zlib = require('node:zlib');
-const { Zip, ZipDeflate } = require(d.fflate);
-const hash = x => crypto.createHash('sha256').update(x).digest('hex');
-const MAX = 18874368;
-function redact(value,key='') {
- if(value&&typeof value==='object'&&['program_all_chat','program_all_chat_reset'].includes(value.kind||value.stage)) {
-   return Object.fromEntries(Object.entries(value).filter(([name])=>['schema','eventId','producerKind','producerRunId','sequence','kind','stage','phase','outcome','time','observedAt','recordedAt','startupSessionId','taskId','operationId','parentOperationId','attemptId','sourceInterval'].includes(name)).concat([['evidence',{excluded:'raw-chat-body',scope:'identity and source interval only'}],['coverage',{excluded:['raw-chat-body'],unknown:[]}]]));
- }
+import { sourceCoversProjection } from './technical-projection.js';
+import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+import { StringDecoder } from 'node:string_decoder';
+import { performance } from 'node:perf_hooks';
+import { Zip, ZipDeflate } from 'fflate';
 
- if(/authorization|cookie|password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket/i.test(key))return '[redacted]';
- if(typeof value==='string'&&/^\s*[{[]/.test(value)){try{return JSON.stringify(redact(JSON.parse(value)));}catch{}}
- if(typeof value==='string')value=value.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi,text=>{try{const url=new URL(text);if(url.username||url.password){url.username='[redacted]';url.password='';}for(const key of [...url.searchParams.keys()])if(/password|token|secret|credential|key|code|auth/i.test(key))url.searchParams.set(key,'[redacted]');if(/^rtmps?:$/.test(url.protocol)){const parts=url.pathname.split('/');if(parts.length>2){parts[parts.length-1]='[redacted]';url.pathname=parts.join('/');}}return url.toString();}catch{return text;}});
- if(typeof value==='string')return value.replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi,'$1 [redacted]').replace(/((?:password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,'$1[redacted]');
- if(Array.isArray(value))return value.map(v=>redact(v));
- if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,redact(v,k)]));
- return value;
+export interface ArchiveWorkerData {
+  sources: {
+    name: string;
+    fd: number;
+    bytes: number;
+    rawAttachment?: boolean;
+    rawIndex?: boolean;
+    secrets?: string[];
+  }[];
+  gaps: unknown[];
+  output: string;
+  exportId: string;
+  range: { from?: string; to?: string };
+  snapshot: unknown;
+  /** Remaining shared cache budget, after other jobs and this job's input snapshots. */
+  diskBudgetBytes?: number;
 }
-let zip, fd, bytes = 0, totalBytes = 0, digest, part = 0, entries = [], parts = [];
-let carrierRecords = 0, uniqueEvents = 0, aggregatedOccurrences = 0, processedBytes = 0;
-const journey = [], business = [], journeyParts=[],businessParts=[], gaps = [...d.gaps];
-let indexBytes=0;
-const indexDirectory=d.output+'/.identity-index';fs.mkdirSync(indexDirectory,{mode:0o700});
-function accept(id,bodyHash) {
- const key=hash(id),path=indexDirectory+'/'+key.slice(0,3);
- const handle=fs.openSync(path,'a+',0o600);
- try {
-   const size=fs.fstatSync(handle).size;
-   if(size>2*1024*1024)throw Error('identity_partition_budget');
-   const bytes=Buffer.alloc(size);if(size)fs.readSync(handle,bytes,0,size,0);
-   let variants=0;
-   for(const line of bytes.toString('ascii').split('\n'))if(line.startsWith(key+':')){if(line===key+':'+bodyHash)return -1;variants++;}
-   const record=key+':'+bodyHash+'\n';
-   if(indexBytes+totalBytes+record.length>256*1024*1024)throw Error('export_disk_budget');
-   fs.writeSync(handle,record);indexBytes+=record.length;return variants;
- } finally {fs.closeSync(handle);}
-}
-function begin() {
-  part++; bytes = 0; entries = []; digest = crypto.createHash('sha256');
-  fd = fs.openSync(d.output + '/part-' + part + '.zip.partial', 'wx', 0o600);
-  zip = new Zip((error, data, final) => {
-    if (error) throw error;
-    if (bytes + data.length > MAX || totalBytes + indexBytes + data.length > 256 * 1024 * 1024) throw Error('export_disk_budget');
-    fs.writeSync(fd, data); digest.update(data); bytes += data.length; totalBytes += data.length;
-  });
-  add('bundle.json', Buffer.from(JSON.stringify({schema:'mizar-support-bundle/2',bundleId:d.exportId,partIndex:part,snapshot:{asOf:d.snapshot.asOf,atomic:false,sources:d.snapshot.sources,unknown:d.snapshot.unknown},range:d.range,partCount:'see-total-manifest'})));
-}
-function finish() {
-  add('coverage.json', Buffer.from(JSON.stringify({uniqueEvents,carrierRecords,aggregatedOccurrences,gaps,entries,scope:'cumulative through this part; total manifest is authoritative'})));
-  zip.end(); fs.fsyncSync(fd); fs.closeSync(fd);
-  const name = 'part-' + part + '.zip';
-  fs.renameSync(d.output + '/' + name + '.partial', d.output + '/' + name);
-  parts.push({name,bytes,sha256:digest.digest('hex')});
-}
-function add(name, data) {
-  if(name!=='bundle.json'&&name!=='coverage.json'&&bytes+data.length*1.02+262144>MAX){finish();begin();}
-  if (data.length > 2 * 1024 * 1024) throw Error('export_entry_budget');
-  const file = new ZipDeflate(name, {level:6}); zip.add(file); file.push(data,true);
-  entries.push({name,bytes:data.length,sha256:hash(data)});
-}
-let chunk = [], chunkBytes = 0, chunkIndex = 0;
-function flush() {
-  if (!chunk.length) return;
-  // Deflate worst-case reserve, local headers and central directory, never recompress completed parts.
-  if (bytes + chunkBytes * 1.02 + 262144 > MAX) { finish(); begin(); }
-  add('events/' + (++chunkIndex) + '.ndjson', Buffer.from(chunk.join(''))); chunk=[]; chunkBytes=0;
-}
-function emit(event, source, offset) {
-  carrierRecords++;
-  if (!event || typeof event !== 'object') event={evidence:event};
-  if (event.stage === 'native_host_records' && Array.isArray(event.evidence?.entries)) {
-    const refs=[];
-    for (const e of event.evidence.entries) {
-      const id=e.entry?.eventId||e.sourceRecordId||'legacy:'+hash(source+':'+(e.offset||offset));
-      if(emit({...e.entry,eventId:id},source,e.offset||0))refs.push(id);
+type ObjectValue = Record<string, unknown>;
+const object = (value: unknown): ObjectValue =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as ObjectValue)
+    : {};
+const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
+const MAX = 18_874_368;
+const ENTRY_MAX = 2 * 1024 * 1024;
+// The offline reader enforces the same expanded per-part ceiling. Reserve space
+// for both final metadata entries before accepting another ordinary entry.
+const EXPANDED_MAX = 256 * 1024 * 1024;
+const FINAL_METADATA_RESERVE = 2 * ENTRY_MAX;
+const timestamp = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
+const sensitive =
+  /authorization|cookie|password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket/i;
+function redact(value: unknown, key = ''): unknown {
+  const record = object(value);
+  if (
+    ['program_all_chat', 'program_all_chat_reset'].includes(String(record.kind ?? record.stage))
+  ) {
+    return {
+      ...Object.fromEntries(
+        Object.entries(record)
+          .filter(([name]) =>
+            [
+              'schema',
+              'eventId',
+              'producerKind',
+              'producerRunId',
+              'sequence',
+              'kind',
+              'stage',
+              'phase',
+              'outcome',
+              'time',
+              'observedAt',
+              'recordedAt',
+              'startupSessionId',
+              'taskId',
+              'operationId',
+              'parentOperationId',
+              'attemptId',
+              'sourceInterval',
+            ].includes(name),
+          )
+          .map(([name, item]) => [name, redact(item, name)]),
+      ),
+      evidence: { excluded: 'raw-chat-body', scope: 'identity and source interval only' },
+      coverage: { excluded: ['raw-chat-body'], unknown: [] },
+    };
+  }
+  if (sensitive.test(key)) return '[redacted]';
+  if (typeof value === 'string') {
+    if (/^\s*[{[]/.test(value)) {
+      try {
+        return JSON.stringify(redact(JSON.parse(value)));
+      } catch {
+        /* Plain text remains evidence. */
+      }
     }
-    emit({...event,kind:'native_carrier_reference',stage:'native_carrier_reference',sourceInterval:{from:null,to:null},evidence:{source:event.evidence.source,eventRefs:refs,rangeExcludedChildren:event.evidence.entries.length-refs.length}},source,offset);
+    return value
+      .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (text) => {
+        try {
+          const url = new URL(text);
+          if (url.username || url.password) {
+            url.username = '[redacted]';
+            url.password = '';
+          }
+          for (const name of [...url.searchParams.keys()])
+            if (/password|token|secret|credential|key|code|auth/i.test(name))
+              url.searchParams.set(name, '[redacted]');
+          if (/^rtmps?:$/.test(url.protocol)) {
+            const parts = url.pathname.split('/');
+            if (parts.length > 2) {
+              parts[parts.length - 1] = '[redacted]';
+              url.pathname = parts.join('/');
+            }
+          }
+          return url.toString();
+        } catch {
+          return text;
+        }
+      })
+      .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 [redacted]')
+      .replace(
+        /((?:password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
+        '$1[redacted]',
+      );
+  }
+  if (Array.isArray(value)) return value.map((item) => redact(item));
+  if (value !== null && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(record).map(([name, item]) => [name, redact(item, name)]),
+    );
+  return value;
+}
+class OutputFailure extends Error {}
+/** Synchronous, bounded work in one finite-lifetime worker; descriptors are pinned by the owner. */
+export function runArchiveWorker(
+  d: ArchiveWorkerData,
+  report: (message: ObjectValue) => void,
+): void {
+  let zip: Zip,
+    fd: number | undefined,
+    bytes = 0,
+    expandedBytes = 0,
+    totalBytes = 0,
+    part = 0;
+  let digest = createHash('sha256');
+  type Entry = { name: string; bytes: number; sha256: string };
+  let entries: Entry[] = [];
+  const parts: Entry[] = [],
+    gaps = [...d.gaps];
+  const excludedSources: { source: string; reason: string }[] = [];
+  let carrierRecords = 0,
+    uniqueEvents = 0,
+    aggregatedOccurrences = 0,
+    processedBytes = 0,
+    indexBytes = 0;
+  const indexDirectory = d.output + '/.identity-index';
+  const budget = Math.min(d.diskBudgetBytes ?? 256 * 1024 * 1024, 256 * 1024 * 1024);
+  const started = performance.now(),
+    baseline = process.memoryUsage();
+  let peakHeap = baseline.heapUsed,
+    peakRss = baseline.rss,
+    peakExternal = baseline.external;
+  const stages = { readMs: 0, decodeMs: 0, encodeMs: 0, finalizeMs: 0 };
+  const sample = () => {
+    const m = process.memoryUsage();
+    peakHeap = Math.max(peakHeap, m.heapUsed);
+    peakRss = Math.max(peakRss, m.rss);
+    peakExternal = Math.max(peakExternal, m.external);
+  };
+  function output<T>(action: () => T): T {
+    try {
+      return action();
+    } catch (error) {
+      throw new OutputFailure(String(error));
+    }
+  }
+  function writeAll(handle: number, data: Uint8Array) {
+    let position = 0;
+    while (position < data.length) {
+      const written = fs.writeSync(handle, data, position, data.length - position);
+      if (!written) throw Error('output_short_write');
+      position += written;
+    }
+  }
+  function readCanonical(name: string, offset: number): ObjectValue {
+    const source = d.sources.find((candidate) => candidate.name === name);
+    if (!source) throw Error('canonical_source_missing');
+    if (name.endsWith('.gz')) {
+      if (source.bytes > 16 * 1024 * 1024) throw Error('source_decode_budget');
+      const raw = Buffer.alloc(source.bytes);
+      let position = 0;
+      while (position < raw.length) position += read(source.fd, raw.subarray(position), position);
+      const start = performance.now();
+      const value: unknown = JSON.parse(
+        gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 }).toString('utf8'),
+      );
+      stages.decodeMs += performance.now() - start;
+      if (!Array.isArray(value)) throw Error('canonical_array_missing');
+      return object(value[offset]);
+    }
+    const chunks: Buffer[] = [];
+    let position = offset,
+      size = 0;
+    while (position < source.bytes) {
+      const raw = Buffer.alloc(Math.min(65536, source.bytes - position));
+      const n = read(source.fd, raw, position),
+        end = raw.subarray(0, n).indexOf(10);
+      const chunk = raw.subarray(0, end < 0 ? n : end);
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > ENTRY_MAX) throw Error('source_line_budget');
+      if (end >= 0) return object(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      position += n;
+    }
+    throw Error('canonical_record_uncommitted');
+  }
+  function identity(
+    event: ObjectValue,
+    id: string,
+    bodyHash: string,
+    source: string,
+    offset: number,
+  ): { variant: number; projection: boolean } {
+    return output(() => {
+      const key = hash(id),
+        path = indexDirectory + '/' + key.slice(0, 3);
+      const handle = fs.openSync(
+        path,
+        fs.constants.O_CREAT |
+          fs.constants.O_APPEND |
+          fs.constants.O_RDWR |
+          (fs.constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      try {
+        const size = fs.fstatSync(handle).size;
+        if (size > ENTRY_MAX) throw Error('identity_partition_budget');
+        const raw = Buffer.alloc(size);
+        let read = 0;
+        while (read < size) {
+          const n = fs.readSync(handle, raw, read, size - read, read);
+          if (!n) throw Error('identity_short_read');
+          read += n;
+        }
+        const lines = raw.toString('ascii').split('\n');
+        const tuple = hash(JSON.stringify([id, event.producerRunId, event.sequence]));
+        const hasTuple =
+          typeof event.producerRunId === 'string' && Number.isSafeInteger(event.sequence);
+        if (
+          event.schema === 'mizar-diagnostic-event/2' &&
+          object(event.projection).sourceEventId === id &&
+          object(event.projection).policyVersion === 2 &&
+          hasTuple
+        ) {
+          const prefix = 'C:' + key + ':' + tuple + ':';
+          for (const line of lines)
+            if (line.startsWith(prefix)) {
+              const locator = JSON.parse(line.slice(prefix.length)) as {
+                source: string;
+                offset: number;
+              };
+              try {
+                if (sourceCoversProjection(readCanonical(locator.source, locator.offset), event))
+                  return { variant: 0, projection: true };
+              } catch (error) {
+                // A failed source re-read cannot prove equivalence. Keep the wire body as a variant.
+                gaps.push({
+                  source: locator.source,
+                  offset: locator.offset,
+                  reason: String(error),
+                  scope: 'projection equivalence unconfirmed',
+                });
+              }
+            }
+        }
+        let variant = 0;
+        for (const line of lines)
+          if (line.startsWith(key + ':')) {
+            if (line === key + ':' + bodyHash) return { variant: -1, projection: false };
+            variant++;
+          }
+        const canonical =
+          event.schema === 'mizar-diagnostic-event/2' && event.projection == null && hasTuple;
+        const record =
+          key +
+          ':' +
+          bodyHash +
+          '\n' +
+          (canonical
+            ? 'C:' + key + ':' + tuple + ':' + JSON.stringify({ source, offset }) + '\n'
+            : '');
+        if (indexBytes + totalBytes + record.length > budget) throw Error('export_disk_budget');
+        writeAll(handle, Buffer.from(record));
+        indexBytes += record.length;
+        return { variant, projection: false };
+      } finally {
+        fs.closeSync(handle);
+      }
+    });
+  }
+  function add(name: string, data: Buffer, metadata = false) {
+    if (
+      !/^[-a-zA-Z0-9_/.]+$/.test(name) ||
+      name.startsWith('/') ||
+      name.split('/').some((segment) => segment === '..' || segment === '')
+    )
+      throw new OutputFailure('unsafe_entry_name');
+    if (data.length > ENTRY_MAX) throw new OutputFailure('export_entry_budget');
+    if (
+      !metadata &&
+      (bytes + data.length * 1.02 + 262144 > MAX ||
+        expandedBytes + data.length + FINAL_METADATA_RESERVE > EXPANDED_MAX)
+    ) {
+      finish(false);
+      begin();
+    }
+    if (expandedBytes + data.length > EXPANDED_MAX)
+      throw new OutputFailure('export_expanded_part_budget');
+    const start = performance.now();
+    output(() => {
+      const file = new ZipDeflate(name, { level: 6 });
+      zip.add(file);
+      file.push(data, true);
+    });
+    stages.encodeMs += performance.now() - start;
+    expandedBytes += data.length;
+    entries.push({ name, bytes: data.length, sha256: hash(data) });
+    sample();
+  }
+  function begin() {
+    if (part >= 32) throw new OutputFailure('export_part_count_budget');
+    part++;
+    bytes = 0;
+    expandedBytes = 0;
+    entries = [];
+    digest = createHash('sha256');
+    fd = output(() => fs.openSync(d.output + '/part-' + part + '.zip.partial', 'wx', 0o600));
+    zip = new Zip((error, data) =>
+      output(() => {
+        if (error) throw error;
+        if (bytes + data.length > MAX || totalBytes + indexBytes + data.length > budget)
+          throw Error('export_disk_budget');
+        writeAll(fd!, data);
+        digest.update(data);
+        bytes += data.length;
+        totalBytes += data.length;
+      }),
+    );
+  }
+  function finish(final: boolean) {
+    const start = performance.now(),
+      encodedBefore = stages.encodeMs;
+    // Final facts are written once, at the end. No circular digest and no recompression.
+    add(
+      'bundle.json',
+      Buffer.from(
+        JSON.stringify({
+          schema: 'mizar-support-bundle/2',
+          bundleId: d.exportId,
+          partIndex: part,
+          partCount: final ? part : null,
+          complete: final,
+          range: d.range,
+          snapshot: redact({
+            asOf: object(d.snapshot).asOf,
+            atomic: false,
+            sources: object(d.snapshot).sources,
+            unknown: object(d.snapshot).unknown,
+          }),
+        }),
+      ),
+      true,
+    );
+    add(
+      'coverage.json',
+      Buffer.from(
+        JSON.stringify({
+          schema: 'mizar-support-coverage/2',
+          uniqueEvents,
+          carrierRecords,
+          aggregatedOccurrences,
+          gaps: redact(gaps),
+          excludedSources,
+          entries,
+          scope: final ? 'final cumulative coverage' : 'cumulative through this part',
+        }),
+      ),
+      true,
+    );
+    output(() => {
+      zip.end();
+      fs.fsyncSync(fd!);
+      fs.closeSync(fd!);
+      fd = undefined;
+      fs.renameSync(
+        d.output + '/part-' + part + '.zip.partial',
+        d.output + '/part-' + part + '.zip',
+      );
+    });
+    parts.push({ name: 'part-' + part + '.zip', bytes, sha256: digest.digest('hex') });
+    stages.finalizeMs += performance.now() - start - (stages.encodeMs - encodedBefore);
+  }
+  let chunk: string[] = [],
+    chunkBytes = 0,
+    chunkIndex = 0;
+  const journey: ObjectValue[] = [],
+    business: ObjectValue[] = [],
+    carriers: ObjectValue[] = [];
+  const journeyParts: ObjectValue[] = [],
+    businessParts: ObjectValue[] = [],
+    carrierParts: ObjectValue[] = [];
+  function flush() {
+    if (!chunk.length) return;
+    add('events/' + ++chunkIndex + '.ndjson', Buffer.from(chunk.join('')));
+    chunk = [];
+    chunkBytes = 0;
+  }
+  function index(name: string, records: ObjectValue[], refs: ObjectValue[]) {
+    if (!records.length) return;
+    const file = 'indexes/' + name + '-' + (refs.length + 1) + '.json';
+    add(file, Buffer.from(JSON.stringify(records)));
+    refs.push({ partIndex: part, name: file });
+    records.length = 0;
+  }
+  function emit(input: unknown, source: string, offset: number): boolean {
+    carrierRecords++;
+    const event =
+      input !== null && typeof input === 'object' && !Array.isArray(input)
+        ? object(input)
+        : { evidence: input };
+    if ((event.kind ?? event.stage) === 'cs2_console_records') {
+      let detail = object(event.evidence);
+      if (!event.evidence && typeof event.detail === 'string') {
+        try {
+          detail = object(JSON.parse(event.detail));
+        } catch {
+          /* Retain unknown content. */
+        }
+      }
+      if (Array.isArray(detail.records)) {
+        const refs: string[] = [];
+        for (const value of detail.records) {
+          const record = object(value);
+          const at = typeof record.sourceOffset === 'number' ? record.sourceOffset : offset;
+          const id =
+            typeof record.sourceRecordId === 'string'
+              ? record.sourceRecordId
+              : 'legacy:' + hash(source + ':' + at);
+          if (
+            emit(
+              {
+                ...record,
+                eventId: id,
+                producerRunId: event.producerRunId ?? event.startupSessionId,
+                kind: 'cs2_console_observation',
+                observedAt: record.capturedAt,
+                sourceInterval: {
+                  from: record.sourceAfterUtc ?? null,
+                  to: record.lastCapturedAt ?? record.capturedAt ?? null,
+                },
+                evidence: record,
+              },
+              source,
+              at,
+            )
+          )
+            refs.push(id);
+        }
+        const { detail: ignored, ...header } = event;
+        void ignored;
+        return emit(
+          {
+            ...header,
+            kind: 'console_carrier_reference',
+            stage: 'console_carrier_reference',
+            sourceInterval: { from: null, to: null },
+            evidence: {
+              eventRefs: refs,
+              rangeExcludedChildren: detail.records.length - refs.length,
+            },
+          },
+          source,
+          offset,
+        );
+      }
+    }
+    const stamp = event.observedAt ?? event.time ?? event.recordedAt;
+    let interval = event.sourceInterval;
+    if (!interval && Array.isArray(object(event.evidence).samples)) {
+      const times = (object(event.evidence).samples as unknown[])
+        .map((sample) => object(sample).time)
+        .filter((time): time is string => Number.isFinite(timestamp(time)))
+        .sort((a, b) => timestamp(a) - timestamp(b));
+      if (times.length) interval = { from: times[0], to: times.at(-1) };
+    }
+    const from = timestamp(interval ? object(interval).from : stamp),
+      to = timestamp(interval ? object(interval).to : stamp);
+    if (
+      (d.range.from && Number.isFinite(to) && to < timestamp(d.range.from)) ||
+      (d.range.to && Number.isFinite(from) && from > timestamp(d.range.to))
+    )
+      return false;
+    const id =
+      typeof event.eventId === 'string'
+        ? event.eventId
+        : typeof event.id === 'string' && object(event.source).recordSequence
+          ? event.id
+          : typeof event.startupSessionId === 'string' && Number.isSafeInteger(event.sequence)
+            ? event.startupSessionId + ':' + event.sequence
+            : 'legacy:' + hash(source + ':' + offset);
+    const { variant, projection } = identity(
+      event,
+      id,
+      hash(JSON.stringify(event)),
+      source,
+      offset,
+    );
+    if (projection || variant < 0) {
+      carriers.push({
+        eventId: id,
+        producerRunId: event.producerRunId,
+        sequence: event.sequence,
+        source,
+        offset,
+        role: projection ? 'technical-projection-reference' : 'identical-carrier-reference',
+      });
+      if (carriers.length >= 2000) index('carriers', carriers, carrierParts);
+      return true;
+    }
+    if (!variant) {
+      uniqueEvents++;
+      const occurrences = event.occurrences ?? object(event.coverage).occurrences;
+      aggregatedOccurrences +=
+        typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
+          ? occurrences
+          : 1;
+    }
+    const line =
+      JSON.stringify({
+        ...object(redact(event)),
+        eventId: id,
+        carrier: {
+          source,
+          offset,
+          role:
+            event.projection != null || source.startsWith('diagnostic-outbox/')
+              ? 'technical-copy'
+              : 'local-original',
+        },
+        ...(variant ? { variant, variantReason: 'nonidentical-carrier-preserved' } : {}),
+      }) + '\n';
+    const size = Buffer.byteLength(line);
+    if (size > ENTRY_MAX) throw Error('record_exceeds_entry_budget');
+    if (chunkBytes + size > 1024 * 1024) flush();
+    chunk.push(line);
+    chunkBytes += size;
+    const ref = {
+      eventId: id,
+      variant,
+      kind: event.kind ?? event.stage ?? null,
+      taskId: event.taskId ?? null,
+      operationId: event.operationId ?? null,
+    };
+    if (ref.taskId || ref.operationId) journey.push(ref);
+    if (String(ref.kind).startsWith('business')) business.push(ref);
+    if (journey.length >= 2000) index('journey', journey, journeyParts);
+    if (business.length >= 2000) index('business', business, businessParts);
+    sample();
     return true;
   }
-  if((event.kind||event.stage)==='cs2_console_records') {
-    let detail=event.evidence; if(!detail&&typeof event.detail==='string'){try{detail=JSON.parse(event.detail);}catch{}}
-    if(Array.isArray(detail?.records)) {
-      const refs=[];
-      for(const record of detail.records){const id=record.sourceRecordId || 'legacy:'+hash(source+':'+(record.sourceOffset||offset));if(emit({...record,eventId:id,producerRunId:event.producerRunId || event.startupSessionId,kind:'cs2_console_observation',observedAt:record.capturedAt,sourceInterval:{from:record.sourceAfterUtc||null,to:record.lastCapturedAt||record.capturedAt||null},evidence:record},source,record.sourceOffset || offset))refs.push(id);}
-      const {detail:ignored,...header}=event;
-      emit({...header,kind:'console_carrier_reference',stage:'console_carrier_reference',sourceInterval:{from:null,to:null},evidence:{eventRefs:refs,rangeExcludedChildren:detail.records.length-refs.length}},source,offset);return true;
-    }
+  function read(handle: number, raw: Buffer, position: number) {
+    const start = performance.now();
+    const n = fs.readSync(handle, raw, 0, raw.length, position);
+    stages.readMs += performance.now() - start;
+    processedBytes += n;
+    if (!n) throw Error('snapshot_short_read');
+    return n;
   }
-  const stamp=event.observedAt || event.time || event.recordedAt || null;
-  let interval=event.sourceInterval;
-  if(!interval && Array.isArray(event.evidence?.samples)) {
-    const times=event.evidence.samples.map(sample=>sample?.time).filter(time=>typeof time==='string'&&Number.isFinite(Date.parse(time))).sort((a,b)=>Date.parse(a)-Date.parse(b));
-    if(times.length)interval={from:times[0],to:times.at(-1)};
-  }
-  const from=Date.parse(interval ? interval.from : stamp), to=Date.parse(interval ? interval.to : stamp);
-  // Keep intersecting aggregates and unknown bounds; a late endpoint is not an exclusion.
-  if ((d.range.from && Number.isFinite(to) && to < Date.parse(d.range.from)) || (d.range.to && Number.isFinite(from) && from > Date.parse(d.range.to))) return false;
-  const id=event.eventId || (event.source?.recordSequence && typeof event.id==='string' ? event.id : null) || (event.startupSessionId && Number.isSafeInteger(event.sequence) ? event.startupSessionId+':'+event.sequence : 'legacy:'+hash(source+':'+offset));
-  const originalHash=hash(JSON.stringify(event));
-  const variant=accept(id,originalHash);
-  if(variant<0)return true;
-  if(!variant){uniqueEvents++;aggregatedOccurrences += typeof event.occurrences === 'number' ? event.occurrences : event.coverage?.occurrences || 1;}
-  const output={...redact(event),eventId:id,carrier:{source,offset,role:source.startsWith('diagnostic-outbox/')?'technical-copy':'local-original'}, ...(variant?{variant,variantReason:'nonidentical-carrier-preserved'}:{})};
-  const line=JSON.stringify(output)+'\n'; const size=Buffer.byteLength(line);
-  if(size > 2*1024*1024) { gaps.push({source,offset,reason:'record_exceeds_entry_budget'}); throw Error('record_exceeds_entry_budget'); }
-  if(chunkBytes+size>1024*1024) flush();
-  chunk.push(line);chunkBytes+=size;
-  const ref={eventId:id,variant,kind:event.kind || event.stage || null,taskId:event.taskId || null,operationId:event.operationId || null};
-  if(ref.taskId || ref.operationId) journey.push(ref);
-  if(String(ref.kind).startsWith('business')) business.push(ref);
-  if(journey.length>2000) { flush();const name='indexes/journey-'+chunkIndex+'.json';add(name,Buffer.from(JSON.stringify(journey.splice(0))));journeyParts.push({partIndex:part,name}); }
-  if(business.length>2000) { flush();const name='indexes/business-'+chunkIndex+'.json';add(name,Buffer.from(JSON.stringify(business.splice(0))));businessParts.push({partIndex:part,name}); }
-  return true;
-}
-function decode(value, source) {
-  if(Array.isArray(value)) { value.forEach((event,index)=>emit(event,source,index)); }
-  else if(value?.schema==='mizar-performance-pending/1') {
-    const raw=zlib.gunzipSync(Buffer.from(value.gzipBase64,'base64'),{maxOutputLength:4*1024*1024});
-    if(hash(raw)!==value.sha256) throw Error('performance_digest_mismatch');
-    JSON.parse(raw).forEach((e,i)=>emit(e,source,i));
-  } else if(Array.isArray(value?.events)) value.events.forEach((e,i)=>emit(e,source,i));
-  else if(Array.isArray(value?.files)) {
-    for(const f of value.files) {
-      let tail='',offset=0;
-      for(const volume of f.volumes || []) {
-        const raw=zlib.gunzipSync(Buffer.from(volume.gzipBase64,'base64'),{maxOutputLength:2*1024*1024});
-        if(hash(raw)!==volume.sha256) throw Error('legacy_volume_digest_mismatch');
-        const lines=(tail+raw.toString('utf8')).split('\n');tail=lines.pop();
-        for(const line of lines) { if(line) { let value;try { value=JSON.parse(line); } catch { value={evidence:{text:line}}; }emit(value,source+'/'+f.name,offset); } offset+=Buffer.byteLength(line)+1; }
-      }
-      if(tail) emit({evidence:{text:tail}},source+'/'+f.name,offset);
-    }
-  } else emit(value,source,0);
-}
-try {
- begin();
- for(const source of d.sources) {
-  parentPort.postMessage({phase:'encoding',inputBytes:processedBytes,outputBytes:totalBytes});
   try {
-  if(source.rawIndex) {
-    if(source.bytes>8*1024*1024)throw Error('migration_index_budget');
-    const raw=Buffer.alloc(source.bytes);let read=0;while(read<raw.length){const n=fs.readSync(source.fd,raw,read,raw.length-read,read);if(!n)throw Error('index_short_read');read+=n;}processedBytes+=raw.length;
-    if(source.name.endsWith('inventory.json')) {
-      const inventory=JSON.parse(raw.toString('utf8'));let items=[],size=0,index=0;
-      const write=()=>{if(items.length){add('indexes/migration/inventory-'+(++index)+'.json',Buffer.from(JSON.stringify({...inventory,sources:items})));items=[];size=0;}};
-      for(const item of inventory.sources||[]){const n=Buffer.byteLength(JSON.stringify(item));if(size+n>1024*1024)write();items.push(item);size+=n;}write();
-    } else add('indexes/'+source.name,raw);
-  } else if(source.rawAttachment) {
-    let position=0,tail='',body='',index=0;const decoder=new(require('node:string_decoder').StringDecoder)('utf8');
-    const write=line=>{for(const secret of source.secrets||[])if(secret)line=line.split(secret).join('[redacted]');line=redact(line)+'\n';if(Buffer.byteLength(body)+Buffer.byteLength(line)>1024*1024){add(source.name+'-'+(++index)+'.log',Buffer.from(body));body='';}body+=line;};
-    while(position<source.bytes){const raw=Buffer.alloc(Math.min(65536,source.bytes-position));const n=fs.readSync(source.fd,raw,0,raw.length,position);if(!n)throw Error('obs_snapshot_short_read');position+=n;processedBytes+=n;const lines=(tail+decoder.write(raw.subarray(0,n))).split('\n');tail=lines.pop();if(Buffer.byteLength(tail)>1024*1024)throw Error('obs_line_budget');for(const line of lines)write(line);}
-    tail+=decoder.end();if(tail)write(tail);if(body)add(source.name+'-'+(++index)+'.log',Buffer.from(body));
-  } else if(source.name.endsWith('.gz') || source.name.endsWith('.json')) {
-    if(source.bytes>16*1024*1024) throw Error('legacy_decode_budget');
-    const raw=Buffer.alloc(source.bytes); let n=0;
-    while(n<raw.length) { const read=fs.readSync(source.fd,raw,n,raw.length-n,n);if(!read) throw Error('snapshot_short_read');n+=read; }
-    decode(JSON.parse(source.name.endsWith('.gz')?zlib.gunzipSync(raw,{maxOutputLength:4*1024*1024}).toString('utf8'):raw.toString('utf8')),source.name);
-    processedBytes+=raw.length;
-  } else {
-    const decoder=new (require('node:string_decoder').StringDecoder)('utf8');let tail='',position=0,offset=0;
-    while(position<source.bytes) {
-      const raw=Buffer.alloc(Math.min(65536,source.bytes-position));const n=fs.readSync(source.fd,raw,0,raw.length,position);
-      if(!n) throw Error('snapshot_short_read');position+=n;processedBytes+=n;
-      const lines=(tail+decoder.write(raw.subarray(0,n))).split('\n');tail=lines.pop();
-      if(Buffer.byteLength(tail)>2*1024*1024) throw Error('source_line_budget');
-      for(const line of lines) { if(line) { let value;try{value=JSON.parse(line);}catch{value={evidence:{text:line},coverage:{unknown:['unstructured-source-time']}};}emit(value,source.name,offset); } offset+=Buffer.byteLength(line)+1; }
+    output(() => fs.mkdirSync(indexDirectory, { mode: 0o700 }));
+    begin();
+    for (const source of d.sources) {
+      report({ phase: 'encoding', inputBytes: processedBytes, outputBytes: totalBytes });
+      try {
+        if (!Number.isSafeInteger(source.bytes) || source.bytes < 0)
+          throw Error('invalid_source_size');
+        if (source.rawIndex || source.name.endsWith('.gz')) {
+          if (source.bytes > (source.rawIndex ? ENTRY_MAX : 16 * 1024 * 1024))
+            throw Error('source_decode_budget');
+          const raw = Buffer.alloc(source.bytes);
+          let position = 0;
+          while (position < raw.length)
+            position += read(source.fd, raw.subarray(position), position);
+          const start = performance.now();
+          const value: unknown = JSON.parse(
+            source.rawIndex
+              ? raw.toString('utf8')
+              : gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 }).toString('utf8'),
+          );
+          stages.decodeMs += performance.now() - start;
+          if (source.rawIndex)
+            add('indexes/' + source.name, Buffer.from(JSON.stringify(redact(value))));
+          else {
+            const events = Array.isArray(value)
+              ? value
+              : object(value).schema === 'mizar-technical-diagnostics/1' &&
+                  Array.isArray(object(value).events)
+                ? (object(value).events as unknown[])
+                : null;
+            if (
+              events &&
+              events.every((event) => object(event).schema === 'mizar-diagnostic-event/2')
+            )
+              events.forEach((event, i) => emit(event, source.name, i));
+            else
+              excludedSources.push({
+                source: source.name,
+                reason: 'outside-current-event-schema; original retained',
+              });
+          }
+        } else if (source.name.endsWith('.json')) throw Error('unsupported_current_source');
+        else {
+          const decoder = new StringDecoder('utf8');
+          let tail = '',
+            position = 0,
+            offset = 0,
+            body = '',
+            attachmentIndex = 0;
+          const write = (line: string) => {
+            if (source.rawAttachment) {
+              for (const secret of source.secrets ?? [])
+                if (secret) line = line.split(secret).join('[redacted]');
+              line = String(redact(line)) + '\n';
+              if (Buffer.byteLength(body) + Buffer.byteLength(line) > 1024 * 1024 && body) {
+                add(source.name + '-' + ++attachmentIndex + '.log', Buffer.from(body));
+                body = '';
+              }
+              body += line;
+            } else if (line) {
+              let value: unknown;
+              const start = performance.now();
+              try {
+                value = JSON.parse(line);
+              } catch {
+                value = {
+                  evidence: { text: line },
+                  coverage: { unknown: ['unstructured-source-time'] },
+                };
+              }
+              stages.decodeMs += performance.now() - start;
+              emit(value, source.name, offset);
+            }
+          };
+          while (position < source.bytes) {
+            const raw = Buffer.alloc(Math.min(65536, source.bytes - position));
+            const n = read(source.fd, raw, position);
+            position += n;
+            const lines = (tail + decoder.write(raw.subarray(0, n))).split('\n');
+            tail = lines.pop()!;
+            if (Buffer.byteLength(tail) > ENTRY_MAX) throw Error('source_line_budget');
+            for (const line of lines) {
+              if (Buffer.byteLength(line) > ENTRY_MAX) throw Error('source_line_budget');
+              write(line);
+              offset += Buffer.byteLength(line) + 1;
+            }
+          }
+          tail += decoder.end();
+          if (source.rawAttachment) {
+            if (tail) write(tail);
+            if (body) add(source.name + '-' + ++attachmentIndex + '.log', Buffer.from(body));
+          } else if (tail)
+            gaps.push({ source: source.name, offset, reason: 'uncommitted_partial_line' });
+        }
+      } catch (error) {
+        if (error instanceof OutputFailure) throw error;
+        gaps.push({
+          source: source.name,
+          reason: String(error),
+          scope: 'remaining source not decoded; original retained',
+        });
+      }
     }
-    if(tail) gaps.push({source:source.name,offset,reason:'uncommitted_partial_line'});
+    flush();
+    for (const [name, records, refs] of [
+      ['journey', journey, journeyParts],
+      ['business', business, businessParts],
+      ['carriers', carriers, carrierParts],
+    ] as const)
+      add(
+        'indexes/' + name + '.json',
+        Buffer.from(
+          JSON.stringify({ schema: 'mizar-reference-index/2', parts: refs, tail: records }),
+        ),
+      );
+    add('snapshots/current.json', Buffer.from(JSON.stringify(redact(d.snapshot))));
+    finish(true);
+    output(() => fs.rmSync(indexDirectory, { recursive: true }));
+    sample();
+    const elapsedMs = performance.now() - started;
+    report({
+      phase: 'ready',
+      knownGaps: gaps.length,
+      completeKnownSources: gaps.length === 0,
+      parts,
+      uniqueEvents,
+      carrierRecords,
+      aggregatedOccurrences,
+      gaps: redact(gaps),
+      excludedSources,
+      inputBytes: processedBytes,
+      outputBytes: totalBytes,
+      measurements: {
+        elapsedMs,
+        stages: {
+          ...stages,
+          processMs: Math.max(
+            0,
+            elapsedMs - Object.values(stages).reduce((sum, value) => sum + value, 0),
+          ),
+        },
+        memory: {
+          baseline,
+          peakHeapUsedDelta: peakHeap - baseline.heapUsed,
+          peakExternalDelta: peakExternal - baseline.external,
+          peakProcessRssDelta: peakRss - baseline.rss,
+          scope:
+            'worker boundary samples; RSS includes main thread and other workers; not an isolated process peak',
+        },
+      },
+    });
+  } catch (error) {
+    try {
+      if (fd !== undefined) fs.closeSync(fd);
+    } catch {
+      /* Preserve the first output failure. */
+    }
+    report({ phase: 'failed', error: String(redact(String(error))) });
   }
-  } catch(error) {if(/export_disk_budget|identity_partition_budget/.test(String(error)))throw error;gaps.push({source:source.name,reason:String(error),scope:'remaining source not decoded; original retained'});}
- }
- flush();
- add('indexes/journey.json',Buffer.from(JSON.stringify({schema:'mizar-reference-index/2',parts:journeyParts,tail:journey})));
- add('indexes/business.json',Buffer.from(JSON.stringify({schema:'mizar-reference-index/2',parts:businessParts,tail:business})));
- add('snapshots/current.json',Buffer.from(JSON.stringify(redact(d.snapshot))));
- finish();
- fs.rmSync(indexDirectory,{recursive:true});
- parentPort.postMessage({phase:'ready',knownGaps:gaps.length,completeKnownSources:gaps.length===0,parts,uniqueEvents,carrierRecords,aggregatedOccurrences,gaps,inputBytes:processedBytes,outputBytes:totalBytes});
-} catch(error) { try {if(fd!==undefined)fs.closeSync(fd);}catch{} parentPort.postMessage({phase:'failed',error:String(error)}); }
-`;
+}

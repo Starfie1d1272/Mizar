@@ -2,7 +2,7 @@ import { gameBackgroundReady } from './game-background.js';
 import { prepareCaptureAudio } from './capture-audio-preparation.js';
 import { ObsCaptureWarmup, ObsCaptureWarmupError } from './capture-warmup.js';
 import { readCaptureInitialization, type CaptureInitialization } from './capture-initialization.js';
-import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
+import type { ObsCaptureDiagnostic, ObsConnectionFacts } from '@mizar/protocol/obs';
 import {
   assertNoVideoOutput,
   ObsPreparationWriteBlocked,
@@ -102,6 +102,7 @@ export function obsErrorEvidence(error: unknown, password = ''): unknown {
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly connectionFailure?: ReturnType<typeof obsFailureKind>;
+  readonly facts?: ObsConnectionFacts;
   readonly currentScene: string | null;
   readonly port: number;
   readonly streaming: boolean | null;
@@ -783,97 +784,157 @@ export class ObsAdapter {
 
   private async readStatus(): Promise<ObsStatus> {
     const config = await this.configStore.read();
-    let connected = false;
+    let facts: ObsConnectionFacts = {
+      executable: 'unknown',
+      process: 'unknown',
+      listener: 'unknown',
+      authentication: 'unknown',
+      resources: 'unknown',
+    };
+    let status: ObsStatus = {
+      connection: 'unavailable',
+      currentScene: null,
+      port: config.port,
+      streaming: null,
+      recording: null,
+      passwordConfigured: Boolean(config.password),
+      video: null,
+      findings: [],
+      programEvidence: null,
+    };
+    const findings: ObsFinding[] = [];
+    const query = async (code: string, message: string, read: () => Promise<void>) => {
+      try {
+        await read();
+      } catch (error) {
+        this.diagnostic(`obs_${code}`, obsErrorEvidence(error, config.password));
+        findings.push({ code, message });
+      }
+    };
     try {
-      const status = await this.withObs(async (obs, endpoint) => {
-        connected = true;
-        const [scene, outputs, video, findings] = await Promise.all([
-          obs.call('GetCurrentProgramScene'),
-          this.outputs.read(),
-          obs.call('GetVideoSettings'),
-          this.configurationFindings(obs, endpoint).catch((error: unknown) => {
-            this.diagnostic('obs_configuration_check', obsErrorEvidence(error, config.password));
-            return [
-              {
-                code: 'configuration_check_failed',
-                message: 'OBS 已连接，但场景或音频检查失败。请查看诊断后重新检查。',
-              },
-            ];
+      await this.withObs(async (obs, endpoint) => {
+        status = { ...status, connection: 'connected' };
+        facts = { ...facts, process: 'running', listener: 'reachable', authentication: 'accepted' };
+        await Promise.all([
+          query('scene_query_failed', 'OBS 已连接，但当前场景尚未确认。请重新检查。', async () => {
+            const scene = await obs.call('GetCurrentProgramScene');
+            if (typeof scene.currentProgramSceneName !== 'string')
+              throw new Error('obs_scene_response_invalid');
+            status = { ...status, currentScene: scene.currentProgramSceneName };
           }),
+          query(
+            'output_query_failed',
+            'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
+            async () => {
+              const outputs = await this.outputs.read();
+              status = {
+                ...status,
+                streaming: outputs.stream.active,
+                recording: outputs.record.active,
+              };
+              if (outputs.stream.active === null || outputs.record.active === null)
+                throw new Error('obs_output_state_unknown');
+            },
+          ),
+          query('video_query_failed', 'OBS 已连接，但视频设置尚未确认。请重新检查。', async () => {
+            const video = await obs.call('GetVideoSettings');
+            const values = [
+              video.baseWidth,
+              video.baseHeight,
+              video.outputWidth,
+              video.outputHeight,
+              video.fpsNumerator,
+              video.fpsDenominator,
+            ];
+            if (
+              !values.every(
+                (value) => typeof value === 'number' && Number.isFinite(value) && value > 0,
+              )
+            )
+              throw new Error('obs_video_response_invalid');
+            status = {
+              ...status,
+              video: {
+                canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
+                output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
+                fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
+              },
+            };
+          }),
+          query(
+            'configuration_check_failed',
+            'OBS 已连接，但场景或音频检查未完成。请重新检查。',
+            async () => {
+              const configuration = await this.configurationFindings(obs, endpoint);
+              findings.push(...configuration);
+              facts = {
+                ...facts,
+                resources: obsFindingReadiness(configuration).blockingFindings.length
+                  ? 'needs_configuration'
+                  : 'ready',
+              };
+            },
+          ),
         ]);
-        if (outputs.stream.active === null || outputs.record.active === null)
-          findings.push({
-            code: 'output_query_failed',
-            message: 'OBS 已连接，但输出状态尚未确认。请在 OBS 核对后重新检查。',
-          });
-        const currentScene =
-          typeof scene.currentProgramSceneName === 'string' ? scene.currentProgramSceneName : null;
-        return {
-          connection: 'connected',
-          currentScene,
-          port: config.port,
-          streaming: outputs.stream.active,
-          recording: outputs.record.active,
-          passwordConfigured: Boolean(config.password),
-          video: {
-            canvas: `${String(video.baseWidth)}×${String(video.baseHeight)}`,
-            output: `${String(video.outputWidth)}×${String(video.outputHeight)}`,
-            fps: Number(video.fpsNumerator) / Number(video.fpsDenominator),
-          },
-          findings,
-        } satisfies ObsStatus;
-      });
-      this.findings = [...status.findings];
-      // Evidence gets a separate session and deadline after base facts are confirmed.
-      // Its failure cannot consume the base session's deadline or change connection facts.
-      let evidenceTimeout: ReturnType<typeof setTimeout> | undefined;
-      const programEvidence = await Promise.race([
+      }, 2500);
+    } catch (error) {
+      const kind = obsFailureKind(error);
+      if (status.connection === 'connected') {
+        findings.push({
+          code: 'status_query_failed',
+          message: 'OBS 已连接，但部分状态查询未完成。请重新检查，不必修改密码。',
+        });
+      } else {
+        status = {
+          ...status,
+          connection:
+            kind === 'authentication'
+              ? config.password
+                ? 'invalid_password'
+                : 'password_required'
+              : 'unavailable',
+          connectionFailure: kind,
+        };
+        facts = {
+          ...facts,
+          listener:
+            kind === 'authentication' ? 'reachable' : kind === 'refused' ? 'refused' : 'unknown',
+          authentication:
+            kind === 'authentication' ? (config.password ? 'rejected' : 'required') : 'unknown',
+        };
+        if (process.platform === 'win32') {
+          await Promise.all([
+            query('process_query_failed', 'OBS 运行状态尚未确认。', async () => {
+              const running = await isObsProcessRunning();
+              facts = { ...facts, process: running ? 'running' : 'stopped' };
+            }),
+            query('executable_query_failed', 'OBS 程序位置尚未确认。', async () => {
+              const path = await discoverObsExecutable(config.executablePath);
+              facts = { ...facts, executable: path ? 'found' : 'not_found' };
+            }),
+          ]);
+        }
+      }
+    }
+    this.findings = [...findings];
+    // Evidence has its own deadline and cannot erase confirmed base observations.
+    let programEvidence: ObsProgramEvidence | null = null;
+    if (status.connection === 'connected') {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      programEvidence = await Promise.race([
         this.withObs(
           (obs) => readObsProgramEvidence(obs, this.browserBaseUrl, status.currentScene),
           PROGRAM_EVIDENCE_MS,
           'obs_program_check',
         ).catch(() => null),
         new Promise<null>((resolve) => {
-          // Also bound config/cleanup work; withObs may still be disconnecting after its RPC timeout.
-          evidenceTimeout = setTimeout(() => {
-            this.diagnostic('obs_program_check', {
-              message: 'OBS 节目取证超时，未能在期限内完成。',
-            });
-            resolve(null);
-          }, PROGRAM_EVIDENCE_MS + 50);
+          timer = setTimeout(() => resolve(null), PROGRAM_EVIDENCE_MS + 50);
         }),
       ]).finally(() => {
-        if (evidenceTimeout) clearTimeout(evidenceTimeout);
+        if (timer) clearTimeout(timer);
       });
-      return { ...status, programEvidence };
-    } catch (error: unknown) {
-      const kind = obsFailureKind(error);
-      return {
-        connection: connected
-          ? 'connected'
-          : kind === 'authentication'
-            ? config.password
-              ? 'invalid_password'
-              : 'password_required'
-            : 'unavailable',
-        connectionFailure: kind,
-        currentScene: null,
-        port: config.port,
-        streaming: null,
-        recording: null,
-        passwordConfigured: Boolean(config.password),
-        video: null,
-        findings: connected
-          ? [
-              {
-                code: 'status_query_failed',
-                message: 'OBS 已连接，但状态查询未完成。请重新检查，不必修改密码。',
-              },
-            ]
-          : [],
-        programEvidence: null,
-      };
     }
+    return { ...status, facts, findings: [...findings], programEvidence };
   }
 
   private previewPending: Promise<{ scene: string; image: string } | null> | null = null;

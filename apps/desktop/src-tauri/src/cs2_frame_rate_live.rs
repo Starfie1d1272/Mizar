@@ -1,10 +1,13 @@
 //! One bounded, process-scoped fps_max transaction. Uncertain writes are never replayed.
-use crate::{cs2_session, managed_cs2, observer_hud, startup_log::DesktopLog};
+use crate::{cs2_console, cs2_session, managed_cs2, startup_log::DesktopLog};
 use serde_json::{json, Value};
 use std::{
     fs,
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
+    time::{Duration, Instant},
 };
 static TRANSACTION: Mutex<()> = Mutex::new(());
 
@@ -81,7 +84,7 @@ fn save(log: &DesktopLog, record: &Value) -> Result<(), String> {
         .as_str()
         .or_else(|| record["attemptId"].as_str())
         .unwrap();
-    let attempt = observer_hud::frame_rate_attempt_id(marker);
+    let attempt = frame_rate_attempt_id(marker);
     log.with_attempt(Some(&attempt), || log.event("cs2_frame_rate_transaction", record["phase"].as_str().unwrap_or("unknown"),
         Some(&json!({"attemptId":record["attemptId"],"restoreAttemptId":record["restoreAttemptId"],"original":record["original"],"applied":record["applied"],"pid":record["pid"],"created":record["created"]}).to_string())));
     Ok(())
@@ -152,7 +155,7 @@ pub(crate) fn control(
     if !valid() {
         return Ok(unknown("受管游戏身份或控制权限已变化，本次未写入。"));
     }
-    let current = match observer_hud::probe_frame_rate(log, executable) {
+    let current = match probe_frame_rate(log, executable) {
         Ok(current) if valid() => current,
         Ok(_) => return Ok(unknown("游戏实例已变化，本次读回未确认。")),
         Err(error) => return Ok(unknown(&error)),
@@ -171,9 +174,9 @@ pub(crate) fn control(
                 "attemptId"
             };
             let marker = saved[marker_key].as_str().unwrap();
-            let attempt = observer_hud::frame_rate_attempt_id(marker);
+            let attempt = frame_rate_attempt_id(marker);
             let receipt = log.with_attempt(Some(&attempt), || {
-                let result = observer_hud::frame_rate_receipt(executable, marker);
+                let result = frame_rate_receipt(executable, marker);
                 log.native_outcome("fps_max_original_receipt_recheck", None, &result);
                 result
             })?;
@@ -224,7 +227,7 @@ pub(crate) fn control(
         }
         // Recheck ownership immediately before reserving restoration. The
         // console has no compare-and-swap; do not overwrite an observed manual change.
-        let latest = match observer_hud::probe_frame_rate(log, executable) {
+        let latest = match probe_frame_rate(log, executable) {
             Ok(value) if valid() => value,
             result => {
                 log.native_outcome("fps_max_restore_preflight", None, &result);
@@ -243,7 +246,7 @@ pub(crate) fn control(
                 "检测到游戏内后续修改，未覆盖当前值。",
             ));
         }
-        let marker = observer_hud::frame_rate_marker()?;
+        let marker = frame_rate_marker()?;
         saved["restoreAttemptId"] = marker.clone().into();
         saved["phase"] = "restore_pending".into();
         save(log, saved)?;
@@ -251,7 +254,7 @@ pub(crate) fn control(
             return Ok(unknown("恢复前实例已变化，未继续写入；请复查。"));
         }
         let original = saved["original"].as_f64().unwrap();
-        let result = observer_hud::frame_rate_command(log, executable, &marker, Some(original));
+        let result = frame_rate_command(log, executable, &marker, Some(original));
         if !valid() || result.as_ref().ok().copied() != Some(original) {
             log.event("fps_max_restore", "unconfirmed", Some(&json!({"attemptId":saved["restoreAttemptId"],"expected":original,"readback":format!("{result:?}")}).to_string()));
             return Ok(unknown("恢复结果尚未确认。请复查，不会重复写入。"));
@@ -288,14 +291,14 @@ pub(crate) fn control(
             "当前值已经一致，未写入，也未取得恢复所有权。",
         ));
     }
-    let marker = observer_hud::frame_rate_marker()?;
+    let marker = frame_rate_marker()?;
     let mut saved = json!({"version":1,"pid":process.pid,"created":process.created,"executable":executable,
         "original":current,"applied":target,"attemptId":marker,"phase":"apply_pending"});
     save(log, &saved)?;
     if !valid() {
         return Ok(unknown("应用前实例已变化，未继续写入；请复查。"));
     }
-    let result = observer_hud::frame_rate_command(log, executable, &marker, Some(target));
+    let result = frame_rate_command(log, executable, &marker, Some(target));
     if !valid() || result.as_ref().ok().copied() != Some(target) {
         log.event("fps_max_apply", "unconfirmed", Some(&json!({"attemptId":saved["attemptId"],"expected":target,"readback":format!("{result:?}")}).to_string()));
         return Ok(unknown("应用结果尚未确认。请复查，不会重复写入。"));
@@ -310,4 +313,102 @@ pub(crate) fn control(
         true,
         "本次帧率已执行并读回确认；退出前仅在值仍属于本次修改时恢复。",
     ))
+}
+
+/// A finite read-only probe on the already-consented console.
+fn probe_frame_rate(log: &DesktopLog, executable: &Path) -> Result<f64, String> {
+    frame_rate_command(log, executable, &frame_rate_marker()?, None)
+}
+
+fn frame_rate_marker() -> Result<String, String> {
+    Ok(format!(
+        "MIZAR_FPS_{:032x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ))
+}
+
+/// The caller durably reserves every write attempt before this function.
+fn frame_rate_command(
+    log: &DesktopLog,
+    executable: &Path,
+    marker: &str,
+    value: Option<f64>,
+) -> Result<f64, String> {
+    if !valid_marker(marker)
+        || value.is_some_and(|v| !v.is_finite() || !(0.0..=10000.0).contains(&v))
+    {
+        return Err("帧率命令参数无效。".into());
+    }
+    let attempt = frame_rate_attempt_id(marker);
+    log.with_attempt(Some(&attempt), || {
+        let result = frame_rate_command_inner(log, executable, marker, value);
+        log.native_outcome("fps_max_command_readback", None, &result);
+        result
+    })
+}
+
+fn frame_rate_attempt_id(marker: &str) -> String {
+    let hex = marker.strip_prefix("MIZAR_FPS_").unwrap_or(marker);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+fn frame_rate_command_inner(
+    log: &DesktopLog,
+    executable: &Path,
+    marker: &str,
+    value: Option<f64>,
+) -> Result<f64, String> {
+    let root = crate::host_runtime::bundle_root()?;
+    let mut command = Command::new(root.join("resources/runtime/node.exe"));
+    command
+        .arg(root.join("resources/app/dist/telemetry/observer-game-control.js"))
+        .args(["--frame-rate-query", marker])
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
+        .creation_flags(0x08000000);
+    if let Some(value) = value {
+        command.arg(value.to_string());
+    }
+    crate::powershell::run(command, log, "游戏帧率读回", Duration::from_secs(12))?;
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        if let Some(value) = frame_rate_receipt(executable, marker)? {
+            return Ok(value);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("尚未收到本次游戏帧率读回；请复查，不会重复写入。".into())
+}
+
+/// Re-read the original attempt's unique receipt without replaying its command.
+fn frame_rate_receipt(executable: &Path, marker: &str) -> Result<Option<f64>, String> {
+    let Some(text) = cs2_console::receipt(executable, marker)? else {
+        return Ok(None);
+    };
+    let value =
+        regex::Regex::new(r#"(?im)^\s*"?fps_max"?\s*(?:=|:)\s*"?([0-9]+(?:\.[0-9]+)?)\b"#).unwrap();
+    let values: Vec<f64> = value
+        .captures_iter(&text)
+        .filter_map(|c| c[1].parse().ok())
+        .collect();
+    if let Some(current) = values
+        .first()
+        .copied()
+        .filter(|v| v.is_finite() && (0.0..=10000.0).contains(v))
+    {
+        if values.iter().all(|v| *v == current) {
+            return Ok(Some(current));
+        }
+    }
+    Err("游戏帧率读回缺失或不一致，本次结果尚未确认。".into())
 }

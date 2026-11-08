@@ -175,12 +175,23 @@ pub async fn observer_command(
     } else {
         None
     };
+    if action == "start-configured" && crate::preparation_task::waiting_for_game()? {
+        let ticket = action_ticket.ok_or("连接操作已失效。")?;
+        app.state::<production_exit::ExitGate>()
+            .check_ticket(ticket)?;
+        // The settings owner already holds the intent. The preparation task resumes it
+        // from the latest owner view once this same game's verified startup completes.
+        return Ok(serde_json::json!({"pending":true}));
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let log = app.state::<DesktopLog>();
         log.event("observer_workspace", "begin", Some(&format!("action={action}")));
         let mut automation = None;
         let result: Result<(), String> = (|| {
             if action == "connection-mode" {
+                if crate::preparation_task::waiting_for_game()? {
+                    return Ok(());
+                }
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.try_lock().map_err(|_| "请等待游戏操作完成后重试。")?;
                 let game = crate::mulnx_launch::observer_control_snapshot(&cs2, &log);
@@ -214,7 +225,7 @@ pub async fn observer_command(
             let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;
             app.state::<crate::updates::PendingUpdate>().check()?;
             if !app.state::<crate::host_state::HostState>().visible.load(Ordering::Acquire) {
-                return Err("请打开制播工作台后连接早源。".into());
+                return Err("请先打开工作台，再连接提前提示。".into());
             }
             let _operation = operation()?;
             app.state::<production_exit::ExitGate>().check_ticket(ticket)?;

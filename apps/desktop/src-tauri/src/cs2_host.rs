@@ -243,7 +243,7 @@ pub(crate) async fn replace(
         }
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
-        production_exit::prepare_external_entry(&log, &expected_revision)?;
+        production_exit::prepare_external_entry(&log, &expected_revision, &preparation_id)?;
         cs2.replace_for_preparation(expected_pid, created, &preparation_id, &guard)
     })
     .await

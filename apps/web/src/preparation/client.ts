@@ -270,10 +270,6 @@ async function enterDesktopWorkspace(
   }
 }
 
-export async function enterProductionManually(state: Production) {
-  await enterDesktopWorkspace({ expectedRevision: state.revision, manual: true });
-}
-
 export async function productionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,

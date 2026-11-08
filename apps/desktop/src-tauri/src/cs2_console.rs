@@ -393,6 +393,64 @@ fn encoding(file: &mut File) -> io::Result<&'static str> {
         "utf8"
     })
 }
+/// Read only one command's echoed marker pair from the bounded console tail.
+/// This does not enable continuous capture or retain unrelated console text.
+pub(crate) fn receipt(executable: &Path, marker: &str) -> Result<Option<String>, String> {
+    const BUDGET: u64 = 65536;
+    let (mut file, _) = match checked(&path(executable)?) {
+        Ok(value) => value,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(failure(error)),
+    };
+    let mode = encoding(&mut file).map_err(failure)?;
+    let length = file.metadata().map_err(failure)?.len();
+    let mut offset = length.saturating_sub(BUDGET);
+    if mode != "utf8" {
+        offset += offset % 2;
+    }
+    file.seek(SeekFrom::Start(offset)).map_err(failure)?;
+    let mut bytes = Vec::new();
+    file.take(BUDGET).read_to_end(&mut bytes).map_err(failure)?;
+    let mut remaining = bytes.as_slice();
+    // A tail offset can fall inside a character or line; never interpret it.
+    if offset != 0 {
+        let Some((end, width)) = newline(remaining, mode) else {
+            return Ok(None);
+        };
+        remaining = &remaining[end + width..];
+    }
+    let ending = format!("{marker}_END");
+    let mut body = None::<String>;
+    while let Some((end, width)) = newline(remaining, mode) {
+        let line = decode(&remaining[..end], mode);
+        remaining = &remaining[end + width..];
+        let line = match line {
+            Ok(line) => line,
+            Err(_) if body.is_none() => continue,
+            Err(_) => return Err("游戏命令回执编码无效，本次结果尚未确认。".into()),
+        };
+        let mut line = console_body(line.trim_start_matches('\u{feff}').trim()).trim();
+        while let Some(channel) = line.strip_prefix('[') {
+            let Some((name, rest)) = channel.split_once(']') else {
+                break;
+            };
+            if name.is_empty() || name.len() > 80 {
+                break;
+            }
+            line = rest.trim_start();
+        }
+        if line == marker {
+            body = Some(String::new());
+        } else if let Some(body) = body.as_mut() {
+            if line == ending {
+                return Ok(Some(std::mem::take(body)));
+            }
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    Ok(None)
+}
 fn anchor(file: &mut File, offset: u64) -> io::Result<String> {
     let size = offset.min(128) as usize;
     file.seek(SeekFrom::Start(offset - size as u64))?;

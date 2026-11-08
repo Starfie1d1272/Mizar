@@ -1,6 +1,3 @@
-import { setImmediate as yieldIO } from 'node:timers/promises';
-import { diagnosticValue } from '../support/session-journal.js';
-import { encodeLogVolumes, type ArchivedLogFile } from '../support/archive.js';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
@@ -478,7 +475,11 @@ interface RootEvidence {
   directoryTruncated: boolean;
   fileStatus: Record<string, 'read' | 'missing' | 'failed' | 'not_selected'>;
 }
-export interface RelatedObsLogFile extends ArchivedLogFile {
+export interface RelatedObsLogFile {
+  name: string;
+  status: string;
+  sourceBytes: number;
+  readBytes: number;
   format: 'obs-log-text/1';
   root: number;
   slot: number;
@@ -721,35 +722,6 @@ export async function collectObsNativeEvidence(
       if (obj(e).code !== 'ENOENT') error(role, e);
       return null;
     }
-  }
-  async function redactRelatedText(text: string, secrets: readonly string[]) {
-    const parts: string[] = [];
-    let start = 0,
-      sinceYield = 0;
-    while (start < text.length) {
-      const newline = text.indexOf('\n', start);
-      const end = newline < 0 ? text.length : newline + 1;
-      const line = text.slice(start, end);
-      parts.push(
-        diagnosticValue(
-          line.replace(
-            /(stream[ _-]?key["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
-            '$1[redacted]',
-          ),
-          '',
-          new Set(),
-          secrets,
-        ) as string,
-      );
-      sinceYield += end - start;
-      start = end;
-      if (sinceYield >= 65536) {
-        await yieldIO();
-        check();
-        sinceYield = 0;
-      }
-    }
-    return parts.join('');
   }
   async function collect() {
     let relatedLogBytes = 0;
@@ -1134,7 +1106,6 @@ export async function collectObsNativeEvidence(
               status: 'not_collected',
               sourceBytes: tail.size,
               readBytes: 0,
-              volumes: [],
               format: 'obs-log-text/1',
               root: evidence.roots.length - 1,
               slot,
@@ -1195,49 +1166,7 @@ export async function collectObsNativeEvidence(
                   await handle?.close();
                 }
               }
-            } else {
-              try {
-                const full = await read(
-                  root,
-                  ['logs', name],
-                  Math.min(
-                    OBS_NATIVE_LIMITS.relatedLogBytes,
-                    OBS_NATIVE_LIMITS.relatedLogTotalBytes - relatedLogBytes,
-                  ),
-                );
-                relatedLogBytes += full.size;
-                file.sourceBytes = full.size;
-                // A fixed Mizar capture marker ties this OBS session to the product.
-                // Saved global configuration or another software's capture is insufficient.
-                const sources = [
-                  OBS_CAPTURE_INPUT,
-                  'Mizar · CS2 Game Capture',
-                  ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
-                  ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
-                ];
-                const related = sources.some(
-                  (source) =>
-                    full.text.includes(`: '${source}']`) || full.text.includes(`: "${source}"]`),
-                );
-                if (!related) file.status = 'mizar_association_not_established';
-                else {
-                  file.association = 'mizar_source_marker';
-                  const redacted = await redactRelatedText(full.text, logSecrets);
-                  Object.assign(file, await encodeLogVolumes(Buffer.from(redacted)));
-                  file.readBytes = full.readBytes ?? full.size;
-                  file.status =
-                    file.readBytes !== full.size
-                      ? 'incomplete_read'
-                      : redacted.endsWith('\n')
-                        ? 'read'
-                        : 'incomplete_last_line';
-                  check();
-                }
-              } catch (e) {
-                file.status = obj(e).code === 'ETOOBIG' ? 'source_exceeds_budget' : 'unreadable';
-                error('related_log_read', e);
-              }
-            }
+            } else file.status = 'snapshot_export_unavailable';
           }
           result.logs.push(log);
         }

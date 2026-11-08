@@ -87,6 +87,38 @@ export function diagnosticEnvelope(value: unknown): {
         stamps.map(diagnosticSourceUtc).filter((value): value is string => value !== null),
       ),
     ].sort();
+    if (event.producerKind === 'document') {
+      const evidence = object(event.evidence);
+      const detail = event.kind === 'task' ? object(evidence.evidence) : evidence;
+      const failureKinds = new Set<DiagnosticFailureKind>();
+      const browserFailure =
+        event.kind === 'browser_error' || event.kind === 'browser_unhandled_rejection';
+      if (!cancelled(event.outcome ?? detail.result)) {
+        if (browserFailure) failureKinds.add('browser');
+        if (
+          event.kind === 'browser_performance' &&
+          typeof evidence.anomalyCount === 'number' &&
+          evidence.anomalyCount > 0
+        )
+          failureKinds.add('performance');
+        if (
+          (event.kind === 'http_control' &&
+            typeof evidence.status === 'number' &&
+            evidence.status >= 400) ||
+          (!browserFailure &&
+            (failed(event.outcome) ||
+              event.phase === 'failure' ||
+              failed(detail.result) ||
+              errorPresent(detail.error)))
+        )
+          failureKinds.add('operation');
+      }
+      return {
+        times,
+        failureKinds: [...failureKinds].sort(),
+        sourceTimeUnknown: times.length === 0,
+      };
+    }
     const failureKinds = new Set(
       diagnosticEnvelope({ ...event, schema: undefined, stage: event.kind ?? event.stage })
         .failureKinds,
