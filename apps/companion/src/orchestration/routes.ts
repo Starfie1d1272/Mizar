@@ -63,7 +63,8 @@ export function registerOrchestrationRoutes(
     controlToken: string | undefined;
     configure: (revision: string, commit: () => void) => void;
     configureDemo?: (requestId: string, commit: () => void) => void;
-    canPrepare?: () => boolean;
+    canPrepare?: (task?: { id: string; revision: string }) => boolean;
+    canCleanup?: () => boolean;
     withSelection?: (commit: () => Promise<void>) => Promise<boolean>;
     reconcileSelection?: () => Promise<boolean>;
   },
@@ -253,10 +254,11 @@ export function registerOrchestrationRoutes(
     )
       return reply.code(403).send({ error: 'runtime-control-denied' });
     try {
-      if (!tool || !session?.canPrepare?.()) throw new Error('mulnx_preparation_required');
       const body = z
         .strictObject({
           cs2Path: nativeCs2PathSchema,
+          preparation: z.strictObject({ id: z.uuid(), revision: z.uuid() }).optional(),
+          cleanup: z.boolean().default(false),
           consoleCapture: z.boolean().default(false),
           update: z.boolean().default(false),
           spectatorCfg: z.boolean().default(false),
@@ -268,6 +270,18 @@ export function registerOrchestrationRoutes(
             .optional(),
         })
         .parse(request.body);
+      const verify = () => {
+        if (
+          !(session?.canPrepare?.(body.preparation) || (body.cleanup && session?.canCleanup?.())) ||
+          (body.cleanup &&
+            (body.update || body.spectatorCfg || body.demoCfg || body.captureCompatibility)) ||
+          (body.preparation && (body.update || body.demoCfg))
+        )
+          throw new Error('mulnx_preparation_required');
+      };
+      if (!tool) throw new Error('mulnx_bundle_unavailable');
+      verify();
+      if (body.cleanup) return await tool.cleanupLaunchOptions(body.cs2Path, verify);
       director.hold('正在准备 MulNX');
       const previous = tool.selectionId;
       const result = await tool.prepare(
@@ -277,10 +291,12 @@ export function registerOrchestrationRoutes(
         body.spectatorCfg,
         body.demoCfg ?? undefined,
         body.captureCompatibility,
+        verify,
       );
+      verify();
       if (previous !== tool.selectionId) {
         director.invalidatePreparation('MulNX 版本已切换，请重新准备运镜。');
-        if (session.reconcileSelection && !(await session.reconcileSelection().catch(() => false)))
+        if (session?.reconcileSelection && !(await session.reconcileSelection().catch(() => false)))
           director.invalidatePreparation('镜头资源已变化，请重新选择或使用方案。');
       }
       return result;

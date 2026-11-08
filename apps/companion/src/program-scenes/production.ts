@@ -590,6 +590,20 @@ export function createProduction(options: ProductionDependencies) {
         !updatePending &&
         !trialPending;
     },
+    canPrepareMulnx: (task?: { id: string; revision: string }) =>
+      task
+        ? mode !== 'preparation' &&
+          !busy &&
+          !shuttingDown &&
+          !exitFrozen &&
+          !updatePending &&
+          !trialPending &&
+          lastEnteredId === task.id &&
+          revision === task.revision &&
+          !preparationCancelled(task.id)
+        : mode === 'preparation',
+    // Exit restores owned launch options before finishing the production state.
+    canCleanupMulnx: () => mode === 'preparation' || (exitFrozen && shuttingDown),
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||

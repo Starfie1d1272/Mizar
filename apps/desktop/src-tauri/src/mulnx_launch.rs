@@ -306,15 +306,21 @@ pub fn launch(
 }
 
 /// Only reconcile an existing submitted request; absence never starts a new one.
-pub fn resume(app: &tauri::AppHandle, log: &DesktopLog) -> Result<Value, String> {
+pub fn resume(
+    app: &tauri::AppHandle,
+    log: &DesktopLog,
+    preparation_id: Option<&str>,
+) -> Result<Value, String> {
     let _launch = LAUNCH_GATE
         .try_lock()
         .map_err(|_| "MulNX 正在启动，请稍后重试。")?;
     app.state::<production_exit::ExitGate>().check()?;
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-    Ok(resume_pending_launch(log, &managed, None, None)?
-        .unwrap_or_else(|| json!({"result":"not-found"})))
+    Ok(
+        resume_pending_launch(log, &managed, None, None, preparation_id)?
+            .unwrap_or_else(|| json!({"result":"not-found"})),
+    )
 }
 
 pub fn resume_demo(
@@ -327,7 +333,7 @@ pub fn resume_demo(
     app.state::<updates::PendingUpdate>().check()?;
     let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
     Ok(
-        resume_pending_launch(log, &managed, Some(request_id), None)?
+        resume_pending_launch(log, &managed, Some(request_id), None, None)?
             .unwrap_or_else(|| json!({"result":"not-found"})),
     )
 }
@@ -359,6 +365,30 @@ pub fn launch_demo(
         Some((path, request_id)),
         true,
         None,
+    )
+}
+
+fn prepare_launcher(
+    log: &DesktopLog,
+    executable: &Path,
+    update: bool,
+    spectator_cfg: bool,
+    demo_cfg: Option<&str>,
+    capture_compatibility: bool,
+    preparation_id: Option<&str>,
+) -> Result<Value, String> {
+    let preparation = preparation_id
+        .map(crate::preparation_task::mulnx_context)
+        .transpose()?;
+    production_exit::prepare_mulnx_with_demo(
+        log,
+        executable,
+        update,
+        spectator_cfg,
+        demo_cfg,
+        capture_compatibility,
+        preparation,
+        false,
     )
 }
 
@@ -418,7 +448,9 @@ fn launch_operation(
         no_game()?;
     }
     if automatic && demo.is_none() {
-        if let Some(receipt) = resume_pending_launch(log, &managed, None, Some(&guard))? {
+        if let Some(receipt) =
+            resume_pending_launch(log, &managed, None, Some(&guard), preparation_id)?
+        {
             return Ok(receipt);
         }
     }
@@ -507,8 +539,14 @@ fn launch_operation(
                         || {
                             cleanup_then_mark(
                                 || {
-                                    production_exit::prepare_mulnx(log, &executable, false, false)
-                                        .map(|_| ())
+                                    production_exit::cleanup_mulnx(
+                                        log,
+                                        &executable,
+                                        preparation_id.and_then(|id| {
+                                            crate::preparation_task::mulnx_context(id).ok()
+                                        }),
+                                    )
+                                    .map(|_| ())
                                 },
                                 || {
                                     managed
@@ -538,7 +576,15 @@ fn launch_operation(
     {
         return Err("MulNX 启动器仍在运行，请先关闭它，再重试启动。".into());
     }
-    let prepared = production_exit::prepare_mulnx(log, &executable, update_only, false)?;
+    let prepared = prepare_launcher(
+        log,
+        &executable,
+        update_only,
+        false,
+        None,
+        false,
+        preparation_id,
+    )?;
     if update_only {
         no_game()?;
         return Ok(prepared);
@@ -595,13 +641,14 @@ fn launch_operation(
     };
     let spectator_cfg = journal["spectatorCfg"] == true;
     let demo_cfg = journal["demoPlaybackCfg"]["name"].as_str();
-    let configured = match production_exit::prepare_mulnx_with_demo(
+    let configured = match prepare_launcher(
         log,
         &executable,
         false,
         spectator_cfg,
         demo_cfg,
         true,
+        preparation_id,
     ) {
         Ok(configured) => configured,
         Err(error) => {
@@ -816,7 +863,11 @@ fn launch_operation(
         );
         return outcome;
     }
-    let cleanup = production_exit::prepare_mulnx(log, &executable, false, false);
+    let cleanup = production_exit::cleanup_mulnx(
+        log,
+        &executable,
+        preparation_id.and_then(|id| crate::preparation_task::mulnx_context(id).ok()),
+    );
     if let Err(error) = cleanup {
         return crate::preparation_gate::recover_unsubmitted(
             Err(format!("MulNX 启动参数清理失败：{error}")),
@@ -842,6 +893,7 @@ fn resume_pending_launch(
     managed: &Mutex<managed_cs2::ManagedCs2>,
     demo_id: Option<&str>,
     guard: Option<&crate::preparation_gate::PreparationGuard<'_>>,
+    preparation_id: Option<&str>,
 ) -> Result<Option<Value>, String> {
     let results = log.state_root.join("data/mulnx-launch");
     let pending = results.join("pending.json");
@@ -904,7 +956,11 @@ fn resume_pending_launch(
             &results.join("current.json"),
             result.to_string().as_bytes(),
         )?;
-        production_exit::prepare_mulnx(log, &executable, false, false)?;
+        production_exit::cleanup_mulnx(
+            log,
+            &executable,
+            preparation_id.and_then(|id| crate::preparation_task::mulnx_context(id).ok()),
+        )?;
         std::fs::remove_file(&pending).map_err(|e| e.to_string())?;
         log.event("mulnx_launch_reuse", "success", Some(&result.to_string()));
         Ok(Some(result))

@@ -22,6 +22,8 @@ export interface ArchiveWorkerData {
   snapshot: unknown;
   /** Remaining shared cache budget, after other jobs and this job's input snapshots. */
   diskBudgetBytes?: number;
+  /** Completed by the owner before this worker starts. */
+  collectionMs?: number;
 }
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue =>
@@ -32,9 +34,9 @@ const hash = (value: string | Uint8Array) => createHash('sha256').update(value).
 const MAX = 18_874_368;
 const ENTRY_MAX = 2 * 1024 * 1024;
 // The offline reader enforces the same expanded per-part ceiling. Reserve space
-// for both final metadata entries before accepting another ordinary entry.
+// for all three final metadata entries before accepting another ordinary entry.
 const EXPANDED_MAX = 256 * 1024 * 1024;
-const FINAL_METADATA_RESERVE = 2 * ENTRY_MAX;
+const FINAL_METADATA_RESERVE = 3 * ENTRY_MAX;
 const timestamp = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
 const sensitive =
   /authorization|cookie|password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket/i;
@@ -171,37 +173,53 @@ export function runArchiveWorker(
       position += written;
     }
   }
-  function readCanonical(name: string, offset: number): ObjectValue {
-    const source = d.sources.find((candidate) => candidate.name === name);
+  // Gzip is decoded once. Exact comparison facts are kept on disk with the
+  // existing identity index, charged to the shared export budget, not in heap.
+  let factsFd: number | undefined,
+    factsBytes = 0;
+  type Locator = {
+    source: string;
+    offset: number;
+    length?: number;
+    facts?: { offset: number; length: number };
+  };
+  function readGzip(source: ArchiveWorkerData['sources'][number]): unknown {
+    if (source.bytes > 16 * 1024 * 1024) throw Error('source_decode_budget');
+    const raw = Buffer.alloc(source.bytes);
+    let position = 0;
+    while (position < raw.length) position += read(source.fd, raw.subarray(position), position);
+    const start = performance.now();
+    const expanded = gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 });
+    const value: unknown = JSON.parse(expanded.toString('utf8'));
+    stages.decodeMs += performance.now() - start;
+    sample();
+    return value;
+  }
+  function readCanonical(locator: Locator): ObjectValue {
+    const source = d.sources.find((candidate) => candidate.name === locator.source);
     if (!source) throw Error('canonical_source_missing');
-    if (name.endsWith('.gz')) {
-      if (source.bytes > 16 * 1024 * 1024) throw Error('source_decode_budget');
-      const raw = Buffer.alloc(source.bytes);
-      let position = 0;
-      while (position < raw.length) position += read(source.fd, raw.subarray(position), position);
-      const start = performance.now();
-      const value: unknown = JSON.parse(
-        gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 }).toString('utf8'),
-      );
-      stages.decodeMs += performance.now() - start;
-      if (!Array.isArray(value)) throw Error('canonical_array_missing');
-      return object(value[offset]);
-    }
-    const chunks: Buffer[] = [];
-    let position = offset,
-      size = 0;
-    while (position < source.bytes) {
-      const raw = Buffer.alloc(Math.min(65536, source.bytes - position));
-      const n = read(source.fd, raw, position),
-        end = raw.subarray(0, n).indexOf(10);
-      const chunk = raw.subarray(0, end < 0 ? n : end);
-      chunks.push(chunk);
-      size += chunk.length;
-      if (size > ENTRY_MAX) throw Error('source_line_budget');
-      if (end >= 0) return object(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      position += n;
-    }
-    throw Error('canonical_record_uncommitted');
+    const { offset, length } = locator.facts ?? locator;
+    const handle = locator.facts ? factsFd : source.fd;
+    const bytes = locator.facts ? factsBytes : source.bytes;
+    if (handle === undefined) throw Error('canonical_facts_missing');
+    if (
+      !Number.isSafeInteger(length) ||
+      length! <= 0 ||
+      length! > ENTRY_MAX ||
+      offset < 0 ||
+      offset + length! >= bytes
+    )
+      throw Error('canonical_record_length_invalid');
+    // Include the committed newline, not the next 64 KiB of unrelated records.
+    const raw = Buffer.alloc(length! + 1);
+    let position = 0;
+    while (position < raw.length)
+      position += read(handle, raw.subarray(position), offset + position);
+    if (raw[length!] !== 10) throw Error('canonical_record_uncommitted');
+    const start = performance.now();
+    const value: unknown = JSON.parse(raw.subarray(0, length).toString('utf8'));
+    stages.decodeMs += performance.now() - start;
+    return object(value);
   }
   function identity(
     event: ObjectValue,
@@ -209,6 +227,8 @@ export function runArchiveWorker(
     bodyHash: string,
     source: string,
     offset: number,
+    length?: number,
+    canonicalEvent = event,
   ): { variant: number; projection: boolean } {
     return output(() => {
       const key = hash(id),
@@ -244,12 +264,9 @@ export function runArchiveWorker(
           const prefix = 'C:' + key + ':' + tuple + ':';
           for (const line of lines)
             if (line.startsWith(prefix)) {
-              const locator = JSON.parse(line.slice(prefix.length)) as {
-                source: string;
-                offset: number;
-              };
+              const locator = JSON.parse(line.slice(prefix.length)) as Locator;
               try {
-                if (sourceCoversProjection(readCanonical(locator.source, locator.offset), event))
+                if (sourceCoversProjection(readCanonical(locator), event))
                   return { variant: 0, projection: true };
               } catch (error) {
                 // A failed source re-read cannot prove equivalence. Keep the wire body as a variant.
@@ -270,14 +287,52 @@ export function runArchiveWorker(
           }
         const canonical =
           event.schema === 'mizar-diagnostic-event/2' && event.projection == null && hasTuple;
+        const locator: Locator = { source, offset, ...(length === undefined ? {} : { length }) };
+        if (canonical && source.endsWith('.gz')) {
+          // Preserve every field consulted by sourceCoversProjection, including
+          // complete evidence/scope. Unknown or differing wire facts stay variants.
+          const fact = Buffer.from(
+            JSON.stringify(
+              Object.fromEntries(
+                [
+                  'schema',
+                  'eventId',
+                  'producerKind',
+                  'producerRunId',
+                  'sequence',
+                  'kind',
+                  'evidence',
+                  'scope',
+                  'phase',
+                  'outcome',
+                  'taskId',
+                  'operationId',
+                  'parentOperationId',
+                  'attemptId',
+                  'monotonicMs',
+                  'sourceInterval',
+                  'appVersion',
+                  'coverage',
+                  'observedAt',
+                  'recordedAt',
+                ].map((key) => [key, canonicalEvent[key]]),
+              ),
+            ) + '\n',
+          );
+          if (fact.length > ENTRY_MAX) throw Error('canonical_fact_budget');
+          if (indexBytes + totalBytes + fact.length > budget) throw Error('export_disk_budget');
+          factsFd ??= fs.openSync(indexDirectory + '/canonical-facts', 'wx+', 0o600);
+          locator.facts = { offset: factsBytes, length: fact.length - 1 };
+          writeAll(factsFd, fact);
+          factsBytes += fact.length;
+          indexBytes += fact.length;
+        }
         const record =
           key +
           ':' +
           bodyHash +
           '\n' +
-          (canonical
-            ? 'C:' + key + ':' + tuple + ':' + JSON.stringify({ source, offset }) + '\n'
-            : '');
+          (canonical ? 'C:' + key + ':' + tuple + ':' + JSON.stringify(locator) + '\n' : '');
         if (indexBytes + totalBytes + record.length > budget) throw Error('export_disk_budget');
         writeAll(handle, Buffer.from(record));
         indexBytes += record.length;
@@ -336,6 +391,29 @@ export function runArchiveWorker(
       }),
     );
   }
+  function measurements() {
+    sample();
+    const elapsedMs = performance.now() - started;
+    return {
+      collectionMs: d.collectionMs ?? null,
+      elapsedMs,
+      stages: {
+        ...stages,
+        processMs: Math.max(
+          0,
+          elapsedMs - Object.values(stages).reduce((sum, value) => sum + value, 0),
+        ),
+      },
+      memory: {
+        baseline,
+        peakHeapUsedDelta: peakHeap - baseline.heapUsed,
+        peakExternalDelta: peakExternal - baseline.external,
+        peakProcessRssDelta: peakRss - baseline.rss,
+        scope:
+          'worker boundary samples; RSS includes main thread and other workers; not an isolated process peak',
+      },
+    };
+  }
   function finish(final: boolean) {
     const start = performance.now(),
       encodedBefore = stages.encodeMs;
@@ -356,6 +434,32 @@ export function runArchiveWorker(
             sources: object(d.snapshot).sources,
             unknown: object(d.snapshot).unknown,
           }),
+        }),
+      ),
+      true,
+    );
+    add(
+      'measurements.json',
+      Buffer.from(
+        JSON.stringify({
+          schema: 'mizar-support-measurements/1',
+          exportId: d.exportId,
+          partIndex: part,
+          cutoff: {
+            at: new Date().toISOString(),
+            phase: 'before-measurements-coverage-and-part-close',
+            scope: final ? 'all sources processed' : 'cumulative through this part',
+            excluded: [
+              'this measurement and coverage encoding',
+              'this part close and fsync',
+              'save dialog and file copy',
+            ],
+            laterEvidence:
+              'generated manifest and subsequent export/save logs correlate by exportId',
+          },
+          inputBytes: processedBytes,
+          outputBytes: totalBytes,
+          ...measurements(),
         }),
       ),
       true,
@@ -411,7 +515,13 @@ export function runArchiveWorker(
     refs.push({ partIndex: part, name: file });
     records.length = 0;
   }
-  function emit(input: unknown, source: string, offset: number): boolean {
+  function emit(
+    input: unknown,
+    source: string,
+    offset: number,
+    length?: number,
+    canonicalEvent?: ObjectValue,
+  ): boolean {
     carrierRecords++;
     const event =
       input !== null && typeof input === 'object' && !Array.isArray(input)
@@ -470,6 +580,8 @@ export function runArchiveWorker(
           },
           source,
           offset,
+          length,
+          event,
         );
       }
     }
@@ -503,6 +615,8 @@ export function runArchiveWorker(
       hash(JSON.stringify(event)),
       source,
       offset,
+      length,
+      canonicalEvent ?? event,
     );
     if (projection || variant < 0) {
       carriers.push({
@@ -576,17 +690,16 @@ export function runArchiveWorker(
         if (source.rawIndex || source.name.endsWith('.gz')) {
           if (source.bytes > (source.rawIndex ? ENTRY_MAX : 16 * 1024 * 1024))
             throw Error('source_decode_budget');
-          const raw = Buffer.alloc(source.bytes);
-          let position = 0;
-          while (position < raw.length)
-            position += read(source.fd, raw.subarray(position), position);
-          const start = performance.now();
-          const value: unknown = JSON.parse(
-            source.rawIndex
-              ? raw.toString('utf8')
-              : gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 }).toString('utf8'),
-          );
-          stages.decodeMs += performance.now() - start;
+          let value: unknown;
+          if (source.rawIndex) {
+            const raw = Buffer.alloc(source.bytes);
+            let position = 0;
+            while (position < raw.length)
+              position += read(source.fd, raw.subarray(position), position);
+            const start = performance.now();
+            value = JSON.parse(raw.toString('utf8'));
+            stages.decodeMs += performance.now() - start;
+          } else value = readGzip(source);
           if (source.rawIndex)
             add('indexes/' + source.name, Buffer.from(JSON.stringify(redact(value))));
           else {
@@ -637,7 +750,7 @@ export function runArchiveWorker(
                 };
               }
               stages.decodeMs += performance.now() - start;
-              emit(value, source.name, offset);
+              emit(value, source.name, offset, Buffer.byteLength(line));
             }
           };
           while (position < source.bytes) {
@@ -683,9 +796,11 @@ export function runArchiveWorker(
       );
     add('snapshots/current.json', Buffer.from(JSON.stringify(redact(d.snapshot))));
     finish(true);
-    output(() => fs.rmSync(indexDirectory, { recursive: true }));
-    sample();
-    const elapsedMs = performance.now() - started;
+    output(() => {
+      if (factsFd !== undefined) fs.closeSync(factsFd);
+      factsFd = undefined;
+      fs.rmSync(indexDirectory, { recursive: true });
+    });
     report({
       phase: 'ready',
       knownGaps: gaps.length,
@@ -698,28 +813,12 @@ export function runArchiveWorker(
       excludedSources,
       inputBytes: processedBytes,
       outputBytes: totalBytes,
-      measurements: {
-        elapsedMs,
-        stages: {
-          ...stages,
-          processMs: Math.max(
-            0,
-            elapsedMs - Object.values(stages).reduce((sum, value) => sum + value, 0),
-          ),
-        },
-        memory: {
-          baseline,
-          peakHeapUsedDelta: peakHeap - baseline.heapUsed,
-          peakExternalDelta: peakExternal - baseline.external,
-          peakProcessRssDelta: peakRss - baseline.rss,
-          scope:
-            'worker boundary samples; RSS includes main thread and other workers; not an isolated process peak',
-        },
-      },
+      measurements: measurements(),
     });
   } catch (error) {
     try {
       if (fd !== undefined) fs.closeSync(fd);
+      if (factsFd !== undefined) fs.closeSync(factsFd);
     } catch {
       /* Preserve the first output failure. */
     }

@@ -1247,7 +1247,12 @@ impl ManagedCs2 {
                 return Err("请先关闭 CS2 和 MulNX 启动器，再恢复配置。".into());
             }
             let executable = value["executable"].as_str().ok_or("游戏路径记录缺失。")?;
-            crate::production_exit::prepare_mulnx(&self.log, Path::new(executable), false, false)?;
+            // An unsubmitted launch can be recovered while its workspace is
+            // already live. Only its own still-active preparation grants access.
+            let preparation = value["preparationId"]
+                .as_str()
+                .and_then(|id| crate::preparation_task::mulnx_context(id).ok());
+            crate::production_exit::cleanup_mulnx(&self.log, Path::new(executable), preparation)?;
             std::fs::remove_file(self.log.state_root.join("data/mulnx-launch/pending.json"))
                 .map_err(|_| "MulNX 启动记录无法清理，原备份仍保留。")?;
         }
@@ -1264,7 +1269,7 @@ impl ManagedCs2 {
                 value["created"] = json!(created);
                 self.store.save(&value)?;
                 self.message = if value["preserveSettings"] == true {
-                    Some("已保持原游戏设置；未应用自动画质、帧率和游戏窗口布局，本机 HUD 覆盖已停用。".into())
+                    Some("已保持原游戏设置，未应用下次启动的画质、帧率和窗口布局。".into())
                 } else {
                     None
                 };
@@ -2329,7 +2334,7 @@ impl ManagedCs2 {
                     }
                     // A crash can leave +exec in MulNX even after a game PID was recorded.
                     // Reconcile the owned launch option before clearing the key backup.
-                    crate::production_exit::prepare_mulnx(&self.log, &executable, false, false)
+                    crate::production_exit::cleanup_mulnx(&self.log, &executable, None)
                         .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
                     self.store.mark_mulnx_options_clean()?;
                     if any_cs2_running(&self.log)?

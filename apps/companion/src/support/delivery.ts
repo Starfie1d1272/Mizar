@@ -471,6 +471,7 @@ export class DiagnosticDelivery {
   private serial = Promise.resolve();
   private sending: Promise<void> | undefined;
   private cleaningAcknowledged: Promise<void> | undefined;
+  private acknowledgedScanNext: string | undefined;
   private abort: AbortController | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
@@ -1518,9 +1519,16 @@ export class DiagnosticDelivery {
   }
   private collectAcknowledged() {
     this.cleaningAcknowledged ??= (async () => {
-      for (const batch of this.state.queue
-        .filter((value) => value.acknowledgedAt && value.index.eventSchemaVersion === 2)
-        .slice(0, 4)) {
+      const candidates = this.state.queue.filter(
+        (value) => value.acknowledgedAt && value.index.eventSchemaVersion === 2,
+      );
+      const next = candidates.findIndex((batch) => batch.id === this.acknowledgedScanNext);
+      // A retained batch must not starve later reclaimable entries. Capture the
+      // next position before release mutates the queue, with at most four attempts.
+      const start = next < 0 ? 0 : next;
+      for (let i = 0; i < Math.min(4, candidates.length); i++) {
+        const batch = candidates[(start + i) % candidates.length]!;
+        this.acknowledgedScanNext = candidates[(start + i + 1) % candidates.length]!.id;
         if (this.closed) return;
         try {
           const released = await this.releaseAcknowledged(batch);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OBSWebSocketError } from 'obs-websocket-js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -41,7 +42,32 @@ const markerArgs = {
   slotName: 'mizar.resource-owner.v1',
 };
 
+// obs-websocket 5.6 CreateInput/CreateScene validate these before creation.
+// https://github.com/obsproject/obs-websocket/tree/5.6.3/src/requesthandler
+// GenericError (205), creation/action/processing failures (700–702), transport
+// errors and unknown codes do not prove that OBS left no resource behind.
+const rejectedBeforeCreate = new Set([
+  203, // MissingRequestType
+  204, // UnknownRequestType
+  207, // NotReady
+  300, // MissingRequestField
+  301, // MissingRequestData
+  401, // InvalidRequestFieldType
+  403, // RequestFieldEmpty
+  601, // ResourceAlreadyExists
+]);
+function createWasRejected(type: string, error: unknown): error is OBSWebSocketError {
+  return (
+    error instanceof OBSWebSocketError &&
+    (rejectedBeforeCreate.has(error.code) ||
+      // CreateInput validates its target scene and input kind before creating either resource.
+      (type === 'CreateInput' && [600, 602, 605].includes(error.code)))
+  );
+}
+
 // Shared across every bind (and store instance), not just calls on one RPC wrapper.
+// Only registration transitions hold this lock, never the create request itself:
+// an OBS request whose reply was lost may never settle after disconnect.
 const initializationLocks = new Map<string, Promise<void>>();
 async function exclusiveInitialization<T>(key: string, run: () => Promise<T>): Promise<T> {
   const previous = initializationLocks.get(key) ?? Promise.resolve();
@@ -405,27 +431,84 @@ export class ManagedObsResources {
             : type === 'CreateScene'
               ? data.sceneName
               : undefined;
-        if (typeof creating === 'string' && specs.has(creating)) {
-          if (registry!.pending?.[specs.get(creating)!.role])
-            throw new Error('OBS 来源创建结果尚未确认，未重复创建。请保留现有来源并检查诊断。');
-          await assertNoVideoOutput(raw);
-          await verifyScope();
-          registry!.pending ??= {};
-          registry!.pending[specs.get(creating)!.role] = creating;
-          await this.save(registry!);
+        const creatingSpec = typeof creating === 'string' ? specs.get(creating) : undefined;
+        let reservation: Registry | undefined;
+        if (creatingSpec) {
+          await exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
+            await load();
+            if (!registry || registry.registration) throw conflict();
+            if (registry.pending?.[creatingSpec.role])
+              throw new Error('OBS 来源创建结果尚未确认，未重复创建。请保留现有来源并检查诊断。');
+            await assertNoVideoOutput(raw);
+            await verifyScope();
+            const identity = registry.roles[creatingSpec.role];
+            if (identity) {
+              const listed = await inventory();
+              const candidates = identity.kind === 'scene' ? listed.scenes : listed.inputs;
+              const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
+              if (candidates.some((item) => item[uuidKey] === identity.uuid)) throw conflict();
+            }
+            const next = {
+              ...registry,
+              pending: { ...registry.pending, [creatingSpec.role]: creating as string },
+            };
+            await this.save(next);
+            registry = reservation = next;
+          });
         }
+        const saveCreation = async (change: (current: Registry) => Registry) =>
+          exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
+            const current = (await this.load()).find(
+              (item) => item.endpoint === endpoint && item.collection === OBS_COLLECTION,
+            );
+            if (
+              !current ||
+              current.instance !== reservation?.instance ||
+              current.collectionIdentity !== reservation.collectionIdentity
+            )
+              throw conflict();
+            const next = change(current);
+            await this.save(next);
+            registry = next;
+          });
+        const finishReservation = (current: Registry) => {
+          if (!creatingSpec || current.pending?.[creatingSpec.role] !== creating) throw conflict();
+          const next = { ...current, pending: { ...current.pending } };
+          delete next.pending[creatingSpec.role];
+          return next;
+        };
         if (/^(CreateSceneItem|RemoveSceneItem|SetInputName|SetSceneName)$/.test(type)) {
           await assertNoVideoOutput(raw);
           await verifyScope();
         }
-        const result = await raw.call(type, args ? data : undefined);
-        if (typeof creating === 'string' && specs.has(creating)) {
-          const spec = specs.get(creating)!;
+        let result: Row;
+        try {
+          result = await raw.call(type, args ? data : undefined);
+        } catch (error) {
+          if (creatingSpec && createWasRejected(type, error)) {
+            try {
+              // Commit the rejection before allowing another attempt. A failed save
+              // must leave both disk and the bound view pending, even in this process.
+              await saveCreation(finishReservation);
+            } catch (persistenceError) {
+              throw new AggregateError(
+                [error, persistenceError],
+                'OBS 已拒绝创建，但拒绝结果未能保存，请检查诊断后重试。',
+                { cause: persistenceError },
+              );
+            }
+          }
+          // Preserve the protocol code/comment for the existing OBS diagnostics.
+          throw error;
+        }
+        if (creatingSpec) {
+          const spec = creatingSpec;
           const uuid = result[spec.kind === 'scene' ? 'sceneUuid' : 'inputUuid'];
-          if (typeof uuid !== 'string') throw conflict();
-          registry!.roles[spec.role] = { uuid, kind: spec.kind, version: 0 };
-          delete registry!.pending?.[spec.role];
-          await this.save(registry!);
+          if (typeof uuid !== 'string' || !uuid) throw conflict();
+          await saveCreation((current) => ({
+            ...finishReservation(current),
+            roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 0 } },
+          }));
           await verifyScope();
           const listed =
             spec.kind === 'scene'
@@ -447,8 +530,14 @@ export class ManagedObsResources {
             )
               throw conflict();
           }
-          registry!.roles[spec.role]!.version = 1;
-          await this.save(registry!);
+          await saveCreation((current) => {
+            if (current.roles[spec.role]?.uuid !== uuid || current.pending?.[spec.role])
+              throw conflict();
+            return {
+              ...current,
+              roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 1 } },
+            };
+          });
         }
         return canonical(result) as Row;
       },

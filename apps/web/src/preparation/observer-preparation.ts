@@ -1,4 +1,7 @@
 import type { ObserverSettings, GameAutomationSettings } from '@mizar/protocol/assist';
+import { command } from './client';
+import { desktopInvoke } from '../workspace/client';
+import type { ControlTask } from '../debug/control-task';
 export type ConnectionPreparationView = {
   revision: string;
   connectionRequestedAt?: number | null;
@@ -11,9 +14,25 @@ export type ConnectionPreparationView = {
     nextMap: boolean;
   } | null;
   waitingForMap?: boolean;
-  gameRunning?: boolean;
-  nextMapRequested?: boolean;
+  receiverPaused?: boolean;
+  suggestedConnectionMode?: 'connect' | 'register-current';
 };
+/** Explicit receiver recovery keeps the connection identity and accepted game action. */
+export async function resumeObserverReceiver(view: ConnectionPreparationView, task?: ControlTask) {
+  if (!view.mapConnection) throw new Error('请先填写本图 GoTV。');
+  const expectedRevision = requireConnectionRevision(view.revision);
+  await command(
+    '/operator/observer-assist',
+    {
+      action: 'resume-receiver',
+      id: view.mapConnection.id,
+      expectedRevision,
+    },
+    task,
+  );
+  if (window.__TAURI_INTERNALS__)
+    await desktopInvoke('observer_command', { action: 'start-configured', expectedRevision }, task);
+}
 /** Refuse incomplete replies rather than silently dropping the concurrency guard. */
 export function requireConnectionRevision(value: unknown): string {
   if (

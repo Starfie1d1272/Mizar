@@ -360,6 +360,7 @@ export class SupportExports {
             range,
             snapshot: vector,
             diskBudgetBytes,
+            collectionMs,
           } satisfies ArchiveWorkerData,
         });
         if (this.active?.id === job.exportId) this.active.worker = worker;

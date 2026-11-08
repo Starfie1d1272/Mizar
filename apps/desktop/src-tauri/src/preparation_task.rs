@@ -973,6 +973,21 @@ fn preparation_start(
     spawn(app, preparation_id);
     Ok(())
 }
+// The authenticated Host sends this only for its active game preparation. The
+// Companion checks the same entry identity, revision and cancellation owner.
+pub(crate) fn mulnx_context(id: &str) -> Result<Value, String> {
+    let task = snapshot()?
+        .filter(|task| {
+            task.id == id
+                && task.entered
+                && task.running
+                && !task.game
+                && !task.cancelled
+                && !task.retire_requested
+        })
+        .ok_or("本次游戏准备已失效，请重新打开工作台。")?;
+    Ok(json!({"id": task.id, "revision": task.revision}))
+}
 pub(crate) fn waiting_for_game() -> Result<bool, String> {
     Ok(snapshot()?.is_some_and(|task| {
         task.entered && task.running && !task.game && !task.cancelled && !task.retire_requested

@@ -34,7 +34,7 @@ export function ToolShell({
           <span>{title}</span>
         </header>
         {context}
-        <div id="tool-content" tabIndex={-1}>
+        <div id="tool-content" className="mizar-tool-content" tabIndex={-1}>
           {children}
         </div>
       </div>

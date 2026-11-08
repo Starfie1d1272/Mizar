@@ -62,7 +62,7 @@ RivalHub 资料先经过结构与语义校验，阻断错误不进入 Core。比
 
 `GET /local/v1/observer` 提供组件版本、连接活动状态与来源健康。工作台通过原生 `observer_command` 提交连接和停止意图，Host 核对当前游戏实例后调用 `POST /operator/runtime/observer`；该接口使用本次运行的私有能力，接受启动、停止和游戏会话续约。入口、运行时、Steam API 及输出路径由安装与运行数据目录推导。连接密码经 stdin 传递，状态响应只含运行摘要。观察器事件进入 Lookahead 来源，消费边界沿用正式节目与私有辅助的独立投影。
 
-`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要与修订号。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；旧配置的 `expectedDelaySeconds` 读取时忽略。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
+`GET /local/v1/observer-assist` 返回观察辅助 `settings`、游戏自动操作 `gameAutomation`、当前连接端点摘要、`mapConnection`、修订号及 `receiverPaused`。`suggestedConnectionMode` 由既有观察资格与当前有效比赛数据给出：首次连接使用 `connect`，已在观战使用 `register-current`；已登记的连接继续保留原 ID、方式和本图／下一图范围，不从游戏进程存在推断观战状态。受信任本机 Origin 通过 `POST /operator/observer-assist` 通过 `configure`、`configure-game` 分别保存偏好，通过 `connection` 提交本场连接。密码仅随本次服务会话保存在内存，比赛切换清除本场连接。相同有效值再次保存不更新修订或通知消费者；提示时间只更新辅助计算：单改 `leadSeconds` 保留缓冲与测量历史并立即重新投影；旧配置的 `expectedDelaySeconds` 读取时忽略。`revision` 仅用于辅助启停、游戏操作与本场连接准备。
 
 私有 `assist` 通道使用 schema 3；开启时携带来源状态、时间参数、`timingBasis: estimated`、只读 `measuredDelaySeconds`、`waitingReason`、距首个提示窗口的 `nextWindowSeconds` 与最多六条击杀提示，包含当前 Program 昵称、唯一观战槽位、预计发生倒计时。预告始终按配置延迟估算，测量不改变配置或阻止显示；无事件和缓冲为正常等待状态。关闭时沿用基础辅助载荷。Program、雷达和公开输出继续使用各自契约。
 
@@ -70,11 +70,11 @@ Host 的 `prepare` / `start-configured` 绑定游戏实例、Desktop Job 和配�
 
 `prepare` 返回的 `revision` 是绑定当前游戏实例、Desktop Job、启动方式和配置的准备令牌，Host 原样交给 `start-configured`。返回现场复用已有早源；节目连接与 HUD 操作分别按本场已接受的动作去重。仅改变早源地址、提示时间或重试辅助不重复已接受的节目连接。启动、停止与设置引发的辅助启停串行执行，连接变化、更新的准备令牌与停止使旧在途启动失效；组件加载后、真正创建进程前仍核对取消。
 
-工作台可先进入制作，再在既有本图连接入口提交 `map-connection`：一次确认带唯一标识和连接方式，可留空沿用内存中的地址与密码。同地址的新图重新连接使用新标识，因此不被上一图的节目命令去重吞掉；同一确认失败后的重试保持标识。选择服务器无缝换图时必须沿用已有连接，保留早源且不向同一游戏发送节目连接命令。确认时请求停止旧镜头并清除旧提示；选择下一图时，若节目仍在上次确认的地图，辅助提示和自动运镜等待节目地图上下文变化。节目命令入队、无缝保留和实际游戏连接是不同状态，仍须现场核对。
+工作台可先进入制作，再在「GoTV 连接」入口提交 `map-connection`：一次确认带唯一标识和连接方式，可留空沿用内存中的地址与密码。同地址的新图重新连接使用新标识，因此不被上一图的节目命令去重吞掉；同一确认失败后的重试保持标识。选择服务器无缝换图时必须沿用已有连接，保留早源且不向同一游戏发送节目连接命令。确认时请求停止旧镜头并清除旧提示；选择下一图时，若节目仍在上次确认的地图，辅助提示和自动运镜等待节目地图上下文变化。节目命令入队、无缝保留和实际游戏连接是不同状态，仍须现场核对。
 
 同一确认标识不得用于不同的连接、方式或下一图选项；服务端拒绝冲突。留空沿用时，标准游戏可显式请求 `copy-connection`，该本机操作要求受信任 Origin 和当前修订，返回仅供复制的节目源命令，响应禁止缓存；普通状态仍不返回密码。
 
-本场 Host 续约仍有效时，关闭辅助只停止早源，重新开启复用本场来源启动；不自动重发节目连接。明确停止、切换连接或超过六秒未续约后，重新启动需 Host 再次确认。`GET /local/v1/observer` 另含 `pending`、有限错误码 `error`（当前为 `observer_operation_failed` 或 null）及 `retryAvailable`。界面结合既有 `failed`、`health`、`terminal` 区分连接中、正常重连与失败；重试沿用原生 `observer_command` 的 `start-configured`，由 Host 重新准备，无需浏览器提交路径或凭据。`retryAvailable` 表示辅助已开启、有本场连接、现场资格有效且无在途操作；即使旧租约已过期，仍可请求 Host 重新核对当前游戏，动作执行时继续校验；进程启动或命令入队不代表真实游戏连接、HUD 或节目画面已经验证。
+本场 Host 续约仍有效时，关闭辅助只停止早源，重新开启复用本场来源启动；不自动重发节目连接。明确停止只暂停接收器并取消其在途或延后启动，保留地址、地图连接意图与已接受的游戏/HUD 操作，不改变连接修订，也不取消等待游戏就绪的连接步骤。`resume-receiver` 携带原连接 `id` 与 `expectedRevision`，经既有 Origin 与现场资格校验恢复接收意图；旧连接已被替换时拒绝恢复。停止后恢复、切换连接或超过六秒未续约后，重新启动均需 Host 再次确认。`GET /local/v1/observer` 另含 `pending`、有限错误码 `error`（当前为 `observer_operation_failed` 或 null）及 `retryAvailable`。界面结合既有 `failed`、`health`、`terminal` 区分连接中、正常重连与失败；重试沿用原生 `observer_command` 的 `start-configured`，由 Host 重新准备，无需浏览器提交路径或凭据。`retryAvailable` 表示辅助已开启、有本场连接、现场资格有效且无在途操作；即使旧租约已过期，仍可请求 Host 重新核对当前游戏，动作执行时继续校验；进程启动或命令入队不代表真实游戏连接、HUD 或节目画面已经验证。
 
 ## 公开实时输出
 
@@ -166,20 +166,20 @@ LAN 公共查看仅注册 program、radar 和节目时间轴的 program-cue。HT
 
 `program-scenes.director.next` 仅表示后续节目预告，不是切场命令。`nextStatus` 区分 `predicted / awaiting / complete`，`nextReason` 解释证据不足或节目结束；`readyToTake` 是编排服务已满足计时门槛的候选，仍受手动保持、数据有效性与 OBS 确认约束。客户端不得根据预告自行切场或推导比赛阶段。新增字段保持可选以兼容旧快照；当前服务始终提供明确预告状态。
 
-| 入口                                                              | 语义                                                                                                                                                              |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /local/v1/readiness`                                         | 汇总数据、场景和 OBS 的当前就绪情况                                                                                                                               |
-| `GET /local/v1/production`、`POST /operator/production`           | 制作生命周期及带预期修订号的 `enter / hide / finish / shutdown / begin-exit / cancel-exit`；Host 使用 `begin-exit` 冻结自动控制并请求本地来源交接，退出期间拒绝新进入，`cancel-exit` 解除退出状态；OBS 与远端收尾各自报告结果                                      |
-| `GET /local/v1/roster-candidate`                                  | 当前可信首发候选                                                                                                                                                  |
-| `POST /operator/local-match/capture`、`create-from-server`        | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表                                                                                                            |
-| `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目                                                                                                                               |
-| `GET /local/v1/obs/confidence`                                    | 当前场景缩略图；请求期间切场则返回空                                                                                                                              |
-| `POST /operator/obs/launch-target`                                | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程                                                                                 |
-| `GET /local/v1/program-scenes`                                    | 当前场景、修订号、候选、阻断与编排状态                                                                                                                            |
-| `POST /operator/program-scene`                                    | 有修订号校验的人工切场                                                                                                                                            |
-| `POST /operator/program-director`                                 | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式 |
-| `GET /local/v1/program-presentation`                              | 有限节目摘要与相邻赛程，不返回完整比赛文档                                                                                                                        |
-| `GET /local/v1/production-guidance`                               | 私有、只读、不缓存的制作提示与平台状态                                                                                                                            |
+| 入口                                                              | 语义                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /local/v1/readiness`                                         | 汇总数据、场景和 OBS 的当前就绪情况                                                                                                                                                                                           |
+| `GET /local/v1/production`、`POST /operator/production`           | 制作生命周期及带预期修订号的 `enter / hide / finish / shutdown / begin-exit / cancel-exit`；Host 使用 `begin-exit` 冻结自动控制并请求本地来源交接，退出期间拒绝新进入，`cancel-exit` 解除退出状态；OBS 与远端收尾各自报告结果 |
+| `GET /local/v1/roster-candidate`                                  | 当前可信首发候选                                                                                                                                                                                                              |
+| `POST /operator/local-match/capture`、`create-from-server`        | 基于候选与上下文修订号保存；不信任客户端提交的玩家列表                                                                                                                                                                        |
+| `GET /local/v1/desktop-overlay`、`POST /operator/desktop-overlay` | 仅本机覆盖显隐策略，不更改 OBS 节目                                                                                                                                                                                           |
+| `GET /local/v1/obs/confidence`                                    | 当前场景缩略图；请求期间切场则返回空                                                                                                                                                                                          |
+| `POST /operator/obs/launch-target`                                | 本地 Origin 保护的 OBS 程序路径解析，供桌面 Host 独立启动；不返回密码、不启动进程                                                                                                                                             |
+| `GET /local/v1/program-scenes`                                    | 当前场景、修订号、候选、阻断与编排状态                                                                                                                                                                                        |
+| `POST /operator/program-scene`                                    | 有修订号校验的人工切场                                                                                                                                                                                                        |
+| `POST /operator/program-director`                                 | `{action: "resume", expectedRevision}` 恢复自动；`{action: "warmup", scene: "waiting" \| "gameplay", expectedRevision}` 修改热身自动接续选择，不改变手动/自动模式                                                             |
+| `GET /local/v1/program-presentation`                              | 有限节目摘要与相邻赛程，不返回完整比赛文档                                                                                                                                                                                    |
+| `GET /local/v1/production-guidance`                               | 私有、只读、不缓存的制作提示与平台状态                                                                                                                                                                                        |
 
 场景状态的可选 `introRevision` 标识一次开场 Take：准备期间使用本次 `preparing.revision`，成功切入后保留该标识；恢复自动或切到其他场景不创建新的开场实例。浏览器只保留开场标识、时长与最后接受的服务端展示位置，状态读取中断时暂停，恢复后同步 Director 锚点，不保留旧遥测或建立游戏时钟。
 
@@ -271,7 +271,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 诊断事件使用 `mizar-diagnostic-event/2`，定义见 [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)。Host、Companion 与文档保留原生产者身份和事件 ID，持久回执与业务动作成功不是同一概念。桌面文档调用有界 `persist_diagnostic_events`，Host 回执只确认该批事件已持久；纯浏览器通过受本机 Origin 限制的 `POST /debug/control-event` 交接同一文档 UUID、序号和 eventId，服务确认持久后返回 204；非法事件返回 400，无持久 writer 返回 503。
 
-`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。旧 `POST /debug/support-bundle` 不再注册；旧日志与旧 JSON 包由相应旧版本处理，不自动迁移或删除。业务身份仅用于用户明确保存的本机包，不自动公开上传。
+`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，各卷的 `measurements.json` 记录本次已完成阶段测量及明确截止点，后续关闭与保存结果以 exportId 关联；固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。当前维护读取器仅处理新版 ZIP；旧 `POST /debug/support-bundle` 不再注册，旧日志、旧 JSON 包及 v1 的 `fullLogs.files`、`obs-log-text/1` 分卷使用对应旧版本工具处理，不自动迁移或删除。新版 OBS 原文保存为独立 `.log` 附件，列入条目摘要与覆盖；文件路径不来自浏览器，附件与技术索引不能证明当前画面正常。业务身份仅用于用户明确保存的本机包，不自动公开上传。
 
 ### 本机网站同步健康
 
@@ -288,8 +288,6 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 ## 本机节目音乐
 
 手动播放、暂停、继续和定位不依赖比赛阶段或遥测；人工播放保持到明确停止、恢复自动或 OBS 控制变化。自动阶段策略仍独立执行。`GET /local/v1/music` 提供本机曲库配置和播放摘要；`POST /operator/music` 保存配置、调整本组音量、停止、下一首或恢复自动；`POST /operator/music/preview` 接收有期限的试听开始、音量更新、续租和停止，核对窗口身份、会话令牌与递增操作编号；不写持久配置或正式播放记录。`POST /operator/music/track` 接收本机选曲，`POST /operator/music/import` 验证并原子应用本地音乐 ZIP。写操作只允许本机可信 Origin，读取检查回环 Host 和浏览器跨站来源；局域网模式拒绝。只返回内容 ID、曲名、策略与必要状态，不返回绝对路径或音频下载地址。比赛、节目、雷达和外部 LIVE 不添加音乐路径或曲库字段；本机私下交付的诊断包保留音乐操作与相关配置，音频正文不进入支持包。格式与限制见[节目音乐](music.md)。
-
-本机诊断路径与容器以[本机诊断历史](#本机诊断历史)为唯一接口说明。旧 v1 中的 `fullLogs.files` 和 `obs-log-text/1` 分卷仍可由维护读取器恢复；新 v2 把相关 OBS 原文保存为独立 `.log` 附件，并列入 entry 摘要与覆盖。OBS 文件路径不来自浏览器，附件与技术索引不能证明当前画面正常。
 
 ## 本机地图编排控制
 

@@ -8,6 +8,7 @@ import { ToolShell } from '../patterns';
 import { usePreparationStatus } from './AutomaticPreparation';
 import {
   requireConnectionRevision,
+  resumeObserverReceiver,
   type ObserverRuntimeView,
   type ConnectionPreparationView,
 } from './observer-preparation';
@@ -28,7 +29,7 @@ export function MatchConnectionDialog() {
   const [earlyEndpoint, setEarlyEndpoint] = useState('');
   const [programEndpoint, setProgramEndpoint] = useState('');
   const [nextMap, setNextMap] = useState(false);
-  const [registerCurrent, setRegisterCurrent] = useState(true);
+  const [registerCurrent, setRegisterCurrent] = useState<boolean | null>(null);
   const [revision, setRevision] = useState<string>();
   const saved = registeredAt !== null;
   const [busy, setBusy] = useState(false);
@@ -36,8 +37,14 @@ export function MatchConnectionDialog() {
   const [manual, setManual] = useState<{ revision: string; command: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const operation = useRef(false);
-  const [intent, setIntent] = useState(() => crypto.randomUUID());
+  const [intent, setIntent] = useState<string | null>(null);
   const preparation = usePreparationStatus();
+  if (intent === null && view) {
+    // Reopening the tool resumes the owner's accepted identity, never a new connect.
+    setIntent(view.mapConnection?.id ?? crypto.randomUUID());
+    setRegisterCurrent(view.suggestedConnectionMode === 'register-current');
+    if (view.mapConnection) setRegisteredAt(read.updatedAt ?? 0);
+  }
   const submitted = saved && view?.mapConnection?.id === intent ? view.mapConnection : null;
   const stale = Boolean(!saved && view && revision && view.revision !== revision);
   const replaced = Boolean(
@@ -47,7 +54,27 @@ export function MatchConnectionDialog() {
     !submitted,
   );
   const currentTarget = submitted?.nextMap ?? nextMap;
-  const currentMode = submitted?.mode ?? (registerCurrent ? 'register-current' : 'connect');
+  const currentMode =
+    submitted?.mode ??
+    (nextMap
+      ? 'connect'
+      : registerCurrent === null
+        ? (view?.suggestedConnectionMode ?? 'connect')
+        : registerCurrent
+          ? 'register-current'
+          : 'connect');
+  const enabled = view?.settings.enabled === true;
+  const paused = enabled && Boolean(view?.receiverPaused);
+  const failed = Boolean(
+    enabled &&
+    !paused &&
+    (runtime?.error ||
+      runtime?.failed ||
+      ['failed', 'ended', 'stopped'].includes(runtime?.health.state ?? '')),
+  );
+  const healthy = Boolean(
+    !busy && submitted && (!enabled || (!paused && !failed && runtime?.health.state === 'live')),
+  );
   const manualCommand =
     submitted && manual?.revision === view?.revision && !runtime?.programCommandQueued
       ? manual?.command
@@ -90,7 +117,7 @@ export function MatchConnectionDialog() {
     read.updatedAt,
   ]);
   const submit = async () => {
-    if (operation.current) return;
+    if (operation.current || !intent) return;
     operation.current = true;
     setBusy(true);
     setError('');
@@ -112,7 +139,7 @@ export function MatchConnectionDialog() {
           {
             action: 'map-connection',
             id: intent,
-            mode: registerCurrent ? 'register-current' : 'connect',
+            mode: currentMode,
             nextMap,
             expectedRevision: currentRevision,
             connection: parseObserverConnection(
@@ -128,7 +155,8 @@ export function MatchConnectionDialog() {
         setRegisteredAt(Date.now());
         task.event('registered', { revision: currentRevision });
       }
-      if (window.__TAURI_INTERNALS__) {
+      if (saved && view) await resumeObserverReceiver(view, task);
+      else if (window.__TAURI_INTERNALS__) {
         await desktopInvoke(
           'observer_command',
           {
@@ -162,7 +190,7 @@ export function MatchConnectionDialog() {
           onChange={(event) => {
             if (!revision) setRevision(view?.revision);
             setNextMap(event.target.value === 'next');
-            setRegisterCurrent(event.target.value !== 'next');
+            setRegisterCurrent(event.target.value === 'next' ? false : null);
             setIntent(crypto.randomUUID());
           }}
         >
@@ -171,13 +199,14 @@ export function MatchConnectionDialog() {
         </Select>
         <Field
           label="GoTV 命令"
-          value={input}
+          value={saved ? (view?.connection?.earlyEndpoint ?? '') : input}
           autoComplete="off"
           disabled={busy || saved}
           placeholder="connect IP:27025; password 密码"
           message="粘贴赛事方提供的 GoTV 命令；两个地址中请选择 27025。"
           onChange={(event) => {
             if (!revision) setRevision(view?.revision);
+            if (registerCurrent === null) setRegisterCurrent(currentMode === 'register-current');
             setInput(event.target.value);
             setIntent(crypto.randomUUID());
           }}
@@ -190,6 +219,7 @@ export function MatchConnectionDialog() {
             disabled={busy || saved}
             onChange={(event) => {
               if (!revision) setRevision(view?.revision);
+              if (registerCurrent === null) setRegisterCurrent(currentMode === 'register-current');
               setEarlyEndpoint(event.target.value);
               setIntent(crypto.randomUUID());
             }}
@@ -200,6 +230,7 @@ export function MatchConnectionDialog() {
             disabled={busy || saved}
             onChange={(event) => {
               if (!revision) setRevision(view?.revision);
+              if (registerCurrent === null) setRegisterCurrent(currentMode === 'register-current');
               setProgramEndpoint(event.target.value);
               setIntent(crypto.randomUUID());
             }}
@@ -212,7 +243,7 @@ export function MatchConnectionDialog() {
         {!currentTarget && !saved ? (
           <Select
             label="本次操作"
-            value={registerCurrent ? 'register-current' : 'connect'}
+            value={currentMode}
             disabled={busy}
             onChange={(event) => {
               if (!revision) setRevision(view?.revision);
@@ -220,8 +251,8 @@ export function MatchConnectionDialog() {
               setIntent(crypto.randomUUID());
             }}
           >
-            <option value="register-current">我已在观战，只开启提前提示</option>
             <option value="connect">连接或重新连接游戏</option>
+            <option value="register-current">我已在观战，只开启提前提示</option>
           </Select>
         ) : null}
         {stale ? (
@@ -232,6 +263,7 @@ export function MatchConnectionDialog() {
               onClick={() => {
                 setRevision(view!.revision);
                 setNextMap(false);
+                setRegisterCurrent(null);
                 setRegisteredAt(null);
                 setManual(null);
                 setIntent(crypto.randomUUID());
@@ -243,13 +275,15 @@ export function MatchConnectionDialog() {
         ) : null}
         {saved && !replaced ? (
           <p role="status">
-            {runtime?.health.state === 'live'
-              ? '正在接收比赛数据，提前提示会在数据就绪后显示。'
-              : preparation?.running
-                ? '连接已保存，游戏就绪后会继续。'
-                : view?.settings.enabled
-                  ? '连接已保存，正在等待比赛数据。'
-                  : '连接已保存。提前提示当前未开启。'}
+            {!enabled
+              ? '连接已保存。提前提示当前未开启。'
+              : paused
+                ? '提前提示接收已暂停，游戏连接与本图地址保留。'
+                : runtime?.health.state === 'live'
+                  ? '正在接收比赛数据，提前提示会在数据就绪后显示。'
+                  : preparation?.running
+                    ? '连接已保存，游戏就绪后会继续。'
+                    : '连接已保存，正在等待比赛数据。'}
           </p>
         ) : null}
         {replaced ? (
@@ -287,32 +321,63 @@ export function MatchConnectionDialog() {
           </section>
         ) : null}
         {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
-        <Button
-          variant="primary"
-          disabled={
-            busy ||
-            !view ||
-            stale ||
-            replaced ||
-            Boolean(saved && (!submitted || preparation?.running))
-          }
-          onClick={() => void submit()}
-        >
-          {busy
-            ? '正在提交…'
-            : saved
-              ? '复查并重试提示接收'
-              : registerCurrent
-                ? '开启提前提示'
-                : '提交 GoTV'}
-        </Button>
-        {window.__TAURI_INTERNALS__ && (runtime?.active || runtime?.pending || submitted) ? (
+        {healthy ? (
           <Button
-            disabled={stopping}
+            variant="primary"
+            onClick={() => {
+              if (window.__TAURI_INTERNALS__)
+                void desktopInvoke<boolean>('restore_cs2_focus')
+                  .then((focused) => {
+                    if (!focused) setError('请用 Alt+Tab 返回 CS2。');
+                  })
+                  .catch(() => setError('请用 Alt+Tab 返回 CS2。'));
+              else window.location.assign('/workspace');
+            }}
+          >
+            {window.__TAURI_INTERNALS__ ? '返回游戏' : '返回工作台'}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            disabled={
+              busy ||
+              stopping ||
+              !view ||
+              !intent ||
+              stale ||
+              replaced ||
+              Boolean(
+                saved && (!submitted || runtime?.pending || (!paused && preparation?.running)),
+              )
+            }
+            onClick={() => void submit()}
+          >
+            {busy
+              ? '正在提交…'
+              : saved
+                ? paused
+                  ? '恢复提前提示接收'
+                  : failed
+                    ? '重试提前提示接收'
+                    : '复查提示接收'
+                : currentMode === 'register-current'
+                  ? '开启提前提示'
+                  : '提交 GoTV'}
+          </Button>
+        )}
+        {window.__TAURI_INTERNALS__ &&
+        enabled &&
+        !paused &&
+        (runtime?.active || runtime?.pending || submitted) ? (
+          <Button
+            disabled={stopping || replaced || !view}
             onClick={() => {
               setStopping(true);
               setError('');
-              void desktopInvoke('observer_command', { action: 'stop' })
+              void desktopInvoke('observer_command', {
+                action: 'stop',
+                expectedRevision: requireConnectionRevision(view?.revision),
+              })
                 .catch((reason: unknown) => setError(String(reason)))
                 .finally(() => setStopping(false));
             }}
@@ -326,7 +391,7 @@ export function MatchConnectionDialog() {
             onClick={() => {
               setRegisteredAt(null);
               setNextMap(false);
-              setRegisterCurrent(true);
+              setRegisterCurrent(null);
               setInput('');
               setRevision(undefined);
               setEarlyEndpoint('');

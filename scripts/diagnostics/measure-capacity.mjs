@@ -2,7 +2,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { meteredRuntime } from './capacity-runtime.mjs';
 import { fullOutbox } from './outbox-capacity.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
-import { mkdtemp, rm, readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
+import {
+  mkdtemp,
+  rm,
+  readFile,
+  writeFile,
+  appendFile,
+  mkdir,
+  stat,
+  readdir,
+  cp,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
@@ -30,6 +40,7 @@ import {
   DELIVERY_LIMITS,
   decodeDiagnosticBatch,
 } from '../../apps/companion/src/support/delivery.ts';
+import { DIAGNOSTIC_CONSENT_REVISION } from '../../packages/protocol/src/version.ts';
 import { runtime, migrate, bindings } from '../../tests/diagnostics/fixture.ts';
 import {
   stampDiagnosticGzip,
@@ -41,7 +52,8 @@ const fixture = JSON.parse(
   await readFile(new URL('./fixtures/capacity-producers.json', import.meta.url), 'utf8'),
 );
 
-async function profile(directory) {
+async function profile(directory, minutes) {
+  const frameCount = minutes * 1200;
   const root = await mkdtemp(join(directory, 'profile-'));
   const consoleEntry = fixture.consoleEntry;
   const consoleDetail = JSON.parse(consoleEntry.detail);
@@ -59,17 +71,62 @@ async function profile(directory) {
       console.error(JSON.stringify({ nativeSourceFailure: event.evidence }));
   });
   await journal.flush();
-  const sourceDirectory = join(root, 'host');
-  await mkdir(sourceDirectory);
+  const sourceDirectory = logs;
+  const hostRunId = randomUUID();
+  const hostFile = `desktop-${randomUUID()}.ndjson`;
+  const documentRunId = randomUUID();
+  let hostSequence = 0,
+    documentSequence = 0,
+    chatRecords = 0;
+  const event = (producerKind, producerRunId, sequence, kind, evidence, outcome = null) => ({
+    schema: 'mizar-diagnostic-event/2',
+    eventId: `${producerRunId}:${sequence}`,
+    producerKind,
+    producerRunId,
+    sequence,
+    kind,
+    phase: outcome,
+    outcome,
+    observedAt: new Date(utc).toISOString(),
+    recordedAt: new Date(utc).toISOString(),
+    monotonicMs: virtual,
+    sourceInterval: null,
+    taskId: null,
+    operationId: null,
+    parentOperationId: null,
+    attemptId: null,
+    scope: null,
+    evidence,
+    coverage: {
+      durability: 'committed',
+      unknown: [],
+      excluded: [],
+      replayCount: 0,
+      occurrences: 1,
+    },
+  });
+  const documentEvent = (kind, evidence, outcome = null) =>
+    event('document', documentRunId, ++documentSequence, kind, evidence, outcome);
+  const writeHost = async (kind, evidence, outcome = 'observed', taskId = null) => {
+    const record = event('host', hostRunId, ++hostSequence, kind, evidence, outcome);
+    await appendFile(
+      join(logs, hostFile),
+      JSON.stringify({
+        ...record,
+        taskId,
+        schemaVersion: 1,
+        time: record.observedAt,
+        startupSessionId: hostRunId,
+        stage: kind,
+        result: outcome,
+      }) + '\n',
+    );
+  };
   let virtual = 0;
   let utc = Date.now();
-  const epoch = utc;
-  const delivery = await new DiagnosticDelivery(logs, journal, {
-    endpoint: 'https://capacity.invalid',
-    now: () => utc,
-  }).initialize(false);
-  await delivery.consent(true);
-  await delivery.pause(true);
+  let epoch;
+  let deliveryStatus;
+  let networkAttempts = 0;
   let frames = 0,
     browser = 0,
     http = 0,
@@ -79,6 +136,11 @@ async function profile(directory) {
   const app = buildApp({
     supportJournal: journal,
     supportLogsDirectory: sourceDirectory,
+    diagnosticsEndpoint: 'https://capacity.invalid',
+    diagnosticsFetch: async () => {
+      networkAttempts++;
+      throw new Error('capacity_network_forbidden');
+    },
     gsiToken: 'public-capacity',
     clock: {
       now: () => ({ receivedAt: new Date(utc).toISOString(), receivedMonotonicMs: virtual }),
@@ -117,6 +179,29 @@ async function profile(directory) {
     provider.close();
   });
   await app.ready();
+  const localHeaders = { origin: 'http://127.0.0.1:3000' };
+  const readStatus = async () =>
+    (
+      await app.inject({
+        method: 'GET',
+        url: '/local/v1/diagnostics/delivery',
+        headers: localHeaders,
+      })
+    ).json();
+  const readyDeadline = performance.now() + 5000;
+  while (!(await readStatus()).available) {
+    assert(performance.now() < readyDeadline, 'app-owned delivery initialization');
+    await waitForIO(10);
+  }
+  // One app-owned queue. Pause before consent so this public model cannot send.
+  for (const [url, payload] of [
+    ['/operator/diagnostics/pause', { paused: true }],
+    ['/operator/diagnostics/consent', { enabled: true, revision: DIAGNOSTIC_CONSENT_REVISION }],
+  ]) {
+    const response = await app.inject({ method: 'POST', url, headers: localHeaders, payload });
+    assert.equal(response.statusCode, 200, response.body);
+  }
+  epoch = utc = Date.now();
   const nativeHeaders = { 'x-runtime-token': controlToken };
   const cameraRoute = '/operator/runtime/camera-session';
   const host = 'public-capacity-host';
@@ -181,7 +266,7 @@ async function profile(directory) {
   const durations = [];
   const start = performance.now();
   try {
-    for (let sequence = 0; sequence < 144000; sequence++) {
+    for (let sequence = 0; sequence < frameCount; sequence++) {
       virtual = sequence * 50;
       utc = epoch + virtual;
       payload.provider.timestamp = utc / 1000;
@@ -233,17 +318,12 @@ async function profile(directory) {
               headers: { origin: 'http://127.0.0.1:3000' },
               method: 'POST',
               url: '/debug/control-event',
-              payload: {
-                operation: 'browser_performance',
-                time: new Date(utc).toISOString(),
-                browserDocumentId: 'public-document',
-                evidence: {
-                  raf: { count: 450, maxGapMs: 18 },
-                  channels: [{ channel: 'radar', accepted: 150, maxHandleMs: 2 }],
-                  anomalyCount: 0,
-                  anomalies: [],
-                },
-              },
+              payload: documentEvent('browser_performance', {
+                raf: { count: 450, maxGapMs: 18 },
+                channels: [{ channel: 'radar', accepted: 150, maxHandleMs: 2 }],
+                anomalyCount: 0,
+                anomalies: [],
+              }),
             })
           ).statusCode,
           204,
@@ -257,18 +337,16 @@ async function profile(directory) {
               headers: { origin: 'http://127.0.0.1:3000' },
               method: 'POST',
               url: '/debug/control-event',
-              payload: {
-                operation: 'browser_error',
-                time: new Date(utc).toISOString(),
-                browserDocumentId: 'public-document',
-                result: 'failed',
-                evidence: {
+              payload: documentEvent(
+                'browser_error',
+                {
                   error: {
                     message: 'public synthetic render error',
                     cause: { message: 'original capacity cause' },
                   },
                 },
-              },
+                'failed',
+              ),
             })
           ).statusCode,
           204,
@@ -289,15 +367,7 @@ async function profile(directory) {
         item.sourceBytes = Buffer.byteLength(item.text) + 1;
         item.sourceOffset = sequence * 256;
         const detail = { ...consoleDetail, records: [item] };
-        await appendFile(
-          join(sourceDirectory, 'desktop.ndjson'),
-          JSON.stringify({
-            ...consoleEntry,
-            time: upper,
-            startupSessionId: 'capacity-public-host',
-            detail: JSON.stringify(detail),
-          }) + '\n',
-        );
+        await writeHost('cs2_console_records', detail);
         technicalLines++;
       }
       if (sequence % 300 === 0) {
@@ -328,32 +398,36 @@ async function profile(directory) {
           'workspace_exit_present',
           'workspace_exit_completed',
         ])
-          await appendFile(
-            join(sourceDirectory, 'desktop.ndjson'),
-            JSON.stringify({
-              schemaVersion: 1,
-              time: new Date(utc).toISOString(),
-              startupSessionId: 'capacity-public-host',
-              stage,
-              result: stage.endsWith('completed') ? 'success' : 'begin',
-              taskId,
-              trigger: 'user',
-              detail: JSON.stringify({
-                arguments: ['-applaunch', '730', '-worldwide', '-condebug'],
-                argumentsScope: 'requested-steam-command',
-                before: { workspace: 'active' },
-                after: { workspace: stage.endsWith('completed') ? 'idle' : 'waiting' },
-              }),
-            }) + '\n',
+          await writeHost(
+            stage,
+            {
+              arguments: ['-applaunch', '730', '-worldwide', '-condebug'],
+              argumentsScope: 'requested-steam-command',
+              before: { workspace: 'active' },
+              after: { workspace: stage.endsWith('completed') ? 'idle' : 'waiting' },
+            },
+            stage.endsWith('completed') ? 'success' : 'begin',
+            taskId,
           );
         nativeOps++;
+      }
+      if (sequence % 1200 === 600) {
+        await writeHost('program_all_chat', {
+          binding: hostRunId,
+          id: `chat-${sequence}`,
+          sender: 'Public Player',
+          text: 'PUBLIC-CAPACITY-CHAT-BODY',
+          sourceAfterUtc: new Date(Date.now() - 1).toISOString(),
+          capturedAt: new Date().toISOString(),
+        });
+        chatRecords++;
       }
       if (sequence % 1200 === 1199) {
         // The producer clock advances 60 seconds while ProgramChatNativeInput's real timer
         // does not. Observe its durable cursor reaching this input boundary;
         // otherwise a fast CI host closes with unread source bytes and measures
         // an incomplete workload. No extra collector or export is substituted.
-        const sourceBytes = (await stat(join(sourceDirectory, 'desktop.ndjson'))).size;
+        const sourceBytes = (await stat(join(sourceDirectory, hostFile))).size;
         const deadline = performance.now() + 5000;
         for (;;) {
           const cursor = await readFile(join(sourceDirectory, 'native-source-cursor.json'), 'utf8')
@@ -370,19 +444,106 @@ async function profile(directory) {
           await waitForIO(50);
         }
         await journal.flush();
-        await delivery.tick(false);
+        deliveryStatus = await readStatus();
         if (sequence % 12000 === 11999)
           console.error(
-            JSON.stringify({ minute: Math.floor(sequence / 1200) + 1, status: delivery.status() }),
+            JSON.stringify({ minute: Math.floor(sequence / 1200) + 1, status: deliveryStatus }),
           );
       }
       if (sequence % 20 === 19) await yieldIO();
     }
+    await journal.flush();
+    // Native receipt is a synthetic fixture; the actual route/owner validates its
+    // fixed bytes and SHA. This is not evidence of Rust/Windows pin execution.
+    const hostPinId = randomUUID();
+    const hostBytes = await readFile(join(logs, hostFile));
+    await mkdir(join(logs, 'host-pins'));
+    await writeFile(
+      join(logs, 'host-pins', hostPinId + '.json'),
+      JSON.stringify({
+        schema: 'mizar-producer-pin/2',
+        pinId: hostPinId,
+        producerKind: 'host',
+        producerRunId: hostRunId,
+        kind: 'export',
+        state: 'committed',
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        segments: [
+          {
+            name: hostFile,
+            bytes: hostBytes.length,
+            sha256: createHash('sha256').update(hostBytes).digest('hex'),
+          },
+        ],
+      }),
+    );
+    const admitted = await app.inject({
+      method: 'POST',
+      url: '/debug/support-exports',
+      headers: localHeaders,
+      payload: { hostPinId },
+    });
+    assert.equal(admitted.statusCode, 202, admitted.body);
+    const exportId = admitted.json().exportId;
+    const deadline = performance.now() + 120000;
+    let exported;
+    do {
+      exported = (
+        await app.inject({
+          method: 'GET',
+          url: '/debug/support-exports/' + exportId,
+          headers: localHeaders,
+        })
+      ).json();
+      assert(performance.now() < deadline, 'current export timed out');
+      if (['collecting', 'encoding'].includes(exported.phase)) await waitForIO(20);
+    } while (['collecting', 'encoding'].includes(exported.phase));
+    assert.equal(exported.phase, 'ready', JSON.stringify(exported));
+    const exportDirectory = join(root, 'support-export', exportId);
+    const exportedTimeline = execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./read-support-bundle.mjs', import.meta.url)),
+        join(exportDirectory, exported.parts.length === 1 ? 'part-1.zip' : 'generated.json'),
+      ],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+    assert(!exportedTimeline.includes('PUBLIC-CAPACITY-CHAT-BODY'));
+    const exportedEvents = exportedTimeline.trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert.equal(
+      exportedEvents.filter((e) => e.kind === 'cs2_console_observation').length,
+      technicalLines,
+    );
+    const exportManifest = JSON.parse(
+      await readFile(join(exportDirectory, 'generated.json'), 'utf8'),
+    );
+    deliveryStatus = await readStatus();
     await app.close();
-    await delivery.close();
+    // Restart the current delivery owner after the app releases its queue.
+    // Accelerated producer time does not advance its 20-minute wall-clock scan.
+    // This phase measures retained-source recovery, not live batching cadence.
+    const recoveryJournal = new SessionJournal(logs, { appVersion: '1.4.0' });
+    const recoveredDelivery = await new DiagnosticDelivery(logs, recoveryJournal, {
+      endpoint: 'https://capacity.invalid',
+      fetch: async () => {
+        networkAttempts++;
+        throw new Error('capacity_network_forbidden');
+      },
+    }).initialize(false);
+    try {
+      await recoveredDelivery.tick();
+      await recoveredDelivery.close();
+      deliveryStatus = recoveredDelivery.status();
+    } finally {
+      await recoveredDelivery.close();
+      await recoveryJournal.close();
+    }
+    if (artifactsDirectory)
+      await cp(exportDirectory, join(artifactsDirectory, exportId), { recursive: true });
     const state = JSON.parse(await readFile(join(logs, 'diagnostic-outbox/state.json'), 'utf8'));
     const packets = [];
     const stages = {};
+    const wireIds = new Set();
     let nativeHealth = null,
       performanceHealth = null;
     let expanded = 0,
@@ -390,6 +551,22 @@ async function profile(directory) {
       events = 0,
       consoleRecords = 0,
       anomalySamples = 0;
+    const canonical = [];
+    for (const name of await readdir(logs)) {
+      if (!/^session-[a-f0-9-]{36}\.ndjson$/.test(name)) continue;
+      canonical.push(
+        ...(await readFile(join(logs, name), 'utf8'))
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map(JSON.parse),
+      );
+    }
+    nativeHealth = canonical.findLast((e) => e.kind === 'native_source_health')?.evidence;
+    performanceHealth = canonical.findLast(
+      (e) => e.kind === 'performance_context_health',
+    )?.evidence;
+    consoleRecords = technicalLines;
     for (const item of state.queue) {
       const bytes = await readFile(join(logs, 'diagnostic-outbox', item.id + '.gz'));
       const decoded = await decodeDiagnosticBatch(bytes);
@@ -397,24 +574,21 @@ async function profile(directory) {
       gzipBytes += bytes.length;
       events += decoded.events.length;
       for (const e of decoded.events) {
+        wireIds.add(e.eventId);
         stages[e.stage] = (stages[e.stage] ?? 0) + 1;
-        if (e.stage === 'native_source_health') nativeHealth = e.evidence;
-        if (e.stage === 'performance_context_health') performanceHealth = e.evidence;
+        assert(!['native_host_records'].includes(e.kind));
+        assert(!JSON.stringify(e).includes('PUBLIC-CAPACITY-CHAT-BODY'));
         if (e.stage === 'performance_anomaly_samples')
           anomalySamples += e.evidence.samples?.length ?? 0;
-        if (e.stage === 'native_host_records')
-          for (const x of e.evidence.entries ?? [])
-            if (x.entry.stage === 'cs2_console_records')
-              consoleRecords += JSON.parse(x.entry.detail).records.length;
       }
       packets.push({ id: item.id, index: item.index, bytes: bytes.toString('base64') });
     }
     durations.sort((a, b) => a - b);
     const output = {
-      schema: 'mizar-final-collector-capacity/1',
+      schema: 'mizar-final-collector-capacity/2',
       scope:
-        'actual buildApp HTTP/GSI/browser collectors, performance window and durable spool plus app-owned ProgramChatNativeInput; real journal/disk/outbox; isolated injected journal root keeps the app-internal off-by-default uploader separate from the metered outbox; native input scales a real Rust-produced public fixture and runtime aggregates scale an actual public production snapshot at modeled rates, not 100 real games; accelerated time, IO catch-up each virtual minute; no account requests; no inference of game FPS or cloud CPU',
-      minutes: 120,
+        'actual buildApp HTTP/GSI/document event/2, app-owned journal/performance spool and one paused delivery; modeled current Host event/2 envelopes in one bounded segment plus chat-only ProgramChat input; actual export route and offline reader. Accelerated input clock, real timers/batching, IO catch-up per virtual minute and post-close retained-source recovery: not a wall-clock two-hour run or live cloud cadence qualification; no account requests or Windows/CS2/Rust-writer claims',
+      minutes,
       epoch,
       rates: {
         gsiHz: 20,
@@ -443,7 +617,31 @@ async function profile(directory) {
       gzipBytes,
       batches: packets.length,
       manifestBytes: Buffer.byteLength(JSON.stringify(state)),
-      outbox: delivery.status(),
+      outbox: {
+        ...deliveryStatus,
+        queuedBatches: state.queue.length,
+        queuedBytes: state.queue.reduce((sum, batch) => sum + batch.bytes, 0),
+        omitted: state.omitted,
+        snapshot: 'after app close and retained-source recovery',
+      },
+      host: {
+        runId: hostRunId,
+        events: hostSequence,
+        bytes: hostBytes.length,
+        consoleRecords,
+        nativeOperations: nativeOps,
+        chatRecords,
+      },
+      export: {
+        exportId,
+        parts: exported.parts,
+        knownGaps: exported.knownGaps,
+        measurements: exportManifest.measurements,
+        offlineReader: 'passed',
+        consoleObservations: technicalLines,
+        rawChatExcluded: true,
+      },
+      networkAttempts,
       journal: journal.health(),
       native: nativeHealth,
       performanceContext: performanceHealth,
@@ -455,12 +653,13 @@ async function profile(directory) {
       },
     };
     console.error(JSON.stringify({ profile: output }));
-    assert.equal(frames, 144000);
-    assert.equal(http, 14400);
-    assert.equal(browser, 960);
-    assert.equal(nativeOps, 360);
-    assert.equal(consoleRecords, 7200);
-    assert.equal(nativeHealth.copied, 9720);
+    assert.equal(frames, frameCount);
+    assert.equal(http, minutes * 120);
+    assert.equal(browser, minutes * 8);
+    assert.equal(nativeOps, minutes * 3);
+    assert.equal(consoleRecords, minutes * 60);
+    assert.equal(nativeHealth.copied, chatRecords);
+    assert.equal(networkAttempts, 0);
     assert.equal(nativeHealth.failures, 0);
     assert.equal(nativeHealth.gaps, 0);
     assert.equal(nativeHealth.invalidRecords, 0);
@@ -470,12 +669,22 @@ async function profile(directory) {
     assert.equal(performanceHealth.coverage.omittedRecords, 0);
     assert.equal(performanceHealth.coverage.omittedContextSamples, 0);
     assert.equal(performanceHealth.writeFailures, 0);
-    assert.equal(delivery.status().omitted, 0);
-    assert.equal(delivery.status().pendingBytes, 0);
+    // Current transport explicitly excludes chat and reports the resulting
+    // producer sequence gaps. Independently verify every non-chat Host identity,
+    // rather than treating either that counter or a quiet health flag as completeness.
+    assert.deepEqual(state.omissionReasons, {
+      chat_not_collected: chatRecords,
+      source_sequence_gap: chatRecords,
+    });
+    for (const line of hostBytes.toString('utf8').trim().split('\n')) {
+      const record = JSON.parse(line);
+      if (record.kind !== 'program_all_chat') assert(wireIds.has(record.eventId));
+    }
+    for (let sequence = 1; sequence <= documentSequence; sequence++)
+      assert(wireIds.has(`${documentRunId}:${sequence}`));
     return { report: output, packets };
   } finally {
     await app.close();
-    await delivery.close();
     await journal.close();
   }
 }
@@ -1327,6 +1536,13 @@ const repository = fileURLToPath(new URL('../..', import.meta.url));
 const sourceFiles = [
   'apps/companion/src/app.ts',
   'apps/companion/src/support/delivery.ts',
+  'apps/companion/src/support/archive-worker.ts',
+  'apps/companion/src/support/export-job.ts',
+  'apps/companion/src/support/technical-projection.ts',
+  'apps/companion/src/support/retention.ts',
+  'scripts/diagnostics/read-support-bundle.mjs',
+  'apps/desktop/src-tauri/src/startup_log.rs',
+  'packages/protocol/src/diagnostics.ts',
   'apps/companion/src/support/session-journal.ts',
   'apps/companion/src/program-chat/native-input.ts',
   'apps/companion/src/support/performance-window.ts',
@@ -1359,6 +1575,17 @@ const sourceIdentity = {
     ),
   ),
 };
+const profileOnly = process.argv.includes('--profile-only');
+const minutes = Number(
+  process.argv.find((value) => value.startsWith('--minutes='))?.slice(10) ?? 120,
+);
+assert(Number.isInteger(minutes) && minutes >= 1 && minutes <= 120, '--minutes must be 1..120');
+assert(profileOnly || minutes === 120, 'short profiles do not qualify the full cloud daily model');
+const reportPath = process.argv.slice(2).find((value) => !value.startsWith('--'));
+const artifactsDirectory = process.argv
+  .find((value) => value.startsWith('--artifacts='))
+  ?.slice(12);
+if (artifactsDirectory) await mkdir(artifactsDirectory, { recursive: true });
 const directory = await mkdtemp(join(tmpdir(), 'mizar-integrated-capacity-'));
 try {
   const configuration = JSON.parse(
@@ -1372,27 +1599,43 @@ try {
     enroll: configuration.ratelimits.find((v) => v.name === 'ENROLL_LIMITER').simple.limit,
     upload: configuration.ratelimits.find((v) => v.name === 'UPLOAD_LIMITER').simple.limit,
   };
-  const result = await profile(directory);
-  const faultResult = await fault(directory);
-  const sharedResult = await sharedIp(directory, [
-    { name: 'previous', enroll: 5, upload: 30 },
-    configured,
-  ]);
-  const cloudResult = await cloud(directory, result, faultResult);
-  const outboxBounds = await fullOutbox(directory);
-  const report = {
-    schema: 'mizar-integrated-capacity/1',
-    sourceIdentity,
-    scope:
-      'Public synthetic frequency model through actual collectors, durable queue, real local R2/SQLite D1; no external account requests, cloud CPU or actual game claims',
-    profile: result.report,
-    fault: faultResult.report,
-    sharedIp: sharedResult,
-    cloud: cloudResult,
-    outboxBounds,
-  };
-  if (process.argv[2]) await writeFile(process.argv[2], JSON.stringify(report, null, 2) + '\n');
-  console.log(JSON.stringify(report));
+  const result = await profile(directory, minutes);
+  if (profileOnly) {
+    const report = {
+      schema: 'mizar-current-capacity-sample/1',
+      sourceIdentity,
+      profile: result.report,
+      notMeasured: [
+        'multi-day cloud capacity',
+        'shared-IP quotas',
+        'Windows/CS2',
+        'real-time batching cadence',
+      ],
+    };
+    if (reportPath) await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');
+    console.log(JSON.stringify(report));
+  } else {
+    const faultResult = await fault(directory);
+    const sharedResult = await sharedIp(directory, [
+      { name: 'previous', enroll: 5, upload: 30 },
+      configured,
+    ]);
+    const cloudResult = await cloud(directory, result, faultResult);
+    const outboxBounds = await fullOutbox(directory);
+    const report = {
+      schema: 'mizar-integrated-capacity/1',
+      sourceIdentity,
+      scope:
+        'Public synthetic frequency model through actual collectors, durable queue, real local R2/SQLite D1; no external account requests, cloud CPU or actual game claims',
+      profile: result.report,
+      fault: faultResult.report,
+      sharedIp: sharedResult,
+      cloud: cloudResult,
+      outboxBounds,
+    };
+    if (reportPath) await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');
+    console.log(JSON.stringify(report));
+  }
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

@@ -470,22 +470,32 @@ export function registerWorkspaceObserver(
   };
   const startAssist = async (value: Host, current: () => boolean) => {
     const connection = settings?.configured();
-    if (!settings?.settings.enabled || !connection) return;
+    if (!settings?.settings.enabled || settings.receiverPaused || !connection) return;
+    const receiverRevision = settings.receiverRevision;
+    const receiving = () =>
+      current() && !settings.receiverPaused && settings.receiverRevision === receiverRevision;
     const key = keys(value).observer;
     if (observerKey === key && observer.view().active) return;
     await observer.stop();
     if (!current()) throw new Error('observer_configuration_changed');
-    await observer.start(
-      value.executable,
-      connection.earlyEndpoint,
-      connection.password,
-      value.job,
-      current,
-    );
+    if (!receiving()) return;
+    try {
+      await observer.start(
+        value.executable,
+        connection.earlyEndpoint,
+        connection.password,
+        value.job,
+        receiving,
+      );
+    } catch (error) {
+      if (current() && settings.receiverRevision !== receiverRevision) return;
+      throw error;
+    }
     if (!current()) {
       await observer.stop();
       throw new Error('observer_configuration_changed');
     }
+    if (!receiving()) return;
     observerKey = key;
   };
   const unsubscribe = settings?.subscribe((kind) => {
@@ -570,7 +580,8 @@ export function registerWorkspaceObserver(
       endpoint: z.string().max(100),
       password: z.string().max(95),
     }),
-    z.strictObject({ action: z.enum(['stop', 'pulse']) }),
+    z.strictObject({ action: z.literal('stop'), expectedRevision: z.uuid().optional() }),
+    z.strictObject({ action: z.literal('pulse') }),
   ]);
   app.post('/operator/runtime/observer', { bodyLimit: 4096 }, async (request, reply) => {
     const actual = Buffer.from(
@@ -636,6 +647,7 @@ export function registerWorkspaceObserver(
             activeKeys !== null &&
             appliedPolicy === policy(body) &&
             (!settings.settings.enabled ||
+              settings.receiverPaused ||
               (observer.view().active && observerKey === activeKeys.observer)) &&
             (!gameControl ||
               ((!gameControl.autoConnect ||
@@ -716,27 +728,32 @@ export function registerWorkspaceObserver(
       } else if (body.action === 'start') {
         operation.stage = 'assist';
         const attempt = ++epoch;
+        settings?.setReceiverPaused(false);
+        const receiverRevision = settings?.receiverRevision;
+        const receiving = () =>
+          attempt === epoch &&
+          !settings?.receiverPaused &&
+          settings?.receiverRevision === receiverRevision &&
+          canStart();
         host = undefined;
         await serialize(async () => {
-          if (attempt !== epoch || !canStart()) throw new Error('observer_configuration_changed');
-          await observer.start(
-            body.executable,
-            body.endpoint,
-            body.password,
-            body.job,
-            () => attempt === epoch && canStart(),
-          );
+          if (!receiving()) throw new Error('observer_configuration_changed');
+          await observer.start(body.executable, body.endpoint, body.password, body.job, receiving);
           observerKey = '';
           lastError = null;
         });
       } else if (body.action === 'stop') {
-        settings?.endProduction();
-        ++epoch;
-        host = undefined;
-        prepared = undefined;
+        if (body.expectedRevision && body.expectedRevision !== settings?.revision)
+          return reply.code(409).send({ message: '本图连接已变化，请重新打开后确认。' });
+        settings?.setReceiverPaused(true);
+        if (!settings) ++epoch;
+        // Cancel this receiver immediately, including a launch queued behind preparation.
+        // Game intent, Host identity and accepted game/HUD operations remain owned here.
+        const stopped = observer.stop();
         await serialize(async () => {
-          observerKey = hiddenGame = appliedPolicy = '';
-          await observer.stop();
+          observerKey = '';
+          await stopped;
+          lastError = null;
         });
       } else {
         if (leased()) hostLease = performance.now();

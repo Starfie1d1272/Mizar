@@ -203,7 +203,11 @@ pub async fn observer_command(
                 let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;
                 let _operation = cleanup_operation();
                 app.state::<production_exit::ExitGate>().check_ticket(ticket)?;
-                return stop_inner(&log, true);
+                let mut intent = serde_json::json!({"action":"stop"});
+                if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
+                request(&log, intent)?;
+                ACTIVE.store(false, Ordering::Release);
+                return Ok(());
             }
             if action == "restore-hud" {
                 let ticket = action_ticket.ok_or("观察辅助操作已失效。")?;

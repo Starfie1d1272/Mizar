@@ -16,7 +16,7 @@ export function MatchConnectionControl({ primary = false }: { primary?: boolean 
           );
         }}
       >
-        填写 GoTV，开启提前提示
+        GoTV 连接
       </Button>
       {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
     </>

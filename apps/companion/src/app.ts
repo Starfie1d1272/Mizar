@@ -1833,7 +1833,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         controlToken: options.productRuntime?.controlToken,
         configure: production.configureCameraSession,
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
-        canPrepare: () => production.get().mode === 'preparation',
+        canPrepare: production.canPrepareMulnx,
+        canCleanup: production.canCleanupMulnx,
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
@@ -1989,6 +1990,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     observerSettings,
     localWebTransport.getOriginPolicy(),
     observerEligible,
+    () => {
+      const program = projectionCoordinator.getCurrent().program;
+      return (
+        observerEligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name)
+      );
+    },
   );
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {

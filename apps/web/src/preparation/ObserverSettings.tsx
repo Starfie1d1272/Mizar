@@ -9,7 +9,11 @@ import {
 import { Button, Checkbox, Field, Panel, StatusBanner } from '../ui';
 import { command, useLocalRead, openTool } from './client';
 import { desktopInvoke } from '../workspace/client';
-import { type ConnectionPreparationView, type ObserverRuntimeView } from './observer-preparation';
+import {
+  resumeObserverReceiver,
+  type ConnectionPreparationView,
+  type ObserverRuntimeView,
+} from './observer-preparation';
 import { useCs2Status } from './cs2-status';
 
 type ObserverView = ConnectionPreparationView & {
@@ -94,21 +98,25 @@ export function ObserverSettingsPanel() {
         {settings.enabled &&
         production?.mode === 'live' &&
         window.__TAURI_INTERNALS__ &&
-        runtime?.retryAvailable ? (
+        runtime?.retryAvailable &&
+        (view?.receiverPaused ||
+          runtime.error ||
+          runtime.failed ||
+          ['failed', 'ended', 'stopped'].includes(runtime.health.state)) ? (
           <Button
             disabled={busy || runtime?.pending}
             onClick={() => {
-              if (busy || runtime?.pending) return;
+              if (busy || runtime?.pending || !view) return;
               setBusy(true);
               setError('');
-              void desktopInvoke('observer_command', { action: 'start-configured' })
+              void resumeObserverReceiver(view)
                 .catch((reason: unknown) =>
                   setError(reason instanceof Error ? reason.message : '提示接收未完成，请重试。'),
                 )
                 .finally(() => setBusy(false));
             }}
           >
-            重新接收提示
+            {view?.receiverPaused ? '恢复提前提示接收' : '重试提前提示接收'}
           </Button>
         ) : null}
         {runtime?.pending ? <p role="status">正在准备提前提示…</p> : null}

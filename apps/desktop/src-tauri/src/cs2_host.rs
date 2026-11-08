@@ -160,11 +160,12 @@ pub(crate) async fn launch_mulnx(
                     let ticket = preparation_gate::preparation_ticket(&app, id)?;
                     app.state::<preparation_gate::PreparationGate>()
                         .commit(Some(id), || {
-                            app.state::<production_exit::ExitGate>()
-                                .commit(ticket, || mulnx_launch::resume(&app, &log))
+                            app.state::<production_exit::ExitGate>().commit(ticket, || {
+                                mulnx_launch::resume(&app, &log, preparation_id.as_deref())
+                            })
                         })
                 }
-                None => mulnx_launch::resume(&app, &log),
+                None => mulnx_launch::resume(&app, &log, preparation_id.as_deref()),
             }
         } else {
             mulnx_launch::launch(

@@ -581,13 +581,12 @@ pub fn check_obs_entry(log: &DesktopLog, preparation_id: &str) -> Result<(), Str
 }
 
 /// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn prepare_mulnx(
+pub fn cleanup_mulnx(
     log: &DesktopLog,
     cs2: &std::path::Path,
-    update: bool,
-    spectator_cfg: bool,
+    preparation: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    prepare_mulnx_with_demo(log, cs2, update, spectator_cfg, None, false)
+    prepare_mulnx_with_demo(log, cs2, false, false, None, false, preparation, true)
 }
 
 pub fn prepare_mulnx_with_demo(
@@ -597,11 +596,17 @@ pub fn prepare_mulnx_with_demo(
     spectator_cfg: bool,
     demo_cfg: Option<&str>,
     capture_compatibility: bool,
+    preparation: Option<serde_json::Value>,
+    cleanup: bool,
 ) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
     let console_capture = crate::cs2_console::settings(log)?["enabled"] == true;
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility}).to_string()));
-    let body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility}).to_string();
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
+    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
+    if let Some(preparation) = preparation {
+        body["preparation"] = preparation;
+    }
+    let body = body.to_string();
     let (code, value) = request_with_identity(
         log,
         "POST",
