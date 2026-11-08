@@ -36,12 +36,15 @@ export class SupportExports {
   constructor(
     private readonly logs: string,
     private readonly participants: () => IncidentParticipant[] = () => [],
+    private readonly onDiagnostic?: (error: unknown, exportId: string) => void,
   ) {
     this.directory = join(dirname(logs), 'support-export');
   }
   status(id: string) {
     const job = this.jobs.get(id);
-    return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now()) ? job : null;
+    return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now())
+      ? { ...job, settled: this.active?.id !== id }
+      : null;
   }
   /** Only after a request was explicitly rejected; never authorizes retrying the same ID. */
   canReleaseRejectedHostPin(id: string) {
@@ -80,6 +83,11 @@ export class SupportExports {
     })()
       .catch(async (error: unknown) => {
         if (job.phase !== 'cancelled') job.phase = 'failed';
+        try {
+          this.onDiagnostic?.(error, id);
+        } catch {
+          // Diagnostics cannot change export ownership or cleanup.
+        }
         job.error = String(error);
         job.expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
         // Only this admitted job owns this output. Never clean another export's directory.
@@ -250,6 +258,10 @@ export class SupportExports {
         gaps.push({ source: prefix + name, reason: String(error) });
       }
     };
+    let readyResult: (ExportJob & Record<string, unknown>) | undefined;
+    let failed = false;
+    let primaryError: unknown;
+    let cleanupFailures: unknown[];
     try {
       for (const participant of participants) {
         this.assertActive(job);
@@ -451,11 +463,12 @@ export class SupportExports {
             void atomicJson(join(output, 'generated.json'), manifest)
               .then(() => {
                 this.assertActive(job);
-                Object.assign(job, message, {
+                readyResult = {
+                  ...message,
                   downloadName,
                   exportId: job.exportId,
                   expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-                });
+                };
                 settled = true;
                 resolve();
               })
@@ -468,13 +481,28 @@ export class SupportExports {
             reject(new Error(`export_worker_exit_${code}`));
         });
       });
+    } catch (error) {
+      failed = true;
+      primaryError = error;
     } finally {
       if (this.active?.id === job.exportId) delete this.active.worker;
-      await Promise.all(handles.map((handle) => handle.close()));
-      await Promise.all(
-        participants.map((participant) => participant.release(job.exportId).catch(() => undefined)),
+      const closed = await Promise.allSettled(handles.map((handle) => handle.close()));
+      const released = await Promise.allSettled(
+        participants.map((participant) => participant.release(job.exportId)),
       );
+      cleanupFailures = [...closed, ...released]
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
     }
+    if (failed && cleanupFailures.length)
+      throw new AggregateError([primaryError, ...cleanupFailures], 'export_cleanup_failed', {
+        cause: primaryError,
+      });
+    if (failed) throw primaryError;
+    if (cleanupFailures.length) throw new AggregateError(cleanupFailures, 'export_cleanup_failed');
+    this.assertActive(job);
+    if (!readyResult) throw new Error('export_result_missing');
+    Object.assign(job, readyResult);
   }
   private async frameRateSnapshot(gap: (source: string, phase: string, error: unknown) => void) {
     const name = 'frame-rate-live.json';

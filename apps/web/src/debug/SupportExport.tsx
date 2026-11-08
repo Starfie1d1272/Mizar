@@ -1,5 +1,5 @@
 import { flushPerformanceJournal } from './performance-journal';
-import { pinHostEvidence } from './export-host-pin';
+import { pinHostEvidence, releaseHostPinWhenSettled } from './export-host-pin';
 import {
   flushControlEvidence,
   flushControlSnapshots,
@@ -147,8 +147,8 @@ export function SupportExport() {
     const deadline = Date.now() + 120_000;
     let stage: 'collect' | 'generate' | 'save' = 'collect';
     let releaseHostPin: (() => void) | undefined;
+    let hostPinId: string | undefined;
     let hostPinSubmitted = false;
-    let hostPinJobSettled = false;
     let deliveryJob = readyJob;
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
@@ -217,7 +217,7 @@ export function SupportExport() {
       await Promise.resolve();
       const documentHandoff = await flushControlEvidence();
       const hostPin = desktop ? await pinHostEvidence(signal) : undefined;
-      const hostPinId = hostPin?.pinId;
+      hostPinId = hostPin?.pinId;
       releaseHostPin = hostPin?.release;
       if (signal.aborted) throw new Error('export_cancelled');
       stage = 'generate';
@@ -296,8 +296,7 @@ export function SupportExport() {
         if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
         setProgress(job);
       }
-      // cancelled only acknowledges the request; collecting may still be using sources.
-      hostPinJobSettled = job.phase === 'ready' || job.phase === 'failed';
+      // A terminal phase may precede cleanup; pin release waits for confirmed settlement.
       if (job.phase === 'cancelled') throw new Error('export_cancelled');
       if (job.phase === 'failed' || !job.parts?.length)
         throw new Error(job.error ?? 'invalid_bundle');
@@ -334,7 +333,8 @@ export function SupportExport() {
       // A timed-out POST may still have admitted the matching job. Keep its
       // hold rather than releasing sources before Companion has finished.
       // Cleanup cannot make the UI wait on the same unavailable Host writer.
-      if (!hostPinSubmitted || hostPinJobSettled) releaseHostPin?.();
+      if (!hostPinSubmitted) releaseHostPin?.();
+      else if (hostPinId && releaseHostPin) releaseHostPinWhenSettled(hostPinId, releaseHostPin);
       busyRef.current = false;
       setBusy(false);
     }

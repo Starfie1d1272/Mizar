@@ -275,7 +275,7 @@ RivalHub 认领请求可选 `allowLineupMismatch: true`；缺省仍严格核对�
 
 诊断事件使用 `mizar-diagnostic-event/2`，定义见 [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)。Host、Companion 与文档保留原生产者身份和事件 ID，持久回执与业务动作成功不是同一概念。桌面文档调用有界 `persist_diagnostic_events`，Host 回执只确认该批事件已持久；纯浏览器通过受本机 Origin 限制的 `POST /debug/control-event` 交接同一文档 UUID、序号和 eventId，服务确认持久后返回 204；非法事件返回 400，无持久 writer 返回 503。
 
-`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，各卷的 `measurements.json` 记录本次已完成阶段测量及明确截止点，后续关闭与保存结果以 exportId 关联；固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。当前维护读取器仅处理新版 ZIP；旧 `POST /debug/support-bundle` 不再注册，旧日志、旧 JSON 包及 v1 的 `fullLogs.files`、`obs-log-text/1` 分卷使用对应旧版本工具处理，不自动迁移或删除。新版 OBS 原文保存为独立 `.log` 附件，列入条目摘要与覆盖；文件路径不来自浏览器，附件与技术索引不能证明当前画面正常。业务身份仅用于用户明确保存的本机包，不自动公开上传。
+`POST /debug/support-exports` 接受可选 ISO `from/to` 与已验证的 Host pin ID，返回 exportId/阶段，不返回大正文。对应状态、取消和固定附件路由只暴露受控导出，GET 校验本机同源请求，POST 保持可信 Origin 校验。状态中的 `settled` 仅表示该导出任务已完成输入使用和收尾尝试；取消请求或终态本身不证明收尾已结束。页面在限定时间内核对确切任务完成后才释放 Host pin，超时或结果未知时保留。桌面 `save_support_bundle(exportId)` 仅通过原生选择的目标保存既有 ZIP；不接受任意源路径或前端摘要。人工包为 `mizar-support-bundle/2`，各卷的 `measurements.json` 记录本次已完成阶段测量及明确截止点，后续关闭与保存结果以 exportId 关联；固定布局、快照/覆盖、分卷和预算见[架构](architecture.md)。当前维护读取器仅处理新版 ZIP；旧 `POST /debug/support-bundle` 不再注册，旧日志、旧 JSON 包及 v1 的 `fullLogs.files`、`obs-log-text/1` 分卷使用对应旧版本工具处理，不自动迁移或删除。新版 OBS 原文保存为独立 `.log` 附件，列入条目摘要与覆盖；文件路径不来自浏览器，附件与技术索引不能证明当前画面正常。业务身份仅用于用户明确保存的本机包，不自动公开上传。
 
 ### 本机网站同步健康
 

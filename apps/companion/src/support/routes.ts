@@ -1,6 +1,7 @@
 import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
 import type { IncidentParticipant } from './retention.js';
 import { SupportExports } from './export-job.js';
+import { diagnosticValue } from './session-journal.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { registerDiagnosticDelivery } from './delivery-routes.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -420,7 +421,17 @@ export function registerSupportRoutes(
     };
   }
   const exports = options.logsDirectory
-    ? new SupportExports(options.logsDirectory, options.exportParticipants)
+    ? new SupportExports(options.logsDirectory, options.exportParticipants, (error, exportId) =>
+        app.log.error(
+          {
+            event: 'support_export',
+            stage: 'build',
+            exportId,
+            diagnostic: { error: diagnosticValue(error) },
+          },
+          'Support export failed',
+        ),
+      )
     : null;
   app.post(
     '/debug/support-exports',

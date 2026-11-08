@@ -13,6 +13,44 @@ type ExportHostPin = {
   release?: () => void;
 };
 
+/** Release only after Companion confirms that the admitted job has stopped using its inputs. */
+export function releaseHostPinWhenSettled(pinId: string, release: () => void): void {
+  void (async () => {
+    const deadline = performance.now() + 120_000;
+    while (performance.now() < deadline) {
+      try {
+        const response = await fetch(`/debug/support-exports/${pinId}`, {
+          cache: 'no-store',
+          redirect: 'error',
+          signal: AbortSignal.timeout(
+            Math.max(1, Math.floor(Math.min(5000, deadline - performance.now()))),
+          ),
+        });
+        if (response.ok) {
+          const job = (await response.json()) as {
+            exportId?: unknown;
+            phase?: unknown;
+            settled?: unknown;
+          };
+          if (
+            job.exportId === pinId &&
+            job.settled === true &&
+            ['ready', 'failed', 'cancelled'].includes(String(job.phase))
+          ) {
+            release();
+            return;
+          }
+        }
+      } catch {
+        // Unknown status must keep the pin; never infer completion from a timeout.
+      }
+      const remaining = deadline - performance.now();
+      if (remaining > 0)
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
+    }
+  })();
+}
+
 export function pinHostEvidence(signal: AbortSignal): Promise<ExportHostPin> {
   if (signal.aborted) return Promise.reject(new Error('export_cancelled'));
   const report = (
