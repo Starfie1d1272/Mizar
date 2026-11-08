@@ -310,4 +310,3 @@ pub(super) fn process_instance(_pid: u32) -> io::Result<Option<String>> {
         "diagnostic delivery process identity unsupported",
     ))
 }
-

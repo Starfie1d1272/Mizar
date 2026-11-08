@@ -435,9 +435,8 @@ fn identity(
     process: &Process,
     log: &crate::startup_log::DesktopLog,
 ) -> Result<(u64, PathBuf), String> {
-    read_identity(process, log)?.ok_or_else(|| {
-        "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into()
-    })
+    read_identity(process, log)?
+        .ok_or_else(|| "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into())
 }
 /// A temporarily unreadable image is unknown, never proof that the process is absent.
 /// Only the submitted-launch observer may wait for another complete observation.
@@ -1170,9 +1169,8 @@ impl ManagedCs2 {
         Ok(!process_pids("CS2Injector.exe", &self.log)?.is_empty())
     }
     pub fn mulnx_handoff_status(&self) -> Result<Value, String> {
-        self.observe_mulnx_handoff()?.ok_or_else(|| {
-            "CS2 程序路径暂时无法读取，请稍后重试准备；本次启动记录仍保留。".into()
-        })
+        self.observe_mulnx_handoff()?
+            .ok_or_else(|| "CS2 程序路径暂时无法读取，请稍后重试准备；本次启动记录仍保留。".into())
     }
     /// None retains the whole unknown snapshot, including possible extra instances.
     pub(crate) fn observe_mulnx_handoff(&self) -> Result<Option<Value>, String> {
@@ -1201,7 +1199,9 @@ impl ManagedCs2 {
             processes.push(json!({"pid": pid, "created": created.to_string(), "executable": executable, "managed": managed}));
         }
         // Snapshot of kernel identity only; neither launcher provenance nor MulNX readiness.
-        Ok(Some(json!({"processes": processes, "url": "http://127.0.0.1:3000/"})))
+        Ok(Some(
+            json!({"processes": processes, "url": "http://127.0.0.1:3000/"}),
+        ))
     }
     /// Request capability only; every launch repeats discovery, these guards and backup.
     /// Never run PowerShell or create recovery work while polling status.

@@ -506,7 +506,11 @@ impl DesktopLog {
             ),
             _ => (),
         }
-        let retention_issue = logger.inner.lock().ok().and_then(|log| log.retention_issue.clone());
+        let retention_issue = logger
+            .inner
+            .lock()
+            .ok()
+            .and_then(|log| log.retention_issue.clone());
         if let Some(reason) = retention_issue {
             logger.event(
                 "native_diagnostic_retention_paused",
@@ -845,7 +849,11 @@ impl DesktopLog {
             if log.pin_work.contains_key(pin_id) || log.pin_work.len() >= 4 {
                 return Err("诊断固定操作进行中。".into());
             }
-            if path.with_extension("partial").try_exists().map_err(|e| e.to_string())? {
+            if path
+                .with_extension("partial")
+                .try_exists()
+                .map_err(|e| e.to_string())?
+            {
                 return Err("诊断固定记录尚待恢复，请重启 Mizar 后重试。".into());
             }
             let previous = read_pin_json(&path).map_err(|e| e.to_string())?;

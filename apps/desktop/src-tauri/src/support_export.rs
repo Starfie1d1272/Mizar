@@ -385,7 +385,8 @@ pub(crate) fn recover_metadata(
             .ok_or_else(|| io::Error::other("diagnostic parent missing"))?,
     )?;
     let (mut file, id) = checked_access(temporary, true)?;
-    let actual: serde_json::Value = serde_json::from_slice(&bounded_read(&mut file, MANIFEST_LIMIT)?)?;
+    let actual: serde_json::Value =
+        serde_json::from_slice(&bounded_read(&mut file, MANIFEST_LIMIT)?)?;
     if &actual != expected {
         return Err(io::Error::other("diagnostic recovery source changed"));
     }
