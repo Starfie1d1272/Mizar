@@ -1272,6 +1272,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       handoffForExit: async () => {
         await options.rivalhubConnection?.handoffForExit();
       },
+      retryExitHandoffs: async () => {
+        await options.rivalhubConnection?.retryExitHandoffs();
+      },
       release: async () => {
         await options.rivalhubConnection?.release();
       },

@@ -1136,6 +1136,24 @@ export class RivalHubConnection {
     return handoff;
   }
 
+  /** Retry only identities frozen by a prior exit, never the current source. */
+  retryExitHandoffs(): Promise<void> {
+    if (!this.sourceStateAvailable)
+      return Promise.reject(new Error('rivalhub_source_state_unavailable'));
+    if (this.exitHandoffs.size && !this.settleSource)
+      return Promise.reject(new Error('可靠事件范围尚未冻结。'));
+    for (const identity of this.exitHandoffs.values()) void this.settle(identity);
+    const handoff = (async () => {
+      await this.persistExitHandoffs();
+      await this.updateCleanupSummary();
+      if (this.cleanupSummary.claimIntent) throw new Error('数据源认领结果待核对。');
+    })();
+    void handoff
+      .then(() => this.sourceCommands.run(() => this.cleanup(false)), () => undefined)
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+    return handoff;
+  }
+
   private async persistExitHandoffs(): Promise<void> {
     for (const [key, identity] of this.exitHandoffs) {
       const state = await this.sourceState.snapshot();

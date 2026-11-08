@@ -45,6 +45,7 @@ export type ProductionDependencies = {
   observer: Pick<ObserverSettingsStore, 'endProduction'>;
   source?:
     | (Pick<RivalHubConnection, 'handoffForExit' | 'release' | 'clearStats'> & {
+        retryExitHandoffs?: () => Promise<void>;
         stats: (
           target: Parameters<RivalHubConnection['stats']>[0],
         ) => ReturnType<RivalHubConnection['stats']> | undefined;
@@ -69,7 +70,7 @@ function sourceStateUnavailable(error: unknown): boolean {
 }
 
 type ProductionAction =
-  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'invalid';
+  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'retry-handoff' | 'invalid';
 type ProductionCommand = {
   action: ProductionAction;
   expectedRevision: string | null;
@@ -109,7 +110,7 @@ export function createProduction(options: ProductionDependencies) {
         completed: boolean;
       }
     | undefined;
-  function startHandoff(): Promise<void> {
+  function startHandoff(retry = false): Promise<void> {
     if (!options.source?.handoffForExit) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
     if (handoffStarted) return Promise.resolve();
@@ -117,7 +118,8 @@ export function createProduction(options: ProductionDependencies) {
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      const pending = options.source?.handoffForExit();
+      const pending = retry ? options.source.retryExitHandoffs?.() : options.source.handoffForExit();
+      if (!pending) throw new Error('数据源交接重试不可用。');
       handoffPromise = pending.then(
         () => {
           if (generation === releaseGeneration) releaseHandoffState = 'recorded';
@@ -306,6 +308,16 @@ export function createProduction(options: ProductionDependencies) {
         failure: 'productionConflict' as const,
         message: '制作状态已变化，请刷新后重试。',
       };
+    if (body.action === 'retry-handoff') {
+      if (mode !== 'preparation' || releaseHandoffState !== 'unconfirmed')
+        return {
+          ok: false as const,
+          failure: 'productionConflict' as const,
+          message: '数据源交接状态已变化，请刷新后核对。',
+        };
+      void startHandoff(true).catch(() => {});
+      return { ok: true as const, value: view() };
+    }
     if (!['enter', 'hide', 'finish', 'shutdown'].includes(String(body?.action)))
       return {
         ok: false as const,
@@ -770,7 +782,8 @@ export function registerProductionRoutes(
       action === 'finish' ||
       action === 'shutdown' ||
       action === 'begin-exit' ||
-      action === 'cancel-exit';
+      action === 'cancel-exit' ||
+      action === 'retry-handoff';
     // Keep conflict and cancellation precedence for malformed actions.
     const result = await production.change({
       action: validAction ? action : 'invalid',
