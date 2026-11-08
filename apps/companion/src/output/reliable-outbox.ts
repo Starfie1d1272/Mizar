@@ -1554,6 +1554,7 @@ export class ReliableOutbox {
             next.push({
               ...record,
               status: expired ? 'expired' : 'superseded',
+              ...(!expired ? { supersessionReason: 'current_scope_failed' as const } : {}),
               updatedAt: now.toISOString(),
             });
             changed = true;
