@@ -29,6 +29,11 @@ export function businessEvidence(value: unknown) {
       : [];
   return {
     schema: input.schema === 2 ? 2 : 1,
+    repetitionId: businessId(input.repetitionId),
+    occurrences: number(input.occurrences),
+    totalOccurrences: number(input.totalOccurrences),
+    firstObservedAt: utc(input.firstObservedAt),
+    lastObservedAt: utc(input.lastObservedAt),
     matchId: businessId(input.matchId),
     competitionId: businessId(input.competitionId),
     installationId: businessId(input.installationId),

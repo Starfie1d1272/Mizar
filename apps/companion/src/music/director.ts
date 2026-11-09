@@ -1,3 +1,5 @@
+import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import { musicFailure } from './failure.js';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -101,6 +103,9 @@ export class MusicDirector {
   private desiredKey = '';
   private inFlight = false;
   private closed = false;
+  private readonly operationFailures = new RepeatedDiagnostic((stage, evidence) =>
+    this.store.previewEvent(stage, evidence),
+  );
   private heldOverride: boolean | null = null;
   private holdReasonOverride: 'external' | 'stop' | null = null;
   private pendingOpening: {
@@ -1157,12 +1162,23 @@ export class MusicDirector {
         await this.configureDefaultMonitor(obs, valid);
         if (valid()) await this.readMonitor(obs, valid);
       });
+      if (valid()) this.operationFailures.clear('music_operation_recovered');
     } catch (error) {
       if (!(error instanceof Error && error.message === 'music_cancelled'))
         this.preview.unavailable(error);
       if (valid()) {
         const failure = musicFailure(error);
-        this.store.previewEvent('music_operation_failed', { error, code: failure.code });
+        try {
+          const diagnostic = diagnosticValue(error);
+          this.operationFailures.record(
+            'music_operation_failed',
+            JSON.stringify([this.desiredKey, this.epoch, failure.code, diagnostic]),
+            { error: diagnostic, code: failure.code },
+          );
+        } catch {
+          // Preserve the original failure path even when diagnostics cannot be serialized.
+          this.store.previewEvent('music_operation_failed', { error, code: failure.code });
+        }
         this.status.failure = failure.code;
         this.status.connection = failure.code === 'obs_disconnected' ? 'unavailable' : 'connected';
         if (this.manual) {
@@ -1761,6 +1777,7 @@ export class MusicDirector {
     this.invalidate();
     // Wait only for the bounded active RPC, then stop owned sources without changing manual hold.
     while (this.inFlight) await new Promise((resolve) => setTimeout(resolve, 10));
+    this.operationFailures.clear();
     let localWriteFailure: unknown;
     let localWriteFailed = false;
     if (!this.isExternalHold() && Object.values(this.store.state.sources).some(Boolean))
