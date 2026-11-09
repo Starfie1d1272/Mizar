@@ -163,6 +163,7 @@ export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,
   task?: ControlTask,
   entry?: { revision: string; signal: AbortSignal },
+  onAudioWarning?: (message: string) => void,
 ) {
   // Installation is checkable before launch; fresh telemetry is not.
   if (window.__TAURI_INTERNALS__) {
@@ -187,7 +188,11 @@ export async function checkObsBeforeLaunch(
         response.ok
           ? ((await response.json()) as {
               connection: string;
-              findings: readonly unknown[];
+              findings: readonly { code?: string; message?: string }[];
+              readiness?: {
+                blockingFindings?: readonly unknown[];
+                warnings?: readonly { message?: string }[];
+              };
               streaming?: boolean | null;
               recording?: boolean | null;
             })
@@ -204,10 +209,21 @@ export async function checkObsBeforeLaunch(
     await prepareObs(entry.revision, entry.signal);
     obs = await readObs();
   }
-  if (obs?.connection !== 'connected' || obs.findings.length > 0) {
+  const isAudioFinding = (code: string | undefined) =>
+    Boolean(
+      code &&
+      (code.startsWith('audio_') || code === 'game_audio_missing' || code === 'commentary_pending'),
+    );
+  const blocking =
+    obs?.readiness?.blockingFindings ?? obs?.findings.filter((item) => !isAudioFinding(item.code));
+  if (obs?.connection !== 'connected' || !Array.isArray(blocking) || blocking.length > 0) {
     window.location.assign('/settings?tab=obs&prepare=1');
     return false;
   }
+  const warnings =
+    obs.readiness?.warnings ?? obs.findings.filter((item) => isAudioFinding(item.code));
+  const warning = warnings.find((item) => typeof item.message === 'string')?.message;
+  if (warning) onAudioWarning?.(`${warning} 请在 OBS 核对并录制试听。`);
   if (requireStoppedOutput && obs.streaming !== false)
     throw new Error('请先在 OBS 停止推流并确认状态，再开始 Demo 试播。');
   return true;

@@ -4,7 +4,7 @@ import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/outp
 
 import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 
-export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v2' as const;
+export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v3' as const;
 export const RELIABLE_OUTBOX_MAX_PENDING = 128;
 export const RELIABLE_OUTBOX_MAX_RECORDS = 192;
 export const RELIABLE_OUTBOX_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -98,6 +98,12 @@ export interface ReliableOutboxRecord {
   readonly lineupSteam64?: readonly string[];
   readonly rejection?: ReliableRejection;
   readonly dispositionReason?: 'boundary_unconfirmed_result';
+  readonly supersessionReason?:
+    | 'rejected_start_result'
+    | 'boundary_unconfirmed_start'
+    | 'map_end_unavailable'
+    | 'current_scope_failed'
+    | 'scope_superseded';
   readonly boundaryQualification?: {
     readonly planFingerprint: string;
     readonly authorityFingerprint: string;
@@ -320,6 +326,20 @@ export function parseRecord(input: unknown): ReliableOutboxRecord {
   )
     throw new Error('outbox_disposition_invalid');
   if (
+    item.supersessionReason !== undefined &&
+    (typeof item.supersessionReason !== 'string' ||
+      ![
+        'rejected_start_result',
+        'boundary_unconfirmed_start',
+        'map_end_unavailable',
+        'current_scope_failed',
+        'scope_superseded',
+      ].includes(item.supersessionReason) ||
+      item.status !== 'superseded' ||
+      item.dispositionReason !== undefined)
+  )
+    throw new Error('outbox_supersession_invalid');
+  if (
     item.receiverOutcome !== undefined &&
     (item.receiverOutcome !== 'needs_attention' || item.status !== 'accepted')
   )
@@ -387,6 +407,13 @@ export function parseRecord(input: unknown): ReliableOutboxRecord {
     ...(item.dispositionReason === 'boundary_unconfirmed_result'
       ? { dispositionReason: 'boundary_unconfirmed_result' as const }
       : {}),
+    ...(item.supersessionReason === undefined
+      ? {}
+      : {
+          supersessionReason: item.supersessionReason as NonNullable<
+            ReliableOutboxRecord['supersessionReason']
+          >,
+        }),
     ...(rejection === undefined ? {} : { rejection }),
     ...(typeof item.recoveryBoundaryKey === 'string'
       ? { recoveryBoundaryKey: item.recoveryBoundaryKey }
@@ -483,7 +510,9 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
     throw new Error('outbox_invalid');
   const value = raw as Record<string, unknown>;
   if (
-    ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v1'].includes(value.version as string) ||
+    ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v2', 'mizar.reliable-outbox.v1'].includes(
+      value.version as string,
+    ) ||
     !Array.isArray(value.records) ||
     value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
     (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true) ||
@@ -513,7 +542,8 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
       value.boundaryOverflowOwners !== undefined)
   )
     throw new Error('outbox_legacy_metadata_invalid');
-  const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
+  const commit =
+    value.version !== 'mizar.reliable-outbox.v1' ? parseCommit(value.commit) : undefined;
   if (commit !== undefined && commit.sha256 !== payloadDigest(value))
     throw new Error('outbox_checksum_mismatch');
   const records = value.records.map(parseRecord);

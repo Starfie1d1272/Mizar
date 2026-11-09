@@ -1,3 +1,4 @@
+import { parseCaptureTicket, type CaptureTicket } from './capture-interval.js';
 import { createHash } from 'node:crypto';
 import type { ReliableEventV1 } from '@mizar/protocol/output';
 import type { ExactSource } from '../match-context/rivalhub-source-state.js';
@@ -13,6 +14,7 @@ import {
 
 /** The original mutation, not a reconstruction from the latest projection. */
 export interface BoundaryCapture {
+  readonly capture?: CaptureTicket;
   readonly events: readonly ReliableEventV1[];
   readonly intents: readonly BoundaryIntent[];
   readonly continuity?: DeliveryContinuity;
@@ -36,6 +38,7 @@ export function parseBoundaryCapture(input: unknown): BoundaryCaptureOperation {
     Object.keys(value).some(
       (key) =>
         ![
+          'capture',
           'events',
           'intents',
           'continuity',
@@ -53,13 +56,14 @@ export function parseBoundaryCapture(input: unknown): BoundaryCaptureOperation {
     !Number.isFinite(Date.parse(value.at))
   )
     throw new Error('boundary_capture_invalid');
+  const capture = value.capture === undefined ? undefined : parseCaptureTicket(value.capture);
   const source = value.source == null ? value.source : parseSource(value.source);
   // Reuse the durable queue's validators for events, source, scope and checkpoint.
   const file = parseOutbox(
     Buffer.from(
       JSON.stringify(
         sealOutbox({
-          version: 'mizar.reliable-outbox.v2',
+          version: 'mizar.reliable-outbox.v3',
           records: value.events.map((event) => ({
             event,
             ...(source ? { source } : {}),
@@ -87,6 +91,7 @@ export function parseBoundaryCapture(input: unknown): BoundaryCaptureOperation {
   if (file.records.some((record) => !isContinuityBoundary(record.event)))
     throw new Error('boundary_capture_invalid');
   const request: BoundaryCapture = {
+    ...(capture ? { capture } : {}),
     events: file.records.map((record) => record.event),
     intents: file.boundaryIntents ?? [],
     ...(file.continuity ? { continuity: file.continuity } : {}),

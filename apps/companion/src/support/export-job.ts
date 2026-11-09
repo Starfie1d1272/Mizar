@@ -1,3 +1,4 @@
+import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
 import { readHostPin, type IncidentParticipant, type PinReceipt } from './retention.js';
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants } from 'node:fs';
@@ -25,6 +26,7 @@ export interface ExportJob {
   parts?: { name: string; bytes: number; sha256: string }[];
   knownGaps?: number;
   downloadName?: string;
+  cleanupStatus?: 'unconfirmed';
 }
 /** One bounded build. HTTP carries only status and trusted binary attachment routes. */
 export class SupportExports {
@@ -35,17 +37,30 @@ export class SupportExports {
   constructor(
     private readonly logs: string,
     private readonly participants: () => IncidentParticipant[] = () => [],
+    private readonly onDiagnostic?: (
+      error: unknown,
+      exportId: string,
+      stage?: 'build' | 'cleanup',
+    ) => void,
   ) {
     this.directory = join(dirname(logs), 'support-export');
   }
   status(id: string) {
     const job = this.jobs.get(id);
-    return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now()) ? job : null;
+    return job && (!job.expiresAt || Date.parse(job.expiresAt) > Date.now())
+      ? { ...job, settled: this.active?.id !== id }
+      : null;
+  }
+  /** Only after a request was explicitly rejected; never authorizes retrying the same ID. */
+  canReleaseRejectedHostPin(id: string) {
+    return idPattern.test(id) && this.active?.id !== id && !this.jobs.has(id);
   }
   async begin(
     range: { from?: string; to?: string },
     snapshot: unknown,
     hostPinId?: string,
+    documentHandoff?: DocumentHandoffCoverage,
+    hostPinCoverage?: HostPinCoverage,
   ): Promise<ExportJob> {
     if (this.active) throw new Error('export_busy');
     for (const [id, cached] of this.jobs)
@@ -61,10 +76,23 @@ export class SupportExports {
     active.task = (async () => {
       const diskBudgetBytes = await this.prepareCache();
       this.assertActive(job);
-      await this.build(job, range, snapshot, diskBudgetBytes, hostPinId);
+      await this.build(
+        job,
+        range,
+        snapshot,
+        diskBudgetBytes,
+        hostPinId,
+        documentHandoff,
+        hostPinCoverage,
+      );
     })()
       .catch(async (error: unknown) => {
         if (job.phase !== 'cancelled') job.phase = 'failed';
+        try {
+          this.onDiagnostic?.(error, id);
+        } catch {
+          // Diagnostics cannot change export ownership or cleanup.
+        }
         job.error = String(error);
         job.expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
         // Only this admitted job owns this output. Never clean another export's directory.
@@ -135,6 +163,8 @@ export class SupportExports {
     snapshot: unknown,
     diskBudgetBytes: number,
     hostPinId?: string,
+    documentHandoff?: DocumentHandoffCoverage,
+    hostPinCoverage?: HostPinCoverage,
   ) {
     const collectionStarted = performance.now();
     const handles: FileHandle[] = [];
@@ -163,6 +193,21 @@ export class SupportExports {
         reason: String(error),
         cause: diagnosticValue(error),
         scope: 'source unavailable; retained original and unknown range',
+      });
+    if (!documentHandoff)
+      gap('document', 'handoff', new Error('document_handoff_coverage_unreported'));
+    else if (
+      documentHandoff.pendingRecords > 0 ||
+      documentHandoff.unconfirmedRecordsObserved > 0 ||
+      documentHandoff.stopReason !== 'drained'
+    )
+      gaps.push({
+        source: 'document',
+        phase: 'handoff',
+        reason: 'document_handoff_unconfirmed',
+        cause: documentHandoff,
+        scope:
+          'requesting document only; unconfirmed at reported cutoff, not proof of omission from pinned files; lifetime loss may fall outside selected time range',
       });
     const output = join(this.directory, job.exportId);
     await mkdir(output, { mode: 0o700 });
@@ -218,6 +263,10 @@ export class SupportExports {
         gaps.push({ source: prefix + name, reason: String(error) });
       }
     };
+    let readyResult: (ExportJob & Record<string, unknown>) | undefined;
+    let failed = false;
+    let primaryError: unknown;
+    const cleanupFailures: unknown[] = [];
     try {
       for (const participant of participants) {
         this.assertActive(job);
@@ -239,7 +288,15 @@ export class SupportExports {
           gap(participant.producerId, phase, error);
         }
       }
-      if (hostPinId) {
+      if (hostPinCoverage && (hostPinCoverage.status !== 'committed' || !hostPinId))
+        gaps.push({
+          source: 'host',
+          phase: 'pin',
+          reason: 'host_pin_unconfirmed',
+          cause: hostPinCoverage,
+          scope: 'client-reported outcome; abandoned or unavailable pin is not used',
+        });
+      if (hostPinId && (!hostPinCoverage || hostPinCoverage.status === 'committed')) {
         try {
           hostPin = await readHostPin(this.logs, hostPinId, 'export');
           if (hostPin.status !== 'committed') throw new Error('host_pin_uncommitted');
@@ -323,6 +380,11 @@ export class SupportExports {
         asOf,
         atomic: false,
         producerPins: receipts,
+        documentHandoff: {
+          clientReported: true,
+          coverage: documentHandoff ?? null,
+        },
+        hostPinCoverage: { clientReported: true, coverage: hostPinCoverage ?? null },
         hostPin: hostPin
           ? {
               pinId: hostPin.pinId,
@@ -348,12 +410,12 @@ export class SupportExports {
         },
         unknown: [
           'cross-process snapshot is not atomic',
-          'unhanded document events',
+          'other documents and events created after the requesting document cutoff',
           'unflushed producer buffers',
         ],
       };
       const collectionMs = performance.now() - collectionStarted;
-      await new Promise<void>((resolve, reject) => {
+      const message = await new Promise<ExportJob & Record<string, unknown>>((resolve, reject) => {
         const entry = new URL('./archive-worker-entry.js', import.meta.url);
         const workerEntry = import.meta.url.endsWith('.ts')
           ? new URL(
@@ -379,56 +441,133 @@ export class SupportExports {
         });
         if (this.active?.id === job.exportId) this.active.worker = worker;
         if (job.phase === 'cancelled') void worker.terminate();
-        let settled = false;
-        let finishing = false;
+        let result: (ExportJob & Record<string, unknown>) | undefined;
+        const workerErrors: Error[] = [];
         worker.on('message', (message: ExportJob & Record<string, unknown>) => {
-          if (this.active?.id !== job.exportId || job.phase === 'cancelled') return;
-          if (message.phase === 'failed') {
-            settled = true;
-            reject(new Error(message.error));
-          } else if (message.phase === 'ready') {
-            finishing = true;
-            const readyAt = Date.now();
-            const downloadName = `mizar-support-${new Date(readyAt).toISOString().replaceAll(':', '-')}.zip`;
-            const manifest = {
-              schema: 'mizar-support-export/2',
-              createdAt: new Date(readyAt).toISOString(),
-              expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-              ...message,
-              measurements: { ...(message.measurements as Record<string, unknown>), collectionMs },
-              downloadName,
-              exportId: job.exportId,
-            };
-            if (Buffer.byteLength(JSON.stringify(manifest)) > MANIFEST_RESERVE) {
-              reject(new Error('export_manifest_budget'));
-              return;
-            }
-            void atomicJson(join(output, 'generated.json'), manifest)
-              .then(() => {
-                this.assertActive(job);
-                Object.assign(job, message, {
-                  downloadName,
-                  exportId: job.exportId,
-                  expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
-                });
-                settled = true;
-                resolve();
-              })
-              .catch(reject);
-          } else Object.assign(job, message, { exportId: job.exportId });
+          if (this.active?.id !== job.exportId || this.active.worker !== worker) return;
+          // Worker diagnostics never enter the public status or generated manifest.
+          // Collect terminal failures even after cancellation, but ignore late progress/ready.
+          const { cleanupFailures: workerCleanup, diagnostic, ...status } = message;
+          if (Array.isArray(workerCleanup)) cleanupFailures.push(...workerCleanup);
+          if (status.phase === 'failed')
+            workerErrors.push(new Error(status.error, { cause: diagnostic }));
+          else if (job.phase !== 'cancelled') {
+            if (status.phase === 'ready') result = status;
+            else if (!result && !workerErrors.length)
+              Object.assign(job, status, { exportId: job.exportId });
+          }
         });
-        worker.on('error', reject);
-        worker.on('exit', (code) => {
-          if (!settled && (!finishing || code !== 0 || job.phase === 'cancelled'))
-            reject(new Error(`export_worker_exit_${code}`));
+        worker.on('error', (error) => {
+          workerErrors.push(new Error('export_worker_error', { cause: error }));
+        });
+        // A message or error is not proof that the worker has stopped using
+        // shared input descriptors. Cleanup and Host pin settlement wait for exit.
+        worker.once('exit', (code) => {
+          if (job.phase === 'cancelled') {
+            const cancelled = new Error('export_cancelled');
+            reject(
+              workerErrors.length
+                ? new AggregateError([cancelled, ...workerErrors], 'export_cancelled', {
+                    cause: cancelled,
+                  })
+                : cancelled,
+            );
+          } else if (workerErrors.length)
+            reject(new AggregateError(workerErrors, 'export_worker_failed'));
+          else if (code !== 0 || !result) reject(new Error(`export_worker_exit_${code}`));
+          else resolve(result);
         });
       });
+      this.assertActive(job);
+      const readyAt = Date.now();
+      const downloadName = `mizar-support-${new Date(readyAt).toISOString().replaceAll(':', '-')}.zip`;
+      const manifest = {
+        schema: 'mizar-support-export/2',
+        createdAt: new Date(readyAt).toISOString(),
+        expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
+        ...message,
+        measurements: {
+          ...(message.measurements as Record<string, unknown>),
+          collectionMs,
+        },
+        downloadName,
+        exportId: job.exportId,
+      };
+      if (Buffer.byteLength(JSON.stringify(manifest)) > MANIFEST_RESERVE)
+        throw new Error('export_manifest_budget');
+      await atomicJson(join(output, 'generated.json'), manifest);
+      this.assertActive(job);
+      readyResult = {
+        ...message,
+        downloadName,
+        exportId: job.exportId,
+        expiresAt: new Date(readyAt + 15 * 60_000).toISOString(),
+      };
+    } catch (error) {
+      failed = true;
+      primaryError = error;
     } finally {
       if (this.active?.id === job.exportId) delete this.active.worker;
-      await Promise.all(handles.map((handle) => handle.close()));
-      await Promise.all(
-        participants.map((participant) => participant.release(job.exportId).catch(() => undefined)),
+      const closed = await Promise.allSettled(
+        handles.map((handle) => Promise.resolve().then(() => handle.close())),
       );
+      const released = await Promise.allSettled(
+        participants.map((participant) =>
+          Promise.resolve().then(() => participant.release(job.exportId)),
+        ),
+      );
+      cleanupFailures.push(
+        ...closed.flatMap((result) =>
+          result.status === 'rejected'
+            ? [new Error('export_input_close_failed', { cause: result.reason })]
+            : [],
+        ),
+        ...released.flatMap((result, index) =>
+          result.status === 'rejected'
+            ? [
+                Object.assign(
+                  new Error('export_participant_release_failed', {
+                    cause: result.reason,
+                  }),
+                  {
+                    producerId: participants[index]!.producerId,
+                  },
+                ),
+              ]
+            : [],
+        ),
+      );
+    }
+    if (!failed) {
+      try {
+        this.assertActive(job);
+      } catch (error) {
+        // Cancellation during cleanup remains primary without dropping any
+        // close/release failures collected after the artifact was generated.
+        failed = true;
+        primaryError = error;
+      }
+    }
+    if (failed && cleanupFailures.length)
+      throw new AggregateError([primaryError, ...cleanupFailures], 'export_cleanup_failed', {
+        cause: primaryError,
+      });
+    if (failed) throw primaryError;
+    if (!readyResult) throw new Error('export_result_missing');
+    Object.assign(job, readyResult);
+    if (cleanupFailures.length) {
+      // The archive and manifest are already complete; cleanup uncertainty is
+      // separate from missing evidence and must not delete a usable artifact.
+      job.cleanupStatus = 'unconfirmed';
+      try {
+        this.onDiagnostic?.(
+          new AggregateError(cleanupFailures, 'export_cleanup_unconfirmed'),
+          job.exportId,
+          'cleanup',
+        );
+      } catch {
+        // Diagnostics cannot invalidate the completed archive.
+      }
     }
   }
   private async frameRateSnapshot(gap: (source: string, phase: string, error: unknown) => void) {

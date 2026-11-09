@@ -2,11 +2,22 @@ import { formatObserverConnection, type ObserverConnection } from '@mizar/protoc
 import { fileURLToPath } from 'node:url';
 
 /** Fixed operations through MulNX's existing command queue, scoped by the native game lease. */
-export async function sendObserverGameCommand(command: string): Promise<void> {
+export async function sendObserverGameCommand(
+  command: string,
+  current: () => boolean = () => true,
+): Promise<void> {
+  const canSend = () => {
+    try {
+      return current();
+    } catch {
+      return false;
+    }
+  };
   const deadline = Date.now() + 5000;
   for (;;) {
+    if (!canSend()) throw new Error('observer_game_control_cancelled');
     try {
-      await submit(command);
+      await submit(command, canSend);
       return;
     } catch (error) {
       // Retry readiness only. Once open, submission may have reached the engine.
@@ -20,7 +31,7 @@ export async function sendObserverGameCommand(command: string): Promise<void> {
     }
   }
 }
-function submit(command: string): Promise<void> {
+function submit(command: string, canSend: () => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket('ws://127.0.0.1:55202');
     const wire = JSON.stringify({
@@ -39,9 +50,14 @@ function submit(command: string): Promise<void> {
       else resolve();
     };
     socket.addEventListener('open', () => {
+      if (done) return;
       opened = true;
       clearTimeout(timer);
       timer = setTimeout(() => finish(new Error('observer_game_control_timeout')), 3000);
+      if (!canSend()) {
+        finish(new Error('observer_game_control_cancelled'));
+        return;
+      }
       try {
         socket.send(wire);
       } catch {

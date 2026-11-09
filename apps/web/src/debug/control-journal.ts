@@ -1,4 +1,8 @@
+import type { DocumentHandoffCoverage } from '@mizar/protocol';
+
 let controlDeliveryFailures = 0;
+let unconfirmedRecords = 0;
+const httpPending = new Map<number, Promise<void>>();
 let browserDocumentId: string | null = null;
 let documentSequence = 0;
 const hostQueue: Record<string, unknown>[] = [];
@@ -59,6 +63,7 @@ export function sendControlEvidence(
   phase: string,
   evidence: unknown,
 ): Promise<void> {
+  let retainedByHost = false;
   try {
     browserDocumentId ??= crypto.randomUUID();
     const context =
@@ -109,9 +114,11 @@ export function sendControlEvidence(
     if (window.__TAURI_INTERNALS__) {
       if (hostQueue.length >= 256 || JSON.stringify(event).length > 32768) {
         controlDeliveryFailures++;
+        unconfirmedRecords++;
         return Promise.resolve();
       }
       hostQueue.push(event);
+      retainedByHost = true;
       return handoffHost();
     }
     const headers: Record<string, string> = { 'content-type': 'application/json' };
@@ -127,7 +134,7 @@ export function sendControlEvidence(
     }
     if (context.trigger === 'user' || context.trigger === 'system')
       headers['x-mizar-trigger'] = context.trigger;
-    return fetch('/debug/control-event', {
+    const delivery = fetch('/debug/control-event', {
       method: 'POST',
       signal: AbortSignal.timeout(3000),
       headers,
@@ -135,13 +142,23 @@ export function sendControlEvidence(
       keepalive: true,
     })
       .then((response) => {
-        if (!response.ok) controlDeliveryFailures++;
+        if (!response.ok) {
+          controlDeliveryFailures++;
+          unconfirmedRecords++;
+        }
       })
       .catch(() => {
         controlDeliveryFailures++;
+        unconfirmedRecords++;
+      })
+      .finally(() => {
+        httpPending.delete(sequence);
       });
+    httpPending.set(sequence, delivery);
+    return delivery;
   } catch {
     controlDeliveryFailures++;
+    if (!retainedByHost) unconfirmedRecords++;
     /* Diagnostics cannot change the operation. */
     return Promise.resolve();
   }
@@ -310,11 +327,84 @@ export function nativeSnapshot(operation: string, result: unknown): void {
     controlEvidence(operation, 'snapshot_failed', { reason: 'unserializable_snapshot' });
   }
 }
-export async function flushControlSnapshots(): Promise<void> {
-  await Promise.allSettled(
-    [...nativeSnapshots].map(([operation, evidence]) =>
-      sendControlEvidence(operation, 'snapshot_aggregate', snapshotEvidence(evidence)),
-    ),
-  );
-  if (window.__TAURI_INTERNALS__) await handoffHost();
+export function flushControlSnapshots(): void {
+  for (const [operation, evidence] of nativeSnapshots)
+    void sendControlEvidence(operation, 'snapshot_aggregate', snapshotEvidence(evidence));
+}
+
+/** Drain a fixed prefix only. A hung IPC or continuously arriving events cannot hold export. */
+export async function flushControlEvidence(): Promise<DocumentHandoffCoverage> {
+  const throughSequence = documentSequence;
+  const transport = window.__TAURI_INTERNALS__ ? 'host' : 'http';
+  const budgetMs = 3000;
+  const deadline = performance.now() + budgetMs;
+  const pending = () =>
+    (transport === 'host'
+      ? hostQueue.map((event) => event.sequence as number)
+      : [...httpPending.keys()]
+    ).filter((sequence) => sequence <= throughSequence);
+  let stopReason: DocumentHandoffCoverage['stopReason'] = 'drained';
+  let attempts = 0;
+  while (pending().length) {
+    if (attempts >= 16) {
+      stopReason = 'attempt-limit';
+      break;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      stopReason = 'deadline';
+      break;
+    }
+    const before = pending().length;
+    const delivery = Promise.resolve().then<unknown>(() =>
+      transport === 'host'
+        ? handoffHost()
+        : Promise.allSettled(
+            [...httpPending]
+              .filter(([sequence]) => sequence <= throughSequence)
+              .map(([, promise]) => promise),
+          ),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled: boolean;
+    try {
+      settled = await Promise.race([
+        delivery.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), remaining);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    attempts++;
+    if (!settled) {
+      stopReason = 'deadline';
+      break;
+    }
+    if (pending().length >= before) {
+      stopReason = 'no-progress';
+      break;
+    }
+  }
+  const remaining = pending();
+  return {
+    documentId: browserDocumentId,
+    throughSequence,
+    observedAt: new Date().toISOString(),
+    transport,
+    stopReason,
+    pendingRecords: remaining.length,
+    firstPendingSequence: remaining.length ? remaining.reduce((a, b) => Math.min(a, b)) : null,
+    lastPendingSequence: remaining.length ? remaining.reduce((a, b) => Math.max(a, b)) : null,
+    // These cumulative counters include this document's lifetime through observedAt,
+    // not just the selected export time range, and failed HTTP receipts may have committed.
+    unconfirmedRecordsObserved: unconfirmedRecords,
+    deliveryFailureAttemptsObserved: controlDeliveryFailures,
+    budgetMs,
+    attempts,
+  };
 }

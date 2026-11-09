@@ -53,8 +53,11 @@ export class RemoteCommentary {
       this.state = schema.parse(JSON.parse(await readFile(this.path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      const initial: State = { revision: randomUUID(), preference: { mode: 'autoTeamspeak' } };
       await mkdir(dirname(this.path), { recursive: true });
+      const initial: State = {
+        revision: randomUUID(),
+        preference: { mode: 'autoTeamspeak' },
+      };
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try {
         await writeFile(temp, `${JSON.stringify(initial)}\n`, { flag: 'wx', mode: 0o600 });

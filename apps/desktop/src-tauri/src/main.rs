@@ -1547,8 +1547,10 @@ fn run_desktop(
     log: DesktopLog,
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
-    update_stage: Arc<Mutex<Option<PathBuf>>>,
+    pending_update: updates::PendingUpdate,
 ) -> Result<(), String> {
+    // Bind before publishing this GUI or accepting any renderer command.
+    let pending_update = pending_update.for_gui();
     let exit_request = Arc::new(
         ExitRequest::new(&shutdown_scope(&host_runtime::bundle_root()?)?)
             .map_err(|error| error.to_string())?,
@@ -1606,7 +1608,7 @@ fn run_desktop(
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(preparation_gate::PreparationGate::default())
-        .manage(updates::PendingUpdate::new(update_stage))
+        .manage(pending_update.clone())
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
             if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
@@ -1703,7 +1705,7 @@ fn run_desktop(
                 }
             }
             setup_log.event("setup_complete", "success", None);
-            updates::check_on_startup(setup_log.clone());
+            updates::check_on_startup(handle.clone());
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
@@ -2032,6 +2034,7 @@ fn run_desktop(
                 }
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
+                    updates::recheck(&cleanup_host)?;
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let _operation = observer_workspace::cleanup_operation();
@@ -2099,7 +2102,8 @@ fn run_desktop(
                     production_exit::cleanup_results(
                         production_exit::cleanup_results(exit_intent, production),
                         cleanup,
-                    )
+                    )?;
+                    updates::recheck(&cleanup_host)
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
@@ -2142,6 +2146,7 @@ fn run_desktop(
             });
         }
         tauri::RunEvent::Exit => {
+            app.state::<updates::PendingUpdate>().invalidate();
             DesktopWorker {
                 running: running.clone(),
                 dispatch: dispatch.clone(),
@@ -2151,6 +2156,7 @@ fn run_desktop(
         }
         _ => (),
     });
+    pending_update.invalidate();
     worker_guard.stop();
     console_guard.stop();
     // Tauri APIs must not be used after run_return has cleaned up the application.
@@ -2164,8 +2170,12 @@ fn run_desktop(
     }
 }
 
-fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
-    let update_stage = Arc::new(Mutex::new(None));
+fn start_gui(
+    root: &Path,
+    log: &DesktopLog,
+    pending_update: &updates::PendingUpdate,
+) -> Result<(), String> {
+    let update_stage = pending_update.stage.clone();
     let scope = log.step("shutdown_scope", || shutdown_scope(root))?;
     let exit_signal = log.step("shutdown_signal", || ExitSignal::new(&scope))?;
     let _observer_job = log.step("observer_job", || observer_job::create(&log.session_id))?;
@@ -2191,13 +2201,19 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_desktop(log.clone(), exit_signal, job.clone(), update_stage.clone())
+            run_desktop(
+                log.clone(),
+                exit_signal,
+                job.clone(),
+                pending_update.clone(),
+            )
         })) {
             Ok(result) => result,
             Err(_) => Err("桌面界面启动或运行时发生异常；原始 panic 信息已记录。".into()),
         }
     })();
     let cleanup_stage = if outcome.is_err() {
+        pending_update.cancel(log);
         "startup_rollback"
     } else {
         "shutdown"
@@ -2228,11 +2244,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         Ok(())
     };
     if let Err(error) = stop_result {
-        if let Ok(mut pending) = update_stage.lock() {
-            if let Some(stage) = pending.take() {
-                let _ = fs::remove_dir_all(stage);
-            }
-        }
+        pending_update.cancel(log);
         if error.starts_with("runtime_stop_timeout:") {
             // Explicit timeout is an abnormal recovery path, never a successful flush.
             let _ = job.terminate();
@@ -2413,7 +2425,11 @@ fn main() {
         "success",
         Some(&windows_startup::windows_version()),
     );
-    while let Err(error) = start_gui(&root, &log) {
+    // One owner survives GUI recovery within this Host process. Late staging
+    // cannot acquire a fresh GUI's update slot or publish an old exit intent.
+    let pending_update = updates::PendingUpdate::new(Arc::new(Mutex::new(None)));
+    while let Err(error) = start_gui(&root, &log, &pending_update) {
+        pending_update.cancel(&log);
         log.event("startup_failed", "failure", Some(&error));
         if error.starts_with("webview2_preflight:") {
             if windows_startup::recover_webview(&log, webview_preflight) {

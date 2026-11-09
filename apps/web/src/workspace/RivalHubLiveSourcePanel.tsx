@@ -25,6 +25,7 @@ type Connection = {
     blocked: number;
     claimIntent: boolean;
     handoffPending: number;
+    coverageUnknown?: number;
   } | null;
   lastRefreshAt?: string | null;
   refreshError?: string | null;
@@ -46,9 +47,11 @@ const scope = (value: Connection | null) =>
 
 function feedbackResolved(feedback: SyncFeedback, connection: Connection): boolean {
   switch (feedback.command) {
+    case '/operator/rivalhub/source/retry-stop':
     case '/operator/rivalhub/source/release': {
       const cleanup = connection.sourceCleanup;
       return Boolean(
+        (feedback.command !== '/operator/rivalhub/source/retry-stop' || !feedback.error) &&
         connection.activeMatchId &&
         connection.stoppedMatchId === connection.activeMatchId &&
         connection.activeSourceMatchId !== connection.activeMatchId &&
@@ -294,12 +297,14 @@ export function RivalHubLiveSourcePanel({
           throw new Error(body?.message ?? '网站同步操作未完成，请重试。');
         }
         confirmationRequired = body?.pending === true;
-        message = selected.command.endsWith('/release')
-          ? '已停止本机网站同步。'
-          : selected.command.endsWith('/refresh') ||
-              selected.command === '/operator/rivalhub/output/retry'
-            ? (body?.message ?? '比赛资料已刷新。')
-            : '操作已提交，等待网站接收本场新数据确认。';
+        message = selected.command.endsWith('/retry-stop')
+          ? (body?.message ?? '停止交接重试已提交，请重新检查网站同步状态。')
+          : selected.command.endsWith('/release')
+            ? '已停止本机网站同步。'
+            : selected.command.endsWith('/refresh') ||
+                selected.command === '/operator/rivalhub/output/retry'
+              ? (body?.message ?? '比赛资料已刷新。')
+              : '操作已提交，等待网站接收本场新数据确认。';
       }
     } catch (error) {
       failed = true;
@@ -336,6 +341,11 @@ export function RivalHubLiveSourcePanel({
     connection.activeSourceMatchId === connection.activeMatchId &&
     connection.stoppedMatchId !== connection.activeMatchId,
   );
+  const hasStoppedSource = Boolean(
+    connection?.activeMatchId &&
+    connection.stoppedMatchId === connection.activeMatchId &&
+    connection.activeSourceMatchId === connection.activeMatchId,
+  );
   const primary = connection ? nextAction(connection) : null;
   const visibleFeedback = feedback?.scope === currentScope ? feedback : null;
   const pending = busy || Boolean(connection?.sourceCommandPending || visibleFeedback?.uncertain);
@@ -353,6 +363,11 @@ export function RivalHubLiveSourcePanel({
               : statusText(connection)
             : '正在读取网站同步状态…'}
       </p>
+      {(connection?.sourceCleanup?.coverageUnknown ?? 0) > 0 ? (
+        <p role="status">
+          部分历史网站数据的完整性待核对，原记录已保留。本机播出不受影响，请导出诊断并核对网站赛果。
+        </p>
+      ) : null}
       {readError || visibleFeedback?.uncertain ? (
         <Button onClick={() => void read()}>重新检查状态</Button>
       ) : primary ? (
@@ -373,6 +388,16 @@ export function RivalHubLiveSourcePanel({
           }
         >
           停止本机网站同步
+        </Button>
+      ) : null}
+      {hasStoppedSource ? (
+        <Button
+          disabled={pending || readError || connection?.sourceState === 'unavailable'}
+          onClick={() =>
+            void run({ label: '重试停止交接', command: '/operator/rivalhub/source/retry-stop' })
+          }
+        >
+          重试停止交接
         </Button>
       ) : null}
       {visibleFeedback ? (

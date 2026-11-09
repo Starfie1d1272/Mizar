@@ -99,6 +99,31 @@ function fields(value: unknown, exclusions: Set<string>, depth = 0): Record<stri
   const output: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(object(value))) {
     if (
+      typeof item === 'string' &&
+      ((key === 'eventKind' &&
+        [
+          'match_started',
+          'map_started',
+          'map_ended',
+          'map_player_snapshot',
+          'series_ended',
+          'source_generation_changed',
+          'map_epoch_changed',
+          'identity_mismatch',
+          'lineup_mismatch',
+        ].includes(item)) ||
+        (key === 'dispositionReason' && item === 'boundary_unconfirmed_result') ||
+        (key === 'supersessionReason' &&
+          [
+            'rejected_start_result',
+            'boundary_unconfirmed_start',
+            'map_end_unavailable',
+            'current_scope_failed',
+            'scope_superseded',
+          ].includes(item)))
+    ) {
+      output[key] = item;
+    } else if (
       scalarFields.has(key) &&
       (item === null ||
         typeof item === 'boolean' ||

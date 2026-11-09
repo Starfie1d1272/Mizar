@@ -39,10 +39,22 @@ export class AudioConfigurationConnection {
   ) {}
   async run<T>(
     operation: (obs: ObsRpc, endpoint: string, observer: MigrationObserver) => Promise<T>,
+    onFailure?: (error: unknown, password: string | undefined) => void,
   ): Promise<T> {
     if (this.busy) throw new Error('audio_configuration_busy');
     this.busy = true;
     const client = this.create();
+    let password: string | undefined;
+    const reported = new Set<unknown>();
+    const report = (error: unknown) => {
+      if (reported.has(error)) return;
+      reported.add(error);
+      try {
+        onFailure?.(error, password);
+      } catch {
+        // Diagnostic callbacks cannot change the operation's result.
+      }
+    };
     const pending = new Set<Promise<unknown>>();
     const deadline = Date.now() + this.budgetMs;
     let closed = false;
@@ -54,7 +66,8 @@ export class AudioConfigurationConnection {
     try {
       const config = await this.config.read();
       const endpoint = `ws://${config.host}:${config.port}`;
-      const connecting = client.connect(endpoint, config.password, {
+      password = config.password;
+      const connecting = client.connect(endpoint, password, {
         eventSubscriptions:
           EventSubscription.General |
           EventSubscription.Config |
@@ -67,7 +80,10 @@ export class AudioConfigurationConnection {
       pending.add(connecting);
       void connecting.then(
         () => pending.delete(connecting),
-        () => pending.delete(connecting),
+        (error: unknown) => {
+          pending.delete(connecting);
+          report(error);
+        },
       );
       await bounded(connecting, remaining());
       const rpc: ObsRpc = {
@@ -77,7 +93,10 @@ export class AudioConfigurationConnection {
           pending.add(task);
           void task.then(
             () => pending.delete(task),
-            () => pending.delete(task),
+            (error: unknown) => {
+              pending.delete(task);
+              report(error);
+            },
           );
           try {
             return await bounded(task, remaining());
@@ -102,9 +121,16 @@ export class AudioConfigurationConnection {
           await this.config.managedResources.bind(rpc, endpoint, 'http://127.0.0.1:3000'),
           endpoint,
           observeAudioMigration(client as MigrationEventSource),
-        ),
+        ).catch((error: unknown) => {
+          // Preserve an eventual failure even if the outer budget already expired.
+          report(error);
+          throw error;
+        }),
         Math.max(1, deadline - Date.now()),
       );
+    } catch (error) {
+      report(error);
+      throw error;
     } finally {
       // A timed-out write can still complete. Keep observation alive until settlement or the total budget expires.
       if (pending.size && !closed)

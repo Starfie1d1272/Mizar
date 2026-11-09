@@ -1,5 +1,10 @@
 import { flushPerformanceJournal } from './performance-journal';
-import { flushControlSnapshots, sendControlEvidence } from './control-journal';
+import { pinHostEvidence, releaseHostPinWhenSettled } from './export-host-pin';
+import {
+  flushControlEvidence,
+  flushControlSnapshots,
+  sendControlEvidence,
+} from './control-journal';
 import { useRef, useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
@@ -102,9 +107,13 @@ type ReadyExport = {
   parts: { name: string }[];
   knownGaps?: number;
   downloadName?: string;
+  cleanupStatus?: 'unconfirmed';
 };
 const gapNotice = (job: ReadyExport) =>
-  job.knownGaps ? ` 部分记录未能读取（${job.knownGaps} 处），详情在诊断包内。` : '';
+  (job.knownGaps ? ` 部分记录缺失或覆盖范围未确认（${job.knownGaps} 处），详情在诊断包内。` : '') +
+  (job.cleanupStatus === 'unconfirmed'
+    ? ' 诊断包可用，但临时资源清理未确认，可能仍占用本机存储。'
+    : '');
 function download(job: ReadyExport, name: string) {
   const link = document.createElement('a');
   link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
@@ -141,7 +150,9 @@ export function SupportExport() {
     const signal = controller.current.signal;
     const deadline = Date.now() + 120_000;
     let stage: 'collect' | 'generate' | 'save' = 'collect';
+    let releaseHostPin: (() => void) | undefined;
     let hostPinId: string | undefined;
+    let hostPinSubmitted = false;
     let deliveryJob = readyJob;
     try {
       const desktop = Boolean(window.__TAURI_INTERNALS__);
@@ -195,65 +206,76 @@ export function SupportExport() {
           ])
         : [null, null, null];
       if (consoleStatus)
-        await sendControlEvidence(
+        void sendControlEvidence(
           'cs2_console_export_snapshot',
           consoleStatus.collectionStatus === 'available' ? 'result' : 'failure',
           { ...consoleStatus, deadlineMs: 8000 },
         );
-      await flushControlSnapshots();
-      await flushPerformanceJournal();
-      if (desktop) {
-        hostPinId = crypto.randomUUID();
-        try {
-          await desktopInvoke('diagnostic_pin', {
-            action: 'prepare',
-            pinId: hostPinId,
-            kind: 'export',
-          });
-          await desktopInvoke('diagnostic_pin', {
-            action: 'commit',
-            pinId: hostPinId,
-            kind: 'export',
-          });
-        } catch (error) {
-          // Companion verifies the fixed receipt itself and reports this producer's gap.
-          // Failure to pin Host evidence must not discard other safely fixed sources.
-          await sendControlEvidence('support_export_host_pin', 'failure', {
-            exportId: hostPinId,
-            error:
-              error instanceof Error ? { name: error.name, message: error.message } : String(error),
-          });
-        }
-      }
+      flushControlSnapshots();
+      void flushPerformanceJournal().catch(() =>
+        sendControlEvidence('browser_performance', 'export_snapshot_failed', {
+          reason: 'snapshot_unavailable',
+        }),
+      );
+      // Let synchronous snapshot failures join the fixed document prefix.
+      await Promise.resolve();
+      const documentHandoff = await flushControlEvidence();
+      const hostPin = desktop ? await pinHostEvidence(signal) : undefined;
+      hostPinId = hostPin?.pinId;
+      releaseHostPin = hostPin?.release;
       if (signal.aborted) throw new Error('export_cancelled');
       stage = 'generate';
+      const requestBody = JSON.stringify({
+        ...(hostPinId ? { hostPinId } : {}),
+        ...(hostPin ? { hostPinCoverage: hostPin.coverage } : {}),
+        documentHandoff,
+        ...(from ? { from: new Date(from).toISOString() } : {}),
+        ...(to ? { to: new Date(to).toISOString() } : {}),
+        desktop: desktop
+          ? {
+              gsi:
+                gsi === null
+                  ? null
+                  : { collectionStatus: gsi.collectionStatus, ...supportGsi(gsi.value) },
+              cs2:
+                cs2 === null
+                  ? null
+                  : {
+                      collectionStatus: cs2.collectionStatus,
+                      ...supportCs2(cs2.value),
+                    },
+            }
+          : null,
+      });
+      hostPinSubmitted = Boolean(hostPinId);
+      // This admission request is issued once. Never replay an uncertain result
+      // or follow a redirect that could change its destination/ownership.
       const response = await fetch('/debug/support-exports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(hostPinId ? { hostPinId } : {}),
-          ...(from ? { from: new Date(from).toISOString() } : {}),
-          ...(to ? { to: new Date(to).toISOString() } : {}),
-          desktop: desktop
-            ? {
-                gsi:
-                  gsi === null
-                    ? null
-                    : { collectionStatus: gsi.collectionStatus, ...supportGsi(gsi.value) },
-                cs2:
-                  cs2 === null
-                    ? null
-                    : {
-                        collectionStatus: cs2.collectionStatus,
-                        ...supportCs2(cs2.value),
-                      },
-              }
-            : null,
-        }),
+        body: requestBody,
         cache: 'no-store',
+        redirect: 'error',
         signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
       });
-      if (!response.ok) throw new Error(`export_http_${response.status}`);
+      if (!response.ok) {
+        const rejection = (await response.json().catch(() => null)) as {
+          error?: unknown;
+          rejectedHostPinId?: unknown;
+        } | null;
+        if (
+          hostPinId &&
+          response.status === 409 &&
+          ['Error: export_busy', 'Error: export_cache_job_budget'].includes(
+            typeof rejection?.error === 'string' ? rejection.error : '',
+          ) &&
+          rejection?.rejectedHostPinId === hostPinId
+        )
+          hostPinSubmitted = false;
+        // Identity conflicts, malformed/legacy responses and transport failures
+        // remain uncertain even when an HTTP error was received.
+        throw new Error(`export_http_${response.status}`);
+      }
       let job = (await response.json()) as {
         exportId: string;
         phase: string;
@@ -262,7 +284,9 @@ export function SupportExport() {
         expiresAt?: string;
         knownGaps?: number;
         downloadName?: string;
+        cleanupStatus?: 'unconfirmed';
       };
+      if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
       setProgress(job);
       while (!['ready', 'failed', 'cancelled'].includes(job.phase)) {
         if (signal.aborted) throw new Error('export_cancelled');
@@ -274,8 +298,10 @@ export function SupportExport() {
         });
         if (!status.ok) throw new Error('export_status_unavailable');
         job = await status.json();
+        if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
         setProgress(job);
       }
+      // A terminal phase may precede cleanup; pin release waits for confirmed settlement.
       if (job.phase === 'cancelled') throw new Error('export_cancelled');
       if (job.phase === 'failed' || !job.parts?.length)
         throw new Error(job.error ?? 'invalid_bundle');
@@ -286,6 +312,7 @@ export function SupportExport() {
         expiresAt: job.expiresAt,
         ...(job.knownGaps === undefined ? {} : { knownGaps: job.knownGaps }),
         ...(job.downloadName === undefined ? {} : { downloadName: job.downloadName }),
+        ...(job.cleanupStatus === 'unconfirmed' ? { cleanupStatus: job.cleanupStatus } : {}),
       };
       setReadyJob(ready);
       stage = 'save';
@@ -309,12 +336,11 @@ export function SupportExport() {
                     : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {
-      if (hostPinId)
-        await desktopInvoke('diagnostic_pin', {
-          action: 'release',
-          pinId: hostPinId,
-          kind: 'export',
-        }).catch(() => undefined);
+      // A timed-out POST may still have admitted the matching job. Keep its
+      // hold rather than releasing sources before Companion has finished.
+      // Cleanup cannot make the UI wait on the same unavailable Host writer.
+      if (!hostPinSubmitted) releaseHostPin?.();
+      else if (hostPinId && releaseHostPin) releaseHostPinWhenSettled(hostPinId, releaseHostPin);
       busyRef.current = false;
       setBusy(false);
     }

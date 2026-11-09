@@ -145,6 +145,23 @@ export class ObsAudioRouting {
     }
     return this.state;
   }
+  /** Do not infer a prior mode from an empty store, including a legacy saved one. */
+  async hasNoEstablishedMode() {
+    const state = await this.load();
+    return Boolean(
+      !state.desktop &&
+      !state.lastDesktop &&
+      !state.desktopMicrophone &&
+      !state.independentCommentaryDisabled &&
+      !state.cancelledCommentaryRevision &&
+      !state.transition &&
+      !state.waitingIndependent &&
+      !roles.some((role) => state.bindings[role]),
+    );
+  }
+  async requiresManualBindings() {
+    return (await this.hasNoEstablishedMode()) && !this.automaticEligible;
+  }
   async enabled() {
     const state = await this.load();
     return roles.some((role) => state.bindings[role] !== null);

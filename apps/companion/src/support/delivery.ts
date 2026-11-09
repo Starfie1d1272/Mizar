@@ -968,11 +968,6 @@ export class DiagnosticDelivery {
       value.stage = value.kind ?? '';
       const time = diagnosticSourceUtc(value.observedAt);
       if (!time || !this.state.consentAt || time < this.state.consentAt) return;
-      if (
-        !this.state.sessions[cursorId] &&
-        Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
-      )
-        this.state.sessions[cursorId] = { from: 0, queued: 0 };
     }
     if (
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.startupSessionId) ||
@@ -984,9 +979,25 @@ export class DiagnosticDelivery {
       this.omitted('invalid_source_cursor');
       return;
     }
-    const cursor = this.state.sessions[cursorId];
+    // Invalid records and new chat-only sources must not consume producer slots.
+    // Existing cursors deduplicate old chat records before counting their exclusion.
+    if (!this.state.sessions[cursorId] && /chat/i.test(value.stage)) {
+      this.omitted('chat_not_collected');
+      return;
+    }
     if (
-      !cursor ||
+      !this.state.sessions[cursorId] &&
+      Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
+    )
+      this.state.sessions[cursorId] = { from: 0, queued: 0 };
+    const cursor = this.state.sessions[cursorId];
+    if (!cursor) {
+      // Never treat a producer rejected by the cursor budget as a completed scan.
+      this.error = 'session_budget_waiting_for_capacity';
+      this.recoveryNeeded = true;
+      return 'cursor-capacity' as const;
+    }
+    if (
       sequence <= cursor.queued ||
       this.pending.some((v) => v.cursorId === cursorId && v.sequence === sequence)
     )
@@ -1047,10 +1058,16 @@ export class DiagnosticDelivery {
       try {
         for await (const line of sourceLines(this.directory, name)) {
           if (!line) continue;
+          let admitted: ReturnType<DiagnosticDelivery['observe']> = undefined;
           try {
-            if (this.observe(line + '\n', true) === false) return;
+            admitted = this.observe(line + '\n', true);
           } catch {
             this.omitted('unreadable_journal_record');
+          }
+          if (admitted === 'cursor-capacity') sourceUnavailable = true;
+          if (admitted === false) {
+            await this.persist();
+            return;
           }
           if (++count % 32 === 0) await yieldIO();
           if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
@@ -1108,7 +1125,12 @@ export class DiagnosticDelivery {
       for (const source of ordered) {
         try {
           for (const event of await read(source.name)) {
-            if (this.observe(JSON.stringify(event) + '\n', true, 'performance:') === false) return;
+            const admitted = this.observe(JSON.stringify(event) + '\n', true, 'performance:');
+            if (admitted === 'cursor-capacity') sourceUnavailable = true;
+            if (admitted === false) {
+              await this.persist();
+              return;
+            }
           }
           if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
             return;
@@ -1131,6 +1153,8 @@ export class DiagnosticDelivery {
     // regenerate its already-queued immutable batches on the next scan.
     this.registerSession(0);
     await this.save();
+    if (!this.state.sessions[this.journal.sessionId]) return;
+    if (this.error === 'session_budget_waiting_for_capacity') this.error = null;
     // A record may have its sequence allocated before this scan but commit
     // after the file snapshot. Observe durable notifications as well as new
     // allocations so that this tail is picked up on the next bounded scan.
@@ -1904,7 +1928,7 @@ export class DiagnosticDelivery {
         this.state.lastConfirmedAt = new Date(this.now()).toISOString();
         this.state.consecutiveFailures = 0;
         this.state.nextAttemptAt = 0;
-        this.error = null;
+        if (this.error !== 'session_budget_waiting_for_capacity') this.error = null;
         this.state.transportFailure = null;
         try {
           await this.save();

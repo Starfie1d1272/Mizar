@@ -34,6 +34,9 @@ export class ObserverSettingsStore {
   private listeners = new Set<(kind: SettingsChange) => void>();
   private writing = Promise.resolve();
   constructor(private readonly path?: string) {}
+  connectIntentDirectory(): string | undefined {
+    return this.path ? `${this.path}.connect-intents` : undefined;
+  }
   async load() {
     if (!this.path) return;
     try {

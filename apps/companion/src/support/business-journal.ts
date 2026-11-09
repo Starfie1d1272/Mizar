@@ -166,6 +166,8 @@ export class BusinessJournal {
       receiverOutcome: record.receiverOutcome,
       recoveryState: record.recoveryState,
       rejectionReason: record.rejection?.reason,
+      dispositionReason: record.dispositionReason,
+      supersessionReason: record.supersessionReason,
       requestId: record.rejection?.requestId,
       recovery: record.rejection?.recovery,
       attempts: record.attempts,

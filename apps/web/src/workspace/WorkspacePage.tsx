@@ -805,9 +805,11 @@ function WorkspaceDockContent() {
         ) : null}
       </Dialog>
       <footer className="workspace-message" role="status">
-        <span title={sceneState?.director?.reason ?? undefined}>
-          {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
-        </span>
+        {!visibleError ? (
+          <span title={sceneState?.director?.reason ?? undefined}>
+            {sceneState?.director?.reason || '点击场景切换播出 · 切换后保持手动'}
+          </span>
+        ) : null}
         {visibleError ? (
           <button
             className="workspace-error"

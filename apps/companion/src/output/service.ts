@@ -19,6 +19,8 @@ import {
   type BoundaryIntent,
   type BoundaryScope,
   parseSource,
+  sourceKey,
+  type CaptureReference,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
@@ -98,6 +100,8 @@ export class OutputService {
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private readonly retiringScopes = new Set<string>();
+  private readonly captureCursors = new Map<string, ReliableEventV1['cursor']>();
+  private readonly captureFailures = new Set<string>();
   private trialQuarantined = false;
   private faultQuarantined = false;
   private get quarantined(): boolean {
@@ -107,9 +111,23 @@ export class OutputService {
     );
   }
   private outboxUnavailable = false;
+  private get localProjectionQuarantined(): boolean {
+    // A failed website startup keeps its recovery evidence, but no longer owns
+    // local projection availability. Trial and local faults still fence reads.
+    return this.outboxUnavailable
+      ? this.trialQuarantined || this.faultQuarantined
+      : this.quarantined;
+  }
   async setQuarantined(value: boolean): Promise<void> {
     this.trialQuarantined = value;
-    if (value) await this.outbox?.flushPending();
+    if (value) {
+      const source = this.options.exactSource?.();
+      if (source && this.outbox?.canCapture(source))
+        void this.sealSourceCapture(source).catch(() =>
+          this.onDiagnostic?.('source_capture_seal_failed'),
+        );
+      await this.outbox?.flushPending();
+    }
   }
   private mapStartScope: string | undefined;
   private mapStartRevision = 0;
@@ -161,8 +179,11 @@ export class OutputService {
     );
   }
 
-  private boundaryAuthority(): string | undefined {
-    const scope = this.options.authorityScope?.();
+  private boundaryAuthority(source?: ExactSource): string | undefined {
+    const exact = source ?? this.options.exactSource?.();
+    const scope = this.options.exactSource
+      ? exact && sourceKey(exact)
+      : this.options.authorityScope?.();
     return scope
       ? createHash('sha256')
           .update(JSON.stringify([this.boundaryOwner, scope]))
@@ -457,20 +478,47 @@ export class OutputService {
     this.outbox = options.outbox;
     this.sink = options.sink;
     this.now = options.now ?? (() => new Date());
-    this.onDiagnostic = options.onDiagnostic;
+    this.onDiagnostic = (code) => {
+      try {
+        options.onDiagnostic?.(code);
+      } catch {
+        // Website diagnostics cannot interrupt local production or reject background work.
+      }
+    };
   }
 
-  async start(): Promise<void> {
+  async start(
+    startup: {
+      sourceStateAvailable?: boolean;
+      restoreSourceCapture?: () => Promise<void>;
+    } = {},
+  ): Promise<void> {
     try {
+      // Every process acquires the website owners in the same order. A process
+      // without the source writer must not take the queue from its owner.
+      if (startup.sourceStateAvailable === false)
+        throw new Error('rivalhub_source_state_unavailable');
       await this.outbox?.load();
+      await startup.restoreSourceCapture?.();
     } catch (error) {
       this.outboxUnavailable = true;
-      this.options.onOutboxLoadError?.(error);
+      let failure = error;
+      try {
+        // This closes only this object's database; local projection stays live.
+        await this.outbox?.close();
+      } catch (cleanupError) {
+        failure = new AggregateError([error, cleanupError], 'website_output_startup_failed');
+      }
+      try {
+        this.options.onOutboxLoadError?.(failure);
+      } catch {
+        // Optional diagnostics cannot block local production startup.
+      }
       this.onDiagnostic?.('outbox_unavailable');
       return;
     }
     try {
-      await this.outbox?.retryPendingBoundaryCaptures(true);
+      await this.outbox?.retryPendingCaptures(true);
     } catch (error) {
       this.reportBoundaryCaptureError(error);
     }
@@ -522,6 +570,88 @@ export class OutputService {
 
   setBinding(binding: MatchContextBinding | undefined): void {
     this.binding = binding;
+  }
+
+  createCaptureReference(cursor: ReliableEventV1['cursor']): CaptureReference {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    return this.outbox.createCaptureReference(cursor);
+  }
+
+  async armSourceCapture(identity: ExactSource, reference: CaptureReference): Promise<void> {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    await this.outbox.armCapture(identity, reference);
+    if (!this.captureCursors.has(sourceKey(identity)))
+      this.captureCursors.set(sourceKey(identity), reference.startCursor);
+  }
+
+  activateSourceCapture(identity: ExactSource): void {
+    const cursor = this.bundle?.program.cursor;
+    if (
+      this.outboxUnavailable ||
+      !this.outbox ||
+      !cursor ||
+      this.binding?.context.matchId !== identity.matchId ||
+      !sameSourceSession(identity, cursor)
+    )
+      throw new Error('source_capture_execution_changed');
+    const active = this.outbox.canCapture(identity);
+    this.outbox.activateCapture(identity, cursor);
+    if (!active) {
+      this.captureCursors.set(sourceKey(identity), cursor);
+      this.mapStartScope = undefined;
+      this.publishedMapStart = undefined;
+      this.pendingMapStart = undefined;
+      this.lastMapObservation = cursor;
+      // The claim may have waited across many runtime commits. Its first
+      // boundary must use the actual activation cut and this exact owner,
+      // never the pre-claim projection or a prior source's frozen context.
+      this.priorForMutation = undefined;
+      this.priorBoundaryContext = undefined;
+      this.boundaryContext = {
+        bundle: this.bundle!,
+        binding: this.binding,
+        source: { ...identity },
+        authority: this.boundaryAuthority(identity),
+      };
+    }
+  }
+
+  async restoreSourceCapture(
+    identity: ExactSource,
+    reference: CaptureReference | undefined,
+  ): Promise<void> {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    await this.outbox.restoreCaptureReference(identity, reference);
+    if (reference && !this.captureCursors.has(sourceKey(identity)))
+      this.captureCursors.set(sourceKey(identity), reference.startCursor);
+  }
+
+  async sealSourceCapture(identity: ExactSource): Promise<boolean> {
+    try {
+      if (this.outboxUnavailable || !this.outbox) return false;
+      const cursor = this.captureCursors.get(sourceKey(identity));
+      if (!cursor) return false;
+      // sealCapture fences synchronously before this first await. Disk or
+      // diagnostic failure must never reject an unawaited runtime callback.
+      return await this.outbox.sealCapture(
+        identity,
+        cursor,
+        !this.captureFailures.has(sourceKey(identity)),
+      );
+    } catch (error) {
+      try {
+        this.options.onBoundaryCaptureError?.(error, { stage: 'source_capture_seal' });
+      } catch {
+        // Diagnostics are best effort; the durable armed interval remains uncertain.
+      }
+      this.onDiagnostic?.('source_capture_seal_failed');
+      return false;
+    }
+  }
+
+  sourceCaptureCoverage(identity: ExactSource) {
+    if (this.outboxUnavailable || !this.outbox) return { state: 'unknown' as const };
+    return this.outbox.captureCoverage(identity);
   }
 
   private executionEligible(binding: MatchContextBinding | undefined): boolean {
@@ -694,7 +824,7 @@ export class OutputService {
       // Local projection can remain readable when the durable publisher could not start.
       blockedReason: this.outboxUnavailable ? 'output_unavailable' : blockedReason,
     });
-    if (this.quarantined)
+    if (this.localProjectionQuarantined)
       return result(
         null,
         !this.trialQuarantined &&
@@ -722,7 +852,7 @@ export class OutputService {
     producedAt: string,
     includeRadar: boolean,
   ): LiveSnapshotV1 | null {
-    if (this.quarantined) return null;
+    if (this.localProjectionQuarantined) return null;
     try {
       return projectLiveSnapshotV1({ bundle, binding, producedAt, includeRadar });
     } catch {
@@ -804,6 +934,34 @@ export class OutputService {
         : frozenMatches
           ? frozen
           : undefined;
+    const crossesExecution =
+      result.transitions.some((transition) => transition.kind === 'map_execution_changed') ||
+      result.disposition.reason === 'source-generation-advanced';
+    const captureSource =
+      crossesExecution && before?.kind !== 'none'
+        ? boundaryContext?.source
+        : this.sourceFor(binding?.context.matchId, cursor);
+    if (this.options.exactSource) {
+      // Website capture exists only inside a durably armed interval. Local
+      // runtime/projections already advanced above and never wait for this store.
+      if (!captureSource || !this.outbox?.canCapture(captureSource)) {
+        const active = this.options.exactSource();
+        if (
+          crossesExecution &&
+          before?.kind === 'owned' &&
+          active?.matchId === before.matchId &&
+          sameSourceSession(active, before.cursor) &&
+          this.outbox?.canCapture(active)
+        ) {
+          this.faultQuarantined = true;
+          this.captureFailures.add(sourceKey(active));
+          void this.sealSourceCapture(active);
+          this.onDiagnostic?.('outbox_boundary_owner_unconfirmed');
+        }
+        return;
+      }
+      this.captureCursors.set(sourceKey(captureSource), cursor);
+    }
     if (
       binding &&
       cursor.liveSessionId &&
@@ -892,6 +1050,10 @@ export class OutputService {
         })
         .catch(() => {
           this.faultQuarantined = true;
+          if (captureSource) {
+            this.captureFailures.add(sourceKey(captureSource));
+            void this.sealSourceCapture(captureSource);
+          }
           this.onDiagnostic?.('outbox_supersede_failed');
         });
     }
@@ -914,8 +1076,13 @@ export class OutputService {
             ),
           ];
     } catch {
+      if (captureSource) this.captureFailures.add(sourceKey(captureSource));
       this.onDiagnostic?.('event_projection_failed');
-      if (!hasBoundary) return;
+      if (!hasBoundary) {
+        this.faultQuarantined = true;
+        if (captureSource) void this.sealSourceCapture(captureSource);
+        return;
+      }
       candidates = [];
       projectionFailed = true;
     }
@@ -1007,6 +1174,8 @@ export class OutputService {
             this.onDiagnostic?.('outbox_boundary_gap');
         })
         .catch((error: unknown) => {
+          if (captureSource && this.outbox?.getBoundaryCaptureRecovery().lost)
+            this.captureFailures.add(sourceKey(captureSource));
           this.reportBoundaryCaptureError(error);
         })
         .finally(() => {
@@ -1027,8 +1196,19 @@ export class OutputService {
       ended &&
       this.playerSnapshot &&
       this.playerSnapshot.scope === this.snapshotScope(bundle, binding)
-    )
-      candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
+    ) {
+      try {
+        candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
+      } catch {
+        this.faultQuarantined = true;
+        if (captureSource) {
+          this.captureFailures.add(sourceKey(captureSource));
+          void this.sealSourceCapture(captureSource);
+        }
+        this.onDiagnostic?.('event_projection_failed');
+        return;
+      }
+    }
     const add = (
       kind: Parameters<typeof buildReliableEventV1>[0]['kind'],
       source: Parameters<typeof buildReliableEventV1>[0]['source'],
@@ -1050,6 +1230,11 @@ export class OutputService {
           ...(previousSourceGeneration === undefined ? {} : { previousSourceGeneration }),
         });
       } catch {
+        if (captureSource) {
+          this.faultQuarantined = true;
+          this.captureFailures.add(sourceKey(captureSource));
+          void this.sealSourceCapture(captureSource);
+        }
         this.onDiagnostic?.('event_projection_failed');
         return;
       }
@@ -1127,6 +1312,9 @@ export class OutputService {
     )
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
     for (const event of candidates) {
+      const eventSource = this.sourceFor(event.matchId, event.cursor);
+      if (this.options.exactSource && (!eventSource || !this.outbox?.canCapture(eventSource)))
+        continue;
       const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
       const lineup = bundle.program.players
         .filter((p) => p.lineupEvidence === 'current')
@@ -1148,7 +1336,7 @@ export class OutputService {
           event.kind === 'map_started' ? retainedLineup : undefined,
           start?.recovery,
           this.boundaryScope(event.matchId, event.cursor),
-          this.sourceFor(event.matchId, event.cursor),
+          eventSource,
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
@@ -1156,8 +1344,13 @@ export class OutputService {
           if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         })
         .catch((error: unknown) => {
-          if (boundary && !this.outbox?.hasPendingEnqueue(event.idempotencyKey))
+          if (!this.outbox?.hasPendingEnqueue(event.idempotencyKey)) {
             this.faultQuarantined = true;
+            if (eventSource) {
+              this.captureFailures.add(sourceKey(eventSource));
+              void this.sealSourceCapture(eventSource);
+            }
+          }
           if (
             error instanceof Error &&
             error.message === 'outbox_pending_enqueue_capacity_exhausted'
@@ -1187,9 +1380,8 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
-      await this.outbox.retryPendingBoundaryCaptures();
+      await this.outbox.retryPendingCaptures();
       if (this.outbox.getBoundaryCaptureRecovery().pending) return;
-      await this.outbox.retryPendingEnqueues();
       const start = this.pendingMapStart;
       if (
         start &&
@@ -1350,6 +1542,8 @@ export class OutputService {
     )
       return 'continuity_chain_missing';
     if (this.outbox?.getBoundaryCaptureRecovery().pending) return 'continuity_waiting';
+    const active = this.options.exactSource?.();
+    if (active && !this.outbox?.canCapture(active)) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
     if (!scope) return null;
     if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
@@ -1414,6 +1608,7 @@ export class OutputService {
   async archiveConfirmedSource(identity: ExactSource): Promise<void> {
     if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.archiveConfirmedSource(identity);
+    this.captureCursors.delete(sourceKey(identity));
   }
 
   async isolateRevokedSource(identity: ExactSource): Promise<void> {
@@ -1429,12 +1624,14 @@ export class OutputService {
     if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
     const exact = 'authorityRevision' in scope ? parseSource(scope) : undefined;
+    if (exact && !(await this.sealSourceCapture(exact))) return false;
     const frozenScope: BoundaryScope = { ...scope, ...(exact ? { source: exact } : {}) };
     // Tail settlement intentionally has no current authority or ephemeral
     // service-owner filter. All retained intents/gaps in the exact old delivery
     // scope must settle, including awaitingSource and previous-authority work.
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
+      this.outbox.hasPendingBoundaryCaptures(scope) ||
       this.outbox.hasBoundaryGap(frozenScope) ||
       this.outbox.getBoundaryIntents(frozenScope).length
     )
@@ -1446,6 +1643,7 @@ export class OutputService {
     await this.outbox.flushPending();
     return (
       !this.outbox.hasPendingEnqueues(scope, exact) &&
+      !this.outbox.hasPendingBoundaryCaptures(scope) &&
       !this.outbox.hasBoundaryGap(frozenScope) &&
       this.outbox.getBoundaryIntents(frozenScope).length === 0 &&
       this.outbox.getScopeDisposition(scope, exact).pending === 0
@@ -1560,8 +1758,19 @@ export class OutputService {
     ) {
       // The sink revalidates this exact durable authority, never the current selection's claim.
       // Missing authority pauses delivery; changing selection does not cancel accepted work.
+      // Check the event's original delivery identity, not the current binding or authority.
+      const cursor = event.cursor;
+      const originalScope: BoundaryScope = {
+        matchId: event.matchId,
+        producerInstanceId: cursor.producerInstanceId,
+        ...(cursor.liveSessionId ? { liveSessionId: cursor.liveSessionId } : {}),
+        runtimeSeq: cursor.runtimeSeq,
+        programSourceGeneration: cursor.programSourceGeneration,
+        mapEpoch: cursor.mapEpoch,
+      };
       return (
         !this.quarantined &&
+        !this.outbox?.hasBoundaryGap(originalScope) &&
         (event.kind !== 'map_started' || recorded.lineupSteam64?.length === 10) &&
         !this.outbox?.hasUnconfirmedBoundary(event) &&
         !this.outbox
@@ -1716,7 +1925,9 @@ export class OutputService {
     // closed prevents a new retry, but an already running retry must settle.
     await this.retryCompletion;
     try {
-      await this.outbox?.flushForShutdown();
+      // An unavailable startup never enabled website production or delivery,
+      // and its owner was already rolled back. Keep its original diagnostics.
+      if (!this.outboxUnavailable) await this.outbox?.flushForShutdown();
     } catch (error) {
       results.push({ status: 'rejected', reason: error });
     }

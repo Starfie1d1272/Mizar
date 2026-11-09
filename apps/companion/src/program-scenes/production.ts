@@ -45,6 +45,7 @@ export type ProductionDependencies = {
   observer: Pick<ObserverSettingsStore, 'endProduction'>;
   source?:
     | (Pick<RivalHubConnection, 'handoffForExit' | 'release' | 'clearStats'> & {
+        retryExitHandoffs?: () => Promise<void>;
         stats: (
           target: Parameters<RivalHubConnection['stats']>[0],
         ) => ReturnType<RivalHubConnection['stats']> | undefined;
@@ -69,7 +70,14 @@ function sourceStateUnavailable(error: unknown): boolean {
 }
 
 type ProductionAction =
-  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'invalid';
+  | 'enter'
+  | 'hide'
+  | 'finish'
+  | 'shutdown'
+  | 'begin-exit'
+  | 'cancel-exit'
+  | 'retry-handoff'
+  | 'invalid';
 type ProductionCommand = {
   action: ProductionAction;
   expectedRevision: string | null;
@@ -83,6 +91,7 @@ export function createProduction(options: ProductionDependencies) {
   let revision = randomUUID();
   let busy = false;
   let shuttingDown = false;
+  let exitIntentGeneration = 0;
   let updatePending = false;
   let trialPending = false;
   let preparationGeneration = 0;
@@ -109,7 +118,7 @@ export function createProduction(options: ProductionDependencies) {
         completed: boolean;
       }
     | undefined;
-  function startHandoff(): Promise<void> {
+  function startHandoff(retry = false): Promise<void> {
     if (!options.source?.handoffForExit) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
     if (handoffStarted) return Promise.resolve();
@@ -117,7 +126,10 @@ export function createProduction(options: ProductionDependencies) {
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      const pending = options.source?.handoffForExit();
+      const pending = retry
+        ? options.source.retryExitHandoffs?.()
+        : options.source.handoffForExit();
+      if (!pending) throw new Error('数据源交接重试不可用。');
       handoffPromise = pending.then(
         () => {
           if (generation === releaseGeneration) releaseHandoffState = 'recorded';
@@ -230,7 +242,10 @@ export function createProduction(options: ProductionDependencies) {
     productionViewSchema.parse(current);
     return current;
   };
-  async function change(body: ProductionCommand) {
+  async function change(
+    body: ProductionCommand,
+    onShutdownCommit?: (cancel: () => Promise<unknown>) => void,
+  ) {
     const obsOnlyRetry =
       body?.action === 'finish' && mode === 'preparation' && obsExitState === 'unconfirmed';
     const entryId = body.preparationId;
@@ -276,6 +291,7 @@ export function createProduction(options: ProductionDependencies) {
       options.observer.endProduction();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      exitIntentGeneration++;
       shuttingDown = true;
       try {
         await startHandoff();
@@ -291,7 +307,13 @@ export function createProduction(options: ProductionDependencies) {
       }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
+      exitIntentGeneration++;
       shuttingDown = false;
+      // An older handoff may still complete, but it must not settle a later exit.
+      releaseGeneration++;
+      if (releaseHandoffState === 'pending') releaseHandoffState = 'unconfirmed';
+      handoffStarted = false;
+      handoffPromise = undefined;
       return { ok: true as const, value: view() };
     }
     if (
@@ -306,6 +328,16 @@ export function createProduction(options: ProductionDependencies) {
         failure: 'productionConflict' as const,
         message: '制作状态已变化，请刷新后重试。',
       };
+    if (body.action === 'retry-handoff') {
+      if (mode !== 'preparation' || releaseHandoffState !== 'unconfirmed')
+        return {
+          ok: false as const,
+          failure: 'productionConflict' as const,
+          message: '数据源交接状态已变化，请刷新后核对。',
+        };
+      void startHandoff(true).catch(() => {});
+      return { ok: true as const, value: view() };
+    }
     if (!['enter', 'hide', 'finish', 'shutdown'].includes(String(body?.action)))
       return {
         ok: false as const,
@@ -319,6 +351,7 @@ export function createProduction(options: ProductionDependencies) {
     }
     busy = true;
     const shutdown = body?.action === 'shutdown';
+    const shutdownIntent = shutdown ? ++exitIntentGeneration : null;
     if (shutdown) shuttingDown = true;
     let committed = false;
     const entering = body?.action === 'enter' && mode === 'preparation';
@@ -491,6 +524,18 @@ export function createProduction(options: ProductionDependencies) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
       }
+      if (shutdownIntent !== null && onShutdownCommit) {
+        const completedRevision = revision;
+        onShutdownCommit(() => {
+          if (busy || revision !== completedRevision || exitIntentGeneration !== shutdownIntent)
+            return Promise.resolve();
+          return dispatchChange({
+            action: 'cancel-exit',
+            expectedRevision: completedRevision,
+            preparationId: null,
+          });
+        });
+      }
       return { ok: true as const, value: view() };
     } catch (error) {
       options.error(
@@ -523,16 +568,19 @@ export function createProduction(options: ProductionDependencies) {
               : ('productionFailure' as const);
       return { ok: false as const, failure, message };
     } finally {
-      if (shutdown && !committed) shuttingDown = false;
+      if (shutdown && !committed && shutdownIntent === exitIntentGeneration) shuttingDown = false;
       busy = false;
     }
   }
   let activeExitChange: Promise<Awaited<ReturnType<typeof change>>> | undefined;
-  async function dispatchChange(body: Parameters<typeof change>[0]) {
+  async function dispatchChange(
+    body: Parameters<typeof change>[0],
+    onShutdownCommit?: Parameters<typeof change>[1],
+  ) {
     const isExit = body?.action === 'finish' || body?.action === 'shutdown';
-    if (!isExit) return change(body);
+    if (!isExit) return change(body, onShutdownCommit);
     if (activeExitChange) {
-      if (body?.expectedRevision !== revision) return change(body);
+      if (body?.expectedRevision !== revision) return change(body, onShutdownCommit);
       const originalSession = sessionId;
       const prior = await activeExitChange;
       if (!prior.ok) return prior;
@@ -542,9 +590,9 @@ export function createProduction(options: ProductionDependencies) {
           failure: 'productionConflict' as const,
           message: '制作状态已变化，请刷新后重试。',
         };
-      return dispatchChange({ ...body, expectedRevision: revision });
+      return dispatchChange({ ...body, expectedRevision: revision }, onShutdownCommit);
     }
-    const pending = change(body);
+    const pending = change(body, onShutdownCommit);
     activeExitChange = pending;
     try {
       return await pending;
@@ -689,6 +737,7 @@ export function createProduction(options: ProductionDependencies) {
         busy = false;
       }
     },
+    canStartObsOutput: () => !updatePending,
     reserveUpdate: () => {
       if (trialPending || mode !== 'preparation' || busy || shuttingDown || updatePending)
         return false;
@@ -698,8 +747,16 @@ export function createProduction(options: ProductionDependencies) {
     releaseUpdate: () => {
       updatePending = false;
     },
-    shutdown: () =>
-      dispatchChange({ action: 'shutdown', expectedRevision: revision, preparationId: null }),
+    shutdown: async () => {
+      let cancel: () => Promise<unknown> = () => Promise.resolve();
+      const result = await dispatchChange(
+        { action: 'shutdown', expectedRevision: revision, preparationId: null },
+        (rollback) => {
+          cancel = rollback;
+        },
+      );
+      return { result, cancel };
+    },
   };
   return production;
 }
@@ -770,7 +827,8 @@ export function registerProductionRoutes(
       action === 'finish' ||
       action === 'shutdown' ||
       action === 'begin-exit' ||
-      action === 'cancel-exit';
+      action === 'cancel-exit' ||
+      action === 'retry-handoff';
     // Keep conflict and cancellation precedence for malformed actions.
     const result = await production.change({
       action: validAction ? action : 'invalid',

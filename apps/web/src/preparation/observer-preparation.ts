@@ -50,6 +50,7 @@ export function requireConnectionRevision(value: unknown): string {
 export type ObserverRuntimeView = {
   gameReady: boolean;
   programCommandQueued: boolean;
+  gameCommandState?: 'not-sent' | 'unknown' | 'queued' | 'unavailable' | null;
   active: boolean;
   failed: boolean;
   pending: boolean;
