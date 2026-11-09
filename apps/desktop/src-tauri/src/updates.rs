@@ -108,7 +108,11 @@ impl PendingUpdate {
                 self.gui.fetch_add(1, Ordering::AcqRel);
             }
             self.generation.fetch_add(1, Ordering::AcqRel);
-            let stage = self.stage.lock().ok().and_then(|mut pending| pending.take());
+            let stage = self
+                .stage
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.take());
             let attempt = self.attempt.lock().ok().and_then(|owner| owner.clone());
             (stage, attempt)
         };
@@ -417,7 +421,9 @@ pub fn check_on_startup(app: tauri::AppHandle) {
             log.event(
                 "update_install",
                 "failure",
-                Some(&format!("phase=startup_recovery; owner_retained; cause={error}")),
+                Some(&format!(
+                    "phase=startup_recovery; owner_retained; cause={error}"
+                )),
             );
         }
     });
@@ -565,9 +571,11 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
     let pending = app.state::<PendingUpdate>().inner().clone();
     pending.check()?;
     app.state::<crate::production_exit::ExitGate>().check()?;
-    if app.webview_windows().iter().any(|(label, window)| {
-        label.starts_with("tool-") && window.is_visible().unwrap_or(true)
-    }) {
+    if app
+        .webview_windows()
+        .iter()
+        .any(|(label, window)| label.starts_with("tool-") && window.is_visible().unwrap_or(true))
+    {
         return Err("请先保存并关闭编辑和预览窗口。".into());
     }
     if pending.preparing.swap(true, Ordering::AcqRel) {
@@ -702,7 +710,11 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
 pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
     let pending = app.state::<PendingUpdate>();
     pending.gui_current()?;
-    if pending.stage.lock().map_err(|_| "更新状态不可用。")?.is_some()
+    if pending
+        .stage
+        .lock()
+        .map_err(|_| "更新状态不可用。")?
+        .is_some()
         && app.webview_windows().iter().any(|(label, window)| {
             label.starts_with("tool-") && window.is_visible().unwrap_or(true)
         })
@@ -712,7 +724,8 @@ pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
     pending.recheck(&app.state::<DesktopLog>())
 }
 pub fn cancel(app: &tauri::AppHandle) {
-    app.state::<PendingUpdate>().cancel(&app.state::<DesktopLog>());
+    app.state::<PendingUpdate>()
+        .cancel(&app.state::<DesktopLog>());
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
     if crate::host_runtime::health_matches(&crate::host_runtime::bundle_root()?) {

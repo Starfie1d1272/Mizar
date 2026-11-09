@@ -2201,7 +2201,12 @@ fn start_gui(
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_desktop(log.clone(), exit_signal, job.clone(), pending_update.clone())
+            run_desktop(
+                log.clone(),
+                exit_signal,
+                job.clone(),
+                pending_update.clone(),
+            )
         })) {
             Ok(result) => result,
             Err(_) => Err("桌面界面启动或运行时发生异常；原始 panic 信息已记录。".into()),
