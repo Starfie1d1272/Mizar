@@ -116,6 +116,8 @@ export class ObserverHintTimeline {
     segment: number;
   }[] = [];
   private effectiveDelayMs: number | null = null;
+  private pendingDelayMs: number | null = null;
+  private pendingClockSegment: number | null = null;
   private lastMatchedDeathOffsetMs: number | null = null;
   private lastEvidenceAt: number | null = null;
   private evidenceCount = 0;
@@ -176,6 +178,7 @@ export class ObserverHintTimeline {
       calibration: {
         state: this.calibrationState(this.lastNow),
         effectiveDelayMs: this.effectiveDelayMs,
+        pendingDelayMs: this.pendingDelayMs,
         lastMatchedDeathOffsetMs: this.lastMatchedDeathOffsetMs,
         evidenceCount: this.evidenceCount,
         evidenceSpreadMs: this.evidenceSpreadMs,
@@ -216,6 +219,7 @@ export class ObserverHintTimeline {
     this.freezeOffset = null;
     this.lastProgramClock = null;
     this.clockEvidence = [];
+    this.pendingDelayMs = null;
     this.clockSegment++;
     this.effectiveDelayMs = null;
     this.lastMatchedDeathOffsetMs = null;
@@ -250,6 +254,7 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
+      this.clockGenerationChanged(true);
       this.generation = event.cursor.generation;
       this.lastSourceReceiveMs = null;
       this.lastMatchedDeathOffsetMs = null;
@@ -285,6 +290,31 @@ export class ObserverHintTimeline {
     if (this.kills.length > 4096) {
       this.kills.shift();
       this.discard('capacity');
+    }
+  }
+  private reacquire(reason: string): void {
+    if (this.effectiveDelayMs !== null) this.continuityLost = true;
+    this.estimateReason = reason;
+    // Once shown on an obsolete estimate, an event must never be scheduled again.
+    // Explicit same-domain playback positions do not depend on this estimate.
+    for (const kill of this.kills) {
+      if (kill.shownDueMs !== null && !kill.retired) {
+        kill.retired = true;
+        this.discard('calibration-changed');
+      }
+    }
+  }
+  private clockGenerationChanged(source: boolean): void {
+    this.reacquire(source ? 'source-generation-changed' : 'program-generation-changed');
+    this.lastProgramClock = null;
+    this.clockEvidence = [];
+    this.pendingDelayMs = null;
+    this.programPhase = null;
+    this.freezeOffset = null;
+    if (source) {
+      this.sourceClocks = [];
+      this.freezeEnds = [];
+      this.clockSegment++;
     }
   }
   private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' | 'reacquiring' {
@@ -353,6 +383,7 @@ export class ObserverHintTimeline {
         this.seenReceive = null;
         this.sourceClocks = [];
         this.clockEvidence = [];
+        this.pendingDelayMs = null;
         this.freezeEnds = [];
         this.freezeOffset = null;
       }
@@ -433,6 +464,7 @@ export class ObserverHintTimeline {
     if (!program) {
       this.lastProgramClock = null;
       this.clockEvidence = [];
+      this.pendingDelayMs = null;
       return;
     }
     if (this.lastProgramClock && program.received === this.lastProgramClock.received) return;
@@ -444,6 +476,7 @@ export class ObserverHintTimeline {
     ) {
       this.lastProgramClock = program;
       this.clockEvidence = [];
+      this.pendingDelayMs = null;
       return;
     }
     const elapsed = (program.received - previous.received) / 1000;
@@ -452,6 +485,7 @@ export class ObserverHintTimeline {
     this.lastProgramClock = program;
     if (elapsed <= 0 || elapsed > 2 || advanced <= 0 || Math.abs(advanced - elapsed) > 0.35) {
       this.clockEvidence = [];
+      this.pendingDelayMs = null;
       return;
     }
     const candidates: { delay: number; segment: number }[] = [];
@@ -476,15 +510,22 @@ export class ObserverHintTimeline {
       )
         candidates.push({ delay, segment: a.segment });
     }
-    if (candidates.length !== 1) return;
+    if (candidates.length !== 1) {
+      this.clockEvidence = [];
+      this.pendingDelayMs = null;
+      return;
+    }
+    if (this.pendingDelayMs !== null && this.pendingClockSegment !== candidates[0]!.segment)
+      this.pendingDelayMs = null;
     const lastEvidence = this.clockEvidence.at(-1);
     // Limit correlated samples; paced backlog cannot be identified from this contract.
     if (
       lastEvidence &&
       (lastEvidence.round !== program.round || lastEvidence.segment !== candidates[0]!.segment)
-    )
+    ) {
       this.clockEvidence = [];
-    else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
+      this.pendingDelayMs = null;
+    } else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
     this.clockEvidence.push({
       delay: candidates[0]!.delay,
       segment: candidates[0]!.segment,
@@ -501,6 +542,7 @@ export class ObserverHintTimeline {
     const delays = this.clockEvidence.map((p) => p.delay).sort((a, b) => a - b);
     const spread = delays.at(-1)! - delays[0]!;
     if (spread > 1500) {
+      this.pendingDelayMs = null;
       this.estimateReason = 'unstable-clock';
       return;
     }
@@ -512,9 +554,29 @@ export class ObserverHintTimeline {
         this.sourceClocks.find((p) => p.segment === candidates[0]!.segment)?.generation &&
       Math.abs(this.freezeOffset.delay - median) > 2500
     ) {
-      this.estimateReason = 'freeze-boundary-conflict';
+      this.pendingDelayMs = null;
+      if (
+        this.effectiveDelayMs !== null &&
+        Math.abs(this.freezeOffset.delay - this.effectiveDelayMs) > 2500
+      )
+        this.reacquire('freeze-boundary-conflict');
+      else this.estimateReason = 'freeze-boundary-conflict';
       return;
     }
+    if (
+      this.effectiveDelayMs !== null &&
+      Math.abs(median - this.effectiveDelayMs) > 1500 &&
+      (this.pendingDelayMs === null || Math.abs(median - this.pendingDelayMs) > 1500)
+    ) {
+      this.reacquire('delay-change-pending');
+      this.pendingDelayMs = median;
+      this.pendingClockSegment = candidates[0]!.segment;
+      // Confirmation must contain entirely new observations, not an overlapping
+      // rolling median over the evidence that proposed this change.
+      this.clockEvidence = [];
+      return;
+    }
+    this.pendingDelayMs = null;
     this.effectiveDelayMs = median;
     this.evidenceCount = delays.length;
     this.evidenceSpreadMs = spread;
@@ -540,6 +602,7 @@ export class ObserverHintTimeline {
     this.lastNow = now;
     this.configuration = { ...settings };
     if (this.programSource.generation !== program.cursor.programSourceGeneration) {
+      this.clockGenerationChanged(false);
       this.lastProgramSequence = null;
       this.seenReceive = null;
       this.previous.clear();
@@ -619,6 +682,7 @@ export class ObserverHintTimeline {
       };
     }
     if (this.generation === undefined || source.generation > this.generation) {
+      this.clockGenerationChanged(true);
       this.generation = source.generation;
       this.lastSourceReceiveMs = null;
       this.lastMatchedDeathOffsetMs = null;

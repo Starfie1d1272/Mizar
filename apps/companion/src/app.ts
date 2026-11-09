@@ -698,7 +698,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     done(null, payload);
   });
   options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
-    if (stage === 'business_live' || stage === 'original_error')
+    // Pre-network guards contain only canonical business fields. Do not write
+    // the same observation under a second event ID; response evidence stays raw.
+    const reason =
+      evidence && typeof evidence === 'object' && 'reason' in evidence ? evidence.reason : null;
+    const guard =
+      stage === 'business_live' &&
+      (reason === 'source_unavailable' || reason === 'map_start_pending');
+    if ((stage === 'business_live' && (!guard || !businessJournal)) || stage === 'original_error')
       sessionJournal?.record(
         stage === 'business_live' ? 'website_live_evidence' : 'website_original_error',
         evidence,
@@ -2676,6 +2683,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => projectionCoordinator.close());
     await closeStep(() => programCueCoordinator.close());
     await closeStep(() => outputService.stopDelivery());
+    await closeStep(() => options.rivalhubConnection?.flushDiagnostics?.());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
     await closeStep(async () => {

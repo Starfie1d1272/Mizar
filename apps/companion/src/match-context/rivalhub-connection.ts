@@ -1,3 +1,4 @@
+import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { SourceLoadError } from './source-error.js';
@@ -336,6 +337,13 @@ export class RivalHubConnection {
   setBusinessEvidenceHandler(handler: (stage: string, evidence: unknown) => void): void {
     this.businessHandler = handler;
   }
+  private readonly unavailableLive = new RepeatedDiagnostic((stage, evidence) => {
+    try {
+      this.businessHandler?.(stage, evidence);
+    } catch {
+      /* Diagnostics cannot affect delivery. */
+    }
+  });
   private business(
     stage: string,
     snapshot: {
@@ -348,7 +356,7 @@ export class RivalHubConnection {
     evidence: Record<string, unknown>,
   ) {
     try {
-      this.businessHandler?.(stage, {
+      const detail = {
         matchId: snapshot.matchId,
         competitionId: snapshot.competitionId,
         contextRevision: snapshot.contextRevision,
@@ -359,7 +367,19 @@ export class RivalHubConnection {
         mapEpoch: snapshot.cursor.mapEpoch,
         sourceGeneration: snapshot.cursor.programSourceGeneration,
         ...evidence,
-      });
+      };
+      if (stage === 'business_live') {
+        if (evidence.reason === 'source_unavailable' || evidence.reason === 'map_start_pending') {
+          this.unavailableLive.record(
+            stage,
+            JSON.stringify({ ...detail, originalObservedAt: null }),
+            detail,
+          );
+          return;
+        }
+        this.unavailableLive.clear();
+      }
+      this.businessHandler?.(stage, detail);
     } catch {
       /* Diagnostics cannot affect authorization or delivery. */
     }
@@ -811,6 +831,7 @@ export class RivalHubConnection {
   /** Startup rollback only; recovery requires a new owner on the next start. */
   async abortSourceCaptureStartup(): Promise<void> {
     this.sourceStateAvailable = false;
+    this.unavailableLive.clear();
     ++this.bindingGeneration;
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
@@ -963,6 +984,11 @@ export class RivalHubConnection {
       .catch((error: unknown) => this.onDiagnostic('source_switch', error));
   }
 
+  /** Flush local observations after delivery stops, before the journal closes. */
+  flushDiagnostics(): void {
+    this.unavailableLive.clear();
+  }
+
   async shutdownSource(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
@@ -977,6 +1003,7 @@ export class RivalHubConnection {
       });
     } finally {
       this.sourceStateAvailable = false;
+      this.unavailableLive.clear();
       await this.sourceState.close();
     }
   }
