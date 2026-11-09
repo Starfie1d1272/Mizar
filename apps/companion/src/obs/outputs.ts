@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
+import { EventSubscription, OBSWebSocket, OBSWebSocketError } from 'obs-websocket-js';
 import type {
   ObsOutputCommand,
   ObsOutputResult,
@@ -491,7 +491,18 @@ export class ObsOutputController {
     const [stream, record, replay, virtual] = await Promise.all([
       this.query(client.call('GetStreamStatus')),
       this.query(client.call('GetRecordStatus')),
-      this.query(client.call('GetReplayBufferStatus')),
+      this.query(
+        client.call('GetReplayBufferStatus').catch((error: unknown) => {
+          // OBS reports an absent replay output, not an unknown activity state.
+          if (
+            error instanceof OBSWebSocketError &&
+            error.code === 604 &&
+            error.message === 'Replay buffer is not available.'
+          )
+            return { outputActive: false };
+          throw error;
+        }),
+      ),
       this.query(client.call('GetVirtualCamStatus')),
     ]);
     const extrasCurrent = extraVersion === this.warmupGeneration;
