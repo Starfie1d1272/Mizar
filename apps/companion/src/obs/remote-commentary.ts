@@ -3,6 +3,9 @@ import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ObsPreparationWriteBlocked } from './video-transaction.js';
+import { OBS_COLLECTION } from './desired-state.js';
+import { readOwnedCommentaryTarget, saveOwnedCommentaryTarget } from './commentary-owned-target.js';
+import { readCommentarySwitch } from './commentary-switch.js';
 import type { ObsRpc } from './reconcile.js';
 
 const binding = z
@@ -133,7 +136,7 @@ export class RemoteCommentary {
     )
       throw new Error('commentary_capability_missing');
     const inputs = records((await obs.call('GetInputList')).inputs).filter(
-      (i) => i.inputKind === 'wasapi_process_output_capture' && typeof i.inputUuid === 'string',
+      (i) => i.inputKind === 'wasapi_process_output_capture' && i.inputUuid === probeUuid,
     );
     if (!inputs.some((i) => i.inputUuid === probeUuid)) throw new Error('commentary_probe_missing');
     const existing: { inputUuid: string; window: string }[] = [];
@@ -173,54 +176,6 @@ export class RemoteCommentary {
   }
 }
 
-/** Rename only journal-owned legacy probes; custom names and active output are left intact. */
-export async function renameLegacyProbe(
-  obs: ObsRpc,
-  journalPath: string,
-  endpoint: string,
-  collection: string,
-  role: 'game' | 'commentary',
-): Promise<void> {
-  let saved: { endpoint?: string; collection?: string; uuid?: string; name?: string };
-  try {
-    saved = JSON.parse(await readFile(journalPath, 'utf8')) as typeof saved;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  if (saved.endpoint !== endpoint || saved.collection !== collection || !saved.uuid) return;
-  const pattern =
-    role === 'game'
-      ? /^Mizar · Game Audio [0-9a-f-]{36}$/
-      : /^Mizar · Remote Commentary [0-9a-f-]{36}$/;
-  const [stream, record, current, list] = await Promise.all([
-    obs.call('GetStreamStatus'),
-    obs.call('GetRecordStatus'),
-    obs.call('GetSceneCollectionList'),
-    obs.call('GetInputList'),
-  ]);
-  if (
-    stream.outputActive !== false ||
-    record.outputActive !== false ||
-    current.currentSceneCollectionName !== collection
-  )
-    return;
-  const inputs = records(list.inputs);
-  const owned = inputs.find((input) => input.inputUuid === saved.uuid);
-  if (
-    owned?.inputKind !== 'wasapi_process_output_capture' ||
-    typeof owned.inputName !== 'string' ||
-    !pattern.test(owned.inputName) ||
-    owned.inputName !== saved.name
-  )
-    return;
-  const base = role === 'game' ? '游戏声音' : '其他解说';
-  let name = base;
-  for (let index = 2; inputs.some((input) => input.inputName === name); index++)
-    name = `${base} ${index}`;
-  await obs.call('SetInputName', { inputUuid: saved.uuid, newInputName: name });
-}
-
 /** Create an inert probe only with an idle OBS; the journal prevents blind recreation after an uncertain call. */
 export async function createCommentaryProbe(
   obs: ObsRpc,
@@ -253,13 +208,86 @@ export async function createCommentaryProbe(
       throw new Error('commentary_probe_context_changed');
     if (!journal.uuid) throw new Error('commentary_probe_creation_uncertain');
     const inputs = records((await obs.call('GetInputList')).inputs);
-    if (
-      !inputs.some(
-        (i) => i.inputUuid === journal.uuid && i.inputKind === 'wasapi_process_output_capture',
-      )
-    )
+    const existing = inputs.find((input) => input.inputUuid === journal.uuid);
+    if (existing) {
+      if (existing.inputKind !== 'wasapi_process_output_capture')
+        throw new Error('commentary_probe_deleted');
+      return journal.uuid;
+    }
+    // The collection owner may recreate a manually deleted role from its saved
+    // settings. Only repair local evidence after proving that exact boundary.
+    if (context.collection !== OBS_COLLECTION || !obs.ownershipScope)
       throw new Error('commentary_probe_deleted');
-    return journal.uuid;
+    const scope = await obs.ownershipScope();
+    if (!scope || (await readCommentarySwitch(`${journalPath}.switch`)))
+      throw new Error('commentary_probe_context_changed');
+    const name = context.label === 'Game Audio' ? '游戏声音' : '其他解说';
+    const replacement = inputs.find(
+      (input) => input.inputName === name && input.inputKind === 'wasapi_process_output_capture',
+    );
+    if (typeof replacement?.inputUuid !== 'string' || !replacement.inputUuid)
+      throw new Error('commentary_probe_deleted');
+    const uuid = replacement.inputUuid;
+    const targetPath = `${journalPath}.owned-target`;
+    const target = await readOwnedCommentaryTarget(targetPath);
+    const check = async () => {
+      await stillCurrent();
+      if (
+        (await obs.ownershipScope!()) !== scope ||
+        (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION
+      )
+        throw new Error('commentary_probe_context_changed');
+      const current = records((await obs.call('GetInputList')).inputs);
+      if (
+        current.some((input) => input.inputUuid === journal!.uuid) ||
+        !current.some(
+          (input) =>
+            input.inputUuid === uuid &&
+            input.inputName === name &&
+            input.inputKind === 'wasapi_process_output_capture',
+        )
+      )
+        throw new Error('commentary_probe_context_changed');
+      const saved = journalSchema.parse(JSON.parse(await readFile(journalPath, 'utf8')));
+      if (JSON.stringify(saved) !== JSON.stringify(journal))
+        throw new Error('commentary_probe_context_changed');
+      const currentTarget = await readOwnedCommentaryTarget(targetPath);
+      if (
+        target
+          ? !currentTarget ||
+            currentTarget.endpoint !== target.endpoint ||
+            currentTarget.collection !== target.collection ||
+            currentTarget.window !== target.window ||
+            ![target.uuid, uuid].includes(currentTarget.uuid)
+          : currentTarget !== null
+      )
+        throw new Error('commentary_owned_target_changed');
+      if (target) {
+        const settings = (await obs.call('GetInputSettings', { inputUuid: uuid })).inputSettings as
+          Record<string, unknown> | undefined;
+        // Accept the new UUID too: the target write may have succeeded before a
+        // prior journal write failed. The unchanged window is still required.
+        if (
+          target.endpoint !== context.endpoint ||
+          target.collection !== OBS_COLLECTION ||
+          ![journal!.uuid, uuid].includes(target.uuid) ||
+          target.window !== settings?.window
+        )
+          throw new Error('commentary_owned_target_changed');
+      }
+    };
+    await check();
+    if (target && target.uuid !== uuid)
+      await saveOwnedCommentaryTarget(targetPath, { ...target, uuid });
+    await check();
+    const temp = `${journalPath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify({ ...journal, name, uuid })}\n`, { mode: 0o600 });
+      await rename(temp, journalPath);
+    } finally {
+      await rm(temp, { force: true });
+    }
+    return uuid;
   }
   const [stream, record, collection, version] = await Promise.all([
     obs.call('GetStreamStatus'),
@@ -288,9 +316,19 @@ export async function createCommentaryProbe(
   await stillCurrent();
   const baseName = context.label === 'Game Audio' ? '游戏声音' : '其他解说';
   const inputs = records((await obs.call('GetInputList')).inputs);
-  let name = baseName;
-  for (let index = 2; inputs.some((input) => input.inputName === name); index++)
-    name = `${baseName} ${index}`;
+  const name = baseName;
+  const existing = inputs.find((input) => input.inputName === name);
+  if (existing && existing.inputKind !== 'wasapi_process_output_capture')
+    throw new Error('commentary_source_conflict');
+  if (existing && typeof existing.inputUuid === 'string') {
+    await mkdir(dirname(journalPath), { recursive: true });
+    await writeFile(
+      journalPath,
+      `${JSON.stringify({ endpoint: context.endpoint, collection: context.collection, name, uuid: existing.inputUuid })}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    return existing.inputUuid;
+  }
   const planned = { endpoint: context.endpoint, collection: context.collection, name };
   await mkdir(dirname(journalPath), { recursive: true });
   // Exclusive creation prevents competing callers from claiming the same operation.

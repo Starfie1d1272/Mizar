@@ -9,7 +9,7 @@ import {
   type ObsRpc,
 } from '../src/obs/reconcile.js';
 import { ensureObsAudio } from '../src/obs/audio.js';
-import { obsDesiredScenes } from '../src/obs/desired-state.js';
+import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsStatus } from '../src/obs/adapter.js';
 import type { ObsAdapter } from '../src/obs/adapter.js';
 import type { ObsConfigStore } from '../src/obs/config.js';
@@ -33,7 +33,7 @@ test('explicit preparation aligns an existing Mizar scene only with idle output 
     call: async (type, data = {}) => {
       calls.push(type);
       if (type === 'GetCurrentProgramScene') return { currentProgramSceneName: current };
-      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: OBS_COLLECTION };
       if (type === 'GetSceneList')
         return {
           scenes: desired.map((scene) => ({ sceneName: scene.sceneName })),
@@ -190,7 +190,7 @@ test('OBS status and explicit ensure expose the same blocking and warning facts'
   }
 });
 
-test('explicit ensure preserves legacy named audio without verified ownership', async () => {
+test('automatic ensure leaves the old collection and its personal audio untouched', async () => {
   const desired = obsDesiredScenes(baseUrl);
   const inputs = [
     ...desired.map((scene) => ({ inputName: scene.browserInput, inputKind: 'browser_source' })),
@@ -295,16 +295,16 @@ test('explicit ensure preserves legacy named audio without verified ownership', 
     },
   };
   outputActive = true;
-  await ensureObsConfiguration(obs, baseUrl, () => activeScene, true);
+  await ensureObsConfiguration(obs, baseUrl, () => activeScene, false);
   assert.equal(
     calls.some((type) => /^(Create|Set|Remove|Stop)/.test(type)),
     false,
   );
   outputActive = false;
-  const findings = await ensureObsConfiguration(obs, baseUrl, () => activeScene, true);
+  const findings = await ensureObsConfiguration(obs, baseUrl, () => activeScene, false);
   assert.equal(
-    findings.some((item) => item.code === 'legacy_names'),
-    false,
+    findings.some((item) => item.code === 'collection_missing'),
+    true,
   );
   assert.ok(inputs.some((input) => input.inputName === 'Mizar · Desktop Audio'));
   assert.equal(
@@ -326,7 +326,7 @@ test('automatic audio preparation cannot modify scenes while an extra video outp
       if (type === 'GetSpecialInputs') return {};
       if (type === 'GetSceneItemList') return { sceneItems: [] };
       if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
-      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: OBS_COLLECTION };
       if (type === 'GetOutputList')
         return {
           outputs: [

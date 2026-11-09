@@ -31,7 +31,7 @@ export async function setBpCompactVisible(
   const sceneName = obsSceneName('gameplay');
   const collection = await obs.call('GetSceneCollectionList');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先在 OBS 中选择 Mizar 场景集合。');
+    throw new Error('请先在 OBS 中选择 「Mizar 制播」场景集合。');
   const scenes = await obs.call('GetSceneList');
   if (visible && scenes.currentProgramSceneName !== sceneName)
     throw new Error('请先将受管比赛画面切到播出。');
@@ -150,17 +150,6 @@ export async function setBpCompactVisible(
 }
 
 /** Do not re-enable the managed HUD while a compact source is on air. */
-export async function assertBpCompactOff(obs: ObsRpc): Promise<void> {
-  const collection = await obs.call('GetSceneCollectionList');
-  if (collection.currentSceneCollectionName !== OBS_COLLECTION) return;
-  const sceneName = obsSceneName('gameplay');
-  const scenes = objects((await obs.call('GetSceneList')).scenes);
-  if (!scenes.some((scene) => scene.sceneName === sceneName)) return;
-  const items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
-  if (items.some((item) => item.sourceName === BP_COMPACT_INPUT && item.sceneItemEnabled !== false))
-    throw new Error('请先关闭紧凑 BP 底栏，再修复 OBS 场景。');
-}
-
 const DEFAULT_COMPACT_TRANSFORM: Record<string, unknown> = {
   positionX: 0,
   positionY: 0,

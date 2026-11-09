@@ -225,6 +225,25 @@ export class AudioMigration {
     if (modeId && journal.modeId !== modeId) return;
     await rm(completedPath);
   }
+  /** Rebuilding our exclusive graph retires scene-item identities, not monitor preferences. */
+  async forgetCompletedSceneItems(path: string, endpoint: string, collection: string) {
+    const completed = await this.readJournal(path);
+    if (!completed) return;
+    if (
+      completed.endpoint !== endpoint ||
+      completed.collection !== collection ||
+      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_identity_changed');
+    const next = { ...completed, fields: completed.fields.filter((entry) => 'kind' in entry) };
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
   async completedEnabledItems(path: string) {
     const completed = await this.readJournal(path);
     return (

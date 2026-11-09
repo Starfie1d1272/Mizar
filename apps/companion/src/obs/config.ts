@@ -76,7 +76,7 @@ export class ObsConfigStore {
   }
   readonly managedResources: ManagedObsResources;
   constructor(private readonly filePath: string) {
-    this.managedResources = new ManagedObsResources(`${filePath}.resources.json`);
+    this.managedResources = new ManagedObsResources(`${filePath}.collection.json`);
   }
   async read(): Promise<ObsConfig> {
     try {

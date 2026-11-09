@@ -1,5 +1,4 @@
 import { writeFile, rm } from 'node:fs/promises';
-import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import {
@@ -73,23 +72,13 @@ export async function prepareRemoteCommentary(
   const scenes = obsDesiredScenes(baseUrl);
   const ensureInert = async (uuid: string) => {
     if (!allowOutput) return;
-    const graph = await inspectAudioSceneGraph(
-      obs,
-      scenes.map((scene) => scene.sceneName),
-    );
-    if (
-      graph.some((container) =>
-        container.items.some(
-          (item) =>
-            item.sourceUuid === uuid && (item.sceneItemEnabled || container.otherRoots.size),
-        ),
-      )
-    )
-      throw new Error('commentary_shared_source');
-    const inputs = records((await obs.call('GetInputList')).inputs);
-    const name = inputs.find((input) => input.inputUuid === uuid)?.inputName;
-    if (Object.values(await obs.call('GetSpecialInputs')).includes(name))
-      throw new Error('commentary_shared_source');
+    for (const scene of scenes) {
+      const items = records(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      );
+      if (items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled))
+        throw new Error('commentary_source_active');
+    }
   };
   let inputs = records((await obs.call('GetInputList')).inputs);
   let target: string | undefined;
@@ -104,18 +93,13 @@ export async function prepareRemoteCommentary(
       return pending('所选远端解说来源已失效，请重新选择。');
     target = binding.inputUuid;
   } else {
-    let probe = inputs.find(
-      (i) => i.inputKind === 'wasapi_process_output_capture' && typeof i.inputUuid === 'string',
-    )?.inputUuid as string | undefined;
-    if (!probe) {
-      probe = await createCommentaryProbe(
-        obs,
-        journal,
-        { endpoint, collection, sceneName: scenes[0]!.sceneName, allowOutput },
-        check,
-      );
-      inputs = records((await obs.call('GetInputList')).inputs);
-    }
+    const probe = await createCommentaryProbe(
+      obs,
+      journal,
+      { endpoint, collection, sceneName: scenes[0]!.sceneName, allowOutput },
+      check,
+    );
+    inputs = records((await obs.call('GetInputList')).inputs);
     let window: string | undefined;
     if (state.preference.mode === 'application') window = state.preference.window;
     else {
@@ -258,38 +242,11 @@ export async function prepareRemoteCommentary(
   if (!source || typeof source.inputName !== 'string')
     return pending('所选远端解说来源已失效，请重新选择。');
   const name = source.inputName;
-  const containsEnabled = async (
-    scene: string,
-    group: boolean,
-    ancestors: Set<string>,
-  ): Promise<boolean> => {
-    if (ancestors.has(scene) || ancestors.size >= 16) throw new Error('commentary_scene_cycle');
-    const next = new Set(ancestors).add(scene);
-    const items = records(
-      (await obs.call(group ? 'GetGroupSceneItemList' : 'GetSceneItemList', { sceneName: scene }))
-        .sceneItems,
-    );
-    for (const item of items) {
-      if (item.sceneItemEnabled !== true) continue;
-      if (item.sourceUuid === target) return true;
-      if (
-        typeof item.sourceName === 'string' &&
-        (item.isGroup === true || item.sourceType === 'OBS_SOURCE_TYPE_SCENE') &&
-        (await containsEnabled(item.sourceName, item.isGroup === true, next))
-      )
-        return true;
-    }
-    return false;
-  };
   for (const scene of scenes) {
     const items = records(
       (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
     );
-    if (
-      items.some((i) => i.sourceUuid === target) ||
-      (await containsEnabled(scene.sceneName, false, new Set()))
-    )
-      continue;
+    if (items.some((i) => i.sourceUuid === target)) continue;
     await check();
     await obs.call('CreateSceneItem', {
       sceneName: scene.sceneName,

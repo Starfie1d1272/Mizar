@@ -30,7 +30,7 @@ it.each(['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'OBS_MONITORING_TYPE_MONITOR_
     const desktop = await change(rig, 'desktop');
     expect(desktop.statusCode, desktop.body).toBe(200);
     expect(rig.monitor()).toBe('OBS_MONITORING_TYPE_NONE');
-    const backup = JSON.parse(await readFile(join(rig.dir, 'journal.migration-mode'), 'utf8')) as {
+    const backup = JSON.parse(await readFile(join(rig.dir, 'journal.dedicated-mode'), 'utf8')) as {
       fields: { kind?: string }[];
     };
     expect(backup.fields).toHaveLength(1);

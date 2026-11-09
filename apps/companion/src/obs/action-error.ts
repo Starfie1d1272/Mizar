@@ -1,6 +1,6 @@
 const messages = {
   output_active_audio: 'OBS 正在输出；停止推流和录制后配置音频。',
-  collection_inactive: '请先修复并切换到 Mizar 场景集合。',
+  collection_inactive: '请先修复并切换到 「Mizar 制播」场景集合。',
   video_audio_active: '游戏或窗口捕获已开启音频，请在 OBS 中配置麦克风，以免重复采集声音。',
   custom_audio: '已有自定义音频来源，请在 OBS 中配置，以免重复采集。',
   audio_name_conflict: 'Mizar 音频来源名称冲突，请在 OBS 中核对。',

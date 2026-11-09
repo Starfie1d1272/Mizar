@@ -78,12 +78,11 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
           responseData = { outputActive: false };
         else if (type === 'GetPersistentData')
           responseData = {
-            slotValue:
-              data.realm === 'SCENE_COLLECTION' ? 'fixture-collection' : 'fixture-instance',
+            slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
           };
         else if (type === 'GetOutputList') responseData = { outputs: [] };
         else if (type === 'GetSceneCollectionList')
-          responseData = { currentSceneCollectionName: 'Mizar' };
+          responseData = { currentSceneCollectionName: 'Mizar 制播' };
         else if (type === 'GetSceneList')
           responseData = {
             currentProgramSceneName: obsSceneName('waiting'),
@@ -173,17 +172,17 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
   await writeFile(
-    join(dir, 'obs.json.resources.json'),
+    join(dir, 'obs.json.collection.json'),
     JSON.stringify([
       {
         endpoint: `ws://127.0.0.1:${address.port}`,
-        collection: 'Mizar',
-        instance: 'fixture-instance',
-        collectionIdentity: 'fixture-collection',
+        instance: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+        collectionIdentity: '1fd3fde9-8040-407f-b738-ddb9f019c96e',
+        creating: false,
         roles: {
-          'scene:waiting': { uuid: 'waiting-uuid', kind: 'scene', version: 1 },
-          'scene:gameplay': { uuid: 'gameplay-uuid', kind: 'scene', version: 1 },
-          capture: { uuid: 'capture-uuid', kind: 'game_capture', version: 1 },
+          [obsSceneName('waiting')]: { uuid: 'waiting-uuid', kind: 'scene' },
+          [obsSceneName('gameplay')]: { uuid: 'gameplay-uuid', kind: 'scene' },
+          游戏画面: { uuid: 'capture-uuid', kind: 'game_capture' },
         },
       },
     ]),
