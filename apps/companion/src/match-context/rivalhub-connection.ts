@@ -21,6 +21,7 @@ import {
 } from '../output/reliable-outbox.js';
 import { SerialCommitQueue } from './serial-commit.js';
 import { replaceDurableJson } from './durable-json.js';
+import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
   type ExactSource,
@@ -68,6 +69,15 @@ type Installation = {
   authorizedUser?: { userId: string; displayName: string } | undefined;
 };
 
+export interface SourceCaptureLifecycle {
+  createReference(cursor: ReliableEventV1['cursor']): CaptureReference;
+  arm(identity: ExactSource, reference: CaptureReference): Promise<void>;
+  activate(identity: ExactSource): void;
+  restore(identity: ExactSource, reference: CaptureReference | undefined): Promise<void>;
+  seal(identity: ExactSource): Promise<boolean>;
+  coverage(identity: ExactSource): { state: 'armed' | 'sealed' | 'unknown' };
+}
+
 export type StatsTarget = {
   matchId: string;
   competitionId: string;
@@ -104,11 +114,7 @@ function statsRetryDelay(header: string | null): number {
   return Number.isFinite(delay) && delay >= 0 ? Math.max(STATS_RETRY_MS, delay) : STATS_RETRY_MS;
 }
 type PairingStatus = 'idle' | 'pending' | 'expired' | 'authorized';
-type Source = {
-  matchId: string;
-  authorityRevision: number;
-  producerInstanceId: string;
-  liveSessionId: string;
+type Source = ExactSource & {
   acknowledgedExecution?: string;
   mapStartAttempt?: symbol;
   deliveryExecution?: string;
@@ -304,7 +310,13 @@ function authorizedUser(input: unknown): Installation['authorizedUser'] {
 export class RivalHubConnection {
   private onDiagnostic: (operation: string, error: unknown) => void = () => {};
   setDiagnosticHandler(handler: (operation: string, error: unknown) => void): void {
-    this.onDiagnostic = handler;
+    this.onDiagnostic = (operation, error) => {
+      try {
+        handler(operation, error);
+      } catch {
+        // Diagnostic observers cannot turn retained website failures into uncaught errors.
+      }
+    };
   }
   private businessHandler: ((stage: string, evidence: unknown) => void) | undefined;
   private originalError(operation: string, error: unknown): void {
@@ -544,7 +556,7 @@ export class RivalHubConnection {
   private claimOperationsInFlight = 0;
   private readonly sourceState: RivalHubSourceState;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
-  private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false };
+  private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
   private archiveSource:
     ((identity: ExactSource, disposition?: 'revoked') => Promise<void>) | undefined;
@@ -697,8 +709,14 @@ export class RivalHubConnection {
   }
 
   stopSync(matchId: string | null): void {
+    ++this.bindingGeneration;
     this.stoppedMatchId = matchId;
     this.syncWatch = null;
+    if (this.source && (!matchId || this.source.matchId === matchId)) {
+      this.source.draining = true;
+      this.source.paused = true;
+      this.sealCapture(this.exactSource(this.source));
+    }
   }
   private liveDelivery: {
     cursor: LiveSnapshotV1['cursor'] | null;
@@ -722,6 +740,9 @@ export class RivalHubConnection {
     return this.source === null
       ? null
       : JSON.stringify([
+          this.source.baseUrl,
+          this.source.competitionId,
+          this.source.installationId,
           this.source.matchId,
           this.source.authorityRevision,
           this.source.producerInstanceId,
@@ -744,9 +765,56 @@ export class RivalHubConnection {
   }
 
   private sourceStateAvailable = false;
+  private captureLifecycle: SourceCaptureLifecycle | undefined;
+
+  async setSourceCaptureLifecycle(lifecycle: SourceCaptureLifecycle): Promise<void> {
+    this.captureLifecycle = lifecycle;
+    if (!this.sourceStateAvailable) return;
+    try {
+      const state = await this.sourceState.snapshot();
+      for (const record of state.records)
+        await lifecycle.restore(record.identity, record.captureReference);
+      await this.updateCleanupSummary();
+    } catch (error) {
+      this.sourceStateAvailable = false;
+      throw error;
+    }
+  }
+
+  private sealCapture(identity: ExactSource): void {
+    // The lifecycle fences synchronously, before any JSON/network await.
+    try {
+      void this.captureLifecycle
+        ?.seal(identity)
+        .catch((error: unknown) => this.onDiagnostic('source_capture_seal', error));
+    } catch (error) {
+      this.onDiagnostic('source_capture_seal', error);
+    }
+  }
+
+  private async confirmedCapture(identity: ExactSource): Promise<CaptureReference | undefined> {
+    const state = await this.sourceState.snapshot();
+    return state.records.find(
+      (record) => JSON.stringify(record.identity) === JSON.stringify(identity),
+    )?.captureReference;
+  }
+
+  private async restoreConfirmedCapture(identity: ExactSource): Promise<void> {
+    if (!this.captureLifecycle) return;
+    await this.captureLifecycle.restore(identity, await this.confirmedCapture(identity));
+  }
 
   private requireSourceState(): void {
     if (!this.sourceStateAvailable) throw new Error('rivalhub_source_state_unavailable');
+  }
+
+  /** Startup rollback only; recovery requires a new owner on the next start. */
+  async abortSourceCaptureStartup(): Promise<void> {
+    this.sourceStateAvailable = false;
+    ++this.bindingGeneration;
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+    await this.sourceCommands.run(() => this.sourceState.close());
   }
 
   async load(): Promise<void> {
@@ -759,6 +827,11 @@ export class RivalHubConnection {
     } catch (error) {
       this.sourceState.invalidate();
       this.onDiagnostic('source_state_load', error);
+      try {
+        await this.sourceState.close();
+      } catch (cleanupError) {
+        this.onDiagnostic('source_state_startup_cleanup', cleanupError);
+      }
     }
     let stage = 'connection_read';
     try {
@@ -871,7 +944,11 @@ export class RivalHubConnection {
 
   bindingChanged(matchId: string | null): void {
     const generation = ++this.bindingGeneration;
-    if (this.source && this.source.matchId !== matchId) this.source.draining = true;
+    if (this.source && this.source.matchId !== matchId) {
+      this.source.draining = true;
+      this.source.paused = true;
+      this.sealCapture(this.exactSource(this.source));
+    }
     void this.sourceCommands
       .run(async () => {
         if (
@@ -889,12 +966,19 @@ export class RivalHubConnection {
   async shutdownSource(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
-    return this.sourceCommands.run(async () => {
-      const deadline = Date.now() + 8000;
-      await this.retireCurrent('shutdown');
-      await this.cleanup(true, deadline);
-      if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
-    });
+    ++this.bindingGeneration;
+    if (this.source) this.sealCapture(this.exactSource(this.source));
+    try {
+      await this.sourceCommands.run(async () => {
+        const deadline = Date.now() + 8000;
+        await this.retireCurrent('shutdown');
+        await this.cleanup(true, deadline);
+        if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
+      });
+    } finally {
+      this.sourceStateAvailable = false;
+      await this.sourceState.close();
+    }
   }
 
   private async updateCleanupSummary(): Promise<void> {
@@ -908,6 +992,9 @@ export class RivalHubConnection {
         state.revokedIntents.length +
         (await this.sourceState.quarantineCount()),
       claimIntent: state.intent !== null,
+      coverageUnknown: state.records.filter(
+        (record) => this.captureLifecycle?.coverage(record.identity).state === 'unknown',
+      ).length,
     };
   }
 
@@ -950,11 +1037,10 @@ export class RivalHubConnection {
   }
 
   private exactSource(source: Source): ExactSource {
-    if (!this.installation) throw new Error('请先连接 RivalHub。');
     return {
-      baseUrl: this.installation.baseUrl,
-      competitionId: this.installation.competitionId,
-      installationId: this.installation.installationId,
+      baseUrl: source.baseUrl,
+      competitionId: source.competitionId,
+      installationId: source.installationId,
       matchId: source.matchId,
       producerInstanceId: source.producerInstanceId,
       liveSessionId: source.liveSessionId,
@@ -965,6 +1051,9 @@ export class RivalHubConnection {
   private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
     if (!this.settleSource) return false;
     const key = JSON.stringify([
+      identity.baseUrl,
+      identity.competitionId,
+      identity.installationId,
       identity.matchId,
       identity.producerInstanceId,
       identity.liveSessionId,
@@ -972,25 +1061,13 @@ export class RivalHubConnection {
     ]);
     const drain = async () => {
       const requests = [...this.liveInFlight.entries()]
-        .filter(
-          ([source]) =>
-            source.matchId === identity.matchId &&
-            source.producerInstanceId === identity.producerInstanceId &&
-            source.liveSessionId === identity.liveSessionId &&
-            source.authorityRevision === identity.authorityRevision,
-        )
+        .filter(([source]) => JSON.stringify(this.exactSource(source)) === JSON.stringify(identity))
         .flatMap(([, pending]) => [...pending]);
       // The output owner fences new events synchronously on entry. Only after
       // that fence exists may a paused source deliver its already queued tail.
       const disposition = this.settleSource!(identity).catch(() => false);
       const source = this.source;
-      if (
-        source?.draining &&
-        source.matchId === identity.matchId &&
-        source.producerInstanceId === identity.producerInstanceId &&
-        source.liveSessionId === identity.liveSessionId &&
-        source.authorityRevision === identity.authorityRevision
-      )
+      if (source?.draining && JSON.stringify(this.exactSource(source)) === JSON.stringify(identity))
         source.drainReliable = true;
       await Promise.allSettled(requests);
       return disposition;
@@ -1017,6 +1094,8 @@ export class RivalHubConnection {
     if (!source) return;
     const identity = this.exactSource(source);
     source.draining = true;
+    source.paused = true;
+    this.sealCapture(identity);
     await this.sourceState.handoff(identity, cause);
     await this.updateCleanupSummary();
     // Durable handoff owns the old scope. Pending network delivery does not block a new match.
@@ -1117,6 +1196,8 @@ export class RivalHubConnection {
         found.authorityRevision as number,
       );
       const key = this.trackExitHandoff(identity, 'recovery');
+      await this.restoreConfirmedCapture(identity);
+      this.sealCapture(identity);
       // A failed write must still leave the original source ready for a later drain.
       this.freezePreviousClaimSource(identity, claimedFrom, installation);
       await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
@@ -1964,6 +2045,7 @@ export class RivalHubConnection {
     const intent = await this.sourceState.beginClaim(
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,
+      this.captureLifecycle?.createReference(snapshot.cursor),
     );
     const claimedFrom = this.source;
     if (claimedFrom) claimedFrom.paused = true;
@@ -2028,11 +2110,42 @@ export class RivalHubConnection {
         if (!Number.isSafeInteger(result.authorityRevision) || result.authorityRevision <= 0)
           throw new Error('数据源授权响应无效，等待核对。');
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
+        if (
+          claimedFrom &&
+          this.source === claimedFrom &&
+          JSON.stringify(this.exactSource(claimedFrom)) !== JSON.stringify(identity)
+        ) {
+          claimedFrom.draining = true;
+          claimedFrom.paused = true;
+          this.sealCapture(this.exactSource(claimedFrom));
+        }
         if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
+        if (this.captureLifecycle) {
+          try {
+            const reference = await this.confirmedCapture(identity);
+            if (!reference) throw new Error('source_capture_legacy_coverage_unknown');
+            await this.captureLifecycle.arm(identity, reference);
+          } catch (error) {
+            try {
+              await this.handoffStaleClaim(identity, claimedFrom, installation);
+            } catch (handoffError) {
+              throw new AggregateError([error, handoffError], '数据采集区间启用未确认。', {
+                cause: handoffError,
+              });
+            }
+            throw error;
+          }
+          if (generation !== this.bindingGeneration || !isCurrent()) {
+            await this.handoffStaleClaim(identity, claimedFrom, installation);
+            throw new Error('比赛已变化，原数据源待释放。');
+          }
+        }
         try {
+          // An accepted claim has no capture interval until arm completes.
+          // Do not publish that transient absence as unknown historical coverage.
           await this.updateCleanupSummary();
         } catch (error) {
           try {
@@ -2049,6 +2162,21 @@ export class RivalHubConnection {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
+        if (this.captureLifecycle) {
+          try {
+            // No await between this actual capture-start cut and source publication.
+            this.captureLifecycle.activate(identity);
+          } catch (error) {
+            try {
+              await this.handoffStaleClaim(identity, claimedFrom, installation);
+            } catch (handoffError) {
+              throw new AggregateError([error, handoffError], '数据采集区间启用未确认。', {
+                cause: handoffError,
+              });
+            }
+            throw error;
+          }
+        }
         this.resumeSource?.(scope);
         this.stoppedMatchId = null;
         this.controlFailure = null;
@@ -2062,12 +2190,7 @@ export class RivalHubConnection {
           notified: false,
         };
         this.claimRevision += 1;
-        this.source = {
-          matchId: snapshot.matchId,
-          authorityRevision: result.authorityRevision,
-          producerInstanceId: snapshot.cursor.producerInstanceId,
-          liveSessionId: snapshot.cursor.liveSessionId,
-        };
+        this.source = { ...identity };
         this.activeDeviceName = null;
         this.activeDeviceMatchId = null;
       } else if (result.claimed === false) {
@@ -2119,6 +2242,7 @@ export class RivalHubConnection {
       // confirmClaim may also have retired the previous authority of this scope.
       claimedFrom.draining = true;
       claimedFrom.paused = true;
+      this.sealCapture(this.exactSource(claimedFrom));
     }
   }
 
@@ -2130,7 +2254,12 @@ export class RivalHubConnection {
     // Keep the confirmed identity and its cause until the handoff is durable.
     const key = this.trackExitHandoff(identity, 'switch');
     this.freezePreviousClaimSource(identity, claimedFrom, installation);
+    await this.restoreConfirmedCapture(identity);
+    this.sealCapture(identity);
     await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
+    // Publish the durable responsibility before returning the stale-claim error.
+    // Keep the in-memory handoff too if refreshing this read-only summary fails.
+    await this.updateCleanupSummary();
     this.exitHandoffs.delete(key);
     void this.sourceCommands
       .run(() => this.cleanup(false))
@@ -2139,7 +2268,39 @@ export class RivalHubConnection {
 
   async release(): Promise<void> {
     this.requireSourceState();
+    ++this.bindingGeneration;
+    if (this.source) {
+      this.source.draining = true;
+      this.source.paused = true;
+      this.sealCapture(this.exactSource(this.source));
+    }
     return this.sourceCommands.run(() => this.releaseLocked());
+  }
+
+  /** Retry a failed manual stop only while its original source is still retained. */
+  async retryStoppedSource(matchId: string, isCurrent: () => boolean): Promise<void> {
+    this.requireSourceState();
+    const source = this.source;
+    const identity = source && this.installation ? this.exactSource(source) : undefined;
+    const generation = this.bindingGeneration;
+    const current = () =>
+      Boolean(
+        source &&
+        identity &&
+        this.source === source &&
+        this.bindingGeneration === generation &&
+        this.stoppedMatchId === matchId &&
+        source.matchId === matchId &&
+        source.draining === true &&
+        this.scopeMatches(identity) &&
+        JSON.stringify(this.exactSource(source)) === JSON.stringify(identity) &&
+        isCurrent(),
+      );
+    if (!current()) throw new Error('rivalhub_stopped_source_changed');
+    return this.sourceCommands.run(async () => {
+      if (!current()) throw new Error('rivalhub_stopped_source_changed');
+      await this.releaseLocked();
+    });
   }
 
   private async releaseLocked(): Promise<void> {

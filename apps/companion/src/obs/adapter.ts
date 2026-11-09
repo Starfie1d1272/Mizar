@@ -99,6 +99,43 @@ export function obsErrorEvidence(error: unknown, password = ''): unknown {
   return redact(diagnosticValue(error, '', new Set(), password ? [password] : []));
 }
 
+export function obsAudioModeFailureEvidence(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  const exactReasons = [
+    'audio_desktop_choice_required',
+    'audio_selection_changed',
+    'audio_revision_changed',
+    'audio_mode_already_desktop',
+    'audio_commentary_unavailable',
+    'audio_mode_pending',
+    'audio_mode_target_changed',
+    'audio_migration_identity_changed',
+    'audio_migration_external_change',
+    'audio_migration_backup_conflict',
+    'audio_migration_recovery_required',
+    'audio_migration_write_uncertain',
+    'audio_setup_context_changed',
+    'audio_configuration_timeout',
+    'audio_configuration_disconnected',
+    'audio_configuration_busy',
+  ];
+  const parameterReasons = [
+    'audio_nested_shared_path',
+    'audio_video_path_unresolved',
+    'audio_monitor_shared',
+    'audio_global_path_unresolved',
+  ];
+  return {
+    code:
+      exactReasons.find((code) => message === code) ??
+      parameterReasons.find((code) => message === code || message.startsWith(`${code}:`)) ??
+      'hidden',
+    failureKind: obsFailureKind(error),
+    detailStatus: 'classification_only',
+    message: '此摘要仅含安全分类，不包含原始错误详情。',
+  };
+}
+
 export interface ObsStatus {
   readonly connection: 'connected' | 'unavailable' | 'password_required' | 'invalid_password';
   readonly connectionFailure?: ReturnType<typeof obsFailureKind>;
@@ -242,6 +279,10 @@ export class ObsAdapter {
   private async preparationStatus(): Promise<NonNullable<ObsOutputsStatus['preparation']> | null> {
     const capture = await this.captureWarmup?.status().catch(() => 'cleanup_pending' as const);
     return capture ?? (this.configurationPending ? 'checking' : null);
+  }
+
+  outputObservationEpoch(): number {
+    return this.outputs.outputObservationEpoch();
   }
 
   async outputStatus(): Promise<ObsOutputsStatus> {
@@ -1049,6 +1090,19 @@ export class ObsAdapter {
       return { cancelled: true };
     });
   }
+  private audioModeRun<T>(
+    stage: string,
+    operation: (obs: ObsRpc, endpoint: string, observer: MigrationObserver) => Promise<T>,
+  ): Promise<T> {
+    return this.audioConfiguration.run(operation, (error, password) => {
+      this.diagnostic(
+        stage,
+        password === undefined
+          ? { ...obsAudioModeFailureEvidence(error), redactionContext: 'unavailable' }
+          : obsErrorEvidence(error, password),
+      );
+    });
+  }
   async requestIndependentMode(
     revision: string,
     music: Pick<
@@ -1062,7 +1116,7 @@ export class ObsAdapter {
   ) {
     if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
     await this.configurationMutation(() =>
-      this.audioConfiguration.run(async (obs, endpoint, observer) => {
+      this.audioModeRun('audio_mode_prepare', async (obs, endpoint, observer) => {
         const before = await this.audioRouting!.modeRecoveryState();
         if (before.revision !== revision) throw new Error('audio_revision_changed');
         if (before.transition) throw new Error('audio_mode_pending');
@@ -1151,7 +1205,7 @@ export class ObsAdapter {
     )
       return null;
     return this.configurationMutation(() =>
-      this.audioConfiguration.run(async (connection, endpoint, observer) => {
+      this.audioModeRun('audio_mode_sources', async (connection, endpoint, observer) => {
         if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
         const obs = guardedObs(connection, valid);
         const state = await this.audioRouting!.modeRecoveryState();
@@ -1224,7 +1278,7 @@ export class ObsAdapter {
   ) {
     if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
     return this.configurationMutation(() =>
-      this.audioConfiguration.run(async (connection, endpoint, observer) => {
+      this.audioModeRun('audio_mode_switch', async (connection, endpoint, observer) => {
         if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
         const guarded = guardedObs(connection, valid);
         let obsWriteAttempted = false;

@@ -4,7 +4,7 @@ import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/outp
 
 import type { ExactSource } from '../match-context/rivalhub-source-state.js';
 
-export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v2' as const;
+export const RELIABLE_OUTBOX_VERSION = 'mizar.reliable-outbox.v3' as const;
 export const RELIABLE_OUTBOX_MAX_PENDING = 128;
 export const RELIABLE_OUTBOX_MAX_RECORDS = 192;
 export const RELIABLE_OUTBOX_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -510,7 +510,9 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
     throw new Error('outbox_invalid');
   const value = raw as Record<string, unknown>;
   if (
-    ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v1'].includes(value.version as string) ||
+    ![RELIABLE_OUTBOX_VERSION, 'mizar.reliable-outbox.v2', 'mizar.reliable-outbox.v1'].includes(
+      value.version as string,
+    ) ||
     !Array.isArray(value.records) ||
     value.records.length > RELIABLE_OUTBOX_MAX_RECORDS ||
     (value.unconfirmedRecovery !== undefined && value.unconfirmedRecovery !== true) ||
@@ -540,7 +542,8 @@ export function parseOutbox(bytes: Buffer): OutboxFile {
       value.boundaryOverflowOwners !== undefined)
   )
     throw new Error('outbox_legacy_metadata_invalid');
-  const commit = value.version === RELIABLE_OUTBOX_VERSION ? parseCommit(value.commit) : undefined;
+  const commit =
+    value.version !== 'mizar.reliable-outbox.v1' ? parseCommit(value.commit) : undefined;
   if (commit !== undefined && commit.sha256 !== payloadDigest(value))
     throw new Error('outbox_checksum_mismatch');
   const records = value.records.map(parseRecord);

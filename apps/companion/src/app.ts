@@ -1058,6 +1058,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {}),
       activeScene: () => sceneController.get().active,
       preparationValid: (revision) => production.preparationValid(revision),
+      canStartOutput: () => production.canStartObsOutput(),
       ...(options.productRuntime
         ? { runtimeControlToken: options.productRuntime.controlToken }
         : {}),
@@ -1427,14 +1428,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await resources?.shutdown();
     });
   }
+  let updateExit: ReturnType<typeof registerUpdateRoutes> | undefined;
   if (options.updates && options.productRuntime)
-    registerUpdateRoutes(app, {
+    updateExit = registerUpdateRoutes(app, {
       manager: options.updates,
       controlToken: options.productRuntime.controlToken,
       originPolicy: localWebTransport.getOriginPolicy(),
       production,
       scenes: sceneController,
       obs: async () => obsAdapter?.status(),
+      obsEpoch: () => obsAdapter?.outputObservationEpoch(),
       mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
     });
   const guidance = new ProductionGuidanceStore();
@@ -2115,7 +2118,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   };
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
-    await outputService.start();
+    await outputService.start({
+      sourceStateAvailable: options.rivalhubConnection?.view().sourceState !== 'unavailable',
+      restoreSourceCapture: async () => {
+        await options.rivalhubConnection?.setSourceCaptureLifecycle?.({
+          createReference: (cursor) => outputService.createCaptureReference(cursor),
+          arm: (identity, reference) => outputService.armSourceCapture(identity, reference),
+          activate: (identity) => outputService.activateSourceCapture(identity),
+          restore: (identity, reference) => outputService.restoreSourceCapture(identity, reference),
+          seal: (identity) => outputService.sealSourceCapture(identity),
+          coverage: (identity) => outputService.sourceCaptureCoverage(identity),
+        });
+      },
+    });
+    if (!outputService.isReliableAvailable()) {
+      try {
+        await options.rivalhubConnection?.abortSourceCaptureStartup?.();
+      } catch (error) {
+        app.log.error({ err: error }, '网站启动所有权清理未确认，本机制作继续；修复后重启。');
+      }
+    }
     options.rivalhubConnection?.setSourceSettlement?.(
       (scope) => outputService.settleSourceForRelease(scope),
       (scope) => outputService.resumeSource(scope),
@@ -2222,8 +2244,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
-      const result = productionHttpResponse(await production.shutdown());
-      if (result.code !== 200) return reply.code(result.code).send(result.value);
+      const shutdown = await production.shutdown();
+      const result = productionHttpResponse(shutdown.result);
+      if (!shutdown.result.ok) return reply.code(result.code).send(result.value);
+      const updateBlocked = await updateExit?.beforeStop();
+      if (updateBlocked) {
+        await shutdown.cancel();
+        return reply.code(409).send({ message: updateBlocked });
+      }
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
     });
@@ -2532,6 +2560,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 monotonicMs: performance.now(),
                 utc: new Date().toISOString(),
               };
+              outputService.beforeRuntimeMutation();
               const generationAdvance = programRuntime.advanceProgramSourceGeneration(at);
               if (
                 generationAdvance.disposition.kind !== 'accepted' ||
@@ -2540,7 +2569,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 await result.nextRecorder.finalize();
                 throw new Error('接收链路代际推进失败。');
               }
-              outputService.beforeRuntimeMutation();
               publishRuntimeCommit(generationAdvance);
               debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
               recorder = result.nextRecorder;

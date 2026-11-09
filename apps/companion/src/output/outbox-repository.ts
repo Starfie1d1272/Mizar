@@ -1,4 +1,9 @@
-import { createHash } from 'node:crypto';
+import {
+  parseCaptureReference,
+  type CaptureInterval,
+  type CaptureTicket,
+} from './capture-interval.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync } from 'node:fs';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -25,6 +30,11 @@ import {
   type RevokedSource,
 } from './outbox-codec.js';
 
+// Fail closed at capacity; unresolved capture evidence is never evicted.
+const MAX_CAPTURE_INTERVALS = 4096;
+const MAX_CAPTURE_UNKNOWN_SOURCES = 192;
+const MAX_CAPTURE_RECEIPTS = 16_384;
+
 export type HistoryKind = 'archived' | 'revoked' | 'legacy';
 export type HistoryItem =
   | { readonly kind: 'record'; readonly value: ReliableOutboxRecord }
@@ -38,6 +48,7 @@ export interface OutboxHistory {
 
 export interface OutboxCommit {
   readonly active: OutboxFile;
+  readonly capture?: CaptureTicket;
   readonly boundaryCapture?: BoundaryCaptureOperation;
   readonly history?: readonly OutboxHistory[];
   readonly damagedScopes?: readonly string[];
@@ -100,7 +111,7 @@ async function readLegacy(path: string): Promise<OutboxCommit> {
     // A mirror alone cannot prove whether its commit was published.
     throw new Error('outbox_import_primary_missing');
   }
-  active ??= sealOutbox({ version: 'mizar.reliable-outbox.v2', records: [] });
+  active ??= sealOutbox({ version: 'mizar.reliable-outbox.v3', records: [] });
 
   const history: OutboxHistory[] = [];
   const damagedScopes = new Set<string>();
@@ -221,7 +232,27 @@ export class OutboxRepository {
     const db = new DatabaseSync(dbPath);
     try {
       chmodSync(dbPath, 0o600);
-      db.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
+      db.exec('PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE;');
+      const tables = new Set(
+        (
+          db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+            name: string;
+          }[]
+        ).map((row) => row.name),
+      );
+      if (tables.has('metadata')) {
+        const active = db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as
+          { value: string } | undefined;
+        if (
+          active &&
+          JSON.parse(active.value).version === 'mizar.reliable-outbox.v3' &&
+          ['capture_intervals', 'capture_receipts', 'capture_unknown', 'boundary_captures'].some(
+            (name) => !tables.has(name),
+          )
+        )
+          throw new Error('capture_store_missing');
+      }
+      db.exec(`PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
         CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sources (source_key TEXT NOT NULL, scope TEXT NOT NULL, disposition TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(source_key, disposition));
         CREATE INDEX IF NOT EXISTS sources_scope ON sources(scope);
@@ -230,15 +261,41 @@ export class OutboxRepository {
         CREATE INDEX IF NOT EXISTS history_key ON history(item_key);
         CREATE INDEX IF NOT EXISTS history_delivery ON history(json_extract(payload, '$.event.cursor.producerInstanceId'), json_extract(payload, '$.event.cursor.liveSessionId'), json_extract(payload, '$.event.matchId'));
         CREATE TABLE IF NOT EXISTS damaged_scopes (scope TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS capture_unknown (source_key TEXT PRIMARY KEY, source TEXT NOT NULL, reason TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS capture_receipts (interval_id TEXT NOT NULL, sequence INTEGER NOT NULL, request_id TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(interval_id, sequence));
+        CREATE TABLE IF NOT EXISTS capture_intervals (id TEXT PRIMARY KEY, source_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS boundary_captures (sequence INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, request TEXT NOT NULL, receipt TEXT);`);
       const repository = new OutboxRepository(db);
-      if (!db.prepare("SELECT value FROM metadata WHERE key = 'imported'").get()) {
-        const imported = await readLegacy(legacyPath);
-        repository.transaction(() => {
+      const imported = !db.prepare("SELECT value FROM metadata WHERE key = 'imported'").get()
+        ? await readLegacy(legacyPath)
+        : undefined;
+      repository.transaction(() => {
+        if (imported) {
           repository.write(imported);
           db.prepare("INSERT INTO metadata VALUES ('imported', '1')").run();
-        });
+        }
+        const raw = db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as {
+          value: string;
+        };
+        const store = db.prepare("SELECT value FROM metadata WHERE key = 'capture_store'").get();
+        if (!store) {
+          if (!imported && JSON.parse(raw.value).version === 'mizar.reliable-outbox.v3')
+            throw new Error('capture_store_missing');
+          db.prepare("INSERT INTO metadata VALUES ('capture_store', ?)").run(randomUUID());
+        }
+        // The active v3 envelope and store identity become visible in one transaction.
+        repository.write({ active: sealOutbox(parseOutbox(Buffer.from(raw.value))) });
+      });
+      repository.captureStoreId();
+      for (const [table, max] of [
+        ['capture_intervals', MAX_CAPTURE_INTERVALS],
+        ['capture_unknown', MAX_CAPTURE_UNKNOWN_SOURCES],
+        ['capture_receipts', MAX_CAPTURE_RECEIPTS],
+      ] as const) {
+        const count = (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+        if (count > max) throw new Error('capture_store_capacity_exhausted');
       }
+      repository.unresolvedCaptureSources();
       return repository;
     } catch (error) {
       db.close();
@@ -270,7 +327,47 @@ export class OutboxRepository {
     this.transaction(() => {
       if (value.boundaryCapture && this.boundaryCaptureReceipt(value.boundaryCapture))
         throw new Error('boundary_capture_already_committed');
+      if (value.capture) {
+        const count = (
+          this.db.prepare('SELECT count(*) AS n FROM capture_receipts').get() as { n: number }
+        ).n;
+        if (count >= MAX_CAPTURE_RECEIPTS) throw new Error('capture_receipt_capacity_exhausted');
+        const interval = this.captureInterval(value.capture.intervalId);
+        if (
+          !interval ||
+          interval.state === 'sealed' ||
+          value.capture.sequence !== interval.committedSequence + 1
+        )
+          throw new Error('capture_sequence_unconfirmed');
+        if (
+          interval.activationCursor &&
+          JSON.stringify(interval.activationCursor) !==
+            JSON.stringify(value.capture.activationCursor)
+        )
+          throw new Error('capture_activation_conflict');
+        this.writeCaptureInterval({
+          ...interval,
+          activationCursor: value.capture.activationCursor,
+          committedSequence: value.capture.sequence,
+        });
+        this.db
+          .prepare('INSERT INTO capture_receipts VALUES (?, ?, ?, ?)')
+          .run(
+            value.capture.intervalId,
+            value.capture.sequence,
+            value.capture.requestId,
+            value.active.commit!.sha256,
+          );
+      }
       this.write(value);
+      for (const history of value.history ?? []) {
+        if (history.disposition !== 'archived' || !history.source) continue;
+        const interval = this.captureIntervalForSource(history.source);
+        if (interval?.state === 'sealed' && !this.captureUnknownReason(history.source))
+          this.db
+            .prepare('DELETE FROM capture_receipts WHERE interval_id = ?')
+            .run(interval.reference.id);
+      }
       if (value.boundaryCapture) {
         const changed = this.db
           .prepare(
@@ -360,6 +457,177 @@ export class OutboxRepository {
     if (row.receipt !== null && !/^[a-f0-9]{64}$/.test(row.receipt))
       throw new Error('boundary_capture_receipt_invalid');
     return row.receipt ?? undefined;
+  }
+
+  captureUnknownReason(source: ExactSource): 'legacy' | 'unclean' | 'mismatch' | undefined {
+    const row = this.db
+      .prepare('SELECT reason FROM capture_unknown WHERE source_key = ?')
+      .get(sourceKey(source)) as { reason: 'legacy' | 'unclean' | 'mismatch' } | undefined;
+    if (row && !['legacy', 'unclean', 'mismatch'].includes(row.reason))
+      throw new Error('capture_unknown_invalid');
+    return row?.reason;
+  }
+
+  recordUnknownCapture(source: ExactSource, reason: 'legacy' | 'unclean' | 'mismatch'): void {
+    this.transaction(() => {
+      if (!this.captureUnknownReason(source)) {
+        const count = (
+          this.db.prepare('SELECT count(*) AS n FROM capture_unknown').get() as { n: number }
+        ).n;
+        if (count >= MAX_CAPTURE_UNKNOWN_SOURCES)
+          throw new Error('capture_unknown_capacity_exhausted');
+      }
+      this.db
+        .prepare('INSERT OR IGNORE INTO capture_unknown VALUES (?, ?, ?)')
+        .run(sourceKey(source), JSON.stringify(parseSource(source)), reason);
+    });
+  }
+
+  unresolvedCaptureSources(): ExactSource[] {
+    const intervals = (
+      this.db.prepare('SELECT payload FROM capture_intervals').all() as { payload: string }[]
+    ).map((row) => this.parseInterval(row.payload));
+    const unknown = (
+      this.db.prepare('SELECT source FROM capture_unknown').all() as { source: string }[]
+    ).map((row) => parseSource(JSON.parse(row.source)));
+    return [
+      ...unknown,
+      ...intervals
+        .filter(
+          (interval) =>
+            interval.state !== 'sealed' ||
+            !this.sourceDisposition(interval.source).includes('archived'),
+        )
+        .map((interval) => interval.source),
+    ];
+  }
+
+  captureReceipt(ticket: CaptureTicket): string | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT request_id, receipt FROM capture_receipts WHERE interval_id = ? AND sequence = ?',
+      )
+      .get(ticket.intervalId, ticket.sequence) as
+      { request_id: string; receipt: string } | undefined;
+    if (row && row.request_id !== ticket.requestId) throw new Error('capture_receipt_conflict');
+    return row?.receipt;
+  }
+
+  captureStoreId(): string {
+    const row = this.db.prepare("SELECT value FROM metadata WHERE key = 'capture_store'").get() as {
+      value: string;
+    };
+    if (
+      !row ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.value)
+    )
+      throw new Error('capture_store_invalid');
+    return row.value;
+  }
+
+  captureInterval(id: string): CaptureInterval | undefined {
+    const row = this.db.prepare('SELECT payload FROM capture_intervals WHERE id = ?').get(id) as
+      { payload: string } | undefined;
+    return row ? this.parseInterval(row.payload) : undefined;
+  }
+
+  captureIntervalForSource(source: ExactSource): CaptureInterval | undefined {
+    const row = this.db
+      .prepare('SELECT payload FROM capture_intervals WHERE source_key = ?')
+      .get(sourceKey(source)) as { payload: string } | undefined;
+    return row ? this.parseInterval(row.payload) : undefined;
+  }
+
+  private parseInterval(payload: string): CaptureInterval {
+    const raw = JSON.parse(payload) as CaptureInterval;
+    const reference = parseCaptureReference(raw.reference);
+    const source = parseSource(raw.source);
+    if (
+      reference.storeId !== this.captureStoreId() ||
+      !['armed', 'sealed', 'unknown'].includes(raw.state) ||
+      !Number.isSafeInteger(raw.committedSequence) ||
+      raw.committedSequence < 0
+    )
+      throw new Error('capture_interval_invalid');
+    const activationCursor =
+      raw.activationCursor === undefined
+        ? undefined
+        : parseCaptureReference({ ...reference, startCursor: raw.activationCursor }).startCursor;
+    if (
+      activationCursor &&
+      (activationCursor.producerInstanceId !== source.producerInstanceId ||
+        activationCursor.liveSessionId !== source.liveSessionId)
+    )
+      throw new Error('capture_activation_source_mismatch');
+    if (raw.committedSequence > 0 && !activationCursor)
+      throw new Error('capture_activation_missing');
+    const endCursor =
+      raw.endCursor === undefined
+        ? undefined
+        : parseCaptureReference({ ...reference, startCursor: raw.endCursor }).startCursor;
+    if (raw.state === 'sealed' && !endCursor) throw new Error('capture_interval_invalid');
+    if (
+      endCursor &&
+      (endCursor.producerInstanceId !== source.producerInstanceId ||
+        endCursor.liveSessionId !== source.liveSessionId ||
+        (activationCursor && endCursor.runtimeSeq < activationCursor.runtimeSeq))
+    )
+      throw new Error('capture_end_cursor_mismatch');
+    return {
+      ...raw,
+      reference,
+      source,
+      ...(activationCursor ? { activationCursor } : {}),
+      ...(endCursor ? { endCursor } : {}),
+    };
+  }
+
+  private writeCaptureInterval(interval: CaptureInterval): void {
+    const parsed = this.parseInterval(JSON.stringify(interval));
+    this.db
+      .prepare(
+        'INSERT INTO capture_intervals VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
+      )
+      .run(parsed.reference.id, sourceKey(parsed.source), JSON.stringify(parsed));
+  }
+
+  createCaptureInterval(interval: CaptureInterval): void {
+    this.transaction(() => {
+      const count = (
+        this.db.prepare('SELECT count(*) AS n FROM capture_intervals').get() as { n: number }
+      ).n;
+      if (count >= MAX_CAPTURE_INTERVALS) throw new Error('capture_interval_capacity_exhausted');
+      if (
+        this.captureInterval(interval.reference.id) ||
+        this.captureIntervalForSource(interval.source)
+      )
+        throw new Error('capture_interval_exists');
+      this.writeCaptureInterval(interval);
+    });
+  }
+
+  sealCaptureInterval(
+    id: string,
+    sequence: number,
+    endCursor: NonNullable<CaptureInterval['endCursor']>,
+    activationCursor?: CaptureInterval['activationCursor'],
+  ): void {
+    this.transaction(() => {
+      const interval = this.captureInterval(id);
+      if (!interval || interval.state !== 'armed' || interval.committedSequence !== sequence)
+        throw new Error('capture_sequence_unconfirmed');
+      if (
+        interval.activationCursor &&
+        JSON.stringify(interval.activationCursor) !== JSON.stringify(activationCursor)
+      )
+        throw new Error('capture_activation_conflict');
+      this.writeCaptureInterval({
+        ...interval,
+        state: 'sealed',
+        endCursor,
+        ...(activationCursor ? { activationCursor } : {}),
+      });
+    });
   }
 
   private write(value: OutboxCommit): void {

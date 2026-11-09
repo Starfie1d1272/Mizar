@@ -242,7 +242,10 @@ export function createProduction(options: ProductionDependencies) {
     productionViewSchema.parse(current);
     return current;
   };
-  async function change(body: ProductionCommand) {
+  async function change(
+    body: ProductionCommand,
+    onShutdownCommit?: (cancel: () => Promise<unknown>) => void,
+  ) {
     const obsOnlyRetry =
       body?.action === 'finish' && mode === 'preparation' && obsExitState === 'unconfirmed';
     const entryId = body.preparationId;
@@ -521,6 +524,18 @@ export function createProduction(options: ProductionDependencies) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
       }
+      if (shutdownIntent !== null && onShutdownCommit) {
+        const completedRevision = revision;
+        onShutdownCommit(() => {
+          if (busy || revision !== completedRevision || exitIntentGeneration !== shutdownIntent)
+            return Promise.resolve();
+          return dispatchChange({
+            action: 'cancel-exit',
+            expectedRevision: completedRevision,
+            preparationId: null,
+          });
+        });
+      }
       return { ok: true as const, value: view() };
     } catch (error) {
       options.error(
@@ -558,11 +573,14 @@ export function createProduction(options: ProductionDependencies) {
     }
   }
   let activeExitChange: Promise<Awaited<ReturnType<typeof change>>> | undefined;
-  async function dispatchChange(body: Parameters<typeof change>[0]) {
+  async function dispatchChange(
+    body: Parameters<typeof change>[0],
+    onShutdownCommit?: Parameters<typeof change>[1],
+  ) {
     const isExit = body?.action === 'finish' || body?.action === 'shutdown';
-    if (!isExit) return change(body);
+    if (!isExit) return change(body, onShutdownCommit);
     if (activeExitChange) {
-      if (body?.expectedRevision !== revision) return change(body);
+      if (body?.expectedRevision !== revision) return change(body, onShutdownCommit);
       const originalSession = sessionId;
       const prior = await activeExitChange;
       if (!prior.ok) return prior;
@@ -572,9 +590,9 @@ export function createProduction(options: ProductionDependencies) {
           failure: 'productionConflict' as const,
           message: '制作状态已变化，请刷新后重试。',
         };
-      return dispatchChange({ ...body, expectedRevision: revision });
+      return dispatchChange({ ...body, expectedRevision: revision }, onShutdownCommit);
     }
-    const pending = change(body);
+    const pending = change(body, onShutdownCommit);
     activeExitChange = pending;
     try {
       return await pending;
@@ -719,6 +737,7 @@ export function createProduction(options: ProductionDependencies) {
         busy = false;
       }
     },
+    canStartObsOutput: () => !updatePending,
     reserveUpdate: () => {
       if (trialPending || mode !== 'preparation' || busy || shuttingDown || updatePending)
         return false;
@@ -728,8 +747,16 @@ export function createProduction(options: ProductionDependencies) {
     releaseUpdate: () => {
       updatePending = false;
     },
-    shutdown: () =>
-      dispatchChange({ action: 'shutdown', expectedRevision: revision, preparationId: null }),
+    shutdown: async () => {
+      let cancel: () => Promise<unknown> = () => Promise.resolve();
+      const result = await dispatchChange(
+        { action: 'shutdown', expectedRevision: revision, preparationId: null },
+        (rollback) => {
+          cancel = rollback;
+        },
+      );
+      return { result, cancel };
+    },
   };
   return production;
 }

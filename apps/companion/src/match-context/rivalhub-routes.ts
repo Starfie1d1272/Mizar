@@ -766,6 +766,34 @@ export function registerRivalHubConnectionRoutes(
       }
     },
   );
+  app.post('/operator/rivalhub/source/retry-stop', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.connection.view().sourceState === 'unavailable')
+      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+    const binding = linkedBinding();
+    if (!binding || !targetMatches(request.body, binding))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+    const target = {
+      matchId: binding.context.matchId,
+      contextRevision: binding.manifest.revision,
+    };
+    try {
+      sourceCommand = options.connection.retryStoppedSource(target.matchId, () =>
+        targetMatches(target, linkedBinding()),
+      );
+      await sourceCommand;
+      return { message: '原数据源停止交接已完成，请核对网站同步状态。' };
+    } catch (error) {
+      request.log.error({ err: error }, 'RivalHub stopped source retry failed');
+      if (error instanceof Error && error.message === 'rivalhub_stopped_source_changed')
+        return reply.code(409).send({ message: '原数据源已变化，请重新检查网站同步状态。' });
+      return reply.code(502).send({ message: '原数据源停止交接仍未确认，请稍后重试。' });
+    } finally {
+      sourceCommand = null;
+    }
+  });
   app.post('/operator/rivalhub/source/release', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });

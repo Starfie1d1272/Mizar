@@ -9,34 +9,134 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 use tauri::Manager;
 
+static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
 pub struct PendingUpdate {
     pub stage: Arc<Mutex<Option<PathBuf>>>,
-    preparing: AtomicBool,
+    preparing: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    gui: Arc<AtomicU64>,
+    gui_ticket: Option<u64>,
+    publication: Arc<Mutex<()>>,
+    attempt: Arc<Mutex<Option<String>>>,
 }
 impl PendingUpdate {
     pub fn new(stage: Arc<Mutex<Option<PathBuf>>>) -> Self {
         Self {
             stage,
-            preparing: AtomicBool::new(false),
+            preparing: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            gui: Arc::new(AtomicU64::new(0)),
+            gui_ticket: None,
+            publication: Arc::new(Mutex::new(())),
+            attempt: Arc::new(Mutex::new(None)),
+        }
+    }
+    pub fn for_gui(&self) -> Self {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        let ticket = self.gui.fetch_add(1, Ordering::AcqRel) + 1;
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        Self {
+            gui_ticket: Some(ticket),
+            ..self.clone()
+        }
+    }
+    fn gui_current(&self) -> Result<(), String> {
+        if self.gui_ticket != Some(self.gui.load(Ordering::Acquire)) {
+            Err("桌面已退出或重建，本次操作已取消，请在当前窗口重试。".into())
+        } else {
+            Ok(())
         }
     }
     pub fn check(&self) -> Result<(), String> {
-        if self.preparing.load(Ordering::Acquire)
-            || self.stage.lock().map_err(|_| "更新状态不可用。")?.is_some()
-        {
+        self.gui_current()?;
+        // Slow authentication/staging must not prevent starting production.
+        if self.stage.lock().map_err(|_| "更新状态不可用。")?.is_some() {
             Err("Mizar 正在准备升级，请完成升级后再打开制作工具。".into())
         } else {
             Ok(())
         }
     }
+    pub fn invalidate(&self) {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        if self.gui_ticket.is_some() && self.gui_current().is_err() {
+            return;
+        }
+        self.gui.fetch_add(1, Ordering::AcqRel);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+    fn current(&self, generation: u64) -> Result<(), String> {
+        self.gui_current()?;
+        if self.generation.load(Ordering::Acquire) != generation {
+            Err("桌面已退出或重建，本次更新准备已取消，请重新尝试。".into())
+        } else {
+            Ok(())
+        }
+    }
+    pub fn recheck(&self, log: &DesktopLog) -> Result<(), String> {
+        self.gui_current()?;
+        if self.stage.lock().map_err(|_| "更新状态不可用。")?.is_none() {
+            return Ok(());
+        }
+        let attempt = self
+            .attempt
+            .lock()
+            .map_err(|_| "更新状态不可用。")?
+            .clone()
+            .ok_or("更新准备状态已变化，请重新尝试。")?;
+        request(log, "recheck", Some(&attempt))?;
+        Ok(())
+    }
+    pub fn cancel(&self, log: &DesktopLog) {
+        let (stage, attempt) = {
+            let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+            // A retired GUI cannot cancel the replacement GUI's owner or stage.
+            if self.gui_ticket.is_some() && self.gui_current().is_err() {
+                return;
+            }
+            // Process-level recovery also retires a GUI that panicked before
+            // Exit. Cancelling within the current GUI keeps that GUI usable.
+            if self.gui_ticket.is_none() {
+                self.gui.fetch_add(1, Ordering::AcqRel);
+            }
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            let stage = self.stage.lock().ok().and_then(|mut pending| pending.take());
+            let attempt = self.attempt.lock().ok().and_then(|owner| owner.clone());
+            (stage, attempt)
+        };
+        if let Some(stage) = stage {
+            if let Err(error) = fs::remove_dir_all(stage) {
+                io_failure(log, "stage_cleanup", &error, "更新暂存清理失败。");
+            }
+        }
+        if let Some(attempt) = attempt {
+            if release_plan(log, &attempt).is_ok() {
+                if let Ok(mut owner) = self.attempt.lock() {
+                    if owner.as_deref() == Some(attempt.as_str()) {
+                        *owner = None;
+                    }
+                }
+            }
+        }
+    }
 }
+
+// The blocking task, not its possibly destroyed renderer future, owns release.
+struct Preparation(PendingUpdate);
+impl Drop for Preparation {
+    fn drop(&mut self) {
+        self.0.preparing.store(false, Ordering::Release);
+    }
+}
+
 fn failure_guidance(summary: &str) -> String {
     if summary.contains('请') {
         summary.into()
@@ -68,16 +168,18 @@ fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summar
     );
     failure_guidance(summary)
 }
-fn release_plan(log: &DesktopLog) {
-    if request(log, "release").is_err() {
+fn release_plan(log: &DesktopLog, attempt: &str) -> Result<(), String> {
+    if let Err(error) = request(log, "release", Some(attempt)) {
         log.event(
             "update_install",
             "failure",
-            Some("phase=release_after_failure; failed; see preceding request phase and cause"),
+            Some("phase=release_after_failure; failed; owner retained for recovery"),
         );
+        return Err(error);
     }
+    Ok(())
 }
-fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
+fn request(log: &DesktopLog, action: &str, attempt: Option<&str>) -> Result<Value, String> {
     log.event(
         "update_install",
         "begin",
@@ -146,7 +248,7 @@ fn request(log: &DesktopLog, action: &str) -> Result<Value, String> {
     let body = if action == "startup" {
         json!({"action": action, "sessionId": log.session_id})
     } else {
-        json!({"action": action})
+        json!({"action": action, "attemptId": attempt})
     }
     .to_string();
     stream.write_all(format!("POST /operator/updates/install-plan HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nx-runtime-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).map_err(|error| io_failure(log, "tcp_write", &error, "更新请求未完成。"))?;
@@ -245,10 +347,79 @@ fn same_path(value: &Value, expected: &Path, log: &DesktopLog, phase: &str) -> b
         }
     }
 }
-pub fn check_on_startup(log: DesktopLog) {
-    // Best effort background metadata check; failure never blocks or closes the Host.
+fn recover_plan(pending: &PendingUpdate, log: &DesktopLog) -> Result<(), String> {
+    let recovered = request(log, "recover", None)?;
+    let previous = match recovered.get("attemptId") {
+        Some(Value::Null) => None,
+        Some(Value::String(value))
+            if (32..=96).contains(&value.len())
+                && value.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') =>
+        {
+            Some(value.clone())
+        }
+        _ => return Err("更新准备状态无法确认，请重启本地服务后重试。".into()),
+    };
+    *pending.attempt.lock().map_err(|_| "更新状态不可用。")? = previous.clone();
+    if let Some(previous) = previous {
+        release_plan(log, &previous)?;
+        *pending.attempt.lock().map_err(|_| "更新状态不可用。")? = None;
+    }
+    Ok(())
+}
+
+pub fn check_on_startup(app: tauri::AppHandle) {
+    let pending = app.state::<PendingUpdate>().inner().clone();
+    let log = app.state::<DesktopLog>().inner().clone();
+    let generation = pending.generation.load(Ordering::Acquire);
+    // Metadata and orphan recovery stay off the UI thread. The process-wide
+    // slot also waits for a previous GUI's blocking staging task to really end.
     std::thread::spawn(move || {
-        let _ = request(&log, "startup");
+        if pending.current(generation).is_err() {
+            return;
+        }
+        let _ = request(&log, "startup", None);
+        let deadline = Instant::now() + Duration::from_secs(240);
+        loop {
+            if pending.current(generation).is_err() {
+                return;
+            }
+            if pending
+                .preparing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                log.event(
+                    "update_install",
+                    "failure",
+                    Some("phase=startup_recovery; prepare_still_running; owner_retained"),
+                );
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _operation = Preparation(pending.clone());
+        let result = (|| -> Result<(), String> {
+            pending.current(generation)?;
+            if pending
+                .stage
+                .lock()
+                .map_err(|_| "更新状态不可用。")?
+                .is_some()
+            {
+                return Ok(());
+            }
+            recover_plan(&pending, &log)
+        })();
+        if let Err(error) = result {
+            log.event(
+                "update_install",
+                "failure",
+                Some(&format!("phase=startup_recovery; owner_retained; cause={error}")),
+            );
+        }
     });
 }
 
@@ -391,39 +562,50 @@ fn helper_stage(value: &Value, log: &DesktopLog) -> Result<PathBuf, String> {
 }
 
 pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
-    let pending = app.state::<PendingUpdate>();
+    let pending = app.state::<PendingUpdate>().inner().clone();
+    pending.check()?;
+    app.state::<crate::production_exit::ExitGate>().check()?;
+    if app.webview_windows().iter().any(|(label, window)| {
+        label.starts_with("tool-") && window.is_visible().unwrap_or(true)
+    }) {
+        return Err("请先保存并关闭编辑和预览窗口。".into());
+    }
     if pending.preparing.swap(true, Ordering::AcqRel) {
         return Err("正在准备升级，请稍候。".into());
     }
+    let generation = pending.generation.load(Ordering::Acquire);
+    let log = app.state::<DesktopLog>().inner().clone();
+    let task_log = log.clone();
+    let operation = Preparation(pending.clone());
+    let attempt = format!(
+        "{}-{:016x}",
+        log.session_id,
+        NEXT_ATTEMPT.fetch_add(1, Ordering::AcqRel)
+    );
     let host = app.clone();
-    let result: Result<(), String> = tauri::async_runtime::spawn_blocking(move || {
-        host.state::<crate::production_exit::ExitGate>().check()?;
-        if host.webview_windows().iter().any(|(label, window)| {
-            label.starts_with("tool-") && window.is_visible().unwrap_or(true)
-        }) {
-            return Err("请先保存并关闭编辑和预览窗口。".into());
-        }
-        if host
-            .state::<PendingUpdate>()
-            .stage
-            .lock()
-            .map_err(|_| "更新状态不可用。")?
-            .is_some()
-        {
-            return Err("更新已经在等待退出。".into());
-        }
-        let log = host.state::<DesktopLog>();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let log = task_log;
+        pending.current(generation)?;
+        // This process holds the sole desktop mutex and preparation slot. A
+        // prior Host may have died after reserving the reused Companion.
+        recover_plan(&pending, &log)?;
+        pending.current(generation)?;
+        *pending.attempt.lock().map_err(|_| "更新状态不可用。")? = Some(attempt.clone());
         let root = crate::host_runtime::bundle_root()?
             .canonicalize()
             .map_err(|error| io_failure(&log, "root_canonicalize", &error, "安装目录无法读取，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。"))?;
-        let plan = match request(&log, "prepare") {
+        let plan = match request(&log, "prepare", Some(&attempt)) {
             Ok(plan) => plan,
             Err(error) => {
-                release_plan(&log);
+                if release_plan(&log, &attempt).is_ok() {
+                    *pending.attempt.lock().map_err(|_| "更新状态不可用。")? = None;
+                }
                 return Err(error);
             }
         };
         let prepared: Result<(), String> = (|| {
+            pending.current(generation)?;
             validate_plan(&plan, &root, &log).map_err(|error| {
                 log.event(
                     "update_install",
@@ -472,51 +654,65 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             let value: Value = serde_json::from_str(&result?)
                 .map_err(|error| json_failure(&log, "helper_json", &error, "安装工具响应无效，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。"))?;
             let stage = helper_stage(&value, &log)?;
-            *host
-                .state::<PendingUpdate>()
-                .stage
-                .lock()
-                .map_err(|_| "更新状态不可用。")? = Some(stage);
-            log.event("update_install", "prepared", None);
-            Ok(())
+            let committed = (|| {
+                pending.current(generation)?;
+                request(&log, "commit", Some(&attempt))?;
+                let _publication = pending
+                    .publication
+                    .lock()
+                    .map_err(|_| "更新状态不可用。")?;
+                pending.current(generation)?;
+                host.state::<crate::production_exit::ExitGate>().check()?;
+                if host.webview_windows().iter().any(|(label, window)| {
+                    label.starts_with("tool-") && window.is_visible().unwrap_or(true)
+                }) {
+                    return Err("请先保存并关闭编辑和预览窗口。".into());
+                }
+                *pending.stage.lock().map_err(|_| "更新状态不可用。")? = Some(stage.clone());
+                log.event("update_install", "prepared", None);
+                host.exit(0);
+                Ok(())
+            })();
+            if committed.is_err() {
+                if let Err(error) = fs::remove_dir_all(&stage) {
+                    io_failure(&log, "stage_cleanup", &error, "更新暂存清理失败。");
+                }
+            }
+            committed
         })();
-        if prepared.is_err() {
-            release_plan(&log);
+        if prepared.is_err() && release_plan(&log, &attempt).is_ok() {
+            if let Ok(mut owner) = pending.attempt.lock() {
+                if owner.as_deref() == Some(attempt.as_str()) {
+                    *owner = None;
+                }
+            }
         }
         prepared
     })
     .await
     .unwrap_or_else(|error| {
-        app.state::<DesktopLog>().event(
+        log.event(
             "update_install",
             "failure",
             Some(&format!("phase=prepare_task; cause={error:?}")),
         );
         Err("升级准备意外中断，升级未启动。旧版仍可用，请导出诊断并从正式发布页下载。".into())
-    });
-    pending.preparing.store(false, Ordering::Release);
-    result?;
-    app.exit(0);
-    Ok(())
+    })
+}
+pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
+    let pending = app.state::<PendingUpdate>();
+    pending.gui_current()?;
+    if pending.stage.lock().map_err(|_| "更新状态不可用。")?.is_some()
+        && app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with("tool-") && window.is_visible().unwrap_or(true)
+        })
+    {
+        return Err("请先保存并关闭编辑和预览窗口。".into());
+    }
+    pending.recheck(&app.state::<DesktopLog>())
 }
 pub fn cancel(app: &tauri::AppHandle) {
-    let mut cancelled = false;
-    if let Ok(mut pending) = app.state::<PendingUpdate>().stage.lock() {
-        if let Some(stage) = pending.take() {
-            if let Err(error) = fs::remove_dir_all(stage) {
-                io_failure(
-                    &app.state::<DesktopLog>(),
-                    "stage_cleanup",
-                    &error,
-                    "更新暂存清理失败。",
-                );
-            }
-            cancelled = true;
-        }
-    }
-    if cancelled {
-        release_plan(&app.state::<DesktopLog>());
-    }
+    app.state::<PendingUpdate>().cancel(&app.state::<DesktopLog>());
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
     if crate::host_runtime::health_matches(&crate::host_runtime::bundle_root()?) {

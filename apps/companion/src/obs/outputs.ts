@@ -106,6 +106,9 @@ export class ObsOutputController {
   // Unlike warmupGeneration, owned scene and input writes do not invalidate this
   // lease. Every observed output transition does, even if it returns to idle.
   private preparationOutputGeneration = 0;
+  // Update safety follows real observations and commands, not repeated failed
+  // connection attempts while both outputs remain unknown and OBS is absent.
+  private outputObservationGeneration = 0;
   private readonly warmupExtraOutputs: Record<
     'replay' | 'virtual',
     'idle' | 'starting' | 'active' | 'stopping' | 'unknown'
@@ -151,6 +154,10 @@ export class ObsOutputController {
 
   preparationOutputEpoch(): number {
     return this.preparationOutputGeneration;
+  }
+
+  outputObservationEpoch(): number {
+    return this.outputObservationGeneration;
   }
 
   captureWarmupBlockReason(): string | null {
@@ -206,6 +213,7 @@ export class ObsOutputController {
   private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
     const previous = this.values[kind];
     if (previous.phase === phase && previous.active === active) return;
+    this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
@@ -213,6 +221,7 @@ export class ObsOutputController {
 
   private invalidate(client?: OBSWebSocket): void {
     if (client && this.client !== client) return;
+    if (this.ready) this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
     this.streamBytes = undefined;
@@ -409,6 +418,7 @@ export class ObsOutputController {
         }
         if (!current()) throw new Error('OBS connection superseded');
         this.ready = true;
+        this.outputObservationGeneration++;
         this.hasConnected = true;
       } catch (error) {
         this.diagnostic(error, config.password);
@@ -584,6 +594,7 @@ export class ObsOutputController {
     const revision = state.revision;
     const client = this.client!;
     this.values[output] = { ...state, pending: action };
+    this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
     const reached = () => {

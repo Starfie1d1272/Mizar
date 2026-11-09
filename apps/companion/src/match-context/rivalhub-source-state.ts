@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmodSync } from 'node:fs';
+import { mkdir, open, readFile, readdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import {
   durableJsonByteLength,
@@ -8,6 +10,7 @@ import {
   type DurableJsonFaultInjector,
 } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import { parseCaptureReference, type CaptureReference } from '../output/capture-interval.js';
 
 const MAX_RECORDS = 64;
 const MAX_BYTES = 256 * 1024;
@@ -47,9 +50,11 @@ const exactSchema = scopeSchema
   .extend({ authorityRevision: z.number().int().positive().safe() })
   .strict();
 const causeSchema = z.enum(['finish', 'switch', 'shutdown', 'recovery', 'authority_check']);
+const captureReferenceSchema = z.unknown().transform(parseCaptureReference);
 const recordSchema = z
   .object({
     identity: exactSchema,
+    captureReference: captureReferenceSchema.optional(),
     state: z.enum(['owned', 'release_pending', 'blocked', 'archive_pending']),
     installationRevoked: z.literal(true).optional(),
     quarantineUncertain: z.literal(true).optional(),
@@ -67,6 +72,7 @@ const intentSchema = z
   .object({
     id: z.string().uuid(),
     scope: scopeSchema,
+    captureReference: captureReferenceSchema.optional(),
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
     quarantineUncertain: z.literal(true).optional(),
     // Proof that this intent re-claimed an exact authority already held before
@@ -81,7 +87,7 @@ const quarantineSchema = z.discriminatedUnion('kind', [
 ]);
 const envelopeSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     records: z.array(recordSchema).max(MAX_RECORDS),
     intent: intentSchema.nullable(),
     revokedIntents: z.array(intentSchema).max(MAX_RECORDS).default([]),
@@ -145,6 +151,7 @@ function sameScope(a: SourceScope, b: SourceScope): boolean {
 export class RivalHubSourceState {
   private readonly queue = new SerialCommitQueue();
   private state: SourceState | undefined;
+  private writer: DatabaseSync | undefined;
   private revokedScanCursor = 0;
   constructor(
     private readonly path: string,
@@ -388,41 +395,93 @@ export class RivalHubSourceState {
   }
 
   invalidate(): void {
+    // Invalid state does not relinquish the lifetime writer while another
+    // already-queued operation might still be using it.
     this.state = undefined;
+  }
+
+  /** An operating-system lock has no stale PID/lease to guess after a process interruption. */
+  private async acquireWriter(): Promise<void> {
+    if (this.writer) return;
+    await mkdir(dirname(this.path), { recursive: true });
+    const path = `${this.path}.owner.sqlite`;
+    const writer = new DatabaseSync(path);
+    try {
+      chmodSync(path, 0o600);
+      writer.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE');
+      this.writer = writer;
+    } catch (error) {
+      writer.close();
+      throw error;
+    }
+  }
+
+  close(): Promise<void> {
+    return this.queue.run(() => {
+      this.invalidate();
+      this.writer?.close();
+      this.writer = undefined;
+    });
   }
 
   async load(): Promise<SourceState> {
     return this.queue.run(async () => {
       if (this.state) return structuredClone(this.state);
-      let bytes: Buffer;
       try {
-        const file = await open(this.path, 'r');
+        await this.acquireWriter();
+        let bytes: Buffer;
         try {
-          const stat = await file.stat();
-          if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('invalid source state size');
-          bytes = await file.readFile();
-          if (bytes.length > MAX_BYTES) throw new Error('invalid source state size');
-        } finally {
-          await file.close();
+          const file = await open(this.path, 'r');
+          try {
+            const stat = await file.stat();
+            if (!stat.isFile() || stat.size > MAX_BYTES)
+              throw new Error('invalid source state size');
+            bytes = await file.readFile();
+            if (bytes.length > MAX_BYTES) throw new Error('invalid source state size');
+          } finally {
+            await file.close();
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          this.state = {
+            version: 2,
+            records: [],
+            intent: null,
+            revokedIntents: [],
+            watermarks: [],
+          };
+          return structuredClone(this.state);
         }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        this.state = { version: 1, records: [], intent: null, revokedIntents: [], watermarks: [] };
+        const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+        const legacy = raw?.version === 1;
+        if (
+          legacy &&
+          ((raw.intent && typeof raw.intent === 'object' && 'captureReference' in raw.intent) ||
+            (Array.isArray(raw.records) &&
+              raw.records.some(
+                (record: unknown) =>
+                  record && typeof record === 'object' && 'captureReference' in record,
+              )))
+        )
+          throw new Error('source_legacy_capture_reference_invalid');
+        const loaded = envelopeSchema.parse(legacy ? { ...raw, version: 2 } : raw);
+        const reconciled = await this.reconcileQuarantine(loaded);
+        if (legacy || reconciled) {
+          const validated = envelopeSchema.parse(loaded);
+          if (durableJsonByteLength(validated) > MAX_BYTES)
+            throw new Error('source state capacity exceeded');
+          await replaceDurableJson(
+            this.path,
+            validated,
+            this.faultInjector ? { faultInjector: this.faultInjector } : {},
+          );
+        }
+        this.state = loaded;
         return structuredClone(this.state);
+      } catch (error) {
+        this.invalidate();
+        throw error;
       }
-      const loaded = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
-      if (await this.reconcileQuarantine(loaded)) {
-        const validated = envelopeSchema.parse(loaded);
-        if (durableJsonByteLength(validated) > MAX_BYTES)
-          throw new Error('source state capacity exceeded');
-        await replaceDurableJson(
-          this.path,
-          validated,
-          this.faultInjector ? { faultInjector: this.faultInjector } : {},
-        );
-      }
-      this.state = loaded;
-      return structuredClone(this.state);
     });
   }
 
@@ -455,11 +514,20 @@ export class RivalHubSourceState {
   async beginClaim(
     scope: SourceScope,
     previousAuthorityRevision: number | null,
+    captureReference?: CaptureReference,
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
       await this.reconcileQuarantine(state);
       if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      if (captureReference) {
+        captureReference = parseCaptureReference(captureReference);
+        if (
+          captureReference.startCursor.producerInstanceId !== validScope.producerInstanceId ||
+          captureReference.startCursor.liveSessionId !== validScope.liveSessionId
+        )
+          throw new Error('source_capture_reference_mismatch');
+      }
       const quarantined = await this.evidenceForScope(validScope);
       if (quarantined.some((item) => item.kind !== 'watermark'))
         throw new Error('source requires cleanup before claim');
@@ -508,6 +576,7 @@ export class RivalHubSourceState {
       const intent = intentSchema.parse({
         id: randomUUID(),
         scope: validScope,
+        ...(captureReference ? { captureReference } : {}),
         previousAuthorityRevision: known.length ? Math.max(...known) : null,
         ...(owned &&
         sameScope(owned.identity, validScope) &&
@@ -556,6 +625,7 @@ export class RivalHubSourceState {
         if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
         state.records.push({
           identity,
+          ...(intent.captureReference ? { captureReference: intent.captureReference } : {}),
           state: 'owned',
           cause: 'recovery',
           attempts: 0,

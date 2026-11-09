@@ -20,7 +20,12 @@ import {
   isLoopbackBindHost,
   type LocalWebOriginPolicy,
 } from '../local-web/origin-policy.js';
-import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
+import {
+  ObsAdapter,
+  obsFailureKind,
+  obsErrorEvidence,
+  obsAudioModeFailureEvidence,
+} from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { ObsVideoError } from './video-transaction.js';
 import { ObsCaptureWarmupError } from './capture-warmup.js';
@@ -51,6 +56,7 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly preparationValid: (revision: unknown) => () => boolean;
+    readonly canStartOutput?: () => boolean;
     readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
     readonly musicDirector?: () => MusicDirector | undefined;
@@ -284,6 +290,20 @@ export function registerObsRoutes(
       );
       return { ok: true, ...result };
     } catch (error) {
+      try {
+        // Request summaries are separate from detailed connection evidence and
+        // contain only safe classifications, including for pre-connection failures.
+        request.log.error(
+          {
+            event: 'obs',
+            stage: 'audio_mode_request',
+            diagnostic: { mode: parsed.data.mode, summary: obsAudioModeFailureEvidence(error) },
+          },
+          'OBS audio mode request failed',
+        );
+      } catch {
+        // Diagnostic failures must not replace the operation's result.
+      }
       return reply.code(409).send({
         error:
           error instanceof Error && error.message === 'audio_desktop_choice_required'
@@ -344,12 +364,20 @@ export function registerObsRoutes(
     const parsed = obsOutputCommandSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: 'obs_output_invalid', message: 'OBS 操作格式有误。' });
+    if (parsed.data.action === 'start' && options.canStartOutput?.() === false)
+      return reply.code(409).send({
+        error: 'obs_output_busy',
+        message: '更新正在退出，请等待更新完成或取消后开始 OBS 输出。',
+      });
     try {
       return {
         ok: true,
         outputs: await options.adapter.outputCommand(
           parsed.data,
-          () => !request.raw.aborted && !reply.raw.destroyed,
+          () =>
+            !request.raw.aborted &&
+            !reply.raw.destroyed &&
+            (parsed.data.action !== 'start' || options.canStartOutput?.() !== false),
         ),
       };
     } catch (error) {
