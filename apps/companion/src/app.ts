@@ -1022,8 +1022,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
-  obsAdapter?.onProgramChanged(() => {
-    sceneController.holdAutomatic();
+  obsAdapter?.onProgramChanged((kind) => {
+    if (kind === 'disconnected') sceneController.interruptAutomatic();
+    else sceneController.holdAutomatic();
     production.invalidateObsExit();
   });
   if (options.steamAvatars) {
@@ -1571,6 +1572,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       production.sessionAllowed() && !production.automaticAllowed()
         ? 'OBS 播出准备尚未确认，请检查 OBS 连接和场景；缺少配置时在准备中心修复。'
         : null,
+    () => presentation.get(),
   );
   if (obsConfigStore && options.obsConfigPath) {
     const musicStore = new MusicStore(
@@ -1621,6 +1623,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
+        presentation: presentation.get(),
         production:
           production.automaticAllowed() &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',

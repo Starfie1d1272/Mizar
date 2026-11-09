@@ -41,7 +41,8 @@ export function ObserverHints() {
     !runtime.pending &&
     now - configuration.connectionRequestedAt > 60_000 &&
     observer?.state !== 'ready' &&
-    observer?.state !== 'paused',
+    observer?.state !== 'paused' &&
+    observer?.waitingReason !== 'calibration-pending',
   );
   const [clock, setClock] = useState({ observer, elapsed: 0 });
   useEffect(() => {
@@ -161,7 +162,9 @@ export function ObserverHints() {
               ? '正在连接提前提示'
               : observer?.state === 'paused'
                 ? '比赛暂停'
-                : '正在接收比赛数据…'}
+                : observer?.waitingReason === 'calibration-pending'
+                  ? '正在校准提前提示…'
+                  : '正在接收比赛数据…'}
         </StatusPill>
       ) : null}
       {runtime?.active && !paused && !pending && !needsRecovery && !reconnecting && !connecting ? (

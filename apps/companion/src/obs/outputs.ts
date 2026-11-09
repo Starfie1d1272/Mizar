@@ -100,6 +100,8 @@ export class ObsOutputController {
   private closed = false;
   private ready = false;
   private hasConnected = false;
+  private programIdentity: { endpoint: string; collection: string; scene: string } | undefined;
+  private programIdentityEpoch = 0;
   // Broader than the UI output revision: every observed takeover invalidates a
   // capture warmup, even when its final output state matches the prior snapshot.
   private warmupGeneration = 0;
@@ -157,6 +159,45 @@ export class ObsOutputController {
   /** Read-only preparation adoption is allowed during output, but not during teardown. */
   canObservePreparation(): boolean {
     return this.ready && !this.closed && !this.warmupExitStarted && !this.warmupCollectionChanging;
+  }
+
+  // Media playback settings are not part of visual/capture/device preparation.
+  // Classify by observed UUID and immutable kind, never by a display name.
+  private mediaInputUuids = new Set<string>();
+  private mediaInputGeneration = 0;
+  preparationInputsGeneration(): number | null {
+    return this.canObservePreparation() ? this.mediaInputGeneration : null;
+  }
+  observePreparationInputs(inputs: unknown, generation: number | null): void {
+    if (
+      generation === null ||
+      !this.canObservePreparation() ||
+      generation !== this.mediaInputGeneration ||
+      this.warmupCollectionChanging ||
+      !Array.isArray(inputs)
+    )
+      return;
+    this.mediaInputUuids = new Set(
+      inputs.flatMap((input: unknown) =>
+        input &&
+        typeof input === 'object' &&
+        'inputKind' in input &&
+        'inputUuid' in input &&
+        input.inputKind === 'ffmpeg_source' &&
+        typeof input.inputUuid === 'string'
+          ? [input.inputUuid]
+          : [],
+      ),
+    );
+  }
+  preparationSettingsChanged(data: unknown): boolean {
+    return (
+      !data ||
+      typeof data !== 'object' ||
+      !('inputUuid' in data) ||
+      typeof data.inputUuid !== 'string' ||
+      !this.mediaInputUuids.has(data.inputUuid)
+    );
   }
 
   preparationConfigurationEpoch(): number {
@@ -236,6 +277,8 @@ export class ObsOutputController {
 
   private invalidate(client?: OBSWebSocket): void {
     if (client && this.client !== client) return;
+    this.mediaInputUuids.clear();
+    this.mediaInputGeneration++;
     if (this.ready) this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.preparationConfigurationGeneration++;
@@ -342,6 +385,14 @@ export class ObsOutputController {
     client.on('CurrentProgramSceneChanged', (event) => {
       if (current()) {
         this.warmupGeneration++;
+        this.programIdentityEpoch++;
+        if (this.programIdentity)
+          this.programIdentity = {
+            ...this.programIdentity,
+            scene: this.programIdentity.scene.startsWith('uuid:')
+              ? `uuid:${event.sceneUuid}`
+              : `name:${event.sceneName}`,
+          };
         this.observeProgram('scene', event.sceneUuid);
       }
     });
@@ -349,13 +400,19 @@ export class ObsOutputController {
       if (current()) {
         this.warmupGeneration++;
         this.warmupCollectionChanging = false;
+        this.programIdentityEpoch++;
+        if (this.programIdentity)
+          this.programIdentity = { ...this.programIdentity, collection: event.sceneCollectionName };
         this.observeProgram('collection', event.sceneCollectionName);
       }
     });
     client.on('CurrentSceneCollectionChanging', (event) => {
       if (current()) {
+        this.mediaInputUuids.clear();
+        this.mediaInputGeneration++;
         this.warmupGeneration++;
         this.warmupCollectionChanging = true;
+        this.programIdentityEpoch++;
         this.observeProgram('collection-changing', event.sceneCollectionName);
       }
     });
@@ -403,6 +460,7 @@ export class ObsOutputController {
       client.on(event, (data) => {
         if (
           current() &&
+          (event !== 'InputSettingsChanged' || this.preparationSettingsChanged(data)) &&
           !this.ownedPreparationEvent(event, data as unknown as Record<string, unknown>)
         )
           this.preparationConfigurationGeneration++;
@@ -448,15 +506,45 @@ export class ObsOutputController {
           throw new Error('OBS connection superseded');
         }
         await this.refresh(client, generation);
-        if (generation > 0) {
-          await bounded(
-            Promise.all([
-              client.call('GetSceneCollectionList'),
-              client.call('GetCurrentProgramScene'),
-            ]),
-          );
-          if (this.hasConnected) this.observeProgram('disconnected');
+        const priorIdentity = this.programIdentity;
+        const identityEpoch = this.programIdentityEpoch;
+        const [collection, scene] = await bounded(
+          Promise.all([
+            client.call('GetSceneCollectionList'),
+            client.call('GetCurrentProgramScene'),
+          ]),
+        ).catch((error: unknown) => {
+          this.diagnostic(error, config.password);
+          return [undefined, undefined] as const;
+        });
+        if (!current() || identityEpoch !== this.programIdentityEpoch)
+          throw new Error('OBS program identity changed during reconnect');
+        const identity =
+          typeof collection?.currentSceneCollectionName === 'string' &&
+          typeof scene?.currentProgramSceneName === 'string'
+            ? {
+                endpoint: `${config.host}:${config.port}`,
+                collection: collection.currentSceneCollectionName,
+                scene:
+                  typeof scene.currentProgramSceneUuid === 'string'
+                    ? `uuid:${scene.currentProgramSceneUuid}`
+                    : `name:${scene.currentProgramSceneName}`,
+              }
+            : undefined;
+        // Missing program identity must not disable output controls. It cannot,
+        // however, justify resuming automatic scene intent after a disconnect.
+        if (this.hasConnected) {
+          if (
+            !identity ||
+            !priorIdentity ||
+            priorIdentity.endpoint !== identity.endpoint ||
+            priorIdentity.collection !== identity.collection
+          )
+            this.observeProgram('collection', identity?.collection);
+          else if (priorIdentity.scene !== identity.scene)
+            this.observeProgram('scene', scene?.currentProgramSceneUuid);
         }
+        this.programIdentity = identity;
         if (!current()) throw new Error('OBS connection superseded');
         this.ready = true;
         this.outputObservationGeneration++;

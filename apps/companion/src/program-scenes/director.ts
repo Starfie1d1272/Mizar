@@ -3,6 +3,7 @@ import {
   programTransition,
   type ProgramSceneId,
   type ProgramSceneState,
+  type ProgramPresentation,
 } from '@mizar/protocol/program-scenes';
 import type { BpSession } from '../bp/controller.js';
 import {
@@ -16,7 +17,7 @@ import {
 } from '../scope/identities.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
-import { isRegulationHalftime } from './presentation.js';
+import { hasFrozenMapResult, isRegulationHalftime } from './presentation.js';
 
 export const DEFAULT_PROGRAM_TIMINGS = Object.freeze({
   bpFinalMs: 12_000,
@@ -75,6 +76,7 @@ export class ProgramDirector {
     private readonly now = () => performance.now(),
     private readonly timings = DEFAULT_PROGRAM_TIMINGS,
     private readonly preparationReason: () => string | null = () => null,
+    private readonly presentation: () => ProgramPresentation | undefined = () => undefined,
   ) {}
   get(): DirectorView {
     return { ...this.view, warmupScene: this.warmupChoice, sceneElapsedMs: this.elapsed };
@@ -110,6 +112,10 @@ export class ProgramDirector {
       reason: '手动保持，恢复自动后继续。',
     };
   }
+  interrupt(): void {
+    this.generation++;
+    this.lastTime = this.now();
+  }
   resume(): void {
     this.manual = false;
     this.failure = null;
@@ -135,6 +141,21 @@ export class ProgramDirector {
       p.series.maps.every((map) => map.status === 'pending')
     );
   }
+  private resultProgression(p: ProgramProjection): boolean {
+    return (
+      (p.map.phase === 'gameover' && hasFrozenMapResult(p, this.presentation())) ||
+      (this.safe(p) &&
+        p.map.phase === 'gameover' &&
+        p.series!.maps.some(
+          (map) =>
+            map.mapOrder === p.series!.currentMapOrder &&
+            map.status === 'completed' &&
+            map.mapName === p.map.name &&
+            map.finalScore !== null,
+        ))
+    );
+  }
+
   private predict(p: ProgramProjection, active: ProgramSceneId): void {
     const key = `${sceneRequestScope(p)}:${active}`;
     const previous = key === this.predictionKey ? this.view.next : null;
@@ -153,7 +174,7 @@ export class ProgramDirector {
       this.view.nextReason = '等待有效比赛上下文与归属确认。';
       return;
     }
-    if (p.status.telemetry !== 'fresh') {
+    if (p.status.telemetry !== 'fresh' && !this.resultProgression(p)) {
       if (previous) {
         this.setPrediction(previous);
         this.view.nextReason = '沿用同一比赛阶段的最近预告，等待遥测恢复后才可自动切场。';
@@ -252,7 +273,7 @@ export class ProgramDirector {
     }
     if (!this.wasProduction) {
       this.wasProduction = true;
-      if (!this.manual) this.resume();
+      if (!this.manual) this.interrupt();
     }
     if (this.failure && !this.manual) {
       this.view = { ...this.view, mode: 'blocked', reason: this.failure, blockCause: null };
@@ -284,10 +305,11 @@ export class ProgramDirector {
     const halftime = isRegulationHalftime(p);
     if (active === 'halftime' && p.map.roundNumber === 12 && p.clock?.phase === 'freezetime')
       this.halftimeSeen = true;
+    const resultProgression = this.resultProgression(p);
     const prematch = this.prematch(p) && (active === 'waiting' || active === 'bp');
     const paused =
       this.safe(p) && ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '');
-    if (!this.safe(p) && !prematch) {
+    if (!this.safe(p) && !prematch && !resultProgression) {
       this.ggStartedAt = null;
       this.view.gg = null;
       this.view = {
@@ -305,7 +327,7 @@ export class ProgramDirector {
       };
       return;
     }
-    if (paused && !halftime && !this.halftimeSeen) {
+    if (paused && !resultProgression && !halftime && !this.halftimeSeen) {
       this.view = {
         ...this.view,
         mode: this.manual ? 'manual' : 'blocked',
@@ -320,7 +342,7 @@ export class ProgramDirector {
       blockCause: null,
       reason: this.manual ? '手动保持，恢复自动后继续。' : null,
     };
-    if (!paused && !this.manual) this.elapsed += delta;
+    if ((!paused || resultProgression) && !this.manual) this.elapsed += delta;
     const seconds = p.clock?.phase === 'freezetime' ? p.clock.endsInSeconds : null;
     const remaining = seconds === null ? 0 : seconds * 1000;
     let target: ProgramSceneId | null = null;
@@ -341,12 +363,7 @@ export class ProgramDirector {
       } else if (active === 'waiting' && this.warmupPlayed) {
         this.view.nextReason = '赛前资料轮播中，等待可信游戏阶段后继续编排。';
       }
-    } else if (
-      p.map.phase === 'gameover' &&
-      p.series?.maps.some(
-        (map) => map.status === 'completed' && map.mapName === p.map.name && map.finalScore,
-      )
-    ) {
+    } else if (resultProgression) {
       if (!this.resultShown) {
         if (this.ggConsumedMap !== cueMap) {
           this.ggConsumedMap = cueMap;
@@ -364,7 +381,7 @@ export class ProgramDirector {
         this.setPrediction('map_result');
         if (!this.view.gg) target = 'map_result';
       } else if (active === 'map_result') {
-        const following = p.series.status === 'completed' ? 'match_result' : 'intermap';
+        const following = p.series?.status === 'completed' ? 'match_result' : 'intermap';
         this.setPrediction(following);
         if (this.elapsed >= this.timings.mapResultMs) target = following;
       }
@@ -472,6 +489,8 @@ export class ProgramDirector {
       }
       return;
     }
+    const resultAction =
+      resultProgression && ['map_result', 'intermap', 'match_result'].includes(target);
     const prematchAction = prematch && (target === 'bp' || target === 'waiting');
     this.inFlight = target;
     const generation = this.generation;
@@ -487,7 +506,9 @@ export class ProgramDirector {
           (prematchAction
             ? this.prematch(this.projections.getCurrent().program) &&
               (target !== 'bp' || this.projections.getBpAssessment().readiness === 'ready')
-            : this.safe(this.projections.getCurrent().program)) &&
+            : resultAction
+              ? this.resultProgression(this.projections.getCurrent().program)
+              : this.safe(this.projections.getCurrent().program)) &&
           (target !== 'matchup' ||
             (this.projections.getCurrent().program.round?.phase === 'freezetime' &&
               this.projections.getCurrent().program.clock?.phase === 'freezetime' &&
@@ -506,6 +527,9 @@ export class ProgramDirector {
         const current = this.projections.getCurrent().program;
         if (
           generation !== this.generation ||
+          (resultAction &&
+            (!this.resultProgression(current) || key !== sceneRequestScope(current))) ||
+          !this.production() ||
           (prematchAction &&
             (!this.prematch(current) ||
               key !== sceneRequestScope(current) ||

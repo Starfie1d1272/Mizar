@@ -11,6 +11,40 @@ import {
   type ProgramPresentation,
 } from '@mizar/protocol/program-scenes';
 
+/** Completed presentation facts survive telemetry loss, not a different match or execution. */
+export function hasFrozenMapResult(
+  p: ProgramProjection,
+  presentation?: ProgramPresentation,
+): boolean {
+  const series = p.series;
+  const frozen = presentation?.series;
+  if (
+    !p.match ||
+    !series ||
+    !frozen ||
+    p.status.context !== 'fresh' ||
+    p.status.identity === 'mismatch' ||
+    series.bindingState !== 'bound' ||
+    presentation?.match?.matchId !== p.match.matchId ||
+    frozen.entrants.a.entryId !== series.entrants.a.entryId ||
+    frozen.entrants.b.entryId !== series.entrants.b.entryId
+  )
+    return false;
+  const map = series.maps.find((item) => item.mapOrder === series.currentMapOrder);
+  if (!map || map.status !== 'completed' || map.mapName !== p.map.name || !map.finalScore)
+    return false;
+  return presentation.completed.some(
+    (item) =>
+      item.mapOrder === map.mapOrder &&
+      item.mapName === map.mapName &&
+      item.score.a === map.finalScore!.a &&
+      item.score.b === map.finalScore!.b &&
+      item.cursor.producerInstanceId === p.cursor.producerInstanceId &&
+      item.cursor.liveSessionId === p.cursor.liveSessionId &&
+      item.cursor.mapEpoch === p.cursor.mapEpoch,
+  );
+}
+
 export function isRegulationHalftime(p: ProgramProjection): boolean {
   const { ct, t } = p.map.score;
   return (

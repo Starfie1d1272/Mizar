@@ -173,14 +173,14 @@ export class ObsAdapter {
   private readonly outputs: ObsOutputController;
   private readonly audioConfiguration: AudioConfigurationConnection;
   private readonly bpOwner = new BpOverlayOwner();
-  private programChanged: () => void = () => undefined;
+  private programChanged: (kind: 'disconnected' | 'changed') => void = () => undefined;
   private expectedScene: string | undefined;
   private expectedCollection: string | undefined;
   private programGeneration = 0;
   private entryPermit:
     | { id: string; outputEpoch: number; programGeneration: number; valid: () => boolean }
     | undefined;
-  onProgramChanged(callback: () => void): void {
+  onProgramChanged(callback: (kind: 'disconnected' | 'changed') => void): void {
     this.programChanged = callback;
   }
   private bpClient: OBSWebSocket | undefined;
@@ -234,7 +234,7 @@ export class ObsAdapter {
           this.programGeneration++;
           this.recoveryPrepared = false;
           this.browserRecoveryPermission = undefined;
-          this.programChanged();
+          this.programChanged('disconnected');
           return;
         }
         if (kind === 'scene' && this.expectedCollection) return;
@@ -244,6 +244,7 @@ export class ObsAdapter {
         }
         if (
           (kind === 'collection' || kind === 'collection-changing') &&
+          this.expectedCollection !== undefined &&
           name === this.expectedCollection
         ) {
           if (kind === 'collection') this.expectedCollection = undefined;
@@ -252,7 +253,7 @@ export class ObsAdapter {
         this.programGeneration++;
         this.recoveryPrepared = false;
         this.browserRecoveryPermission = undefined;
-        this.programChanged();
+        this.programChanged('changed');
       },
       (event, data) => this.bpOwner.observePreparationEvent(event, data),
     );
@@ -716,13 +717,15 @@ export class ObsAdapter {
       'InputCreated',
       'InputRemoved',
       'InputNameChanged',
-      'InputSettingsChanged',
       'CurrentProfileChanging',
       'CurrentProfileChanged',
     ] as const;
     const invalidateAudio = () => {
       active = false;
       if (observePreparationIdentity) this.recoveryPrepared = false;
+    };
+    const invalidatePreparationSettings = (data: { inputUuid?: string }) => {
+      if (this.outputs.preparationSettingsChanged(data)) invalidateAudio();
     };
     const invalidateBrowser = () => {
       active = false;
@@ -757,8 +760,10 @@ export class ObsAdapter {
           client.on('CurrentProfileChanged', invalidateAudio);
           client.on('ConnectionClosed', invalidateAudio);
         }
-        if (observePreparationIdentity)
+        if (observePreparationIdentity) {
           for (const event of preparationEvents) client.on(event, invalidateAudio);
+          client.on('InputSettingsChanged', invalidatePreparationSettings);
+        }
         stage = 'obs_request';
         const rpc: ObsRpc = {
           onTransitionVideoEnded: (listener) => {
@@ -845,6 +850,7 @@ export class ObsAdapter {
       }
       if (observePreparationIdentity)
         for (const event of preparationEvents) client.off(event, invalidateAudio);
+      client.off('InputSettingsChanged', invalidatePreparationSettings);
       await client.disconnect().catch(() => undefined);
     }
   }
@@ -869,6 +875,8 @@ export class ObsAdapter {
     endpoint: string,
     visual?: ObsFinding[],
   ): Promise<ObsFinding[]> {
+    const inputGeneration = this.outputs.preparationInputsGeneration();
+    this.outputs.observePreparationInputs((await obs.call('GetInputList')).inputs, inputGeneration);
     const findings =
       visual ??
       (await checkObsConfiguration(
