@@ -389,6 +389,7 @@ namespace Mizar.WebInstaller {
     string selectedTarget;
     CancellationTokenSource cancellation;
     string installedCore, technicalDetails, activePhase="checking-release";
+    FreshInstallResult installedResult;
     bool finished, recoveryRequired, downloading, launchFailed;
     public Window(Plan value) : this(value,null,null,false) { }
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
@@ -450,12 +451,14 @@ namespace Mizar.WebInstaller {
         using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
         using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
           installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token,stages);
-        var core=await Nsis.Install(plan,installer,target,token,stages);
-        installedCore=core.Directory;
-        if(core.ResourcesReady) return installedCore;
+        installedResult=await Nsis.Install(plan,installer,target,token,stages);
+        installedCore=installedResult.Directory;
       }
-      await Nsis.RunResourceBridge(plan,installedCore,token,stages);
-      token.ThrowIfCancellationRequested(); return installedCore;
+      if(installedResult==null || !installedResult.ResourcesReady) await Nsis.RunResourceBridge(plan,installedCore,token,stages);
+      token.ThrowIfCancellationRequested();
+      // The tracked finalizer must stop successfully before completion/launch.
+      if(installedResult!=null) await installedResult.CompleteAsync(plan);
+      return installedCore;
     }
     internal void ShowStage(string phase) {
       if(phase!="waiting-for-installer") activePhase=phase;
@@ -540,7 +543,8 @@ namespace Mizar.WebInstaller {
           if(cancellation==current && !finished && !current.IsCancellationRequested) ShowStage(phase);
         });
         string path=await install(progress,stages,current.Token);
-        current.Token.ThrowIfCancellationRequested(); ShowCompleted(path);
+        if(installedResult==null || !installedResult.Completed) current.Token.ThrowIfCancellationRequested();
+        ShowCompleted(path);
       } catch(OperationCanceledException error) {
         technicalDetails=ErrorDetails(error);
         heading.Text=current.IsCancellationRequested ? "已取消" : "操作超时";

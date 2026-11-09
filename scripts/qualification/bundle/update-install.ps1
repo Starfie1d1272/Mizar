@@ -1,5 +1,5 @@
 ﻿param(
-  [ValidateSet('Prepare', 'Install', 'Recover', 'Rollback')][string]$Mode,
+  [ValidateSet('Prepare', 'Install', 'Recover', 'Rollback', 'Finalize')][string]$Mode,
   [string]$PlanPath,
   [string]$StageRoot,
   [int]$HostProcessId = 0,
@@ -418,6 +418,28 @@ try {
     try { [void]$ready.Set() } finally { $ready.Dispose() }
   }
 try {
+  if ($Mode -eq 'Finalize') {
+    $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
+    if ($journal.phase -ne 'committed') { throw 'update_not_committed' }
+    Assert-Stopped
+    Assert-Payload $plan.bundleRoot $plan.contentDigest $plan.version $plan.gitSha
+    # Only the successful bootstrap owner requests finalization, after resource
+    # readiness and its last cancellation check. Failed/recovering stages never enter.
+    $previous = Join-Path $StageRoot 'previous'
+    Assert-PlainPath $previous
+    if (Test-Path -LiteralPath $previous) {
+      if (!(Test-Path -LiteralPath $previous -PathType Container)) { throw 'update_backup_path_invalid' }
+      if (Get-ChildItem -LiteralPath $previous -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
+      Remove-Item -LiteralPath $previous -Recurse -Force
+    }
+    foreach ($download in @((Join-Path $StageRoot 'Installer.exe'), $plan.installer)) {
+      Assert-PlainPath $download
+      if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
+    }
+    Record-UpdateActivity 'finalized'
+    Record-Result 'installed' 'update_completed'
+    return
+  }
   if ($Mode -eq 'Rollback') { Restore-Previous; return }
   if ($Mode -eq 'Recover') {
     Recovery-Registration $true

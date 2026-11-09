@@ -25,7 +25,8 @@ export type ProductionDependencies = {
     | 'controlValid'
     | 'get'
     | 'setResourceActivationPending'
-  >;
+  > &
+    Partial<Pick<ProgramSceneController, 'resumeAutomatic'>>;
   obs?:
     | Pick<
         ObsAdapter,
@@ -523,6 +524,9 @@ export function createProduction(options: ProductionDependencies) {
       if (entering) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
+        // A new production starts automatic; returning from hidden mode above
+        // preserves an operator's existing manual hold.
+        options.scenes.resumeAutomatic?.(options.scenes.get().revision);
       }
       if (shutdownIntent !== null && onShutdownCommit) {
         const completedRevision = revision;
@@ -626,6 +630,8 @@ export function createProduction(options: ProductionDependencies) {
     },
     canControl: () => !busy && !shuttingDown,
     sessionAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    presentationAllowed: () =>
+      production.sessionAllowed() && !exitFrozen && !updatePending && !trialPending,
     automaticAllowed: () =>
       production.sessionAllowed() && (options.obs?.hasCurrentPreparation() ?? true),
     preparationValid: (expectedRevision: unknown) => {

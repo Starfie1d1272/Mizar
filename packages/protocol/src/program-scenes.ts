@@ -55,6 +55,8 @@ export function programSceneForPath(path: string): ProgramScene | undefined {
 export const programSceneStateSchema = z.object({
   schemaVersion: z.literal('mizar.program-scenes.v1'),
   active: programSceneIdSchema,
+  // Read-only lifecycle eligibility for presentation within the selected scene.
+  productionActive: z.boolean().optional(),
   bpCompact: z.enum(['off', 'on', 'unknown']).optional(),
   bpCompactTarget: z.enum(['managed', 'external']).optional(),
   revision: z.string().min(1),

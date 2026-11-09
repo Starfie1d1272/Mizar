@@ -554,10 +554,14 @@ export function registerProgramSceneRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly controller: ProgramSceneController;
     readonly canControl?: () => boolean;
+    readonly productionActive?: () => boolean;
   },
 ) {
   app.get('/local/v1/program-scenes', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(options.controller.get()),
+    reply.header('cache-control', 'no-store').send({
+      ...options.controller.get(),
+      productionActive: options.productionActive?.() ?? false,
+    }),
   );
   app.post('/operator/program-director', { bodyLimit: 1024 }, (request, reply) => {
     if (

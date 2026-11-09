@@ -278,7 +278,11 @@ export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
   };
 }
 
-export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
+export async function checkObsConfiguration(
+  obs: ObsRpc,
+  baseUrl: string,
+  hiddenHud: { sceneUuid: string; inputUuid: string; itemId: number } | null = null,
+): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
@@ -364,7 +368,21 @@ export async function checkObsConfiguration(obs: ObsRpc, baseUrl: string): Promi
           scene: scene.sceneName,
           message: `${scene.sceneName} 缺少制播来源。`,
         });
-      else if (items.find((item) => item.sourceName === source)?.sceneItemEnabled === false)
+      else if (
+        items.find((item) => item.sourceName === source)?.sceneItemEnabled === false &&
+        !(
+          hiddenHud &&
+          scene.id === 'gameplay' &&
+          source === scene.browserInput &&
+          objects(scenes.scenes).some(
+            (item) => item.sceneName === scene.sceneName && item.sceneUuid === hiddenHud.sceneUuid,
+          ) &&
+          objects(inputs.inputs).some(
+            (item) => item.inputName === source && item.inputUuid === hiddenHud.inputUuid,
+          ) &&
+          items.find((item) => item.sourceName === source)?.sceneItemId === hiddenHud.itemId
+        )
+      )
         findings.push({
           code: 'source_disabled',
           scene: scene.sceneName,

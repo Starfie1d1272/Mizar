@@ -33,21 +33,31 @@ export function mirrorResourcePath(version: string, name: string) {
 }
 // Transport only. Original canonical catalog URLs and all publisher claims stay
 // unchanged; the existing SDK authenticates the returned original bytes.
-export async function downloadResourceOriginal({
-  version,
-  name,
-  maximum,
-  signal,
-  fetcher,
-  sourceMode = 'auto',
-}: {
-  version: string;
-  name: string;
-  maximum: number;
-  signal: AbortSignal;
-  fetcher?: typeof fetch;
-  sourceMode?: ResourceSourceMode;
-}) {
+/** A transaction-local byte cache, not an authorization or persistent trust cache. */
+export function createResourceOriginalDownloader() {
+  const carriers = new Map<string, Buffer>();
+  return (options: Parameters<typeof downloadResourceOriginal>[0]) =>
+    downloadResourceOriginal(options, carriers);
+}
+
+async function downloadResourceOriginal(
+  {
+    version,
+    name,
+    maximum,
+    signal,
+    fetcher,
+    sourceMode = 'auto',
+  }: {
+    version: string;
+    name: string;
+    maximum: number;
+    signal: AbortSignal;
+    fetcher?: typeof fetch;
+    sourceMode?: ResourceSourceMode;
+  },
+  carriers?: Map<string, Buffer>,
+) {
   mirrorResourcePath(version, name);
   if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
   const transportName = MACHINE_METADATA_NAME;
@@ -56,6 +66,21 @@ export async function downloadResourceOriginal({
   const extract = (bytes: Buffer) => {
     const original = readMachineFile(bytes, name);
     if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
+    return Buffer.from(original);
+  };
+  const key = `${version}:${sourceMode}`;
+  const cached = carriers?.get(key);
+  signal.throwIfAborted();
+  if (cached) {
+    try {
+      return extract(cached);
+    } catch {
+      carriers?.delete(key);
+    }
+  }
+  const remember = (bytes: Buffer) => {
+    const original = extract(bytes);
+    carriers?.set(key, Buffer.from(bytes));
     return original;
   };
   const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(60000)]);
@@ -64,7 +89,7 @@ export async function downloadResourceOriginal({
     const attempt = globalThis.AbortSignal.any([deadline, globalThis.AbortSignal.timeout(15000)]);
     const url = await resourceMirrorUrl(path, attempt, fetcher);
     // Never fall back after bytes have arrived and failed publisher verification.
-    return extract(await boundedBytes(await updateRequest(url.href, deadline, fetcher), bound));
+    return remember(await boundedBytes(await updateRequest(url.href, deadline, fetcher), bound));
   } catch (mirrorError) {
     if (sourceMode !== 'github')
       logBootstrapFallback('resource mirror fallback ' + name, mirrorError);
@@ -72,7 +97,7 @@ export async function downloadResourceOriginal({
     // All fallback bytes undergo the same sole SDK verification. No metadata,
     // pin or authority is taken from the failed mirror response.
     try {
-      return extract(
+      return remember(
         await boundedBytes(
           await updateRequest(
             `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${transportName}`,
