@@ -2037,6 +2037,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         observerEligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name)
       );
     },
+    () => projectionCoordinator.recalibrateObserver(),
   );
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {
