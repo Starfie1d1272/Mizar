@@ -8,8 +8,7 @@ const versionPattern =
 
 // Deliberately bounded authoring format, rather than a general Markdown renderer.
 // The same parsed release feeds GitHub Markdown and the signed plain-text notes.
-export function releaseSection(changelog, version) {
-  if (!versionPattern.test(version)) throw new Error('更新日志版本无效');
+export function releaseSections(changelog) {
   const sections = new Map();
   let current;
   for (const line of changelog.replace(/\r\n?/g, '\n').split('\n')) {
@@ -22,10 +21,17 @@ export function releaseSection(changelog, version) {
       sections.set(current, []);
     } else if (current) sections.get(current).push(line);
   }
-  const markdown = sections
-    .get(version)
-    ?.join('\n')
-    .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
+  return new Map(
+    [...sections].map(([version, lines]) => [
+      version,
+      lines.join('\n').replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, ''),
+    ]),
+  );
+}
+
+export function releaseSection(changelog, version) {
+  if (!versionPattern.test(version)) throw new Error('更新日志版本无效');
+  const markdown = releaseSections(changelog).get(version);
   if (!markdown?.trim()) throw new Error(`更新日志缺少 ${version} 的正文`);
   const blocks = parseReleaseMarkdown(markdown);
   return {
