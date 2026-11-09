@@ -203,12 +203,21 @@ export function registerObserverSettings(
   policy: LocalWebOriginPolicy,
   canRegisterCurrent: () => boolean = () => true,
   isObserving: () => boolean = () => false,
+  recalibrateObserver: () => boolean = () => false,
 ) {
+  let calibrationRevision = randomUUID();
+  const view = () => ({ ...store.view(isObserving()), calibrationRevision });
   app.get('/local/v1/observer-assist', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(store.view(isObserving())),
+    reply.header('cache-control', 'no-store').send(view()),
   );
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
+    z.strictObject({
+      action: z.literal('recalibrate'),
+      calibrationRevision: z.uuid(),
+      id: z.uuid(),
+      expectedRevision: z.uuid(),
+    }),
     z.strictObject({
       action: z.literal('connection'),
       connection: observerConnectionSchema,
@@ -236,6 +245,23 @@ export function registerObserverSettings(
     const parsed = schema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ message: '请核对时间设置、GOTV 地址和密码格式。' });
+    if (parsed.data.action === 'recalibrate') {
+      if (
+        parsed.data.calibrationRevision !== calibrationRevision ||
+        parsed.data.expectedRevision !== store.revision ||
+        parsed.data.id !== store.mapConnection?.id ||
+        !canRegisterCurrent() ||
+        !store.settings.enabled ||
+        store.receiverPaused ||
+        store.waitingForMap ||
+        !recalibrateObserver()
+      )
+        return reply
+          .code(409)
+          .send({ message: '当前无法重新校准，请确认本图连接和提前提示接收状态。' });
+      calibrationRevision = randomUUID();
+      return reply.header('cache-control', 'no-store').send(view());
+    }
     if (parsed.data.action === 'copy-connection') {
       const connection = store.configured();
       if (parsed.data.expectedRevision !== store.revision || !connection)

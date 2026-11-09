@@ -56,7 +56,7 @@ async function downloadResourceOriginal(
     fetcher?: typeof fetch;
     sourceMode?: ResourceSourceMode;
   },
-  carriers?: Map<string, Buffer>,
+  carriers: Map<string, Buffer>,
 ) {
   mirrorResourcePath(version, name);
   if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
@@ -66,21 +66,21 @@ async function downloadResourceOriginal(
   const extract = (bytes: Buffer) => {
     const original = readMachineFile(bytes, name);
     if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
-    return Buffer.from(original);
+    return original;
   };
   const key = `${version}:${sourceMode}`;
-  const cached = carriers?.get(key);
+  const cached = carriers.get(key);
   signal.throwIfAborted();
   if (cached) {
     try {
       return extract(cached);
     } catch {
-      carriers?.delete(key);
+      carriers.delete(key);
     }
   }
   const remember = (bytes: Buffer) => {
     const original = extract(bytes);
-    carriers?.set(key, Buffer.from(bytes));
+    carriers.set(key, bytes);
     return original;
   };
   const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(60000)]);
