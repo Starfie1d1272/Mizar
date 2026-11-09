@@ -16,6 +16,12 @@ export const SESSION_LIMITS = {
   retentionDays: 14,
   pendingBytes: 2 * 1024 * 1024,
 };
+type JournalSegment = {
+  name: string;
+  size: number;
+  critical: boolean;
+  repair?: { ino: number; dev: number; offset: number };
+};
 const credential =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|ticket)$/i;
 /** Preserve technical context; replace credential values, never whole events. */
@@ -167,6 +173,7 @@ export class SessionJournal {
   private pending: {
     line: string;
     bytes: number;
+    critical: boolean;
     receipt?: { resolve: (sequence: number) => void; reject: (error: unknown) => void };
     sequence: number;
   }[] = [];
@@ -179,9 +186,11 @@ export class SessionJournal {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private writeError: unknown = null;
   private inflightRecords = 0;
-  private repair: { ino: number; dev: number; offset: number } | undefined;
-  private size = 0;
-  private segmentName = `session-${randomUUID()}.ndjson`;
+  private readonly segments: JournalSegment[] = [false, true].map((critical) => ({
+    name: `session-${randomUUID()}.ndjson`,
+    size: 0,
+    critical,
+  }));
   private initialized = false;
   private readonly identity: {
     appVersion: string | null;
@@ -332,6 +341,13 @@ export class SessionJournal {
             }
           : {}),
       }) + '\n';
+    const event = JSON.parse(line) as Record<string, unknown>;
+    const critical = Boolean(
+      event.taskId ||
+      String(event.kind ?? event.stage).startsWith('business_') ||
+      diagnosticEnvelope(event).failureKinds.length > 0 ||
+      ['failed', 'failure', 'error'].includes(String(event.outcome ?? '')),
+    );
     const bytes = Buffer.byteLength(line);
     if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
       this.dropped++;
@@ -339,7 +355,13 @@ export class SessionJournal {
       return;
     }
     this.pendingBytes += bytes;
-    this.pending.push({ line, bytes, sequence: this.sequence, ...(receipt ? { receipt } : {}) });
+    this.pending.push({
+      line,
+      bytes,
+      critical,
+      sequence: this.sequence,
+      ...(receipt ? { receipt } : {}),
+    });
     if (receipt && this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
@@ -361,10 +383,18 @@ export class SessionJournal {
           const entry = this.pending.shift()!;
           batch.push(entry);
           bytes += entry.bytes;
-        } while (this.pending.length && bytes + this.pending[0]!.bytes <= 256 * 1024);
+        } while (
+          this.pending.length &&
+          this.pending[0]!.critical === batch[0]!.critical &&
+          bytes + this.pending[0]!.bytes <= 256 * 1024
+        );
         this.inflightRecords = batch.length;
         try {
-          await this.append(batch.map((entry) => entry.line).join(''), bytes);
+          await this.append(
+            batch.map((entry) => entry.line).join(''),
+            bytes,
+            this.segments[batch[0]!.critical ? 1 : 0]!,
+          );
           this.committedSequence = batch[batch.length - 1]!.sequence;
           this.writeError = null;
           this.pendingBytes -= bytes;
@@ -435,17 +465,28 @@ export class SessionJournal {
       await file.close();
     }
   }
-  private async append(line: string, bytes: number) {
+  private async append(line: string, bytes: number, segment: JournalSegment) {
     await this.initialize();
-    if (this.size + bytes > SESSION_LIMITS.segmentBytes) await this.rotate();
+    if (segment.size + bytes > SESSION_LIMITS.segmentBytes) await this.seal(segment);
     // A failed collect after sealing must be retried before the empty successor accepts bytes.
     if (
-      !this.size &&
-      !(await this.retained.collect({ incomingBytes: SESSION_LIMITS.segmentBytes })).writable
+      !segment.size &&
+      !(
+        await this.retained.collect({
+          incomingBytes:
+            Math.max(SESSION_LIMITS.segmentBytes, bytes) +
+            this.segments
+              .filter((other) => other !== segment && other.size > 0)
+              .reduce(
+                (total, other) => total + Math.max(SESSION_LIMITS.segmentBytes, other.size),
+                0,
+              ),
+        })
+      ).writable
     )
       throw new Error('session_retention_pinned_budget');
     await safePath(this.directory);
-    const path = join(this.directory, this.segmentName);
+    const path = join(this.directory, segment.name);
     const before = await lstat(path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return null;
@@ -471,23 +512,23 @@ export class SessionJournal {
       )
         throw new Error('session_log_changed');
       let appendStart = opened.size;
-      if (this.repair) {
-        if (this.repair.ino === opened.ino && this.repair.dev === opened.dev) {
-          await this.rollbackAppend(path, opened, this.repair.offset);
-          appendStart = this.repair.offset;
+      if (segment.repair) {
+        if (segment.repair.ino === opened.ino && segment.repair.dev === opened.dev) {
+          await this.rollbackAppend(path, opened, segment.repair.offset);
+          appendStart = segment.repair.offset;
         }
-        this.repair = undefined;
+        delete segment.repair;
       }
       try {
         await fd.writeFile(line);
         await fd.sync();
-        this.size = appendStart + bytes;
+        segment.size = appendStart + bytes;
       } catch (error) {
         try {
           await this.rollbackAppend(path, opened, appendStart);
-          this.size = appendStart;
+          segment.size = appendStart;
         } catch (rollback) {
-          this.repair = { ino: opened.ino, dev: opened.dev, offset: appendStart };
+          segment.repair = { ino: opened.ino, dev: opened.dev, offset: appendStart };
           throw new AggregateError([error, rollback], 'session_append_rollback_failed', {
             cause: rollback,
           });
@@ -562,9 +603,9 @@ export class SessionJournal {
         await this.retained.releasePin(pin.pinId);
     this.initialized = true;
   }
-  private async seal() {
-    if (!this.size) return;
-    const content = await readFile(await safePath(this.directory, this.segmentName), 'utf8');
+  private async seal(segment: JournalSegment) {
+    if (!segment.size) return;
+    const content = await readFile(await safePath(this.directory, segment.name), 'utf8');
     const events = content
       .trim()
       .split('\n')
@@ -581,7 +622,7 @@ export class SessionJournal {
             outcome?: string;
           },
       );
-    await this.retained.registerSegment(this.segmentName, {
+    await this.retained.registerSegment(segment.name, {
       producerRunId: this.sessionId,
       firstSequence: events[0]?.journal?.sequence ?? events[0]?.sequence ?? null,
       lastSequence: events.at(-1)?.journal?.sequence ?? events.at(-1)?.sequence ?? null,
@@ -589,27 +630,15 @@ export class SessionJournal {
       lastObservedAt: events.at(-1)?.observedAt ?? null,
       records: events.length,
     });
-    // Active critical paths remain protected; ordinary high-frequency observations may age out.
-    if (
-      events.some(
-        (event) =>
-          event.taskId ||
-          String(event.kind ?? event.stage).startsWith('business_') ||
-          diagnosticEnvelope(event).failureKinds.length > 0 ||
-          ['failed', 'failure', 'error'].includes(event.outcome ?? ''),
-      )
-    ) {
-      const pinId = this.segmentName.slice('session-'.length, -'.ndjson'.length);
-      await this.retained.preparePin({ pinId, kind: 'active', names: [this.segmentName] });
+    // Only critical records occupy protected segments; ordinary observations
+    // remain collectable without removing a critical event in the same file.
+    if (segment.critical) {
+      const pinId = segment.name.slice('session-'.length, -'.ndjson'.length);
+      await this.retained.preparePin({ pinId, kind: 'active', names: [segment.name] });
       await this.retained.commitPin(pinId);
     }
-    this.segmentName = `session-${randomUUID()}.ndjson`;
-    this.size = 0;
-  }
-  private async rotate() {
-    await this.seal();
-    if (!(await this.retained.collect({ incomingBytes: SESSION_LIMITS.segmentBytes })).writable)
-      throw new Error('session_retention_pinned_budget');
+    segment.name = `session-${randomUUID()}.ndjson`;
+    segment.size = 0;
   }
   incidentParticipant(): IncidentParticipant {
     return this.evidenceParticipant('incident');
@@ -634,7 +663,7 @@ export class SessionJournal {
       prepare: (pinId) =>
         serialize(async () => {
           await this.initialize();
-          await this.seal();
+          for (const segment of this.segments) await this.seal(segment);
           const receipt = await this.retained.preparePin({
             pinId,
             kind,
