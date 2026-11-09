@@ -362,9 +362,11 @@ async function* sourceLines(directory: string, name: string): AsyncGenerator<str
     await file.close();
   }
 }
+type JournalSource = { name: string; run: string; sequence: number; order: number };
 async function orderedSources(directory: string) {
   const names = await diagnosticSegmentNames(directory);
-  const records: { name: string; run: string; sequence: number; order: number }[] = [];
+  const records: JournalSource[] = [];
+  let unavailable: unknown = null;
   for (const [order, name] of names.entries()) {
     let run = '';
     let sequence = 0;
@@ -383,25 +385,104 @@ async function orderedSources(directory: string) {
             event.journal?.producerRunId ??
             (event.producerKind === 'companion' ? (event.producerRunId ?? '') : '');
           sequence = event.journal?.sequence ?? event.sequence ?? 0;
+          if (!run || !Number.isSafeInteger(sequence) || sequence <= 0)
+            throw new Error('journal_source_sequence_invalid');
           break;
         }
-      } catch {
-        /* Recovery below reports the unavailable source without dropping other sources. */
+      } catch (error) {
+        if (missing(error)) continue;
+        unavailable = error;
+        continue;
       }
+      // Empty active files have no committed records. A later commit triggers
+      // another scan; do not read them again without a known carrier boundary.
+      if (!run) continue;
     }
     records.push({ name, run, sequence, order });
   }
-  // Order segments within each journal run, preserving first-seen run order.
-  // One browser producer may survive a Companion restart, so UUID lexical order
-  // is not a cross-run clock. Host/document files retain their producer-owned order.
-  const runOrder = new Map<string, number>();
-  for (const value of records)
-    if (value.run && !runOrder.has(value.run)) runOrder.set(value.run, value.order);
-  const sessions = records
-    .filter((value) => value.run)
-    .sort((a, b) => runOrder.get(a.run)! - runOrder.get(b.run)! || a.sequence - b.sequence);
+  // A run may now have two interleaved physical streams. Keep runs in
+  // first-seen order, but merge their carrier sequences rather than whole files.
+  const groups: JournalSource[][] = [];
+  const runs = new Map<string, JournalSource[]>();
+  for (const record of records) {
+    if (!record.run) {
+      groups.push([record]);
+      continue;
+    }
+    let group = runs.get(record.run);
+    if (!group) {
+      group = [];
+      runs.set(record.run, group);
+      groups.push(group);
+    }
+    group.push(record);
+  }
+  for (const group of groups) group.sort((a, b) => a.sequence - b.sequence);
+  return { groups, unavailable };
+}
+/** At most two overlapping streams per journal run. Legacy segments do not
+ * overlap. Open successors only when their first sequence can precede a head;
+ * neither the entire run nor an unbounded set of file handles is retained. */
+async function* mergedSourceLines(directory: string, sources: JournalSource[]) {
+  if (!sources[0]?.run) {
+    yield* sourceLines(directory, sources[0]!.name);
+    return;
+  }
+  const run = sources[0].run;
+  const heads: { reader: AsyncGenerator<string>; line: string; sequence: number }[] = [];
   let next = 0;
-  return records.map((value) => (value.run ? sessions[next++]!.name : value.name));
+  let emitted = 0;
+  const sequenceOf = (line: string) => {
+    const event = JSON.parse(line) as {
+      producerRunId?: string;
+      sequence?: number;
+      journal?: { producerRunId?: string; sequence?: number };
+    };
+    const sequence = event.journal?.sequence ?? event.sequence;
+    if (
+      (event.journal?.producerRunId ?? event.producerRunId) !== run ||
+      !Number.isSafeInteger(sequence) ||
+      sequence! <= 0
+    )
+      throw new Error('journal_source_sequence_invalid');
+    return sequence!;
+  };
+  try {
+    while (next < sources.length || heads.length) {
+      heads.sort((a, b) => a.sequence - b.sequence);
+      if (
+        next < sources.length &&
+        (!heads.length || sources[next]!.sequence <= heads[0]!.sequence)
+      ) {
+        if (heads.length >= 2) throw new Error('journal_source_overlap_budget');
+        const source = sources[next++]!;
+        const reader = sourceLines(directory, source.name);
+        try {
+          const first = await reader.next();
+          if (first.done) throw new Error('journal_source_changed');
+          const sequence = sequenceOf(first.value);
+          if (sequence !== source.sequence) throw new Error('journal_source_changed');
+          heads.push({ reader, line: first.value, sequence });
+        } catch (error) {
+          await reader.return(undefined);
+          throw error;
+        }
+        continue;
+      }
+      const head = heads[0]!;
+      if (head.sequence <= emitted) throw new Error('journal_source_sequence_order');
+      emitted = head.sequence;
+      yield head.line;
+      const value = await head.reader.next();
+      if (value.done) heads.shift();
+      else {
+        head.line = value.value;
+        head.sequence = sequenceOf(value.value);
+      }
+    }
+  } finally {
+    await Promise.all(heads.map((head) => head.reader.return(undefined)));
+  }
 }
 /** Raw batches are never inflated without a bound, including malicious cloud archives. */
 export async function decodeDiagnosticBatch(bytes: Buffer) {
@@ -1049,15 +1130,32 @@ export class DiagnosticDelivery {
     // Keep live notifications behind recovery until a complete scan is stable.
     this.recoveryNeeded = true;
     const startedRevision = this.sourceRevision;
-    const startedSequence = this.journal.health().sequence;
+    const sourceHealth = this.journal.health();
+    const startedSequence = sourceHealth.sequence;
+    // Separate file snapshots must not admit a newer commit from one stream
+    // while the other snapshot still omits an earlier committed record.
+    const committedCutoff = sourceHealth.committedSequence;
     let sourceUnavailable = false;
     // Fixed Mizar log names only; source rotation remains governed by SessionJournal.
-    const names = await orderedSources(this.directory);
-    for (const name of names) {
+    const indexed = await orderedSources(this.directory);
+    if (indexed.unavailable) {
+      sourceUnavailable = true;
+      this.error =
+        indexed.unavailable instanceof Error ? indexed.unavailable.message : 'journal_unreadable';
+    }
+    for (const sources of indexed.groups) {
+      // An unidentified journal source could contain an earlier carrier from
+      // any run. Other producers remain readable, but no journal cursor may
+      // overtake it until its boundary can be established.
+      if (indexed.unavailable && sources[0]?.run) continue;
       let count = 0;
       try {
-        for await (const line of sourceLines(this.directory, name)) {
+        for await (const line of mergedSourceLines(this.directory, sources)) {
           if (!line) continue;
+          if (sources[0]?.run === sourceHealth.sessionId) {
+            const event = JSON.parse(line) as { sequence: number; journal?: { sequence: number } };
+            if ((event.journal?.sequence ?? event.sequence) > committedCutoff) break;
+          }
           let admitted: ReturnType<DiagnosticDelivery['observe']> = undefined;
           try {
             admitted = this.observe(line + '\n', true);
@@ -1082,8 +1180,13 @@ export class DiagnosticDelivery {
           }
         }
       } catch (error) {
-        if (missing(error)) continue;
-        this.error = error instanceof Error ? error.message : 'journal_unreadable';
+        // A source removed after indexing interrupts the entire merged run,
+        // not just that file. Re-enumerate before admitting later live commits.
+        this.error = missing(error)
+          ? 'journal_source_changed_during_recovery'
+          : error instanceof Error
+            ? error.message
+            : 'journal_unreadable';
         sourceUnavailable = true;
       }
     }
