@@ -237,6 +237,19 @@ export class UpdateManager {
           const resultDigest =
             result.status === 'installed' ? plan.contentDigest : plan.previousContentDigest;
           if (resultDigest !== this.options.currentContentDigest) this.lastResult = null;
+          else if (
+            result.status === 'installed' &&
+            this.ready?.manifest.version === plan.version &&
+            this.ready.manifest.installer.contentDigest === resultDigest
+          ) {
+            // Only consume the download proven to be this completed installation.
+            // Keep other candidates and all recovery records/backups untouched.
+            try {
+              await this.discard();
+            } catch (cause) {
+              this.disableInitialization('installed_download_cleanup', cause);
+            }
+          }
         } catch (error) {
           /* No reliable payload identity: retain the recorded result. */
           this.failure('result_identity_load', error);

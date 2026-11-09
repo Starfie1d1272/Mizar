@@ -74,6 +74,7 @@ export class ProgramDirector {
     private readonly production: () => boolean,
     private readonly now = () => performance.now(),
     private readonly timings = DEFAULT_PROGRAM_TIMINGS,
+    private readonly preparationReason: () => string | null = () => null,
   ) {}
   get(): DirectorView {
     return { ...this.view, warmupScene: this.warmupChoice, sceneElapsedMs: this.elapsed };
@@ -121,6 +122,17 @@ export class ProgramDirector {
       p.status.telemetry === 'fresh' &&
       p.status.identity !== 'mismatch' &&
       p.series?.bindingState === 'bound'
+    );
+  }
+  /** Selected pre-match information has no dependency on a live game map. */
+  private prematch(p: ProgramProjection): boolean {
+    return (
+      p.status.context === 'fresh' &&
+      p.match !== null &&
+      p.series !== null &&
+      p.series.status === 'planned' &&
+      p.status.identity !== 'mismatch' &&
+      p.series.maps.every((map) => map.status === 'pending')
     );
   }
   private predict(p: ProgramProjection, active: ProgramSceneId): void {
@@ -221,9 +233,12 @@ export class ProgramDirector {
     this.view.gg = null;
     this.predict(p, this.scenes.get().active);
     const production = this.production() && operator.matchContext.origin !== 'fixture';
+    // BP reveals are sourced from selected match data, not from GoTV. Only a
+    // trustworthy current-map pause may freeze them; stale/unbound clocks cannot.
     this.bp.setPaused(
       production &&
-        (!this.safe(p) || ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '')),
+        (this.projections.getBpAssessment().readiness !== 'ready' ||
+          (this.safe(p) && ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? ''))),
     );
     if (!production) {
       this.wasProduction = false;
@@ -231,7 +246,7 @@ export class ProgramDirector {
         ...this.view,
         mode: 'preparation',
         blockCause: null,
-        reason: null,
+        reason: this.preparationReason(),
       };
       return;
     }
@@ -269,8 +284,10 @@ export class ProgramDirector {
     const halftime = isRegulationHalftime(p);
     if (active === 'halftime' && p.map.roundNumber === 12 && p.clock?.phase === 'freezetime')
       this.halftimeSeen = true;
-    const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '');
-    if (!this.safe(p)) {
+    const prematch = this.prematch(p) && (active === 'waiting' || active === 'bp');
+    const paused =
+      this.safe(p) && ['paused', 'timeout_ct', 'timeout_t'].includes(p.clock?.phase ?? '');
+    if (!this.safe(p) && !prematch) {
       this.ggStartedAt = null;
       this.view.gg = null;
       this.view = {
@@ -309,8 +326,22 @@ export class ProgramDirector {
     let target: ProgramSceneId | null = null;
     let finalBp = false;
     const cueMap = sceneResultScope(p);
-    if (p.map.phase === 'live') this.observedLiveMap = cueMap;
-    if (
+    if (this.safe(p) && p.map.phase === 'live') this.observedLiveMap = cueMap;
+    if (prematch) {
+      const bpReady = this.projections.getBpAssessment().readiness === 'ready';
+      this.view.next = null;
+      this.view.nextStatus = 'awaiting';
+      this.view.nextReason = '等待有效 BP 资料；赛前资料轮播继续。';
+      if (bpReady && !this.warmupPlayed) target = 'bp';
+      else if (active === 'bp' && this.bp.get().state === 'shown') {
+        if (!this.manual) this.warmupFinalElapsed += delta;
+        this.setPrediction('waiting');
+        if (this.warmupFinalElapsed >= this.timings.warmupFinalMs + this.timings.bpRevealSettleMs)
+          target = 'waiting';
+      } else if (active === 'waiting' && this.warmupPlayed) {
+        this.view.nextReason = '赛前资料轮播中，等待可信游戏阶段后继续编排。';
+      }
+    } else if (
       p.map.phase === 'gameover' &&
       p.series?.maps.some(
         (map) => map.status === 'completed' && map.mapName === p.map.name && map.finalScore,
@@ -441,6 +472,7 @@ export class ProgramDirector {
       }
       return;
     }
+    const prematchAction = prematch && (target === 'bp' || target === 'waiting');
     this.inFlight = target;
     const generation = this.generation;
     const key = sceneRequestScope(p);
@@ -452,7 +484,10 @@ export class ProgramDirector {
           !this.manual &&
           generation === this.generation &&
           this.production() &&
-          this.safe(this.projections.getCurrent().program) &&
+          (prematchAction
+            ? this.prematch(this.projections.getCurrent().program) &&
+              (target !== 'bp' || this.projections.getBpAssessment().readiness === 'ready')
+            : this.safe(this.projections.getCurrent().program)) &&
           (target !== 'matchup' ||
             (this.projections.getCurrent().program.round?.phase === 'freezetime' &&
               this.projections.getCurrent().program.clock?.phase === 'freezetime' &&
@@ -471,6 +506,10 @@ export class ProgramDirector {
         const current = this.projections.getCurrent().program;
         if (
           generation !== this.generation ||
+          (prematchAction &&
+            (!this.prematch(current) ||
+              key !== sceneRequestScope(current) ||
+              (target === 'bp' && this.projections.getBpAssessment().readiness !== 'ready'))) ||
           (key === sceneRequestScope(current) &&
             target !== 'gameplay' &&
             this.safe(current) &&

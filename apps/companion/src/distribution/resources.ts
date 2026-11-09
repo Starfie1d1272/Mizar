@@ -8,7 +8,7 @@ import {
   type ResourceCatalogCorePin,
 } from '@mizar/resource-pack-contract/runtime';
 import {
-  downloadResourceOriginal,
+  createResourceOriginalDownloader,
   downloadResourceArchive,
   logBootstrapFallback,
   type ResourceSourceMode,
@@ -37,6 +37,7 @@ export async function authenticatePublishedResource(
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(600_000)]);
   const fetcher = options.fetcher ?? globalThis.fetch;
   const version = options.core.appVersion;
+  const downloadResourceOriginal = createResourceOriginalDownloader();
   const download = (
     name: string,
     maximum: number,

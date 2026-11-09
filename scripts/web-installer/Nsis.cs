@@ -10,8 +10,17 @@ namespace Mizar.WebInstaller {
   public sealed class FreshInstallResult {
     internal FreshInstallResult(string directory, PendingInstall pending) { Directory = directory; CoreInstalled = true; record = pending; }
     readonly PendingInstall record;
+    bool completed, completionStarted;
+    internal bool Completed { get { return completed; } }
     public string Directory { get; private set; }
-    public Task RollbackAsync() { return record.updateStage == null ? Nsis.RollbackFreshExclusive(Directory, record) : Nsis.RollbackUpdate(record); }
+    public Task RollbackAsync() { if(completionStarted) throw new InvalidOperationException("安装已提交，不能再回滚。"); return record.updateStage == null ? Nsis.RollbackFreshExclusive(Directory, record) : Nsis.RollbackUpdate(record); }
+    internal async Task CompleteAsync(Plan plan) {
+      if(completed) return;
+      // Completion closes cancellation/rollback before any backup is removed.
+      completionStarted=true;
+      if(record.updateStage!=null) await Nsis.FinalizeUpdate(plan,record);
+      completed=true;
+    }
     // Core installation is never the Core + default resource completion signal.
     public bool CoreInstalled { get; private set; }
     public bool ResourcesReady { get { return record.updateStage != null && record.coreResourcesReady; } }
@@ -401,8 +410,8 @@ namespace Mizar.WebInstaller {
       if(diagnostic.Contains("update_installer_corrupt")) return new InstallerActionRequired("安装文件验证未通过。请重新下载官方轻量安装器后重试。",false,cause);
       if(diagnostic.Contains("update_payload_") || diagnostic.Contains("update_reparse_point") || diagnostic.Contains("update_registration_snapshot_invalid")) return new InstallerActionRequired("原安装文件或恢复记录未通过验证。请保留安装目录并使用原恢复入口；需要协助时导出诊断。",false,cause);
       if(diagnostic.Contains("update_installer_cancelled")) return new InstallerActionRequired("安装程序已取消或失败。请导出诊断确认原因后重试。",true,cause);
-      string phase=arguments.Contains("-Mode Prepare") ? "更新准备" : arguments.Contains("-Mode Install") ? "更新安装" : "安装恢复";
-      return new InstallerActionRequired(phase+"未完成。请查看或导出诊断后处理；原程序与现场已保留。",false,cause);
+      string phase=arguments.Contains("-Mode Prepare") ? "更新准备" : arguments.Contains("-Mode Install") ? "更新安装" : arguments.Contains("-Mode Finalize") ? "安装清理" : "安装恢复";
+      return new InstallerActionRequired(phase+"未完成。请查看或导出诊断后处理；"+(arguments.Contains("-Mode Finalize") ? "安装状态须重新核对，剩余恢复资料已保留。" : "原程序与现场已保留。"),false,cause);
     }
     static void AssertUpdate(PendingInstall record) {
       string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","updates");
@@ -440,6 +449,17 @@ namespace Mizar.WebInstaller {
       AssertUpdate(record);
       await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Rollback -StageRoot \""+record.updateStage+"\"",record);
       if(File.Exists(PendingPath())) File.Delete(PendingPath());
+    }
+    internal static async Task FinalizeUpdate(Plan plan,PendingInstall record) {
+      string leasePath=Path.Combine(Path.GetDirectoryName(PendingPath()),"fresh-install.lock");Downloader.NoReparse(leasePath);
+      using(var lease=new FileStream(leasePath,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
+        if(File.Exists(PendingPath()) || record.planSha256!=PlanHash(plan) || record.writerPid<=0 || ProcessStillActive(record.writerPid,record.writerStarted)) throw new InstallerRecoveryRequired(record.target,"安装清理条件无法确认，保留恢复资料。");
+        AssertUpdate(record);
+        using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
+        record.stage="update-finalizing";SavePending(record,true);
+        await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Finalize -StageRoot \""+record.updateStage+"\"",record);
+        File.Delete(PendingPath());
+      }
     }
     static async Task<FreshInstallResult> UpdateInstalled(Plan plan,string installer,string target,IProgress<string> progress,CancellationToken token) {
       AssertOwnedRegistration(target);AssertOwnedShortcuts(target);

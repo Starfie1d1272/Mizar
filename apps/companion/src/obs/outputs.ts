@@ -109,6 +109,8 @@ export class ObsOutputController {
   // Update safety follows real observations and commands, not repeated failed
   // connection attempts while both outputs remain unknown and OBS is absent.
   private outputObservationGeneration = 0;
+  // Configuration freshness is separate from output transitions and scene-control intent.
+  private preparationConfigurationGeneration = 0;
   private readonly warmupExtraOutputs: Record<
     'replay' | 'virtual',
     'idle' | 'starting' | 'active' | 'stopping' | 'unknown'
@@ -124,6 +126,10 @@ export class ObsOutputController {
       kind: 'scene' | 'collection' | 'collection-changing' | 'disconnected',
       name?: string,
     ) => void = () => undefined,
+    private readonly ownedPreparationEvent: (
+      event: string,
+      data: Record<string, unknown>,
+    ) => boolean = () => false,
   ) {}
 
   get busy(): boolean {
@@ -146,6 +152,15 @@ export class ObsOutputController {
         ['starting', 'active', 'stopping'].includes(phase),
       )
     );
+  }
+
+  /** Read-only preparation adoption is allowed during output, but not during teardown. */
+  canObservePreparation(): boolean {
+    return this.ready && !this.closed && !this.warmupExitStarted && !this.warmupCollectionChanging;
+  }
+
+  preparationConfigurationEpoch(): number {
+    return this.preparationConfigurationGeneration;
   }
 
   captureWarmupGeneration(): number | null {
@@ -223,6 +238,7 @@ export class ObsOutputController {
     if (client && this.client !== client) return;
     if (this.ready) this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
+    this.preparationConfigurationGeneration++;
     this.warmupGeneration++;
     this.streamBytes = undefined;
     this.warmupExtraOutputs.replay = 'unknown';
@@ -368,6 +384,29 @@ export class ObsOutputController {
     };
     client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
     client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
+    for (const event of [
+      'SceneCreated',
+      'SceneRemoved',
+      'SceneNameChanged',
+      'SceneItemCreated',
+      'SceneItemRemoved',
+      'SceneItemEnableStateChanged',
+      'SceneItemTransformChanged',
+      'SceneItemListReindexed',
+      'InputCreated',
+      'InputRemoved',
+      'InputNameChanged',
+      'InputSettingsChanged',
+      'CurrentProfileChanging',
+      'CurrentProfileChanged',
+    ] as const)
+      client.on(event, (data) => {
+        if (
+          current() &&
+          !this.ownedPreparationEvent(event, data as unknown as Record<string, unknown>)
+        )
+          this.preparationConfigurationGeneration++;
+      });
     client.on('InputSettingsChanged', invalidateWarmup);
     client.on('InputRemoved', invalidateWarmup);
     client.on('InputNameChanged', invalidateWarmup);
@@ -393,6 +432,8 @@ export class ObsOutputController {
               eventSubscriptions:
                 EventSubscription.Outputs |
                 EventSubscription.Scenes |
+                EventSubscription.SceneItems |
+                EventSubscription.SceneItemTransformChanged |
                 EventSubscription.Config |
                 EventSubscription.Inputs |
                 EventSubscription.General,

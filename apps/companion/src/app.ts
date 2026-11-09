@@ -1037,6 +1037,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: sceneController,
     canControl: () => production.canControl(),
+    productionActive: () => production.presentationAllowed(),
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
     app.addHook('onListen', () => {
@@ -1552,8 +1553,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
     });
   });
-  const director = new ProgramDirector(projectionCoordinator, sceneController, bpSession, () =>
-    production.automaticAllowed(),
+  const director = new ProgramDirector(
+    projectionCoordinator,
+    sceneController,
+    bpSession,
+    () => production.automaticAllowed(),
+    undefined,
+    undefined,
+    () =>
+      production.sessionAllowed() && !production.automaticAllowed()
+        ? 'OBS 播出准备尚未确认，请检查 OBS 连接和场景；缺少配置时在准备中心修复。'
+        : null,
   );
   if (obsConfigStore && options.obsConfigPath) {
     const musicStore = new MusicStore(
