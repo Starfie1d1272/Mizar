@@ -1,4 +1,5 @@
 import { AudioMeter } from './audio-meter.js';
+import { ObsObservationConnection } from './observation-connection.js';
 import {
   readAudioDevices,
   setAudioDevice,
@@ -190,6 +191,7 @@ function guardedObs(obs: ObsRpc, valid: () => boolean): ObsRpc {
 
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
+  private readonly observations = new ObsObservationConnection();
   private readonly audioConfiguration: AudioConfigurationConnection;
   private readonly audioMeter: AudioMeter;
   private readonly bpOwner = new BpOverlayOwner();
@@ -376,6 +378,7 @@ export class ObsAdapter {
       this.audioRouting?.invalidateSelections();
       this.commentaryChoices.clear();
       this.outputs.reset();
+      this.observations.reset();
     });
   }
 
@@ -403,12 +406,15 @@ export class ObsAdapter {
   }
 
   private preparationValidity(): () => boolean {
+    // A completed observation owns its snapshot; an older pending read cannot replace it.
+    const findings = this.findings;
     const program = this.programGeneration;
     const output = this.outputs.outputObservationEpoch();
     const recovery = this.recoveryGeneration;
     const configuration = this.outputs.preparationConfigurationEpoch();
     const observation = this.observationGeneration;
     return () =>
+      findings === this.findings &&
       output === this.outputs.outputObservationEpoch() &&
       observation === this.observationGeneration &&
       !this.observationWriteActive &&
@@ -709,6 +715,7 @@ export class ObsAdapter {
     if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
     await this.commentaryTask;
     await this.outputs.close();
+    await this.observations.close();
     const bpClient = this.bpClient;
     this.bpClient = undefined;
     await bpClient?.disconnect().catch(() => undefined);
@@ -761,6 +768,25 @@ export class ObsAdapter {
     return result;
   }
 
+  private withReadObs<T>(
+    operation: (obs: ObsRpc, endpoint: string, recovery: ObsRpc) => Promise<T>,
+    timeoutMs = TIMEOUT_MS,
+    diagnosticStage?: string,
+    commitObservation?: (value: T) => void,
+  ): Promise<T> {
+    return this.withObs(
+      operation,
+      timeoutMs,
+      diagnosticStage,
+      false,
+      false,
+      false,
+      true,
+      commitObservation,
+      true,
+    );
+  }
+
   private async withObs<T>(
     operation: (obs: ObsRpc, endpoint: string, recovery: ObsRpc) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
@@ -770,9 +796,19 @@ export class ObsAdapter {
     observeVideoIdentity = false,
     observePreparationIdentity = false,
     commitObservation?: (value: T) => void,
+    readOnly = false,
   ): Promise<T> {
+    const observation = this.observationGeneration;
     const config = await this.configStore.read();
-    const client = new OBSWebSocket();
+    if (
+      readOnly &&
+      (this.recoveryClosed ||
+        this.observationWriteActive ||
+        observation !== this.observationGeneration)
+    )
+      throw new ObsVideoError('obs_observation_changed', 'OBS 状态已变化，请重新检查。');
+    const borrowed = readOnly ? this.observations.acquire(config) : undefined;
+    const client = borrowed?.client ?? new OBSWebSocket();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stage = 'obs_connect';
     let active = true;
@@ -810,17 +846,19 @@ export class ObsAdapter {
     };
     try {
       const task = (async () => {
-        await client.connect(
-          `ws://${config.host}:${config.port}`,
-          config.password,
-          observePreparationIdentity
-            ? {
-                eventSubscriptions:
-                  EventSubscription.All | EventSubscription.SceneItemTransformChanged,
-              }
-            : undefined,
-        );
-        if (!active) throw new Error('obs_operation_cancelled');
+        await (borrowed?.ready ??
+          client.connect(
+            `ws://${config.host}:${config.port}`,
+            config.password,
+            observePreparationIdentity
+              ? {
+                  eventSubscriptions:
+                    EventSubscription.All | EventSubscription.SceneItemTransformChanged,
+                }
+              : undefined,
+          ));
+        if (!active || (borrowed && !borrowed.current()))
+          throw new Error('obs_operation_cancelled');
         if (observeAudioIdentity) {
           client.on('CurrentSceneCollectionChanging', invalidateAudio);
           client.on('InputRemoved', invalidateAudio);
@@ -850,7 +888,10 @@ export class ObsAdapter {
             return () => client.off('SceneTransitionVideoEnded', onEnded);
           },
           call: async (type, data, onDispatch) => {
-            if (!active) throw new Error('obs_operation_cancelled');
+            if (readOnly && !/^Get[A-Z]/.test(type))
+              throw new Error('obs_observation_write_forbidden');
+            if (!active || (borrowed && !borrowed.current()))
+              throw new Error('obs_operation_cancelled');
             if (
               type === 'SetCurrentProgramScene' &&
               typeof (data?.sceneUuid ?? data?.sceneName) === 'string'
@@ -880,7 +921,8 @@ export class ObsAdapter {
                 args?: Record<string, unknown>,
               ) => Promise<Record<string, unknown>>
             )(type, data);
-            if (!active) throw new Error('obs_operation_cancelled');
+            if (!active || (borrowed && !borrowed.current()))
+              throw new Error('obs_operation_cancelled');
             return result;
           },
         };
@@ -891,7 +933,8 @@ export class ObsAdapter {
           this.browserBaseUrl,
         );
         const result = await operation(managed, managed.identityEndpoint ?? endpoint, rpc);
-        if (!active) throw new Error('obs_operation_cancelled');
+        if (!active || (borrowed && !borrowed.current()))
+          throw new Error('obs_operation_cancelled');
         commitObservation?.(result);
         return result;
       })();
@@ -900,6 +943,7 @@ export class ObsAdapter {
         new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(() => {
             active = false;
+            if (borrowed) this.observations.retire(borrowed);
             reject(new Error('OBS 操作超时，请检查连接。'));
           }, timeoutMs);
         }),
@@ -929,7 +973,7 @@ export class ObsAdapter {
       if (observePreparationIdentity)
         for (const event of preparationEvents) client.off(event, invalidateAudio);
       client.off('InputSettingsChanged', invalidatePreparationSettings);
-      await client.disconnect().catch(() => undefined);
+      if (!borrowed) await client.disconnect().catch(() => undefined);
     }
   }
 
@@ -1037,7 +1081,7 @@ export class ObsAdapter {
       }
     };
     try {
-      await this.withObs(
+      await this.withReadObs(
         async (obs, endpoint) => {
           status = { ...status, connection: 'connected' };
           facts = {
@@ -1122,21 +1166,19 @@ export class ObsAdapter {
         },
         2500,
         undefined,
-        false,
-        false,
-        false,
-        true,
         () => {
-          // Commit before releasing the observation socket; the slower program evidence
+          // Commit before finishing this observation; the slower program evidence
           // below cannot renew a configuration snapshot invalidated in the meantime.
           if (preparationCurrent()) {
             this.preparedConfigurationEpoch = this.outputs.preparationConfigurationEpoch();
             this.recoveryPrepared = obsFindingReadiness(findings).blockingFindings.length === 0;
+            this.findings = [...findings];
           }
         },
       );
     } catch (error) {
-      if (preparationCurrent()) this.recoveryPrepared = false;
+      // A failed observation cannot revoke a newer confirmed snapshot. The
+      // persistent event owner still invalidates actual disconnect/configuration changes.
       const kind = obsFailureKind(error);
       if (status.connection === 'connected') {
         findings.push({
@@ -1175,13 +1217,12 @@ export class ObsAdapter {
         }
       }
     }
-    if (preparationCurrent()) this.findings = [...findings];
     // Evidence has its own deadline and cannot erase confirmed base observations.
     let programEvidence: ObsProgramEvidence | null = null;
     if (status.connection === 'connected') {
       let timer: ReturnType<typeof setTimeout> | undefined;
       programEvidence = await Promise.race([
-        this.withObs(
+        this.withReadObs(
           (obs) => readObsProgramEvidence(obs, this.browserBaseUrl, status.currentScene),
           PROGRAM_EVIDENCE_MS,
           'obs_program_check',
@@ -1211,26 +1252,28 @@ export class ObsAdapter {
   private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
   confidencePreview(): Promise<{ scene: string; image: string } | null> {
     if (this.previewPending) return this.previewPending;
-    this.previewPending = this.withObs(async (obs) => {
-      const current = await obs.call('GetCurrentProgramScene');
-      const scene = current.currentProgramSceneName;
-      if (typeof scene !== 'string') return null;
-      const screenshot = await obs.call('GetSourceScreenshot', {
-        sourceName: scene,
-        imageFormat: 'jpeg',
-        imageWidth: 640,
-        imageHeight: 360,
-        imageCompressionQuality: 70,
-      });
-      const after = await obs.call('GetCurrentProgramScene');
-      const image = screenshot.imageData;
-      return after.currentProgramSceneName === scene &&
-        typeof image === 'string' &&
-        image.startsWith('data:image/jpeg;base64,') &&
-        image.length < 1_000_000
-        ? { scene, image }
-        : null;
-    })
+    this.previewPending = this.observe(() =>
+      this.withReadObs(async (obs) => {
+        const current = await obs.call('GetCurrentProgramScene');
+        const scene = current.currentProgramSceneName;
+        if (typeof scene !== 'string') return null;
+        const screenshot = await obs.call('GetSourceScreenshot', {
+          sourceName: scene,
+          imageFormat: 'jpeg',
+          imageWidth: 640,
+          imageHeight: 360,
+          imageCompressionQuality: 70,
+        });
+        const after = await obs.call('GetCurrentProgramScene');
+        const image = screenshot.imageData;
+        return after.currentProgramSceneName === scene &&
+          typeof image === 'string' &&
+          image.startsWith('data:image/jpeg;base64,') &&
+          image.length < 1_000_000
+          ? { scene, image }
+          : null;
+      }),
+    )
       .catch(() => null)
       .finally(() => {
         this.previewPending = null;
@@ -1241,14 +1284,10 @@ export class ObsAdapter {
   check(): Promise<readonly ObsFinding[]> {
     return this.observe(async () => {
       const current = this.preparationValidity();
-      const findings = await this.withObs(
+      const findings = await this.withReadObs(
         (obs, endpoint) => this.configurationFindings(obs, endpoint),
         12_000,
         undefined,
-        false,
-        false,
-        false,
-        true,
         (findings) => {
           if (!current()) return;
           this.preparedConfigurationEpoch = this.outputs.preparationConfigurationEpoch();
@@ -1285,7 +1324,7 @@ export class ObsAdapter {
   }
   readAudioDevices() {
     return this.observe(() =>
-      this.withObs(
+      this.withReadObs(
         async (obs) => ({
           ...(await readAudioDevices(obs)),
           desktopMode: Boolean(await this.audioRouting?.desktopBinding()),
@@ -1323,7 +1362,7 @@ export class ObsAdapter {
   readAudioRouting() {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
     return this.observe(() =>
-      this.withObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
+      this.withReadObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
     );
   }
   cancelAudioWait(revision: string) {
@@ -1942,7 +1981,7 @@ export class ObsAdapter {
   }
   mixerRead() {
     return this.observe(() =>
-      this.withObs((obs, endpoint) => this.mixerReadObs(obs, endpoint), 12000, undefined, true),
+      this.withReadObs((obs, endpoint) => this.mixerReadObs(obs, endpoint), 12000),
     );
   }
   mixerWrite(command: MixerCommand, gameAudio?: GameAudioController): Promise<MixerCommandResult> {
@@ -3110,7 +3149,9 @@ export class ObsAdapter {
     return this.ensure(activeScene, valid, undefined, prepareMusic);
   }
   gameBackgroundReady(): Promise<boolean> {
-    return this.observe(() => this.withObs((obs) => gameBackgroundReady(obs)).catch(() => false));
+    return this.observe(() =>
+      this.withReadObs((obs) => gameBackgroundReady(obs)).catch(() => false),
+    );
   }
   beginCaptureWarmup(preparationId: string, valid: () => boolean) {
     const generation = this.programGeneration;
@@ -3170,7 +3211,7 @@ export class ObsAdapter {
     return this.observe(async () => {
       await this.outputs.read();
       const observing = id === null || this.outputs.hasRunningOutput();
-      return this.withObs(async (obs) => {
+      return this.withReadObs(async (obs) => {
         if (!observing && (!this.captureWarmup || !(await this.captureWarmup.confirm(obs, id!))))
           throw new ObsCaptureWarmupError(
             'capture_warmup_changed',
