@@ -262,7 +262,7 @@ export class BpOverlayOwner {
   preparationRpc(obs: ObsRpc, baseUrl: string): ObsRpc {
     return {
       ...obs,
-      call: async (type, data) => {
+      call: async (type, data, onDispatch) => {
         if (type === 'SetSceneItemTransform' && data) {
           const fields = data.sceneItemTransform as Record<string, unknown>;
           const crop = Object.fromEntries(
@@ -274,14 +274,22 @@ export class BpOverlayOwner {
           // OBS applies info2 before crop. Separate the two known states rather than
           // assuming one event, a fixed count, or accepting arbitrary intermediate geometry.
           if (Object.keys(crop).length && Object.keys(geometry).length) {
-            await this.preparationRpc(obs, baseUrl).call(type, {
-              ...data,
-              sceneItemTransform: geometry,
-            });
-            return this.preparationRpc(obs, baseUrl).call(type, {
-              ...data,
-              sceneItemTransform: crop,
-            });
+            await this.preparationRpc(obs, baseUrl).call(
+              type,
+              {
+                ...data,
+                sceneItemTransform: geometry,
+              },
+              onDispatch,
+            );
+            return this.preparationRpc(obs, baseUrl).call(
+              type,
+              {
+                ...data,
+                sceneItemTransform: crop,
+              },
+              onDispatch,
+            );
           }
         }
         if (
@@ -294,7 +302,7 @@ export class BpOverlayOwner {
             'SetSceneItemIndex',
           ].includes(type)
         )
-          return obs.call(type, data);
+          return obs.call(type, data, onDispatch);
         const sceneName = obsSceneName('gameplay');
         const scene = objects((await obs.call('GetSceneList')).scenes).find(
           (item) => item.sceneName === sceneName,
@@ -445,7 +453,7 @@ export class BpOverlayOwner {
         }
         this.preparationReceipts.push(...receipts);
         try {
-          const result = await obs.call(type, data);
+          const result = await obs.call(type, data, onDispatch);
           if (type === 'CreateInput' || type === 'CreateSceneItem') {
             if (
               typeof result.sceneItemId !== 'number' ||

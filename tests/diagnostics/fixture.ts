@@ -42,6 +42,7 @@ export const bindings = {
 };
 export function runtime(directory: string, uploadLimit = 300, enrollmentLimit = 120) {
   return new Miniflare({
+    cf: false,
     modules: true,
     script,
     compatibilityDate: '2026-07-30',

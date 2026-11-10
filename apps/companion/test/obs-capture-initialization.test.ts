@@ -154,3 +154,57 @@ it('checks launch time and current production revision at the real route boundar
     await app.close();
   }
 });
+
+it('retains a current-session hook failure before a read-only recheck despite nonzero size', async () => {
+  const app = Fastify();
+  const now = Date.now();
+  const evidence = {
+    collectionStatus: 'available',
+    processes: [{ role: 'obs', pid: 42 }],
+    roots: [
+      {
+        logs: [
+          {
+            processAssociation: 'time_correlated',
+            processPid: 42,
+            timestampStatus: 'ordered',
+            latestCaptureEvent: {
+              occurredAt: new Date(now - 1000).toISOString(),
+              outcome: 'failure',
+              source: 'mizar_capture',
+              reason: 'process_open_failed',
+              code: 5,
+            },
+          },
+        ],
+      },
+    ],
+  } as unknown as ObsNativeEvidence;
+  registerObsRoutes(app, {
+    adapter: {
+      captureInitialization: (diagnostic: ObsCaptureDiagnostic) =>
+        readCaptureInitialization(rpc(), diagnostic),
+    } as unknown as ObsAdapter,
+    configStore: {} as ObsConfigStore,
+    originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+    activeScene: () => 'waiting',
+    preparationValid: (revision) => () => revision === 'revision',
+    readCaptureEvidence: async () => evidence,
+  });
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/operator/obs/capture-initialization',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: { expectedRevision: 'revision', since: now, transactionId: null },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      state: 'failed',
+      reason: 'hook_failed',
+      captureDiagnostic: { state: 'needs_attention', reason: 'access_denied' },
+    });
+  } finally {
+    await app.close();
+  }
+});

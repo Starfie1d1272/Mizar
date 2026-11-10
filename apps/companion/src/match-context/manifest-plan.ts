@@ -2,6 +2,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import type { BroadcastManifest } from '@mizar/rivalhub';
 
+/** Existing scores or completion evidence cannot be removed by local plan editing. */
+export function isPlayedMap(
+  map: Pick<BroadcastManifest['maps'][number], 'scoreA' | 'scoreB' | 'completedAt'>,
+): boolean {
+  return map.scoreA !== null || map.scoreB !== null || map.completedAt !== null;
+}
+
 /** Identity and plan only: scores and completion timestamps do not define a plan. */
 export function manifestPlanIdentity(manifest: BroadcastManifest) {
   return {

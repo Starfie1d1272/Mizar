@@ -72,6 +72,7 @@ export default {
 `;
 export function meteredRuntime(directory, dailyBatchLimit = 4800) {
   return new Miniflare({
+    cf: false,
     modules: [
       { type: 'ESModule', path: 'measurement.mjs', contents: instrumentation },
       { type: 'ESModule', path: 'production.mjs', contents: script },
