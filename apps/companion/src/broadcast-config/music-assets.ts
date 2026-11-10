@@ -43,12 +43,16 @@ export async function portableMusicTrack(
   store: MusicStore,
   value: MusicTrack,
 ): Promise<PortableTrack> {
+  const track = portableTrackDraft(value);
+  await readMusicAsset(store, track.asset);
+  return track;
+}
+
+function portableTrackDraft(value: MusicTrack): PortableTrack {
   const track = musicTrackSchema.parse(value);
-  const asset = musicAssetRef(track.id);
-  await readMusicAsset(store, asset);
   return {
     entryId: track.entryId ?? randomUUID(),
-    asset,
+    asset: musicAssetRef(track.id),
     name: track.name,
     startMs: track.startMs,
     endMs: track.endMs,
@@ -62,13 +66,26 @@ export async function portableMusicConfig(
   input: MusicConfig,
   automaticEnabled: boolean,
 ): Promise<PortableMusicConfigV1> {
+  const config = portableMusicDraft(input, automaticEnabled);
+  for (const group of MUSIC_GROUPS)
+    await Promise.all(
+      config.groups[group].tracks.map((track) => readMusicAsset(store, track.asset)),
+    );
+  return config;
+}
+
+/** Convert configuration and references only; consumers must verify bytes before applying. */
+export function portableMusicDraft(
+  input: MusicConfig,
+  automaticEnabled: boolean,
+): PortableMusicConfigV1 {
   const config = musicConfigSchema.parse(input);
   const groups = {} as PortableMusicConfigV1['groups'];
   for (const group of MUSIC_GROUPS) {
     const { tracks, ...settings } = config.groups[group];
     groups[group] = {
       ...settings,
-      tracks: await Promise.all(tracks.map((track) => portableMusicTrack(store, track))),
+      tracks: tracks.map(portableTrackDraft),
     };
   }
   return { version: 1, automaticEnabled, groups };
