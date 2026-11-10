@@ -386,7 +386,10 @@ async function secureRead(directory: string, name: string, maximum: number) {
 async function recoverSealedBatch(directory: string, name: string, expected: Buffer) {
   const path = await safePath(directory, name);
   const before = await lstat(path);
-  const file = await open(path, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
+  const file = await open(
+    path,
+    constants.O_RDWR | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
+  );
   try {
     const stat = await file.stat();
     if (

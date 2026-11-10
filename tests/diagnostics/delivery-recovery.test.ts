@@ -3,7 +3,17 @@ import { test, type TestContext } from 'node:test';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, open, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  cp,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -253,6 +263,7 @@ test('a SIGKILL during sealed write resumes only the proven prefix, including an
   assert(partial.length < expected.length);
   assert.deepEqual(partial, expected.subarray(0, partial.length));
   await cp(directory, join(r.root, 'inplace-conflict'), { recursive: true });
+  await cp(directory, join(r.root, 'append-conflict'), { recursive: true });
   const c = await r.client('partial');
   const probe = await open(join(r.root, 'probe'), 'wx');
   const prototype = Object.getPrototypeOf(probe);
@@ -321,6 +332,46 @@ test('a SIGKILL during sealed write resumes only the proven prefix, including an
   assert.deepEqual(await readFile(conflictPath), changed);
   assert.deepEqual(
     await readFile(join(conflict.directory, 'diagnostic-outbox', rawBatch.id + '.gz')),
+    raw,
+  );
+  const appended = await r.client('append-conflict');
+  const appendPath = join(appended.directory, 'diagnostic-outbox', hash(expected) + '.gz');
+  const appendTarget = await open(appendPath, 'r');
+  const appendIdentity = await appendTarget.stat();
+  await appendTarget.close();
+  const foreignTail = Buffer.from('synthetic-concurrent-tail');
+  let appendedTail = false;
+  prototype.writeFile = async function (bytes: unknown, ...args: unknown[]) {
+    const current = await this.stat();
+    if (
+      !appendedTail &&
+      current.ino === appendIdentity.ino &&
+      current.dev === appendIdentity.dev &&
+      Buffer.isBuffer(bytes) &&
+      bytes.equals(expected.subarray(partial.length))
+    ) {
+      appendedTail = true;
+      // Another handle appends after the prefix read but before the repair.
+      // The repair must append after it, never overwrite from its old offset.
+      await appendFile(appendPath, foreignTail);
+    }
+    return writeHandle.call(this, bytes, ...args);
+  };
+  try {
+    await appended.delivery.tick(false);
+  } finally {
+    prototype.writeFile = writeHandle;
+  }
+  assert(appendedTail);
+  assert.equal(appended.delivery.status().acknowledged, 0);
+  assert.equal(appended.delivery.status().blockedBatches, 1);
+  assert.equal(appended.delivery.status().error, 'sealed_batch_conflict_local_copy_retained');
+  assert.deepEqual(
+    await readFile(appendPath),
+    Buffer.concat([partial, foreignTail, expected.subarray(partial.length)]),
+  );
+  assert.deepEqual(
+    await readFile(join(appended.directory, 'diagnostic-outbox', rawBatch.id + '.gz')),
     raw,
   );
 });
