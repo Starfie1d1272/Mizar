@@ -10,6 +10,7 @@ import {
 
 import { durableJsonByteLength, replaceDurableJson } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import { isPlayedMap } from './manifest-plan.js';
 import type { LocalBo3BpRules } from '@mizar/protocol/bp';
 
 const MAX_STORE_BYTES = 2_000_000;
@@ -497,11 +498,10 @@ export class LocalTournamentStore {
             document.competition.themeColor !== event.themeColor)) ||
         existing.entrants.a.entryId !== document.entrants.a.entryId ||
         existing.entrants.b.entryId !== document.entrants.b.entryId ||
-        (existing.format !== document.format &&
-          existing.maps.some((map) => map.completedAt !== null)) ||
+        (existing.format !== document.format && existing.maps.some(isPlayedMap)) ||
         existing.maps.some(
           (map) =>
-            map.completedAt !== null &&
+            isPlayedMap(map) &&
             JSON.stringify(map) !==
               JSON.stringify(document.maps.find((next) => next.mapId === map.mapId)),
         )
@@ -708,6 +708,7 @@ export class LocalTournamentStore {
         roundLabel: match.roundLabel,
         matchLabel: match.matchLabel,
         isForfeit: match.isForfeit,
+        isTest: match.isTest ?? false,
         scoreA: match.scoreA,
         scoreB: match.scoreB,
         entrants: {

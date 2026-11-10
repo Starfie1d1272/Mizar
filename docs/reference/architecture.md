@@ -24,7 +24,7 @@ Companion 组装运行时、持久化和接口
 
 赛事平台拥有官方赛事资料与结果，Mizar 拥有本地实时观测。独立模式与连接模式共享运行时，仅赛事资料来源不同。Mizar 不直连 RivalHub 内部数据库；DAK 等赛后证据不进入低延迟播出主循环。
 
-本机赛事的BO3默认禁选规则保存在既有LocalTournamentStore赛事资产中，供未录入BP的比赛继承；本场草稿使用规则编译出同一MatchDocument的veto/maps事实，已有事实优先恢复，赛事默认变更不改旧BP。本场规则调整不顺带修改赛事默认，在线补录不改平台身份或网站数据。缺省旧配置保留既有流程，见[ADR-0040](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0040-event-bo3-authoring-rules.md)。
+本机赛事的BO3默认禁选规则保存在既有LocalTournamentStore赛事资产中，供未录入BP的比赛继承；本场草稿使用规则编译出同一MatchDocument的veto/maps事实，已有事实优先恢复，赛事默认变更不改旧BP。本场规则调整不顺带修改赛事默认，在线补录不改平台身份或网站数据。本地地图已有任一数值比分（包括 0）或完成时间时，BP 和比赛资料编辑保留该图及赛制，不因缺少完成时间而允许裁剪或覆盖；双方比分与完成时间均为空的未开打计划仍可编辑。缺省旧配置保留既有流程，见[ADR-0040](https://github.com/Starfie1d1272/Mizar/blob/3b187e168ad755ede595eb8371bfaf5933c044fa/docs/decisions/0040-event-bo3-authoring-rules.md)。
 
 ## 模块职责
 

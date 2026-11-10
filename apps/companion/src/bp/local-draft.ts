@@ -13,6 +13,7 @@ import type { BroadcastManifest, BroadcastSide } from '@mizar/rivalhub';
 import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
 import { isLocalBinding, localAuthoringMode } from '../match-context/lkg-store.js';
+import { isPlayedMap } from '../match-context/manifest-plan.js';
 
 export type LocalBpDraftResult =
   | { readonly ok: true; readonly manifest: BroadcastManifest }
@@ -297,11 +298,16 @@ export function createLocalBpManifest(
     };
   });
   const maps: BroadcastManifest['maps'][number][] = [];
+  if (
+    baseManifest?.maps.some(
+      (map) =>
+        isPlayedMap(map) && !plannedMaps.some((planned) => planned.mapOrder === map.mapOrder),
+    )
+  )
+    return invalid('bp_played_map_conflict', '已有比分或完成记录的地图不能通过本地 BP 移除。');
   for (const planned of plannedMaps) {
     const existing = baseManifest?.maps.find((map) => map.mapOrder === planned.mapOrder);
-    const played =
-      existing !== undefined &&
-      (existing.scoreA !== null || existing.scoreB !== null || existing.completedAt !== null);
+    const played = existing !== undefined && isPlayedMap(existing);
     if (played) {
       if (
         existing.mapName !== planned.mapName ||
