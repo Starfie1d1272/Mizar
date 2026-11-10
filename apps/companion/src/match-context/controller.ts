@@ -15,7 +15,7 @@ import type { LocalTournamentStore } from './local-tournament-store.js';
 import type { LocalBo3BpRules } from '@mizar/protocol/bp';
 
 import { SerialCommitQueue } from './serial-commit.js';
-import { sameManifestPlan } from './manifest-plan.js';
+import { isPlayedMap, sameManifestPlan } from './manifest-plan.js';
 import { SourceLoadError, sourceErrorEvidence, type SourceFailureCode } from './source-error.js';
 import {
   type ContextFreshness,
@@ -90,10 +90,6 @@ function controllerIssue(
   details: Omit<MatchContextControllerIssue, 'code' | 'message'> = {},
 ): MatchContextControllerIssue {
   return { code, message, ...details };
-}
-
-function isPlayedMap(map: BroadcastManifest['maps'][number]): boolean {
-  return map.scoreA !== null || map.scoreB !== null || map.completedAt !== null;
 }
 
 function preservesLocalMatchIdentity(

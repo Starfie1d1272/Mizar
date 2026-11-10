@@ -106,8 +106,10 @@ export class AudioMeter {
       await bounded(connecting, 4000);
       check();
       const rpc: ObsRpc = {
-        call: (type, data) => {
+        reportsDispatch: true,
+        call: (type, data, onDispatch) => {
           check();
+          onDispatch?.();
           return bounded(client.call(type, data), 2000);
         },
       };
