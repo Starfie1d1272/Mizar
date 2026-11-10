@@ -26,6 +26,7 @@ import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
   type ExactSource,
+  type ClaimIntent,
   type SourceScope,
 } from './rivalhub-source-state.js';
 
@@ -580,6 +581,7 @@ export class RivalHubConnection {
     count: number;
   } | null = null;
   private readonly sourceState: RivalHubSourceState;
+  private intentReconcileCursor = 0;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
@@ -1023,7 +1025,7 @@ export class RivalHubConnection {
         state.records.filter((item) => item.state === 'blocked').length +
         state.revokedIntents.length +
         (await this.sourceState.quarantineCount()),
-      claimIntent: state.intent !== null,
+      claimIntent: state.intents.length > 0,
       coverageUnknown: state.records.filter(
         (record) => this.captureLifecycle?.coverage(record.identity).state === 'unknown',
       ).length,
@@ -1038,7 +1040,7 @@ export class RivalHubConnection {
           item.state !== 'owned' &&
           (this.scopeMatches(item.identity) ||
             (item.state !== 'archive_pending' && !item.installationRevoked)),
-      ) || state.intent !== null
+      ) || state.intents.length > 0
     );
   }
 
@@ -1141,25 +1143,41 @@ export class RivalHubConnection {
 
   private async reconcileIntent(deadline: number): Promise<void> {
     const state = await this.sourceState.snapshot();
-    if (!state.intent || !this.scopeMatches(state.intent.scope) || Date.now() >= deadline) return;
-    const claimedFrom = this.source;
-    const installation = this.installation;
-    this.claimOperationsInFlight++;
-    try {
-      await this.reconcileIntentForState(state, deadline, claimedFrom, installation);
-    } finally {
-      this.claimOperationsInFlight--;
+    const intents = state.intents.filter((intent) => this.scopeMatches(intent.scope));
+    if (!intents.length) return;
+    const start = this.intentReconcileCursor % intents.length;
+    const ordered = [...intents.slice(start), ...intents.slice(0, start)];
+    // Rotate bounded work so an unavailable old match cannot starve later claims.
+    let examined = 0;
+    for (const intent of ordered) {
+      if (examined >= 8 || Date.now() >= deadline) break;
+      examined++;
+      this.claimOperationsInFlight++;
+      try {
+        await this.reconcileIntentForState(
+          intent,
+          await this.sourceState.snapshot(),
+          deadline,
+          this.source,
+          this.installation,
+        );
+      } catch (error) {
+        this.onDiagnostic('source_status', error);
+      } finally {
+        this.claimOperationsInFlight--;
+      }
     }
+    this.intentReconcileCursor = (start + examined) % intents.length;
   }
 
   private async reconcileIntentForState(
+    intent: ClaimIntent,
     state: Awaited<ReturnType<RivalHubSourceState['snapshot']>>,
     deadline: number,
     claimedFrom: Source | null,
     installation: Installation | null,
   ): Promise<void> {
-    const intent = state.intent;
-    if (!intent || !this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
+    if (!this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
     const query = new URLSearchParams({
       matchId: intent.scope.matchId,
       producerInstanceId: intent.scope.producerInstanceId,
@@ -1229,6 +1247,7 @@ export class RivalHubConnection {
       const identity = await this.sourceState.confirmClaim(
         intent.id,
         found.authorityRevision as number,
+        'release_pending',
       );
       const key = this.trackExitHandoff(identity, 'recovery');
       await this.restoreConfirmedCapture(identity);
@@ -1340,7 +1359,8 @@ export class RivalHubConnection {
       if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
     }
     try {
-      await this.reconcileIntent(deadline);
+      // Keep part of the cleanup budget for already confirmed sources.
+      await this.reconcileIntent(Math.min(deadline, Date.now() + 4000));
     } catch (error) {
       this.onDiagnostic('source_status', error);
     }
@@ -1988,7 +2008,7 @@ export class RivalHubConnection {
       // Old records for this match require explicit recovery, including another
       // producer/session. Other matches keep their independent durable cleanup.
       if (
-        state.intent ||
+        state.intents.some((intent) => sameMatch(intent.scope)) ||
         state.records.some((record) => sameMatch(record.identity)) ||
         state.revokedIntents.some((intent) => sameMatch(intent.scope)) ||
         [...this.exitHandoffs.values()].some(({ identity }) => sameMatch(identity)) ||
