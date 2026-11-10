@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { ObsAudioRoutingStatus } from '@mizar/protocol/obs';
 import { Button, Select } from '../ui';
 
+import { ObsAudioMeter } from './ObsAudioMeter';
 import { ObsAudioDevices } from './ObsAudioDevices';
 
-export function ObsAudioRouting() {
+export function ObsAudioRouting({ active = true }: { active?: boolean }) {
   const [commentary, setCommentary] = useState<{
     revision: string;
     preference: {
@@ -446,6 +447,9 @@ export function ObsAudioRouting() {
         </p>
       )}
       {message && <p role="alert">{message}</p>}
+      {active && !busy && !status?.transition && (
+        <ObsAudioMeter key={status?.revision ?? 'unavailable'} />
+      )}
       <ObsAudioDevices
         key={status?.revision ?? 'unavailable'}
         disabled={busy || Boolean(status?.transition || status?.waitingIndependent)}

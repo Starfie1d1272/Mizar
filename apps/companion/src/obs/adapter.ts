@@ -1,3 +1,4 @@
+import { AudioMeter } from './audio-meter.js';
 import {
   readAudioDevices,
   setAudioDevice,
@@ -190,6 +191,7 @@ function guardedObs(obs: ObsRpc, valid: () => boolean): ObsRpc {
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
   private readonly audioConfiguration: AudioConfigurationConnection;
+  private readonly audioMeter: AudioMeter;
   private readonly bpOwner = new BpOverlayOwner();
   private programChanged: (kind: 'disconnected' | 'changed') => void = () => undefined;
   private expectedScene: string | undefined;
@@ -242,6 +244,14 @@ export class ObsAdapter {
     private readonly buildId = process.env.MIZAR_APP_VERSION ?? 'development',
   ) {
     this.audioConfiguration = new AudioConfigurationConnection(configStore);
+    this.audioMeter = new AudioMeter(configStore, undefined, undefined, (error, password) =>
+      this.diagnostic(
+        'obs_audio_meter',
+        password === undefined
+          ? { reason: 'audio_meter_unavailable', redactionContext: 'unavailable' }
+          : obsErrorEvidence(error, password),
+      ),
+    );
     this.outputs = new ObsOutputController(
       configStore,
       (error, password) => diagnostic('obs_output', obsErrorEvidence(error, password)),
@@ -1211,6 +1221,10 @@ export class ObsAdapter {
       }, 12_000);
       return this.findings;
     });
+  }
+  sampleAudioMeters(valid: () => boolean) {
+    const generation = this.programGeneration;
+    return this.audioMeter.sample(() => valid() && generation === this.programGeneration);
   }
   readAudioDevices() {
     return this.serial(() =>

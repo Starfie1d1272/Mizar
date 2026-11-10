@@ -60,7 +60,7 @@ export function SoundSettings() {
       <div hidden={section !== 'sources'}>
         <Panel className="settings-card">
           <h2>音源</h2>
-          <ObsAudioRouting key={routingVersion} />
+          <ObsAudioRouting key={routingVersion} active={section === 'sources'} />
           <p>音源由「Mizar 制播」集合统一维护，设备选择与静音状态分别配置。</p>
           {!connected ? (
             <p>连接后自动检查音频。</p>

@@ -333,6 +333,20 @@ export function registerObsRoutes(
       });
     }
   });
+  app.post('/operator/obs/audio-meter', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return await options.adapter.sampleAudioMeters(
+        () => !request.raw.aborted && !reply.raw.destroyed,
+      );
+    } catch {
+      return reply.code(409).send({
+        error: 'audio_meter_unavailable',
+        message: '电平检查未完成。请核对 OBS 连接与专用集合后重新检查。',
+      });
+    }
+  });
   app.get('/local/v1/obs/audio-devices', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
