@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, chmod, link, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -237,5 +239,61 @@ test('explicit audio repair preserves bytes when backup, identity or ownership i
         await rm(root, { recursive: true, force: true });
       }
     });
+  }
+});
+
+test('audio repair retries through its route after a partially written backup fails', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-music-backup-retry-'));
+  const current = await start(root);
+  const bytes = musicWav();
+  const id = `${createHash('sha256').update(bytes).digest('hex')}.wav`;
+  const target = join(root, 'music', 'tracks', id);
+  await writeFile(target, 'damaged original');
+  const originalWrite = fs.writeFile;
+  const fault = t.mock.method(fs, 'writeFile', async (...args: Parameters<typeof fs.writeFile>) => {
+    if (String(args[0]).startsWith(`${target}.damaged-`)) {
+      await originalWrite(args[0], Buffer.from('partial'), args[2]);
+      throw Object.assign(new Error('synthetic backup disk full'), { code: 'ENOSPC' });
+    }
+    return originalWrite(...args);
+  });
+  syncBuiltinESMExports();
+  const repair = () =>
+    current.app.inject({
+      method: 'POST',
+      url: '/operator/music/track/repair',
+      headers: {
+        ...headers,
+        'content-type': 'application/x-mizar-audio',
+        'x-mizar-filename': 'original.wav',
+      },
+      payload: bytes,
+    });
+  try {
+    assert.equal((await repair()).statusCode, 400);
+    assert.equal(await readFile(target, 'utf8'), 'damaged original');
+    const partial = (await readdir(join(root, 'music', 'tracks'))).filter((name) =>
+      name.startsWith(`${id}.damaged-`),
+    );
+    assert.equal(partial.length, 1);
+    assert.equal(await readFile(join(root, 'music', 'tracks', partial[0]!), 'utf8'), 'partial');
+    fault.mock.restore();
+    syncBuiltinESMExports();
+    const restored = await repair();
+    assert.equal(restored.statusCode, 200, restored.body);
+    assert.deepEqual(await readFile(target), bytes);
+    const backups = (await readdir(join(root, 'music', 'tracks'))).filter((name) =>
+      name.startsWith(`${id}.damaged-`),
+    );
+    assert.equal(backups.length, 2);
+    const contents = await Promise.all(
+      backups.map((name) => readFile(join(root, 'music', 'tracks', name), 'utf8')),
+    );
+    assert.deepEqual(contents.sort(), ['damaged original', 'partial']);
+  } finally {
+    fault.mock.restore();
+    syncBuiltinESMExports();
+    await current.app.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
