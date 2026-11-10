@@ -38,7 +38,7 @@ export function registerBpWorkspaceRoutes(
     const binding = options.controller?.getActiveBinding();
     const pending = options.controller?.getPendingOnlineCandidate();
     const eventRules =
-      binding === undefined
+      binding === undefined || !options.localTournamentStore?.getAvailability().available
         ? undefined
         : options.localTournamentStore
             ?.getSnapshot()
@@ -136,6 +136,12 @@ export function registerBpWorkspaceRoutes(
       return reply.code(409).send({
         error: 'bp_website_readonly',
         message: '网站比赛的 BP 请在网站修改，Mizar 会自动同步。',
+      });
+    if (options.localTournamentStore && !options.localTournamentStore.getAvailability().available)
+      return reply.code(503).send({
+        error: 'local_tournament_unavailable',
+        reason: options.localTournamentStore.getAvailability().reason,
+        message: '本地赛事资料库无法读取，原文件已保留。请修复后重新加载。',
       });
     const eventRules =
       activeBinding === undefined
