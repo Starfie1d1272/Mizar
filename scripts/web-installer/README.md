@@ -34,4 +34,4 @@ Box 过渡期只新增原始 latest 与每版机器元数据；旧 WebInstaller 
 
 ## 验证边界
 
-常规 CI 在相关改动时编译 WebInstaller C# 源码；脚本测试从生产 PowerShell 提取恢复函数，以隔离文件目录和模拟登记检查事务归属。它们不运行真实安装器，也不证明 Windows 进程、注册表、快捷方式或 UI 生命周期通过。正式安装与恢复仍须独立 Windows 验收，见[开发验证](../../docs/development/development-validation.md)。
+常规 CI 在相关改动时编译 WebInstaller C# 源码，不运行真实安装器，也不证明 Windows 进程、注册表、快捷方式或 UI 生命周期通过。正式安装与恢复仍须独立 Windows 验收，见[开发验证](../../docs/development/development-validation.md)。
