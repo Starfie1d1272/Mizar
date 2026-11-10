@@ -149,6 +149,7 @@ export function registerRivalHubConnectionRoutes(
     return refreshing;
   };
   const timer = setInterval(() => {
+    maintainAutomaticSource();
     const statsBinding = linkedBinding();
     if (
       options.canFetchStats?.() &&
@@ -366,6 +367,24 @@ export function registerRivalHubConnectionRoutes(
   };
   const syncExpected = () => Boolean(linkedBinding() && (!options.canClaim || options.canClaim()));
   let sourceCommand: Promise<unknown> | null = null;
+  // Background maintenance owns the default behavior, never a UI status read.
+  const maintainAutomaticSource = () => {
+    if (sourceCommand) return;
+    const state = sourceStatus();
+    if (state.blocked || !state.binding || !state.snapshot) return;
+    sourceCommand = options.connection
+      .claimAutomatically(
+        state.snapshot,
+        state.binding.manifest.revision,
+        sourceStillCurrent(state),
+      )
+      .catch((error: unknown) => {
+        app.log.error({ err: error }, 'Automatic RivalHub source claim unconfirmed');
+      })
+      .finally(() => {
+        sourceCommand = null;
+      });
+  };
   options.setContextRecoveryHandler?.(async (event, authority) => {
     const sameExecution = () => {
       const snapshot = options.currentSnapshot();
