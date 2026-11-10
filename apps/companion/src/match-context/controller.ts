@@ -239,6 +239,12 @@ export class MatchContextController {
     return {
       document,
       source: binding.origin === 'online' ? 'rivalhub' : binding.origin,
+      ...(binding.origin === 'cache' && binding.cachedFrom !== undefined
+        ? {
+            cachedFrom:
+              binding.cachedFrom === 'online' ? ('rivalhub' as const) : binding.cachedFrom,
+          }
+        : {}),
       revision: binding.manifest.revision,
       freshness: binding.freshness,
       acquiredAt: binding.storedAt ?? this.activeAcquiredAt,
