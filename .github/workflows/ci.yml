@@ -56,6 +56,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          # checkout uses blob:none for sparse checkout; keep full trees for the diff below.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitattributes
+            /.cargo/
+            /rust-toolchain
+            /rust-toolchain.toml
+            /.github/actions/cargo-cache/
+            /.github/actions/save-cargo-cache/
+            /scripts/ci/cargo-cache-key.mjs
+            /apps/desktop/src-tauri/
+            /apps/web/src/workspace/desktop-commands.generated.ts
+            /apps/companion/src/match-context/lifecycle-contract.json
+            /scripts/qualification/bundle/gsi-discovery.ps1
+            /config/mizar_observer.cfg
       - name: Select native build
         id: select
         shell: bash
