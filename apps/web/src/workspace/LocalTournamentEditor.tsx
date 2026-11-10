@@ -131,23 +131,39 @@ export function LocalTournamentEditor({
   const event = view?.events.find(
     (item) => item.eventId === (eventId ?? selected?.competition?.competitionId),
   );
+  // Bind the draft to the document and revision actually shown together. Polling
+  // must not grant an old draft permission to overwrite a newer match snapshot.
+  const revision =
+    selected &&
+    view?.activeLocalMatchId === selected.matchId &&
+    JSON.stringify(view.matches.find((item) => item.matchId === selected.matchId)) ===
+      JSON.stringify(selected)
+      ? view.contextRevision
+      : null;
   const [matchEdit, setMatchEdit] = useState({
     draft: selected ?? null,
     baseline: selected,
     observed: selected,
+    observedRevision: revision,
+    revision,
   });
   const draft = matchEdit.draft;
-  const candidateBase = matchEdit.baseline;
-  if (scope !== 'resources' && selected && matchEdit.observed !== selected) {
+  const baseline = matchEdit.baseline;
+  if (
+    scope !== 'resources' &&
+    (matchEdit.observed !== selected || matchEdit.observedRevision !== revision)
+  ) {
     const wasClean =
-      JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(matchEdit.observed));
+      JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(baseline));
+    const accepted =
+      selected?.matchId === draft?.matchId &&
+      JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(selected));
     setMatchEdit({
       observed: selected,
-      baseline:
-        wasClean || JSON.stringify(editableMatch(draft)) === JSON.stringify(editableMatch(selected))
-          ? selected
-          : matchEdit.baseline,
-      draft: wasClean ? selected : matchEdit.draft,
+      observedRevision: revision,
+      baseline: wasClean || accepted ? selected : baseline,
+      draft: wasClean || accepted ? (selected ?? null) : draft,
+      revision: wasClean || accepted ? revision : matchEdit.revision,
     });
   }
   const setDraft = (update: SetStateAction<MatchDocumentV1 | null>) =>
@@ -165,7 +181,7 @@ export function LocalTournamentEditor({
   const dirty =
     scope !== 'resources'
       ? draft !== null &&
-        JSON.stringify(editableMatch(draft)) !== JSON.stringify(editableMatch(selected))
+        JSON.stringify(editableMatch(draft)) !== JSON.stringify(editableMatch(baseline))
       : event !== undefined &&
         (eventName !== event.name ||
           eventLogo !== event.logoUrl ||
@@ -197,10 +213,12 @@ export function LocalTournamentEditor({
     canSave &&
     (scope === 'resources' ||
       ((scope === 'match'
-        ? view.activeLocalMatchId === draft?.matchId
+        ? view.activeLocalMatchId === draft?.matchId &&
+          matchEdit.revision !== null &&
+          view.contextRevision === matchEdit.revision
         : view.activeLocalMatchId !== draft?.matchId) &&
         JSON.stringify(view.matches.find((item) => item.matchId === selected?.matchId)) ===
-          JSON.stringify(scope === 'candidate' ? candidateBase : selected)));
+          JSON.stringify(baseline)));
   const updateEntrant = (side: 'a' | 'b', patch: Partial<MatchDocumentV1['entrants']['a']>) =>
     setDraft((current) =>
       current === null
@@ -238,9 +256,9 @@ export function LocalTournamentEditor({
                   : '/operator/local-match/save',
                 {
                   ...(scope === 'candidate'
-                    ? { expectedDocument: candidateBase }
-                    : { expectedContextRevision: view.contextRevision }),
-                  document: { ...selected, ...editableMatch(draft) },
+                    ? { expectedDocument: baseline }
+                    : { expectedContextRevision: matchEdit.revision }),
+                  document: { ...baseline, ...editableMatch(draft) },
                 },
               );
               await refresh();
@@ -439,7 +457,7 @@ export function LocalTournamentEditor({
               <p role="status">
                 {scope === 'candidate'
                   ? '比赛库版本或本场选择已变化，或连接待恢复；草稿保留，请取消后重新核对。'
-                  : '正在核对本场连接与保存版本；资料草稿保留。'}
+                  : '本场资料或保存版本已变化，或连接待恢复；草稿保留，请取消后重新核对。'}
               </p>
             ) : null}
           </div>
@@ -456,17 +474,21 @@ export function LocalTournamentEditor({
                 进入画面检查
               </Button>
             ) : null}
-            {onCancel ? (
-              <Button
-                onClick={() => {
-                  setDraft(selected ?? null);
-                  setSavedMessage('');
-                  onCancel();
-                }}
-              >
-                取消编辑
-              </Button>
-            ) : null}
+            <Button
+              onClick={() => {
+                setMatchEdit({
+                  draft: selected ?? null,
+                  baseline: selected,
+                  observed: selected,
+                  observedRevision: revision,
+                  revision,
+                });
+                setSavedMessage('');
+                onCancel?.();
+              }}
+            >
+              取消编辑
+            </Button>
           </div>
         </form>
       ) : null}
