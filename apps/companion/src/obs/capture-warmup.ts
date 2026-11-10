@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { link, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
 import { assertNoVideoOutput } from './video-transaction.js';
@@ -159,8 +159,8 @@ export class ObsCaptureWarmup {
       await rm(temp, { force: true });
     }
   }
-  private async archive(journal: Journal): Promise<void> {
-    const archived = `${this.path}.completed-${journal.id}.json`;
+  private async archive(journal: Journal, disposition = 'completed'): Promise<void> {
+    const archived = `${this.path}.${disposition}-${journal.id}.json`;
     if (!isDeepStrictEqual(await this.read(), journal)) throw lost();
     try {
       await link(this.path, archived);
@@ -183,13 +183,51 @@ export class ObsCaptureWarmup {
       journal.phase === 'enabled'
     );
   }
+  /** Detached records retain recovery duties when a new collection starts its own warmup. */
+  private async detached(): Promise<ObsCaptureWarmup[]> {
+    const files = await readdir(dirname(this.path)).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === 'ENOENT') return [];
+      throw cause;
+    });
+    const prefix = `${basename(this.path)}.detached-`;
+    return files
+      .filter(
+        (name) =>
+          name.startsWith(prefix) &&
+          name.endsWith('.json') &&
+          z.string().uuid().safeParse(name.slice(prefix.length, -5)).success,
+      )
+      .map((name) => new ObsCaptureWarmup(join(dirname(this.path), name)));
+  }
   async status(): Promise<'checking' | 'cleanup_pending' | null> {
     const journal = await this.read();
-    if (!journal) return null;
-    return this.active?.id === journal.id && this.active.valid() ? 'checking' : 'cleanup_pending';
+    if (journal && this.active?.id === journal.id && this.active.valid()) return 'checking';
+    return journal || (await this.detached()).length ? 'cleanup_pending' : null;
+  }
+  /** Only the exact current collection graph can still contain this temporary item. */
+  async affectsCurrentCollection(obs: ObsRpc, endpoint: string): Promise<boolean> {
+    for (const owner of [this, ...(await this.detached())]) {
+      const journal = await owner.read();
+      if (journal && journal.endpoint === endpoint && (await recoveryIdentity(obs, journal)))
+        return true;
+    }
+    return false;
+  }
+  async recoverCurrentCollection(
+    obs: ObsRpc,
+    endpoint: string,
+    lease: () => boolean,
+  ): Promise<void> {
+    for (const owner of [this, ...(await this.detached())]) {
+      const journal = await owner.read();
+      if (journal && journal.endpoint === endpoint && (await recoveryIdentity(obs, journal)))
+        await owner.recoverBeforePreparation(obs, endpoint, lease);
+    }
   }
   async pending(id: string): Promise<boolean> {
-    return (await this.read())?.id === id;
+    for (const owner of [this, ...(await this.detached())])
+      if ((await owner.read())?.id === id) return true;
+    return false;
   }
   async matches(id: string, since: number): Promise<boolean> {
     return this.active?.id === id && this.active.startedAt === since && (await this.pending(id));
@@ -329,9 +367,15 @@ export class ObsCaptureWarmup {
     lease: () => boolean,
   ): Promise<{ transactionId: string; startedAt: number }> {
     if (!valid() || !lease()) throw lost();
-    await this.recoverBeforePreparation(obs, endpoint, lease);
+    await this.recoverCurrentCollection(obs, endpoint, lease);
     await assertNoVideoOutput(obs);
     const original = await identity(obs);
+    const detached = await this.read();
+    if (detached) {
+      if (!lease() || (await this.affectsCurrentCollection(obs, endpoint))) throw lost();
+      // Keep unresolved evidence for its original collection; it owns no item here.
+      await this.archive(detached, 'detached');
+    }
     await audioDisabled(obs, original.sourceUuid);
     if (!valid() || !lease()) throw lost();
     const before = objects(
@@ -482,7 +526,11 @@ export class ObsCaptureWarmup {
   }
   async release(obs: ObsRpc, endpoint: string, id: string, lease: () => boolean): Promise<void> {
     const journal = await this.read();
-    if (!journal || journal.id !== id) return;
+    if (!journal || journal.id !== id) {
+      for (const owner of await this.detached())
+        if ((await owner.read())?.id === id) await owner.release(obs, endpoint, id, lease);
+      return;
+    }
     if (this.active?.id === id && this.active.valid()) lease = this.active.valid;
     this.active = undefined;
     if (!lease() || endpoint !== journal.endpoint) throw lost();
