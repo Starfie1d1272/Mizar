@@ -31,6 +31,7 @@ mod observer_job;
 mod observer_workspace;
 mod overlay_recovery;
 mod powershell;
+mod preparation_evidence;
 mod preparation_gate;
 mod preparation_ipc;
 mod preparation_task;
