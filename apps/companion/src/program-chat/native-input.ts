@@ -11,7 +11,7 @@ export const NATIVE_SOURCE_LIMITS = {
   pollMs: 1000,
   readBytes: 256 * 1024,
   lineBytes: 128 * 1024,
-  groupBytes: 192 * 1024,
+  recordBytes: 192 * 1024,
   sourceBytes: 25 * 1024 * 1024,
   // Host retains roughly 1 MiB segments under its byte/age/pin policy, not four
   // files. Reserve bounded room for short process runs and protected segments.
@@ -348,35 +348,12 @@ export class ProgramChatNativeInput {
       );
       const { bytesRead } = await file.read(buffer, 0, buffer.length, cursor.offset);
       const bytes = buffer.subarray(0, bytesRead);
-      const entries: {
-        sourceRecordId: string;
-        offset: number;
-        bytes: number;
-        entry: NativeRecord;
-      }[] = [];
-      let groupBytes = 0;
       let invalid = 0;
       const invalidSamples: unknown[] = [];
       const invalidLine = (value: unknown) => {
         invalid++;
         this.invalid++;
         if (invalidSamples.length < 16) invalidSamples.push(value);
-      };
-      const commit = async () => {
-        if (!entries.length) return;
-        const committed = entries.splice(0);
-        // Program chat is a real-time input, never a diagnostic transfer or ACK dependent.
-        this.copied += committed.length;
-        for (const record of committed) {
-          const entry = record.entry;
-          if (
-            entry.schema === 'mizar-diagnostic-event/2' &&
-            ['program_all_chat', 'program_all_chat_reset'].includes(entry.stage)
-          )
-            this.onRecord?.({ ...entry, detail: JSON.stringify(entry.evidence) });
-          else this.onRecord?.(entry);
-        }
-        groupBytes = 0;
       };
       let start = 0;
       while (start < bytes.length) {
@@ -427,16 +404,8 @@ export class ProgramChatNativeInput {
           continue;
         }
         if (!['program_all_chat', 'program_all_chat_reset'].includes(entry.stage)) continue;
-        // Keep I/O outside the malformed-record catch: a failed durable commit
-        // aborts this poll and restores every source cursor for replay.
-        const copied = {
-          sourceRecordId: hash(`${identity}:${offset}:${hash(line)}`),
-          offset,
-          bytes: line.length + 1,
-          entry: diagnosticValue(entry) as NativeRecord,
-        };
-        const size = Buffer.byteLength(JSON.stringify(copied));
-        if (size > NATIVE_SOURCE_LIMITS.groupBytes) {
+        const sanitized = diagnosticValue(entry) as NativeRecord;
+        if (Buffer.byteLength(JSON.stringify(sanitized)) > NATIVE_SOURCE_LIMITS.recordBytes) {
           invalidLine({
             reason: 'sanitized_native_record_budget',
             offset,
@@ -445,11 +414,15 @@ export class ProgramChatNativeInput {
           });
           continue;
         }
-        if (groupBytes + size > NATIVE_SOURCE_LIMITS.groupBytes) await commit();
-        entries.push(copied);
-        groupBytes += size;
+        // Chat delivery is synchronous and independent of diagnostic journal ACKs.
+        // Callback failure still aborts this file and restores its cursor for replay.
+        this.copied++;
+        this.onRecord?.(
+          sanitized.schema === 'mizar-diagnostic-event/2'
+            ? { ...sanitized, detail: JSON.stringify(sanitized.evidence) }
+            : sanitized,
+        );
       }
-      await commit();
       if (invalid)
         await this.journal.recordCommitted('native_source_gap', {
           reason: 'invalid_or_oversized_records',
@@ -477,7 +450,7 @@ export class ProgramChatNativeInput {
       error: this.error,
       backlogBytes: this.backlogBytes,
       trackedFiles: this.cursors.length,
-      cursorSemantics: 'at-least-once; stable sourceRecordId permits replay deduplication',
+      cursorSemantics: 'at-least-once; ProgramChat owns message identity and freshness',
       limits: NATIVE_SOURCE_LIMITS,
     };
   }
