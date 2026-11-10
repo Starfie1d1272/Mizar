@@ -4,6 +4,9 @@ Unicode true
 !include "WinMessages.nsh"
 ManifestDPIAware true
 Var ControlledUpdate
+Var InstallationOwner
+Var ExternalOwner
+Var UpdateWriter
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -49,6 +52,22 @@ SetCompressor zlib
 !insertmacro MUI_LANGUAGE "SimpChinese"
 SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
 
+!macro AcquireUpdateWriter
+  ; Reuse the updater's one writer. Controlled parent/child extraction never
+  ; reacquires its parent's mutex; independent Setup/uninstall holds it to exit.
+  System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Global\MizarUpdateWriter") p.r3'
+  StrCpy $UpdateWriter $3
+  StrCmp $3 "0" writer_blocked
+  System::Call 'kernel32::WaitForSingleObject(p r3, i 0) i.r4'
+  StrCmp $4 "0" writer_acquired
+  StrCmp $4 "128" writer_acquired
+  System::Call 'kernel32::CloseHandle(p r3)'
+  writer_blocked:
+  SetErrorLevel 1
+  Abort "安装或恢复正在进行，请等待当前操作完成后重试。"
+  writer_acquired:
+!macroend
+
 Function .onInit
   SetShellVarContext current
   StrCpy $ControlledUpdate "0"
@@ -57,6 +76,57 @@ Function .onInit
   ${GetOptions} $0 "/MIZARUPDATE" $1
   IfErrors +2 0
   StrCpy $ControlledUpdate "1"
+  StrCpy $ExternalOwner "0"
+  ClearErrors
+  ${GetOptions} $0 "/MIZAROWNER=" $InstallationOwner
+  IfErrors new_identity
+  StrCmp $ControlledUpdate "1" 0 new_identity
+  StrLen $1 $InstallationOwner
+  StrCmp $1 "40" update_identity
+  StrCmp $1 "42" 0 identity_failed
+  StrCpy $1 $InstallationOwner 10
+  StrCmp $1 "bootstrap-" 0 identity_failed
+  StrCpy $5 10
+  Goto validate_identity
+  update_identity:
+  StrCpy $1 $InstallationOwner 8
+  StrCmp $1 "install-" 0 identity_failed
+  StrCpy $5 8
+  validate_identity:
+  StrCpy $2 $InstallationOwner 1 $5
+  StrCmp $2 "" controlled_identity
+  StrCpy $3 0
+  validate_character:
+  StrCpy $4 "0123456789abcdef" 1 $3
+  StrCmp $4 "" identity_failed
+  StrCmp $2 $4 valid_character
+  IntOp $3 $3 + 1
+  Goto validate_character
+  valid_character:
+  IntOp $5 $5 + 1
+  Goto validate_identity
+  controlled_identity:
+  StrCpy $ExternalOwner "1"
+  Goto identity_ready
+  new_identity:
+  System::Call 'ole32::CoCreateGuid(g .r1) i.r2'
+  StrCmp $2 "0" 0 identity_failed
+  StrCpy $InstallationOwner $1
+  Goto identity_ready
+  identity_failed:
+  SetErrorLevel 1
+  Abort "无法创建本次安装身份，请重试。"
+  identity_ready:
+  StrCmp $ControlledUpdate "1" 0 acquire_writer
+  ; Preserve the existing /MIZARUPDATE contract for older callers. They cannot
+  ; prove a new instance owner and retain their previous concurrency boundary.
+  StrCmp $ExternalOwner "1" 0 writer_ready
+  StrCpy $1 $InstallationOwner 8
+  ; Current update parents own the writer; fresh bootstrap owns only a file lease.
+  StrCmp $1 "install-" writer_ready
+  acquire_writer:
+  !insertmacro AcquireUpdateWriter
+  writer_ready:
   Call CheckRunning
 FunctionEnd
 Function UpdateDirectoryPre
@@ -87,17 +157,61 @@ FunctionEnd
 
 Section "-Mizar" SecMain
   SectionIn RO
+  ; Each install claims its own instance before any previous payload is removed.
+  ; An interrupted later Setup must retire an old updater's directory marker too.
+  CreateDirectory "$INSTDIR"
+  StrCmp $ExternalOwner "1" 0 publish_instance_owner
+  IfFileExists "$INSTDIR\.mizar-update-owner" 0 publish_instance_owner
+  ; Never truncate the update parent's durable marker.
+  ClearErrors
+  FileOpen $0 "$INSTDIR\.mizar-update-owner" r
+  IfErrors instance_write_failed
+  FileRead $0 $1
+  FileClose $0
+  IfErrors instance_write_failed
+  StrCmp $1 $InstallationOwner instance_owner_ready instance_write_failed
+  publish_instance_owner:
+  ClearErrors
+  IfFileExists "$INSTDIR\.mizar-update-owner.$InstallationOwner.tmp" instance_write_failed
+  FileOpen $0 "$INSTDIR\.mizar-update-owner.$InstallationOwner.tmp" w
+  IfErrors instance_write_failed
+  FileWrite $0 "$InstallationOwner"
+  System::Call 'kernel32::FlushFileBuffers(p r0) i.r1'
+  FileClose $0
+  StrCmp $1 "0" instance_write_failed
+  IfErrors instance_write_failed
+  System::Call 'kernel32::MoveFileExW(w "$INSTDIR\.mizar-update-owner.$InstallationOwner.tmp", w "$INSTDIR\.mizar-update-owner", i 9) i.r1'
+  StrCmp $1 "0" instance_write_failed
+  instance_owner_ready:
+  StrCmp $ExternalOwner "1" keep_bootstrap_owner
+  IfFileExists "$INSTDIR\.mizar-bootstrap-owner" 0 keep_bootstrap_owner
+  Delete "$INSTDIR\.mizar-bootstrap-owner"
+  IfErrors instance_write_failed
+  keep_bootstrap_owner:
   ; The previous uninstaller only removes its own recorded payload. User data is separate.
   IfFileExists "$INSTDIR\Uninstall.exe" 0 install
-  ExecWait '"$INSTDIR\Uninstall.exe" /S _?=$INSTDIR' $0
+  ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE _?=$INSTDIR' $0
   StrCmp $0 "0" install
   Abort "旧版本卸载未完成，请正常退出应用后重试。"
   install:
   SetOutPath "$INSTDIR"
-  File /r "${PAYLOAD}\*"
-  FileOpen $0 "$INSTDIR\installed.flag" w
-  FileWrite $0 "Mizar per-user installation"
+  ClearErrors
+  IfFileExists "$INSTDIR\installed.flag.$InstallationOwner.tmp" instance_write_failed
+  FileOpen $0 "$INSTDIR\installed.flag.$InstallationOwner.tmp" w
+  IfErrors instance_write_failed
+  FileWrite $0 "mizar.install.v1:$InstallationOwner"
+  System::Call 'kernel32::FlushFileBuffers(p r0) i.r1'
   FileClose $0
+  IfErrors instance_write_failed
+  StrCmp $1 "0" instance_write_failed
+  System::Call 'kernel32::MoveFileExW(w "$INSTDIR\installed.flag.$InstallationOwner.tmp", w "$INSTDIR\installed.flag", i 9) i.r1'
+  StrCmp $1 "0" instance_write_failed
+  Goto instance_ready
+  instance_write_failed:
+  SetErrorLevel 1
+  Abort "本次安装身份未能保存，安装已停止。请保留现场并检查目录权限。"
+  instance_ready:
+  File /r "${PAYLOAD}\*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\Mizar"
   CreateShortcut "$SMPROGRAMS\Mizar\Mizar.lnk" "$INSTDIR\Mizar.exe"
@@ -109,6 +223,11 @@ Section "-Mizar" SecMain
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "DisplayIcon" "$INSTDIR\Mizar.exe"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "NoRepair" 1
+  StrCmp $ExternalOwner "1" keep_update_owner
+  ClearErrors
+  Delete "$INSTDIR\.mizar-update-owner"
+  IfErrors instance_write_failed
+  keep_update_owner:
 SectionEnd
 Section /o "桌面快捷方式" SecDesktop
   CreateShortcut "$DESKTOP\Mizar.lnk" "$INSTDIR\Mizar.exe"
@@ -116,6 +235,15 @@ SectionEnd
 
 Function un.onInit
   SetShellVarContext current
+  StrCpy $ControlledUpdate "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/MIZARUPDATE" $1
+  IfErrors +2 0
+  StrCpy $ControlledUpdate "1"
+  StrCmp $ControlledUpdate "1" writer_ready
+  !insertmacro AcquireUpdateWriter
+  writer_ready:
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name Mizar -ErrorAction SilentlyContinue) { exit 1 }"'
   Pop $0
   Pop $1
@@ -127,6 +255,9 @@ Function un.onInit
 FunctionEnd
 Section "Uninstall"
   !include "${REMOVE_FILES}"
+  StrCmp $ControlledUpdate "1" preserve_instance_owner
+  Delete "$INSTDIR\.mizar-update-owner"
+  preserve_instance_owner:
   Delete "$INSTDIR\.mizar-bootstrap-owner"
   Delete "$INSTDIR\installed.flag"
   Delete "$INSTDIR\Uninstall.exe"
