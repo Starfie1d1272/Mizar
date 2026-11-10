@@ -12,6 +12,7 @@ import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
  * No body inflation, public object URL, runtime management token, or business-state interpretation. */
 export interface Env {
+  DIAGNOSTICS_VERSION?: { id: string };
   DIAGNOSTICS_DB: D1Database;
   DIAGNOSTICS_BUCKET: R2Bucket;
   ENROLL_LIMITER: RateLimit;
@@ -910,6 +911,7 @@ async function admin(request: Request, env: Env, path: string, now: number) {
       'SELECT COUNT(*) AS reservations,SUM(writers) AS writers FROM batches WHERE writers>0',
     ).all();
     return json({
+      deploymentVersionId: env.DIAGNOSTICS_VERSION?.id ?? null,
       accepting: env.ACCEPTING === '1',
       dailyReservations: daily,
       openWriters: storage.results[0],

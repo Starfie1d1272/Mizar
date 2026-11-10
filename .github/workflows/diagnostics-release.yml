@@ -1,0 +1,106 @@
+name: Diagnostics Release
+on:
+  workflow_run:
+    workflows: [Release Promotion]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已公开正式版本的准确标签（用于接收器恢复）
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+jobs:
+  source:
+    if: github.repository == 'Starfie1d1272/Mizar' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-promotion.yml'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sync: ${{ steps.release.outputs.sync }}
+      sha: ${{ steps.release.outputs.sha }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Verify the original promotion and actual signed publication
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/diagnostics/release.mjs resolve diagnostics-source.json
+      - name: Preserve the source decision
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-source-${{ github.run_attempt }}
+          path: diagnostics-source.json
+          if-no-files-found: warn
+  sync:
+    needs: source
+    if: needs.source.outputs.sync == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: diagnostics-production
+    concurrency:
+      group: mizar-diagnostics-production
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ needs.source.outputs.tag }}
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+      DIAGNOSTICS_OUTPUT: ${{ github.workspace }}/.agent-tmp/diagnostics-release
+    steps:
+      - name: Checkout trusted deployment controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout the exact published receiver source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Build and check the published receiver
+        working-directory: candidate
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @mizar/diagnostics-worker... --fail-if-no-match run build
+          pnpm --filter @mizar/diagnostics-worker... --fail-if-no-match run typecheck
+      - name: Freeze exact receiver modules and schema
+        run: |
+          node -e "require('fs').writeFileSync('diagnostics-manifest.json', JSON.stringify({ gitSha: process.env.SOURCE_SHA, appVersion: process.env.RELEASE_TAG.slice(1) }))"
+          node scripts/diagnostics/release.mjs prepare candidate diagnostics-manifest.json "$RELEASE_TAG" "$DIAGNOSTICS_OUTPUT"
+      - name: Recheck latest Stable before acquiring deployment credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/bounded-gh.mjs api "repos/$GITHUB_REPOSITORY/releases/latest" > latest-stable-release.json
+      - name: Verify or deploy the production receiver
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DIAGNOSTICS_CLOUDFLARE_API_TOKEN }}
+          DIAGNOSTICS_ADMIN_KEY: ${{ secrets.DIAGNOSTICS_ADMIN_KEY }}
+          DIAGNOSTICS_ENDPOINT: ${{ vars.DIAGNOSTICS_ENDPOINT }}
+          DIAGNOSTICS_CONFIG_SHA256: ${{ vars.DIAGNOSTICS_CONFIG_SHA256 }}
+          DIAGNOSTICS_SCHEMA_SHA256: ${{ vars.DIAGNOSTICS_SCHEMA_SHA256 }}
+          DIAGNOSTICS_BASELINE_VERSION: ${{ vars.DIAGNOSTICS_BASELINE_VERSION }}
+          DIAGNOSTICS_BASELINE_TAG: ${{ vars.DIAGNOSTICS_BASELINE_TAG }}
+        run: node scripts/diagnostics/release.mjs deploy candidate "$DIAGNOSTICS_OUTPUT" latest-stable-release.json
+      - name: Preserve deployment and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-deployment-${{ github.run_attempt }}
+          path: |
+            .agent-tmp/diagnostics-release/candidate.json
+            .agent-tmp/diagnostics-release/result.json
+          if-no-files-found: warn
