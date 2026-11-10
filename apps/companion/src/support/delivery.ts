@@ -407,8 +407,25 @@ async function recoverSealedBatch(directory: string, name: string, expected: Buf
     // are never truncated or replaced, including when this repair is interrupted.
     if (actual.length < expected.length) await file.writeFile(expected.subarray(actual.length));
     await file.sync();
+    const verified = Buffer.alloc(expected.length);
+    let offset = 0;
+    while (offset < verified.length) {
+      const { bytesRead } = await file.read(verified, offset, verified.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    const final = await file.stat();
+    if (offset !== expected.length || final.size !== expected.length || !verified.equals(expected))
+      throw new Error('sealed_batch_conflict');
     const current = await lstat(path);
-    if (current.ino !== stat.ino || current.dev !== stat.dev || current.nlink !== 1)
+    if (
+      final.nlink !== 1 ||
+      !current.isFile() ||
+      current.ino !== stat.ino ||
+      current.dev !== stat.dev ||
+      current.nlink !== 1 ||
+      current.size !== expected.length
+    )
       throw new Error('diagnostics_file_changed');
   } finally {
     await file.close();

@@ -252,25 +252,26 @@ test('a SIGKILL during sealed write resumes only the proven prefix, including an
   const partial = await readFile(path);
   assert(partial.length < expected.length);
   assert.deepEqual(partial, expected.subarray(0, partial.length));
+  await cp(directory, join(r.root, 'inplace-conflict'), { recursive: true });
   const c = await r.client('partial');
   const probe = await open(join(r.root, 'probe'), 'wx');
   const prototype = Object.getPrototypeOf(probe);
   await probe.close();
   await unlink(join(r.root, 'probe'));
-  const writeFile = prototype.writeFile;
+  const writeHandle = prototype.writeFile;
   let failed = false;
   prototype.writeFile = async function (bytes: unknown, ...args: unknown[]) {
     if (!failed && Buffer.isBuffer(bytes) && bytes.equals(expected.subarray(partial.length))) {
       failed = true;
-      await writeFile.call(this, bytes.subarray(0, Math.floor(bytes.length / 2)), ...args);
+      await writeHandle.call(this, bytes.subarray(0, Math.floor(bytes.length / 2)), ...args);
       throw new Error('synthetic_suffix_write_failed');
     }
-    return writeFile.call(this, bytes, ...args);
+    return writeHandle.call(this, bytes, ...args);
   };
   try {
     await c.delivery.tick(false);
   } finally {
-    prototype.writeFile = writeFile;
+    prototype.writeFile = writeHandle;
   }
   assert(failed);
   assert.equal(c.delivery.status().error, 'synthetic_suffix_write_failed');
@@ -289,6 +290,38 @@ test('a SIGKILL during sealed write resumes only the proven prefix, including an
         .first()
     )?.id,
     hash(expected),
+  );
+  const conflict = await r.client('inplace-conflict');
+  const conflictPath = join(conflict.directory, 'diagnostic-outbox', hash(expected) + '.gz');
+  const target = await open(conflictPath, 'r');
+  const identity = await target.stat();
+  await target.close();
+  const changed = Buffer.from(expected);
+  changed[changed.length - 1]! ^= 1;
+  const sync = prototype.sync;
+  let tampered = false;
+  prototype.sync = async function () {
+    const current = await this.stat();
+    if (!tampered && current.ino === identity.ino && current.dev === identity.dev) {
+      tampered = true;
+      // A separate writer changes the same inode without changing its size.
+      await writeFile(conflictPath, changed);
+    }
+    return sync.call(this);
+  };
+  try {
+    await conflict.delivery.tick(false);
+  } finally {
+    prototype.sync = sync;
+  }
+  assert(tampered);
+  assert.equal(conflict.delivery.status().acknowledged, 0);
+  assert.equal(conflict.delivery.status().blockedBatches, 1);
+  assert.equal(conflict.delivery.status().error, 'sealed_batch_conflict_local_copy_retained');
+  assert.deepEqual(await readFile(conflictPath), changed);
+  assert.deepEqual(
+    await readFile(join(conflict.directory, 'diagnostic-outbox', rawBatch.id + '.gz')),
+    raw,
   );
 });
 
