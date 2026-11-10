@@ -107,7 +107,10 @@ jobs:
         shell: pwsh
         run: |
           $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$env:RUNNER_TEMP/Mizar-WebInstaller-compile.exe" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll scripts/web-installer/Bootstrap.cs scripts/web-installer/Nsis.cs
+          $bootstrap = (Resolve-Path -LiteralPath 'scripts/web-installer/Bootstrap.cs').Path
+          $nsis = (Resolve-Path -LiteralPath 'scripts/web-installer/Nsis.cs').Path
+          $output = Join-Path $env:RUNNER_TEMP 'Mizar-WebInstaller-compile.exe'
+          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$output" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $bootstrap $nsis
           if ($LASTEXITCODE -ne 0) { throw 'WebInstaller C# compilation failed' }
       - uses: ./.github/actions/cargo-cache
         id: cargo-cache
