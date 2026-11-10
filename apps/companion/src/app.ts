@@ -1487,7 +1487,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const schedule = demoTest.get().active
       ? undefined
       : envelope?.source === 'local' && document?.competition
-        ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
+        ? localTournamentStore?.getAvailability().available
+          ? localTournamentStore.scheduleWindow(document.competition.competitionId)
+          : undefined
         : options.rivalhubConnection?.getSchedule();
     return presentation.get(document, schedule);
   };
@@ -1960,11 +1962,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
   const restoreFormal = async (trial = false) => {
     if (matchContextController === null) return;
-    await localTournamentStore?.load();
+    try {
+      await localTournamentStore?.load();
+    } catch (error) {
+      app.log.warn(
+        { event: 'local-tournament-unavailable', error: diagnosticValue(error) },
+        'Local tournament library could not be loaded',
+      );
+    }
     const restored = trial
       ? await matchContextController.restoreTemporaryBinding()
       : await matchContextController.restoreLatest();
-    if (localTournamentStore === null) return;
+    if (localTournamentStore === null || !localTournamentStore.getAvailability().available) return;
     const selected = localTournamentStore
       .getSnapshot()
       .matches.find(

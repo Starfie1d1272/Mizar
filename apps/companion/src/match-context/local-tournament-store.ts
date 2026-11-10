@@ -218,43 +218,78 @@ function restoreSchedulePosition(
 export class LocalTournamentStore {
   private state: LocalTournamentState = emptyState();
   private readonly queue = new SerialCommitQueue();
+  private hasPersistedState = false;
+  private unavailableReason: string | null = null;
+
+  getAvailability() {
+    return { available: this.unavailableReason === null, reason: this.unavailableReason };
+  }
+
+  private requireAvailable(): void {
+    if (this.unavailableReason !== null)
+      throw Object.assign(new Error('local_tournament_unavailable'), { statusCode: 503 });
+  }
 
   constructor(private readonly filePath: string) {}
 
   async load(): Promise<void> {
     await this.queue.run(async () => {
-      let bytes: Buffer;
       try {
-        const stat = await lstat(this.filePath);
-        if (stat.size > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
-        bytes = await readFile(this.filePath);
+        let bytes: Buffer;
+        try {
+          const stat = await lstat(this.filePath);
+          if (stat.size > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
+          bytes = await readFile(this.filePath);
+        } catch (error) {
+          if (
+            (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+            !this.hasPersistedState &&
+            this.unavailableReason === null
+          ) {
+            return;
+          }
+          throw error;
+        }
+        if (bytes.length > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
+        const input: unknown = JSON.parse(bytes.toString('utf8'));
+        const oversizedLegacy = bytes.length > MAX_STORE_BYTES;
+        // Only the representation written by the old Store qualifies for size recovery.
+        if (oversizedLegacy && !bytes.equals(Buffer.from(`${JSON.stringify(input, null, 2)}\n`)))
+          throw new Error('local_store_too_large');
+        const recovered = recoverPersistedLinks(input);
+        const state = readState(input);
+        if (durableJsonByteLength(state, true) > MAX_STORE_BYTES)
+          throw new Error('local_store_too_large');
+        if (recovered || oversizedLegacy) {
+          await preserveOriginal(
+            this.filePath,
+            bytes,
+            recovered ? 'live-stream-url' : 'compact-json',
+          );
+          await replaceDurableJson(this.filePath, state, { compact: true });
+        }
+        this.state = state;
+        this.hasPersistedState = true;
+        this.unavailableReason = null;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        const code = (error as NodeJS.ErrnoException).code;
+        this.unavailableReason =
+          error instanceof SyntaxError
+            ? 'invalid_json'
+            : ['EACCES', 'EPERM', 'EISDIR', 'ENOENT', 'EIO', 'ENOSPC', 'EROFS', 'ENOTDIR'].includes(
+                  code ?? '',
+                )
+              ? code!
+              : error instanceof Error && error.message === 'local_store_too_large'
+                ? 'too_large'
+                : 'invalid_store';
         throw error;
       }
-      if (bytes.length > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
-      const input: unknown = JSON.parse(bytes.toString('utf8'));
-      const oversizedLegacy = bytes.length > MAX_STORE_BYTES;
-      // Only the representation written by the old Store qualifies for size recovery.
-      if (oversizedLegacy && !bytes.equals(Buffer.from(`${JSON.stringify(input, null, 2)}\n`)))
-        throw new Error('local_store_too_large');
-      const recovered = recoverPersistedLinks(input);
-      const state = readState(input);
-      if (durableJsonByteLength(state, true) > MAX_STORE_BYTES)
-        throw new Error('local_store_too_large');
-      if (recovered || oversizedLegacy) {
-        await preserveOriginal(
-          this.filePath,
-          bytes,
-          recovered ? 'live-stream-url' : 'compact-json',
-        );
-        await replaceDurableJson(this.filePath, state, { compact: true });
-      }
-      this.state = state;
     });
   }
 
   getSnapshot(): LocalTournamentState {
+    this.requireAvailable();
     return this.state;
   }
 
@@ -274,6 +309,7 @@ export class LocalTournamentStore {
     canCommit?: () => boolean,
   ): Promise<MatchDocumentV1> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       if (
         input.eventName !== undefined &&
         (!input.eventName.trim() || input.eventName.trim().length > 128)
@@ -384,6 +420,7 @@ export class LocalTournamentStore {
 
   async selectMatch(matchId: string, canCommit?: () => boolean): Promise<MatchDocumentV1> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       const document = this.state.matches.find((match) => match.matchId === matchId);
       if (document === undefined) throw new Error('local_match_not_found');
       await this.commit(
@@ -400,6 +437,7 @@ export class LocalTournamentStore {
 
   async trashMatch(matchId: string, canCommit: () => boolean): Promise<void> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       if (!canCommit()) throw new Error('local_match_in_use');
       const document = this.state.matches.find((match) => match.matchId === matchId);
       if (!document) {
@@ -446,6 +484,7 @@ export class LocalTournamentStore {
 
   async restoreMatch(matchId: string): Promise<void> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       const item = this.state.trashedMatches.find((entry) => entry.document.matchId === matchId);
       if (!item) {
         if (this.state.matches.some((match) => match.matchId === matchId)) return;
@@ -483,6 +522,7 @@ export class LocalTournamentStore {
   async saveMatch(input: unknown, canCommit?: () => boolean): Promise<MatchDocumentV1> {
     const document = parseMatchDocumentV1(input);
     return this.queue.run(async () => {
+      this.requireAvailable();
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
       if (existing === undefined) throw new Error('local_match_not_found');
       const event = this.state.events.find(
@@ -540,6 +580,7 @@ export class LocalTournamentStore {
     canCommit?: () => boolean,
   ): Promise<LocalEventV1> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       const existing = this.state.events.find((item) => item.eventId === input.eventId);
       if (
         existing === undefined ||
@@ -597,6 +638,7 @@ export class LocalTournamentStore {
     const document = parseMatchDocumentV1(input);
     const competition = document.competition;
     return this.queue.run(async () => {
+      this.requireAvailable();
       const existing = this.state.matches.find((match) => match.matchId === document.matchId);
       if (existing !== undefined) {
         if (canCommit) {
@@ -658,6 +700,7 @@ export class LocalTournamentStore {
 
   async reorder(eventId: string, matchIds: readonly string[]): Promise<void> {
     return this.queue.run(async () => {
+      this.requireAvailable();
       const event = this.state.events.find((item) => item.eventId === eventId);
       if (
         event === undefined ||
@@ -676,6 +719,7 @@ export class LocalTournamentStore {
   }
 
   scheduleWindow(eventId: string): ScheduleWindowV1 | null {
+    this.requireAvailable();
     const event = this.state.events.find((item) => item.eventId === eventId);
     if (event === undefined) return null;
     const ordered = event.matchIds
@@ -728,6 +772,7 @@ export class LocalTournamentStore {
   }
 
   private async commit(next: LocalTournamentState, canCommit?: () => boolean): Promise<void> {
+    this.requireAvailable();
     const validated = readState(next);
     if (durableJsonByteLength(validated, true) > MAX_STORE_BYTES)
       throw new Error('local_store_too_large');
@@ -739,5 +784,6 @@ export class LocalTournamentStore {
     )
       throw new Error('local_evidence_changed');
     this.state = validated;
+    this.hasPersistedState = true;
   }
 }
