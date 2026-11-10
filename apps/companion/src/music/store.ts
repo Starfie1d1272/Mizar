@@ -12,6 +12,7 @@ import {
 } from '@mizar/protocol/music';
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
 import { audioBytes, readMusicPack } from './archive.js';
+import { preserveDamagedTrack } from './asset-repair.js';
 
 const playbackSchema = z
   .object({
@@ -407,7 +408,7 @@ export class MusicStore {
     return this.installTrackAsset(name, bytes);
   }
   /** Install a validated package asset without requiring music playback to be initialized. */
-  async installTrackAsset(name: string, bytes: Buffer) {
+  async installTrackAsset(name: string, bytes: Buffer, repair = false) {
     await this.stage('music_validate', { name, bytes: bytes.length }, () => {
       if (!audioBytes(name, bytes)) throw new Error('music_track_invalid');
     });
@@ -417,13 +418,18 @@ export class MusicStore {
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
     await ensureDirectory(join(this.directory, 'tracks'));
     await safePath(join(this.directory, 'tracks'));
+    let unchanged: (() => Promise<void>) | undefined;
     try {
       // OBS may hold the existing media file open on Windows. Reuse it only
       // after the same integrity and path checks used for playback.
       await this.trackPath(id);
       return track;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (!repair || !(error instanceof Error) || error.message !== 'music_track_invalid')
+          throw error;
+        unchanged = await preserveDamagedTrack(this.directory, id);
+      }
     }
     const fd = await this.stage('music_open_track', { name, id, target, temporary }, () =>
       open(temporary, 'wx', 0o600),
@@ -438,6 +444,7 @@ export class MusicStore {
     }
     try {
       await this.stage('music_commit_track', { name, id }, async () => {
+        await unchanged?.();
         try {
           await rename(temporary, target);
         } catch (error) {
