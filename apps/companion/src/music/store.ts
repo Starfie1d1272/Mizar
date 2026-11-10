@@ -37,6 +37,26 @@ const stateSchema = z
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
+    previewMonitorLeases: z
+      .array(
+        z
+          .object({
+            uuid: z.string().min(1),
+            scope: z.string().min(1),
+            before: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
+            ]),
+            applied: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+            ]),
+            phase: z.enum(['borrowed', 'restoring']),
+          })
+          .strict(),
+      )
+      .default([]),
     desktopMonitorOriginal: z
       .object({
         bgm: z
@@ -149,6 +169,7 @@ export class MusicStore {
     master: 1,
     muted: false,
     monitorPreference: true,
+    previewMonitorLeases: [],
     desktopMonitorOriginal: { bgm: null, stinger: null },
     monitorConfigured: { bgm: null, stinger: null },
     held: false,

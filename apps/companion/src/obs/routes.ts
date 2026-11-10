@@ -713,15 +713,25 @@ export function registerObsRoutes(
           const connected = () => !request.raw.aborted && !reply.raw.destroyed;
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
+          const prepareMusic = options.musicDirector
+            ? async () => {
+                await options.musicDirector?.()?.prepare(() => valid() && connected());
+              }
+            : undefined;
           const findings =
             action === 'ensure'
               ? await options.adapter.ensure(
                   options.activeScene,
                   () => valid() && connected(),
                   entryId?.success ? { id: entryId.data, valid } : undefined,
+                  prepareMusic,
                 )
               : action === 'repair'
-                ? await options.adapter.repair(options.activeScene, () => valid() && connected())
+                ? await options.adapter.repair(
+                    options.activeScene,
+                    () => valid() && connected(),
+                    prepareMusic,
+                  )
                 : action === 'capture-recover'
                   ? await options.adapter.recoverCaptureWarmup(() => valid() && connected())
                   : await options.adapter.check();
