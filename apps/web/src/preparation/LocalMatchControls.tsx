@@ -19,7 +19,7 @@ export function LocalMatchControls({
   readonly beforeApply?: () => boolean | Promise<boolean>;
   readonly action: (run: () => Promise<unknown>) => Promise<void>;
 }) {
-  const { view, refresh, status } = useLocalTournament();
+  const { view, refresh, status, unavailable, error, reload, reloading } = useLocalTournament();
   const [a, setA] = useState({ name: '', id: '' });
   const [b, setB] = useState({ name: '', id: '' });
   const [eventId, setEventId] = useState(initialEventId);
@@ -29,6 +29,7 @@ export function LocalMatchControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const mutate = async (operation: 'trash' | 'restore', matchId: string) => {
+    if (status !== 'ready') return;
     setBusy(true);
     setMessage('');
     try {
@@ -50,6 +51,12 @@ export function LocalMatchControls({
   };
   return (
     <div className="workspace-local-match">
+      {error ? <StatusBanner tone="warning">{error}</StatusBanner> : null}
+      {unavailable ? (
+        <Button loading={reloading} onClick={() => void reload()}>
+          重新加载资料库
+        </Button>
+      ) : null}
       {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
       <Dialog
         open={confirmation !== null}
@@ -65,7 +72,7 @@ export function LocalMatchControls({
             <Button
               className="local-match-trash-confirm"
               loading={busy}
-              disabled={confirmation?.matchId === view?.inUseMatchId}
+              disabled={status !== 'ready' || confirmation?.matchId === view?.inUseMatchId}
               onClick={() => {
                 if (confirmation) void action(() => mutate('trash', confirmation.matchId));
               }}
@@ -201,6 +208,7 @@ export function LocalMatchControls({
         window.__TAURI_INTERNALS__ ? (
           <Button
             loading={busy}
+            disabled={status !== 'ready'}
             onClick={() =>
               void action(async () => {
                 setBusy(true);
@@ -223,7 +231,7 @@ export function LocalMatchControls({
               {match.entrants.a.name} vs {match.entrants.b.name} · {match.format.toUpperCase()}
             </span>
             <Button
-              disabled={busy || match.matchId === view.inUseMatchId}
+              disabled={status !== 'ready' || busy || match.matchId === view.inUseMatchId}
               onClick={() =>
                 setConfirmation({
                   matchId: match.matchId,
@@ -244,7 +252,7 @@ export function LocalMatchControls({
               {document.format.toUpperCase()}
             </span>
             <Button
-              disabled={busy}
+              disabled={status !== 'ready' || busy}
               onClick={() => void action(() => mutate('restore', document.matchId))}
             >
               恢复比赛
@@ -256,9 +264,10 @@ export function LocalMatchControls({
       {mode !== 'create' && view?.matches.length ? (
         <Select
           label="已保存比赛"
+          disabled={status !== 'ready'}
           value={view.activeLocalMatchId ?? ''}
           onChange={(event) => {
-            if (event.target.value)
+            if (status === 'ready' && event.target.value)
               void action(async () => {
                 await command('/operator/local-match/select', { matchId: event.target.value });
                 await refresh();

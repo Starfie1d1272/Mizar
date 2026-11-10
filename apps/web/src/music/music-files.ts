@@ -1,6 +1,10 @@
 import { controlEvidence, browserErrorEvidence } from '../debug/control-journal';
 import type { MusicView } from './MusicControls';
-import type { MusicTrack } from '@mizar/protocol/music';
+import {
+  MUSIC_ARCHIVE_MAX_BYTES,
+  MUSIC_TRACK_MAX_BYTES,
+  type MusicTrack,
+} from '@mizar/protocol/music';
 import type { PortableTrack } from '@mizar/broadcast-config';
 
 export type UploadedMusicTrack = MusicTrack & { portable: PortableTrack };
@@ -14,6 +18,15 @@ export async function localFile<T = MusicView & MusicTrack>(url: string, file: F
     type: file.type,
     destination: url,
   });
+  const archive = type === 'application/zip';
+  const maxBytes = archive ? MUSIC_ARCHIVE_MAX_BYTES : MUSIC_TRACK_MAX_BYTES;
+  const sizeMessage = archive
+    ? '音乐包超过允许大小（最大 128 MiB），未导入，原配置已保留。请选择较小的音乐包。'
+    : '音频超过允许大小（最大 32 MiB），未添加。请选择较小的音频文件。';
+  if (file.size > maxBytes) {
+    controlEvidence('music_file', 'size_rejected', { operationId, bytes: file.size, maxBytes });
+    throw new Error(sizeMessage);
+  }
   let body: ArrayBuffer;
   controlEvidence('music_file', 'read_begin', { operationId, name: file.name, bytes: file.size });
   try {
@@ -45,6 +58,7 @@ export async function localFile<T = MusicView & MusicTrack>(url: string, file: F
     throw new Error('曲目未能传到本机服务，请确认 Mizar 正在运行后重试。', { cause: error });
   }
   controlEvidence('music_file', 'uploaded', { operationId, status: response.status });
+  if (response.status === 413) throw new Error(sizeMessage);
   if (!response.ok) {
     const reason = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(

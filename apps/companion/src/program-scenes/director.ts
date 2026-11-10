@@ -75,7 +75,6 @@ export class ProgramDirector {
     private readonly production: () => boolean,
     private readonly now = () => performance.now(),
     private readonly timings = DEFAULT_PROGRAM_TIMINGS,
-    private readonly preparationReason: () => string | null = () => null,
     private readonly presentation: () => ProgramPresentation | undefined = () => undefined,
   ) {}
   get(): DirectorView {
@@ -267,7 +266,7 @@ export class ProgramDirector {
         ...this.view,
         mode: 'preparation',
         blockCause: null,
-        reason: this.preparationReason(),
+        reason: null,
       };
       return;
     }

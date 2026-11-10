@@ -44,7 +44,7 @@ test('atomic write failure preserves disk and memory, and unsafe state is reject
   fail = true;
   await assert.rejects(store.confirmClaim(intent.id, 1), /injected/);
   assert.deepEqual(await readFile(path), before);
-  assert.deepEqual((await store.snapshot()).intent, intent);
+  assert.deepEqual((await store.snapshot()).intents, [intent]);
   fail = false;
   await store.clearIntent(intent.id);
   await assert.rejects(
@@ -85,5 +85,5 @@ test('concurrent claims serialize and retain one unresolved intent', async (t) =
   ]);
   assert.equal(outcomes.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(outcomes.filter((result) => result.status === 'rejected').length, 1);
-  assert.ok((await store.snapshot()).intent);
+  assert.equal((await store.snapshot()).intents.length, 1);
 });

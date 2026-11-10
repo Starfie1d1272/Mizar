@@ -11,9 +11,12 @@ export const NATIVE_SOURCE_LIMITS = {
   pollMs: 1000,
   readBytes: 256 * 1024,
   lineBytes: 128 * 1024,
-  groupBytes: 192 * 1024,
+  recordBytes: 192 * 1024,
   sourceBytes: 25 * 1024 * 1024,
-  cursorBytes: 8192,
+  // Host retains roughly 1 MiB segments under its byte/age/pin policy, not four
+  // files. Reserve bounded room for short process runs and protected segments.
+  cursorEntries: 1024,
+  cursorBytes: 256 * 1024,
 };
 type Cursor = { identity: string; offset: number; anchor: string; discarding: boolean };
 type NativeRecord = {
@@ -25,6 +28,15 @@ type NativeRecord = {
 };
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+function cursorCheckpoint(cursors: Cursor[]) {
+  const value = { schema: 1, cursors };
+  if (
+    cursors.length > NATIVE_SOURCE_LIMITS.cursorEntries ||
+    Buffer.byteLength(JSON.stringify(value)) > NATIVE_SOURCE_LIMITS.cursorBytes
+  )
+    throw new Error('native_cursor_budget');
+  return value;
+}
 
 // Only fixed Host names can use the Windows packaged-app mapping fallback.
 async function nativePath(directory: string, name: string): Promise<string> {
@@ -157,7 +169,6 @@ export class ProgramChatNativeInput {
         if (
           value.schema !== 1 ||
           !Array.isArray(value.cursors) ||
-          value.cursors.length > 4 ||
           value.cursors.some(
             (cursor) =>
               !cursor ||
@@ -171,11 +182,24 @@ export class ProgramChatNativeInput {
           )
         )
           throw new Error('native_cursor_invalid');
-        this.cursors = value.cursors;
+        const cursors = value.cursors.map(({ identity, offset, anchor, discarding }) => ({
+          identity,
+          offset,
+          anchor,
+          discarding,
+        }));
+        if (new Set(cursors.map((cursor) => cursor.identity)).size !== cursors.length)
+          throw new Error('native_cursor_invalid');
+        cursorCheckpoint(cursors);
+        this.cursors = cursors;
       } finally {
         await file.close();
       }
     } catch (error) {
+      // An older writer could persist more than this reader's bounded budget.
+      // Keep that checkpoint intact and retry initialization; never replace it
+      // with a partial scan or silently replay all sources on every restart.
+      if (error instanceof Error && error.message === 'native_cursor_budget') throw error;
       if (!missing(error)) {
         this.gaps++;
         this.journal.record('native_source_gap', {
@@ -192,6 +216,7 @@ export class ProgramChatNativeInput {
     const found = new Set<string>();
     this.backlogBytes = 0;
     let sourceFailed = false;
+    let sourceIdentitiesUnconfirmed = false;
     try {
       for (const name of [
         ...(await readdir(this.directory)).filter((name) =>
@@ -199,15 +224,22 @@ export class ProgramChatNativeInput {
         ),
       ]) {
         const beforeFile = structuredClone(this.cursors);
+        const identified = found.size;
         try {
           await this.file(name, found);
         } catch (error) {
           this.cursors = beforeFile;
           sourceFailed = true;
+          // A directory listing alone does not prove which identity a failed
+          // path owns. Preserve unmatched cursors until every listed source can
+          // be identified or is confirmed absent, including rotation races.
+          if (found.size === identified) sourceIdentitiesUnconfirmed = true;
           this.recordFailure(name, { name, error });
         }
       }
-      const removed = this.cursors.filter((cursor) => !found.has(cursor.identity));
+      const removed = sourceIdentitiesUnconfirmed
+        ? []
+        : this.cursors.filter((cursor) => !found.has(cursor.identity));
       if (removed.length) {
         this.gaps++;
         this.journal.record('native_source_gap', {
@@ -216,7 +248,8 @@ export class ProgramChatNativeInput {
           scope: 'removed file may have unread bytes; retained Host files remain authoritative',
         });
       }
-      this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
+      if (!sourceIdentitiesUnconfirmed)
+        this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
       // Chat delivery precedes this checkpoint. A restart may replay an identity;
       // ProgramChat applies its own current-generation and freshness constraints.
       if (this.checkpointPending || JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
@@ -225,7 +258,11 @@ export class ProgramChatNativeInput {
           await nativePath(this.directory, cursorName).catch((error) => {
             if (!missing(error)) throw error;
           });
-          await atomicJson(join(this.directory, cursorName), { schema: 1, cursors: this.cursors });
+          await atomicJson(
+            join(this.directory, cursorName),
+            cursorCheckpoint(this.cursors),
+            NATIVE_SOURCE_LIMITS.cursorBytes,
+          );
           this.checkpointPending = false;
         } catch (error) {
           // Committed records are already delivered. Keep advancing in memory while
@@ -286,6 +323,8 @@ export class ProgramChatNativeInput {
       found.add(identity);
       let cursor = this.cursors.find((value) => value.identity === identity);
       if (!cursor) {
+        if (this.cursors.length >= NATIVE_SOURCE_LIMITS.cursorEntries)
+          throw new Error('native_cursor_budget');
         cursor = { identity, offset: 0, anchor: hash(''), discarding: false };
         this.cursors.push(cursor);
       }
@@ -309,35 +348,12 @@ export class ProgramChatNativeInput {
       );
       const { bytesRead } = await file.read(buffer, 0, buffer.length, cursor.offset);
       const bytes = buffer.subarray(0, bytesRead);
-      const entries: {
-        sourceRecordId: string;
-        offset: number;
-        bytes: number;
-        entry: NativeRecord;
-      }[] = [];
-      let groupBytes = 0;
       let invalid = 0;
       const invalidSamples: unknown[] = [];
       const invalidLine = (value: unknown) => {
         invalid++;
         this.invalid++;
         if (invalidSamples.length < 16) invalidSamples.push(value);
-      };
-      const commit = async () => {
-        if (!entries.length) return;
-        const committed = entries.splice(0);
-        // Program chat is a real-time input, never a diagnostic transfer or ACK dependent.
-        this.copied += committed.length;
-        for (const record of committed) {
-          const entry = record.entry;
-          if (
-            entry.schema === 'mizar-diagnostic-event/2' &&
-            ['program_all_chat', 'program_all_chat_reset'].includes(entry.stage)
-          )
-            this.onRecord?.({ ...entry, detail: JSON.stringify(entry.evidence) });
-          else this.onRecord?.(entry);
-        }
-        groupBytes = 0;
       };
       let start = 0;
       while (start < bytes.length) {
@@ -388,16 +404,8 @@ export class ProgramChatNativeInput {
           continue;
         }
         if (!['program_all_chat', 'program_all_chat_reset'].includes(entry.stage)) continue;
-        // Keep I/O outside the malformed-record catch: a failed durable commit
-        // aborts this poll and restores every source cursor for replay.
-        const copied = {
-          sourceRecordId: hash(`${identity}:${offset}:${hash(line)}`),
-          offset,
-          bytes: line.length + 1,
-          entry: diagnosticValue(entry) as NativeRecord,
-        };
-        const size = Buffer.byteLength(JSON.stringify(copied));
-        if (size > NATIVE_SOURCE_LIMITS.groupBytes) {
+        const sanitized = diagnosticValue(entry) as NativeRecord;
+        if (Buffer.byteLength(JSON.stringify(sanitized)) > NATIVE_SOURCE_LIMITS.recordBytes) {
           invalidLine({
             reason: 'sanitized_native_record_budget',
             offset,
@@ -406,11 +414,15 @@ export class ProgramChatNativeInput {
           });
           continue;
         }
-        if (groupBytes + size > NATIVE_SOURCE_LIMITS.groupBytes) await commit();
-        entries.push(copied);
-        groupBytes += size;
+        // Chat delivery is synchronous and independent of diagnostic journal ACKs.
+        // Callback failure still aborts this file and restores its cursor for replay.
+        this.copied++;
+        this.onRecord?.(
+          sanitized.schema === 'mizar-diagnostic-event/2'
+            ? { ...sanitized, detail: JSON.stringify(sanitized.evidence) }
+            : sanitized,
+        );
       }
-      await commit();
       if (invalid)
         await this.journal.recordCommitted('native_source_gap', {
           reason: 'invalid_or_oversized_records',
@@ -438,7 +450,7 @@ export class ProgramChatNativeInput {
       error: this.error,
       backlogBytes: this.backlogBytes,
       trackedFiles: this.cursors.length,
-      cursorSemantics: 'at-least-once; stable sourceRecordId permits replay deduplication',
+      cursorSemantics: 'at-least-once; ProgramChat owns message identity and freshness',
       limits: NATIVE_SOURCE_LIMITS,
     };
   }

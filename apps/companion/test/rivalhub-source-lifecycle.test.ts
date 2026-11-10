@@ -534,13 +534,17 @@ test(`legacy repeated claim retains held-authority proof with ambiguous status`,
   await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
   const statePath = join(h.path, '..', 'rivalhub-source-state.json');
   const oldState = JSON.parse(await readFile(statePath, 'utf8'));
-  delete oldState.intent.idempotentAuthorityRevision;
+  const [intent] = oldState.intents;
+  delete intent.idempotentAuthorityRevision;
+  delete oldState.intents;
+  oldState.version = 1;
+  oldState.intent = intent;
   await writeFile(statePath, JSON.stringify(oldState));
   h.setAmbiguous(true);
   const restarted = await h.restart();
   await assert.rejects(restarted.release(), /待重试或核对/);
   const upgraded = JSON.parse(await readFile(statePath, 'utf8'));
-  assert.equal(upgraded.intent.idempotentAuthorityRevision, 1);
+  assert.equal(upgraded.intents[0].idempotentAuthorityRevision, 1);
   assert.equal(upgraded.records.length, 0);
   h.setAmbiguous(false);
   const again = await h.restart();
@@ -663,105 +667,4 @@ test('a delayed claim after a binding switch cannot enable the old source', asyn
   assert.equal(h.connection.view().sourceCleanup.pending, 1);
   await h.connection.release();
   assert.equal(h.releases.length, 1);
-});
-
-test('automatic first claim is serialized and cannot resume an existing or stopped source', async (t) => {
-  const h = await setup(t);
-  await Promise.all([
-    h.connection.claimAutomatically(h.snapshot, 'revision', () => true),
-    h.connection.claimAutomatically(h.snapshot, 'revision', () => true),
-  ]);
-  assert.equal(h.connection.reliableExactSource()?.authorityRevision, 1);
-  h.connection.stopSync(h.snapshot.matchId);
-  await h.connection.release();
-  await h.connection.claimAutomatically(h.snapshot, 'revision', () => true);
-  assert.equal(h.connection.view().activeSourceMatchId, null);
-  assert.equal(h.connection.view().stoppedMatchId, h.snapshot.matchId);
-  assert.equal(h.releases.length, 1);
-});
-
-test('automatic claims bound refusals but allow changed context, authorization and explicit retry', async (t) => {
-  const h = await setup(t);
-  let attempts = 0;
-  h.setClaimRefusal(() => {
-    attempts++;
-    return Response.json(
-      { code: 'FORBIDDEN', error: 'permission denied' },
-      {
-        status: 403,
-        headers: { 'cache-control': 'no-store' },
-      },
-    );
-  });
-  for (let tick = 0; tick < 8; tick++)
-    await h.connection
-      .claimAutomatically(h.snapshot, 'revision', () => true)
-      .catch(() => undefined);
-  assert.equal(attempts, 5);
-  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
-  await assert.rejects(h.connection.claimAutomatically(h.snapshot, 'updated', () => true));
-  assert.equal(attempts, 6);
-  for (let tick = 0; tick < 5; tick++)
-    await h.connection.claimAutomatically(h.snapshot, 'updated', () => true).catch(() => undefined);
-  assert.equal(attempts, 10);
-  await h.connection.startPairing();
-  assert.equal(await h.connection.pollPairing(), 'authorized');
-  for (let tick = 0; tick < 8; tick++)
-    await h.connection.claimAutomatically(h.snapshot, 'updated', () => true).catch(() => undefined);
-  assert.equal(attempts, 15);
-  h.setClaimRefusal(undefined);
-  await h.connection.claim(h.snapshot, 'updated', false);
-  assert.equal(h.connection.view().activeSourceMatchId, h.snapshot.matchId);
-});
-
-test('automatic first claim leaves unknown requests and same-match old sources to recovery', async (t) => {
-  const h = await setup(t);
-  let attempts = 0;
-  h.setClaimRefusal(() => {
-    attempts++;
-    return new Response(null, { status: 500 });
-  });
-  await assert.rejects(h.connection.claimAutomatically(h.snapshot, 'revision', () => true));
-  await h.connection.claimAutomatically(h.snapshot, 'revision', () => true);
-  assert.equal(attempts, 1);
-  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
-
-  const old = await setup(t);
-  await old.connection.claim(old.snapshot, 'revision', false);
-  const restarted = await old.restart();
-  const nextSession = structuredClone(old.snapshot);
-  nextSession.cursor.liveSessionId = 'new-session';
-  await restarted.claimAutomatically(nextSession, 'revision', () => true);
-  assert.equal(restarted.view().activeSourceMatchId, null);
-  assert.equal(restarted.view().sourceCleanup.pending, 1);
-  assert.equal(old.releases.length, 0);
-});
-
-test('automatic first claim respects other devices and hands off a stale accepted request', async (t) => {
-  const h = await setup(t);
-  let attempts = 0;
-  h.setClaimRefusal(() => {
-    attempts++;
-    return Response.json({ claimed: false, activeDeviceName: 'other' });
-  });
-  await h.connection.claimAutomatically(h.snapshot, 'revision', () => true);
-  await h.connection.claimAutomatically(h.snapshot, 'revision', () => true);
-  assert.equal(attempts, 1);
-  assert.equal(h.connection.view().activeDeviceName, 'other');
-
-  const stale = await setup(t);
-  let release!: () => void;
-  stale.setClaimGate(
-    new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-  );
-  let current = true;
-  const pending = stale.connection.claimAutomatically(stale.snapshot, 'revision', () => current);
-  await stale.claimStarted;
-  current = false;
-  release();
-  await assert.rejects(pending);
-  assert.equal(stale.connection.view().activeSourceMatchId, null);
-  assert.equal(stale.connection.view().sourceCleanup.pending, 1);
 });

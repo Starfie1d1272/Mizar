@@ -24,6 +24,34 @@ function object(value: unknown): Record<string, unknown> | null {
 
 export function registerLocalTournamentRoutes(
   app: FastifyInstance,
+  options: Parameters<typeof registerRoutes>[1],
+): void {
+  const unavailable = () => ({
+    error: 'local_tournament_unavailable',
+    reason: options.store.getAvailability().reason,
+    message: '本地赛事资料库无法读取，原文件已保留。请修复文件或访问权限后重新加载。',
+  });
+  app.post('/operator/local-tournament/reload', async (request, reply) => {
+    if (!canMutate(options.originPolicy, request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      await options.store.load();
+      return { ok: true };
+    } catch {
+      return reply.code(503).send(unavailable());
+    }
+  });
+  app.register(async (local) => {
+    local.addHook('preHandler', async (_request, reply) => {
+      if (!options.store.getAvailability().available)
+        return reply.code(503).header('cache-control', 'no-store').send(unavailable());
+    });
+    registerRoutes(local, options);
+  });
+}
+
+function registerRoutes(
+  app: FastifyInstance,
   options: {
     readonly store: LocalTournamentStore;
     readonly projections?: ProjectionCoordinator;
