@@ -15,7 +15,6 @@ import { updateRequest, type UpdateFetch } from './network.js';
 import { transfer } from '../distribution/transfer.js';
 import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 import { installerUrl, StableSource } from './source.js';
-import { BoxSource } from './box.js';
 
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 const configSchema = z.strictObject({
@@ -547,17 +546,6 @@ export class UpdateManager {
               proxyAsset: origin,
               ...(end === undefined ? {} : { rangeEnd: end }),
             }),
-        },
-        {
-          name: '南大云盘',
-          stage: 'box_download',
-          request: async (attempt: AbortSignal, end?: number) =>
-            updateRequest(
-              await new BoxSource(this.options.fetcher).installer(manifest, attempt),
-              attempt,
-              this.options.fetcher,
-              end === undefined ? undefined : { rangeEnd: end },
-            ),
         },
       ];
       const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;
