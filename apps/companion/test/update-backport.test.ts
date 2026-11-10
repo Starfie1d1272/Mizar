@@ -155,6 +155,8 @@ test('Mizar download sorts authenticated sources, labels fallback and verifies f
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(manager.status().phase, 'ready');
     assert.equal(manager.status().downloadSource, 'GitHub');
+    await manager.check();
+    assert.equal(manager.status().phase, 'ready');
     assert.deepEqual(full, ['gh-proxy.com', 'github.com']);
     const ready = JSON.parse(await readFile(join(root, 'updates', 'ready.json'), 'utf8')) as {
       directory: string;

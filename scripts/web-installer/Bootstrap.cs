@@ -57,7 +57,7 @@ namespace Mizar.WebInstaller {
     internal static async Task Verify(Plan plan,HttpClient client,CancellationToken token) {
       ValidatePlan(plan);
       using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
-        deadline.CancelAfter(15000);
+        deadline.CancelAfter(30000);
         string url="https://github.com/Starfie1d1272/Mizar/releases/download/v"+plan.version+"/machine-metadata.json";
         CheckIndex(IndexFromMachine(await new Downloader(client).Metadata(url,deadline.Token)),plan);
       }
@@ -103,6 +103,22 @@ namespace Mizar.WebInstaller {
       return u.Scheme == "https" && u.IsDefaultPort && u.UserInfo == "" && u.Fragment == "" &&
         ((u.Host == "github.com" && u.AbsolutePath.StartsWith("/Starfie1d1272/Mizar/releases/download/", StringComparison.Ordinal)) ||
          u.Host == "release-assets.githubusercontent.com");
+    }
+    const string ProxyPrefix = "https://gh-proxy.com/";
+    static System.Collections.Generic.IEnumerable<string> Sources(string[] origins) {
+      foreach(string origin in origins) {
+        yield return origin;
+        var uri=new Uri(origin);
+        if(Allowed(uri) && uri.Host=="github.com" && uri.Query=="") yield return ProxyPrefix+origin;
+      }
+    }
+    static bool AllowedEndpoint(Uri endpoint,string source) {
+      string origin=source.StartsWith(ProxyPrefix,StringComparison.Ordinal) ? source.Substring(ProxyPrefix.Length) : source;
+      Uri canonical;
+      if(!Uri.TryCreate(origin,UriKind.Absolute,out canonical) || !Allowed(canonical)) return false;
+      // A proxy may carry only this qualified asset, never arbitrary URLs or credentials.
+      return (Allowed(endpoint) && (endpoint.AbsoluteUri==canonical.AbsoluteUri || endpoint.Host=="release-assets.githubusercontent.com")) ||
+        (canonical.Host=="github.com" && canonical.Query=="" && endpoint.AbsoluteUri==ProxyPrefix+canonical.AbsoluteUri);
     }
     internal static void NoReparse(string path) {
       for (string p = Path.GetFullPath(path); p != null; p = Path.GetDirectoryName(p)) {
@@ -168,7 +184,7 @@ namespace Mizar.WebInstaller {
       long length = new FileInfo(staging).Length;
       if (partial == null || partial.identity != Identity(plan) || partial.source != source ||
           partial.bytes != plan.bytes || length < 1 || length > plan.bytes ||
-          !Uri.TryCreate(partial.endpoint, UriKind.Absolute, out endpoint) || !Allowed(endpoint) ||
+          !Uri.TryCreate(partial.endpoint, UriKind.Absolute, out endpoint) || !AllowedEndpoint(endpoint,source) ||
           !System.Net.Http.Headers.EntityTagHeaderValue.TryParse(partial.etag, out etag) || etag.IsWeak || etag.Tag == "*") {
         Discard(staging); return null;
       }
@@ -186,7 +202,7 @@ namespace Mizar.WebInstaller {
     async Task<HttpResponseMessage> Request(string url, long offset, Partial partial, CancellationToken token) {
       Uri current = new Uri(url);
       for (int n = 0; n < 5; n++) {
-        if (!Allowed(current)) throw new InvalidDataException("下载重定向地址不受信任。");
+        if (!AllowedEndpoint(current,url)) throw new InvalidDataException("下载重定向地址不受信任。");
         using (var request = new HttpRequestMessage(HttpMethod.Get, current)) {
           request.Headers.TryAddWithoutValidation("User-Agent", "Mizar-WebInstaller");
           request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
@@ -195,7 +211,15 @@ namespace Mizar.WebInstaller {
             request.Headers.IfRange = new System.Net.Http.Headers.RangeConditionHeaderValue(
               new System.Net.Http.Headers.EntityTagHeaderValue(partial.etag));
           }
-          var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+          HttpResponseMessage response;
+          using(var headers=CancellationTokenSource.CreateLinkedTokenSource(token)) {
+            headers.CancelAfter(15000);
+            try { response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,headers.Token); }
+            catch(OperationCanceledException error) {
+              token.ThrowIfCancellationRequested();
+              throw new HttpRequestException("下载源连接超时。",error);
+            }
+          }
           int status = (int)response.StatusCode;
           if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
             var location = response.Headers.Location;
@@ -227,6 +251,23 @@ namespace Mizar.WebInstaller {
       throw new InvalidDataException("下载重定向次数超限。");
     }
     internal async Task<string> Metadata(string url,CancellationToken token) {
+      var failures=new System.Collections.Generic.List<Exception>();
+      foreach(string source in Sources(new[] {url})) {
+        using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
+          deadline.CancelAfter(15000);
+          try { return await ReadMetadata(source,deadline.Token); }
+          catch(Exception error) {
+            token.ThrowIfCancellationRequested();
+            // Invalid bytes, forbidden redirects and later publication checks fail
+            // closed. Only transport failure or a local deadline can switch source.
+            if(error is InvalidDataException || !(error is HttpRequestException || error is IOException || deadline.IsCancellationRequested)) throw;
+            failures.Add(error);Window.SaveDiagnostic(new IOException("Publication transport failed: "+source,error));
+          }
+        }
+      }
+      throw new IOException("发布资料下载失败，请检查网络后重试。",new AggregateException(failures));
+    }
+    async Task<string> ReadMetadata(string url,CancellationToken token) {
       using(var response=await Request(url,0,null,token))
       using(var abortRead=token.Register(response.Dispose))
       using(var input=await response.Content.ReadAsStreamAsync())
@@ -258,7 +299,7 @@ namespace Mizar.WebInstaller {
         string staging = target + ".part";
         NoReparse(staging); NoReparse(staging + ".json");
         var failures=new System.Collections.Generic.List<Exception>();
-        var sources=new System.Collections.Generic.List<string>(plan.urls);
+        var sources=Sources(plan.urls);
         foreach (string url in sources) {
           token.ThrowIfCancellationRequested();
           using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token)) {
