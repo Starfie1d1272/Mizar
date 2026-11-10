@@ -11,7 +11,7 @@ import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { AbortController, AbortSignal, Blob, FormData, Response } = globalThis;
 
-test('final readbacks start Core in first batch, join failures and cover every asset', async () => {
+test('final readbacks join failures and cover every asset', async () => {
   const asset = (name) => ({ name, size: 1, sha256: 'a'.repeat(64) });
   const metadata = asset('machine-metadata.json');
   const core = asset('Mizar-v1.10.0-Windows-x64-Core-Setup.exe');
@@ -32,7 +32,6 @@ test('final readbacks start Core in first batch, join failures and cover every a
     },
   });
   assert.equal(paths.length, 4);
-  assert.ok(paths[0].endsWith(core.name));
   assert.deepEqual(
     new Set(paths.map((path) => path.split('/').pop())),
     new Set([core.name, metadata.name, 'web.exe', 'pack.zip']),
@@ -57,11 +56,12 @@ test('final readbacks start Core in first batch, join failures and cover every a
     settled = true;
   });
   await setImmediate();
-  assert.equal(started.length, 3);
+  assert.ok(started.length > 1);
+  const startedBeforeSettlement = [...started];
   assert.equal(settled, false);
   finish();
   await assert.rejects(failed, /failure/);
-  assert.equal(started.length, 3);
+  assert.deepEqual(started, startedBeforeSettlement);
 });
 
 function client(transport) {

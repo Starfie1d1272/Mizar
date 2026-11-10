@@ -101,7 +101,8 @@ test(
     }
     parent.kill('SIGTERM');
     assert.notEqual(await exited, 0);
-    await delay(1800);
+    // Observe beyond the descendants' scheduled write, not just parent exit.
+    await delay(3700);
     for (const lane of ['runtime', 'resources', 'downloads'])
       await assert.rejects(readFile(join(root, `late-${lane}`)), { code: 'ENOENT' });
     const summary = JSON.parse(await readFile(join(root, 'lanes', 'orchestration.json')));
@@ -134,7 +135,10 @@ test(
           ),
           /all lanes have settled/,
         );
+        // A surviving descendant would write after 3500 ms.
+        await delay(3700);
         for (const lane of ['runtime', 'resources', 'downloads']) {
+          await readFile(join(work, `ready-${lane}`));
           await assert.rejects(readFile(join(work, `late-${lane}`)), { code: 'ENOENT' });
           await assert.rejects(readFile(join(work, 'receipts', `${lane}.json`)), {
             code: 'ENOENT',

@@ -43,6 +43,7 @@ jobs:
           install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm release-notes:check
+      - run: pnpm architecture:check
       - run: pnpm format:check
       - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
       - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check

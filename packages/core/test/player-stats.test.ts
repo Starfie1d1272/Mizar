@@ -140,6 +140,19 @@ it('leaves the community approximation unavailable without a round sample', asyn
   ).toBeNull();
 });
 
+it('computes the community approximation from one complete shared sample', async () => {
+  const { calculateRating2Approx } = await import('../src/runtime/index.js');
+  const sample = calculateRating2Approx({
+    rounds: 24,
+    kills: 20,
+    assists: 5,
+    deaths: 15,
+    damage: 1800,
+    kastRounds: 18,
+  });
+  expect(sample?.rating2Approx).toBeCloseTo(1.2569205, 8);
+});
+
 it('only uses bound program events and trades in game time for a completed round', async () => {
   const { projectPlayerStatistics } = await import('../src/runtime/index.js');
   const playerC = '76561198000000003';

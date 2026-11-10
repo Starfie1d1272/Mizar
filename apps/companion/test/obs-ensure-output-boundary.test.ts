@@ -14,59 +14,50 @@ import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 it.each([
   {
-    preparedAudio: true,
     align: false,
     event: '',
     label: 'active output and automatic TeamSpeak probe',
   },
   {
-    preparedAudio: true,
     align: true,
     event: '',
     label: 'idle output and an existing gameplay scene',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'StreamStateChanged',
     label: 'StreamStateChanged STARTING',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'StreamStateChanged',
     late: true,
     label: 'stream STARTING immediately before the scene switch',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'ReplayBufferStateChanged',
     transient: true,
     label: 'replay starting and stopping during preparation',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'CurrentProgramSceneChanged',
     label: 'external scene takeover',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'CurrentSceneCollectionChanging',
     label: 'external collection takeover',
   },
-  { preparedAudio: true, align: true, event: 'ExitStarted', label: 'OBS exit' },
+  { align: true, event: 'ExitStarted', label: 'OBS exit' },
   {
-    preparedAudio: true,
     align: false,
     event: '',
     entryMode: 'idle',
     label: 'idle entry receives a native permit',
   },
   {
-    preparedAudio: true,
     align: false,
     event: 'StreamStateChanged',
     late: true,
@@ -74,7 +65,7 @@ it.each([
     label: 'entry output starts at the final no-write check',
   },
 ])('explicit ensure handles $label', async (scenario) => {
-  const { preparedAudio, align, event, late, transient, entryMode } = scenario;
+  const { align, event, late, transient, entryMode } = scenario;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -219,20 +210,16 @@ it.each([
                 inputKind: 'game_capture',
                 inputUuid: `input:${OBS_CAPTURE_INPUT}`,
               },
-              ...(preparedAudio
-                ? [
-                    {
-                      inputName: '桌面声音',
-                      inputKind: 'wasapi_output_capture',
-                      inputUuid: 'input:桌面声音',
-                    },
-                    {
-                      inputName: '麦克风',
-                      inputKind: 'wasapi_input_capture',
-                      inputUuid: 'input:麦克风',
-                    },
-                  ]
-                : []),
+              {
+                inputName: '桌面声音',
+                inputKind: 'wasapi_output_capture',
+                inputUuid: 'input:桌面声音',
+              },
+              {
+                inputName: '麦克风',
+                inputKind: 'wasapi_input_capture',
+                inputUuid: 'input:麦克风',
+              },
             ],
           };
           break;
@@ -265,22 +252,18 @@ it.each([
                 sceneItemIndex: index,
                 sceneItemEnabled: true,
               })),
-              ...(preparedAudio
-                ? [
-                    {
-                      sourceName: '桌面声音',
-                      sourceUuid: 'input:桌面声音',
-                      sceneItemId: 100,
-                      sceneItemEnabled: true,
-                    },
-                    {
-                      sourceName: '麦克风',
-                      sourceUuid: 'input:麦克风',
-                      sceneItemId: 101,
-                      sceneItemEnabled: true,
-                    },
-                  ]
-                : []),
+              {
+                sourceName: '桌面声音',
+                sourceUuid: 'input:桌面声音',
+                sceneItemId: 100,
+                sceneItemEnabled: true,
+              },
+              {
+                sourceName: '麦克风',
+                sourceUuid: 'input:麦克风',
+                sceneItemId: 101,
+                sceneItemEnabled: true,
+              },
             ],
           };
           break;
@@ -411,12 +394,8 @@ it.each([
             [scene.browserInput, { uuid: `input:${scene.browserInput}`, kind: 'browser_source' }],
           ]),
           [OBS_CAPTURE_INPUT, { uuid: `input:${OBS_CAPTURE_INPUT}`, kind: 'game_capture' }],
-          ...(preparedAudio
-            ? [
-                ['桌面声音', { uuid: 'input:桌面声音', kind: 'wasapi_output_capture' }],
-                ['麦克风', { uuid: 'input:麦克风', kind: 'wasapi_input_capture' }],
-              ]
-            : []),
+          ['桌面声音', { uuid: 'input:桌面声音', kind: 'wasapi_output_capture' }],
+          ['麦克风', { uuid: 'input:麦克风', kind: 'wasapi_input_capture' }],
         ]),
       },
     ]),
@@ -433,7 +412,7 @@ it.each([
     baseUrl,
     undefined,
     undefined,
-    preparedAudio && !align && !entryMode
+    !align && !entryMode
       ? {
           owner: new RemoteCommentary(join(directory, 'commentary.json')),
           journal: join(directory, 'commentary-probe.json'),
@@ -553,14 +532,12 @@ it.each([
       message: expect.stringContaining('Plugin video'),
     });
     expect(requests).toContain('GetOutputList');
-    if (preparedAudio) {
-      expect(requests).not.toContain('GetVersion');
-      // Active output stops preparation before audio discovery or creation,
-      // so no probe journal should block the next explicit retry.
-      await expect(access(join(directory, 'commentary-probe.json'))).rejects.toMatchObject({
-        code: 'ENOENT',
-      });
-    }
+    expect(requests).not.toContain('GetVersion');
+    // Active output stops preparation before audio discovery or creation,
+    // so no probe journal should block the next explicit retry.
+    await expect(access(join(directory, 'commentary-probe.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     expect(unexpected).toEqual([]);
     expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
   } finally {
