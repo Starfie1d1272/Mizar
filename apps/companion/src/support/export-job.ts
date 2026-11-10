@@ -1,8 +1,8 @@
 import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
 import { readHostPin, type IncidentParticipant, type PinReceipt } from './retention.js';
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
-import { constants } from 'node:fs';
-import { mkdir, open, lstat, readdir, rm, type FileHandle } from 'node:fs/promises';
+import { constants, lstatSync, unlinkSync, utimesSync, type Stats } from 'node:fs';
+import { mkdir, open, lstat, readdir, rm, rmdir, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
@@ -16,6 +16,66 @@ const currentProcessLogs = /^(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(
 const CACHE_LIMIT = 256 * 1024 * 1024;
 const MANIFEST_RESERVE = 1024 * 1024;
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+/** Own only the lease created by this cleanup attempt, never a native saver or peer. */
+async function removeExpiredExport(path: string, directory: Stats): Promise<boolean> {
+  const leasePath = join(path, 'saving.lease');
+  let lease: FileHandle;
+  try {
+    lease = await open(
+      leasePath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+  let owner: Stats | undefined;
+  let failure: unknown;
+  try {
+    owner = await lease.stat();
+    await safePath(path);
+    const actual = await lstat(path);
+    if (actual.dev !== directory.dev || actual.ino !== directory.ino)
+      throw new Error('export_cache_directory_changed');
+    // Keep the lease in place throughout partial deletion. Recursive removal of
+    // the whole directory could delete it before failing on another entry.
+    for (const name of await readdir(path)) {
+      if (name !== 'saving.lease') await rm(join(path, name), { recursive: true });
+    }
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await lease.close();
+    // Keep check/release in one turn. Compliant peers cannot acquire this path
+    // until unlink; an unexpected replacement must never be released by us.
+    const current = lstatSync(leasePath);
+    if (!owner || current.dev !== owner.dev || current.ino !== owner.ino || current.nlink !== 1)
+      throw new Error('export_cache_lease_changed');
+    unlinkSync(leasePath);
+    const currentDirectory = lstatSync(path);
+    if (currentDirectory.dev !== directory.dev || currentDirectory.ino !== directory.ino)
+      throw new Error('export_cache_directory_changed');
+    // Lease creation/removal must not give failed, already-expired content a
+    // new lifetime. Preserve its age for the next attempt, including restart.
+    utimesSync(path, directory.atime, directory.mtime);
+  } catch (error) {
+    failure = failure
+      ? new AggregateError([failure, error], 'export_cache_cleanup_unconfirmed')
+      : error;
+  }
+  if (failure) throw failure;
+  try {
+    // A peer may acquire a new lease after release. Never recursively remove it.
+    await rmdir(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    if ((error as NodeJS.ErrnoException).code === 'ENOTEMPTY') return false;
+    throw error;
+  }
+}
 export interface ExportJob {
   exportId: string;
   phase: 'collecting' | 'encoding' | 'ready' | 'failed' | 'cancelled';
@@ -74,7 +134,7 @@ export class SupportExports {
     this.active = active;
     this.jobs.set(id, job);
     active.task = (async () => {
-      const diskBudgetBytes = await this.prepareCache();
+      const diskBudgetBytes = await this.prepareCache(job);
       this.assertActive(job);
       await this.build(
         job,
@@ -110,11 +170,13 @@ export class SupportExports {
     if (this.active?.id !== job.exportId || job.phase === 'cancelled')
       throw new Error('export_cancelled');
   }
-  private async prepareCache() {
+  private async prepareCache(job: ExportJob) {
     await safePath(dirname(this.directory));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await safePath(this.directory);
     let used = 0;
+    let leased = false;
+    let cleanupFailed = false;
     const size = async (path: string): Promise<number> => {
       const stat = await lstat(path);
       if (stat.isFile() && stat.nlink === 1) {
@@ -133,28 +195,45 @@ export class SupportExports {
       const stat = await lstat(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('export_cache_unsafe');
       if (Date.now() - stat.mtimeMs > 15 * 60_000) {
-        let lease: FileHandle | undefined;
+        let removed = false;
         try {
-          lease = await open(
-            join(path, 'saving.lease'),
-            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-            0o600,
-          );
-          await safePath(path);
-          await lease.close();
-          lease = undefined;
-          await rm(path, { recursive: true });
+          removed = await removeExpiredExport(path, stat);
+          if (!removed) leased = true;
+        } catch (cause) {
+          cleanupFailed = true;
+          job.cleanupStatus = 'unconfirmed';
+          try {
+            this.onDiagnostic?.(
+              new Error('export_cache_cleanup_failed', { cause }),
+              job.exportId,
+              'cleanup',
+            );
+          } catch {
+            // Reporting must not turn measurable retained cache into an export blocker.
+          }
+        }
+        if (removed) {
           this.jobs.delete(name);
           continue;
-        } catch (error) {
-          await lease?.close();
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         }
       }
+      // Failed cleanup is not failed admission: retain and charge safe contents.
+      // A replaced/unsafe directory or an unreadable size still blocks admission.
+      await safePath(path);
+      const retained = await lstat(path);
+      if (retained.dev !== stat.dev || retained.ino !== stat.ino)
+        throw new Error('export_cache_directory_changed');
       used += await size(path);
     }
     const remaining = CACHE_LIMIT - used - MANIFEST_RESERVE;
-    if (remaining <= 0) throw new Error('export_cache_budget');
+    if (remaining <= 0)
+      throw new Error(
+        cleanupFailed
+          ? 'export_cache_cleanup_failed'
+          : leased
+            ? 'export_cache_lease_unconfirmed'
+            : 'export_cache_budget',
+      );
     return remaining;
   }
   private async build(

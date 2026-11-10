@@ -195,18 +195,16 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       }
     } else setRequested(true);
   };
-  const openPage = async (source: 'github' | 'mirror') => {
+  const openPage = async () => {
     try {
       if (desktop)
         await desktopInvoke('open_update_page', {
-          source,
+          source: 'github',
           version: status?.candidate?.version ?? null,
         });
       else
         window.open(
-          source === 'mirror'
-            ? 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads'
-            : 'https://github.com/Starfie1d1272/Mizar/releases',
+          'https://github.com/Starfie1d1272/Mizar/releases',
           '_blank',
           'noopener,noreferrer',
         );
@@ -289,7 +287,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           </details>
         </div>
       ) : phase === 'current' ? (
-        <p>已是最新版本。</p>
+        <p>未发现可用更新。</p>
       ) : unavailable ? (
         <p>请在桌面应用中检查更新。</p>
       ) : null}
@@ -374,13 +372,11 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
             <Button onClick={() => setRequested(false)}>稍后</Button>
           ) : null}
           {phase === 'manual' ? (
-            <Button variant="primary" onClick={() => void openPage('mirror')}>
+            <Button variant="primary" onClick={() => void openPage()}>
               下载新版
             </Button>
           ) : null}
-          {phase === 'manual' || phase === 'error' ? (
-            <Button onClick={() => void openPage('github')}>GitHub 下载</Button>
-          ) : null}
+          {phase === 'error' ? <Button onClick={() => void openPage()}>GitHub 下载</Button> : null}
         </div>
         {status ? (
           <details className="settings-update-options">

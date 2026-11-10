@@ -9,7 +9,7 @@ on:
         description: 正式版本标签（同步时必填，例如 v1.0.0）
         type: string
       mode:
-        description: 同步拆分分发或只读验收用户入口
+        description: 同步兼容元数据或只读验收历史入口
         type: choice
         default: sync
         options: [sync, probe, verify-downloads]
@@ -61,15 +61,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/qualification/box-phases.mjs prepare "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-release.json"
-      - name: 并行完成三个独立分发通道
+      - name: 并行核验 GitHub 原始发行资产
         if: ${{ steps.plan.outcome == 'success' }}
         id: lanes
         env:
           GH_TOKEN: ${{ github.token }}
-          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           BOX_PLAN_SHA256: ${{ steps.plan.outputs.plan_sha256 }}
         run: node scripts/qualification/box-lanes.mjs run "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-lanes" "$RUNNER_TEMP/box-receipts"
-      - name: 复核全部回执、匿名入口和远端原字节
+      - name: 复核全部回执并发布、回读兼容机器元数据
         if: ${{ steps.lanes.outcome == 'success' }}
         id: final_check
         env:
@@ -90,13 +89,6 @@ jobs:
           MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
           BOX_PLAN_SHA256: ${{ steps.plan.outputs.plan_sha256 }}
         run: node scripts/qualification/box-phases.mjs index-verify "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
-      - name: 匿名完整下载用户入口
-        if: ${{ steps.index_verify.outcome == 'success' }}
-        id: anonymous
-        env:
-          MIZAR_BOX_REPO_TOKEN: ${{ secrets.MIZAR_BOX_REPO_TOKEN }}
-          BOX_PLAN_SHA256: ${{ steps.plan.outputs.plan_sha256 }}
-        run: node scripts/qualification/box-phases.mjs anonymous "$RUNNER_TEMP/box-plan" "$RUNNER_TEMP/box-receipts"
       - name: 保留本次计划与通道证据
         if: ${{ always() && env.BOX_SYNC_MODE == 'sync' && steps.read_release.outputs.sync == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -113,17 +105,16 @@ jobs:
         if: ${{ always() && env.BOX_SYNC_MODE == 'sync' && (steps.read_release.outputs.prerelease == 'false' || steps.read_release.outcome != 'success') }}
         env:
           GH_TOKEN: ${{ github.token }}
-          BOX_OUTCOME: ${{ steps.plan.outcome == 'success' && steps.lanes.outcome == 'success' && steps.final_check.outcome == 'success' && steps.index_update.outcome == 'success' && steps.index_verify.outcome == 'success' && steps.anonymous.outcome == 'success' && 'success' || 'failure' }}
+          BOX_OUTCOME: ${{ steps.plan.outcome == 'success' && steps.lanes.outcome == 'success' && steps.final_check.outcome == 'success' && steps.index_update.outcome == 'success' && steps.index_verify.outcome == 'success' && 'success' || 'failure' }}
           READ_RECOVERY: ${{ steps.read_release.outputs.recovery_started_at }}
           PLAN_RECOVERY: ${{ steps.plan.outputs.recovery_started_at }}
           LANES_RECOVERY: ${{ steps.lanes.outputs.recovery_started_at }}
           FINAL_RECOVERY: ${{ steps.final_check.outputs.recovery_started_at }}
           INDEX_RECOVERY: ${{ steps.index_update.outputs.recovery_started_at }}
           VERIFY_RECOVERY: ${{ steps.index_verify.outputs.recovery_started_at }}
-          ANONYMOUS_RECOVERY: ${{ steps.anonymous.outputs.recovery_started_at }}
         run: |
           BOX_RECOVERY_STARTED_AT=""
-          for value in "$READ_RECOVERY" "$PLAN_RECOVERY" "$LANES_RECOVERY" "$FINAL_RECOVERY" "$INDEX_RECOVERY" "$VERIFY_RECOVERY" "$ANONYMOUS_RECOVERY"; do
+          for value in "$READ_RECOVERY" "$PLAN_RECOVERY" "$LANES_RECOVERY" "$FINAL_RECOVERY" "$INDEX_RECOVERY" "$VERIFY_RECOVERY"; do
             if [[ -n "$value" && ( -z "$BOX_RECOVERY_STARTED_AT" || "$value" < "$BOX_RECOVERY_STARTED_AT" ) ]]; then BOX_RECOVERY_STARTED_AT="$value"; fi
           done
           export BOX_RECOVERY_STARTED_AT

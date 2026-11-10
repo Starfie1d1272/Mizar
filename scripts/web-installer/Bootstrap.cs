@@ -17,7 +17,7 @@ namespace Mizar.WebInstaller {
     public long bytes;
     public string[] urls;
     public bool allowExecute, publicationRequired;
-    public string coreName, coreSha256, boxReadToken, updateManifestSha256;
+    public string coreName, coreSha256, updateManifestSha256;
     public long coreBytes;
     public void Validate() {
       if (schemaVersion != 1 || String.IsNullOrEmpty(version) ||
@@ -57,52 +57,23 @@ namespace Mizar.WebInstaller {
     internal static async Task Verify(Plan plan,HttpClient client,CancellationToken token) {
       ValidatePlan(plan);
       using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
-        deadline.CancelAfter(15000);
-        await Mirror.Resolve(plan,client,deadline.Token);
+        deadline.CancelAfter(30000);
+        string url="https://github.com/Starfie1d1272/Mizar/releases/download/v"+plan.version+"/machine-metadata.json";
+        CheckIndex(IndexFromMachine(await new Downloader(client).Metadata(url,deadline.Token)),plan);
       }
-    }
-  }
-
-  // Box public-state checks compare only immutable Qualification pins. The
-  // installed original SDK alone authenticates the dual-signed publication.
-  static class Mirror {
-    static JavaScriptSerializer Serializer() { return new JavaScriptSerializer {MaxJsonLength=2*1024*1024}; }
-    static async Task<string> Read(HttpClient client,string url,string token,CancellationToken cancel,int maximum=2*1024*1024) {
-      using(var request=new HttpRequestMessage(HttpMethod.Get,url)) {
-        if(token!=null) request.Headers.TryAddWithoutValidation("Authorization","Token "+token);
-        using(var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false)) {
-          response.EnsureSuccessStatusCode();
-          using(var input=await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-          using(var output=new MemoryStream()) {
-            var buffer=new byte[16384];
-            for(;;) {int count=await input.ReadAsync(buffer,0,buffer.Length,cancel).ConfigureAwait(false);if(count==0) break;if(output.Length+count>maximum) throw new InvalidDataException("镜像响应超限。");output.Write(buffer,0,count);}
-            return new System.Text.UTF8Encoding(false,true).GetString(output.ToArray());
-          }
-        }
-      }
-    }
-    static async Task<System.Collections.Generic.Dictionary<string,object>> Directory(HttpClient client,Plan plan,string folder,CancellationToken token) {
-      var value=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(await Read(client,"https://box.nju.edu.cn/api/v2.1/via-repo-token/dir/?path="+Uri.EscapeDataString(folder),plan.boxReadToken,token));
-      if(value==null || !value.ContainsKey("repo_name") || !Object.Equals(value["repo_name"],"Mizar") || !value.ContainsKey("user_perm") || !Object.Equals(value["user_perm"],"r")) throw new InvalidDataException("镜像只读资料库不匹配。");
-      return value;
-    }
-    static async Task<string> Link(HttpClient client,Plan plan,string path,CancellationToken token) {
-      string url=Serializer().Deserialize<string>(await Read(client,"https://box.nju.edu.cn/api/v2.1/via-repo-token/download-link/?path="+Uri.EscapeDataString(path),plan.boxReadToken,token));
-      if(url==null || url.Length>8192 || !Downloader.Allowed(new Uri(url)) || new Uri(url).Host!="box.nju.edu.cn") throw new InvalidDataException("镜像下载链接无效。");
-      return url;
     }
     internal static void CheckIndex(string json,Plan plan) {
-      var serializer=Serializer();var index=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
-      if(!Object.Equals(index["schemaVersion"],"mizar.update-index.v2") || !index.ContainsKey("provenance") || !index.ContainsKey("publicationProvenance")) throw new InvalidDataException("镜像发布资料不完整。");
+      var serializer=new JavaScriptSerializer {MaxJsonLength=2*1024*1024};var index=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
+      if(!Object.Equals(index["schemaVersion"],"mizar.update-index.v2") || !index.ContainsKey("provenance") || !index.ContainsKey("publicationProvenance")) throw new InvalidDataException("发布资料不完整。");
       byte[] original=Convert.FromBase64String((string)index["manifestBase64"]), published=Convert.FromBase64String((string)index["publicationBase64"]);
-      if(original.Length>65536 || published.Length>65536) throw new InvalidDataException("镜像元数据超限。");
+      if(original.Length>65536 || published.Length>65536) throw new InvalidDataException("发布元数据超限。");
       var manifest=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(System.Text.Encoding.UTF8.GetString(original));
       var publication=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(System.Text.Encoding.UTF8.GetString(published));
       var installer=(System.Collections.Generic.Dictionary<string,object>)manifest["installer"];
       bool corePlan=plan.updateManifestSha256!=null;
       string digest;using(var sha=SHA256.Create()) digest=BitConverter.ToString(sha.ComputeHash(original)).Replace("-","").ToLowerInvariant();
       DateTimeOffset time;
-      if(!Object.Equals(manifest["repository"],"Starfie1d1272/Mizar") || !Object.Equals(manifest["schemaVersion"],"mizar.update.v1") || !Object.Equals(manifest["channel"],"stable") || !Object.Equals(manifest["version"],plan.version) || !Object.Equals(manifest["gitSha"],plan.gitSha) || (corePlan ? !Object.Equals(plan.updateManifestSha256,digest) : !Object.Equals(installer["name"],plan.name) || Convert.ToInt64(installer["bytes"])!=plan.bytes || !Object.Equals(installer["sha256"],plan.sha256) || !Object.Equals(installer["contentDigest"],plan.contentDigest)) || !Object.Equals(publication["schemaVersion"],"mizar.update-publication.v1") || !Object.Equals(publication["repository"],"Starfie1d1272/Mizar") || !Object.Equals(publication["version"],plan.version) || !Object.Equals(publication["gitSha"],plan.gitSha) || !Object.Equals(publication["manifestSha256"],digest) || Convert.ToInt64(publication["releaseId"])<1 || !DateTimeOffset.TryParse((string)publication["publishedAt"],out time) || time>DateTimeOffset.UtcNow) throw new InvalidDataException("镜像与固定资格版本不一致。");
+      if(!Object.Equals(manifest["repository"],"Starfie1d1272/Mizar") || !Object.Equals(manifest["schemaVersion"],"mizar.update.v1") || !Object.Equals(manifest["channel"],"stable") || !Object.Equals(manifest["version"],plan.version) || !Object.Equals(manifest["gitSha"],plan.gitSha) || (corePlan ? !Object.Equals(plan.updateManifestSha256,digest) : !Object.Equals(installer["name"],plan.name) || Convert.ToInt64(installer["bytes"])!=plan.bytes || !Object.Equals(installer["sha256"],plan.sha256) || !Object.Equals(installer["contentDigest"],plan.contentDigest)) || !Object.Equals(publication["schemaVersion"],"mizar.update-publication.v1") || !Object.Equals(publication["repository"],"Starfie1d1272/Mizar") || !Object.Equals(publication["version"],plan.version) || !Object.Equals(publication["gitSha"],plan.gitSha) || !Object.Equals(publication["manifestSha256"],digest) || Convert.ToInt64(publication["releaseId"])<1 || !DateTimeOffset.TryParse((string)publication["publishedAt"],out time) || time>DateTimeOffset.UtcNow) throw new InvalidDataException("发布资料与固定资格版本不一致。");
     }
     internal static string IndexFromMachine(string json) {
       var carrier=new JavaScriptSerializer {MaxJsonLength=16*1024*1024}.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json);
@@ -124,26 +95,6 @@ namespace Mizar.WebInstaller {
       if(bytes.Length>2*1024*1024 || Convert.ToBase64String(bytes)!=encoded) throw new InvalidDataException("发布索引编码无效。");
       return new System.Text.UTF8Encoding(false,true).GetString(bytes);
     }
-    internal static async Task<string> Resolve(Plan plan,HttpClient client,CancellationToken token) {
-      if(String.IsNullOrEmpty(plan.boxReadToken)) throw new IOException("镜像只读合同缺失。");
-      string folder=plan.updateManifestSha256!=null ? "/Runtime/v"+plan.version : "/Stable";
-      if(plan.updateManifestSha256!=null) {
-        await Directory(client,plan,folder,token);
-        string carrierUrl=await Link(client,plan,folder+"/machine-metadata.json",token);
-        CheckIndex(IndexFromMachine(await Read(client,carrierUrl,null,token,16*1024*1024)),plan);
-      } else {
-        await Directory(client,plan,"/Updates",token);
-        string index=await Link(client,plan,"/Updates/latest.json",token);
-        CheckIndex(await Read(client,index,null,token),plan);
-      }
-      var entries=await Directory(client,plan,folder,token);int count=0;
-      foreach(var item in (System.Collections.ArrayList)entries["dirent_list"]) {
-        var entry=(System.Collections.Generic.Dictionary<string,object>)item;
-        if(Object.Equals(entry["name"],plan.name)) {count++;if(!Object.Equals(entry["type"],"file") || Convert.ToInt64(entry["size"])!=plan.bytes) throw new InvalidDataException("镜像安装包不匹配。");}
-      }
-      if(count!=1) throw new IOException("镜像尚未同步该版本。");
-      return await Link(client,plan,folder+"/"+plan.name,token);
-    }
   }
   public sealed class Downloader {
     readonly HttpClient client;
@@ -151,8 +102,23 @@ namespace Mizar.WebInstaller {
     public static bool Allowed(Uri u) {
       return u.Scheme == "https" && u.IsDefaultPort && u.UserInfo == "" && u.Fragment == "" &&
         ((u.Host == "github.com" && u.AbsolutePath.StartsWith("/Starfie1d1272/Mizar/releases/download/", StringComparison.Ordinal)) ||
-         u.Host == "release-assets.githubusercontent.com" ||
-         (u.Host == "box.nju.edu.cn" && u.AbsolutePath.StartsWith("/seafhttp/files/", StringComparison.Ordinal)));
+         u.Host == "release-assets.githubusercontent.com");
+    }
+    const string ProxyPrefix = "https://gh-proxy.com/";
+    static System.Collections.Generic.IEnumerable<string> Sources(string[] origins) {
+      foreach(string origin in origins) {
+        yield return origin;
+        var uri=new Uri(origin);
+        if(Allowed(uri) && uri.Host=="github.com" && uri.Query=="") yield return ProxyPrefix+origin;
+      }
+    }
+    static bool AllowedEndpoint(Uri endpoint,string source) {
+      string origin=source.StartsWith(ProxyPrefix,StringComparison.Ordinal) ? source.Substring(ProxyPrefix.Length) : source;
+      Uri canonical;
+      if(!Uri.TryCreate(origin,UriKind.Absolute,out canonical) || !Allowed(canonical)) return false;
+      // A proxy may carry only this qualified asset, never arbitrary URLs or credentials.
+      return (Allowed(endpoint) && (endpoint.AbsoluteUri==canonical.AbsoluteUri || endpoint.Host=="release-assets.githubusercontent.com")) ||
+        (canonical.Host=="github.com" && canonical.Query=="" && endpoint.AbsoluteUri==ProxyPrefix+canonical.AbsoluteUri);
     }
     internal static void NoReparse(string path) {
       for (string p = Path.GetFullPath(path); p != null; p = Path.GetDirectoryName(p)) {
@@ -218,7 +184,7 @@ namespace Mizar.WebInstaller {
       long length = new FileInfo(staging).Length;
       if (partial == null || partial.identity != Identity(plan) || partial.source != source ||
           partial.bytes != plan.bytes || length < 1 || length > plan.bytes ||
-          !Uri.TryCreate(partial.endpoint, UriKind.Absolute, out endpoint) || !Allowed(endpoint) ||
+          !Uri.TryCreate(partial.endpoint, UriKind.Absolute, out endpoint) || !AllowedEndpoint(endpoint,source) ||
           !System.Net.Http.Headers.EntityTagHeaderValue.TryParse(partial.etag, out etag) || etag.IsWeak || etag.Tag == "*") {
         Discard(staging); return null;
       }
@@ -236,7 +202,7 @@ namespace Mizar.WebInstaller {
     async Task<HttpResponseMessage> Request(string url, long offset, Partial partial, CancellationToken token) {
       Uri current = new Uri(url);
       for (int n = 0; n < 5; n++) {
-        if (!Allowed(current)) throw new InvalidDataException("下载重定向地址不受信任。");
+        if (!AllowedEndpoint(current,url)) throw new InvalidDataException("下载重定向地址不受信任。");
         using (var request = new HttpRequestMessage(HttpMethod.Get, current)) {
           request.Headers.TryAddWithoutValidation("User-Agent", "Mizar-WebInstaller");
           request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
@@ -245,7 +211,15 @@ namespace Mizar.WebInstaller {
             request.Headers.IfRange = new System.Net.Http.Headers.RangeConditionHeaderValue(
               new System.Net.Http.Headers.EntityTagHeaderValue(partial.etag));
           }
-          var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+          HttpResponseMessage response;
+          using(var headers=CancellationTokenSource.CreateLinkedTokenSource(token)) {
+            headers.CancelAfter(15000);
+            try { response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,headers.Token); }
+            catch(OperationCanceledException error) {
+              token.ThrowIfCancellationRequested();
+              throw new HttpRequestException("下载源连接超时。",error);
+            }
+          }
           int status = (int)response.StatusCode;
           if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
             var location = response.Headers.Location;
@@ -276,6 +250,42 @@ namespace Mizar.WebInstaller {
       }
       throw new InvalidDataException("下载重定向次数超限。");
     }
+    internal async Task<string> Metadata(string url,CancellationToken token) {
+      var failures=new System.Collections.Generic.List<Exception>();
+      foreach(string source in Sources(new[] {url})) {
+        using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(token)) {
+          deadline.CancelAfter(15000);
+          try { return await ReadMetadata(source,deadline.Token); }
+          catch(Exception error) {
+            token.ThrowIfCancellationRequested();
+            // Invalid bytes, forbidden redirects and later publication checks fail
+            // closed. Only transport failure or a local deadline can switch source.
+            if(error is InvalidDataException || !(error is HttpRequestException || error is IOException || deadline.IsCancellationRequested)) throw;
+            failures.Add(error);Window.SaveDiagnostic(new IOException("Publication transport failed: "+source,error));
+          }
+        }
+      }
+      throw new IOException("发布资料下载失败，请检查网络后重试。",new AggregateException(failures));
+    }
+    async Task<string> ReadMetadata(string url,CancellationToken token) {
+      using(var response=await Request(url,0,null,token))
+      using(var abortRead=token.Register(response.Dispose))
+      using(var input=await response.Content.ReadAsStreamAsync())
+      using(var output=new MemoryStream()) {
+        const int maximum=16*1024*1024;
+        if(response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value>maximum)
+          throw new InvalidDataException("版本元数据超限。");
+        var buffer=new byte[16384];
+        for(;;) {
+          int count=await input.ReadAsync(buffer,0,buffer.Length,token);
+          if(count==0) break;
+          if(output.Length+count>maximum) throw new InvalidDataException("版本元数据超限。");
+          output.Write(buffer,0,count);
+        }
+        token.ThrowIfCancellationRequested();
+        return new System.Text.UTF8Encoding(false,true).GetString(output.ToArray());
+      }
+    }
     public async Task<string> Download(Plan plan, string cache, IProgress<long> progress, CancellationToken token, IProgress<string> stages=null) {
       if(stages!=null) stages.Report("checking-cache");
       plan.Validate(); token.ThrowIfCancellationRequested();
@@ -289,10 +299,7 @@ namespace Mizar.WebInstaller {
         string staging = target + ".part";
         NoReparse(staging); NoReparse(staging + ".json");
         var failures=new System.Collections.Generic.List<Exception>();
-        var sources=new System.Collections.Generic.List<string>(plan.urls);
-        if(plan.publicationRequired) {
-          try {using(var lookup=CancellationTokenSource.CreateLinkedTokenSource(token)) {lookup.CancelAfter(15000);sources.Insert(0,await Mirror.Resolve(plan,client,lookup.Token));}} catch(Exception error) {Window.SaveDiagnostic(new IOException("Core download mirror lookup failed; trying authenticated canonical source.",error));token.ThrowIfCancellationRequested();}
-        }
+        var sources=Sources(plan.urls);
         foreach (string url in sources) {
           token.ThrowIfCancellationRequested();
           using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token)) {
@@ -381,8 +388,8 @@ namespace Mizar.WebInstaller {
     internal readonly CheckBox launchChoice = new CheckBox();
     readonly LinkLabel details = new LinkLabel();
     internal readonly LinkLabel offlineDownload = new LinkLabel();
-    const string OfflineDownloads = "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads";
-    const string OfflineHint = "也可点击“下载完整离线包”，在南大云盘选择 Offline。";
+    const string OfflineDownloads = "https://github.com/Starfie1d1272/Mizar/releases/latest";
+    const string OfflineHint = "也可点击“下载完整离线包”，在 GitHub 发布页选择完整 Setup 或离线 ZIP。";
     internal readonly TextBox destination = new TextBox();
     internal readonly Button browse = new Button(), openLocation = new Button();
     readonly Label destinationLabel = new Label();

@@ -26,15 +26,11 @@ import {
   downloadReleaseAsset,
   publishStablePointer,
   verifyStablePointer,
-  verifyStableReadbacks,
   releaseIdentity,
   readReleaseInfo,
   resolveBoxTag,
-  syncResourceFiles,
-  syncRuntimeFiles,
-  syncUserDownloads,
+  syncCompatibilityMetadata,
   verifiedUpdateIndex,
-  verifyPublicDownloads,
   verifyRemote,
 } from './box-sync.mjs';
 import {
@@ -357,85 +353,12 @@ async function laneFiles(root, plan, lane) {
     }),
   );
 }
-const bootstrapIdentity = (plan) => ({
-  ...plan.assets.downloads[0],
-  version: plan.tag.slice(1),
-  gitSha: plan.sourceSha,
-  releaseId: plan.releaseId,
-});
-export async function transferLane(root, lane, selected, box = boxClient()) {
-  const { plan, originals } = await readContext(root);
-  const files = await laneFiles(root, plan, lane);
-  await box.initialize();
-  if (lane === 'runtime') {
-    requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
-    const name =
-      selected === 'metadata'
-        ? MACHINE_METADATA_NAME
-        : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
-    return syncRuntimeFiles({ box, version: plan.tag.slice(1), files, selected: name });
-  }
-  if (lane === 'resources') {
-    const catalog = JSON.parse(originals.get(RESOURCE_ASSET_NAMES.catalog));
-    const reuseVersion = catalog.origin?.publication?.releaseVersion;
-    return syncResourceFiles({
-      box,
-      version: plan.tag.slice(1),
-      files,
-      metadataInRuntime: true,
-      reuseVersion:
-        reuseVersion && older(reuseVersion, plan.tag.slice(1)) ? reuseVersion : undefined,
-    });
-  }
-  requireValue(lane === 'downloads', '未知分发通道');
-  const identity = bootstrapIdentity(plan);
-  return syncUserDownloads({
-    box,
-    bootstrap: {
-      identity,
-      bytes: files[0].bytes,
-      resolveIdentity: async (tag) => (await releaseIdentity(tag, { runtime: false })).bootstrap,
-    },
-    resolveIdentity: (tag) => releaseIdentity(tag, { runtime: false }),
-    accept: async () => {},
-  });
-}
-const remotePath = (plan, lane, name) =>
-  lane === 'runtime'
-    ? `/Runtime/${plan.tag}/${name}`
-    : lane === 'resources'
-      ? `/Resources/${plan.tag}/${name}`
-      : `/Stable/Downloads/${name}`;
-async function recordRuntimeReadback(root, bytes, plan, selected) {
-  requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
-  const name =
-    selected === 'metadata'
-      ? MACHINE_METADATA_NAME
-      : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
-  const marker = (asset) =>
-    Buffer.from(
-      JSON.stringify({
-        runId: plan.runId,
-        attempt: envAttempt(),
-        planSha256: digest(bytes),
-        asset,
-      }),
-    );
-  const markers = join(root, 'verified');
-  await mkdir(markers, { recursive: true });
-  await writeNew(
-    join(markers, `${selected}.json`),
-    marker(plan.assets.runtime.find((item) => item.name === name)),
-  );
-  if (selected === 'metadata') return;
-  const metadata = plan.assets.runtime.find((item) => item.name === MACHINE_METADATA_NAME);
-  requireValue(
-    (await readFile(join(markers, 'metadata.json'))).equals(marker(metadata)),
-    '机器元数据回读记录不一致',
-  );
-  await writeLaneReceipt(root, bytes, plan, 'runtime');
-}
-async function writeLaneReceipt(root, bytes, plan, lane) {
+// Receipts attest GitHub downloads and their original provenance/content checks,
+// never Box copies of executable or resource bytes.
+export async function verifyLane(root, lane) {
+  const { bytes, plan } = await readContext(root);
+  requireValue(['runtime', 'resources', 'downloads'].includes(lane), '未知分发通道');
+  await laneFiles(root, plan, lane);
   const receipt = makeBoxReceipt(
     bytes,
     lane,
@@ -445,39 +368,6 @@ async function writeLaneReceipt(root, bytes, plan, lane) {
   );
   await mkdir(join(root, 'receipt'), { recursive: true });
   await writeNew(join(root, 'receipt', `${lane}.json`), receipt);
-}
-export async function transferVerifiedRuntime(root, selected, box = boxClient()) {
-  await transferLane(root, 'runtime', selected, box);
-  const { bytes, plan } = await readContext(root);
-  await recordRuntimeReadback(root, bytes, plan, selected);
-}
-export async function verifyLane(
-  root,
-  lane,
-  selected,
-  box = boxClient(),
-  publicVerify = verifyPublicDownloads,
-) {
-  const { bytes, plan } = await readContext(root);
-  requireValue(['runtime', 'resources', 'downloads'].includes(lane), '未知分发通道');
-  await box.initialize();
-  if (lane === 'runtime') {
-    requireValue(['metadata', 'core'].includes(selected), 'Runtime 资产选择无效');
-    const name =
-      selected === 'metadata'
-        ? MACHINE_METADATA_NAME
-        : `Mizar-${plan.tag}-Windows-x64-Core-Setup.exe`;
-    const asset = plan.assets.runtime.find((item) => item.name === name);
-    await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
-    await recordRuntimeReadback(root, bytes, plan, selected);
-    return;
-  } else {
-    for (const asset of plan.assets[lane])
-      await verifyRemote(box, remotePath(plan, lane, asset.name), asset);
-    if (lane === 'downloads')
-      await publicVerify({ bootstrap: { identity: bootstrapIdentity(plan) } });
-  }
-  await writeLaneReceipt(root, bytes, plan, lane);
 }
 
 async function finalContext(root, receipts) {
@@ -492,24 +382,18 @@ async function finalContext(root, receipts) {
     );
   const index = await readFile(join(root, 'update-index.json'));
   assertBytes(index, plan.updateIndex);
-  return { bytes, plan, index, bootstrap: { identity: bootstrapIdentity(plan) } };
+  return { bytes, plan, index };
 }
-export async function finalCheck(
-  root,
-  receipts,
-  box = boxClient(),
-  publicVerify = verifyPublicDownloads,
-) {
-  const { bytes, plan, bootstrap } = await finalContext(root, receipts);
+export async function finalCheck(root, receipts, box = boxClient()) {
+  const { bytes, plan } = await finalContext(root, receipts);
+  const { carrier } = await readContext(root);
   await box.initialize();
-  await publicVerify({ bootstrap });
-  await verifyStableReadbacks({
+  await syncCompatibilityMetadata({ box, version: plan.tag.slice(1), bytes: carrier });
+  await verifyRemote(
     box,
-    identity: { version: plan.tag.slice(1) },
-    bootstrap,
-    runtime: plan.assets.runtime,
-    resources: plan.assets.resources,
-  });
+    `/Runtime/${plan.tag}/${MACHINE_METADATA_NAME}`,
+    plan.assets.runtime.find((asset) => asset.name === MACHINE_METADATA_NAME),
+  );
   await writeNew(
     join(root, 'final-verified.json'),
     Buffer.from(
@@ -530,18 +414,14 @@ async function requireFinalCheck(root, receipts) {
   return context;
 }
 export async function updatePointer(root, receipts, box = boxClient()) {
-  const { index } = await requireFinalCheck(root, receipts);
+  const { index, plan } = await requireFinalCheck(root, receipts);
   await box.initialize();
-  return publishStablePointer({ box, updateIndex: index });
+  return publishStablePointer({ box, updateIndex: index, version: plan.tag.slice(1) });
 }
 export async function verifyPointer(root, receipts, box = boxClient()) {
   const { index } = await requireFinalCheck(root, receipts);
   await box.initialize();
   await verifyStablePointer({ box, updateIndex: index });
-}
-export async function verifyEntry(root, receipts, publicVerify = verifyPublicDownloads) {
-  const { bootstrap } = await requireFinalCheck(root, receipts);
-  await publicVerify({ bootstrap });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -566,15 +446,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         );
       }
     } else if (phase === 'download') await downloadLane(root, argument, selected);
-    else if (phase === 'transfer') await transferLane(root, argument, selected);
-    else if (phase === 'transfer-verified-runtime') {
-      requireValue(argument === 'runtime', '未知分发通道');
-      await transferVerifiedRuntime(root, selected);
-    } else if (phase === 'verify') await verifyLane(root, argument, selected);
+    else if (phase === 'verify') await verifyLane(root, argument);
     else if (phase === 'final-check') await finalCheck(root, argument);
     else if (phase === 'index-update') console.log(await updatePointer(root, argument));
     else if (phase === 'index-verify') await verifyPointer(root, argument);
-    else if (phase === 'anonymous') await verifyEntry(root, argument);
     else throw new Error('未知 Box 阶段');
   } catch (error) {
     // Never print arbitrary external error text, paths, tokens or temporary URLs.

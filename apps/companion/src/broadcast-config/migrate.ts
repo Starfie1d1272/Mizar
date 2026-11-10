@@ -15,7 +15,7 @@ import type { HudConfigState } from '../hud-config/store.js';
 import { createBuiltinModules, legacyOverlays } from './builtin-modules.js';
 export { legacyOverlays } from './builtin-modules.js';
 
-/** Conversion must verify existing media and camera source identities before returning. */
+/** Preserve media identities; verify camera sources and validate media when consumers apply. */
 export interface LegacyBroadcastMigration {
   hud: HudConfigState;
   music: MusicConfig;
