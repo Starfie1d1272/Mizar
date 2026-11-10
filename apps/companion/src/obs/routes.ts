@@ -372,8 +372,9 @@ export function registerObsRoutes(
       const code =
         error instanceof ObsVideoError ? error.code : error instanceof Error ? error.message : '';
       const messages: Record<string, string> = {
-        audio_device_requires_independent:
-          '请先切到独立分路，再更换桌面设备；保存后切回桌面混音以重新核对音乐监听。',
+        audio_device_monitor_conflict:
+          '新设备会改变当前监听回采路径。请先在 OBS 中核对相关音源的监听与节目输出，再更换设备。',
+        audio_device_monitor_unknown: '无法确认当前监听回采路径，请在 OBS 中核对后重试。',
         audio_mode_pending: '请先完成或恢复当前音频切换，再更换设备。',
         audio_devices_changed: '设备或音频配置已变化，请重新读取设备后选择。',
         audio_devices_prepare_required: '固定音源身份未确认，请先修复场景与音频，再重新读取设备。',
@@ -456,7 +457,15 @@ export function registerObsRoutes(
   );
   app.get('/local/v1/obs', async (_request, reply) => {
     const diagnostic = allowedRead(_request) ? captureDiagnostic() : Promise.resolve(null);
-    const status = await options.adapter.status();
+    const status = await options.adapter.status().catch((error: unknown) => {
+      if (!(error instanceof ObsVideoError) || error.code !== 'obs_observation_changed')
+        throw error;
+      return null;
+    });
+    if (!status)
+      return reply
+        .code(409)
+        .send({ error: 'obs_observation_changed', message: 'OBS 状态已变化，请重新检查。' });
     return reply.header('cache-control', 'no-store').send({
       ...status,
       readiness: obsReadiness(status, options.activeScene()),

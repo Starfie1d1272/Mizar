@@ -74,7 +74,11 @@ export async function readAudioDevices(obs: ObsRpc) {
   };
 }
 
-export async function setAudioDevice(obs: ObsRpc, command: AudioDeviceCommand) {
+export async function setAudioDevice(
+  obs: ObsRpc,
+  command: AudioDeviceCommand,
+  verifyRoute?: (uuid: string) => Promise<void>,
+) {
   const before = await readAudioDevices(obs);
   const device = before.devices.find((item) => item.role === command.role)!;
   if (
@@ -82,6 +86,8 @@ export async function setAudioDevice(obs: ObsRpc, command: AudioDeviceCommand) {
     !device.candidates.some((item) => item.id === command.deviceId)
   )
     throw new Error('audio_devices_changed');
+  if (device.deviceId === command.deviceId) return before;
+  await verifyRoute?.(device.uuid);
   await guardedPreparationWrites(obs).call('SetInputSettings', {
     inputUuid: device.uuid,
     inputSettings: { device_id: command.deviceId },
