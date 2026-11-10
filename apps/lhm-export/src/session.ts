@@ -4,7 +4,7 @@ import { createLhmProjection } from './projection';
 
 type Snapshot = NonNullable<ReturnType<ReturnType<typeof createLhmProjection>>>;
 const STALE_AFTER_MS = 20_000;
-const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000] as const;
 
 async function readHostJson(path: string, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, {
@@ -26,6 +26,7 @@ export function createLhmSession({
 }) {
   let alive = true;
   let project = createLhmProjection();
+  let inputVisible = false;
   let match: LhmMatch | null = null;
   let knownMatchId: string | null | undefined;
   let avatars = new Map<string, string>();
@@ -51,13 +52,14 @@ export function createLhmSession({
   };
   const clearInput = () => {
     clearInputTimers();
+    inputVisible = false;
     project = createLhmProjection();
     currentPlayerIds = [];
     onSnapshot(null);
   };
   const publishMetadata = () => {
     project.setMetadata(match, avatars);
-    onSnapshot(project.refresh());
+    if (inputVisible) onSnapshot(project.refresh());
   };
   const request = <T>(load: (signal: AbortSignal) => Promise<T>, accept: (value: T) => void) => {
     const owner = metadata;
@@ -71,8 +73,8 @@ export function createLhmSession({
         })
         .catch(() => {
           if (!current()) return;
-          const delay = RETRY_DELAYS_MS[attempt++];
-          if (delay === undefined) return;
+          const delay = RETRY_DELAYS_MS[attempt]!;
+          attempt = Math.min(attempt + 1, RETRY_DELAYS_MS.length - 1);
           const timer = setTimeout(() => {
             retries.delete(timer);
             run();
@@ -139,17 +141,19 @@ export function createLhmSession({
       return;
     }
     if (!next) return;
+    inputVisible = true;
     onSnapshot(next);
     currentPlayerIds = next.program.payload.players.map((player) => player.sourcePlayerId);
     loadAvatars();
     clearInputTimers();
     objectiveExpiry = setTimeout(
       () => {
-        if (alive) onSnapshot(project.refresh());
+        if (alive && inputVisible) onSnapshot(project.refresh());
       },
       getObjectiveClockLeaseMs({ staleAfterMs: STALE_AFTER_MS }) + 1,
     );
     stale = setTimeout(() => {
+      inputVisible = false;
       if (alive) onSnapshot(null);
     }, STALE_AFTER_MS);
   };

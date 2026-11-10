@@ -45,7 +45,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it('retries unavailable match and avatar metadata with a bounded budget, not once per GSI', async () => {
+it('keeps recovering match and avatar metadata at a capped rate, not once per GSI', async () => {
   let unavailable = true;
   const read = vi.fn(async (path: string) => {
     if (unavailable) {
@@ -73,12 +73,19 @@ it('retries unavailable match and avatar metadata with a bounded budget, not onc
   unavailable = true;
   session.loadMatch();
   await flush();
-  for (let second = 0; second < 12; second++) {
+  for (let second = 0; second < 60; second++) {
     session.update(raw);
     await vi.advanceTimersByTimeAsync(1000);
   }
-  expect(read.mock.calls.filter(([path]) => path === '/api/match/current')).toHaveLength(6);
-  expect(read.mock.calls.filter(([path]) => path.includes('/avatar/'))).toHaveLength(60);
+  expect(read.mock.calls.filter(([path]) => path === '/api/match/current')).toHaveLength(10);
+  expect(read.mock.calls.filter(([path]) => path.includes('/avatar/'))).toHaveLength(100);
+  unavailable = false;
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(current()?.program.payload.match?.matchId).toBe('match-a');
+  expect(current()?.program.payload.players.every((player) => player.avatarUrl !== null)).toBe(
+    true,
+  );
+  expect(read.mock.calls.filter(([path]) => path === '/api/match/current')).toHaveLength(11);
 });
 
 it('refreshes same-match metadata without renewing input, but a different match needs new compatible input', async () => {
@@ -109,6 +116,21 @@ it('refreshes same-match metadata without renewing input, but a different match 
   session.loadMatch();
   await flush();
   expect(current()?.program.cursor).toEqual(initial.cursor);
+
+  pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  session.loadMatch();
+  await vi.advanceTimersByTimeAsync(19_000);
+  expect(current()).toBeNull();
+  release!(value);
+  pending = undefined;
+  await flush();
+  expect(current()).toBeNull();
+  session.update(null);
+  expect(current()).toBeNull();
+  session.update(raw);
+  expect(current()?.program.payload.match?.matchId).toBe('match-a');
 
   value = match('match-b', 'de_nuke');
   session.loadMatch();
