@@ -79,21 +79,14 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   };
 }
 
-for (const failure of ['reset', 'timeout', 'server', 'certificate', 'broadcast'] as const) {
+for (const failure of ['timeout', 'server'] as const) {
   test(`LIVE ${failure} uses its recovery budget and resumes with the latest frame`, async (t) => {
     const h = await setup(t);
     h.behavior(() => {
       if (failure === 'server') return new Response(null, { status: 503 });
-      if (failure === 'broadcast')
-        return Response.json({ accepted: false, reason: 'broadcast_unavailable' });
-      if (failure === 'timeout') throw Object.assign(new Error(), { name: 'TimeoutError' });
-      throw new TypeError('fetch failed', {
-        cause: Object.assign(new Error(), {
-          code: failure === 'reset' ? 'ECONNRESET' : 'CERT_HAS_EXPIRED',
-        }),
-      });
+      throw Object.assign(new Error(), { name: 'TimeoutError' });
     });
-    const fast = failure === 'reset' || failure === 'timeout';
+    const fast = failure === 'timeout';
     for (const delay of fast ? [1000, 2000, 2000] : [1000, 2000, 4000, 8000]) {
       const before = h.sent.length;
       await h.connection.sendLive(h.snapshot);

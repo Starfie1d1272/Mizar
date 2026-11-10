@@ -388,7 +388,7 @@ it('prepares without selecting and publishes a configured instance only after se
     };
     expect(await switchRelease('different source')).toBe(false);
     expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
-      preset: { name: '已关闭', maps: [] },
+      preset: { name: 'Camera', maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
       automaticEnabled: false,
     });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({

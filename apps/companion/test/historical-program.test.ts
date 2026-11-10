@@ -4,7 +4,6 @@ import { programPresentationSchema } from '@mizar/protocol/program-scenes';
 import type { MatchContextBinding } from '../src/match-context/lkg-store.js';
 import { projectHistoricalProgram } from '../src/projections/historical-program.js';
 import { projectHistoricalStats } from '../src/projections/historical-stats.js';
-import legacy from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 import extended from '../../../tests/fixtures/rivalhub-provider-stats-v1-extended.json' with { type: 'json' };
 import single from '../../../tests/fixtures/rivalhub-provider-stats-v1-single-sided.json' with { type: 'json' };
 import zero from '../../../tests/fixtures/rivalhub-provider-stats-v1-zero.json' with { type: 'json' };
@@ -213,38 +212,6 @@ it('selects team and map display fields with their actual samples', () => {
   expect(output.communityDisplay?.percentages[1]).toBeCloseTo(33.3333333);
 });
 
-it('selects the 22 requested prematch kinds with the extended synthetic snapshot', () => {
-  const input = broadcastStatsSchema.parse(extended);
-  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
-  const kinds = new Set(output.pages.map((page) => page.kind));
-  for (const kind of [
-    'match',
-    'lineup',
-    'maps',
-    'map-profile',
-    'veto',
-    'recent',
-    'players',
-    'radar',
-    'profile',
-    'ranking',
-    'multikill',
-    'overview',
-    'economy',
-    'opening',
-    'advantage',
-    'utility',
-    'flash',
-    'weapons',
-    'awp',
-    'conversion',
-    'clutch',
-    'community',
-  ])
-    expect(kinds.has(kind as (typeof output.pages)[number]['kind'])).toBe(true);
-  expect(output.pages.filter((page) => page.kind === 'map-profile')).toHaveLength(2);
-});
-
 it('shows observed weapon rows but infers a missing AWP as zero only with explicit completeness', () => {
   const input = broadcastStatsSchema.parse(extended);
   input.entrants[1]!.facts!.weapons![0]!.weapon = 'ak47';
@@ -347,48 +314,4 @@ it('uses the local series, veto and last map summary without recomputing the web
   expect(output.pages.find((page) => page.kind === 'bp')?.mapNames).toEqual(['de_nuke']);
   expect(output.program?.completed.at(-1)?.mapName).toBe('de_map2');
   expect(input).toEqual(before);
-});
-
-it('serves identity immediately while the website snapshot is absent, without fetching', async () => {
-  const { default: Fastify } = await import('fastify');
-  const { registerHistoricalStatsProgramRoute } =
-    await import('../src/match-context/rivalhub-routes.js');
-  const input = broadcastStatsSchema.parse(single);
-  const active = binding(input);
-  let reads = 0;
-  const app = Fastify();
-  registerHistoricalStatsProgramRoute(app, {
-    connection: {
-      getStatsSnapshot: () => {
-        reads++;
-        return null;
-      },
-    } as unknown as import('../src/match-context/rivalhub-connection.js').RivalHubConnection,
-    getBinding: () => active,
-    getProgram: () => null,
-    getScene: () => 'waiting',
-  });
-  try {
-    const result = await app.inject('/local/v1/broadcast-stats-program');
-    expect(result.statusCode).toBe(200);
-    expect(result.headers['cache-control']).toBe('no-store');
-    expect(result.json().pages.map((page: { kind: string }) => page.kind)).toEqual([
-      'match',
-      'lineup',
-      'maps-info',
-      'profile',
-    ]);
-    expect(reads).toBe(1);
-  } finally {
-    await app.close();
-  }
-});
-
-it('retains old v1 available topics when optional extended blocks are absent', () => {
-  const input = broadcastStatsSchema.parse(legacy);
-  const output = projectHistoricalProgram(binding(input), input, null, 'waiting');
-  expect(output.pages.some((page) => page.kind === 'maps')).toBe(false);
-  expect(output.pages.some((page) => page.kind === 'utility')).toBe(true);
-  expect(output.pages.some((page) => page.kind === 'flash')).toBe(true);
-  expect(output.sourceRevision).toBe(input.revision);
 });

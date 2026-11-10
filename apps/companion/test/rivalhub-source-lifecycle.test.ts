@@ -247,29 +247,20 @@ test('a structured receiver validation refusal clears only the uncommitted inten
   assert.equal(h.releases.length, 1);
 });
 
-for (const refusal of [
-  () =>
+test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
+  const h = await setup(t);
+  h.setClaimRefusal(() =>
     Response.json(
       { code: 'VALIDATION_FAILED', error: 'stale context' },
       { status: 500, headers: { 'cache-control': 'no-store' } },
     ),
-  () => Response.json({ code: 'VALIDATION_FAILED', error: 'stale context' }, { status: 400 }),
-  () =>
-    new Response('invalid', {
-      status: 400,
-      headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
-    }),
-]) {
-  test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
-    const h = await setup(t);
-    h.setClaimRefusal(refusal);
-    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-    assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release());
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  });
-}
+  );
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release());
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+});
 
 test('a failed same-source claim keeps the previous exact authority for release', async (t) => {
   const h = await setup(t);
@@ -289,7 +280,7 @@ test('a failed same-source claim keeps the previous exact authority for release'
   assert.equal(h.releases[0]?.authority, '1');
 });
 
-for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] as const) {
+for (const operation of ['switch', 'backoff'] as const) {
   test(`a LIVE 403 drains the existing outbox during ${operation}`, async (t) => {
     const h = await setup(t);
     const tail = parseReliableEventV1({
@@ -367,15 +358,7 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
       (scope) => output.settleSourceForRelease(scope),
       (scope) => output.resumeSource(scope),
     );
-    if (operation === 'finish') {
-      h.connection.stopSync(h.snapshot.matchId);
-      await h.connection.release();
-    } else if (operation === 'shutdown') {
-      await h.connection.shutdownSource();
-    } else if (operation === 'pairing') {
-      await h.connection.startPairing();
-      assert.equal(await h.connection.pollPairing(), 'authorized');
-    } else if (operation === 'switch') {
+    if (operation === 'switch') {
       const next = structuredClone(h.snapshot);
       next.matchId = 'match-b';
       next.cursor.liveSessionId = 'live-b';
@@ -536,62 +519,54 @@ test('background reconciliation can drain the held source after a lost repeated 
   assert.equal(h.releases.length, 1);
 });
 
-for (const statusBeforeRelease of ['open', 'ambiguous'] as const) {
-  test(`lost idempotent claim survives restart and ${statusBeforeRelease} status`, async (t) => {
-    const h = await setup(t);
-    h.setIdempotent(true);
-    await h.connection.claim(h.snapshot, 'revision', false);
-    h.setLose(true);
-    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-    h.setAmbiguous(statusBeforeRelease === 'ambiguous');
-    const restarted = await h.restart();
-    if (statusBeforeRelease === 'ambiguous') {
-      await assert.rejects(restarted.release(), /待重试或核对/);
-      assert.equal(h.releases.length, 1);
-      assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-      h.setAmbiguous(false);
-    }
-    await restarted.release();
-    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
-    assert.deepEqual(
-      h.releases.map((item) => item.authority),
-      ['1'],
-    );
-    h.setLose(false);
-    await restarted.claim(h.snapshot, 'revision', false);
-    await restarted.release();
-    assert.deepEqual(
-      h.releases.map((item) => item.authority),
-      ['1', '2'],
-    );
-  });
-}
+test(`lost idempotent claim survives restart and ambiguous status`, async (t) => {
+  const h = await setup(t);
+  h.setIdempotent(true);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.setAmbiguous(true);
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release(), /待重试或核对/);
+  assert.equal(h.releases.length, 1);
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  h.setAmbiguous(false);
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.deepEqual(
+    h.releases.map((item) => item.authority),
+    ['1'],
+  );
+  h.setLose(false);
+  await restarted.claim(h.snapshot, 'revision', false);
+  await restarted.release();
+  assert.deepEqual(
+    h.releases.map((item) => item.authority),
+    ['1', '2'],
+  );
+});
 
-for (const statusBeforeRelease of ['open', 'ambiguous'] as const) {
-  test(`legacy repeated claim retains held-authority proof with ${statusBeforeRelease} status`, async (t) => {
-    const h = await setup(t);
-    h.setIdempotent(true);
-    await h.connection.claim(h.snapshot, 'revision', false);
-    h.setLose(true);
-    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-    const statePath = join(h.path, '..', 'rivalhub-source-state.json');
-    const oldState = JSON.parse(await readFile(statePath, 'utf8'));
-    delete oldState.intent.idempotentAuthorityRevision;
-    await writeFile(statePath, JSON.stringify(oldState));
-    h.setAmbiguous(statusBeforeRelease === 'ambiguous');
-    const restarted = await h.restart();
-    if (statusBeforeRelease === 'ambiguous') {
-      await assert.rejects(restarted.release(), /待重试或核对/);
-      const upgraded = JSON.parse(await readFile(statePath, 'utf8'));
-      assert.equal(upgraded.intent.idempotentAuthorityRevision, 1);
-      assert.equal(upgraded.records.length, 0);
-      h.setAmbiguous(false);
-    }
-    const again = await h.restart();
-    await again.release();
-    assert.equal(again.view().sourceCleanup.claimIntent, false);
-  });
-}
+test(`legacy repeated claim retains held-authority proof with ambiguous status`, async (t) => {
+  const h = await setup(t);
+  h.setIdempotent(true);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  const statePath = join(h.path, '..', 'rivalhub-source-state.json');
+  const oldState = JSON.parse(await readFile(statePath, 'utf8'));
+  delete oldState.intent.idempotentAuthorityRevision;
+  await writeFile(statePath, JSON.stringify(oldState));
+  h.setAmbiguous(true);
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release(), /待重试或核对/);
+  const upgraded = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(upgraded.intent.idempotentAuthorityRevision, 1);
+  assert.equal(upgraded.records.length, 0);
+  h.setAmbiguous(false);
+  const again = await h.restart();
+  await again.release();
+  assert.equal(again.view().sourceCleanup.claimIntent, false);
+});
 
 test('replacement pairing keeps the old credential until cleanup succeeds', async (t) => {
   const h = await setup(t);

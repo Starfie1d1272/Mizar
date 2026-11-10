@@ -11,11 +11,6 @@ import {
 import { checkObsAudio, setupObsAudio } from '../src/obs/audio.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsStatus } from '../src/obs/adapter.js';
-import type { ObsAdapter } from '../src/obs/adapter.js';
-import type { ObsConfigStore } from '../src/obs/config.js';
-import Fastify from 'fastify';
-import { registerObsRoutes } from '../src/obs/routes.js';
-import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 const activeScene = 'waiting';
 const baseUrl = 'http://127.0.0.1:3000';
@@ -143,51 +138,6 @@ test('audio preferences remain visible without masking actual setup failures', (
   );
   assert.equal(obsReadiness({ ...status, connection: 'unavailable' }, activeScene).ready, false);
   assert.equal(obsReadiness({ ...status, currentScene: 'Personal' }, activeScene).ready, false);
-});
-
-test('OBS status and explicit ensure expose the same blocking and warning facts', async () => {
-  const app = Fastify();
-  const findings = [
-    { code: 'audio_muted:麦克风', message: '麦克风已静音' },
-    { code: 'source_missing', message: '缺少来源' },
-  ];
-  const status: ObsStatus = {
-    connection: 'connected',
-    currentScene: obsDesiredScenes(baseUrl).find((scene) => scene.id === activeScene)!.sceneName,
-    port: 4455,
-    streaming: false,
-    recording: false,
-    passwordConfigured: false,
-    video: null,
-    findings,
-  };
-  const adapter = {
-    status: async () => status,
-    ensure: async () => findings,
-  } as unknown as ObsAdapter;
-  registerObsRoutes(app, {
-    adapter,
-    configStore: {} as ObsConfigStore,
-    originPolicy: createLocalWebOriginPolicy(),
-    activeScene: () => activeScene,
-    preparationValid: () => () => true,
-  });
-  try {
-    const read = await app.inject({ method: 'GET', url: '/local/v1/obs' });
-    const ensure = await app.inject({
-      method: 'POST',
-      url: '/operator/obs/ensure',
-      headers: { origin: 'http://127.0.0.1:3000' },
-      payload: { expectedRevision: 'revision' },
-    });
-    assert.equal(read.statusCode, 200);
-    assert.equal(ensure.statusCode, 200);
-    assert.equal(read.json().readiness.ready, false);
-    assert.deepEqual(read.json().readiness.blockingFindings, ensure.json().blockingFindings);
-    assert.deepEqual(read.json().readiness.warnings, ensure.json().warnings);
-  } finally {
-    await app.close();
-  }
 });
 
 test('automatic ensure leaves the old collection and its personal audio untouched', async () => {

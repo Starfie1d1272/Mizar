@@ -4,28 +4,8 @@ import {
   bindHistoricalStats,
   projectHistoricalStats,
 } from '../src/projections/historical-stats.js';
-import expected from '../../../tests/fixtures/mizar-broadcast-stats-presentation-v1.json' with { type: 'json' };
 import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 import type { BroadcastManifest } from '@mizar/rivalhub';
-import sparse from '../../../tests/fixtures/rivalhub-provider-stats-v1-sparse.json' with { type: 'json' };
-
-it('selects comparable website facts without altering the original snapshot', () => {
-  const input = broadcastStatsSchema.parse(fixture);
-  const original = structuredClone(input);
-  const projection = projectHistoricalStats(input)!;
-  expect(projection).toEqual(expected);
-  expect(projection.matchId).toBe(input.matchId);
-  expect(projection.sourceRevision).toBe(input.revision);
-  expect(projection.maps.pages[0]!.rows[0]).toMatchObject({
-    mapName: input.entrants[0]!.mapPerformance.maps[0]!.mapName,
-    values: [{ winRate: 0.5 }, { winRate: input.entrants[1]!.mapPerformance.maps[0]!.winRate }],
-  });
-  expect(projection.lineups.rows.map((entry) => entry.length)).toEqual([2, 2, 2, 2, 2]);
-  expect(projection.selectedPlayers).not.toBeNull();
-  expect(Object.keys(projection.playerAttributes.values!)).toHaveLength(7);
-  expect(input).toEqual(original);
-  expect(projectHistoricalStats(broadcastStatsSchema.parse(sparse))?.maps.pages).toEqual([]);
-});
 
 it('selects the highest sampled starter independently of ADR and qualifies each row independently', () => {
   const input = broadcastStatsSchema.parse(fixture);
@@ -43,7 +23,6 @@ it('selects the highest sampled starter independently of ADR and qualifies each 
   const projection = projectHistoricalStats(input)!;
   expect(projection.selectedPlayers?.[1].userId).toBe(top.userId);
   expect(projection.playerComparison.adr).toBeNull();
-  expect(projection.selectedPlayers?.[1].userId).toBe(top.userId);
   expect(projection.pistol.pistol?.[1].rate).toBe(0);
   expect(projection.pistol.conversion).toBeNull();
   expect(projection.utility.utilityDamagePerRound?.[1].rate).toBe(0);

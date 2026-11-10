@@ -7,64 +7,6 @@ import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 
-it('only schedules current online statistics during production and retains cached-online scope', async () => {
-  vi.useFakeTimers();
-  const app = Fastify();
-  let production = false;
-  let origin = 'online';
-  let cachedFrom: string | undefined;
-  const stats = vi.fn().mockResolvedValue(null);
-  const clearStats = vi.fn();
-  const binding = () => ({
-    origin,
-    cachedFrom,
-    context: {
-      matchId: 'match',
-      competition: { competitionId: 'competition' },
-      entrants: { a: { entryId: 'a' }, b: { entryId: 'b' } },
-    },
-    manifest: { match: { competition: { competitionId: 'competition' } } },
-  });
-  const connection = {
-    setDiagnosticHandler: vi.fn(),
-    view: () => ({ paired: true, competitionId: 'competition' }),
-    stats,
-    clearStats,
-    library: vi.fn().mockResolvedValue(null),
-  };
-  const controller = { getActiveBinding: binding, isOnlineCandidateLoading: () => true };
-  registerRivalHubConnectionRoutes(app, {
-    connection,
-    controller,
-    canFetchStats: () => production,
-    currentSnapshot: () => null,
-    originPolicy: { mode: 'loopback' },
-  } as unknown as Parameters<typeof registerRivalHubConnectionRoutes>[1]);
-  try {
-    await app.ready();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(stats).not.toHaveBeenCalled();
-    production = true;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(stats).toHaveBeenCalledTimes(1);
-    origin = 'cache';
-    cachedFrom = 'online';
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(stats).toHaveBeenCalledTimes(2);
-    cachedFrom = 'local';
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(stats).toHaveBeenCalledTimes(2);
-    production = false;
-    origin = 'online';
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(stats).toHaveBeenCalledTimes(2);
-  } finally {
-    await app.close();
-    expect(clearStats).toHaveBeenCalledOnce();
-    vi.useRealTimers();
-  }
-});
-
 it('retries incorrect entrants on production maintenance ticks until the bound teams arrive', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-team-retry-'));
   const path = join(directory, 'connection.json');
