@@ -22,7 +22,12 @@ import {
 } from './cues.js';
 import { looping, type MusicStore, type Playback } from './store.js';
 import { MusicPreview } from './preview.js';
-import { ownedMusicInput, type MusicLayer } from './obs-provider.js';
+import {
+  findMusicInput,
+  prepareMusicResources,
+  verifyMusicPlayback,
+  type MusicLayer,
+} from './obs-provider.js';
 
 type MonitorRelationship = 'independent' | 'same' | 'different' | 'unknown';
 type MonitorType = AudioMonitorChange['before'];
@@ -117,7 +122,6 @@ export class MusicDirector {
   private fades: Partial<Record<MusicLayer, Fade>> = {};
   private expectedStops = new Map<MusicLayer, string>();
   private appliedVolumes = new Map<MusicLayer, number>();
-  private config = '';
   private failed = new Map<string, Set<string>>();
   private status: MusicStatus = {
     held: false,
@@ -156,7 +160,49 @@ export class MusicDirector {
       Promise.resolve('independent'),
     private readonly audioModePending: () => Promise<boolean> = () => Promise.resolve(false),
   ) {
-    this.preview = new MusicPreview(store, now);
+    this.preview = new MusicPreview(store, now, async (obs) => {
+      if (await this.audioModePending().catch(() => true)) return null;
+      if (!(await this.monitorSafe(obs).catch(() => false))) return null;
+      const relationship = await this.monitorRelationship(obs).catch(() => 'unknown' as const);
+      const desired = desiredMonitorType(relationship, true);
+      return desired === 'OBS_MONITORING_TYPE_NONE' ? null : desired;
+    });
+  }
+  /** Explicit operator preparation; reads and playback never enter this structural path. */
+  async prepare(valid: () => boolean = () => true): Promise<void> {
+    if (!this.store.ready || this.store.failure) throw new Error('music_unavailable');
+    await this.withAudioModeRecovery(async (current) => {
+      const active = () => valid() && current();
+      const needsLayer = (layer: MusicLayer) =>
+        Object.entries(this.store.state.config.groups).some(
+          ([group, config]) =>
+            config.tracks.length > 0 && (layer === 'stinger' || group !== 'opening'),
+        );
+      const failures: unknown[] = [];
+      await this.provider.session(async (obs) => {
+        for (const layer of ['bgm', 'stinger'] as const) {
+          if (!active()) throw new Error('music_cancelled');
+          if (
+            !needsLayer(layer) &&
+            !this.store.state.sources[layer] &&
+            !this.store.state.sourceInitialization.some((item) => item.layer === layer)
+          )
+            continue;
+          try {
+            if (
+              this.store.state.desktopMonitorOriginal[layer] &&
+              (await this.audioModePending().catch(() => true)) &&
+              !(await findMusicInput(obs, this.store, layer, active))
+            )
+              throw new Error('music_monitor_source_changed');
+            await prepareMusicResources(obs, this.store, layer, active);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+      });
+      if (failures.length) throw new AggregateError(failures, 'music_preparation_incomplete');
+    });
   }
   private isHeld() {
     return this.heldOverride ?? this.store.state.held;
@@ -206,7 +252,7 @@ export class MusicDirector {
         let failure: unknown;
         for (const layer of ['bgm', 'stinger'] as const) {
           try {
-            const name = await ownedMusicInput(obs, this.store, layer, false, current, false, true);
+            const name = await findMusicInput(obs, this.store, layer, current);
             if (!current()) throw new Error('music_cancelled');
             const uuid = this.store.state.sources[layer];
             if (name && uuid) await run(obs, layer, uuid);
@@ -423,7 +469,7 @@ export class MusicDirector {
     try {
       await this.provider.session(async (obs, epoch) => {
         if (!current() || manual.epoch !== epoch) throw new Error('music_cancelled');
-        const name = await ownedMusicInput(obs, this.store, 'bgm', false, current, false);
+        const name = await findMusicInput(obs, this.store, 'bgm', current);
         const uuid = this.store.state.sources.bgm;
         if (!name || !uuid || !current()) throw new Error('music_source_missing');
         const settings = await obs.call('GetInputSettings', { inputUuid: uuid });
@@ -486,7 +532,7 @@ export class MusicDirector {
         this.status.playback = 'unknown';
         await this.provider
           .session(async (obs) => {
-            const name = await ownedMusicInput(obs, this.store, 'bgm', false, current, false);
+            const name = await findMusicInput(obs, this.store, 'bgm', current);
             if (name && current()) {
               const read = await obs.call('GetMediaInputStatus', {
                 inputUuid: this.store.state.sources.bgm,
@@ -526,7 +572,7 @@ export class MusicDirector {
     try {
       await this.provider.session(async (obs, epoch) => {
         if (epoch !== this.epoch || !current()) throw new Error('music_cancelled');
-        const name = await ownedMusicInput(obs, this.store, 'bgm', false, current, false);
+        const name = await findMusicInput(obs, this.store, 'bgm', current);
         const uuid = this.store.state.sources.bgm;
         if (!name || !uuid || !current()) throw new Error('music_source_missing');
         const settings = await obs.call('GetInputSettings', { inputUuid: uuid });
@@ -586,7 +632,7 @@ export class MusicDirector {
       if (writing && current()) {
         await this.provider
           .session(async (obs) => {
-            const name = await ownedMusicInput(obs, this.store, 'bgm', false, current, false);
+            const name = await findMusicInput(obs, this.store, 'bgm', current);
             if (name && current()) {
               const read = await obs.call('GetMediaInputStatus', {
                 inputUuid: this.store.state.sources.bgm,
@@ -624,7 +670,7 @@ export class MusicDirector {
   private async readMonitor(obs: ObsRpc, valid: () => boolean) {
     const modes: unknown[] = [];
     for (const layer of ['bgm', 'stinger'] as const) {
-      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false, false);
+      const name = await findMusicInput(obs, this.store, layer, valid);
       if (!valid()) return;
       if (!name) continue;
       const read = await obs.call('GetInputAudioMonitorType', {
@@ -663,7 +709,7 @@ export class MusicDirector {
     if (!valid()) return;
     const wanted = this.store.state.monitorPreference;
     const pending = (['bgm', 'stinger'] as const).filter((layer) => {
-      if (layer === 'stinger' && this.isStingerHeld()) return false;
+      if (layer === 'stinger' && (this.isStingerHeld() || this.preview.busy)) return false;
       const uuid = this.store.state.sources[layer];
       return uuid && this.store.state.monitorConfigured[layer] !== uuid;
     });
@@ -679,12 +725,13 @@ export class MusicDirector {
       return;
     }
     for (const layer of ['bgm', 'stinger'] as const) {
-      if (layer === 'stinger' && this.isStingerHeld()) continue;
+      if (layer === 'stinger' && (this.isStingerHeld() || this.preview.busy)) continue;
       const uuid = this.store.state.sources[layer];
+      if (uuid && this.preview.ownsMonitor(uuid)) continue;
       const original = this.store.state.desktopMonitorOriginal[layer];
       const isNew = pending.includes(layer);
       if (!uuid || (!isNew && (!recheck || !original))) continue;
-      const name = await ownedMusicInput(obs, this.store, layer, false, valid, false);
+      const name = await findMusicInput(obs, this.store, layer, valid);
       if (!name || !valid()) return;
       const observed = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid }))
         .monitorType;
@@ -740,6 +787,51 @@ export class MusicDirector {
     }) => Promise<T>,
   ): Promise<T> {
     return this.withAudioModeRecovery(async (current) => {
+      if (!this.store.ready || this.store.failure) {
+        // Basic routing can proceed without a music library only when it needs
+        // no music monitor writes. Never substitute default state for a failed read.
+        if (!obs.managedInputIdentity) throw new Error('music_monitor_unavailable');
+        const inputs = (await obs.call('GetInputList')).inputs;
+        if (!Array.isArray(inputs)) throw new Error('music_monitor_unknown');
+        for (const name of ['音乐', '音效']) {
+          const identity = await obs.managedInputIdentity(name);
+          const input = identity && inputs.find((item) => item.inputUuid === identity.uuid);
+          if (!input) {
+            if (inputs.some((item) => item.inputName === name))
+              throw new Error('music_monitor_source_changed');
+            continue;
+          }
+          if (input.inputKind !== 'ffmpeg_source' || identity.kind !== 'ffmpeg_source')
+            throw new Error('music_monitor_source_changed');
+          const mode = (await obs.call('GetInputAudioMonitorType', { inputUuid: identity.uuid }))
+            .monitorType;
+          const unchangedSafe =
+            mode === 'OBS_MONITORING_TYPE_NONE' ||
+            (relationship === 'same' && mode === 'OBS_MONITORING_TYPE_MONITOR_ONLY') ||
+            ((relationship === 'different' || relationship === 'independent') &&
+              mode === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+          if (!unchangedSafe) throw new Error('music_monitor_unavailable');
+        }
+        if (!current()) throw new Error('music_cancelled');
+        return apply({
+          changes: [],
+          managedMusicUuids: [],
+          musicBefore: { bgm: null, stinger: null },
+          musicAfter: { bgm: null, stinger: null },
+        });
+      }
+      if (this.preview.busy) {
+        this.preview.cancel('audio_mode');
+        await this.preview.reconcile(
+          obs,
+          this.epoch,
+          current,
+          false,
+          (uuid) => this.expectedStops.set('stinger', uuid),
+          () => this.holdForPreviewControl(current),
+        );
+      }
+      await this.preview.recoverMonitor(obs, current);
       const changes: AudioMonitorChange[] = [];
       const managedMusicUuids: string[] = [];
       const musicBefore = structuredClone(this.store.state.desktopMonitorOriginal);
@@ -747,7 +839,7 @@ export class MusicDirector {
         Record<MusicLayer, NonNullable<MonitorOriginals[MusicLayer]> | null>
       > = {};
       for (const layer of ['bgm', 'stinger'] as const) {
-        const name = await ownedMusicInput(obs, this.store, layer, false, current, false, false);
+        const name = await findMusicInput(obs, this.store, layer, current);
         const uuid = this.store.state.sources[layer];
         const original = this.store.state.desktopMonitorOriginal[layer];
         if (!name || !uuid) {
@@ -756,6 +848,7 @@ export class MusicDirector {
         }
         const mode = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType;
         if (!isMonitorType(mode)) throw new Error('music_monitor_unknown');
+        const auditionOwnsMonitor = this.preview.ownsMonitor(uuid);
         managedMusicUuids.push(uuid);
         if (original && original.uuid !== uuid) throw new Error('music_monitor_source_changed');
         const held = ownedMonitorApplied(original);
@@ -766,6 +859,10 @@ export class MusicDirector {
         }
         if (relationship === 'independent') {
           const target = monitorRestoreTarget(original, this.store.state.monitorPreference);
+          if (auditionOwnsMonitor) {
+            if (target && mode !== target) throw new Error('music_preview_monitor_pending');
+            continue;
+          }
           if (target && mode !== target)
             changes.push({
               kind: 'monitor',
@@ -778,6 +875,10 @@ export class MusicDirector {
         }
         const wanted = this.store.state.monitorPreference === true;
         const desired = desiredMonitorType(relationship, wanted);
+        if (auditionOwnsMonitor) {
+          if (mode !== desired) throw new Error('music_preview_monitor_pending');
+          continue;
+        }
         if (mode !== desired)
           changes.push({ kind: 'monitor', inputUuid: uuid, before: mode, applied: desired });
         originals[layer] = {
@@ -797,14 +898,15 @@ export class MusicDirector {
     });
   }
   monitorPlanCompatible(relationship: MonitorRelationship, after: MonitorOriginals): boolean {
+    if ((!this.store.ready || this.store.failure) && Object.values(after).some(Boolean))
+      return false;
     const desired = desiredMonitorType(relationship, this.store.state.monitorPreference === true);
     return (['bgm', 'stinger'] as const).every(
       (layer) => !after[layer]?.applied || after[layer]!.applied === desired,
     );
   }
   async withAudioModeRecovery<T>(run: (current: () => boolean) => Promise<T>): Promise<T> {
-    if (this.closed || !this.store.ready || this.store.failure)
-      throw new Error('music_unavailable');
+    if (this.closed) throw new Error('music_unavailable');
     const revision = ++this.commandRevision;
     this.invalidate();
     while (this.inFlight && revision === this.commandRevision && !this.closed)
@@ -822,6 +924,12 @@ export class MusicDirector {
     after: MonitorOriginals,
     side: 'before' | 'after',
   ) {
+    if (
+      ['bgm', 'stinger'].every(
+        (layer) => !before[layer as MusicLayer] && !after[layer as MusicLayer],
+      )
+    )
+      return;
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
     await this.store.update((state) => {
@@ -850,6 +958,7 @@ export class MusicDirector {
     if (!current()) return;
     if (await this.audioModePending()) throw new Error('audio_mode_pending');
     this.inFlight = true;
+    this.preview.cancel('monitor_control');
     this.status.monitor = 'unknown';
     try {
       await this.store.update((state) => {
@@ -857,12 +966,29 @@ export class MusicDirector {
       });
       if (!current()) return;
       await this.provider.session(async (obs) => {
+        await this.preview.reconcile(
+          obs,
+          this.epoch,
+          current,
+          false,
+          (uuid) => this.expectedStops.set('stinger', uuid),
+          () => this.holdForPreviewControl(current),
+        );
+        const monitorRecovered = await this.preview.recoverMonitor(obs, current);
+        let pending = false;
+        let found = false;
         const relation = await this.monitorRelationship(obs).catch(() => 'unknown' as const);
         const monitorPending = enabled && relation === 'unknown';
         for (const layer of ['bgm', 'stinger'] as const) {
-          const name = await ownedMusicInput(obs, this.store, layer, true, current, true, true);
+          const name = await findMusicInput(obs, this.store, layer, current);
           const uuid = this.store.state.sources[layer];
-          if (!name || !uuid || !current()) throw new Error('music_cancelled');
+          if (!current()) throw new Error('music_cancelled');
+          if (!name || !uuid) continue;
+          if (!monitorRecovered && this.preview.ownsMonitor(uuid)) {
+            pending = true;
+            continue;
+          }
+          found = true;
           const monitorType = desiredMonitorType(relation, enabled);
           await this.store.update((state) => {
             state.monitorConfigured[layer] = uuid;
@@ -887,6 +1013,8 @@ export class MusicDirector {
           if (!current()) return;
           if (read.monitorType !== monitorType) throw new Error('music_monitor_unconfirmed');
         }
+        if (pending) throw new Error('music_preview_monitor_pending');
+        if (!found) throw new Error('music_source_missing');
         if (current()) {
           this.status.monitor = monitorPending ? 'unknown' : enabled ? 'enabled' : 'disabled';
           this.status.monitorPending = monitorPending;
@@ -949,13 +1077,12 @@ export class MusicDirector {
   }
   async tick(): Promise<void> {
     if (this.closed) return;
-    // An unfinished route transaction may defer automatic playback, not a new manual target.
-    if (
+    // Route recovery defers automatic playback, never an already-started audition's stop.
+    const automaticDeferred =
       (await this.audioModePending().catch(() => true)) &&
       !this.manual &&
-      !(this.isHeld() && !this.isExternalHold())
-    )
-      return;
+      !(this.isHeld() && !this.isExternalHold());
+    if (automaticDeferred && !this.preview.busy) return;
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
     if (this.store.failure && !this.preview.busy) {
       this.status.failure = 'load_failed';
@@ -1001,7 +1128,7 @@ export class MusicDirector {
     const generation = this.generation;
     const valid = () => !this.closed && generation === this.generation;
     try {
-      if (this.store.failure || !this.store.ready) {
+      if (automaticDeferred || this.store.failure || !this.store.ready) {
         await this.provider.session(async (obs, epoch) => {
           await this.preview.reconcile(
             obs,
@@ -1059,13 +1186,6 @@ export class MusicDirector {
         this.status.connection = 'idle';
         return;
       }
-      const signature = JSON.stringify([
-        this.store.state.config,
-        this.store.state.master,
-        this.store.state.muted,
-      ]);
-      const configChanged = Boolean(this.config && this.config !== signature);
-      this.config = signature;
       await this.provider.session(async (obs, epoch) => {
         const reconnect = this.epoch !== epoch;
         if (this.manual && this.manual.epoch !== null && this.manual.epoch !== epoch) {
@@ -1082,6 +1202,8 @@ export class MusicDirector {
         this.status.connection = 'connected';
         this.status.failure = null;
         this.status.message = null;
+        await this.preview.recoverMonitor(obs, valid);
+        if (!valid()) return;
         if (this.isExternalHold()) {
           await this.observeHeldPlayback(obs, valid);
           if (valid()) await this.readMonitor(obs, valid);
@@ -1112,7 +1234,7 @@ export class MusicDirector {
         if (valid() && this.preview.busy) await this.readMonitor(obs, valid);
         if (!valid() || this.preview.busy) return;
         if (this.unknownControl) {
-          const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false);
+          const name = await findMusicInput(obs, this.store, 'bgm', valid);
           if (name && valid()) {
             const media = await obs.call('GetMediaInputStatus', {
               inputUuid: this.store.state.sources.bgm,
@@ -1124,7 +1246,7 @@ export class MusicDirector {
         }
         // Observe both existing layers before changing a cue or attributing a stop to the system.
         if (await this.observeManualControls(obs, valid, previewOwned)) return;
-        await this.layer(obs, 'bgm', cue, valid, configChanged, reconnect);
+        await this.layer(obs, 'bgm', cue, valid);
         await this.configureDefaultMonitor(obs, valid);
         if (this.store.state.sources.bgm || this.store.state.sources.stinger)
           await this.readMonitor(obs, valid);
@@ -1146,8 +1268,6 @@ export class MusicDirector {
               ...(opening.track ? { track: opening.track } : {}),
             },
             valid,
-            configChanged,
-            reconnect,
           );
         } else if (!previewOwned && !this.isStingerHeld()) {
           const stinger = this.store.state.stinger;
@@ -1167,8 +1287,6 @@ export class MusicDirector {
               ? { group: 'opening', key: stinger.key, track: stinger.track }
               : null,
             valid,
-            configChanged,
-            reconnect,
           );
         }
         await this.configureDefaultMonitor(obs, valid);
@@ -1264,7 +1382,7 @@ export class MusicDirector {
   }
   private async observeHeldPlayback(obs: ObsRpc, valid: () => boolean) {
     this.status.stinger = null;
-    const name = await ownedMusicInput(obs, this.store, 'bgm', false, valid, false, false);
+    const name = await findMusicInput(obs, this.store, 'bgm', valid);
     if (!valid()) return;
     if (!name) {
       this.status.playback = 'unknown';
@@ -1310,15 +1428,7 @@ export class MusicDirector {
     }
     const stinger = this.store.state.stinger;
     if (stinger && !stinger.finished) {
-      const stingerName = await ownedMusicInput(
-        obs,
-        this.store,
-        'stinger',
-        false,
-        valid,
-        false,
-        false,
-      );
+      const stingerName = await findMusicInput(obs, this.store, 'stinger', valid);
       if (stingerName && valid()) {
         const stingerArgs = { inputUuid: this.store.state.sources.stinger };
         const [stingerMedia, stingerSettings, stingerPath] = await Promise.all([
@@ -1341,7 +1451,7 @@ export class MusicDirector {
     for (const layer of ['bgm', 'stinger'] as const) {
       if ((skipStinger || this.isStingerHeld()) && layer === 'stinger') continue;
       if (!this.store.state.sources[layer] || this.resumeLayers.has(layer)) continue;
-      const name = await ownedMusicInput(obs, this.store, layer, false, valid);
+      const name = await findMusicInput(obs, this.store, layer, valid);
       if (!name) continue;
       const args = { inputUuid: this.store.state.sources[layer] };
       const call = (type: string) => {
@@ -1398,14 +1508,7 @@ export class MusicDirector {
     }
     throw new Error('music_cancelled');
   }
-  private async layer(
-    obs: ObsRpc,
-    layer: MusicLayer,
-    cue: MusicCue | null,
-    valid: () => boolean,
-    configChanged: boolean,
-    reconnect: boolean,
-  ) {
+  private async layer(obs: ObsRpc, layer: MusicLayer, cue: MusicCue | null, valid: () => boolean) {
     const call = async (type: string, data: Record<string, unknown>) => {
       if (!valid()) throw new Error('music_cancelled');
       if (type === 'TriggerMediaInputAction') {
@@ -1421,10 +1524,12 @@ export class MusicDirector {
     const enabled = Boolean(
       cue && (this.manual?.cue === cue || spec?.enabled) && (cue.track || spec?.tracks.length),
     );
-    const previousUuid = this.store.state.sources[layer];
-    const name = await ownedMusicInput(obs, this.store, layer, enabled, valid, reconnect);
-    if (cue && previousUuid !== this.store.state.sources[layer]) this.failed.delete(cue.key);
-    if (!name) return;
+    const name = await findMusicInput(obs, this.store, layer, valid);
+    if (!name) {
+      if (enabled) throw new Error('music_source_missing');
+      return;
+    }
+    if (enabled) await verifyMusicPlayback(obs, this.store, layer, valid);
     saved = this.store.state[layer];
     const args = { inputUuid: this.store.state.sources[layer]! };
     const media = await call('GetMediaInputStatus', args);
@@ -1797,7 +1902,7 @@ export class MusicDirector {
         .session(async (obs) => {
           for (const layer of ['bgm', 'stinger'] as const) {
             if (layer === 'stinger' && this.isStingerHeld()) continue;
-            const name = await ownedMusicInput(obs, this.store, layer, false, () => true);
+            const name = await findMusicInput(obs, this.store, layer, () => true);
             if (name) {
               const media = await obs.call('GetMediaInputStatus', {
                 inputUuid: this.store.state.sources[layer]!,
