@@ -87,7 +87,26 @@ namespace Mizar.WebInstaller {
       if ((record.target != target && target != record.target + ".incomplete-" + record.token) || !System.Text.RegularExpressions.Regex.IsMatch(record.token ?? "", "^[a-f0-9]{32}$")) throw new IOException("安装所有权记录无效。");
       string owner = Path.Combine(target, OwnershipName); Downloader.NoReparse(owner);
       if (new FileInfo(owner).Length != 32 || File.ReadAllText(owner) != record.token) throw new IOException("安装目录所有权无法确认，保留现场。");
+      string instance=Path.Combine(target,"installed.flag"), writer=Path.Combine(target,".mizar-update-owner");
+      Downloader.NoReparse(instance); Downloader.NoReparse(writer);
+      string expected="bootstrap-"+record.token;
+      if(File.Exists(writer) && (new FileInfo(writer).Length>64 || File.ReadAllText(writer)!=expected)) throw new IOException("目录已有其他安装实例，保留现场。");
+      if(File.Exists(instance) && (new FileInfo(instance).Length>256 || File.ReadAllText(instance)!="mizar.install.v1:"+expected)) throw new IOException("当前程序不属于这次安装实例，保留现场。");
       AssertOwnedRegistration(record.target);
+    }
+    static void CompleteFreshOwnership(PendingInstall record, string target) {
+      // This synchronous boundary shares NSIS/update exclusion without keeping a
+      // thread-owned mutex across await continuations.
+      using (var writer = new Mutex(false, @"Global\MizarUpdateWriter")) {
+        bool owned=false;
+        try {
+          try { owned=writer.WaitOne(0); } catch (AbandonedMutexException) { owned=true; }
+          if(!owned) throw new IOException("安装或恢复正在进行，请稍后重试。");
+          AssertOwnedTarget(record,target);
+          string marker=Path.Combine(target,".mizar-update-owner"); Downloader.NoReparse(marker);
+          if(File.Exists(marker)) File.Delete(marker);
+        } finally { if(owned) writer.ReleaseMutex(); }
+      }
     }
     internal static bool RecoverPending(Plan plan, string target) {
       string path = PendingPath(); Downloader.NoReparse(path);
@@ -131,14 +150,16 @@ namespace Mizar.WebInstaller {
           try {
             if (record.stage.StartsWith("rollback-", StringComparison.Ordinal)) throw new IOException("继续修复已中断的回滚。");
             VerifiedRuntime(plan, target, false);
-            File.Delete(path); return true;
           } catch (IOException) {
             // Preserve every byte, including unknown files. Repair uses a fresh
             // destination; no recursive delete and no unknown uninstaller execution.
             if (Directory.Exists(retained) || File.Exists(retained)) throw new IOException("保留目录已存在。");
             record.stage="quarantined"; SavePending(record, false);
             Directory.Move(target, retained);
+            return false;
           }
+          CompleteFreshOwnership(record,target);
+          File.Delete(path); return true;
         }
         return false;
       } catch (Exception error) {
@@ -616,7 +637,7 @@ namespace Mizar.WebInstaller {
             int code;
             record.stage="launching"; SavePending(record, false);
             using (var child = Process.Start(new ProcessStartInfo {
-              FileName = installer, Arguments = "/S /MIZARUPDATE /D=" + destination,
+              FileName = installer, Arguments = "/S /MIZARUPDATE /MIZAROWNER=bootstrap-" + record.token + " /D=" + destination,
               UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(installer),
             })) {
               record.writerPid=child.Id; record.writerStarted=child.StartTime.ToUniversalTime().Ticks; record.stage="writing"; SavePending(record, false);
@@ -645,6 +666,7 @@ namespace Mizar.WebInstaller {
               finished = true;
               throw validationFailure;
             }
+            CompleteFreshOwnership(record,destination);
             finished = true;
             return new FreshInstallResult(destination, record);
             } finally { if (finished) File.Delete(pending); }
