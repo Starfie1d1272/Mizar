@@ -27,11 +27,11 @@ const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 const sessions: ReturnType<typeof createLhmSession>[] = [];
-function create(readJson: (path: string, signal: AbortSignal) => Promise<unknown>) {
+function create(readJson?: (path: string, signal: AbortSignal) => Promise<unknown>) {
   let snapshot: Snapshot = null;
   const session = createLhmSession({
     origin: 'http://localhost:3000',
-    readJson,
+    ...(readJson ? { readJson } : {}),
     onSnapshot: (value) => {
       snapshot = value;
     },
@@ -43,6 +43,7 @@ beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'perf
 afterEach(() => {
   for (const session of sessions.splice(0)) session.dispose();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 it('keeps recovering match and avatar metadata at a capped rate, not once per GSI', async () => {
@@ -182,4 +183,45 @@ it('retires requests and retry timers on reconnect, match change and disposal', 
   session.loadMatch();
   expect(read).toHaveBeenCalledTimes(count);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('treats only the current-match 404 as no match; unusable 200 data keeps input and retries', async () => {
+  let status = 200;
+  let value: unknown = match();
+  const fetchHost = vi.fn(async (path: string) => ({
+    ok: path !== '/api/match/current' || status === 200,
+    status: path === '/api/match/current' ? status : 200,
+    json: async () =>
+      path === '/api/match/current' ? value : path.startsWith('/api/teams/') ? team(path) : avatar,
+  }));
+  vi.stubGlobal('fetch', fetchHost);
+  const { session, current } = create();
+  session.loadMatch();
+  session.update(raw);
+  await flush();
+  const cursor = current()!.program.cursor;
+  for (const invalid of [null, {}, { ...match(), left: { id: null, wins: 0 } }]) {
+    value = invalid;
+    session.loadMatch();
+    await flush();
+    expect(current()?.program.cursor).toEqual(cursor);
+    expect(current()?.program.payload.match).toBeNull();
+    const attempts = fetchHost.mock.calls.filter(([path]) => path === '/api/match/current').length;
+    value = match();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchHost.mock.calls.filter(([path]) => path === '/api/match/current')).toHaveLength(
+      attempts + 1,
+    );
+    expect(current()?.program.payload.match?.matchId).toBe('match-a');
+    expect(current()?.program.cursor).toEqual(cursor);
+  }
+  status = 404;
+  session.loadMatch();
+  await flush();
+  expect(current()).toBeNull();
+  session.update(raw);
+  expect(current()?.program.payload.match).toBeNull();
+  const attempts = fetchHost.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(fetchHost).toHaveBeenCalledTimes(attempts);
 });

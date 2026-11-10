@@ -4,12 +4,16 @@ import { createLhmProjection } from './projection';
 
 type Snapshot = NonNullable<ReturnType<ReturnType<typeof createLhmProjection>>>;
 const STALE_AFTER_MS = 20_000;
+const CURRENT_MATCH_PATH = '/api/match/current';
+const NO_CURRENT_MATCH = Symbol('no-current-match');
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000] as const;
 
 async function readHostJson(path: string, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
   });
+  // LHM and JT use this endpoint's 404, not a malformed 200 body, for no active match.
+  if (path === CURRENT_MATCH_PATH && response.status === 404) return NO_CURRENT_MATCH;
   if (!response.ok) throw new Error('host data unavailable');
   return response.json() as Promise<unknown>;
 }
@@ -108,9 +112,10 @@ export function createLhmSession({
     publishMetadata();
     request(
       async (signal) => {
-        const data = await readJson('/api/match/current', signal);
+        const data = await readJson(CURRENT_MATCH_PATH, signal);
+        if (data === NO_CURRENT_MATCH) return null;
         const ids = matchTeamIds(data);
-        if (!ids) return null;
+        if (!ids) throw new Error('host match unavailable');
         const [a, b] = await Promise.all(
           ids.map((id) => readJson(`/api/teams/${encodeURIComponent(id)}`, signal)),
         );
