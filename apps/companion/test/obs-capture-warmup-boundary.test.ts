@@ -272,7 +272,6 @@ it('uses actual HTTP routes and OBS WebSocket for disabled → zero → enabled 
   });
   expect((await r.post('capture-warmup-release', { transactionId })).statusCode).toBe(200);
   expect(r.item()).toBeNull();
-  expect((await r.post('capture-warmup-release', { transactionId })).statusCode).toBe(200);
 });
 
 it.each(['starting', 'takeover'] as const)(

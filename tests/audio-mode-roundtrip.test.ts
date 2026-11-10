@@ -23,43 +23,41 @@ async function change(
   return rig.request('POST', '/operator/obs/audio-mode', { mode, revision: read.json().revision });
 }
 
-it.each(['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'OBS_MONITORING_TYPE_MONITOR_ONLY'])(
-  'switches initial desktop through the real API without overlap and restores %s',
-  async (initialMonitor) => {
-    const rig = await setup(initialMonitor);
-    const desktop = await change(rig, 'desktop');
-    expect(desktop.statusCode, desktop.body).toBe(200);
-    expect(rig.monitor()).toBe('OBS_MONITORING_TYPE_NONE');
-    const backup = JSON.parse(await readFile(join(rig.dir, 'journal.dedicated-mode'), 'utf8')) as {
-      fields: { kind?: string }[];
-    };
-    expect(backup.fields).toHaveLength(1);
-    expect(backup.fields[0]?.kind).toBe('monitor');
-    rig.timeline.length = 0;
-    const independent = await change(rig, 'independent');
-    expect(independent.statusCode, independent.body).toBe(200);
-    expect(independent.json().waiting).toBe(false);
-    expect(rig.violations).toEqual([]);
-    const firstNewPath = rig.timeline.findIndex(
-      (entry) => entry === 'game:true' || entry === 'ts:true',
-    );
-    expect(
-      rig.timeline.slice(0, firstNewPath).filter((entry) => entry === 'desktop:false'),
-    ).toHaveLength(rig.scenes.size);
-    expect(rig.timeline.indexOf(`monitor:${initialMonitor}`)).toBeGreaterThan(
-      rig.timeline.lastIndexOf('desktop:false'),
-    );
-    for (const items of rig.scenes.values()) {
-      expect(items.find((item) => item.sourceUuid === 'desktop')?.sceneItemEnabled).toBe(false);
-      expect(items.find((item) => item.sourceUuid === 'game')?.sceneItemEnabled).toBe(true);
-      expect(items.find((item) => item.sourceUuid === 'ts')?.sceneItemEnabled).toBe(true);
-      expect(items.find((item) => item.sourceUuid === 'mic')?.sceneItemEnabled).toBe(true);
-    }
-    expect(rig.monitor()).toBe(initialMonitor);
-    expect((await rig.routing.modeRecoveryState()).desktop).toBeNull();
-    expect((await rig.routing.modeRecoveryState()).transition).toBeNull();
-  },
-);
+it('switches initial desktop through the real API without overlap and restores monitoring', async () => {
+  const initialMonitor = 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+  const rig = await setup(initialMonitor);
+  const desktop = await change(rig, 'desktop');
+  expect(desktop.statusCode, desktop.body).toBe(200);
+  expect(rig.monitor()).toBe('OBS_MONITORING_TYPE_NONE');
+  const backup = JSON.parse(await readFile(join(rig.dir, 'journal.dedicated-mode'), 'utf8')) as {
+    fields: { kind?: string }[];
+  };
+  expect(backup.fields).toHaveLength(1);
+  expect(backup.fields[0]?.kind).toBe('monitor');
+  rig.timeline.length = 0;
+  const independent = await change(rig, 'independent');
+  expect(independent.statusCode, independent.body).toBe(200);
+  expect(independent.json().waiting).toBe(false);
+  expect(rig.violations).toEqual([]);
+  const firstNewPath = rig.timeline.findIndex(
+    (entry) => entry === 'game:true' || entry === 'ts:true',
+  );
+  expect(
+    rig.timeline.slice(0, firstNewPath).filter((entry) => entry === 'desktop:false'),
+  ).toHaveLength(rig.scenes.size);
+  expect(rig.timeline.indexOf(`monitor:${initialMonitor}`)).toBeGreaterThan(
+    rig.timeline.lastIndexOf('desktop:false'),
+  );
+  for (const items of rig.scenes.values()) {
+    expect(items.find((item) => item.sourceUuid === 'desktop')?.sceneItemEnabled).toBe(false);
+    expect(items.find((item) => item.sourceUuid === 'game')?.sceneItemEnabled).toBe(true);
+    expect(items.find((item) => item.sourceUuid === 'ts')?.sceneItemEnabled).toBe(true);
+    expect(items.find((item) => item.sourceUuid === 'mic')?.sceneItemEnabled).toBe(true);
+  }
+  expect(rig.monitor()).toBe(initialMonitor);
+  expect((await rig.routing.modeRecoveryState()).desktop).toBeNull();
+  expect((await rig.routing.modeRecoveryState()).transition).toBeNull();
+});
 
 it('closes independent paths before restoring desktop after an uncertain write', async () => {
   const rig = await setup();

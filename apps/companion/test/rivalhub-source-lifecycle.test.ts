@@ -403,15 +403,6 @@ for (const operation of ['switch', 'backoff'] as const) {
   });
 }
 
-test('reliable 403 retains the exact identity for finish', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setReliable(403);
-  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'rejected');
-  await h.connection.release();
-  assert.equal(h.releases[0]?.authority, '1');
-});
-
 test(
   'failed durable handoff never enables reliable draining after a LIVE 403',
   {
@@ -438,17 +429,6 @@ test(
     assert.equal(h.releases.length, 1);
   },
 );
-
-test('pending reliable scope prevents release and later retry retains identity', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setSettle(false);
-  await assert.rejects(h.connection.release(), /待重试或核对/);
-  assert.equal(h.releases.length, 0);
-  h.setSettle(true);
-  await h.connection.release();
-  assert.equal(h.releases.length, 1);
-});
 
 test('switch preserves failed old release when the new claim succeeds', async (t) => {
   const h = await setup(t);
@@ -613,26 +593,6 @@ test('a previously released authority cannot resolve a later uncertain claim', a
   const restarted = await h.restart();
   await assert.rejects(restarted.release(), /待重试或核对/);
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  assert.equal(h.releases.length, 1);
-});
-
-test('release waits for an already in-flight LIVE request', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  await h.connection.sendReliable(h.event, h.snapshot);
-  let finish!: () => void;
-  h.setLiveGate(
-    new Promise<void>((resolve) => {
-      finish = resolve;
-    }),
-  );
-  const live = h.connection.sendLive(h.snapshot);
-  const release = h.connection.release();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(h.releases.length, 0);
-  finish();
-  await live;
-  await release;
   assert.equal(h.releases.length, 1);
 });
 

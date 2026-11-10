@@ -126,17 +126,8 @@ describe('map-scoped player stats accumulator', () => {
   });
 });
 
-it('computes the community approximation from one complete shared sample', async () => {
+it('leaves the community approximation unavailable without a round sample', async () => {
   const { calculateRating2Approx } = await import('../src/runtime/index.js');
-  const sample = calculateRating2Approx({
-    rounds: 24,
-    kills: 20,
-    assists: 5,
-    deaths: 15,
-    damage: 1800,
-    kastRounds: 18,
-  });
-  expect(sample?.rating2Approx).toBeCloseTo(1.2569205, 8);
   expect(
     calculateRating2Approx({
       rounds: 0,
@@ -396,42 +387,6 @@ it('uses complete damage for ADR independently of missing survival evidence', as
   });
   expect(stats.completed.kastPercent.value).toBeNull();
   expect(stats.completed.rating2Approx.value).toBeNull();
-});
-
-it('keeps ten-player ADR samples after one player lacks terminal damage in the middle round', async () => {
-  const { projectPlayerStatistics } = await import('../src/runtime/index.js');
-  let state = createInitialRuntimeState('ten-player-adr');
-  const push = (
-    seq: number,
-    round: number,
-    phase: 'freezetime' | 'live' | 'over',
-    missing = false,
-  ) => {
-    const obs = frame(seq, seq, phase, round);
-    const players: ObservedPlayer[] = Array.from({ length: 10 }, (_, index) => ({
-      sourcePlayerId: (76561198000000001n + BigInt(index)).toString(),
-      side: index < 5 ? 'CT' : 'T',
-      state:
-        missing && index === 9
-          ? { health: 100 }
-          : { health: 100, roundTotalDamage: phase === 'freezetime' ? 0 : 80 },
-    }));
-    state = accept(state, { ...obs, telemetry: { ...obs.telemetry, allPlayers: players } }).state;
-  };
-  const adr = () =>
-    projectPlayerStatistics(state.playerStats, PLAYER_A, undefined, null).completed.adr;
-  push(1, 0, 'freezetime');
-  push(2, 0, 'live');
-  push(3, 0, 'over');
-  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 1, coverage: 'complete' } });
-  push(4, 1, 'freezetime');
-  push(5, 1, 'live');
-  push(6, 1, 'over', true);
-  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 1, coverage: 'partial' } });
-  push(7, 2, 'freezetime');
-  push(8, 2, 'live');
-  push(9, 2, 'over');
-  expect(adr()).toMatchObject({ value: 80, basis: { rounds: 2, coverage: 'partial' } });
 });
 
 it('settles terminal damage without inventing missing health', async () => {

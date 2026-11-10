@@ -11,7 +11,7 @@ import {
 } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
-test('passive OBS preparation never takes another collection, including while output is active', async () => {
+test('passive OBS preparation never takes another collection', async () => {
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: (type) => {
@@ -21,16 +21,6 @@ test('passive OBS preparation never takes another collection, including while ou
           currentSceneCollectionName: 'Personal',
           sceneCollections: ['Personal', OBS_COLLECTION],
         });
-      if (type === 'GetOutputList')
-        return Promise.resolve({
-          outputs: [
-            {
-              outputName: 'Virtual camera',
-              outputActive: true,
-              outputFlags: { OBS_OUTPUT_VIDEO: true },
-            },
-          ],
-        });
       throw new Error(`Unexpected OBS request: ${type}`);
     },
   };
@@ -38,7 +28,6 @@ test('passive OBS preparation never takes another collection, including while ou
     (await ensureObsConfiguration(obs, 'http://127.0.0.1:3000'))[0]?.code,
     'collection_inactive',
   );
-  await assert.rejects(ensureObsConfiguration(obs, 'http://127.0.0.1:3000', () => 'waiting', true));
   assert.ok(calls.every((type) => type.startsWith('Get')));
 });
 

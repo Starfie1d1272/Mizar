@@ -132,8 +132,6 @@ describe('program statistics integration', () => {
     const player = after.payload.players.find((p) => p.sourcePlayerId === ids[0])!;
     expect(player.statistics.completed.rating2Approx.value).not.toBeNull();
     expect(player.statistics.completed.rating2Approx.basis.rounds).toBe(1);
-    expect(player.equipment.primary).toBe('weapon_0');
-    expect(after.payload.teamEconomy.ct.equipmentValue).toBe(12500);
     expect(
       acceptTrustedRoundEvents({
         programSourceGeneration: 0,

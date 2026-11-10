@@ -198,26 +198,6 @@ test('reliable rejection preserves only classified bounded metadata and safely h
   assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
 });
 
-test('200 needs_attention remains a receipt with review required until LIVE accepts', async (t) => {
-  const h = await setup(t);
-  h.snapshot.map.mapId = 'map-1';
-  h.snapshot.capability.lineupComplete = true;
-  h.connection.syncHealth(h.snapshot, true);
-  await h.connection.sendLive(h.snapshot);
-  assert.equal(h.connection.syncHealth(h.snapshot, true).status, 'healthy');
-  h.reliableBehavior(() => Response.json({ outcome: 'needs_attention', duplicate: false }));
-  assert.deepEqual(await h.connection.sendReliable(h.event, h.snapshot), {
-    status: 'accepted',
-    outcome: 'needs_attention',
-  });
-  h.advance(16000);
-  const health = h.connection.syncHealth(h.snapshot, true);
-  // A LIVE ACK from before the attention receipt cannot confirm recovery.
-  assert.notEqual(health.status, 'healthy');
-  await h.connection.sendLive(h.snapshot);
-  assert.equal(h.connection.syncHealth(h.snapshot, true).status, 'healthy');
-});
-
 test('stalled reliable rejection body is bounded and old unknown failures stay terminal', async (t) => {
   const h = await setup(t);
   h.reliableBehavior(

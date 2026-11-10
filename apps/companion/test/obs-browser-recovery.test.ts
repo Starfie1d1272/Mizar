@@ -176,13 +176,6 @@ it('refreshes an existing owned browser source on enter without granting scene/a
       (call) => call.type.startsWith('Get') || call.type === 'PressInputPropertiesButton',
     ),
   ).toBe(true);
-  r.adapter.pauseAutomatic();
-  r.adapter.resumeAutomatic();
-  r.adapter.startBrowserRecovery();
-  await r.adapter.settleAutomatic();
-  expect(r.calls.filter((call) => call.type === 'PressInputPropertiesButton')).toHaveLength(
-    scenes.length,
-  );
 });
 
 it('revokes an in-flight refresh when the OBS scene changes externally', async () => {

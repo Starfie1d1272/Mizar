@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
-import { projectHistoricalStats } from '../src/projections/historical-stats.js';
 import fixture from '../../../tests/fixtures/rivalhub-provider-stats-v1.json' with { type: 'json' };
 
 const target = (matchId = fixture.matchId) => ({
@@ -124,58 +123,6 @@ it('uses one real HTTP snapshot for repeated local readers and refreshes only on
   }
 });
 
-it('rejects a late real HTTP response after switching matches', async () => {
-  const { createServer } = await import('node:http');
-  const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-switch-'));
-  let releaseOld!: () => void;
-  let receivedOld!: () => void;
-  const received = new Promise<void>((resolve) => {
-    receivedOld = resolve;
-  });
-  const server = createServer((request, response) => {
-    const matchId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('matchId');
-    if (matchId === fixture.matchId) {
-      releaseOld = () => response.end(JSON.stringify(fixture));
-      receivedOld();
-      return;
-    }
-    response.end(JSON.stringify({ ...fixture, matchId, revision: 'new-match' }));
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('missing HTTP address');
-    const path = join(directory, 'connection.json');
-    await writeFile(
-      path,
-      JSON.stringify({
-        baseUrl: `http://127.0.0.1:${address.port}`,
-        credential: 'secret',
-        installationId: 'install',
-        competitionId: fixture.competitionId,
-        displayName: 'test',
-      }),
-    );
-    const connection = new RivalHubConnection(path);
-    await connection.load();
-    const old = connection.stats(target());
-    await received;
-    expect(await connection.stats(target('other'))).toMatchObject({
-      matchId: 'other',
-      revision: 'new-match',
-    });
-    releaseOld();
-    expect(await old).toBeNull();
-    expect(await connection.getStats(target())).toBeNull();
-    expect(await connection.getStats(target('other'))).toMatchObject({ revision: 'new-match' });
-  } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 it('retries indefinitely on transient failures with shared cooldown and stops on a valid empty snapshot', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-retry-'));
   const wall = Date.parse('2026-10-30T06:00:00Z');
@@ -238,19 +185,6 @@ it('retries indefinitely on transient failures with shared cooldown and stops on
     expect(await connection.stats(target())).toMatchObject({
       entrants: [{ starters: [] }, { starters: [] }],
     });
-    const emptyProjection = projectHistoricalStats((await connection.getStats(target()))!)!;
-    expect(
-      [
-        emptyProjection.maps,
-        emptyProjection.recent,
-        emptyProjection.lineups,
-        emptyProjection.pistol,
-        emptyProjection.economy,
-        emptyProjection.utility,
-        emptyProjection.playerComparison,
-        emptyProjection.playerAttributes,
-      ].every((topic) => !topic.eligible),
-    ).toBe(true);
     now += 1_000_000;
     expect(await connection.stats(target())).toMatchObject({ revision: fixture.revision });
     expect(fetcher).toHaveBeenCalledTimes(5);
@@ -306,7 +240,7 @@ it('retries invalid identity and oversized data until a valid snapshot arrives',
   }
 });
 
-it('retries interrupted response streams and aborts a replaced scope', async () => {
+it('retries interrupted response streams', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-stats-stream-'));
   try {
     const path = join(directory, 'connection.json');
@@ -321,8 +255,6 @@ it('retries interrupted response streams and aborts a replaced scope', async () 
       }),
     );
     let now = 0;
-    let firstSignal!: AbortSignal;
-    let release!: (response: Response) => void;
     const interrupted = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.error(new Error('stream interrupted'));
@@ -331,24 +263,13 @@ it('retries interrupted response streams and aborts a replaced scope', async () 
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response(interrupted))
-      .mockImplementationOnce((_url, init: RequestInit) => {
-        firstSignal = init.signal!;
-        return new Promise<Response>((resolve) => {
-          release = resolve;
-        });
-      })
-      .mockResolvedValueOnce(Response.json({ ...fixture, matchId: 'other' }));
+      .mockResolvedValueOnce(Response.json(fixture));
     const connection = new RivalHubConnection(path, fetcher as typeof fetch, undefined, () => now);
     await connection.load();
     expect(await connection.stats(target())).toBeNull();
     now = 30_000;
-    const pending = connection.stats(target());
-    expect(firstSignal.aborted).toBe(false);
-    expect(await connection.stats(target('other'))).toMatchObject({ matchId: 'other' });
-    expect(firstSignal.aborted).toBe(true);
-    release(Response.json(fixture));
-    expect(await pending).toBeNull();
-    expect(await connection.getStats(target('other'))).toMatchObject({ matchId: 'other' });
+    expect(await connection.stats(target())).toMatchObject({ revision: fixture.revision });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

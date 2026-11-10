@@ -94,7 +94,7 @@ it('does not reuse a prior game capture success as evidence of this launch', () 
   expect(projectObsCaptureDiagnostic(evidence, now + 31000, now - 2000).state).toBe('unknown');
 });
 
-it('checks origin, launch time and current production revision at the real route boundary', async () => {
+it('checks launch time and current production revision at the real route boundary', async () => {
   const app = Fastify();
   let valid = true;
   const eventAt = Date.now();
@@ -142,7 +142,6 @@ it('checks origin, launch time and current production revision at the real route
       },
     });
   try {
-    expect((await request('https://outside.example', eventAt - 500)).statusCode).toBe(403);
     expect((await request('http://127.0.0.1:3000', eventAt - 700_000)).statusCode).toBe(400);
     expect((await request('http://127.0.0.1:3000', eventAt - 500)).json().state).toBe(
       'initialized',

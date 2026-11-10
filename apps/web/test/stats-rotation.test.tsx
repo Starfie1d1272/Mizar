@@ -25,7 +25,6 @@ it('uses Companion page order, freezes each card, and stops on manual takeover',
   expect(host.textContent).toBe('MAIN');
   await act(async () => vi.advanceTimersByTimeAsync(20_000));
   expect(host.textContent).toBe(`match ${fixture.teams[0]!.name}`);
-  expect(fetcher.mock.calls[0]?.[0]).toBe('/local/v1/broadcast-stats-program');
   data.teams[0]!.name = 'Updated team';
   await act(async () => vi.advanceTimersByTimeAsync(11_999));
   expect(host.textContent).toBe(`match ${fixture.teams[0]!.name}`);

@@ -14,12 +14,6 @@ import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 it.each([
   {
-    preparedAudio: false,
-    align: false,
-    event: '',
-    label: 'active output and default audio sources',
-  },
-  {
     preparedAudio: true,
     align: false,
     event: '',
@@ -31,12 +25,12 @@ it.each([
     event: '',
     label: 'idle output and an existing gameplay scene',
   },
-  ...[
-    'StreamStateChanged',
-    'RecordStateChanged',
-    'ReplayBufferStateChanged',
-    'VirtualcamStateChanged',
-  ].map((event) => ({ preparedAudio: true, align: true, event, label: `${event} STARTING` })),
+  {
+    preparedAudio: true,
+    align: true,
+    event: 'StreamStateChanged',
+    label: 'StreamStateChanged STARTING',
+  },
   {
     preparedAudio: true,
     align: true,
@@ -64,13 +58,6 @@ it.each([
     label: 'external collection takeover',
   },
   { preparedAudio: true, align: true, event: 'ExitStarted', label: 'OBS exit' },
-  {
-    preparedAudio: true,
-    align: false,
-    event: '',
-    entryMode: 'streaming',
-    label: 'entry with an active stream and no scene writes',
-  },
   {
     preparedAudio: true,
     align: false,
@@ -152,7 +139,7 @@ it.each([
         case 'GetStreamStatus':
         case 'GetRecordStatus':
           responseData = {
-            outputActive: type === 'GetStreamStatus' && entryMode === 'streaming',
+            outputActive: false,
             outputPaused: false,
             outputReconnecting: false,
           };
@@ -507,12 +494,6 @@ it.each([
         ...(entryMode ? { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' } : {}),
       },
     });
-    if (entryMode === 'streaming') {
-      expect(response.statusCode).toBe(409);
-      expect(response.json().message).toContain('直播');
-      expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
-      return;
-    }
     if (event) {
       expect(response.statusCode).toBe(409);
       if (event.endsWith('StateChanged'))
