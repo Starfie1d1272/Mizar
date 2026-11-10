@@ -989,7 +989,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
       : undefined,
   );
-  app.addHook('onReady', () => bpPresentationSettings.load());
+  app.addHook('onReady', () => bpPresentationSettings.load(app.log));
   registerBpPresentationSettings(app, bpPresentationSettings, localWebTransport.getOriginPolicy());
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
