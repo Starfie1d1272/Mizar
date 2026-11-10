@@ -13,7 +13,10 @@ export const NATIVE_SOURCE_LIMITS = {
   lineBytes: 128 * 1024,
   groupBytes: 192 * 1024,
   sourceBytes: 25 * 1024 * 1024,
-  cursorBytes: 8192,
+  // Host retains roughly 1 MiB segments under its byte/age/pin policy, not four
+  // files. Reserve bounded room for short process runs and protected segments.
+  cursorEntries: 1024,
+  cursorBytes: 256 * 1024,
 };
 type Cursor = { identity: string; offset: number; anchor: string; discarding: boolean };
 type NativeRecord = {
@@ -25,6 +28,15 @@ type NativeRecord = {
 };
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+function cursorCheckpoint(cursors: Cursor[]) {
+  const value = { schema: 1, cursors };
+  if (
+    cursors.length > NATIVE_SOURCE_LIMITS.cursorEntries ||
+    Buffer.byteLength(JSON.stringify(value)) > NATIVE_SOURCE_LIMITS.cursorBytes
+  )
+    throw new Error('native_cursor_budget');
+  return value;
+}
 
 // Only fixed Host names can use the Windows packaged-app mapping fallback.
 async function nativePath(directory: string, name: string): Promise<string> {
@@ -157,7 +169,6 @@ export class ProgramChatNativeInput {
         if (
           value.schema !== 1 ||
           !Array.isArray(value.cursors) ||
-          value.cursors.length > 4 ||
           value.cursors.some(
             (cursor) =>
               !cursor ||
@@ -171,11 +182,24 @@ export class ProgramChatNativeInput {
           )
         )
           throw new Error('native_cursor_invalid');
-        this.cursors = value.cursors;
+        const cursors = value.cursors.map(({ identity, offset, anchor, discarding }) => ({
+          identity,
+          offset,
+          anchor,
+          discarding,
+        }));
+        if (new Set(cursors.map((cursor) => cursor.identity)).size !== cursors.length)
+          throw new Error('native_cursor_invalid');
+        cursorCheckpoint(cursors);
+        this.cursors = cursors;
       } finally {
         await file.close();
       }
     } catch (error) {
+      // An older writer could persist more than this reader's bounded budget.
+      // Keep that checkpoint intact and retry initialization; never replace it
+      // with a partial scan or silently replay all sources on every restart.
+      if (error instanceof Error && error.message === 'native_cursor_budget') throw error;
       if (!missing(error)) {
         this.gaps++;
         this.journal.record('native_source_gap', {
@@ -192,6 +216,7 @@ export class ProgramChatNativeInput {
     const found = new Set<string>();
     this.backlogBytes = 0;
     let sourceFailed = false;
+    let sourceIdentitiesUnconfirmed = false;
     try {
       for (const name of [
         ...(await readdir(this.directory)).filter((name) =>
@@ -199,15 +224,22 @@ export class ProgramChatNativeInput {
         ),
       ]) {
         const beforeFile = structuredClone(this.cursors);
+        const identified = found.size;
         try {
           await this.file(name, found);
         } catch (error) {
           this.cursors = beforeFile;
           sourceFailed = true;
+          // A directory listing alone does not prove which identity a failed
+          // path owns. Preserve unmatched cursors until every listed source can
+          // be identified or is confirmed absent, including rotation races.
+          if (found.size === identified) sourceIdentitiesUnconfirmed = true;
           this.recordFailure(name, { name, error });
         }
       }
-      const removed = this.cursors.filter((cursor) => !found.has(cursor.identity));
+      const removed = sourceIdentitiesUnconfirmed
+        ? []
+        : this.cursors.filter((cursor) => !found.has(cursor.identity));
       if (removed.length) {
         this.gaps++;
         this.journal.record('native_source_gap', {
@@ -216,7 +248,8 @@ export class ProgramChatNativeInput {
           scope: 'removed file may have unread bytes; retained Host files remain authoritative',
         });
       }
-      this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
+      if (!sourceIdentitiesUnconfirmed)
+        this.cursors = this.cursors.filter((cursor) => found.has(cursor.identity));
       // Chat delivery precedes this checkpoint. A restart may replay an identity;
       // ProgramChat applies its own current-generation and freshness constraints.
       if (this.checkpointPending || JSON.stringify(previous) !== JSON.stringify(this.cursors)) {
@@ -225,7 +258,11 @@ export class ProgramChatNativeInput {
           await nativePath(this.directory, cursorName).catch((error) => {
             if (!missing(error)) throw error;
           });
-          await atomicJson(join(this.directory, cursorName), { schema: 1, cursors: this.cursors });
+          await atomicJson(
+            join(this.directory, cursorName),
+            cursorCheckpoint(this.cursors),
+            NATIVE_SOURCE_LIMITS.cursorBytes,
+          );
           this.checkpointPending = false;
         } catch (error) {
           // Committed records are already delivered. Keep advancing in memory while
@@ -286,6 +323,8 @@ export class ProgramChatNativeInput {
       found.add(identity);
       let cursor = this.cursors.find((value) => value.identity === identity);
       if (!cursor) {
+        if (this.cursors.length >= NATIVE_SOURCE_LIMITS.cursorEntries)
+          throw new Error('native_cursor_budget');
         cursor = { identity, offset: 0, anchor: hash(''), discarding: false };
         this.cursors.push(cursor);
       }
