@@ -68,6 +68,8 @@ jobs:
             /.github/actions/cargo-cache/
             /.github/actions/save-cargo-cache/
             /scripts/ci/cargo-cache-key.mjs
+            /scripts/web-installer/Bootstrap.cs
+            /scripts/web-installer/Nsis.cs
             /apps/desktop/src-tauri/
             /apps/web/src/workspace/desktop-commands.generated.ts
             /apps/companion/src/match-context/lifecycle-contract.json
@@ -80,6 +82,7 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           native=true
+          installer=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
             if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri apps/web/src/workspace/desktop-commands.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
@@ -88,8 +91,24 @@ jobs:
               if [ "$result" -ne 1 ]; then echo "Cannot determine native changes" >&2; exit "$result"; fi
             fi
           fi
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- scripts/web-installer/Bootstrap.cs scripts/web-installer/Nsis.cs scripts/web-installer/build.ps1 .github/workflows/ci.yml; then
+              installer=false
+            else
+              result=$?
+              if [ "$result" -ne 1 ]; then echo "Cannot determine installer changes" >&2; exit "$result"; fi
+            fi
+          fi
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "Native build required: $native"
+      - name: Compile WebInstaller C# sources
+        if: steps.select.outputs.installer == 'true'
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$env:RUNNER_TEMP/Mizar-WebInstaller-compile.exe" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll scripts/web-installer/Bootstrap.cs scripts/web-installer/Nsis.cs
+          if ($LASTEXITCODE -ne 0) { throw 'WebInstaller C# compilation failed' }
       - uses: ./.github/actions/cargo-cache
         id: cargo-cache
         if: steps.select.outputs.native == 'true'

@@ -289,7 +289,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           </details>
         </div>
       ) : phase === 'current' ? (
-        <p>已是最新版本。</p>
+        <p>未发现可用更新。</p>
       ) : unavailable ? (
         <p>请在桌面应用中检查更新。</p>
       ) : null}
