@@ -1140,10 +1140,12 @@ impl ManagedCs2 {
                 );
             }
             self.confirm_game_stopped()?;
-            self.restore_backup(false)?;
+            self.restore_backup_for_start()?;
         }
-        self.confirm_game_stopped()?;
-        if self.startup_recovery_status()?.pending {
+        // Old per-session Demo files are not referenced by a new launch. Keep
+        // their cleanup visible without treating it as unresolved game state.
+        self.check_preserved_start()?;
+        if crate::demo_test::requires_recovery(&self.log, None) {
             return Err("原游戏配置仍待恢复，请重试。".into());
         }
         Ok(false)
@@ -2354,7 +2356,6 @@ impl ManagedCs2 {
     fn require_backup_idle(&self) -> Result<(), String> {
         if self.store.load()?.is_some()
             || self.store.spectator_pending()
-            || self.store.playback_cleanup_pending()
             || crate::demo_test::requires_recovery(&self.log, None)
         {
             return Err("请先结束工作台并完成上次配置恢复。".into());
@@ -2479,6 +2480,16 @@ impl ManagedCs2 {
         Ok(())
     }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        self.restore_backup_inner(confirm_steam_cancelled, true)
+    }
+    fn restore_backup_for_start(&mut self) -> Result<(), String> {
+        self.restore_backup_inner(false, false)
+    }
+    fn restore_backup_inner(
+        &mut self,
+        confirm_steam_cancelled: bool,
+        require_playback_cleanup: bool,
+    ) -> Result<(), String> {
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
             if self.store.load()?.is_none() && self.store.spectator_pending() {
                 if self.store.mulnx_observer_unconfirmed()? {
@@ -2572,12 +2583,27 @@ impl ManagedCs2 {
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再清理试播文件。".into());
                 }
-                self.store.restore_playback_cleanup().map_err(|error| {
-                    self.log
-                        .event("demo_playback_cleanup", "failure", Some(&error));
-                    error
-                })?;
-                self.message = Some("原设置已恢复，试播文件已清理。".into());
+                match self.store.restore_playback_cleanup() {
+                    Ok(()) => self.message = Some("原设置已恢复，试播文件已清理。".into()),
+                    Err(error) => {
+                        self.log
+                            .event("demo_playback_cleanup", "failure", Some(&error));
+                        if require_playback_cleanup {
+                            return Err(error);
+                        }
+                        // Core/spectator recovery, pending Steam/MulNX requests,
+                        // and Demo data isolation still gate a normal start.
+                        self.check_preserved_start()?;
+                        if crate::demo_test::requires_recovery(&self.log, None) {
+                            return Err(error);
+                        }
+                        self.log.event("demo_playback_cleanup", "retained", Some(&json!({
+                            "reason":error,"gameLaunchContinues":true,
+                            "files":"unchanged; cleanup can be retried after game exit"
+                        }).to_string()));
+                        self.message = Some("原设置已恢复；旧试播文件仍保留，可稍后重试清理，不影响新启动。".into());
+                    }
+                }
             }
             Ok(())
         });
@@ -2627,10 +2653,7 @@ impl ManagedCs2 {
         let unknown_trial = Value::Null;
         let trial_state = trial_status.as_ref().unwrap_or(&unknown_trial);
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
-            if self.store.load()?.is_some()
-                || self.store.spectator_pending()
-                || self.store.playback_cleanup_pending()
-            {
+            if self.store.load()?.is_some() || self.store.spectator_pending() {
                 return Err("请先完成受管游戏的配置恢复。".into());
             }
             // Read-only migration of an old external Demo marker. No new external

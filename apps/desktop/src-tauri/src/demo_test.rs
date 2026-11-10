@@ -291,9 +291,7 @@ fn playback_cfg_file(journal: &Value) -> Result<(PathBuf, &str), String> {
 }
 
 pub fn install_playback_cfg(journal: &Value) -> Result<(), (String, bool)> {
-    install_playback_cfg_with(journal, |file, bytes| {
-        file.write_all(bytes).and_then(|_| file.sync_all())
-    })
+    install_playback_cfg_with(journal, |file, bytes| file.write_all(bytes))
 }
 
 pub(crate) fn install_playback_cfg_with(
@@ -301,22 +299,68 @@ pub(crate) fn install_playback_cfg_with(
     write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
 ) -> Result<(), (String, bool)> {
     let (path, content) = playback_cfg_file(journal).map_err(|e| (e, false))?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| {
-            (
-                crate::cs2_session::io_error("Demo 播放 CFG 无法创建，已有文件保持原样。", &e),
-                false,
-            )
-        })?;
-    write(&mut file, content.as_bytes()).map_err(|e| {
+    let temporary = path.with_extension(format!(
+        "cfg.{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let mut created = false;
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        created = true;
+        write(&mut file, content.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if fs::read(&temporary)? != content.as_bytes() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "incomplete Demo playback CFG",
+            ));
+        }
+        // Publish complete bytes only. A collision never grants ownership of
+        // the existing target, and failure cannot leave a half-written CFG.
+        publish_playback_cfg(&temporary, &path)
+    })();
+    if created {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(|error| {
         (
-            crate::cs2_session::io_error("Demo 播放 CFG 未能完整保存。", &e),
-            true,
+            crate::cs2_session::io_error(
+                "Demo 播放 CFG 未能完整发布，已有文件保持原样。",
+                &error,
+            ),
+            false,
         )
     })
+}
+
+#[cfg(not(windows))]
+fn publish_playback_cfg(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::hard_link(from, to)
+}
+
+#[cfg(windows)]
+fn publish_playback_cfg(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // WRITE_THROUGH without REPLACE_EXISTING: never overwrite a prior file.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 8) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn playback_cleanup_id(journal: &Value) -> Result<&str, String> {
