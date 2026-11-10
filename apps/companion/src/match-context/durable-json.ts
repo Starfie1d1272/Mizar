@@ -10,12 +10,17 @@ export type DurableJsonFaultInjector = (point: DurableJsonCommitPoint) => void;
 
 export interface DurableJsonReplaceOptions {
   readonly canCommit?: () => boolean;
+  readonly compact?: boolean;
   readonly faultInjector?: DurableJsonFaultInjector;
 }
 
+function serializeDurableJson(value: unknown, compact: boolean): string {
+  return compact ? JSON.stringify(value) : `${JSON.stringify(value, null, 2)}\n`;
+}
+
 /** Size of the exact UTF-8 representation written by replaceDurableJson. */
-export function durableJsonByteLength(value: unknown): number {
-  return Buffer.byteLength(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+export function durableJsonByteLength(value: unknown, compact = false): number {
+  return Buffer.byteLength(serializeDurableJson(value, compact), 'utf8');
 }
 
 /**
@@ -38,7 +43,7 @@ export async function replaceDurableJson(
 
   try {
     options.faultInjector?.('before-write');
-    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+    await writeFile(temporaryPath, serializeDurableJson(value, options.compact ?? false), {
       encoding: 'utf8',
       mode: 0o600,
       flush: true,
