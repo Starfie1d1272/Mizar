@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { bpPreviewSnapshot as preview } from '../bp/preview';
 import { BpCompactPresentation, BpPresentation } from '@mizar/hud-view';
-import { Panel, StatusBanner } from '../ui';
+import { Button, Panel, StatusBanner } from '../ui';
 import { command, useLocalRead } from './client';
 import './bp-presentation-settings.css';
 
 type Mode = 'full' | 'compact';
-type View = { mode: Mode; revision: string };
+type View = { mode: Mode; revision: string; recovery: { reason: string; message: string } | null };
 
 export function BpPresentationSettingsPanel() {
   const [refresh, setRefresh] = useState(0);
@@ -14,7 +14,7 @@ export function BpPresentationSettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   async function select(mode: Mode) {
-    if (!view || busy || view.mode === mode) return;
+    if (!view || busy || (view.mode === mode && !view.recovery)) return;
     setBusy(true);
     setMessage('');
     try {
@@ -62,6 +62,14 @@ export function BpPresentationSettingsPanel() {
           </label>
         ))}
       </fieldset>
+      {view?.recovery ? (
+        <StatusBanner tone="warning">
+          BP 样式读取失败，暂用全屏样式。原文件已保留；可重新选择样式，或保存全屏样式。
+          <Button disabled={busy} aria-busy={busy} onClick={() => void select(view.mode)}>
+            保存全屏样式
+          </Button>
+        </StatusBanner>
+      ) : null}
       {!view ? (
         <StatusBanner tone="warning">展示设置暂不可用，请检查制作服务。</StatusBanner>
       ) : null}
