@@ -529,7 +529,13 @@ export class ObsAudioRouting {
     );
   }
   /** Only a verified owned collection may recreate these fixed-name identities. */
-  async refreshManagedBindings(obs: ObsRpc, endpoint: string) {
+  async refreshManagedBindings(
+    obs: ObsRpc,
+    endpoint: string,
+    beforeCommit?: (
+      replacements: { before: string; after: string; kind: string }[],
+    ) => Promise<void>,
+  ) {
     const state = await this.load();
     if (state.transition || state.waitingIndependent || state.collectionTransfer)
       throw new Error('audio_mode_pending');
@@ -537,6 +543,7 @@ export class ObsAudioRouting {
       throw new Error('audio_collection_changed');
     const inputs = records((await obs.call('GetInputList')).inputs);
     let changed = false;
+    const replacements: { before: string; after: string; kind: string }[] = [];
     const refresh = (binding: State['desktop'], name: string) => {
       if (!binding || binding.collection !== OBS_COLLECTION || binding.endpoint !== endpoint)
         return binding;
@@ -551,6 +558,11 @@ export class ObsAudioRouting {
       )
         return binding;
       changed = true;
+      replacements.push({
+        before: binding.inputUuid,
+        after: input.inputUuid,
+        kind: binding.inputKind,
+      });
       return { ...binding, inputUuid: input.inputUuid };
     };
     const next: State = {
@@ -567,6 +579,9 @@ export class ObsAudioRouting {
     if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
       throw new Error('audio_collection_changed');
     if (changed) {
+      await beforeCommit?.(replacements);
+      if ((await this.load()).revision !== state.revision)
+        throw new Error('audio_revision_changed');
       await this.saveState({ ...next, revision: randomUUID() }, true);
       this.invalidateSelections();
     }
@@ -931,6 +946,8 @@ export class ObsAudioRouting {
     beforeCommit?: (binding: State['bindings'][ObsAudioRole]) => Promise<void>,
   ) {
     const state = await this.load();
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName === OBS_COLLECTION)
+      throw new Error('audio_managed_roles_required');
     if (state.transition || state.desktop) throw new Error('audio_mode_pending');
     if (state.revision !== command.revision) throw new Error('audio_revision_changed');
     let binding: State['bindings'][ObsAudioRole] = null;

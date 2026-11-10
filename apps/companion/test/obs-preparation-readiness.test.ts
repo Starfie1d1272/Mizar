@@ -8,7 +8,7 @@ import {
   guardedPreparationWrites,
   type ObsRpc,
 } from '../src/obs/reconcile.js';
-import { ensureObsAudio } from '../src/obs/audio.js';
+import { checkObsAudio, setupObsAudio } from '../src/obs/audio.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsStatus } from '../src/obs/adapter.js';
 import type { ObsAdapter } from '../src/obs/adapter.js';
@@ -317,7 +317,7 @@ test('automatic ensure leaves the old collection and its personal audio untouche
   );
 });
 
-test('automatic audio preparation cannot modify scenes while an extra video output is active', async () => {
+test('production audio setup cannot modify scenes while an extra video output is active', async () => {
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: async (type) => {
@@ -340,7 +340,7 @@ test('automatic audio preparation cannot modify scenes while an extra video outp
       throw new Error(`Unexpected request ${type}`);
     },
   };
-  await assert.rejects(ensureObsAudio(guardedPreparationWrites(obs), baseUrl), /Plugin video/);
+  await assert.rejects(setupObsAudio(guardedPreparationWrites(obs), baseUrl), /Plugin video/);
   assert.equal(calls.includes('CreateInput'), false);
   assert.equal(
     calls.some((type) => type.startsWith('Stop')),
@@ -348,7 +348,7 @@ test('automatic audio preparation cannot modify scenes while an extra video outp
   );
 });
 
-test('already prepared audio is checked without requiring an active stream to stop', async () => {
+test('production audio readiness checks are read-only and do not require stopping a stream', async () => {
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: async (type) => {
@@ -371,10 +371,12 @@ test('already prepared audio is checked without requiring an active stream to st
       if (type === 'GetInputMute') return { inputMuted: false };
       if (type === 'GetInputVolume') return { inputVolumeMul: 1 };
       if (type === 'GetInputAudioTracks') return { inputAudioTracks: { 1: true } };
+      if (type === 'GetProfileList') return { currentProfileName: 'Streaming' };
+      if (type === 'GetProfileParameter') return { parameterValue: 'Simple' };
       throw new Error(`Unexpected request ${type}`);
     },
   };
-  assert.deepEqual(await ensureObsAudio(guardedPreparationWrites(obs), baseUrl), []);
+  assert.deepEqual(await checkObsAudio(guardedPreparationWrites(obs)), []);
   assert.equal(
     calls.every((type) => type.startsWith('Get')),
     true,

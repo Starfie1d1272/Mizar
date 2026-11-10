@@ -77,6 +77,12 @@ export function businessEvidence(value: unknown) {
       'UND_ERR_BODY_TIMEOUT',
       'UND_ERR_SOCKET',
     ]),
+    sourceUnavailableReason: pick(input.sourceUnavailableReason, [
+      'source_missing',
+      'match_mismatch',
+      'producer_mismatch',
+      'session_mismatch',
+    ]),
     authorityRevision: number(input.authorityRevision),
     originalObservedAt: utc(input.originalObservedAt),
     recordUpdatedAt: utc(input.recordUpdatedAt),

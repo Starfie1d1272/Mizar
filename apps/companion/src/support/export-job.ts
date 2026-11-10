@@ -179,6 +179,7 @@ export class SupportExports {
       rawIndex?: boolean;
       secrets?: string[];
     }[] = [];
+    const excludedSources: { source: string; reason: string }[] = [];
     const gaps: {
       source: string;
       reason: string;
@@ -322,6 +323,19 @@ export class SupportExports {
       const performancePin = receipts.find((receipt) => receipt.producerId === 'performance');
       const pinned = (receipt: { segments: { name: string }[] } | null | undefined, name: string) =>
         receipt?.segments.some((segment) => segment.name === name) ?? false;
+      const successor = (receipt: PinReceipt | null | undefined, name: string): boolean => {
+        if (!receipt || receipt.status !== 'committed') return false;
+        const state = receipt.sourceState as { postCutoffSegments?: unknown } | undefined;
+        const names = state?.postCutoffSegments;
+        return (
+          Array.isArray(names) &&
+          names.length <= 2 &&
+          names.every(
+            (value) => typeof value === 'string' && diagnosticSegmentPattern.test(value),
+          ) &&
+          names.includes(name)
+        );
+      };
       try {
         await safePath(this.logs);
         const names = (await readdir(this.logs)).sort();
@@ -330,6 +344,11 @@ export class SupportExports {
           if (diagnosticSegmentPattern.test(name)) {
             const pin = name.startsWith('session-') ? companionPin : hostPin;
             if (pinned(pin, name)) await capture(this.logs, name);
+            else if (successor(pin, name))
+              excludedSources.push({
+                source: name,
+                reason: 'producer-declared-post-cutoff-segment',
+              });
             else gap(name, 'pin', new Error('source_not_safely_fixed'));
           } else if (currentProcessLogs.test(name)) await capture(this.logs, name, '', false, true);
         }
@@ -431,6 +450,7 @@ export class SupportExports {
           workerData: {
             sources,
             gaps,
+            excludedSources,
             output,
             exportId: job.exportId,
             range,

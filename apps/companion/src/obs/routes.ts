@@ -1,3 +1,4 @@
+import { audioDeviceCommandSchema } from './audio-device-settings.js';
 import { preparationCancelled } from '../program-scenes/preparation-cancellation.js';
 import { z } from 'zod';
 import { timingSafeEqual } from 'node:crypto';
@@ -268,6 +269,7 @@ export function registerObsRoutes(
           .strict(),
         z.object({ revision: z.string().uuid(), mode: z.literal('independent') }).strict(),
         z.object({ revision: z.string().uuid(), mode: z.literal('cancel') }).strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('recover') }).strict(),
       ])
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'audio_mode_invalid' });
@@ -279,14 +281,16 @@ export function registerObsRoutes(
       const music = options.musicDirector?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
-        command.mode === 'independent'
-          ? options.adapter.requestIndependentMode(command.revision, music)
-          : options.adapter.switchAudioMode(
-              command.revision,
-              'desktop',
-              command.selectionId,
-              music,
-            ),
+        command.mode === 'recover'
+          ? options.adapter.recoverAudioMode(music, undefined, command.revision).then(() => ({}))
+          : command.mode === 'independent'
+            ? options.adapter.requestIndependentMode(command.revision, music)
+            : options.adapter.switchAudioMode(
+                command.revision,
+                'desktop',
+                command.selectionId,
+                music,
+              ),
       );
       return { ok: true, ...result };
     } catch (error) {
@@ -323,7 +327,48 @@ export function registerObsRoutes(
                   : error instanceof Error &&
                       error.message.startsWith('audio_global_path_unresolved:')
                     ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
-                    : '切换结果未确认，请立即在 OBS 核对直播电平和当前音源；如无声，请手动恢复可用来源，勿反复切换。',
+                    : parsed.data.mode === 'recover'
+                      ? '音频恢复尚未确认。请核对 OBS 连接和当前场景集合后重试；原恢复记录已保留。'
+                      : '切换结果未确认，请立即在 OBS 核对直播电平和当前音源；如无声，请手动恢复可用来源，勿反复切换。',
+      });
+    }
+  });
+  app.get('/local/v1/obs/audio-devices', async (request, reply) => {
+    if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.adapter.readAudioDevices());
+    } catch {
+      return reply.code(409).send({
+        error: 'audio_devices_unavailable',
+        message: '设备设置未确认，请重新读取后核对。',
+      });
+    }
+  });
+  app.post('/operator/obs/audio-device', { bodyLimit: 4096 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = audioDeviceCommandSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'audio_device_invalid' });
+    try {
+      await options.adapter.setAudioDevice(parsed.data);
+      return { ok: true };
+    } catch (error) {
+      const code =
+        error instanceof ObsVideoError ? error.code : error instanceof Error ? error.message : '';
+      const messages: Record<string, string> = {
+        audio_device_requires_independent:
+          '请先切到独立分路，再更换桌面设备；保存后切回桌面混音以重新核对音乐监听。',
+        audio_mode_pending: '请先完成或恢复当前音频切换，再更换设备。',
+        audio_devices_changed: '设备或音频配置已变化，请重新读取设备后选择。',
+        audio_devices_prepare_required: '固定音源身份未确认，请先修复场景与音频，再重新读取设备。',
+        video_output_active: 'OBS 正在输出，请停止直播与录像后再更换设备。',
+      };
+      const known = Object.hasOwn(messages, code);
+      return reply.code(409).send({
+        error: known ? code : 'audio_device_unconfirmed',
+        message: known ? messages[code] : '设备设置未确认，请重新读取后核对。',
       });
     }
   });

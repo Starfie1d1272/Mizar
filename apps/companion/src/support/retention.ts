@@ -723,6 +723,7 @@ export async function readHostPin(
     expiresAt: string | null;
     segments: { name: string; bytes: number; sha256: string }[];
     sourceState?: {
+      postCutoffSegments?: string[];
       asOf: string;
       memoryOnly: { events: number | null; bytes: number | null };
       unreportedLoss: { overflow: number; contended: number; writeFailed: number };
@@ -802,7 +803,22 @@ export async function readHostPin(
         !timestamp(totals.lastObservedAt))
     )
       throw new Error('host_deferred_coverage_invalid');
+    const successors = state.postCutoffSegments;
+    if (
+      successors !== undefined &&
+      (!Array.isArray(successors) ||
+        successors.length > 2 ||
+        successors.some(
+          (name) =>
+            typeof name !== 'string' ||
+            !immutableName.test(name) ||
+            !/^(desktop|document)-/.test(name) ||
+            segments.some((segment) => segment.name === name),
+        ))
+    )
+      throw new Error('host_pin_cutoff_invalid');
     sourceState = {
+      ...(successors ? { postCutoffSegments: successors } : {}),
       asOf: state.asOf,
       memoryOnly: {
         included: false,

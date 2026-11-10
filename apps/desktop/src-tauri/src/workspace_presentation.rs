@@ -1014,7 +1014,6 @@ pub(crate) fn refresh_finished_window_feedback(
     cs2: &managed_cs2::ManagedCs2,
 ) {
     let log = app.state::<DesktopLog>();
-    log.event("workspace_exit_feedback", "begin", None);
     // Optional feedback retirement cannot be used as proof of game/production cleanup.
     let result = app
         .state::<HostState>()
@@ -1023,7 +1022,13 @@ pub(crate) fn refresh_finished_window_feedback(
         .map_err(|_| "窗口反馈状态锁不可用。".to_owned())
         .and_then(|mut tracker| tracker.finish_session_feedback(cs2));
     match result {
-        Ok(retired) => log.event("workspace_exit_feedback", if retired { "success" } else { "skipped" }, Some(&serde_json::json!({"retired":retired,"reason":if retired {"finished"} else {"no_feedback_or_no_stop_proof"}}).to_string())),
+        Ok(true) => log.event(
+            "workspace_exit_feedback",
+            "success",
+            Some(&serde_json::json!({"retired":true,"reason":"finished"}).to_string()),
+        ),
+        // Polling with nothing to retire is not an operation or a failure.
+        Ok(false) => {}
         Err(error) => log.event("workspace_exit_feedback", "failure", Some(&error)),
     }
 }

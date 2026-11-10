@@ -1,4 +1,9 @@
 import {
+  readAudioDevices,
+  setAudioDevice,
+  type AudioDeviceCommand,
+} from './audio-device-settings.js';
+import {
   captureAudioCollectionTransfer,
   applyAudioCollectionTransfer,
   audioCollectionTransferError,
@@ -475,11 +480,8 @@ export class ObsAdapter {
       | 'monitorPlanCompatible'
       | 'store'
     >,
-    gameAudio?: GameAudioController,
     mayPrepare: () => boolean = () => true,
   ): void {
-    // Kept for callers compiled against the existing recovery interface.
-    void gameAudio;
     if (
       !this.commentary ||
       this.recoveryClosed ||
@@ -530,14 +532,17 @@ export class ObsAdapter {
       'withAudioModeRecovery' | 'commitDesktopMonitorOriginals' | 'monitorPlanCompatible'
     >,
     valid: () => boolean = () => true,
+    revision?: string,
   ): Promise<void> {
-    if (!this.audioRouting || !this.commentary) return;
-    const state = await this.audioRouting.modeRecoveryState();
-    const migration = new AudioMigration(`${this.commentary.journal}.migration`);
-    const pending = await migration.pending();
-    if (!state.transition && !pending?.modeId) return;
-    await this.configurationMutation(() =>
-      this.audioConfiguration.run((obs, endpoint, observer) =>
+    if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
+    await this.configurationMutation(async () => {
+      const state = await this.audioRouting!.modeRecoveryState();
+      if (revision !== undefined && state.revision !== revision)
+        throw new Error('audio_revision_changed');
+      const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
+      const pending = await migration.pending();
+      if (!state.transition && !pending?.modeId) return;
+      await this.audioConfiguration.run((obs, endpoint, observer) =>
         music.withAudioModeRecovery(() =>
           this.recoverAudioModeOnConnection(
             guardedObs(obs, valid),
@@ -547,8 +552,8 @@ export class ObsAdapter {
             valid,
           ),
         ),
-      ),
-    );
+      );
+    });
   }
   private async recoverAudioModeOnConnection(
     obs: ObsRpc,
@@ -1206,6 +1211,35 @@ export class ObsAdapter {
       }, 12_000);
       return this.findings;
     });
+  }
+  readAudioDevices() {
+    return this.serial(() =>
+      this.audioModeRun('audio_devices_read', async (obs) => ({
+        ...(await readAudioDevices(obs)),
+        desktopMode: Boolean(await this.audioRouting?.desktopBinding()),
+      })),
+    );
+  }
+  setAudioDevice(command: AudioDeviceCommand) {
+    const generation = this.recoveryGeneration;
+    const programGeneration = this.programGeneration;
+    return this.configurationMutation(() =>
+      this.audioModeRun('audio_device_set', async (connection) => {
+        if (!this.audioRouting) throw new Error('audio_routing_unavailable');
+        const state = await this.audioRouting.modeRecoveryState();
+        if (state.transition || state.waitingIndependent) throw new Error('audio_mode_pending');
+        // Changing the capture device can change which monitoring path is audible.
+        // Leave desktop mode through its existing reversible transaction first.
+        if (command.role === 'desktop' && state.desktop)
+          throw new Error('audio_device_requires_independent');
+        const obs = guardedObs(
+          connection,
+          () =>
+            generation === this.recoveryGeneration && programGeneration === this.programGeneration,
+        );
+        return setAudioDevice(obs, command);
+      }),
+    );
   }
   readAudioRouting() {
     if (!this.audioRouting) throw new Error('audio_routing_unavailable');
@@ -2504,6 +2538,27 @@ export class ObsAdapter {
           ).catch((error: unknown) => {
             throw audioCollectionTransferError(error);
           });
+        if (this.audioRouting && (await this.audioRouting.modePending())) {
+          // A mode journal owns exact source and scene-item identities. Inspect
+          // the existing visuals without normalizing/rebuilding its audio graph.
+          // Explicit recovery remains available in sound settings.
+          const visual = await checkObsConfiguration(obs, this.browserBaseUrl);
+          return {
+            findings: [
+              ...visual,
+              { code: 'audio_mode_pending', message: '音频切换尚未完成，请在声音设置中恢复。' },
+            ],
+            ready: !visual.some((item) =>
+              [
+                'collection_missing',
+                'collection_inactive',
+                'scene_missing',
+                'source_kind_conflict',
+              ].includes(item.code),
+            ),
+            audioReady: false,
+          };
+        }
         const visual = await ensureObsConfiguration(obs, this.browserBaseUrl, activeScene, true);
         if (
           visual.some((item) =>
@@ -2567,7 +2622,22 @@ export class ObsAdapter {
           else await ensureManagedAudioSources(audioObs, this.browserBaseUrl);
           if (this.audioRouting && !(await this.audioRouting.modePending())) {
             const previous = await this.audioRouting.commentaryBinding();
-            await this.audioRouting.refreshManagedBindings(audioObs, endpoint);
+            await this.audioRouting.refreshManagedBindings(
+              audioObs,
+              endpoint,
+              async (replacements) => {
+                if (!this.commentary) return;
+                await new AudioMigration(
+                  `${this.commentary.journal}.migration`,
+                ).rebindCompletedInputs(
+                  audioObs,
+                  `${this.commentary.journal}.dedicated-mode`,
+                  endpoint,
+                  OBS_COLLECTION,
+                  replacements,
+                );
+              },
+            );
             const next = await this.audioRouting.commentaryBinding();
             if (
               this.commentary &&
@@ -2697,7 +2767,7 @@ export class ObsAdapter {
         if (manualBindingsRequired && !defaultDesktop) {
           this.audioPreparationWarnings.routing = {
             code: 'audio_bindings_required',
-            message: '旧配置尚未登记音频分路，请在声音设置中手动绑定来源。',
+            message: '旧配置尚未完成音频分路，请在声音设置中选择并准备音频模式。',
           };
           this.findings = [...this.findings, this.audioPreparationWarnings.routing];
         } else if (this.audioPreparationWarnings.routing?.code !== 'audio_bindings_required')
@@ -2712,12 +2782,12 @@ export class ObsAdapter {
         };
         this.findings = [...this.findings, this.audioPreparationWarnings.routing];
       }
-      if (modePending)
+      if (modePending && !this.findings.some((item) => item.code === 'audio_mode_pending'))
         this.findings = [
           ...this.findings,
           {
             code: 'commentary_pending',
-            message: '音频模式切换待完成，请在声音设置重新核对并切换。',
+            message: '音频模式切换待完成，请在声音设置中核对并恢复音频。',
           },
         ];
       if (

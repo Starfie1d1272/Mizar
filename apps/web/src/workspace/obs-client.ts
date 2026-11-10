@@ -104,8 +104,7 @@ export function useObsStatus(): ObsStatus | null {
   return value;
 }
 
-type ObsAction =
-  'open' | 'check' | 'capture-recover' | 'ensure' | 'repair' | 'configure' | 'audio-setup';
+type ObsAction = 'open' | 'check' | 'capture-recover' | 'ensure' | 'repair' | 'configure';
 let opening: Promise<unknown> | null = null;
 export function obsCommand(
   action: ObsAction,
@@ -134,7 +133,7 @@ async function performObsCommand(
       AbortSignal.timeout(
         action === 'ensure' || action === 'capture-recover'
           ? 40_000
-          : ['repair', 'check', 'audio-setup'].includes(action)
+          : ['repair', 'check'].includes(action)
             ? 15_000
             : 6000,
       ),

@@ -18,6 +18,7 @@ const identitySchema = z
     uuid: z.string().min(1),
     kind: z.string().min(1),
     settings: z.record(z.string(), z.unknown()).optional(),
+    enabled: z.boolean().optional(),
   })
   .strict();
 const registrySchema = z
@@ -397,6 +398,20 @@ export class ManagedObsResources {
           ].includes(role.kind)
         )
           continue;
+        if (name === '麦克风' && listed.inputs.some((input) => input.inputUuid === role.uuid)) {
+          let enabled = false;
+          for (const scene of listed.scenes) {
+            const items = rows(
+              (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+            );
+            if (
+              items.some((item) => item.sourceUuid === role.uuid && item.sceneItemEnabled === true)
+            )
+              enabled = true;
+          }
+          role.enabled = enabled;
+          await this.save(registry!);
+        }
         if (listed.inputs.some((input) => input.inputUuid === role.uuid)) {
           const waiting = rows(
             (await raw.call('GetSceneItemList', { sceneName: desired[0]!.sceneName })).sceneItems,
@@ -429,7 +444,7 @@ export class ManagedObsResources {
             inputName: name,
             inputKind: role.kind,
             inputSettings: role.settings ?? {},
-            sceneItemEnabled: name === '麦克风',
+            sceneItemEnabled: name === '麦克风' && role.enabled !== false,
           });
       }
       const { scenes } = await inventory();
@@ -498,6 +513,11 @@ export class ManagedObsResources {
       managedResourcesDrift: drift,
       normalizeManagedResources: normalize,
       pruneManagedResources: prune,
+      managedInputIdentity: async (name) => {
+        await verify();
+        const role = registry!.roles[name];
+        return role ? { uuid: role.uuid, kind: role.kind } : null;
+      },
       ownershipScope: async () => {
         await verify();
         return `${endpoint}|${OBS_COLLECTION}|${registry!.instance}|${registry!.collectionIdentity}`;
@@ -532,6 +552,20 @@ export class ManagedObsResources {
             }
           }
         }
+        const microphone = registry?.roles['麦克风'];
+        const changesMicrophone =
+          type === 'SetSceneItemEnabled' &&
+          microphone &&
+          rows(
+            (
+              await raw.call(
+                'GetSceneItemList',
+                data?.sceneUuid ? { sceneUuid: data.sceneUuid } : { sceneName: data?.sceneName },
+              )
+            ).sceneItems,
+          ).some(
+            (item) => item.sceneItemId === data?.sceneItemId && item.sourceUuid === microphone.uuid,
+          );
         if (mutating) beforeMutation?.();
         const result = await raw.call(type, data);
         if (type === 'CreateScene' || type === 'CreateInput') {
@@ -544,9 +578,28 @@ export class ManagedObsResources {
             uuid,
             kind,
             ...(type === 'CreateInput' && audio.has(name)
-              ? { settings: data?.inputSettings as Row }
+              ? {
+                  settings: data?.inputSettings as Row,
+                  ...(name === '麦克风' ? { enabled: data?.sceneItemEnabled === true } : {}),
+                }
               : {}),
           };
+          await this.save(registry!);
+        }
+        if (changesMicrophone && microphone) {
+          let enabled = false;
+          for (const scene of (await inventory()).scenes) {
+            const items = rows(
+              (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+            );
+            if (
+              items.some(
+                (item) => item.sourceUuid === microphone.uuid && item.sceneItemEnabled === true,
+              )
+            )
+              enabled = true;
+          }
+          microphone.enabled = enabled;
           await this.save(registry!);
         }
         if (type === 'SetInputSettings') {

@@ -1051,7 +1051,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     app.addHook('onListen', () => {
       obsAdapter.startCommentaryRecovery(
         musicDirector,
-        gameAudio,
         () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
       );
       return Promise.resolve();
@@ -1273,7 +1272,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     scenes: sceneController,
     obs: obsAdapter,
     music: () => musicDirector,
-    gameAudio,
     camera: () => cameraDirector,
     demo: () => demoTest,
     observer: observerSettings,

@@ -1,8 +1,10 @@
+import { desktopMonitorRelationship } from './audio-monitor-device.js';
+import { configuredStreamTracks } from './audio-stream-tracks.js';
 import { ObsActionError } from './action-error.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsFinding, ObsRpc } from './reconcile.js';
 
-type Input = { inputName: string; inputKind: string };
+type Input = { inputName: string; inputKind: string; inputUuid?: string };
 const AUDIO_KINDS = new Set([
   'wasapi_output_capture',
   'wasapi_input_capture',
@@ -64,32 +66,68 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       },
     ];
   const findings: ObsFinding[] = [];
+  const streamTracks = await configuredStreamTracks(obs).catch(() => null);
+  if (streamTracks === null)
+    findings.push({
+      code: 'audio_stream_tracks_unknown',
+      message: '无法确认 OBS 当前配置的直播音轨，请在 OBS 输出设置核对；未更改音轨。',
+    });
   if (candidates.every((input) => input.inputKind === 'wasapi_input_capture'))
     findings.push({
       code: 'game_audio_missing',
       message: '仅检测到麦克风输入，未检测到系统或游戏音频来源，请在 OBS 中核对游戏声音。',
     });
   const scenes = obsDesiredScenes('http://127.0.0.1');
-  for (const input of candidates) {
+  const music = active.filter(
+    (input) => input.inputKind === 'ffmpeg_source' && ['音乐', '音效'].includes(input.inputName),
+  );
+  for (const input of [...candidates, ...music]) {
     const data = { inputName: input.inputName };
+    const isMusic = input.inputKind === 'ffmpeg_source';
     const [mute, volume, tracks] = await Promise.all([
-      obs.call('GetInputMute', data),
-      obs.call('GetInputVolume', data),
+      isMusic ? Promise.resolve({ inputMuted: false }) : obs.call('GetInputMute', data),
+      isMusic ? Promise.resolve({ inputVolumeMul: 1 }) : obs.call('GetInputVolume', data),
       obs.call('GetInputAudioTracks', data),
     ]);
-    if (mute.inputMuted === true || Number(volume.inputVolumeMul) === 0)
+    // Idle music is deliberately silent; only its eventual output path is checked.
+    if (!isMusic && (mute.inputMuted === true || Number(volume.inputVolumeMul) === 0))
       findings.push({
         code: `audio_muted:${input.inputName}`,
         message: `${input.inputName} 已静音或音量为零，请检查 OBS 混音器。`,
       });
-    if (
-      !Object.values((tracks.inputAudioTracks ?? {}) as Record<string, unknown>).some(
-        (enabled) => enabled === true,
-      )
-    )
+    if (isMusic) {
+      const monitor = await obs.call('GetInputAudioMonitorType', data);
+      if (monitor.monitorType === 'OBS_MONITORING_TYPE_MONITOR_ONLY') {
+        // OBS <=32 reaches the program through desktop recapture, checked above.
+        const desktop = candidates.find(
+          (source) =>
+            source.inputKind === 'wasapi_output_capture' && source.inputName === '桌面声音',
+        );
+        if (
+          !desktop?.inputUuid ||
+          (await desktopMonitorRelationship(obs, desktop.inputUuid).catch(() => 'unknown')) !==
+            'same'
+        )
+          findings.push({
+            code: `audio_monitor_path:${input.inputName}`,
+            message: `${input.inputName} 仅监听但无法确认同设备桌面回采路径，请核对 OBS 监听与输出。`,
+          });
+        continue;
+      }
+    }
+    const assigned = (tracks.inputAudioTracks ?? {}) as Record<string, unknown>;
+    if (!Object.values(assigned).some((enabled) => enabled === true))
       findings.push({
         code: `audio_tracks:${input.inputName}`,
         message: `${input.inputName} 未分配输出音轨。`,
+      });
+    else if (
+      streamTracks !== null &&
+      !streamTracks.some((track) => assigned[String(track)] === true)
+    )
+      findings.push({
+        code: `audio_stream_track_mismatch:${input.inputName}`,
+        message: `${input.inputName} 未进入 OBS 配置的直播音轨，请在 OBS 高级音频属性与输出设置中核对。`,
       });
   }
   for (const scene of scenes) {
@@ -117,6 +155,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
 export async function ensureManagedAudioSources(
   obs: ObsRpc,
   baseUrl: string,
+  initializeMicrophone = false,
 ): Promise<{ desktop: string; microphone: string }> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     throw new ObsActionError('collection_inactive');
@@ -150,15 +189,17 @@ export async function ensureManagedAudioSources(
         scene,
         items: (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems as {
           sourceUuid: string;
+          sceneItemId: number;
           sceneItemEnabled: boolean;
         }[],
       })),
     );
     const microphoneEnabled =
       managed.name === '麦克风' &&
-      sceneItems.some(({ items }) =>
-        items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled),
-      );
+      (initializeMicrophone ||
+        sceneItems.some(({ items }) =>
+          items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled),
+        ));
     for (const { scene, items } of sceneItems) {
       if (!items.some((item) => item.sourceUuid === uuid))
         await obs.call('CreateSceneItem', {
@@ -166,6 +207,20 @@ export async function ensureManagedAudioSources(
           sourceName: managed.name,
           sceneItemEnabled: microphoneEnabled,
         });
+      if (managed.name === '麦克风') {
+        for (const item of items.filter((item) => item.sourceUuid === uuid))
+          if (item.sceneItemEnabled !== microphoneEnabled)
+            await obs.call('SetSceneItemEnabled', {
+              sceneName: scene.sceneName,
+              sceneItemId: item.sceneItemId,
+              sceneItemEnabled: microphoneEnabled,
+            });
+        const confirmed = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
+          .sceneItems as { sourceUuid: string; sceneItemEnabled: boolean }[];
+        const refs = confirmed.filter((item) => item.sourceUuid === uuid);
+        if (refs.length !== 1 || refs[0]!.sceneItemEnabled !== microphoneEnabled)
+          throw new Error('audio_microphone_enable_unconfirmed');
+      }
     }
   }
   return { desktop: ids[0]!, microphone: ids[1]! };
@@ -182,18 +237,15 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
     throw new ObsActionError('output_active_audio');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new ObsActionError('collection_inactive');
-  const before = (await obs.call('GetInputList')).inputs as (Input & { inputUuid: string })[];
-  const microphoneExisted = before.some(
-    (input) => input.inputName === '麦克风' && input.inputKind === 'wasapi_input_capture',
-  );
-  const ids = await ensureManagedAudioSources(obs, baseUrl);
+  // No established routing mode is the durable initialization marker. An existing
+  // input may be the result of an interrupted first preparation, not a user choice.
+  const ids = await ensureManagedAudioSources(obs, baseUrl, true);
   for (const scene of obsDesiredScenes(baseUrl)) {
     const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
       .sceneItems as { sourceUuid: string; sceneItemId: number; sceneItemEnabled: boolean }[];
     for (const item of items)
       if (
-        (item.sourceUuid === ids.desktop ||
-          (item.sourceUuid === ids.microphone && !microphoneExisted)) &&
+        (item.sourceUuid === ids.desktop || item.sourceUuid === ids.microphone) &&
         !item.sceneItemEnabled
       )
         await obs.call('SetSceneItemEnabled', {
@@ -202,30 +254,4 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
           sceneItemEnabled: true,
         });
   }
-}
-
-export async function ensureObsAudio(obs: ObsRpc, baseUrl: string): Promise<ObsFinding[]> {
-  const inputs = (await obs.call('GetInputList')).inputs as Input[];
-  if (
-    MANAGED.every((managed) =>
-      inputs.some((input) => input.inputName === managed.name && input.inputKind === managed.kind),
-    )
-  ) {
-    const complete = await Promise.all(
-      obsDesiredScenes(baseUrl).map(async (scene) => {
-        const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
-          .sceneItems as { sourceName: string; sceneItemEnabled: boolean }[];
-        return MANAGED.every((managed) =>
-          items.some(
-            (item) =>
-              item.sourceName === managed.name &&
-              (managed.name === '麦克风' || item.sceneItemEnabled),
-          ),
-        );
-      }),
-    );
-    if (complete.every(Boolean)) return checkObsAudio(obs);
-  }
-  await setupObsAudio(obs, baseUrl);
-  return checkObsAudio(obs);
 }

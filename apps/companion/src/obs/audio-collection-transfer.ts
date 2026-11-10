@@ -34,6 +34,7 @@ const sourceSchema = z
     slots: z.array(z.enum(slots)).min(1),
     settings: object,
     muted: z.boolean(),
+    enabled: z.boolean().optional(),
     volume: z.number().finite().nonnegative(),
     tracks: z.record(z.string(), z.boolean()),
     monitor: z.enum([
@@ -108,6 +109,39 @@ async function collection(obs: ObsRpc, expected: string) {
     throw new Error('audio_collection_transfer_collection_changed');
 }
 
+/** Capture effective enable intent before leaving the legacy graph, including groups. */
+async function sourceEnabled(obs: ObsRpc, uuid: string): Promise<boolean> {
+  const scenes = (await obs.call('GetSceneList')).scenes as { sceneName: string }[];
+  const visit = async (
+    name: string,
+    group = false,
+    ancestors = new Set<string>(),
+  ): Promise<boolean> => {
+    if (ancestors.has(name)) throw new Error('audio_collection_transfer_scene_cycle');
+    const next = new Set(ancestors).add(name);
+    const items = (
+      await obs.call(group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
+        sceneName: name,
+      })
+    ).sceneItems as {
+      sourceUuid: string;
+      sourceName: string;
+      sceneItemEnabled: boolean;
+      isGroup?: boolean;
+    }[];
+    for (const item of items) {
+      if (typeof item.sceneItemEnabled !== 'boolean')
+        throw new Error('audio_collection_transfer_enable_unknown');
+      if (!item.sceneItemEnabled) continue;
+      if (item.sourceUuid === uuid) return true;
+      if (item.isGroup && (await visit(item.sourceName, true, next))) return true;
+    }
+    return false;
+  };
+  for (const scene of scenes) if (await visit(scene.sceneName)) return true;
+  return false;
+}
+
 /** Snapshot only explicit old bindings, before the old collection is left. No OBS writes. */
 export async function captureAudioCollectionTransfer(
   obs: ObsRpc,
@@ -121,8 +155,6 @@ export async function captureAudioCollectionTransfer(
       throw new Error('audio_collection_transfer_endpoint_changed');
     return;
   }
-  if (state.transition || state.waitingIndependent)
-    throw new Error('audio_collection_transfer_mode_pending');
   const bindings: AudioCollectionBindings = {};
   for (const slot of slots) {
     const binding =
@@ -143,6 +175,8 @@ export async function captureAudioCollectionTransfer(
     entries.some(([, binding]) => binding.collection !== 'Mizar' || binding.endpoint !== endpoint)
   )
     throw new Error('audio_collection_transfer_binding_context_mismatch');
+  if (state.transition || state.waitingIndependent)
+    throw new Error('audio_collection_transfer_mode_pending');
   // A completed backup is evidence, not an unfinished mode transaction.
   // Retain its original file; only copied source monitoring can cross collections.
   let completedMode: AudioCollectionTransfer['completedMode'] = null;
@@ -236,6 +270,7 @@ export async function captureAudioCollectionTransfer(
         slots: [slot],
         settings: settings.inputSettings,
         muted: mute.inputMuted,
+        enabled: await sourceEnabled(obs, binding.inputUuid),
         volume: volume.inputVolumeMul,
         tracks: tracks.inputAudioTracks,
         monitor: monitor.monitorType,
@@ -279,6 +314,8 @@ export async function applyAudioCollectionTransfer(
   await collection(obs, OBS_COLLECTION);
   const bindings: AudioCollectionBindings = {};
   for (const source of transfer.sources) {
+    if (source.name === '麦克风' && typeof source.enabled !== 'boolean')
+      throw new Error('audio_collection_transfer_enable_unknown');
     await collection(obs, OBS_COLLECTION);
     const inputs = (await obs.call('GetInputList')).inputs as {
       inputUuid: string;
@@ -301,6 +338,29 @@ export async function applyAudioCollectionTransfer(
       ).inputUuid;
     if (typeof inputUuid !== 'string' || !inputUuid)
       throw new Error('audio_collection_transfer_create_unconfirmed');
+    // The persisted source snapshot owns migration intent, including interrupted retries.
+    if (source.name === '麦克风') {
+      const items = (await obs.call('GetSceneItemList', { sceneName })).sceneItems as {
+        sourceUuid: string;
+        sceneItemId: number;
+        sceneItemEnabled: boolean;
+      }[];
+      const refs = items.filter((item) => item.sourceUuid === inputUuid);
+      if (refs.length !== 1) throw new Error('audio_collection_transfer_enable_unknown');
+      await obs.call('SetSceneItemEnabled', {
+        sceneName,
+        sceneItemId: refs[0]!.sceneItemId,
+        sceneItemEnabled: source.enabled,
+      });
+      const confirmed = (await obs.call('GetSceneItemList', { sceneName }))
+        .sceneItems as typeof items;
+      if (
+        !confirmed.some(
+          (item) => item.sourceUuid === inputUuid && item.sceneItemEnabled === source.enabled,
+        )
+      )
+        throw new Error('audio_collection_transfer_enable_unknown');
+    }
     const data = { inputUuid };
     await obs.call('SetInputSettings', { ...data, inputSettings: source.settings, overlay: false });
     await obs.call('SetInputMute', { ...data, inputMuted: source.muted });

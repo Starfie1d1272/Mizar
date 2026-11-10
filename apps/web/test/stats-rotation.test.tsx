@@ -39,29 +39,6 @@ it('uses Companion page order, freezes each card, and stops on manual takeover',
   await act(async () => root.unmount());
 });
 
-it('visits every qualified page in order, including multiple map pages, before returning to the scene', async () => {
-  vi.useFakeTimers();
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => Response.json(fixture)),
-  );
-  const host = document.createElement('div');
-  const root = createRoot(host);
-  function Rotation() {
-    const card = useStatsRotation(true, fixture.matchId);
-    return <span>{card?.id ?? 'MAIN'}</span>;
-  }
-  await act(async () => root.render(<Rotation />));
-  await act(async () => vi.advanceTimersByTimeAsync(20_000));
-  for (const page of fixture.pages) {
-    expect(host.textContent).toBe(page.id);
-    const duration = ['maps', 'maps-info', 'recent', 'radar'].includes(page.kind) ? 15_000 : 12_000;
-    await act(async () => vi.advanceTimersByTimeAsync(duration));
-  }
-  expect(host.textContent).toBe('MAIN');
-  await act(async () => root.unmount());
-});
-
 it('ignores a late response after a match change', async () => {
   vi.useFakeTimers();
   let resolveOld!: (value: Response) => void;

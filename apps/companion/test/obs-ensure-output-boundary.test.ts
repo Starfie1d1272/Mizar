@@ -339,6 +339,12 @@ it.each([
         case 'GetInputVolume':
           responseData = { inputVolumeMul: 1 };
           break;
+        case 'GetProfileList':
+          responseData = { currentProfileName: 'Streaming' };
+          break;
+        case 'GetProfileParameter':
+          responseData = { parameterValue: 'Simple' };
+          break;
         case 'GetInputAudioTracks':
           responseData = { inputAudioTracks: { 1: true } };
           break;

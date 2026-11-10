@@ -40,7 +40,6 @@ export type ProductionDependencies = {
       >
     | undefined;
   music: () => Parameters<ObsAdapter['startCommentaryRecovery']>[0];
-  gameAudio?: Parameters<ObsAdapter['startCommentaryRecovery']>[1];
   camera: () => Pick<CameraDirector, 'beginProduction' | 'finishProduction'> | undefined;
   demo: () => Pick<DemoTestController, 'openFormalBoundary' | 'finish'> | undefined;
   observer: Pick<ObserverSettingsStore, 'endProduction'>;
@@ -374,7 +373,6 @@ export function createProduction(options: ProductionDependencies) {
           options.obs?.resumeAutomatic();
           options.obs?.startCommentaryRecovery(
             options.music(),
-            options.gameAudio,
             () => production.automaticAllowed() && (options.obs?.hasCurrentPreparation() ?? false),
           );
           options.camera()?.beginProduction();

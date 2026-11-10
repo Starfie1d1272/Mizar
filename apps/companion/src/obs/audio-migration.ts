@@ -225,6 +225,64 @@ export class AudioMigration {
     if (modeId && journal.modeId !== modeId) return;
     await rm(completedPath);
   }
+  /** Rebind only completed restoration duties to a verified replacement role.
+   * The routing owner commits its new UUIDs after this durable write, so retries
+   * still retain the old-to-new identity evidence if persistence is interrupted.
+   */
+  async rebindCompletedInputs(
+    obs: ObsRpc,
+    path: string,
+    endpoint: string,
+    collection: string,
+    replacements: { before: string; after: string; kind: string }[],
+  ): Promise<void> {
+    const completed = await this.readJournal(path);
+    if (!completed) return;
+    if (
+      completed.endpoint !== endpoint ||
+      completed.collection !== collection ||
+      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_identity_changed');
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
+      throw new Error('audio_migration_identity_changed');
+    const inputs = (await obs.call('GetInputList')).inputs as {
+      inputUuid: string;
+      inputKind: string;
+    }[];
+    const fields: Field[] = [];
+    for (const entry of completed.fields) {
+      const replacement =
+        'kind' in entry ? replacements.find((item) => item.before === entry.inputUuid) : undefined;
+      if (!replacement) {
+        fields.push(entry);
+        continue;
+      }
+      if (
+        inputs.some((input) => input.inputUuid === replacement.before) ||
+        !inputs.some(
+          (input) => input.inputUuid === replacement.after && input.inputKind === replacement.kind,
+        )
+      )
+        throw new Error('audio_migration_identity_changed');
+      const current = (await obs.call('GetInputAudioMonitorType', { inputUuid: replacement.after }))
+        .monitorType;
+      // A newly recreated source can already be at the original value. That
+      // restoration duty is fulfilled; do not overwrite a differing user value.
+      if (current === entry.before) continue;
+      if (current !== entry.applied) throw new Error('audio_migration_external_change');
+      fields.push({ ...entry, inputUuid: replacement.after });
+    }
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
+      throw new Error('audio_migration_identity_changed');
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify({ ...completed, fields })}\n`, { mode: 0o600 });
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
   /** Rebuilding our exclusive graph retires scene-item identities, not monitor preferences. */
   async forgetCompletedSceneItems(path: string, endpoint: string, collection: string) {
     const completed = await this.readJournal(path);

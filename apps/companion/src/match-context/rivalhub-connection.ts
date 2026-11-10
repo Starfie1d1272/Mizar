@@ -2493,7 +2493,16 @@ export class RivalHubConnection {
       source.producerInstanceId !== snapshot.cursor.producerInstanceId ||
       source.liveSessionId !== snapshot.cursor.liveSessionId
     ) {
-      this.business('business_live', snapshot, { reason: 'source_unavailable' });
+      this.business('business_live', snapshot, {
+        reason: 'source_unavailable',
+        sourceUnavailableReason: !source
+          ? 'source_missing'
+          : source.matchId !== snapshot.matchId
+            ? 'match_mismatch'
+            : source.producerInstanceId !== snapshot.cursor.producerInstanceId
+              ? 'producer_mismatch'
+              : 'session_mismatch',
+      });
       throw new Error('rivalhub_live_unavailable');
     }
     this.beginDeliveryExecution(source, snapshot.cursor);

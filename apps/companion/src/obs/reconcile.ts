@@ -18,6 +18,7 @@ export interface ObsRpc {
   withMutationGuard?(guard: () => void): ObsRpc;
   /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
   ownershipScope?(): Promise<string>;
+  managedInputIdentity?(name: string): Promise<{ uuid: string; kind: string } | null>;
   observeManagedResources?(): Promise<boolean>;
   prepareManagedCollection?(allowChange: boolean, writer: ObsRpc): Promise<void>;
   managedResourcesDrift?(): Promise<boolean>;

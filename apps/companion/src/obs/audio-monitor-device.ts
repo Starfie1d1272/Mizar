@@ -1,7 +1,8 @@
 import type { ObsRpc } from './reconcile.js';
 
-/** Compare OBS device selectors. A default selector cannot be resolved to an
- * explicit Windows endpoint by obs-websocket, so that case remains unknown. */
+/** Resolve a safe desktop monitoring route, not only physical device equality.
+ * Unknown also covers unsupported monitor-only semantics. Default selectors
+ * cannot be resolved to explicit Windows endpoints through obs-websocket. */
 export async function desktopMonitorRelationship(
   obs: ObsRpc,
   desktopUuid: string,
@@ -20,7 +21,13 @@ export async function desktopMonitorRelationship(
   const monitor = profile.parameterValue;
   if (typeof capture !== 'string' || !capture || typeof monitor !== 'string' || !monitor)
     return 'unknown';
-  if (capture.toLowerCase() === monitor.toLowerCase()) return 'same';
+  if (capture.toLowerCase() === monitor.toLowerCase()) {
+    // OBS 33 removed monitor-only output suppression. The legacy RPC now enables
+    // monitoring AND direct output, so desktop recapture would duplicate music.
+    const version = (await obs.call('GetVersion')).obsVersion;
+    const major = typeof version === 'string' ? /^(\d+)\./.exec(version)?.[1] : undefined;
+    return major && Number(major) > 0 && Number(major) < 33 ? 'same' : 'unknown';
+  }
   if (capture.toLowerCase() === 'default' || monitor.toLowerCase() === 'default') return 'unknown';
   return 'different';
 }

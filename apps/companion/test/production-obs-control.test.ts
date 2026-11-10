@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
+import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { ensureObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
 import {
   createProduction,
@@ -18,7 +19,7 @@ test('passive OBS preparation never takes another collection, including while ou
       if (type === 'GetSceneCollectionList')
         return Promise.resolve({
           currentSceneCollectionName: 'Personal',
-          sceneCollections: ['Personal', 'Mizar'],
+          sceneCollections: ['Personal', OBS_COLLECTION],
         });
       if (type === 'GetOutputList')
         return Promise.resolve({

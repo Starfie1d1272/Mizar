@@ -55,6 +55,6 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
     return { status: signal?.aborted ? 'cancelled' : 'failed', parsedRecords };
   } finally {
     signal?.removeEventListener('abort', abort);
-    manager.disconnectObserver();
+    manager.disconnectObserver(signal?.aborted ? 'cancelled' : 'failed');
   }
 }
