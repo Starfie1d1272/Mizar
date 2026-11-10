@@ -193,12 +193,58 @@ function geometry(value: unknown): Record<string, number | string> {
 }
 const sameGeometry = (a: Record<string, number | string>, b: Record<string, number | string>) =>
   geometryKeys.every((key) => a[key] === b[key]);
+const initialGeometry = {
+  positionX: 0,
+  positionY: 0,
+  rotation: 0,
+  scaleX: 1,
+  scaleY: 1,
+  boundsType: 'OBS_BOUNDS_NONE',
+  boundsWidth: 0,
+  boundsHeight: 0,
+  boundsAlignment: 0,
+  alignment: 5,
+  cropLeft: 0,
+  cropRight: 0,
+  cropTop: 0,
+  cropBottom: 0,
+};
+const audioOnly = (value: Record<string, number | string>) =>
+  value.boundsType === 'OBS_BOUNDS_NONE' && value.scaleX === 0 && value.scaleY === 0;
 const sameItem = (a: Initialization, b: Initialization) =>
   a.layer === b.layer &&
   a.scope === b.scope &&
   a.inputUuid === b.inputUuid &&
   a.sceneUuid === b.sceneUuid &&
   a.sceneItemId === b.sceneItemId;
+
+async function createMusicResource(
+  obs: ObsRpc,
+  store: MusicStore,
+  intent: Initialization,
+  type: 'CreateInput' | 'CreateSceneItem',
+  data: Record<string, unknown>,
+  valid: () => boolean,
+) {
+  // A missing final-dispatch hook is unknown, never evidence that nothing ran.
+  let dispatched = !obs.withMutationGuard;
+  const writer =
+    obs.withMutationGuard?.(() => {
+      if (!valid()) throw new Error('music_cancelled');
+      dispatched = true;
+    }) ?? obs;
+  try {
+    return await writer.call(type, data);
+  } catch (error) {
+    if (!dispatched)
+      await store.update((state) => {
+        state.sourceInitialization = state.sourceInitialization.filter(
+          (entry) => !sameItem(entry, intent) || entry.phase !== intent.phase,
+        );
+      });
+    throw error;
+  }
+}
 
 /** Resume only a persisted unfinished item, never infer ownership from an existing layout. */
 async function initializeMusicItem(
@@ -257,20 +303,34 @@ async function initializeMusicItem(
   };
   let current = await read();
   if (pending.before === null) {
-    // If the first observation itself was interrupted, there is no saved geometry
-    // against which to exclude an operator edit. Keep the journal and fail closed.
-    if (!newlyCreated || current.enabled) throw new Error('music_initialization_unconfirmed');
-    pending = { ...pending, before: current.transform };
+    // Creation has an accepted UUID/item receipt, even if its first observation
+    // was cancelled. Resume only the untouched disabled item or an audio-only
+    // item already repaired by preparation, never adopt another existing layout.
+    if (!newlyCreated) {
+      if (!scope) throw new Error('music_source_conflict');
+      await assertNoVideoOutput(obs);
+      current = await read();
+      if (!audioOnly(current.transform) && !sameGeometry(current.transform, initialGeometry))
+        throw new Error('music_source_conflict');
+    }
+    if (current.enabled && !audioOnly(current.transform))
+      throw new Error('music_initialization_unconfirmed');
+    pending = {
+      ...pending,
+      before: current.transform,
+      phase: audioOnly(current.transform) ? 'enable' : pending.phase,
+    };
     await store.update((state) => {
       const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
       if (!entry) throw new Error('music_initialization_unconfirmed');
       entry.before = current.transform;
+      entry.phase = pending.phase;
     });
   }
   const target = { ...pending.before!, boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 };
   if (pending.phase === 'transform') {
     if (
-      current.enabled ||
+      (current.enabled && !sameGeometry(current.transform, target)) ||
       (!sameGeometry(current.transform, pending.before!) &&
         !sameGeometry(current.transform, target))
     )
@@ -285,7 +345,7 @@ async function initializeMusicItem(
       });
     }
     current = await read();
-    if (current.enabled || !sameGeometry(current.transform, target))
+    if (!sameGeometry(current.transform, target))
       throw new Error('music_initialization_unconfirmed');
     await store.update((state) => {
       const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));
@@ -332,16 +392,54 @@ export async function ownedMusicInput(
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('music_collection_inactive');
   const scope = await obs.ownershipScope?.();
-  // A timed-out creation may already exist in OBS. Names alone cannot recover
-  // its UUID authority, so retain the original submitted intent and never replay.
-  if (
-    store.state.sourceInitialization.some(
-      (entry) =>
-        entry.layer === layer && entry.scope === (scope ?? null) && entry.phase === 'create',
-    )
-  )
-    throw new Error('music_initialization_unconfirmed');
   const name = layer === 'bgm' ? '音乐' : '音效';
+  const creations = store.state.sourceInitialization.filter(
+    (entry) => entry.layer === layer && entry.scope === (scope ?? null) && entry.phase === 'create',
+  );
+  if (creations.length) {
+    // A missing music-store receipt can still be confirmed by the managed
+    // registry's accepted UUID, but never by a matching display name alone.
+    if (!scope || creations.length !== 1 || creations[0]!.requestedName !== name)
+      throw new Error('music_source_conflict');
+    await assertNoVideoOutput(obs);
+    const registered = await obs.managedInputIdentity?.(name);
+    const current = (await obs.call('GetInputList')).inputs as {
+      inputName: string;
+      inputKind: string;
+      inputUuid?: string;
+    }[];
+    const accepted = registered && current.find((input) => input.inputUuid === registered.uuid);
+    if (accepted && (registered.kind !== 'ffmpeg_source' || accepted.inputKind !== 'ffmpeg_source'))
+      throw new Error('music_source_conflict');
+    if (!accepted && current.some((input) => input.inputName === name))
+      throw new Error('music_source_conflict');
+    if ((await obs.ownershipScope?.()) !== scope) throw new Error('music_source_conflict');
+    assertCurrent();
+    await store.update((state) => {
+      const index = state.sourceInitialization.findIndex(
+        (entry) => sameItem(entry, creations[0]!) && entry.phase === 'create',
+      );
+      if (index < 0) throw new Error('music_initialization_unconfirmed');
+      if (accepted) {
+        if (state.sourceScopes[layer] !== scope) {
+          state.desktopMonitorOriginal[layer] = null;
+          state.monitorConfigured[layer] = null;
+        }
+        state.sources[layer] = accepted.inputUuid!;
+        state.sourceScopes[layer] = scope;
+        state.sourceInitialization[index] = {
+          ...creations[0]!,
+          inputUuid: accepted.inputUuid!,
+          phase: 'locate',
+        };
+      } else {
+        // The verified collection has no target source. Retire only this stale
+        // intent; normal creation still requires idle outputs and a final guard.
+        // A late arrival will hit OBS's name collision, never be adopted/deleted.
+        state.sourceInitialization.splice(index, 1);
+      }
+    });
+  }
   const inputs = (await obs.call('GetInputList')).inputs as {
     inputName: string;
     inputKind: string;
@@ -367,6 +465,7 @@ export async function ownedMusicInput(
       throw new Error('music_source_conflict');
   } else {
     if (!create) return null;
+    if (inputs.some((input) => input.inputName === name)) throw new Error('music_source_conflict');
     // Missing sources may be recreated, but existing unowned ones are never adopted.
     const sceneList = (await obs.call('GetSceneList')).scenes as {
       sceneName: string;
@@ -396,21 +495,28 @@ export async function ownedMusicInput(
     await store.update((state) => {
       state.sourceInitialization.push(creation);
     });
-    const result = await obs.call('CreateInput', {
-      sceneName: scenes[0]!.sceneName,
-      inputName: name,
-      inputKind: 'ffmpeg_source',
-      inputSettings: {
-        is_local_file: true,
-        local_file: '',
-        looping: false,
-        restart_on_activate: false,
-        close_when_inactive: false,
+    const result = await createMusicResource(
+      obs,
+      store,
+      creation,
+      'CreateInput',
+      {
+        sceneName: scenes[0]!.sceneName,
+        inputName: name,
+        inputKind: 'ffmpeg_source',
+        inputSettings: {
+          is_local_file: true,
+          local_file: '',
+          looping: false,
+          restart_on_activate: false,
+          close_when_inactive: false,
+        },
+        // OBS also creates the first scene item. Do not expose album-art video
+        // before that newly owned item's transform is made audio-only below.
+        sceneItemEnabled: false,
       },
-      // OBS also creates the first scene item. Do not expose album-art video
-      // before that newly owned item's transform is made audio-only below.
-      sceneItemEnabled: false,
-    });
+      valid,
+    );
     if (typeof result.inputUuid !== 'string') throw new Error('music_obs_version');
     // Persist the accepted source before the first fallible item query. An unknown
     // item id remains a locate intent, never permission to create another source.
@@ -483,11 +589,18 @@ export async function ownedMusicInput(
       await store.update((state) => {
         state.sourceInitialization.push(pending);
       });
-      const result = await obs.call('CreateSceneItem', {
-        sceneUuid,
-        sourceUuid: store.state.sources[layer],
-        sceneItemEnabled: false,
-      });
+      const result = await createMusicResource(
+        obs,
+        store,
+        pending,
+        'CreateSceneItem',
+        {
+          sceneUuid,
+          sourceUuid: store.state.sources[layer],
+          sceneItemEnabled: false,
+        },
+        valid,
+      );
       if (Number.isInteger(result.sceneItemId)) {
         await store.update((state) => {
           const entry = state.sourceInitialization.find((entry) => sameItem(entry, pending));

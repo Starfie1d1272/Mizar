@@ -18,6 +18,18 @@ pub(crate) struct Token {
     pub(crate) quoted: bool,
 }
 
+impl Token {
+    fn scalar(&self) -> bool {
+        self.quoted || !matches!(self.value.as_str(), "{" | "}")
+    }
+
+    fn key(&self) -> bool {
+        self.scalar()
+            && !self.value.eq_ignore_ascii_case("#include")
+            && !self.value.eq_ignore_ascii_case("#base")
+    }
+}
+
 pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
     let bytes = text.as_bytes();
     let mut i = if text.starts_with('\u{feff}') { 3 } else { 0 };
@@ -84,7 +96,29 @@ pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
                 quoted: false,
             });
         } else {
-            return Err("CS2 或 Steam 配置格式不支持。".into());
+            // KeyValues permits unquoted keys and values. Keep their exact byte
+            // ranges for restoration; directives and conditionals still require
+            // evaluation we cannot safely perform and must not become scalars.
+            let start = i;
+            while i < bytes.len()
+                && !bytes[i].is_ascii_whitespace()
+                && ![b'{', b'}', b'"'].contains(&bytes[i])
+                && !bytes[i..].starts_with(b"//")
+            {
+                if bytes[i].is_ascii_control()
+                    || [b'#', b'[', b']'].contains(&bytes[i])
+                    || bytes[i..].starts_with(b"/*")
+                {
+                    return Err(format!("CS2 或 Steam 配置格式不支持（字节位置 {i}）。"));
+                }
+                i += 1;
+            }
+            result.push(Token {
+                value: text[start..i].to_string(),
+                start,
+                end: i,
+                quoted: false,
+            });
         }
     }
     Ok(result)
@@ -111,7 +145,7 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
                 *i += 1;
                 return Ok(());
             }
-            if !key.quoted {
+            if !key.key() {
                 return Err("启动配置字段无效。".into());
             }
             path.push(key.value.clone());
@@ -120,7 +154,7 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
             *i += 1;
             if !value.quoted && value.value == "{" {
                 walk(tokens, i, path, target, found, true)?;
-            } else if value.quoted {
+            } else if value.scalar() {
                 if path.len() == target.len()
                     && path
                         .iter()
@@ -187,7 +221,7 @@ pub(crate) fn scalar_section_with_end(
                 *i += 1;
                 return Ok(());
             }
-            if !key.quoted {
+            if !key.key() {
                 return Err("启动配置字段无效。".into());
             }
             *i += 1;
@@ -200,7 +234,7 @@ pub(crate) fn scalar_section_with_end(
                 path.push(key.value.clone());
                 walk(tokens, i, path, target, result, true)?;
                 path.pop();
-            } else if value.quoted {
+            } else if value.scalar() {
                 if selected {
                     entries.push((key.clone(), value.clone()));
                 }
