@@ -755,11 +755,7 @@ impl SessionStore {
         account: u32,
     ) -> Result<bool, String> {
         let guard = self.acquire_write_guard()?;
-        if self.load()?.is_some()
-            || self.spectator_pending()
-            || self.full_spectator_pending()
-            || self.playback_cleanup_pending()
-        {
+        if self.load()?.is_some() || self.spectator_pending() || self.full_spectator_pending() {
             return Err("请先完成上次游戏配置恢复。".into());
         }
         let mut record = crate::cs2_spectator::prepare_standalone(video, executable)?;
@@ -1367,8 +1363,8 @@ impl SessionStore {
         original: &str,
         frame: Option<(&str, &str)>,
     ) -> Result<(), String> {
-        if self.spectator_pending() || self.playback_cleanup_pending() {
-            return Err("请先完成上次观战或试播恢复。".into());
+        if self.spectator_pending() {
+            return Err("请先完成上次观战恢复。".into());
         }
         let restored = cs2_video::compatible_restore(backup, original)?;
         let machine = video
