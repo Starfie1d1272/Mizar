@@ -85,7 +85,7 @@ const quarantineSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('intent'), intent: intentSchema }).strict(),
   z.object({ kind: z.literal('watermark'), identity: exactSchema }).strict(),
 ]);
-const envelopeSchema = z
+const legacyEnvelopeSchema = z
   .object({
     version: z.literal(2),
     records: z.array(recordSchema).max(MAX_RECORDS),
@@ -93,14 +93,26 @@ const envelopeSchema = z
     revokedIntents: z.array(intentSchema).max(MAX_RECORDS).default([]),
     watermarks: z.array(exactSchema).max(MAX_RECORDS).default([]),
   })
-  .strict()
+  .strict();
+
+const validateRecords = (state: { records: SourceRecord[] }, ctx: z.RefinementCtx) => {
+  const keys = state.records.map((record) => exactKey(record.identity));
+  if (
+    new Set(keys).size !== keys.length ||
+    state.records.filter((record) => record.state === 'owned').length > 1
+  )
+    ctx.addIssue({ code: 'custom', message: 'duplicate or multiple owned sources' });
+};
+
+const envelopeSchema = legacyEnvelopeSchema
+  .omit({ intent: true })
+  .extend({ version: z.literal(3), intents: z.array(intentSchema).max(MAX_RECORDS) })
   .superRefine((state, ctx) => {
-    const keys = state.records.map((record) => exactKey(record.identity));
-    if (
-      new Set(keys).size !== keys.length ||
-      state.records.filter((record) => record.state === 'owned').length > 1
-    )
-      ctx.addIssue({ code: 'custom', message: 'duplicate or multiple owned sources' });
+    validateRecords(state, ctx);
+    const ids = state.intents.map((intent) => intent.id);
+    const matches = state.intents.map((intent) => matchKey(intent.scope));
+    if (new Set(ids).size !== ids.length || new Set(matches).size !== matches.length)
+      ctx.addIssue({ code: 'custom', message: 'duplicate pending claims' });
   });
 
 export type SourceScope = z.infer<typeof scopeSchema>;
@@ -136,6 +148,10 @@ function exactKey(identity: ExactSource): string {
     identity.authorityRevision,
   ]);
 }
+function matchKey(scope: SourceScope): string {
+  return JSON.stringify([scope.baseUrl, scope.competitionId, scope.installationId, scope.matchId]);
+}
+
 function sameScope(a: SourceScope, b: SourceScope): boolean {
   return (
     a.baseUrl === b.baseUrl &&
@@ -360,28 +376,25 @@ export class RivalHubSourceState {
       watermarks.push(identity);
     }
     state.watermarks = watermarks;
-    if (state.intent) {
+    const intents: ClaimIntent[] = [];
+    for (const intent of state.intents) {
       let evidence: QuarantineEvidence[];
       try {
-        evidence = await this.evidenceForScope(state.intent.scope);
+        evidence = await this.evidenceForScope(intent.scope);
       } catch {
         await this.quarantine({
           kind: 'intent',
-          intent: { ...state.intent, quarantineUncertain: true },
+          intent: { ...intent, quarantineUncertain: true },
         });
-        state.intent = null;
         changed = true;
-        evidence = [];
+        continue;
       }
-      if (
-        state.intent &&
-        evidence.some((item) => item.kind === 'intent' && item.intent.id === state.intent?.id)
-      ) {
-        await this.quarantine({ kind: 'intent', intent: state.intent });
-        state.intent = null;
+      if (evidence.some((item) => item.kind === 'intent' && item.intent.id === intent.id)) {
+        await this.quarantine({ kind: 'intent', intent });
         changed = true;
-      }
+      } else intents.push(intent);
     }
+    state.intents = intents;
     for (const intent of state.revokedIntents) {
       try {
         await this.quarantine({ kind: 'intent', intent });
@@ -444,18 +457,18 @@ export class RivalHubSourceState {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           this.state = {
-            version: 2,
+            version: 3,
             records: [],
-            intent: null,
+            intents: [],
             revokedIntents: [],
             watermarks: [],
           };
           return structuredClone(this.state);
         }
         const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
-        const legacy = raw?.version === 1;
+        const legacy = raw?.version === 1 || raw?.version === 2;
         if (
-          legacy &&
+          raw?.version === 1 &&
           ((raw.intent && typeof raw.intent === 'object' && 'captureReference' in raw.intent) ||
             (Array.isArray(raw.records) &&
               raw.records.some(
@@ -464,7 +477,15 @@ export class RivalHubSourceState {
               )))
         )
           throw new Error('source_legacy_capture_reference_invalid');
-        const loaded = envelopeSchema.parse(legacy ? { ...raw, version: 2 } : raw);
+        let migrated: unknown = raw;
+        if (legacy) {
+          const { intent, ...rest } = legacyEnvelopeSchema.superRefine(validateRecords).parse({
+            ...raw,
+            version: 2,
+          });
+          migrated = { ...rest, version: 3, intents: intent ? [intent] : [] };
+        }
+        const loaded = envelopeSchema.parse(migrated);
         const reconciled = await this.reconcileQuarantine(loaded);
         if (legacy || reconciled) {
           const validated = envelopeSchema.parse(loaded);
@@ -510,7 +531,7 @@ export class RivalHubSourceState {
     });
   }
 
-  /** Persist before sending claim. A previous unknown claim must be resolved first. */
+  /** Persist before sending claim. Unknown claims block only their installation and match. */
   async beginClaim(
     scope: SourceScope,
     previousAuthorityRevision: number | null,
@@ -518,8 +539,9 @@ export class RivalHubSourceState {
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
       await this.reconcileQuarantine(state);
-      if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      if (state.intents.some((intent) => matchKey(intent.scope) === matchKey(validScope)))
+        throw new Error('source claim requires reconciliation');
       if (captureReference) {
         captureReference = parseCaptureReference(captureReference);
         if (
@@ -563,7 +585,8 @@ export class RivalHubSourceState {
         owned.cause = 'switch';
       }
       // Reserve a slot before contacting the server; unresolved identities are never evicted.
-      if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
+      if (state.records.length + state.intents.length >= MAX_RECORDS)
+        throw new Error('source state capacity exceeded');
       const known = scopes
         .filter((item) => sameScope(item, validScope))
         .map((item) => item.authorityRevision);
@@ -594,27 +617,35 @@ export class RivalHubSourceState {
           ? { idempotentAuthorityRevision: owned.identity.authorityRevision }
           : {}),
       });
-      state.intent = intent;
+      state.intents.push(intent);
       return intent;
     });
   }
 
   /** Persist the exact authority before the caller enables sends. */
-  async confirmClaim(intentId: string, authorityRevision: number): Promise<ExactSource> {
+  async confirmClaim(
+    intentId: string,
+    authorityRevision: number,
+    disposition: 'owned' | 'release_pending' = 'owned',
+  ): Promise<ExactSource> {
     return this.change((state) => {
-      const intent = state.intent;
-      if (!intent || intent.id !== intentId) throw new Error('stale source claim');
+      const intent = state.intents.find((item) => item.id === intentId);
+      if (!intent) throw new Error('stale source claim');
       const identity = exactSchema.parse({ ...intent.scope, authorityRevision });
       const key = exactKey(identity);
       for (const record of state.records) {
-        if (record.state === 'owned' && exactKey(record.identity) !== key) {
+        if (
+          record.state === 'owned' &&
+          exactKey(record.identity) !== key &&
+          (disposition === 'owned' || sameScope(record.identity, intent.scope))
+        ) {
           record.state = 'release_pending';
           record.cause = 'switch';
         }
       }
       const existing = state.records.find((record) => exactKey(record.identity) === key);
       if (existing) {
-        existing.state = 'owned';
+        existing.state = disposition;
         delete existing.installationRevoked;
         existing.cause = 'recovery';
         existing.attempts = 0;
@@ -626,14 +657,14 @@ export class RivalHubSourceState {
         state.records.push({
           identity,
           ...(intent.captureReference ? { captureReference: intent.captureReference } : {}),
-          state: 'owned',
+          state: disposition,
           cause: 'recovery',
           attempts: 0,
           nextAttemptAt: null,
           lastFailureCode: null,
         });
       }
-      state.intent = null;
+      state.intents = state.intents.filter((item) => item.id !== intentId);
       return identity;
     });
   }
@@ -641,8 +672,9 @@ export class RivalHubSourceState {
   /** Only call after a conclusive response or exact status lookup proves no claim occurred. */
   async clearIntent(intentId: string): Promise<void> {
     await this.change((state) => {
-      if (!state.intent || state.intent.id !== intentId) throw new Error('stale source claim');
-      state.intent = null;
+      if (!state.intents.some((item) => item.id === intentId))
+        throw new Error('stale source claim');
+      state.intents = state.intents.filter((item) => item.id !== intentId);
     });
   }
 
@@ -708,17 +740,17 @@ export class RivalHubSourceState {
         throw new Error('source is not archive pending');
       // Upgrade legacy in-flight intents before removing their only durable
       // proof that the equal revision was held when the claim began.
-      if (
-        state.intent &&
-        state.intent.idempotentAuthorityRevision === undefined &&
-        sameScope(state.intent.scope, identity) &&
-        state.intent.previousAuthorityRevision === identity.authorityRevision &&
-        !state.watermarks.some(
-          (item) =>
-            sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
+      for (const intent of state.intents)
+        if (
+          intent.idempotentAuthorityRevision === undefined &&
+          sameScope(intent.scope, identity) &&
+          intent.previousAuthorityRevision === identity.authorityRevision &&
+          !state.watermarks.some(
+            (item) =>
+              sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
+          )
         )
-      )
-        state.intent.idempotentAuthorityRevision = identity.authorityRevision;
+          intent.idempotentAuthorityRevision = identity.authorityRevision;
       if (state.records[index]?.installationRevoked) {
         await this.quarantine({ kind: 'watermark', identity });
       } else {
@@ -778,10 +810,9 @@ export class RivalHubSourceState {
         else watermarks.push(identity);
       }
       state.watermarks = watermarks;
-      if (state.intent && matches(state.intent.scope)) {
-        await this.quarantine({ kind: 'intent', intent: state.intent });
-        state.intent = null;
-      }
+      for (const intent of state.intents)
+        if (matches(intent.scope)) await this.quarantine({ kind: 'intent', intent });
+      state.intents = state.intents.filter((intent) => !matches(intent.scope));
       return revoked;
     });
   }
