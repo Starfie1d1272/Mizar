@@ -134,7 +134,7 @@ export class SupportExports {
     this.active = active;
     this.jobs.set(id, job);
     active.task = (async () => {
-      const diskBudgetBytes = await this.prepareCache();
+      const diskBudgetBytes = await this.prepareCache(job);
       this.assertActive(job);
       await this.build(
         job,
@@ -170,12 +170,13 @@ export class SupportExports {
     if (this.active?.id !== job.exportId || job.phase === 'cancelled')
       throw new Error('export_cancelled');
   }
-  private async prepareCache() {
+  private async prepareCache(job: ExportJob) {
     await safePath(dirname(this.directory));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await safePath(this.directory);
     let used = 0;
     let leased = false;
+    let cleanupFailed = false;
     const size = async (path: string): Promise<number> => {
       const stat = await lstat(path);
       if (stat.isFile() && stat.nlink === 1) {
@@ -194,20 +195,45 @@ export class SupportExports {
       const stat = await lstat(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('export_cache_unsafe');
       if (Date.now() - stat.mtimeMs > 15 * 60_000) {
-        const removed = await removeExpiredExport(path, stat).catch((cause: unknown) => {
-          throw new Error('export_cache_cleanup_failed', { cause });
-        });
+        let removed = false;
+        try {
+          removed = await removeExpiredExport(path, stat);
+          if (!removed) leased = true;
+        } catch (cause) {
+          cleanupFailed = true;
+          job.cleanupStatus = 'unconfirmed';
+          try {
+            this.onDiagnostic?.(
+              new Error('export_cache_cleanup_failed', { cause }),
+              job.exportId,
+              'cleanup',
+            );
+          } catch {
+            // Reporting must not turn measurable retained cache into an export blocker.
+          }
+        }
         if (removed) {
           this.jobs.delete(name);
           continue;
         }
-        leased = true;
       }
+      // Failed cleanup is not failed admission: retain and charge safe contents.
+      // A replaced/unsafe directory or an unreadable size still blocks admission.
+      await safePath(path);
+      const retained = await lstat(path);
+      if (retained.dev !== stat.dev || retained.ino !== stat.ino)
+        throw new Error('export_cache_directory_changed');
       used += await size(path);
     }
     const remaining = CACHE_LIMIT - used - MANIFEST_RESERVE;
     if (remaining <= 0)
-      throw new Error(leased ? 'export_cache_lease_unconfirmed' : 'export_cache_budget');
+      throw new Error(
+        cleanupFailed
+          ? 'export_cache_cleanup_failed'
+          : leased
+            ? 'export_cache_lease_unconfirmed'
+            : 'export_cache_budget',
+      );
     return remaining;
   }
   private async build(

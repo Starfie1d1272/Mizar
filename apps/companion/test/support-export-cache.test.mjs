@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SupportExports } from '../dist/support/export-job.js';
 
-async function fixture() {
+async function fixture(bytes = 255 * 1024 * 1024) {
   const root = await fs.mkdtemp(join(tmpdir(), 'mizar-export-cache-'));
   const logs = join(root, 'logs');
   const stale = join(root, 'support-export', randomUUID());
@@ -16,7 +16,7 @@ async function fixture() {
   await fs.mkdir(logs);
   await fs.mkdir(stale, { recursive: true });
   const handle = await fs.open(part, 'wx');
-  await handle.truncate(255 * 1024 * 1024);
+  await handle.truncate(bytes);
   await handle.close();
   const age = async () => fs.utimes(stale, new Date(0), new Date(0));
   await age();
@@ -174,6 +174,84 @@ test('final empty-directory removal cannot delete a newly acquired peer lease', 
     fs.rmdir = realRmdir;
     syncBuiltinESMExports();
     await peer?.close();
+    await realRm(f.root, { recursive: true, force: true });
+  }
+});
+
+test('small measurable stale-cache cleanup failure does not block a new export', async () => {
+  const f = await fixture(4096);
+  const diagnostics = [];
+  try {
+    replaceRm(async (path, options) => {
+      if (path === f.part)
+        throw Object.assign(new Error('cache permission denied'), { code: 'EACCES' });
+      return realRm(path, options);
+    });
+    const owner = new SupportExports(
+      f.logs,
+      () => [],
+      (error, id, stage) => diagnostics.push({ error, id, stage }),
+    );
+    const result = await settle(owner);
+    assert.equal(result.phase, 'ready', result.error);
+    assert.equal(result.cleanupStatus, 'unconfirmed');
+    assert.ok(result.parts.length > 0);
+    assert.equal((await fs.stat(f.part)).size, 4096);
+    await assert.rejects(fs.lstat(f.lease), { code: 'ENOENT' });
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].id, result.exportId);
+    assert.equal(diagnostics[0].stage, 'cleanup');
+    assert.equal(diagnostics[0].error.cause.code, 'EACCES');
+    assert.equal(diagnostics[0].error.cause.message, 'cache permission denied');
+  } finally {
+    replaceRm(realRm);
+    await realRm(f.root, { recursive: true, force: true });
+  }
+});
+
+test('unsafe retained cache still blocks admission after cleanup failure', async () => {
+  const f = await fixture(4096);
+  try {
+    replaceRm(async (path, options) => {
+      if (path === f.part) {
+        await fs.rename(f.stale, `${f.stale}.original`);
+        await fs.mkdir(f.stale);
+        throw new Error('directory replaced during cleanup');
+      }
+      return realRm(path, options);
+    });
+    const result = await settle(new SupportExports(f.logs));
+    assert.equal(result.phase, 'failed');
+    assert.match(result.error, /export_cache_directory_changed/);
+    assert.equal((await fs.stat(join(`${f.stale}.original`, 'part-1.zip'))).size, 4096);
+  } finally {
+    replaceRm(realRm);
+    await realRm(f.root, { recursive: true, force: true });
+  }
+});
+
+test('unmeasurable retained cache blocks admission instead of guessing a budget', async () => {
+  const f = await fixture(4096);
+  const realLstat = fs.lstat;
+  try {
+    replaceRm(async (path, options) => {
+      if (path === f.part) throw Object.assign(new Error('cleanup denied'), { code: 'EACCES' });
+      return realRm(path, options);
+    });
+    fs.lstat = async (path, options) => {
+      if (path === f.part)
+        throw Object.assign(new Error('cannot measure retained content'), { code: 'EACCES' });
+      return realLstat(path, options);
+    };
+    syncBuiltinESMExports();
+    const result = await settle(new SupportExports(f.logs));
+    assert.equal(result.phase, 'failed');
+    assert.match(result.error, /cannot measure retained content/);
+    assert.equal((await fs.stat(f.part)).size, 4096);
+    await assert.rejects(realLstat(f.lease), { code: 'ENOENT' });
+  } finally {
+    fs.lstat = realLstat;
+    replaceRm(realRm);
     await realRm(f.root, { recursive: true, force: true });
   }
 });
