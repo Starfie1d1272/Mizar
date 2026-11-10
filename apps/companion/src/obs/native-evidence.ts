@@ -191,7 +191,9 @@ export interface ObsNativeLogEvent {
   readonly operation?: string | null;
   readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio';
   readonly audioLagMs?: number;
-  readonly audioSource?: 'microphone' | 'desktop' | 'game' | 'commentary' | 'music' | 'other';
+  readonly audioBufferMs?: number;
+  readonly audioSource?:
+    'microphone' | 'desktop' | 'game' | 'commentary' | 'music' | 'effect' | 'other';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
   readonly source: 'mizar_capture' | 'other_capture' | null;
   readonly target: 'cs2.exe' | 'other' | null;
@@ -215,6 +217,7 @@ export interface ObsNativeLogEvent {
     | 'audio_lag_restart'
     | 'audio_device_start_failed'
     | 'audio_window_unavailable'
+    | 'audio_timestamp_error'
     | null;
   readonly code: number | null;
   readonly codeHex: string | null;
@@ -291,6 +294,15 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
       stamp[2]!,
     );
   const device = /^WASAPI: Device '.*' failed to start \(source: (.+)\)$/i.exec(stamp[2]!);
+  const initialized = /^WASAPI: Device '.*' \[\d+ Hz\] initialized \(source: (.+)\)$/i.exec(
+    stamp[2]!,
+  );
+  const invalidated = /^Device '.*' invalidated\.\s+Retrying \(source: (.+)\)$/i.exec(stamp[2]!);
+  const buffer =
+    /^adding \d+ milliseconds of audio buffering, total audio buffering is now (\d+) milliseconds \(source: (.+)\)$/i.exec(
+      stamp[2]!,
+    );
+  const defaultChanged = /^WASAPI: Default (input|output) device changed$/i.test(stamp[2]!);
   const audioReason = lag
     ? 'audio_lag_restart'
     : device
@@ -301,30 +313,52 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
               stamp[2]!,
             )
           ? 'audio_window_unavailable'
-          : null;
-  if (audioReason) {
+          : /^\[WASAPISource::ProcessCaptureData\] Timestamp error!$/i.test(stamp[2]!)
+            ? 'audio_timestamp_error'
+            : null;
+  const audioOperation =
+    audioReason ??
+    (initialized
+      ? 'audio_device_initialized'
+      : invalidated
+        ? 'audio_device_retry'
+        : buffer
+          ? 'audio_buffer_increased'
+          : defaultChanged
+            ? 'audio_default_device_changed'
+            : null);
+  if (audioOperation) {
     const lagMs = lag ? Number(lag[2]) : undefined;
-    const source = lag?.[1] ?? device?.[1];
+    const bufferMs = buffer ? number(Number(buffer[1])) : null;
+    const source = lag?.[1] ?? device?.[1] ?? initialized?.[1] ?? invalidated?.[1] ?? buffer?.[2];
     const roles: Record<string, NonNullable<ObsNativeLogEvent['audioSource']>> = {
       麦克风: 'microphone',
       桌面声音: 'desktop',
       游戏声音: 'game',
       其他解说: 'commentary',
       音乐: 'music',
+      音效: 'effect',
     };
     return {
       localTime: stamp[1]!,
       category: 'audio',
-      outcome: 'failure',
+      outcome: audioReason
+        ? 'failure'
+        : initialized
+          ? 'success'
+          : invalidated
+            ? 'retry'
+            : 'attempt',
       source: null,
       target: null,
-      operation: audioReason,
+      operation: audioOperation,
       reason: audioReason,
-      message: audioReason,
+      message: audioOperation,
       code: null,
       codeHex: null,
       hookVersions: null,
       ...(source ? { audioSource: Object.hasOwn(roles, source) ? roles[source]! : 'other' } : {}),
+      ...(bufferMs !== null ? { audioBufferMs: bufferMs } : {}),
       ...(lagMs !== undefined && Number.isFinite(lagMs) ? { audioLagMs: lagMs } : {}),
     };
   }

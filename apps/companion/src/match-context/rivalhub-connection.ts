@@ -1128,7 +1128,10 @@ export class RivalHubConnection {
     // Durable handoff owns the old scope. Pending network delivery does not block a new match.
     // Cleanup still requires settlement before issuing the exact release.
     void this.settle(identity).catch((error: unknown) => this.onDiagnostic('source_settle', error));
-    if (this.source === source) this.source = null;
+    if (this.source === source) {
+      this.source = null;
+      this.cleanupEvidence(identity, `source_retired_${cause}`, 0);
+    }
   }
 
   private async reconcileIntent(deadline: number): Promise<void> {
@@ -1992,8 +1995,17 @@ export class RivalHubConnection {
     isCurrent: () => boolean = () => true,
   ) {
     this.claimOperationsInFlight++;
+    this.business('business_claim', snapshot, { contextRevision, reason: 'claim_started' });
     try {
       return await this.claimLockedOnce(snapshot, contextRevision, takeover, generation, isCurrent);
+    } catch (error) {
+      this.originalError('source_claim', error);
+      this.business('business_claim', snapshot, {
+        contextRevision,
+        reason: requestFailureReason(error),
+        causeCode: requestFailureCode(error),
+      });
+      throw error;
     } finally {
       this.claimOperationsInFlight--;
     }
@@ -2074,6 +2086,10 @@ export class RivalHubConnection {
       priorRevisions.length ? Math.max(...priorRevisions) : null,
       this.captureLifecycle?.createReference(snapshot.cursor),
     );
+    this.business('business_claim', snapshot, {
+      contextRevision,
+      reason: 'claim_intent_persisted',
+    });
     const claimedFrom = this.source;
     if (claimedFrom) claimedFrom.paused = true;
     await this.updateCleanupSummary();
@@ -2218,6 +2234,7 @@ export class RivalHubConnection {
         };
         this.claimRevision += 1;
         this.source = { ...identity };
+        this.business('business_claim', snapshot, { contextRevision, reason: 'source_published' });
         this.activeDeviceName = null;
         this.activeDeviceMatchId = null;
       } else if (result.claimed === false) {
@@ -2240,11 +2257,6 @@ export class RivalHubConnection {
         this.controlFailureScope = this.failureScope(snapshot);
         this.controlFailure = requestFailureReason(error);
       }
-      this.business('business_claim', snapshot, {
-        contextRevision,
-        reason: requestFailureReason(error),
-        causeCode: requestFailureCode(error),
-      });
       throw error;
     }
   }
@@ -2864,6 +2876,12 @@ export class RivalHubConnection {
     if (attempt && source && isCurrent() && !signal.aborted) {
       if (result === 'accepted' || (typeof result === 'object' && result.status === 'accepted')) {
         source.acknowledgedExecution = executionKey(event.cursor);
+        this.business('business_reliable', event, {
+          idempotencyKey: event.idempotencyKey,
+          eventKind: event.kind,
+          reason: 'map_start_acknowledged',
+          acknowledgedAt: new Date().toISOString(),
+        });
         if (source.deliveryExecution === executionKey(event.cursor)) {
           if (typeof result === 'object' && result.status === 'accepted')
             this.controlFailure = 'reliable_needs_attention';

@@ -448,10 +448,10 @@ export function ObsAudioRouting({ active = true }: { active?: boolean }) {
       )}
       {message && <p role="alert">{message}</p>}
       {active && !busy && !status?.transition && (
-        <ObsAudioMeter key={status?.revision ?? 'unavailable'} />
+        <ObsAudioMeter key={`meter:${status?.revision ?? 'unavailable'}`} />
       )}
       <ObsAudioDevices
-        key={status?.revision ?? 'unavailable'}
+        key={`devices:${status?.revision ?? 'unavailable'}`}
         disabled={busy || Boolean(status?.transition || status?.waitingIndependent)}
       />
       <details className="obs-audio-advanced">

@@ -741,17 +741,21 @@ export function runArchiveWorker(
             position = 0,
             offset = 0,
             body = '',
+            bodyBytes = 0,
             attachmentIndex = 0;
           const write = (line: string) => {
             if (source.rawAttachment) {
               for (const secret of source.secrets ?? [])
                 if (secret) line = line.split(secret).join('[redacted]');
               line = String(redact(line)) + '\n';
-              if (Buffer.byteLength(body) + Buffer.byteLength(line) > 1024 * 1024 && body) {
+              const lineBytes = Buffer.byteLength(line);
+              if (bodyBytes + lineBytes > 1024 * 1024 && body) {
                 add(source.name + '-' + ++attachmentIndex + '.log', Buffer.from(body));
                 body = '';
+                bodyBytes = 0;
               }
               body += line;
+              bodyBytes += lineBytes;
             } else if (line) {
               let value: unknown;
               const start = performance.now();

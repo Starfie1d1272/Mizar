@@ -5,7 +5,9 @@ import { z } from 'zod';
 import { obsAudioBindingSchema } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import { AudioMigration } from './audio-migration.js';
-import { OBS_COLLECTION } from './desired-state.js';
+import { OBS_COLLECTION, obsSceneName } from './desired-state.js';
+import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { ObsVideoError } from './video-transaction.js';
 import type { ObsRpc } from './reconcile.js';
 
@@ -109,39 +111,6 @@ async function collection(obs: ObsRpc, expected: string) {
     throw new Error('audio_collection_transfer_collection_changed');
 }
 
-/** Capture effective enable intent before leaving the legacy graph, including groups. */
-async function sourceEnabled(obs: ObsRpc, uuid: string): Promise<boolean> {
-  const scenes = (await obs.call('GetSceneList')).scenes as { sceneName: string }[];
-  const visit = async (
-    name: string,
-    group = false,
-    ancestors = new Set<string>(),
-  ): Promise<boolean> => {
-    if (ancestors.has(name)) throw new Error('audio_collection_transfer_scene_cycle');
-    const next = new Set(ancestors).add(name);
-    const items = (
-      await obs.call(group ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
-        sceneName: name,
-      })
-    ).sceneItems as {
-      sourceUuid: string;
-      sourceName: string;
-      sceneItemEnabled: boolean;
-      isGroup?: boolean;
-    }[];
-    for (const item of items) {
-      if (typeof item.sceneItemEnabled !== 'boolean')
-        throw new Error('audio_collection_transfer_enable_unknown');
-      if (!item.sceneItemEnabled) continue;
-      if (item.sourceUuid === uuid) return true;
-      if (item.isGroup && (await visit(item.sourceName, true, next))) return true;
-    }
-    return false;
-  };
-  for (const scene of scenes) if (await visit(scene.sceneName)) return true;
-  return false;
-}
-
 /** Snapshot only explicit old bindings, before the old collection is left. No OBS writes. */
 export async function captureAudioCollectionTransfer(
   obs: ObsRpc,
@@ -231,8 +200,15 @@ export async function captureAudioCollectionTransfer(
   await collection(obs, 'Mizar');
   const inputs = (await obs.call('GetInputList')).inputs as {
     inputUuid: string;
+    inputName: string;
     inputKind: string;
   }[];
+  const special = await obs.call('GetSpecialInputs');
+  const scenes = (await obs.call('GetSceneList')).scenes as { sceneName: string }[];
+  const roots = PROGRAM_SCENES.map((scene) => obsSceneName(scene.id)).filter((name) =>
+    scenes.some((scene) => scene.sceneName === name),
+  );
+  const graph = await inspectAudioSceneGraph(obs, roots);
   const sources: AudioCollectionTransfer['sources'] = [];
   for (const [slot, binding] of entries) {
     const existing = sources.find((source) => source.name === names[slot]);
@@ -248,11 +224,10 @@ export async function captureAudioCollectionTransfer(
       )
     )
       throw new Error('audio_collection_transfer_unsupported_source');
-    if (
-      !inputs.some(
-        (input) => input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
-      )
-    )
+    const input = inputs.find(
+      (input) => input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
+    );
+    if (!input || typeof input.inputName !== 'string' || !input.inputName)
       throw new Error('audio_collection_transfer_source_missing');
     const data = { inputUuid: binding.inputUuid };
     const [settings, mute, volume, tracks, monitor, filters] = await Promise.all([
@@ -270,7 +245,16 @@ export async function captureAudioCollectionTransfer(
         slots: [slot],
         settings: settings.inputSettings,
         muted: mute.inputMuted,
-        enabled: await sourceEnabled(obs, binding.inputUuid),
+        // Global Mic/Aux is active without scene items; mute is copied separately.
+        enabled:
+          Object.values(special).includes(input.inputName) ||
+          graph.some(
+            (container) =>
+              container.activeManagedRoots.size > 0 &&
+              container.items.some(
+                (item) => item.sourceUuid === binding.inputUuid && item.sceneItemEnabled,
+              ),
+          ),
         volume: volume.inputVolumeMul,
         tracks: tracks.inputAudioTracks,
         monitor: monitor.monitorType,
