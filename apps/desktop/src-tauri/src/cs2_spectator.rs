@@ -227,7 +227,7 @@ fn saved_binding(saved: &Value, digit: &str) -> Result<Option<(String, String)>,
     match saved.get(digit) {
         Some(Value::Null) => Ok(None),
         Some(Value::String(raw)) => {
-            // Validate the saved token as one quoted scalar, never as commands.
+            // Validate the saved token as one scalar, never as commands.
             let text = format!("\"config\" {{\"bindings\" {{\"{digit}\" {raw}}}}}");
             let token = field(&text, &["config", "bindings", digit])?
                 .filter(|token| token.end - token.start == raw.len())
@@ -516,7 +516,7 @@ pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Valu
     if original.len() > 256 * 1024 {
         return Err("观战配置过大。".into());
     }
-    value(&original)?;
+    value(&original).map_err(|error| format!("cs2_machine_convars.vcfg / 观战设置：{error}"))?;
     let mut record = prepare(
         &[json!({"kind":"convars", "original":original})],
         video,
@@ -597,9 +597,10 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
     let original = record["original"]
         .as_str()
         .ok_or("观战配置原值备份缺失。")?;
-    value(original)?;
-    let keys = read_keys(video)?;
-    let bindings = backup_bindings(&keys)?;
+    value(original).map_err(|error| format!("cs2_machine_convars.vcfg / 观战设置：{error}"))?;
+    let keys = read_keys(video).map_err(|error| format!("{KEYS_NAME} / 读取键位：{error}"))?;
+    let bindings =
+        backup_bindings(&keys).map_err(|error| format!("{KEYS_NAME} / 备份数字键：{error}"))?;
     match backup_hud(&keys) {
         Ok(hud) => {
             let identity = hud["identity"].as_str().ok_or("HUD 键身份缺失。")?;
@@ -610,8 +611,9 @@ pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value
                 Err(warning) => Err(warning),
             }
         }
-        Err(warning) => {
+        Err(error) => {
             install(executable)?;
+            let warning = format!("{KEYS_NAME} / 备份 H 键：{error}");
             Ok(
                 json!({"version":2,"video":video,"original":original,"bindings":bindings,"hudWarning":warning,"loadAttempted":false}),
             )

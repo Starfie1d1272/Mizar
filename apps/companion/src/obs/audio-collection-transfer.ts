@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { obsAudioBindingSchema } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import { AudioMigration } from './audio-migration.js';
+import { readCommentarySwitch } from './commentary-switch.js';
 import { OBS_COLLECTION, obsSceneName } from './desired-state.js';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import { inspectAudioSceneGraph } from './audio-scene-graph.js';
@@ -29,6 +30,25 @@ const names: Record<Slot, string> = {
   microphone: '麦克风',
 };
 const object = z.record(z.string(), z.unknown());
+const completedProbe = z
+  .object({
+    endpoint: z.string().min(1),
+    collection: z.literal('Mizar'),
+    uuid: z.string().min(1),
+    name: z.string().min(1),
+  })
+  .strict();
+const ownedTarget = completedProbe
+  .omit({ name: true })
+  .extend({ window: z.string().min(1) })
+  .strict();
+const waitingTarget = completedProbe
+  .omit({ name: true })
+  .extend({
+    revision: z.string().uuid(),
+    phase: z.literal('waiting'),
+  })
+  .strict();
 const sourceSchema = z
   .object({
     name: z.string().min(1),
@@ -92,8 +112,12 @@ export const audioCollectionTransferSchema = z
   .object({
     revision: z.string().uuid(),
     endpoint: z.string().min(1),
-    sources: z.array(sourceSchema).min(1),
-    journals: z.array(z.object({ path: z.string().min(1), before: object }).strict()),
+    sources: z.array(sourceSchema),
+    journals: z.array(
+      z
+        .object({ path: z.string().min(1), before: object, archive: z.boolean().optional() })
+        .strict(),
+    ),
     completedMode: completedModeSchema.nullable().default(null),
   })
   .strict();
@@ -153,48 +177,67 @@ export async function captureAudioCollectionTransfer(
     const snapshot = await new AudioMigration(`${journal}.migration-mode`).pending();
     if (snapshot) {
       if (
-        !state.desktop ||
         snapshot.endpoint !== endpoint ||
         snapshot.collection !== 'Mizar' ||
         snapshot.fields.some((field) => field.phase !== 'confirmed' || field.externalChanged)
       )
         throw new Error('audio_collection_transfer_completed_mode_unconfirmed');
-      completedMode = completedModeSchema.parse({
-        targetPath: `${journal}.dedicated-mode`,
-        snapshot,
-      });
+      if (state.desktop)
+        completedMode = completedModeSchema.parse({
+          targetPath: `${journal}.dedicated-mode`,
+          snapshot,
+        });
     }
   } catch (cause) {
     throw new Error('audio_collection_transfer_completed_mode_unconfirmed', { cause });
   }
-  // Legacy mode/source transactions must be resolved in their original collection, never discarded.
-  for (const suffix of ['.migration', '.waiting', '.switch', '.game.switch']) {
-    try {
-      await access(`${journal}${suffix}`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
-    }
+  // A mode transaction still owns actual mutations in its original collection.
+  if (await new AudioMigration(`${journal}.migration`).pending())
     throw new Error('audio_collection_transfer_journal_pending');
-  }
   const journals: AudioCollectionTransfer['journals'] = [];
-  for (const suffix of ['', '.game', '.microphone', '.owned-target']) {
+  // Waiting records and prepared switches have not dispatched an audio write.
+  // Keep their evidence, but do not let an obsolete collection's deferred target
+  // block the current explicit device choices. Sent switches remain unresolved.
+  for (const suffix of ['.switch', '.game.switch']) {
+    const pending = await readCommentarySwitch(`${journal}${suffix}`);
+    if (!pending) continue;
+    if (
+      pending.endpoint !== endpoint ||
+      pending.collection !== 'Mizar' ||
+      pending.phase !== 'prepared'
+    )
+      throw new Error('audio_collection_transfer_journal_pending');
+    journals.push({ path: `${journal}${suffix}`, before: pending, archive: true });
+  }
+  for (const suffix of ['', '.game', '.microphone', '.owned-target', '.waiting']) {
     try {
-      const probe = object.parse(JSON.parse(await readFile(`${journal}${suffix}`, 'utf8')));
-      if (
-        typeof probe.uuid !== 'string' ||
-        !probe.uuid ||
-        probe.endpoint !== endpoint ||
-        probe.collection !== 'Mizar'
-      )
-        throw new Error('audio_collection_transfer_probe_pending');
-      journals.push({ path: `${journal}${suffix}`, before: probe });
+      const schema =
+        suffix === '.owned-target'
+          ? ownedTarget
+          : suffix === '.waiting'
+            ? waitingTarget
+            : completedProbe;
+      const probe = schema.parse(JSON.parse(await readFile(`${journal}${suffix}`, 'utf8')));
+      if (probe.endpoint !== endpoint) throw new Error('audio_collection_transfer_probe_pending');
+      journals.push({
+        path: `${journal}${suffix}`,
+        before: probe,
+        archive:
+          suffix === '.waiting' || !entries.some(([, binding]) => binding.inputUuid === probe.uuid),
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
   if (!entries.length) {
-    if (journals.length) throw new Error('audio_collection_transfer_binding_missing');
+    if (journals.length)
+      await routing.saveCollectionTransfer({
+        revision: state.revision,
+        endpoint,
+        sources: [],
+        journals,
+        completedMode,
+      });
     return;
   }
   await collection(obs, 'Mizar');
@@ -269,6 +312,7 @@ export async function captureAudioCollectionTransfer(
   }
   await collection(obs, 'Mizar');
   for (const journal of journals) {
+    if (journal.archive) continue;
     const source = sources.find((source) => source.binding.inputUuid === journal.before.uuid);
     if (!source || ('window' in journal.before && journal.before.window !== source.settings.window))
       throw new Error('audio_collection_transfer_journal_binding_mismatch');
@@ -414,6 +458,29 @@ export async function applyAudioCollectionTransfer(
   }
   await collection(obs, OBS_COLLECTION);
   for (const journal of transfer.journals) {
+    if (journal.archive) {
+      const archive = `${journal.path}.completed-${transfer.revision}.json`;
+      let current: unknown;
+      try {
+        current = JSON.parse(await readFile(journal.path, 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (!isDeepStrictEqual(JSON.parse(await readFile(archive, 'utf8')), journal.before))
+          throw new Error('audio_collection_transfer_journal_changed', { cause: error });
+        continue;
+      }
+      if (!isDeepStrictEqual(current, journal.before))
+        throw new Error('audio_collection_transfer_journal_changed');
+      try {
+        await link(journal.path, archive);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      if (!isDeepStrictEqual(JSON.parse(await readFile(archive, 'utf8')), journal.before))
+        throw new Error('audio_collection_transfer_journal_changed');
+      await rm(journal.path);
+      continue;
+    }
     const source = transfer.sources.find(
       (source) => source.binding.inputUuid === journal.before.uuid,
     )!;

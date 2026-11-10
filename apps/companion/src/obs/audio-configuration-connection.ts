@@ -87,8 +87,10 @@ export class AudioConfigurationConnection {
       );
       await bounded(connecting, remaining());
       const rpc: ObsRpc = {
-        call: async (type, data) => {
+        reportsDispatch: true,
+        call: async (type, data, onDispatch) => {
           if (closed || Date.now() >= deadline) throw new Error('audio_configuration_disconnected');
+          onDispatch?.();
           const task = client.call(type, data);
           pending.add(task);
           void task.then(
@@ -116,10 +118,15 @@ export class AudioConfigurationConnection {
           }
         },
       };
+      const managed = await this.config.managedResources.bind(
+        rpc,
+        endpoint,
+        'http://127.0.0.1:3000',
+      );
       return await bounded(
         operation(
-          await this.config.managedResources.bind(rpc, endpoint, 'http://127.0.0.1:3000'),
-          endpoint,
+          managed,
+          managed.identityEndpoint ?? endpoint,
           observeAudioMigration(client as MigrationEventSource),
         ).catch((error: unknown) => {
           // Preserve an eventual failure even if the outer budget already expired.

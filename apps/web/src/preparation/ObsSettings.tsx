@@ -24,6 +24,7 @@ export function ObsSettings() {
     value === true ? '是' : value === false ? '否' : '待确认';
   const sceneRepairNeeded = obs?.findings.some((item) =>
     [
+      'capture_warmup_pending',
       'collection_missing',
       'collection_inactive',
       'scene_missing',
@@ -172,7 +173,15 @@ export function ObsSettings() {
           打开 OBS
         </Button>
       </div>
-      {message ? <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner> : null}
+      {message &&
+      !(
+        failed &&
+        connected &&
+        preparation.phase === 'failed' &&
+        message === preparation.message
+      ) ? (
+        <StatusBanner tone={failed ? 'danger' : 'info'}>{message}</StatusBanner>
+      ) : null}
       {preparing ? (
         <StatusBanner tone="info">{preparation.message} 无需逐项点击配置。</StatusBanner>
       ) : null}

@@ -14,6 +14,10 @@ import {
 } from './video-transaction.js';
 
 export interface ObsRpc {
+  /** The call forwards onDispatch to the transport after all asynchronous guards. */
+  readonly reportsDispatch?: true;
+  /** Original identity key after a registered OBS instance proves a changed connection address. */
+  readonly identityEndpoint?: string;
   /** Compose synchronous lease checks at the final mutation dispatch, after identity reads. */
   withMutationGuard?(guard: () => void): ObsRpc;
   /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
@@ -24,7 +28,11 @@ export interface ObsRpc {
   managedResourcesDrift?(): Promise<boolean>;
   normalizeManagedResources?(writer: ObsRpc): Promise<void>;
   pruneManagedResources?(writer: ObsRpc): Promise<void>;
-  call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  call(
+    type: string,
+    data?: Record<string, unknown>,
+    onDispatch?: () => void,
+  ): Promise<Record<string, unknown>>;
   onTransitionVideoEnded?(listener: (transitionName: string) => void): () => void;
 }
 
@@ -271,7 +279,7 @@ function sceneTransforms(
 export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
   return {
     ...obs,
-    call: async (type, data) => {
+    call: async (type, data, onDispatch) => {
       if (/^(Create|Set|Remove)/.test(type)) {
         try {
           await assertNoVideoOutput(obs);
@@ -279,7 +287,7 @@ export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
           throw new ObsPreparationWriteBlocked(error);
         }
       }
-      return obs.call(type, data);
+      return obs.call(type, data, onDispatch);
     },
   };
 }
@@ -687,13 +695,13 @@ export async function alignPreparationScene(
   if (initial === desiredSceneName(target)) return;
   const stable: ObsRpc = guardedPreparationWrites({
     ...obs,
-    call: async (type, data) => {
+    call: async (type, data, onDispatch) => {
       if (type === 'SetCurrentProgramScene') {
         const current = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
         if (current !== initial) throw new Error('OBS 当前场景已变化，请重试。');
       }
       if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
-      return obs.call(type, data);
+      return obs.call(type, data, onDispatch);
     },
   });
   await switchObsScene(stable, target, { transition: { kind: 'cut', durationMs: 0 }, valid });
