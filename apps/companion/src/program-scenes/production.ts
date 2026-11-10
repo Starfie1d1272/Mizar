@@ -35,7 +35,6 @@ export type ProductionDependencies = {
         | 'pauseAutomatic'
         | 'resumeAutomatic'
         | 'startCommentaryRecovery'
-        | 'hasCurrentPreparation'
         | 'startBrowserRecovery'
       >
     | undefined;
@@ -371,9 +370,8 @@ export function createProduction(options: ProductionDependencies) {
           handoffPromise = undefined;
           releaseGeneration++;
           options.obs?.resumeAutomatic();
-          options.obs?.startCommentaryRecovery(
-            options.music(),
-            () => production.automaticAllowed() && (options.obs?.hasCurrentPreparation() ?? false),
+          options.obs?.startCommentaryRecovery(options.music(), () =>
+            production.automaticAllowed(),
           );
           options.camera()?.beginProduction();
           statsActive = true;
@@ -630,8 +628,9 @@ export function createProduction(options: ProductionDependencies) {
     sessionAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
     presentationAllowed: () =>
       production.sessionAllowed() && !exitFrozen && !updatePending && !trialPending,
-    automaticAllowed: () =>
-      production.sessionAllowed() && (options.obs?.hasCurrentPreparation() ?? true),
+    // Session intent only. Scene, music and audio owners validate their own
+    // current resources at the operation boundary, not a composite setup report.
+    automaticAllowed: () => production.presentationAllowed(),
     preparationValid: (expectedRevision: unknown) => {
       const generation = preparationGeneration;
       return () =>

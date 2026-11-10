@@ -1049,10 +1049,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
     app.addHook('onListen', () => {
-      obsAdapter.startCommentaryRecovery(
-        musicDirector,
-        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
-      );
+      obsAdapter.startCommentaryRecovery(musicDirector, () => production.automaticAllowed());
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -1568,10 +1565,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     () => production.automaticAllowed(),
     undefined,
     undefined,
-    () =>
-      production.sessionAllowed() && !production.automaticAllowed()
-        ? 'OBS 播出准备尚未确认，请检查 OBS 连接和场景；缺少配置时在准备中心修复。'
-        : null,
     () => presentation.get(),
   );
   if (obsConfigStore && options.obsConfigPath) {
