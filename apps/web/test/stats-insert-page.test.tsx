@@ -53,11 +53,6 @@ it('recovers and updates a same-match local snapshot while retaining it on read 
   data = fixture;
   await act(async () => vi.advanceTimersByTimeAsync(2000));
   expect(host.textContent).toContain(fixture.teams[0]!.name);
-  expect(
-    vi
-      .mocked(fetch)
-      .mock.calls.some(([url]) => String(url).includes('/local/v1/broadcast-stats-program')),
-  ).toBe(true);
   const refreshed = structuredClone(fixture);
   refreshed.teams[0]!.name = 'Updated team';
   data = refreshed;

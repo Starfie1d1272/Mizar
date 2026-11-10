@@ -1,4 +1,3 @@
-import { isAbsolute, relative } from 'node:path';
 import { assertNoVideoOutput } from '../obs/video-transaction.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { OBSWebSocket } from 'obs-websocket-js/json';
@@ -315,7 +314,7 @@ async function initializeMusicItem(
   });
 }
 
-/** UUID + unpredictable installation name, never a display-name-only ownership assumption. */
+/** UUID and dedicated collection scope, never a display-name-only ownership assumption. */
 export async function ownedMusicInput(
   obs: ObsRpc,
   store: MusicStore,
@@ -332,56 +331,36 @@ export async function ownedMusicInput(
   const collection = await obs.call('GetSceneCollectionList');
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('music_collection_inactive');
+  const scope = await obs.ownershipScope?.();
   // A timed-out creation may already exist in OBS. Names alone cannot recover
   // its UUID authority, so retain the original submitted intent and never replay.
   if (
     store.state.sourceInitialization.some(
-      (entry) => entry.layer === layer && entry.phase === 'create',
+      (entry) =>
+        entry.layer === layer && entry.scope === (scope ?? null) && entry.phase === 'create',
     )
   )
     throw new Error('music_initialization_unconfirmed');
-  const legacyName = `Mizar · ${layer === 'bgm' ? 'BGM' : 'Stinger'} · ${store.state.owner}`;
-  const baseName = layer === 'bgm' ? '音乐' : '音效';
+  const name = layer === 'bgm' ? '音乐' : '音效';
   const inputs = (await obs.call('GetInputList')).inputs as {
     inputName: string;
     inputKind: string;
     inputUuid?: string;
   }[];
   const expected = store.state.sources[layer];
-  const found = expected ? inputs.find((i) => i.inputUuid === expected) : undefined;
-  const scope = await obs.ownershipScope?.();
-  if (found && scope && store.state.sourceScopes[layer] !== scope) {
-    if (store.state.sourceScopes[layer] !== null) throw new Error('music_source_conflict');
-    const settings = (await obs.call('GetInputSettings', { inputUuid: expected })).inputSettings as
-      Record<string, unknown> | undefined;
-    const path =
-      typeof settings?.local_file === 'string'
-        ? relative(store.directory, settings.local_file)
-        : '..';
-    if (found.inputName !== legacyName && (!path || path.startsWith('..') || isAbsolute(path)))
-      throw new Error('music_source_conflict');
-    if (found.inputKind !== 'ffmpeg_source') throw new Error('music_source_conflict');
-    await store.update((state) => {
-      state.sourceScopes[layer] = scope;
-    });
-  }
-  if (!found && store.state.sourceInitialization.some((entry) => entry.layer === layer))
+  const found = expected ? inputs.find((input) => input.inputUuid === expected) : undefined;
+  if (found && scope && store.state.sourceScopes[layer] !== scope)
     throw new Error('music_source_conflict');
-  let name = found?.inputName ?? baseName;
-  if (!found) {
-    if (
-      inputs.some(
-        (i) =>
-          i.inputName === legacyName ||
-          (expected &&
-            (i.inputName === baseName ||
-              (i.inputName.startsWith(`${baseName} `) &&
-                /^\d+$/.test(i.inputName.slice(baseName.length + 1))))),
-      )
+  if (
+    !found &&
+    store.state.sourceInitialization.some(
+      (entry) => entry.layer === layer && entry.scope === (scope ?? null),
     )
-      throw new Error('music_source_conflict');
-    for (let index = 2; inputs.some((input) => input.inputName === name); index++)
-      name = `${baseName} ${index}`;
+  )
+    throw new Error('music_initialization_unconfirmed');
+  if (found && found.inputName !== name) {
+    await assertNoVideoOutput(obs);
+    await obs.call('SetInputName', { inputUuid: found.inputUuid, newInputName: name });
   }
   if (found) {
     if (!expected || found.inputUuid !== expected || found.inputKind !== 'ffmpeg_source')
@@ -445,6 +424,10 @@ export async function ownedMusicInput(
       before: null,
     };
     await store.update((s) => {
+      if (s.sourceScopes[layer] !== scope) {
+        s.desktopMonitorOriginal[layer] = null;
+        s.monitorConfigured[layer] = null;
+      }
       s.sources[layer] = result.inputUuid as string;
       const index = s.sourceInitialization.findIndex(
         (entry) => sameItem(entry, creation) && entry.phase === 'create',
@@ -463,7 +446,9 @@ export async function ownedMusicInput(
     });
     await initializeMusicItem(obs, store, pending, scope, valid, true);
   }
-  for (const pending of store.state.sourceInitialization.filter((entry) => entry.layer === layer)) {
+  for (const pending of store.state.sourceInitialization.filter(
+    (entry) => entry.layer === layer && entry.scope === (scope ?? null),
+  )) {
     await initializeMusicItem(obs, store, pending, scope, valid);
   }
   if (create && (attach || !found)) {

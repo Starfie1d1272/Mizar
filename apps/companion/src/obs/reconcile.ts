@@ -14,10 +14,16 @@ import {
 } from './video-transaction.js';
 
 export interface ObsRpc {
+  /** Compose synchronous lease checks at the final mutation dispatch, after identity reads. */
+  withMutationGuard?(guard: () => void): ObsRpc;
   /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
   ownershipScope?(): Promise<string>;
+  managedInputIdentity?(name: string): Promise<{ uuid: string; kind: string } | null>;
   observeManagedResources?(): Promise<boolean>;
-  adoptManagedResources?(): Promise<void>;
+  prepareManagedCollection?(allowChange: boolean, writer: ObsRpc): Promise<void>;
+  managedResourcesDrift?(): Promise<boolean>;
+  normalizeManagedResources?(writer: ObsRpc): Promise<void>;
+  pruneManagedResources?(writer: ObsRpc): Promise<void>;
   call(type: string, data?: Record<string, unknown>): Promise<Record<string, unknown>>;
   onTransitionVideoEnded?(listener: (transitionName: string) => void): () => void;
 }
@@ -287,20 +293,24 @@ export async function checkObsConfiguration(
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
   if (!collectionNames(collections.sceneCollections).includes(OBS_COLLECTION)) {
-    findings.push({ code: 'collection_missing', message: 'Mizar 场景集合尚未创建。' });
+    findings.push({ code: 'collection_missing', message: '「Mizar 制播」场景集合尚未创建。' });
     return findings;
   }
   if (collections.currentSceneCollectionName !== OBS_COLLECTION) {
     findings.push({
       code: 'collection_inactive',
-      message: '当前未使用 Mizar 场景集合。',
+      message: '当前未使用 「Mizar 制播」场景集合。',
     });
     return findings;
   }
   if (obs.observeManagedResources && !(await obs.observeManagedResources()))
+    return [
+      { code: 'resource_identity_missing', message: '专用集合尚未登记，不能接管已有同名集合。' },
+    ];
+  if (obs.managedResourcesDrift && (await obs.managedResourcesDrift()))
     findings.push({
-      code: 'resource_identity_missing',
-      message: 'Mizar 场景尚未登记，请配置场景。',
+      code: 'managed_collection_drift',
+      message: '专用场景集合需要整理，手动增改将在准备时清除。',
     });
   const transitionKinds = new Set(
     objects((await obs.call('GetSceneTransitionList')).transitions).map(
@@ -310,7 +320,7 @@ export async function checkObsConfiguration(
   if (!transitionKinds.has('fade_transition') || !transitionKinds.has('cut_transition'))
     findings.push({
       code: 'transition_missing',
-      message: 'Mizar 场景集合缺少淡化或直接切换转场，请在 OBS 中补齐。',
+      message: '「Mizar 制播」场景集合缺少淡化或直接切换转场，请在 OBS 中补齐。',
     });
   const video = await obs.call('GetVideoSettings');
   const fps = Number(video.fpsNumerator) / Number(video.fpsDenominator);
@@ -341,7 +351,8 @@ export async function checkObsConfiguration(
       settings?.capture_mode !== 'window' ||
       !isCs2Window(settings.window) ||
       (currentWindow.source === 'enumerated' && settings.window !== currentWindow.window) ||
-      settings.priority !== 2
+      settings.priority !== 2 ||
+      settings.capture_audio !== false
     )
       findings.push({
         code: 'capture_drift',
@@ -442,7 +453,7 @@ export async function checkObsConfiguration(
 export async function repairObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
-  options: { readonly allowCollectionChange?: boolean } = {},
+  options: { readonly allowCollectionChange?: boolean; readonly force?: boolean } = {},
 ): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const before = await checkObsConfiguration(obs, baseUrl);
@@ -451,7 +462,10 @@ export async function repairObsConfiguration(
     before.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
   )
     return before;
-  if (!before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code)))
+  if (
+    !options.force &&
+    !before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code))
+  )
     return before;
   await assertNoVideoOutput(obs);
   obs = guardedPreparationWrites(obs);
@@ -461,11 +475,10 @@ export async function repairObsConfiguration(
     options.allowCollectionChange === false &&
     (!exists || collections.currentSceneCollectionName !== OBS_COLLECTION)
   )
-    throw new Error('OBS 场景集合已改变，请在 OBS 中选择 Mizar 后重新检查。');
-  if (!exists) await obs.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
-  else if (collections.currentSceneCollectionName !== OBS_COLLECTION)
-    await obs.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
-  await obs.adoptManagedResources?.();
+    throw new Error('OBS 场景集合已改变，请在 OBS 中选择「Mizar 制播」后重新检查。');
+  if (!obs.prepareManagedCollection) throw new Error('OBS 专用集合管理不可用。');
+  await obs.prepareManagedCollection(options.allowCollectionChange !== false, obs);
+  await obs.normalizeManagedResources?.(obs);
   const scenes = await obs.call('GetSceneList');
   const sceneNames = new Set(names(scenes.scenes, 'sceneName'));
   const inputs = await obs.call('GetInputList');
@@ -490,6 +503,7 @@ export async function repairObsConfiguration(
         ...(target.source === 'enumerated' ? { window: target.window } : {}),
         priority: 2,
         capture_cursor: false,
+        capture_audio: false,
       },
       overlay: true,
     });
@@ -537,7 +551,7 @@ export async function repairObsConfiguration(
       await obs.call('SetInputSettings', {
         inputName: scene.browserInput,
         inputSettings: { url: scene.browserUrl, width: OBS_WIDTH, height: OBS_HEIGHT },
-        overlay: true,
+        overlay: false,
       });
     }
     if (
@@ -582,6 +596,7 @@ export async function repairObsConfiguration(
         });
     }
   }
+  await obs.pruneManagedResources?.(obs);
   return checkObsConfiguration(obs, baseUrl);
 }
 
@@ -598,7 +613,7 @@ export async function switchObsScene(
   const name = desiredSceneName(sceneId);
   const collections = await obs.call('GetSceneCollectionList');
   if (collections.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先检查并修复 Mizar 场景集合。');
+    throw new Error('请先检查并修复 「Mizar 制播」场景集合。');
   const sceneList = await obs.call('GetSceneList');
   const scenes = names(sceneList.scenes, 'sceneName');
   if (!scenes.includes(name)) throw new Error('目标 OBS 场景尚未就绪，请先检查配置。');
@@ -698,13 +713,15 @@ export async function ensureObsConfiguration(
   allowCollectionChange = false,
 ): Promise<ObsFinding[]> {
   const findings = await checkObsConfiguration(obs, baseUrl);
-  if (findings.some((finding) => finding.code === 'source_kind_conflict')) return findings;
-  if (
-    findings.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
-  ) {
-    if (!allowCollectionChange) return findings;
-    const repaired = await repairObsConfiguration(obs, baseUrl);
+  const collectionChanged = findings.some((finding) =>
+    ['collection_missing', 'collection_inactive'].includes(finding.code),
+  );
+  if (allowCollectionChange) {
+    // Explicit preparation owns the complete template, including manual edits
+    // that do not affect the lightweight runtime readiness checks.
+    const repaired = await repairObsConfiguration(obs, baseUrl, { force: true });
     if (
+      collectionChanged &&
       !repaired.some((item) =>
         ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
       )
@@ -714,7 +731,10 @@ export async function ensureObsConfiguration(
     }
     return repaired;
   }
+  if (collectionChanged) return findings;
   const repairable = new Set([
+    'managed_collection_drift',
+    'source_kind_conflict',
     'resource_identity_missing',
     'scene_missing',
     'source_missing',

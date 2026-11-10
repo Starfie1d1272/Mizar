@@ -240,24 +240,36 @@ export class MusicDirector {
       if (muted !== undefined) state.muted = muted;
     });
     await this.immediateControl(current, async (obs, layer, uuid) => {
+      // WASAPI monitoring does not honor source mute. Apply the effective gain
+      // first, including mute-only requests and unmuting after a zero-gain mute.
+      const saved = this.store.state[layer];
+      const target =
+        this.preview.mixerVolume(uuid) ??
+        (saved
+          ? this.effectiveVolume(saved.group, saved.track)
+          : this.store.state.muted
+            ? 0
+            : this.store.state.master);
+      await this.preview.prepareMixer(obs, uuid, target);
+      if (!current()) throw new Error('music_cancelled');
+      await obs.call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: target });
+      if (!current()) throw new Error('music_cancelled');
+      const readVolume = await obs.call('GetInputVolume', { inputUuid: uuid });
+      if (
+        typeof readVolume.inputVolumeMul !== 'number' ||
+        Math.abs(readVolume.inputVolumeMul - target) > 0.001
+      )
+        throw new Error('music_volume_unconfirmed');
+      this.appliedVolumes.set(layer, target);
+      this.preview.confirmMixer(uuid, target);
       if (muted !== undefined) {
+        await this.preview.prepareMixer(obs, uuid, undefined, muted);
+        if (!current()) throw new Error('music_cancelled');
         await obs.call('SetInputMute', { inputUuid: uuid, inputMuted: muted });
         if (!current()) throw new Error('music_cancelled');
         const read = await obs.call('GetInputMute', { inputUuid: uuid });
         if (read.inputMuted !== muted) throw new Error('music_mute_unconfirmed');
-      }
-      if (volume !== undefined && current()) {
-        const saved = this.store.state[layer];
-        const target = saved ? this.effectiveVolume(saved.group, saved.track) : volume;
-        await obs.call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: target });
-        if (!current()) throw new Error('music_cancelled');
-        const read = await obs.call('GetInputVolume', { inputUuid: uuid });
-        if (
-          typeof read.inputVolumeMul !== 'number' ||
-          Math.abs(read.inputVolumeMul - target) > 0.001
-        )
-          throw new Error('music_volume_unconfirmed');
-        this.appliedVolumes.set(layer, target);
+        this.preview.confirmMixer(uuid, undefined, muted);
       }
     });
     return true;

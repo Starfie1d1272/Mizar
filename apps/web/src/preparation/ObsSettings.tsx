@@ -435,7 +435,7 @@ export function ObsSettings() {
                                         item.code.startsWith('audio_game_'),
                                       )?.message
                                     : obs.findings.some((item) => item.code.includes('audio'))
-                                      ? '请在 OBS 检查音频设备、静音和输出音轨，录制试听；具体问题见技术详情。'
+                                      ? '请到声音设置核对采集设备、静音与音频恢复；在 OBS 核对输出音轨并录制试听。'
                                       : (obs.findings[0]?.message ??
                                         'Mizar 配置检查通过，请核对实际音画。')}
                     </StatusBanner>

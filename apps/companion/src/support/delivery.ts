@@ -43,6 +43,43 @@ export const DELIVERY_LIMITS = {
   pollMs: 5000,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
+const transportReasons = [
+  'receiver_upgrade_required',
+  'receipt_invalid',
+  'batch_retention_expired',
+  'automatic_window_expired',
+  'payload_clock_future',
+  'payload_creation_time_missing',
+  'permit_budget',
+  'rate_limited',
+  'connection_timeout',
+  'connection_failed',
+  'request_timeout',
+  'unconfirmed',
+] as const;
+function transportFailureReason(error: unknown): (typeof transportReasons)[number] {
+  const seen = new Set<unknown>();
+  for (
+    let depth = 0;
+    error && typeof error === 'object' && depth < 8 && !seen.has(error);
+    depth++
+  ) {
+    seen.add(error);
+    const detail = error as { reason?: unknown; code?: unknown; name?: unknown; cause?: unknown };
+    if (transportReasons.includes(detail.reason as (typeof transportReasons)[number]))
+      return detail.reason as (typeof transportReasons)[number];
+    if (detail.code === 'UND_ERR_CONNECT_TIMEOUT') return 'connection_timeout';
+    if (
+      ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH'].includes(
+        String(detail.code),
+      )
+    )
+      return 'connection_failed';
+    if (detail.name === 'TimeoutError') return 'request_timeout';
+    error = detail.cause;
+  }
+  return 'unconfirmed';
+}
 interface Credentials {
   installationId: string;
   enrollmentSecret: string;
@@ -132,17 +169,7 @@ const stateSchema = z
       .object({
         phase: z.enum(['enrollment', 'permit', 'upload', 'withdrawal']),
         status: z.number().int().min(400).max(599).nullable(),
-        reason: z.enum([
-          'receiver_upgrade_required',
-          'receipt_invalid',
-          'batch_retention_expired',
-          'automatic_window_expired',
-          'payload_clock_future',
-          'payload_creation_time_missing',
-          'permit_budget',
-          'rate_limited',
-          'unconfirmed',
-        ]),
+        reason: z.enum(transportReasons),
       })
       .nullable()
       .default(null),
@@ -225,7 +252,10 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
   const limit = 8192;
   if (Number(response.headers.get('content-length')) > limit || !response.body) {
     void response.body?.cancel().catch(() => undefined);
-    throw new Error('receipt_size_or_body');
+    throw Object.assign(new Error('receipt_size_or_body'), {
+      reason: 'receipt_invalid',
+      status: response.status,
+    });
   }
   const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
   const chunks: Uint8Array[] = [];
@@ -246,10 +276,20 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
       if (bytes > limit) throw new Error('receipt_size_budget');
       chunks.push(item.value);
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+    const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('receipt_invalid');
+    return value;
   } catch (error) {
     void reader.cancel().catch(() => undefined);
-    throw error;
+    throw Object.assign(error instanceof Error ? error : new Error('receipt_invalid'), {
+      status: response.status,
+      reason: signal.aborted
+        ? 'request_timeout'
+        : transportFailureReason(error) === 'unconfirmed'
+          ? 'receipt_invalid'
+          : transportFailureReason(error),
+    });
   }
 }
 const initial = (): State => ({
@@ -1499,7 +1539,7 @@ export class DiagnosticDelivery {
       !Number.isSafeInteger(data.expiresAt) ||
       data.expiresAt <= this.now()
     )
-      throw new Error('invalid_enrollment_ack');
+      throw transportReceiptError('enrollment', response.status, null);
     value.token = data.token;
     value.expiresAt = data.expiresAt;
     return data.token;
@@ -1876,7 +1916,27 @@ export class DiagnosticDelivery {
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       if (bearer === null) throw new Error('unexpected_closed_enrollment');
-      await this.transaction(() => this.save());
+      await this.transaction(async () => {
+        // Enrollment recovery is independent of whether there is a batch to send.
+        // It must not clear a prior permit/upload failure or claim a batch ACK.
+        const previous = structuredClone(this.state);
+        const recovered =
+          epoch === this.epoch &&
+          this.consentActive() &&
+          this.state.transportFailure?.phase === 'enrollment';
+        if (recovered) {
+          this.state.transportFailure = null;
+          this.state.consecutiveFailures = 0;
+          this.state.nextAttemptAt = 0;
+        }
+        try {
+          await this.save();
+        } catch (error) {
+          this.state = previous;
+          throw error;
+        }
+        if (recovered && !this.error?.includes('budget')) this.error = null;
+      });
       const selectedBatch = this.state.queue.find(
         (value) =>
           !value.serverExpired && !value.acknowledgedAt && value.index.eventSchemaVersion === 2,
@@ -1942,7 +2002,7 @@ export class DiagnosticDelivery {
           permit.installationId !== identity.installationId ||
           permit.payloadSha256 !== batch.id
         )
-          throw new Error('invalid_batch_permit');
+          throw transportReceiptError('permit', response.status, null);
         const sealed = Buffer.from(sealDiagnosticGzip(bytes, permit));
         const oldBatch = batch;
         const newBatch = { ...batch, id: checksum(sealed), bytes: sealed.length, sealed: true };
@@ -2047,16 +2107,6 @@ export class DiagnosticDelivery {
         this.state.failures++;
         this.state.consecutiveFailures++;
         const detail = error as { status?: unknown; reason?: unknown };
-        const reasons = [
-          'receiver_upgrade_required',
-          'receipt_invalid',
-          'batch_retention_expired',
-          'automatic_window_expired',
-          'payload_clock_future',
-          'payload_creation_time_missing',
-          'permit_budget',
-          'rate_limited',
-        ];
         this.state.transportFailure = this.transportPhase
           ? {
               phase: this.transportPhase,
@@ -2064,10 +2114,7 @@ export class DiagnosticDelivery {
                 typeof detail?.status === 'number' && detail.status >= 400 && detail.status <= 599
                   ? detail.status
                   : null,
-              reason:
-                typeof detail?.reason === 'string' && reasons.includes(detail.reason)
-                  ? detail.reason
-                  : 'unconfirmed',
+              reason: transportFailureReason(error),
             }
           : null;
         this.state.nextAttemptAt = Math.max(

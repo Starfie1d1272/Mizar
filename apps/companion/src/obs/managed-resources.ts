@@ -1,97 +1,59 @@
 import { z } from 'zod';
-import { OBSWebSocketError } from 'obs-websocket-js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  OBS_HEIGHT,
+  OBS_WIDTH,
+  obsDesiredScenes,
+} from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
-import { assertNoVideoOutput } from './video-transaction.js';
+import { assertNoVideoOutput, ObsVideoError } from './video-transaction.js';
 
 type Row = Record<string, unknown>;
 const identitySchema = z
   .object({
     uuid: z.string().min(1),
     kind: z.string().min(1),
-    version: z.number().int().min(0).max(1),
+    settings: z.record(z.string(), z.unknown()).optional(),
+    enabled: z.boolean().optional(),
   })
   .strict();
 const registrySchema = z
   .object({
     endpoint: z.string().url(),
-    collection: z.literal(OBS_COLLECTION),
-    instance: z.string().min(1),
-    collectionIdentity: z.string().min(1),
+    instance: z.string().uuid(),
+    collectionIdentity: z.string().uuid(),
     roles: z.record(z.string(), identitySchema),
-    pending: z.record(z.string(), z.string()).optional(),
-    registration: z
-      .object({
-        instance: z.enum(['required', 'submitted', 'confirmed']),
-        collection: z.enum(['required', 'submitted', 'confirmed']),
-      })
-      .strict()
-      .optional(),
+    creating: z.boolean(),
+    creationSent: z.boolean().default(false),
   })
   .strict();
-type Identity = z.infer<typeof identitySchema>;
 type Registry = z.infer<typeof registrySchema>;
-const rows = (value: unknown): Row[] => (Array.isArray(value) ? (value as Row[]) : []);
-const conflict = () => new Error('OBS 资源身份未确认。请保留现有来源并检查 Mizar 场景配置。');
+const rows = (value: unknown): Row[] => {
+  if (!Array.isArray(value)) throw new Error('OBS 来源列表未确认。');
+  return value as Row[];
+};
+const conflict = () =>
+  new ObsVideoError(
+    'collection_ownership_unknown',
+    '无法确认「Mizar 制播」专用集合的归属。请保留现有集合并检查诊断；不会接管同名个人集合。',
+  );
 const markerArgs = {
   realm: 'OBS_WEBSOCKET_DATA_REALM_GLOBAL',
-  slotName: 'mizar.resource-owner.v1',
+  slotName: 'mizar.dedicated-collection.v1',
 };
 
-// obs-websocket 5.6 CreateInput/CreateScene validate these before creation.
-// https://github.com/obsproject/obs-websocket/tree/5.6.3/src/requesthandler
-// GenericError (205), creation/action/processing failures (700–702), transport
-// errors and unknown codes do not prove that OBS left no resource behind.
-const rejectedBeforeCreate = new Set([
-  203, // MissingRequestType
-  204, // UnknownRequestType
-  207, // NotReady
-  300, // MissingRequestField
-  301, // MissingRequestData
-  401, // InvalidRequestFieldType
-  403, // RequestFieldEmpty
-  601, // ResourceAlreadyExists
-]);
-function createWasRejected(type: string, error: unknown): error is OBSWebSocketError {
-  return (
-    error instanceof OBSWebSocketError &&
-    (rejectedBeforeCreate.has(error.code) ||
-      // CreateInput validates its target scene and input kind before creating either resource.
-      (type === 'CreateInput' && [600, 602, 605].includes(error.code)))
-  );
-}
-
-// Shared across every bind (and store instance), not just calls on one RPC wrapper.
-// Only registration transitions hold this lock, never the create request itself:
-// an OBS request whose reply was lost may never settle after disconnect.
-const initializationLocks = new Map<string, Promise<void>>();
-async function exclusiveInitialization<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const previous = initializationLocks.get(key) ?? Promise.resolve();
-  const task = previous.then(run, run);
-  const tail = task.then(
-    () => undefined,
-    () => undefined,
-  );
-  initializationLocks.set(key, tail);
-  try {
-    return await task;
-  } finally {
-    if (initializationLocks.get(key) === tail) initializationLocks.delete(key);
-  }
-}
-
-/** Only ownership evidence is persisted here. Connection/output/playback belong to their owners. */
+/** The collection is the ownership boundary. Roles only keep stable identities and fixed names. */
 export class ManagedObsResources {
   private queue: Promise<unknown> = Promise.resolve();
+  private initialization: Promise<unknown> = Promise.resolve();
   constructor(private readonly path: string) {}
   private async load(): Promise<Registry[]> {
     try {
-      const value: unknown = JSON.parse(await readFile(this.path, 'utf8'));
-      return z.array(registrySchema).parse(value);
+      return z.array(registrySchema).parse(JSON.parse(await readFile(this.path, 'utf8')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
@@ -100,20 +62,11 @@ export class ManagedObsResources {
   private async save(registry: Registry): Promise<void> {
     const task = this.queue.then(async () => {
       const all = await this.load();
-      const previous = all.find(
-        (item) => item.endpoint === registry.endpoint && item.collection === registry.collection,
-      );
-      if (
-        previous &&
-        (previous.instance !== registry.instance ||
-          previous.collectionIdentity !== registry.collectionIdentity)
-      )
-        throw conflict();
-      if (previous) registry.roles = { ...previous.roles, ...registry.roles };
-      const next = all.filter(
-        (item) => item.endpoint !== registry.endpoint || item.collection !== registry.collection,
-      );
-      next.push(registry);
+      const previous = all.find((item) => item.endpoint === registry.endpoint);
+      if (previous && previous.collectionIdentity !== registry.collectionIdentity) throw conflict();
+      registry.roles = { ...previous?.roles, ...registry.roles };
+      const next = all.filter((item) => item.endpoint !== registry.endpoint);
+      next.push(structuredClone(registry));
       await mkdir(dirname(this.path), { recursive: true });
       const temp = `${this.path}.${randomUUID()}.tmp`;
       await writeFile(temp, JSON.stringify(next), { mode: 0o600 });
@@ -123,424 +76,546 @@ export class ManagedObsResources {
     await task;
   }
 
-  private async registerMarker(raw: ObsRpc, registry: Registry): Promise<void> {
-    const actual = (await raw.call('GetPersistentData', markerArgs)).slotValue;
-    if (actual !== registry.instance) {
-      if (actual !== null && actual !== undefined && actual !== '') throw conflict();
-      // A fixed marker value is idempotent. Unlike CreateInput, a lost reply may
-      // be retried after observing the same empty slot, using the reserved value.
-      registry.registration = { instance: 'submitted', collection: 'confirmed' };
-      await this.save(registry);
-      let submissionFailure: unknown;
-      try {
-        await raw.call('SetPersistentData', { ...markerArgs, slotValue: registry.instance });
-      } catch (error) {
-        submissionFailure = error;
-      }
-      let observed: unknown;
-      try {
-        observed = (await raw.call('GetPersistentData', markerArgs)).slotValue;
-      } catch (error) {
-        throw new AggregateError(
-          submissionFailure === undefined ? [error] : [submissionFailure, error],
-          'OBS 资源身份登记结果尚未确认。',
-          { cause: error },
-        );
-      }
-      if (observed !== registry.instance)
-        throw new Error('OBS 资源身份登记结果尚未确认，请重试配置场景。', {
-          cause: submissionFailure,
-        });
-    }
-    if (registry.registration) {
-      delete registry.registration;
-      await this.save(registry);
-    }
-  }
-
-  /** Owned role aliases resolve to UUIDs; unregistered read requests stay read-only. */
   async bind(raw: ObsRpc, endpoint: string, baseUrl: string): Promise<ObsRpc> {
     const desired = obsDesiredScenes(baseUrl);
-    const specs = new Map<string, { role: string; kind: string; legacy: string; path?: string }>();
-    for (const scene of desired) {
-      const title = PROGRAM_SCENES.find((item) => item.id === scene.id)!.title;
-      specs.set(scene.sceneName, {
-        role: `scene:${scene.id}`,
-        kind: 'scene',
-        legacy: `Mizar · ${title}`,
-      });
-      specs.set(scene.browserInput, {
-        role: `browser:${scene.id}`,
-        kind: 'browser_source',
-        legacy: `Mizar · ${scene.id} · Program`,
-        path: new URL(scene.browserUrl).pathname,
-      });
-    }
-    specs.set(OBS_CAPTURE_INPUT, {
-      role: 'capture',
-      kind: 'game_capture',
-      legacy: 'Mizar · CS2 Game Capture',
-    });
-    specs.set('禁选紧凑底栏', {
-      role: 'bp-compact',
-      kind: 'browser_source',
-      legacy: 'Mizar · BP 紧凑底栏',
-      path: '/program/bp-compact',
-    });
-    let registry: Registry | undefined;
-    let observed = false;
-    const load = async () => {
-      registry = (await this.load()).find(
-        (item) => item.endpoint === endpoint && item.collection === OBS_COLLECTION,
-      );
-    };
+    const specs = new Map<string, string>([
+      ...desired.flatMap((scene): [string, string][] => [
+        [scene.sceneName, 'scene'],
+        [scene.browserInput, 'browser_source'],
+      ]),
+      [OBS_CAPTURE_INPUT, 'game_capture'],
+      ['禁选紧凑底栏', 'browser_source'],
+      ['桌面声音', 'wasapi_output_capture'],
+      ['麦克风', 'wasapi_input_capture'],
+      ['游戏声音', 'wasapi_process_output_capture'],
+      ['其他解说', 'wasapi_process_output_capture'],
+      ['音乐', 'ffmpeg_source'],
+      ['音效', 'ffmpeg_source'],
+    ]);
+    let registry = (await this.load()).find((item) => item.endpoint === endpoint);
     const inventory = async () => ({
       inputs: rows((await raw.call('GetInputList')).inputs),
       scenes: rows((await raw.call('GetSceneList')).scenes),
     });
-    const collection = async () => {
-      if ((await raw.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
-        throw conflict();
-    };
-    const verifyInventory = ({ inputs, scenes }: Awaited<ReturnType<typeof inventory>>) => {
-      let present = 0;
-      for (const [role, identity] of Object.entries(registry!.roles)) {
-        const spec = [...specs].find(([, value]) => value.role === role);
-        if (!spec || spec[1].kind !== identity.kind) throw conflict();
-        const candidates = identity.kind === 'scene' ? scenes : inputs;
-        const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
-        const nameKey = identity.kind === 'scene' ? 'sceneName' : 'inputName';
-        const found = candidates.find((item) => item[uuidKey] === identity.uuid);
-        if (found) {
-          if (identity.kind !== 'scene' && found.inputKind !== identity.kind) throw conflict();
-          present++;
-        }
-        if (candidates.some((item) => item[nameKey] === spec[0] && item[uuidKey] !== identity.uuid))
-          throw conflict();
-      }
-      // A same-named replacement collection is not the previously owned graph.
-      if (Object.keys(registry!.roles).length && !present) throw conflict();
-    };
-    const verifyScope = async () => {
-      await collection();
+    const active = async () =>
+      (await raw.call('GetSceneCollectionList')).currentSceneCollectionName === OBS_COLLECTION;
+    const verify = async () => {
+      registry = (await this.load()).find((item) => item.endpoint === endpoint);
       if (
         !registry ||
+        registry.creating ||
+        !(await active()) ||
         (await raw.call('GetPersistentData', markerArgs)).slotValue !== registry.instance
       )
         throw conflict();
-      verifyInventory(await inventory());
+      const { inputs, scenes } = await inventory();
+      // A deleted/recreated same-name collection is not proof of ownership. A
+      // surviving UUID lets us repair every other manually removed/changed role.
+      if (
+        !Object.values(registry.roles).some((role) =>
+          [...inputs, ...scenes].some(
+            (row) => (role.kind === 'scene' ? row.sceneUuid : row.inputUuid) === role.uuid,
+          ),
+        )
+      )
+        throw conflict();
     };
     const observe = async () => {
-      if (!observed) {
-        await load();
-        if (registry && !registry.registration) await verifyScope();
-        observed = true;
-      }
-      return !!registry && !registry.registration;
+      if (!registry) return false;
+      const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+      if (!marker && !registry.creating) return false;
+      await verify();
+      return true;
     };
-    const adopt = () =>
-      exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
-        await load();
-        await collection();
-        if (registry) {
-          // Existing identities and unfinished intents are never replaced by names.
-          verifyInventory(await inventory());
-          if (registry.registration) await this.registerMarker(raw, registry);
-          await verifyScope();
-          observed = true;
-          return;
+    const prepare = async (allowChange: boolean, writer: ObsRpc, beforeMutation?: () => void) => {
+      registry = (await this.load()).find((item) => item.endpoint === endpoint);
+      await assertNoVideoOutput(raw);
+      const collection = await raw.call('GetSceneCollectionList');
+      const exists =
+        Array.isArray(collection.sceneCollections) &&
+        collection.sceneCollections.includes(OBS_COLLECTION);
+      if (!allowChange && collection.currentSceneCollectionName !== OBS_COLLECTION)
+        throw conflict();
+      if (!registry) {
+        if (exists) throw conflict();
+        const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+        if (marker && !z.string().uuid().safeParse(marker).success) throw conflict();
+        registry = {
+          endpoint,
+          instance: typeof marker === 'string' && marker ? marker : randomUUID(),
+          collectionIdentity: randomUUID(),
+          roles: {},
+          creating: true,
+          creationSent: false,
+        };
+        await this.save(registry);
+      }
+      if (registry.creating) {
+        if (registry.creationSent || exists) throw conflict();
+        await assertNoVideoOutput(writer);
+        registry.creationSent = true;
+        await this.save(registry);
+        try {
+          await assertNoVideoOutput(writer);
+          beforeMutation?.();
+        } catch (error) {
+          // The collection request has not been dispatched. Preserve the same
+          // reserved identity, but permit a later explicit preparation to retry.
+          registry.creationSent = false;
+          await this.save(registry);
+          throw error;
         }
-        await assertNoVideoOutput(raw);
+        await raw.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+        if (!(await active())) throw conflict();
+        const initial = await inventory();
+        for (const [index, scene] of initial.scenes.entries()) {
+          if (typeof scene.sceneUuid !== 'string') throw conflict();
+          registry.roles[`bootstrap:${index}`] = { uuid: scene.sceneUuid, kind: 'scene' };
+        }
+        if (!Object.keys(registry.roles).length) throw conflict();
+        registry.creating = false;
+        registry.creationSent = false;
+        await this.save(registry);
+      } else {
+        if (!exists) throw conflict();
+        if (collection.currentSceneCollectionName !== OBS_COLLECTION) {
+          await assertNoVideoOutput(writer);
+          beforeMutation?.();
+          await raw.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+        }
+      }
+      const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+      if (marker !== registry.instance) {
+        if (marker || !(await active())) throw conflict();
         const { inputs, scenes } = await inventory();
-        const roles: Record<string, Identity> = {};
-        for (const [name, spec] of specs) {
-          if (spec.kind === 'scene') continue;
-          const candidates = inputs.filter(
-            (item) => item.inputName === name || item.inputName === spec.legacy,
-          );
-          if (!candidates.length) continue;
-          if (candidates.length !== 1) throw conflict();
-          const input = candidates[0]!;
-          if (
-            input.inputKind !== spec.kind ||
-            typeof input.inputUuid !== 'string' ||
-            !input.inputUuid
-          )
-            throw conflict();
-          const settings = (await raw.call('GetInputSettings', { inputUuid: input.inputUuid }))
-            .inputSettings as Row | undefined;
-          if (spec.path) {
-            let url: URL;
-            try {
-              url = new URL(String(settings?.url));
-            } catch {
-              throw conflict();
-            }
-            if (
-              url.protocol !== 'http:' ||
-              url.hostname !== '127.0.0.1' ||
-              url.pathname !== spec.path ||
-              url.username ||
-              url.password ||
-              url.search ||
-              url.hash
-            )
-              throw conflict();
-          } else if (
-            settings?.capture_mode !== 'window' ||
-            !/^.+:.+:cs2\.exe$/i.test(String(settings.window))
-          )
-            throw conflict();
-          roles[spec.role] = { uuid: input.inputUuid, kind: spec.kind, version: 1 };
-        }
-        const attached = new Set<string>();
-        for (const scene of desired) {
-          const spec = specs.get(scene.sceneName)!;
-          const candidates = scenes.filter(
-            (item) => item.sceneName === scene.sceneName || item.sceneName === spec.legacy,
-          );
-          if (!candidates.length) continue;
-          if (
-            candidates.length !== 1 ||
-            typeof candidates[0]!.sceneUuid !== 'string' ||
-            !candidates[0]!.sceneUuid
-          )
-            throw conflict();
-          const uuid = candidates[0]!.sceneUuid as string;
-          const items = rows((await raw.call('GetSceneItemList', { sceneUuid: uuid })).sceneItems);
-          if (
-            !scene.sources.every((name) => {
-              const role = specs.get(name)!.role;
-              if (!roles[role] || !items.some((item) => item.sourceUuid === roles[role]!.uuid))
-                return false;
-              attached.add(role);
-              return true;
-            })
-          )
-            throw conflict();
-          roles[spec.role] = { uuid, kind: 'scene', version: 1 };
-        }
-        // A plausible source name/settings without its expected graph is not ownership.
         if (
-          Object.entries(roles).some(
-            ([role, value]) =>
-              value.kind !== 'scene' && role !== 'bp-compact' && !attached.has(role),
+          !Object.values(registry.roles).some((role) =>
+            [...inputs, ...scenes].some(
+              (row) => (role.kind === 'scene' ? row.sceneUuid : row.inputUuid) === role.uuid,
+            ),
           )
         )
           throw conflict();
-        if (roles['bp-compact']) {
-          const scene = roles['scene:gameplay'];
-          if (
-            !scene ||
-            !rows((await raw.call('GetSceneItemList', { sceneUuid: scene.uuid })).sceneItems).some(
-              (item) => item.sourceUuid === roles['bp-compact']!.uuid,
-            )
+        await assertNoVideoOutput(writer);
+        // An empty slot plus the saved UUID graph permits this idempotent
+        // registration to resume after a lost reply, never a foreign marker.
+        beforeMutation?.();
+        await raw.call('SetPersistentData', { ...markerArgs, slotValue: registry.instance });
+      }
+      await verify();
+    };
+    const globalInputs = async () => {
+      const specials = await raw.call('GetSpecialInputs');
+      const inputs = (await inventory()).inputs;
+      return Object.entries(specials)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !!entry[1])
+        .map(([slot, name]) => {
+          const input = inputs.find((row) => row.inputName === name);
+          if (!input || typeof input.inputUuid !== 'string')
+            throw new Error('OBS 全局音频身份未确认。');
+          return { ...input, slot, inputName: String(input.inputName), inputUuid: input.inputUuid };
+        });
+    };
+    const drift = async () => {
+      await verify();
+      const { inputs, scenes } = await inventory();
+      const globals = await globalInputs();
+      for (const input of globals) {
+        const args = { inputUuid: input.inputUuid };
+        if (
+          (await raw.call('GetInputMute', args)).inputMuted !== true ||
+          (await raw.call('GetInputAudioMonitorType', args)).monitorType !==
+            'OBS_MONITORING_TYPE_NONE'
+        )
+          return true;
+      }
+      for (const row of [...scenes, ...inputs]) {
+        if (globals.some((input) => input.inputUuid === row.inputUuid)) continue;
+        const name = String(row.sceneName ?? row.inputName);
+        const kind = row.sceneUuid ? 'scene' : String(row.inputKind);
+        if (
+          (audio.has(name) ? registry!.roles[name]?.kind !== kind : specs.get(name) !== kind) ||
+          registry!.roles[name]?.uuid !== (row.sceneUuid ?? row.inputUuid)
+        )
+          return true;
+      }
+      for (const [name, role] of Object.entries(registry!.roles)) {
+        if (
+          !role.settings ||
+          !audio.has(name) ||
+          !inputs.some((input) => input.inputUuid === role.uuid)
+        )
+          continue;
+        const settings = (await raw.call('GetInputSettings', { inputUuid: role.uuid }))
+          .inputSettings;
+        if (
+          !settings ||
+          Object.entries(role.settings).some(
+            ([key, value]) => JSON.stringify((settings as Row)[key]) !== JSON.stringify(value),
           )
-            throw conflict();
-        }
-        const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
-        if (marker !== null && marker !== undefined && marker !== '' && typeof marker !== 'string')
-          throw conflict();
-        registry = {
-          endpoint,
-          collection: OBS_COLLECTION,
-          instance: typeof marker === 'string' && marker ? marker : randomUUID(),
-          // Local registry identity, NOT an OBS profile or a remote collection marker.
-          collectionIdentity: randomUUID(),
-          roles,
-          registration: { instance: 'required', collection: 'confirmed' },
-        };
-        await collection();
-        await this.save(registry);
-        await this.registerMarker(raw, registry);
-        await verifyScope();
-        observed = true;
-      });
-    const canonical = (value: unknown): unknown => {
-      if (Array.isArray(value)) return value.map(canonical);
-      if (!value || typeof value !== 'object') return value;
-      const result = { ...(value as Row) };
-      for (const [role, identity] of Object.entries(registry?.roles ?? {})) {
-        const name = [...specs].find(([, spec]) => spec.role === role)?.[0];
-        if (!name) continue;
-        for (const prefix of [
-          'input',
-          'source',
-          'scene',
-          'currentProgramScene',
-          'currentPreviewScene',
-        ]) {
-          if (result[`${prefix}Uuid`] === identity.uuid) result[`${prefix}Name`] = name;
+        )
+          return true;
+      }
+      for (const scene of scenes) {
+        const spec = desired.find(
+          (value) => registry!.roles[value.sceneName]?.uuid === scene.sceneUuid,
+        );
+        if (!spec) return true;
+        const seen = new Set<unknown>();
+        for (const item of rows(
+          (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+        )) {
+          const name = String(item.sourceName);
+          if (seen.has(item.sourceUuid) || !allowedItem(spec.id, name)) return true;
+          if (name === '音乐' || name === '音效') {
+            const transform = (
+              await raw.call('GetSceneItemTransform', {
+                sceneUuid: scene.sceneUuid,
+                sceneItemId: item.sceneItemId,
+              })
+            ).sceneItemTransform as Row;
+            if (
+              transform?.boundsType !== 'OBS_BOUNDS_NONE' ||
+              transform.scaleX !== 0 ||
+              transform.scaleY !== 0
+            )
+              return true;
+          }
+          seen.add(item.sourceUuid);
         }
       }
-      for (const [key, child] of Object.entries(result))
-        if (Array.isArray(child)) result[key] = canonical(child);
-      return result;
+      return false;
     };
-    return {
+    const audio = new Set(['桌面声音', '麦克风', '游戏声音', '其他解说', '音乐', '音效']);
+    const allowedItem = (id: string, name: string) => {
+      const scene = desired.find((value) => value.id === id)!;
+      return (
+        scene.sources.includes(name) ||
+        audio.has(name) ||
+        (id === 'gameplay' && name === '禁选紧凑底栏')
+      );
+    };
+    const normalize = async (writer: ObsRpc) => {
+      await assertNoVideoOutput(raw);
+      await verify();
+      const globals = await globalInputs();
+      // OBS has no SetSpecialInputs request. Silence collection-local globals
+      // and monitoring, then verify rather than claiming RemoveInput detached them.
+      for (const input of globals) {
+        const names: Record<string, string> = {
+          desktop1: '全局桌面主路（已停用）',
+          desktop2: '全局桌面辅路（已停用）',
+          mic1: '全局麦克风主路（已停用）',
+          mic2: '全局麦克风辅路（已停用）',
+          mic3: '全局麦克风备用（已停用）',
+          mic4: '全局麦克风扩展（已停用）',
+        };
+        const name = names[input.slot];
+        if (!name) throw new Error('OBS 全局音频通道未确认。');
+        const collision = (await inventory()).inputs.find(
+          (row) => row.inputName === name && row.inputUuid !== input.inputUuid,
+        );
+        if (collision) await writer.call('RemoveInput', { inputUuid: collision.inputUuid });
+        if (input.inputName !== name)
+          await writer.call('SetInputName', { inputUuid: input.inputUuid, newInputName: name });
+        await writer.call('SetInputMute', { inputUuid: input.inputUuid, inputMuted: true });
+        await writer.call('SetInputAudioMonitorType', {
+          inputUuid: input.inputUuid,
+          monitorType: 'OBS_MONITORING_TYPE_NONE',
+        });
+      }
+      // Keep an initial scene until the real scenes exist, so there is always a
+      // durable identity anchor and OBS never has to remove its final scene.
+      let listed = await inventory();
+      for (const [name, kind] of specs) {
+        const role = registry!.roles[name];
+        const candidates = kind === 'scene' ? listed.scenes : listed.inputs;
+        const found =
+          role &&
+          candidates.find(
+            (row) => (kind === 'scene' ? row.sceneUuid : row.inputUuid) === role.uuid,
+          );
+        const collision = [...listed.inputs, ...listed.scenes].find(
+          (row) =>
+            (row.inputName ?? row.sceneName) === name &&
+            (row.inputUuid ?? row.sceneUuid) !== role?.uuid,
+        );
+        if (collision && !globals.some((input) => input.inputUuid === collision.inputUuid)) {
+          await writer.call(
+            collision.sceneUuid ? 'RemoveScene' : 'RemoveInput',
+            collision.sceneUuid
+              ? { sceneUuid: collision.sceneUuid }
+              : { inputUuid: collision.inputUuid },
+          );
+        }
+        if (found && (kind === 'scene' ? found.sceneName : found.inputName) !== name)
+          await writer.call(
+            kind === 'scene' ? 'SetSceneName' : 'SetInputName',
+            kind === 'scene'
+              ? { sceneUuid: role!.uuid, newSceneName: name }
+              : { inputUuid: role!.uuid, newInputName: name },
+          );
+        if (found && role?.settings && audio.has(name))
+          await writer.call('SetInputSettings', {
+            inputUuid: role.uuid,
+            inputSettings: role.settings,
+            overlay: false,
+          });
+        if (found && name === '禁选紧凑底栏')
+          await writer.call('SetInputSettings', {
+            inputUuid: role!.uuid,
+            inputSettings: {
+              url: new URL('/program/bp-compact', baseUrl).toString(),
+              width: OBS_WIDTH,
+              height: OBS_HEIGHT,
+            },
+            overlay: false,
+          });
+        if (found && (kind === 'browser_source' || kind === 'game_capture')) {
+          const filters = rows(
+            (await raw.call('GetSourceFilterList', { sourceUuid: role!.uuid })).filters,
+          );
+          for (const filter of filters)
+            await writer.call('RemoveSourceFilter', {
+              sourceUuid: role!.uuid,
+              filterName: filter.filterName,
+            });
+        }
+        listed = await inventory();
+      }
+    };
+    const prune = async (writer: ObsRpc) => {
+      await assertNoVideoOutput(raw);
+      await verify();
+      const globals = await globalInputs();
+      const listed = await inventory();
+      for (const [name, role] of Object.entries(registry!.roles)) {
+        if (
+          ![
+            'wasapi_output_capture',
+            'wasapi_input_capture',
+            'wasapi_process_output_capture',
+          ].includes(role.kind)
+        )
+          continue;
+        if (name === '麦克风' && listed.inputs.some((input) => input.inputUuid === role.uuid)) {
+          let enabled = false;
+          for (const scene of listed.scenes) {
+            const items = rows(
+              (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+            );
+            if (
+              items.some((item) => item.sourceUuid === role.uuid && item.sceneItemEnabled === true)
+            )
+              enabled = true;
+          }
+          role.enabled = enabled;
+          await this.save(registry!);
+        }
+        if (listed.inputs.some((input) => input.inputUuid === role.uuid)) {
+          const waiting = rows(
+            (await raw.call('GetSceneItemList', { sceneName: desired[0]!.sceneName })).sceneItems,
+          );
+          if (!waiting.some((item) => item.sourceUuid === role.uuid)) {
+            let enabled = false;
+            if (name === '麦克风')
+              for (const scene of listed.scenes) {
+                const items = rows(
+                  (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+                );
+                if (
+                  items.some(
+                    (item) => item.sourceUuid === role.uuid && item.sceneItemEnabled === true,
+                  )
+                ) {
+                  enabled = true;
+                  break;
+                }
+              }
+            await writer.call('CreateSceneItem', {
+              sceneName: desired[0]!.sceneName,
+              sourceName: name,
+              sceneItemEnabled: enabled,
+            });
+          }
+        } else
+          await writer.call('CreateInput', {
+            sceneName: desired[0]!.sceneName,
+            inputName: name,
+            inputKind: role.kind,
+            inputSettings: role.settings ?? {},
+            sceneItemEnabled: name === '麦克风' && role.enabled !== false,
+          });
+      }
+      const { scenes } = await inventory();
+      for (const scene of scenes) {
+        const wanted = desired.find(
+          (value) => registry!.roles[value.sceneName]?.uuid === scene.sceneUuid,
+        );
+        if (!wanted) {
+          await writer.call('RemoveScene', { sceneUuid: scene.sceneUuid });
+          continue;
+        }
+        const seen = new Set<unknown>();
+        for (const item of rows(
+          (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+        )) {
+          if (
+            seen.has(item.sourceUuid) ||
+            !allowedItem(wanted.id, String(item.sourceName)) ||
+            globals.some((input) => input.inputUuid === item.sourceUuid)
+          )
+            await writer.call('RemoveSceneItem', {
+              sceneUuid: scene.sceneUuid,
+              sceneItemId: item.sceneItemId,
+            });
+          else {
+            seen.add(item.sourceUuid);
+            if (item.sourceName === '禁选紧凑底栏')
+              await writer.call('SetSceneItemEnabled', {
+                sceneUuid: scene.sceneUuid,
+                sceneItemId: item.sceneItemId,
+                sceneItemEnabled: false,
+              });
+            if (item.sourceName === '音乐' || item.sourceName === '音效')
+              await writer.call('SetSceneItemTransform', {
+                sceneUuid: scene.sceneUuid,
+                sceneItemId: item.sceneItemId,
+                sceneItemTransform: { boundsType: 'OBS_BOUNDS_NONE', scaleX: 0, scaleY: 0 },
+              });
+          }
+        }
+      }
+      // Removing a final scene reference may already destroy its input.
+      for (const input of (await inventory()).inputs) {
+        if (globals.some((global) => global.inputUuid === input.inputUuid)) continue;
+        if (
+          ![...specs].some(
+            ([name, kind]) => kind !== 'scene' && registry!.roles[name]?.uuid === input.inputUuid,
+          )
+        )
+          await writer.call('RemoveInput', { inputUuid: input.inputUuid });
+      }
+    };
+    const scoped = (beforeMutation?: () => void): ObsRpc => ({
       ...raw,
+      withMutationGuard: (guard) =>
+        scoped(() => {
+          beforeMutation?.();
+          guard();
+        }),
       observeManagedResources: observe,
-      adoptManagedResources: adopt,
+      prepareManagedCollection: (allowChange, writer) => {
+        const task = this.initialization.then(() => prepare(allowChange, writer, beforeMutation));
+        this.initialization = task.catch(() => undefined);
+        return task;
+      },
+      managedResourcesDrift: drift,
+      normalizeManagedResources: normalize,
+      pruneManagedResources: prune,
+      managedInputIdentity: async (name) => {
+        await verify();
+        const role = registry!.roles[name];
+        return role ? { uuid: role.uuid, kind: role.kind } : null;
+      },
       ownershipScope: async () => {
-        if (!(await observe())) throw conflict();
-        await verifyScope();
+        await verify();
         return `${endpoint}|${OBS_COLLECTION}|${registry!.instance}|${registry!.collectionIdentity}`;
       },
       call: async (type, args) => {
-        if (
-          ['GetSceneCollectionList', 'CreateSceneCollection', 'SetCurrentSceneCollection'].includes(
-            type,
-          )
-        ) {
-          if (type !== 'GetSceneCollectionList') {
-            observed = false;
-            registry = undefined;
-          }
-          return raw.call(type, args);
-        }
-        if (!/Scene|Input|Source/.test(type)) return raw.call(type, args);
-        const scope = await raw.call('GetSceneCollectionList');
-        if (scope.currentSceneCollectionName !== OBS_COLLECTION) {
-          if (/^(Create|Set|Remove|Press|Trigger)/.test(type)) throw conflict();
-          return raw.call(type, args);
-        }
-        const owned = await observe();
         const mutating = /^(Create|Set|Remove|Press|Trigger)/.test(type);
-        if (!owned) {
-          if (mutating) throw conflict();
+        if (!/Scene|Input|Source|Filter/.test(type) || type === 'GetSceneCollectionList') {
+          if (mutating) beforeMutation?.();
           return raw.call(type, args);
         }
-        if (mutating) await verifyScope();
-        const data = { ...args };
-        for (const prefix of ['scene', 'input', 'source']) {
-          const name = data[`${prefix}Name`];
-          if (typeof name !== 'string' || !specs.has(name)) continue;
-          if (
-            (type === 'CreateInput' && prefix === 'input') ||
-            (type === 'CreateScene' && prefix === 'scene')
-          )
-            continue;
-          const identity = registry!.roles[specs.get(name)!.role];
-          if (!identity) throw conflict();
-          data[`${prefix}Uuid`] = identity.uuid;
-          delete data[`${prefix}Name`];
-        }
-        const creating =
-          type === 'CreateInput'
-            ? data.inputName
-            : type === 'CreateScene'
-              ? data.sceneName
-              : undefined;
-        const creatingSpec = typeof creating === 'string' ? specs.get(creating) : undefined;
-        let reservation: Registry | undefined;
-        if (creatingSpec) {
-          await exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
-            await load();
-            if (!registry || registry.registration) throw conflict();
-            if (registry.pending?.[creatingSpec.role])
-              throw new Error('OBS 来源创建结果尚未确认，未重复创建。请保留现有来源并检查诊断。');
-            await assertNoVideoOutput(raw);
-            await verifyScope();
-            const identity = registry.roles[creatingSpec.role];
-            if (identity) {
-              const listed = await inventory();
-              const candidates = identity.kind === 'scene' ? listed.scenes : listed.inputs;
-              const uuidKey = identity.kind === 'scene' ? 'sceneUuid' : 'inputUuid';
-              if (candidates.some((item) => item[uuidKey] === identity.uuid)) throw conflict();
+        if (mutating) await verify();
+        const name = type === 'CreateInput' ? String(args?.inputName) : undefined;
+        const previous = name ? registry?.roles[name] : undefined;
+        let data =
+          type === 'CreateInput' && previous?.settings && audio.has(name!)
+            ? { ...args, inputSettings: previous.settings }
+            : args;
+        if (mutating) {
+          data = { ...data };
+          for (const prefix of ['scene', 'input', 'source']) {
+            if (
+              (prefix === 'input' && ['CreateInput', 'SetInputName'].includes(type)) ||
+              (prefix === 'scene' && ['CreateScene', 'SetSceneName'].includes(type))
+            )
+              continue;
+            const key = `${prefix}Name`;
+            const role =
+              typeof data[key] === 'string' ? registry?.roles[data[key] as string] : undefined;
+            if (role) {
+              data[`${prefix}Uuid`] = role.uuid;
+              delete data[key];
             }
-            const next = {
-              ...registry,
-              pending: { ...registry.pending, [creatingSpec.role]: creating as string },
-            };
-            await this.save(next);
-            registry = reservation = next;
-          });
+          }
         }
-        const saveCreation = async (change: (current: Registry) => Registry) =>
-          exclusiveInitialization(`${this.path}|${endpoint}`, async () => {
-            const current = (await this.load()).find(
-              (item) => item.endpoint === endpoint && item.collection === OBS_COLLECTION,
+        const microphone = registry?.roles['麦克风'];
+        const changesMicrophone =
+          type === 'SetSceneItemEnabled' &&
+          microphone &&
+          rows(
+            (
+              await raw.call(
+                'GetSceneItemList',
+                data?.sceneUuid ? { sceneUuid: data.sceneUuid } : { sceneName: data?.sceneName },
+              )
+            ).sceneItems,
+          ).some(
+            (item) => item.sceneItemId === data?.sceneItemId && item.sourceUuid === microphone.uuid,
+          );
+        if (mutating) beforeMutation?.();
+        const result = await raw.call(type, data);
+        if (type === 'CreateScene' || type === 'CreateInput') {
+          const name = String(type === 'CreateScene' ? args?.sceneName : args?.inputName);
+          const kind =
+            type === 'CreateInput' && audio.has(name) ? String(data?.inputKind) : specs.get(name);
+          const uuid = result[type === 'CreateScene' ? 'sceneUuid' : 'inputUuid'];
+          if (!kind || typeof uuid !== 'string') throw conflict();
+          registry!.roles[name] = {
+            uuid,
+            kind,
+            ...(type === 'CreateInput' && audio.has(name)
+              ? {
+                  settings: data?.inputSettings as Row,
+                  ...(name === '麦克风' ? { enabled: data?.sceneItemEnabled === true } : {}),
+                }
+              : {}),
+          };
+          await this.save(registry!);
+        }
+        if (changesMicrophone && microphone) {
+          let enabled = false;
+          for (const scene of (await inventory()).scenes) {
+            const items = rows(
+              (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
             );
             if (
-              !current ||
-              current.instance !== reservation?.instance ||
-              current.collectionIdentity !== reservation.collectionIdentity
+              items.some(
+                (item) => item.sourceUuid === microphone.uuid && item.sceneItemEnabled === true,
+              )
             )
-              throw conflict();
-            const next = change(current);
-            await this.save(next);
-            registry = next;
-          });
-        const finishReservation = (current: Registry) => {
-          if (!creatingSpec || current.pending?.[creatingSpec.role] !== creating) throw conflict();
-          const next = { ...current, pending: { ...current.pending } };
-          delete next.pending[creatingSpec.role];
-          return next;
-        };
-        if (/^(CreateSceneItem|RemoveSceneItem|SetInputName|SetSceneName)$/.test(type)) {
-          await assertNoVideoOutput(raw);
-          await verifyScope();
-        }
-        let result: Row;
-        try {
-          result = await raw.call(type, args ? data : undefined);
-        } catch (error) {
-          if (creatingSpec && createWasRejected(type, error)) {
-            try {
-              // Commit the rejection before allowing another attempt. A failed save
-              // must leave both disk and the bound view pending, even in this process.
-              await saveCreation(finishReservation);
-            } catch (persistenceError) {
-              throw new AggregateError(
-                [error, persistenceError],
-                'OBS 已拒绝创建，但拒绝结果未能保存，请检查诊断后重试。',
-                { cause: persistenceError },
-              );
-            }
+              enabled = true;
           }
-          // Preserve the protocol code/comment for the existing OBS diagnostics.
-          throw error;
+          microphone.enabled = enabled;
+          await this.save(registry!);
         }
-        if (creatingSpec) {
-          const spec = creatingSpec;
-          const uuid = result[spec.kind === 'scene' ? 'sceneUuid' : 'inputUuid'];
-          if (typeof uuid !== 'string' || !uuid) throw conflict();
-          await saveCreation((current) => ({
-            ...finishReservation(current),
-            roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 0 } },
-          }));
-          await verifyScope();
-          const listed =
-            spec.kind === 'scene'
-              ? rows((await raw.call('GetSceneList')).scenes)
-              : rows((await raw.call('GetInputList')).inputs);
-          const confirmed = listed.some(
-            (item) =>
-              item[spec.kind === 'scene' ? 'sceneUuid' : 'inputUuid'] === uuid &&
-              (spec.kind === 'scene' || item.inputKind === spec.kind),
-          );
-          if (!confirmed) throw conflict();
-          if (spec.kind !== 'scene') {
-            const actual = (await raw.call('GetInputSettings', { inputUuid: uuid }))
-              .inputSettings as Row | undefined;
-            const requested = data.inputSettings as Row | undefined;
-            if (
-              requested &&
-              !Object.entries(requested).every(([key, value]) => actual?.[key] === value)
-            )
-              throw conflict();
+        if (type === 'SetInputSettings') {
+          const role = Object.entries(registry?.roles ?? {}).find(
+            ([name, value]) =>
+              audio.has(name) && (value.uuid === args?.inputUuid || name === args?.inputName),
+          )?.[1];
+          if (role) {
+            role.settings = (await raw.call('GetInputSettings', { inputUuid: role.uuid }))
+              .inputSettings as Row;
+            await this.save(registry!);
           }
-          await saveCreation((current) => {
-            if (current.roles[spec.role]?.uuid !== uuid || current.pending?.[spec.role])
-              throw conflict();
-            return {
-              ...current,
-              roles: { ...current.roles, [spec.role]: { uuid, kind: spec.kind, version: 1 } },
-            };
-          });
         }
-        return canonical(result) as Row;
+        return result;
       },
-    };
+    });
+    return scoped();
   }
 }

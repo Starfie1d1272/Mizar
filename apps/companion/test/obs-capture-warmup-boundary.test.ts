@@ -24,6 +24,7 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   await obsServer.register(websocket);
   const clients = new Set<{ send: (data: string) => void }>();
   const calls: string[] = [];
+  const visibleWrites: string[] = [];
   let valid = true;
   let item: {
     sceneItemId: number;
@@ -78,12 +79,11 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
           responseData = { outputActive: false };
         else if (type === 'GetPersistentData')
           responseData = {
-            slotValue:
-              data.realm === 'SCENE_COLLECTION' ? 'fixture-collection' : 'fixture-instance',
+            slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
           };
         else if (type === 'GetOutputList') responseData = { outputs: [] };
         else if (type === 'GetSceneCollectionList')
-          responseData = { currentSceneCollectionName: 'Mizar' };
+          responseData = { currentSceneCollectionName: 'Mizar 制播' };
         else if (type === 'GetSceneList')
           responseData = {
             currentProgramSceneName: obsSceneName('waiting'),
@@ -130,18 +130,21 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
             sceneItemId: 17,
             sourceName: '游戏画面',
             sourceUuid: 'capture-uuid',
-            sceneItemEnabled: false,
+            sceneItemEnabled:
+              data.sceneItemEnabled === undefined ? true : data.sceneItemEnabled === true,
           };
           responseData = { sceneItemId: 17 };
         } else if (type === 'SetSceneItemTransform') {
-          geometry = {
-            ...(data.sceneItemTransform as Record<string, unknown>),
-            width: 0,
-            height: 0,
-          };
+          const transform = data.sceneItemTransform as Record<string, unknown>;
+          geometry = { ...geometry, ...transform };
+          // OBS applies supplied dimensions through scale; omitted fields retain their values.
+          if (typeof transform.width === 'number') geometry.scaleX = transform.width / 1920;
+          if (typeof transform.height === 'number') geometry.scaleY = transform.height / 1080;
+          geometry.width = 1920 * Math.abs(Number(geometry.scaleX));
+          geometry.height = 1080 * Math.abs(Number(geometry.scaleY));
           if (scenario === 'cancel') valid = false;
         } else if (type === 'SetSceneItemEnabled') {
-          if (item) item.sceneItemEnabled = true;
+          if (item) item.sceneItemEnabled = data.sceneItemEnabled === true;
           if (scenario === 'starting')
             notify(
               'StreamStateChanged',
@@ -153,6 +156,13 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
           if (scenario === 'starting' || scenario === 'takeover')
             await new Promise((resolve) => setTimeout(resolve, 50));
         } else if (type === 'RemoveSceneItem') item = null;
+        if (
+          ['CreateSceneItem', 'SetSceneItemTransform', 'SetSceneItemEnabled'].includes(type) &&
+          item?.sceneItemEnabled &&
+          Number(geometry.width) > 0 &&
+          Number(geometry.height) > 0
+        )
+          visibleWrites.push(type);
         socket.send(
           JSON.stringify({
             op: 7,
@@ -173,17 +183,17 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
   await writeFile(
-    join(dir, 'obs.json.resources.json'),
+    join(dir, 'obs.json.collection.json'),
     JSON.stringify([
       {
         endpoint: `ws://127.0.0.1:${address.port}`,
-        collection: 'Mizar',
-        instance: 'fixture-instance',
-        collectionIdentity: 'fixture-collection',
+        instance: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+        collectionIdentity: '1fd3fde9-8040-407f-b738-ddb9f019c96e',
+        creating: false,
         roles: {
-          'scene:waiting': { uuid: 'waiting-uuid', kind: 'scene', version: 1 },
-          'scene:gameplay': { uuid: 'gameplay-uuid', kind: 'scene', version: 1 },
-          capture: { uuid: 'capture-uuid', kind: 'game_capture', version: 1 },
+          [obsSceneName('waiting')]: { uuid: 'waiting-uuid', kind: 'scene' },
+          [obsSceneName('gameplay')]: { uuid: 'gameplay-uuid', kind: 'scene' },
+          游戏画面: { uuid: 'capture-uuid', kind: 'game_capture' },
         },
       },
     ]),
@@ -241,6 +251,8 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   return {
     post,
     calls,
+    visibleWrites,
+    geometry: () => geometry,
     item: () => item,
     setFailure: () => {
       diagnosticFailure = true;
@@ -257,6 +269,9 @@ it('uses actual HTTP routes and OBS WebSocket for disabled → zero → enabled 
   });
   expect(begin.statusCode).toBe(200);
   const { transactionId, startedAt } = begin.json();
+  expect(r.visibleWrites).toEqual([]);
+  expect(r.item()?.sceneItemEnabled).toBe(true);
+  expect(r.geometry()).toMatchObject({ scaleX: 0, scaleY: 0, width: 0, height: 0 });
   expect(r.calls.indexOf('CreateSceneItem')).toBeLessThan(r.calls.indexOf('SetSceneItemTransform'));
   expect(r.calls.indexOf('SetSceneItemTransform')).toBeLessThan(
     r.calls.indexOf('SetSceneItemEnabled'),
@@ -273,7 +288,6 @@ it('uses actual HTTP routes and OBS WebSocket for disabled → zero → enabled 
   });
   expect((await r.post('capture-warmup-release', { transactionId })).statusCode).toBe(200);
   expect(r.item()).toBeNull();
-  expect((await r.post('capture-warmup-release', { transactionId })).statusCode).toBe(200);
 });
 
 it.each(['starting', 'takeover'] as const)(

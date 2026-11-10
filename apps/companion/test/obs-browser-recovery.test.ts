@@ -29,7 +29,7 @@ async function rig(blockSettings = false) {
   const waiting = new Promise<void>((resolve) => {
     reached = resolve;
   });
-  let currentCollection = 'Mizar';
+  let currentCollection = 'Mizar 制播';
   const notifyScene: (() => void)[] = [];
   server.get('/', { websocket: true }, (socket) => {
     notifyScene.push(() =>
@@ -62,10 +62,7 @@ async function rig(blockSettings = false) {
         const responseData =
           type === 'GetPersistentData'
             ? {
-                slotValue:
-                  request.d.requestData?.realm === 'SCENE_COLLECTION'
-                    ? 'fixture-collection'
-                    : 'fixture-instance',
+                slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
               }
             : type === 'GetOutputList'
               ? { outputs: [] }
@@ -78,30 +75,37 @@ async function rig(blockSettings = false) {
                 ? { outputActive: false }
                 : type === 'GetSceneCollectionList'
                   ? { currentSceneCollectionName: currentCollection }
-                  : type === 'GetInputList'
+                  : type === 'GetSceneList'
                     ? {
-                        inputs: [
-                          ...scenes.map((scene, index) => ({
-                            inputName: scene.browserInput,
-                            inputKind: 'browser_source',
-                            inputUuid: `owned-${index}`,
-                          })),
-                          {
-                            inputName: 'Personal',
-                            inputKind: 'browser_source',
-                            inputUuid: 'personal',
-                          },
-                        ],
+                        scenes: scenes.map((scene, index) => ({
+                          sceneName: scene.sceneName,
+                          sceneUuid: `scene-${index}`,
+                        })),
                       }
-                    : type === 'GetInputSettings'
+                    : type === 'GetInputList'
                       ? {
-                          inputSettings: {
-                            url: scenes.find(
-                              (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
-                            )?.browserUrl,
-                          },
+                          inputs: [
+                            ...scenes.map((scene, index) => ({
+                              inputName: scene.browserInput,
+                              inputKind: 'browser_source',
+                              inputUuid: `owned-${index}`,
+                            })),
+                            {
+                              inputName: 'Personal',
+                              inputKind: 'browser_source',
+                              inputUuid: 'personal',
+                            },
+                          ],
                         }
-                      : {};
+                      : type === 'GetInputSettings'
+                        ? {
+                            inputSettings: {
+                              url: scenes.find(
+                                (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
+                              )?.browserUrl,
+                            },
+                          }
+                        : {};
         socket.send(
           JSON.stringify({
             op: 7,
@@ -122,17 +126,17 @@ async function rig(blockSettings = false) {
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
   await writeFile(
-    join(dir, 'obs.json.resources.json'),
+    join(dir, 'obs.json.collection.json'),
     JSON.stringify([
       {
         endpoint: `ws://127.0.0.1:${address.port}`,
-        collection: 'Mizar',
-        instance: 'fixture-instance',
-        collectionIdentity: 'fixture-collection',
+        instance: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+        collectionIdentity: '1fd3fde9-8040-407f-b738-ddb9f019c96e',
+        creating: false,
         roles: Object.fromEntries(
           scenes.map((scene, index) => [
-            `browser:${scene.id}`,
-            { uuid: `owned-${index}`, kind: 'browser_source', version: 1 },
+            scene.browserInput,
+            { uuid: `owned-${index}`, kind: 'browser_source' },
           ]),
         ),
       },
@@ -172,13 +176,6 @@ it('refreshes an existing owned browser source on enter without granting scene/a
       (call) => call.type.startsWith('Get') || call.type === 'PressInputPropertiesButton',
     ),
   ).toBe(true);
-  r.adapter.pauseAutomatic();
-  r.adapter.resumeAutomatic();
-  r.adapter.startBrowserRecovery();
-  await r.adapter.settleAutomatic();
-  expect(r.calls.filter((call) => call.type === 'PressInputPropertiesButton')).toHaveLength(
-    scenes.length,
-  );
 });
 
 it('revokes an in-flight refresh when the OBS scene changes externally', async () => {

@@ -189,7 +189,11 @@ export interface ObsNativeLogEvent {
   readonly localTime: string;
   readonly occurredAt?: string | null;
   readonly operation?: string | null;
-  readonly category: 'hook' | 'renderer' | 'window_capture';
+  readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio';
+  readonly audioLagMs?: number;
+  readonly audioBufferMs?: number;
+  readonly audioSource?:
+    'microphone' | 'desktop' | 'game' | 'commentary' | 'music' | 'effect' | 'other';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
   readonly source: 'mizar_capture' | 'other_capture' | null;
   readonly target: 'cs2.exe' | 'other' | null;
@@ -209,6 +213,11 @@ export interface ObsNativeLogEvent {
     | 'hook_event_open_failed'
     | 'capture_failure'
     | 'renderer_failure'
+    | 'audio_buffer_limit'
+    | 'audio_lag_restart'
+    | 'audio_device_start_failed'
+    | 'audio_window_unavailable'
+    | 'audio_timestamp_error'
     | null;
   readonly code: number | null;
   readonly codeHex: string | null;
@@ -278,6 +287,81 @@ const CAPTURE_FAILURE_OPERATIONS = [
 export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
+  // This is an optional scheduling privilege, not a renderer initialization failure.
+  if (/^D3D11 GPU priority setup failed \(not admin\?\)$/i.test(stamp[2]!)) return null;
+  const lag =
+    /^Source (.+) audio is lagging \(over by (\d+(?:\.\d+)?) ms\) at max audio buffering\. Restarting source audio\.$/i.exec(
+      stamp[2]!,
+    );
+  const device = /^WASAPI: Device '.*' failed to start \(source: (.+)\)$/i.exec(stamp[2]!);
+  const initialized = /^WASAPI: Device '.*' \[\d+ Hz\] initialized \(source: (.+)\)$/i.exec(
+    stamp[2]!,
+  );
+  const invalidated = /^Device '.*' invalidated\.\s+Retrying \(source: (.+)\)$/i.exec(stamp[2]!);
+  const buffer =
+    /^adding \d+ milliseconds of audio buffering, total audio buffering is now (\d+) milliseconds \(source: (.+)\)$/i.exec(
+      stamp[2]!,
+    );
+  const defaultChanged = /^WASAPI: Default (input|output) device changed$/i.test(stamp[2]!);
+  const audioReason = lag
+    ? 'audio_lag_restart'
+    : device
+      ? 'audio_device_start_failed'
+      : /^Max audio buffering reached!$/i.test(stamp[2]!)
+        ? 'audio_buffer_limit'
+        : /^\[WASAPISource::(?:ProcessCaptureData\] window disappeared|TryInitialize\]:\[\[VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK\]\] Failed to find window)$/i.test(
+              stamp[2]!,
+            )
+          ? 'audio_window_unavailable'
+          : /^\[WASAPISource::ProcessCaptureData\] Timestamp error!$/i.test(stamp[2]!)
+            ? 'audio_timestamp_error'
+            : null;
+  const audioOperation =
+    audioReason ??
+    (initialized
+      ? 'audio_device_initialized'
+      : invalidated
+        ? 'audio_device_retry'
+        : buffer
+          ? 'audio_buffer_increased'
+          : defaultChanged
+            ? 'audio_default_device_changed'
+            : null);
+  if (audioOperation) {
+    const lagMs = lag ? Number(lag[2]) : undefined;
+    const bufferMs = buffer ? number(Number(buffer[1])) : null;
+    const source = lag?.[1] ?? device?.[1] ?? initialized?.[1] ?? invalidated?.[1] ?? buffer?.[2];
+    const roles: Record<string, NonNullable<ObsNativeLogEvent['audioSource']>> = {
+      麦克风: 'microphone',
+      桌面声音: 'desktop',
+      游戏声音: 'game',
+      其他解说: 'commentary',
+      音乐: 'music',
+      音效: 'effect',
+    };
+    return {
+      localTime: stamp[1]!,
+      category: 'audio',
+      outcome: audioReason
+        ? 'failure'
+        : initialized
+          ? 'success'
+          : invalidated
+            ? 'retry'
+            : 'attempt',
+      source: null,
+      target: null,
+      operation: audioOperation,
+      reason: audioReason,
+      message: audioOperation,
+      code: null,
+      codeHex: null,
+      hookVersions: null,
+      ...(source ? { audioSource: Object.hasOwn(roles, source) ? roles[source]! : 'other' } : {}),
+      ...(bufferMs !== null ? { audioBufferMs: bufferMs } : {}),
+      ...(lagMs !== undefined && Number.isFinite(lagMs) ? { audioLagMs: lagMs } : {}),
+    };
+  }
   const capture = /^\[(game-capture|window-capture): '(.*)'\]\s+(.*)$/.exec(stamp[2]!);
   const text = capture?.[3] ?? stamp[2]!;
   const hook = capture?.[1] === 'game-capture';
@@ -1034,7 +1118,7 @@ export async function collectObsNativeEvidence(
               }
               eventCount++;
               if (event.outcome === 'failure') {
-                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}`;
+                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}${event.audioSource ? `:${event.audioSource}` : ''}`;
                 if (Object.keys(log.failureCounts!).length < 64 || key in log.failureCounts!)
                   log.failureCounts![key] = (log.failureCounts![key] ?? 0) + 1;
                 failures.delete(key);

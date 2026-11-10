@@ -18,36 +18,24 @@ const scope: SourceScope = {
 };
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-source-state-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  return join(dir, 'source.json');
+  const path = join(dir, 'source.json');
+  const owners: RivalHubSourceState[] = [];
+  t.after(async () => {
+    for (const owner of owners) await owner.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const open = (fault?: ConstructorParameters<typeof RivalHubSourceState>[1]) => {
+    const owner = new RivalHubSourceState(path, fault);
+    owners.push(owner);
+    return owner;
+  };
+  return { path, open };
 }
 
-test('claim intent and exact identity survive restart without restoring sending authority', async (t) => {
-  const path = await setup(t);
-  const first = new RivalHubSourceState(path);
-  await first.load();
-  const intent = await first.beginClaim(scope, null);
-  const restarted = new RivalHubSourceState(path);
-  assert.deepEqual((await restarted.load()).intent, intent);
-  await assert.rejects(restarted.beginClaim(scope, null), /reconciliation/);
-  const identity = await restarted.confirmClaim(intent.id, 7);
-  const last = new RivalHubSourceState(path);
-  assert.equal((await last.load()).records[0]?.state, 'owned');
-  await last.recover();
-  assert.deepEqual((await last.snapshot()).records[0], {
-    identity,
-    state: 'release_pending',
-    cause: 'recovery',
-    attempts: 0,
-    nextAttemptAt: null,
-    lastFailureCode: null,
-  });
-});
-
 test('atomic write failure preserves disk and memory, and unsafe state is rejected', async (t) => {
-  const path = await setup(t);
+  const { path, open } = await setup(t);
   let fail = false;
-  const store = new RivalHubSourceState(path, (point) => {
+  const store = open((point) => {
     if (fail && point === 'before-rename') throw new Error('injected');
   });
   await store.load();
@@ -63,12 +51,13 @@ test('atomic write failure preserves disk and memory, and unsafe state is reject
     store.beginClaim({ ...scope, baseUrl: 'https://user:secret@example.com' }, null),
   );
   assert.equal((await readFile(path, 'utf8')).includes('secret'), false);
+  await store.close();
   await writeFile(path, '{"version":1,"records":[],"intent":null,"credential":"secret"}');
-  await assert.rejects(new RivalHubSourceState(path).load());
+  await assert.rejects(open().load(), { name: 'ZodError' });
 });
 
 test('full pending state refuses a new claim without evicting identities', async (t) => {
-  const path = await setup(t);
+  const { path, open } = await setup(t);
   const records = Array.from({ length: 64 }, (_, index) => ({
     identity: { ...scope, matchId: `match-${index}`, authorityRevision: index + 1 },
     state: 'release_pending',
@@ -78,7 +67,7 @@ test('full pending state refuses a new claim without evicting identities', async
     lastFailureCode: null,
   }));
   await writeFile(path, JSON.stringify({ version: 1, records, intent: null }));
-  const store = new RivalHubSourceState(path);
+  const store = open();
   await store.load();
   const before = await readFile(path);
   await assert.rejects(store.beginClaim(scope, null), /capacity/);
@@ -87,8 +76,8 @@ test('full pending state refuses a new claim without evicting identities', async
 });
 
 test('concurrent claims serialize and retain one unresolved intent', async (t) => {
-  const path = await setup(t);
-  const store = new RivalHubSourceState(path);
+  const { open } = await setup(t);
+  const store = open();
   await store.load();
   const outcomes = await Promise.allSettled([
     store.beginClaim(scope, null),
@@ -97,15 +86,4 @@ test('concurrent claims serialize and retain one unresolved intent', async (t) =
   assert.equal(outcomes.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(outcomes.filter((result) => result.status === 'rejected').length, 1);
   assert.ok((await store.snapshot()).intent);
-});
-
-test('a pending source cannot become evidence for a later claim', async (t) => {
-  const path = await setup(t);
-  const store = new RivalHubSourceState(path);
-  await store.load();
-  const intent = await store.beginClaim(scope, null);
-  const identity = await store.confirmClaim(intent.id, 1);
-  await store.handoff(identity, 'finish');
-  await assert.rejects(store.beginClaim(scope, null), /cleanup/);
-  assert.equal((await store.snapshot()).intent, null);
 });

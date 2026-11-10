@@ -672,6 +672,8 @@ export class SessionJournal {
           return {
             ...receipt,
             sourceState: {
+              // Sealing advanced these writer-owned names before accepting more writes.
+              postCutoffSegments: this.segments.map((segment) => segment.name),
               health: this.health(),
               memoryOnly: {
                 included: false,

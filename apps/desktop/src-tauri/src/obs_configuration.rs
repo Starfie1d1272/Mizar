@@ -158,8 +158,6 @@ pub fn launch(path: &str, session: Option<(&str, &str)>, log: &DesktopLog) -> Re
     } else {
         let mut probe = crate::powershell::background();
         probe.args([
-            "-NoProfile",
-            "-NonInteractive",
             "-Command",
             "@(Get-Process -Name obs64 -ErrorAction SilentlyContinue).Count",
         ]);
@@ -277,7 +275,7 @@ pub fn finish(session: &str, log: &DesktopLog) -> Result<Value, String> {
             return Ok(outcome("not_owned"));
         }
         let mut probe = crate::powershell::background();
-        probe.args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
+        probe.args(["-Command", "$ErrorActionPreference='Stop'; $p=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/production' -TimeoutSec 3; $o=Invoke-RestMethod -Uri 'http://127.0.0.1:3000/local/v1/obs/outputs' -TimeoutSec 3; @{production=$p;outputs=$o}|ConvertTo-Json -Depth 6 -Compress"]);
         let reason =
             match crate::powershell::run(probe, log, "OBS 配置状态检测", Duration::from_secs(8))
             {

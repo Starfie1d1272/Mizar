@@ -22,6 +22,10 @@ export class MusicPreview {
   private uuid: string | null = null;
   private path = '';
   private expectedVolume = 0;
+  private expectedMuted = false;
+  private pendingVolume: { before: number; applied: number } | null = null;
+  private pendingMute: { before: boolean; applied: boolean } | null = null;
+  private envelope = 0;
   private epoch = 0;
   private stopping = false;
   private stopSent = false;
@@ -33,6 +37,54 @@ export class MusicPreview {
   ) {}
   get busy() {
     return Boolean(this.request || this.uuid);
+  }
+  /** Share the borrowed source's current gain with the normal mixer owner. */
+  mixerVolume(uuid: string): number | null {
+    if (this.uuid !== uuid || !this.request) return null;
+    return (
+      (this.store.state.muted ? 0 : this.store.state.master) *
+      (this.request.track.gain ?? this.request.volume) *
+      this.envelope
+    );
+  }
+  /** Register before dispatch. A lost reply retains both possible owned values. */
+  async prepareMixer(obs: ObsRpc, uuid: string, volume?: number, muted?: boolean): Promise<void> {
+    if (this.uuid !== uuid) return;
+    if (this.pendingVolume || this.pendingMute) {
+      const [gain, mute] = await Promise.all([
+        obs.call('GetInputVolume', { inputUuid: uuid }),
+        obs.call('GetInputMute', { inputUuid: uuid }),
+      ]);
+      if (!this.observeMixer(gain.inputVolumeMul, mute.inputMuted))
+        throw new Error('music_preview_mixer_changed');
+    }
+    if (volume !== undefined) this.pendingVolume = { before: this.expectedVolume, applied: volume };
+    if (muted !== undefined) this.pendingMute = { before: this.expectedMuted, applied: muted };
+  }
+  confirmMixer(uuid: string, volume?: number, muted?: boolean): void {
+    if (this.uuid !== uuid) return;
+    if (volume !== undefined) {
+      this.expectedVolume = volume;
+      this.pendingVolume = null;
+    }
+    if (muted !== undefined) {
+      this.expectedMuted = muted;
+      this.pendingMute = null;
+    }
+  }
+  private observeMixer(volume: unknown, muted: unknown): boolean {
+    if (typeof volume !== 'number' || !Number.isFinite(volume) || typeof muted !== 'boolean')
+      throw new Error('music_preview_mixer_unconfirmed');
+    const volumes = this.pendingVolume
+      ? [this.pendingVolume.before, this.pendingVolume.applied]
+      : [this.expectedVolume];
+    const mutes = this.pendingMute
+      ? [this.pendingMute.before, this.pendingMute.applied]
+      : [this.expectedMuted];
+    if (!volumes.some((value) => Math.abs(volume - value) <= 0.015) || !mutes.includes(muted))
+      return false;
+    this.confirmMixer(this.uuid!, volume, muted);
+    return true;
   }
   private event(stage: string, reason: string) {
     const r = this.request;
@@ -203,10 +255,11 @@ export class MusicPreview {
           obs.call('GetInputVolume', args),
         ]);
         if (!current()) return;
+        const mixerOwned = this.observeMixer(volume.inputVolumeMul, mute.inputMuted);
         if (
           !this.forceStop &&
           ((settings.inputSettings as Record<string, unknown>)?.local_file !== this.path ||
-            mute.inputMuted === true ||
+            !mixerOwned ||
             before.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
             (!this.stopSent && before.mediaState === 'OBS_MEDIA_STATE_STOPPED') ||
             (active(before.mediaState) &&
@@ -338,14 +391,24 @@ export class MusicPreview {
         );
         return;
       }
+      const gain = await call('GetInputVolume', { inputUuid: uuid });
+      if (typeof gain.inputVolumeMul !== 'number' || !Number.isFinite(gain.inputVolumeMul))
+        throw new Error('music_preview_mixer_unconfirmed');
       // Register cleanup before the first write, including uncertain RPC outcomes.
       this.uuid = uuid;
       this.path = path;
       this.epoch = epoch;
       this.started = this.now();
       this.deadline = this.started + 15_000;
-      this.expectedVolume = 0; // Remain silent until OBS confirms playback and the segment seek.
-      await call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: this.expectedVolume });
+      this.expectedMuted = false;
+      this.pendingVolume = null;
+      this.pendingMute = null;
+      this.envelope = 0;
+      this.expectedVolume = gain.inputVolumeMul;
+      // Remain silent until OBS confirms playback and the segment seek.
+      await this.prepareMixer(obs, uuid, 0);
+      await call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: 0 });
+      this.confirmMixer(uuid, 0);
       await call('SetInputSettings', {
         inputUuid: uuid,
         overlay: true,
@@ -370,8 +433,9 @@ export class MusicPreview {
     const volume = await call('GetInputVolume', args);
     const settings = await call('GetInputSettings', args);
     if (!current()) return;
+    const mixerOwned = this.observeMixer(volume.inputVolumeMul, mute.inputMuted);
     if (
-      mute.inputMuted === true ||
+      !mixerOwned ||
       media.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
       media.mediaState === 'OBS_MEDIA_STATE_STOPPED' ||
       Math.abs(Number(volume.inputVolumeMul) - this.expectedVolume) > 0.015 ||
@@ -433,15 +497,15 @@ export class MusicPreview {
       return;
     }
     const remaining = Math.min(this.deadline - this.now(), end - cursor);
-    this.expectedVolume =
-      (this.store.state.muted ? 0 : this.store.state.master) *
-      (r.track.gain ?? r.volume) *
-      Math.min(
-        1,
-        r.fadeInMs ? (this.now() - this.fadeAt) / r.fadeInMs : 1,
-        r.fadeOutMs ? Math.max(0, remaining) / r.fadeOutMs : 1,
-      );
-    await call('SetInputVolume', { ...args, inputVolumeMul: this.expectedVolume });
+    this.envelope = Math.min(
+      1,
+      r.fadeInMs ? (this.now() - this.fadeAt) / r.fadeInMs : 1,
+      r.fadeOutMs ? Math.max(0, remaining) / r.fadeOutMs : 1,
+    );
+    const target = this.mixerVolume(this.uuid!)!;
+    await this.prepareMixer(obs, this.uuid!, target);
+    await call('SetInputVolume', { ...args, inputVolumeMul: target });
+    this.confirmMixer(this.uuid!, target);
   }
   private fail(reason: string, message: string) {
     this.failureMessage = message;

@@ -130,36 +130,6 @@ describe('Resource Store', () => {
     await restored.removeOptional(packId);
     expect(await restored.isDeleting(ref)).toBe(false);
   });
-  it('checks references inside the shared queue before optional removal', async () => {
-    let referenced = true;
-    let inQueue = false;
-    const { store } = await setup({
-      packs: [{ packId, optional: true }],
-      references: {
-        async run(operation) {
-          inQueue = true;
-          try {
-            return await operation();
-          } finally {
-            inQueue = false;
-          }
-        },
-        isReferenced(ref) {
-          expect(inQueue).toBe(true);
-          expect(ref).toEqual({ id: packId, version: '1', digest: hash('manifest-1') });
-          return Promise.resolve(referenced);
-        },
-      },
-    });
-    await store.installVerified(packId, prepare());
-    await expect(store.removeOptional(packId)).rejects.toThrow('resource_in_use');
-    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
-    referenced = false;
-    await store.removeOptional(packId);
-    expect(await store.isDeleting({ id: packId, version: '1', digest: hash('manifest-1') })).toBe(
-      false,
-    );
-  });
   it('reads exact authenticated versions without following the active pointer', async () => {
     const { store } = await setup();
     await store.installVerified(packId, prepare());

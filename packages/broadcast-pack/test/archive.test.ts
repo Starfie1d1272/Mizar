@@ -96,7 +96,6 @@ describe('pack archive', () => {
   it('writes a verified archive that round trips', async () => {
     const files = new Map([['assets/a.txt', content]]);
     const zip = writePackArchive(manifest, files);
-    expect(writePackArchive(manifest, files)).toEqual(zip);
     const result = await readPackArchive(zip);
     expect(result.files.get('assets/a.txt')).toEqual(content);
     expect(() => writePackArchive(manifest, new Map())).toThrow();

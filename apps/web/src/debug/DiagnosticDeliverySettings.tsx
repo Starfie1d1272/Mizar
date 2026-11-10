@@ -225,11 +225,22 @@ export function DiagnosticDeliverySettings({
       {(value?.error || value?.transportFailure) && value.closedReason !== 'policy_changed' ? (
         <StatusBanner tone="warning">
           {value.transportFailure
+            ? `${{ enrollment: '登记', permit: '发送许可', upload: '上传', withdrawal: '删除请求' }[value.transportFailure.phase]}${value.transportFailure.status ? `（HTTP ${value.transportFailure.status}）` : ''}：`
+            : null}
+          {value.transportFailure
             ? value.transportFailure.reason === 'permit_budget'
               ? '接收端暂未提供发送额度；待传批次保留在本机，将按计划重试。'
               : value.transportFailure.reason === 'rate_limited'
                 ? '接收端请求过于频繁；将稍后自动重试。'
-                : `${{ enrollment: '登记', permit: '发送许可', upload: '上传', withdrawal: '删除请求' }[value.transportFailure.phase]}未确认${value.transportFailure.status ? `（HTTP ${value.transportFailure.status}）` : ''}；将按计划重试。`
+                : value.transportFailure.reason === 'connection_timeout'
+                  ? '连接诊断接收端超时，尚未取得响应；请检查网络，将按计划重试。'
+                  : value.transportFailure.reason === 'connection_failed'
+                    ? '无法连接诊断接收端；请检查网络，将按计划重试。'
+                    : value.transportFailure.reason === 'request_timeout'
+                      ? '等待接收端响应超时；本机批次保留，将按计划重试。'
+                      : value.transportFailure.reason === 'receipt_invalid'
+                        ? '接收端返回的确认无效；本机批次保留，将按计划重试。'
+                        : '未确认；将按计划重试。'
             : '暂时无法发送，请检查本机状态或网络。'}
           可导出本机诊断报告。
         </StatusBanner>

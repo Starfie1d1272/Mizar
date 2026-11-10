@@ -282,12 +282,14 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.resetObserverContinuity();
   }
 
-  disconnectObserver(): void {
-    if (this.observerIdentity === undefined || this.stopRequested) return;
+  disconnectObserver(reason: 'failed' | 'cancelled' = 'failed'): void {
+    if (this.observerIdentity === undefined || this.stopRequested || !this.observerAttached) return;
     this.observerAttached = false;
     this.resetObserverContinuity();
     this.state = 'reconnecting';
-    this.recordDiagnostic({ code: 'session-run-failed' });
+    this.recordDiagnostic({
+      code: reason === 'cancelled' ? 'session-cancelled' : 'session-run-failed',
+    });
   }
 
   private resetObserverContinuity(): void {
@@ -825,7 +827,7 @@ export function createCstvSourceManagers(options: {
 
 export interface ObserverSourceManager<R extends GameEventSourceRole> extends CstvSourceManager<R> {
   attachObserver(identity: ObserverSourceIdentity): void;
-  disconnectObserver(): void;
+  disconnectObserver(reason?: 'failed' | 'cancelled'): void;
   consumeObserverRecord(input: unknown): void;
 }
 

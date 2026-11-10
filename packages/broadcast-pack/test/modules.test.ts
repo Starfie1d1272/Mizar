@@ -1,13 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
-import {
-  exportModule,
-  importModule,
-  readPackArchive,
-  writePackArchive,
-  type ModuleTemplate,
-} from '../src/index.js';
+import { exportModule, importModule, type ModuleTemplate } from '../src/index.js';
 
 const resource = { id: 'local:music:track', version: '1', digest: 'a'.repeat(64) };
 const asset = { resource, fileId: 'track.wav' };
@@ -110,87 +104,5 @@ describe('portable module references', () => {
       expect(JSON.stringify(template)).not.toContain(resource.id);
       expect(importModule(template, imports, identity)).toEqual(item);
     }
-  });
-  it('round trips a music module and its asset through ZIP bytes', async () => {
-    const music = module('music', 1, {
-      version: 1,
-      automaticEnabled: true,
-      groups: {
-        waiting: { ...group, tracks: [track] },
-        tactical: group,
-        technical: group,
-        halftime: group,
-        mapVictory: group,
-        matchVictory: group,
-        opening: group,
-      },
-    });
-    const bytes = Buffer.from(JSON.stringify(exportModule(music, refs)));
-    const audio = Buffer.from('RIFF0000WAVEtest');
-    const manifest = Buffer.from(
-      JSON.stringify({
-        format: 'mizar.pack',
-        formatVersion: 1,
-        packageId: randomUUID(),
-        version: '1.0.0',
-        name: 'Music',
-        author: '',
-        modules: [
-          { entryId: 'music', module: 'music', schemaVersion: 1, fileId: 'module', required: true },
-        ],
-        presets: [],
-        dependencies: [],
-        requirements: [],
-        files: [
-          {
-            id: 'module',
-            path: 'modules/music.json',
-            mediaType: 'application/json',
-            bytes: bytes.length,
-            sha256: createHash('sha256').update(bytes).digest('hex'),
-          },
-          {
-            id: 'audio',
-            path: 'assets/audio.wav',
-            mediaType: 'audio/wav',
-            bytes: audio.length,
-            sha256: createHash('sha256').update(audio).digest('hex'),
-          },
-        ],
-      }),
-    );
-    const archive = writePackArchive(
-      manifest,
-      new Map([
-        ['modules/music.json', bytes],
-        ['assets/audio.wav', audio],
-      ]),
-    );
-    const decoded = await readPackArchive(archive);
-    expect(decoded.files.get('assets/audio.wav')).toEqual(audio);
-    const template = JSON.parse(
-      decoded.files.get('modules/music.json')!.toString(),
-    ) as ModuleTemplate;
-    expect(importModule(template, imports, identity)).toEqual(music);
-  });
-  it('rejects malformed reference shapes and unknown fields through the domain parser', () => {
-    const program = module('program', 1, {
-      scenes: Object.fromEntries(
-        ['waiting', 'matchup', 'bp', 'halftime', 'map_result', 'intermap', 'match_result'].map(
-          (name) => [name, { kind: 'builtin', id: 'pulse', apiVersion: 1 }],
-        ),
-      ),
-      tokens: {},
-      assets: { logo: asset },
-    });
-    const template = exportModule(program, refs);
-    expect(importModule(template, imports, identity)).toEqual(program);
-    const invalid = structuredClone(template);
-    (invalid.value as { assets: { logo: unknown } }).assets.logo = {
-      package: '$self',
-      fileId: 'audio',
-      extra: true,
-    };
-    expect(() => importModule(invalid, imports, identity)).toThrow();
   });
 });

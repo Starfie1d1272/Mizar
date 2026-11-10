@@ -17,6 +17,7 @@ export interface ArchiveWorkerData {
     secrets?: string[];
   }[];
   gaps: unknown[];
+  excludedSources?: { source: string; reason: string }[];
   output: string;
   exportId: string;
   range: { from?: string; to?: string };
@@ -139,7 +140,7 @@ export function runArchiveWorker(
   let entries: Entry[] = [];
   const parts: Entry[] = [],
     gaps = [...d.gaps];
-  const excludedSources: { source: string; reason: string }[] = [];
+  const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
   let carrierRecords = 0,
     uniqueEvents = 0,
     aggregatedOccurrences = 0,
@@ -428,6 +429,7 @@ export function runArchiveWorker(
           partIndex: part,
           partCount: final ? part : null,
           complete: final,
+          completenessScope: 'archive parts only; source coverage is declared in coverage.json',
           range: d.range,
           snapshot: redact({
             asOf: object(d.snapshot).asOf,
@@ -475,6 +477,13 @@ export function runArchiveWorker(
           aggregatedOccurrences,
           gaps: redact(gaps),
           excludedSources,
+          interpretation: {
+            gaps: 'Missing or unconfirmed evidence; archive completion does not resolve these gaps.',
+            source_not_safely_fixed:
+              'No committed pin covered this source at export time; it was not read. Historical evidence is not reconstructed.',
+            excludedSources:
+              'Outside the current schema or declared collection scope; producer-declared-post-cutoff-segment identifies a writer-owned successor after the pinned boundary. Not counted as current evidence; originals remain at their source.',
+          },
           entries,
           scope: final ? 'final cumulative coverage' : 'cumulative through this part',
         }),
@@ -732,17 +741,21 @@ export function runArchiveWorker(
             position = 0,
             offset = 0,
             body = '',
+            bodyBytes = 0,
             attachmentIndex = 0;
           const write = (line: string) => {
             if (source.rawAttachment) {
               for (const secret of source.secrets ?? [])
                 if (secret) line = line.split(secret).join('[redacted]');
               line = String(redact(line)) + '\n';
-              if (Buffer.byteLength(body) + Buffer.byteLength(line) > 1024 * 1024 && body) {
+              const lineBytes = Buffer.byteLength(line);
+              if (bodyBytes + lineBytes > 1024 * 1024 && body) {
                 add(source.name + '-' + ++attachmentIndex + '.log', Buffer.from(body));
                 body = '';
+                bodyBytes = 0;
               }
               body += line;
+              bodyBytes += lineBytes;
             } else if (line) {
               let value: unknown;
               const start = performance.now();

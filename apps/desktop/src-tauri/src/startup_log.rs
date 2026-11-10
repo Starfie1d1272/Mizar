@@ -920,7 +920,10 @@ impl DesktopLog {
                     let sealed = std::mem::replace(&mut log.document_segment_name, next);
                     log.active_segments.push(sealed);
                 }
-                let mut receipt = json!({"sourceState":self.deferred_source_state(),"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments});
+                let mut source_state = self.deferred_source_state();
+                source_state["postCutoffSegments"] =
+                    json!([log.segment_name, log.document_segment_name]);
+                let mut receipt = json!({"sourceState":source_state,"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments});
                 if let Some(owner) = &delivery_owner {
                     receipt["deliveryOwner"] = owner.clone();
                 }

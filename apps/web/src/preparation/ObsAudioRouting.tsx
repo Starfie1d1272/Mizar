@@ -1,20 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ObsAudioRole, ObsAudioRoutingStatus } from '@mizar/protocol/obs';
+import type { ObsAudioRoutingStatus } from '@mizar/protocol/obs';
 import { Button, Select } from '../ui';
 
-const labels: Record<ObsAudioRole, string> = {
-  game: '游戏',
-  remoteCommentary: '远端解说音频',
-  microphone: '麦克风',
-};
-const sourceTypes: Record<string, string> = {
-  wasapi_output_capture: '桌面音频',
-  wasapi_input_capture: '音频输入',
-  wasapi_process_output_capture: '应用音频',
-  game_capture: '游戏捕获',
-  window_capture: '窗口捕获',
-};
-export function ObsAudioRouting() {
+import { ObsAudioMeter } from './ObsAudioMeter';
+import { ObsAudioDevices } from './ObsAudioDevices';
+
+export function ObsAudioRouting({ active = true }: { active?: boolean }) {
   const [commentary, setCommentary] = useState<{
     revision: string;
     preference: {
@@ -34,8 +25,6 @@ export function ObsAudioRouting() {
   // This is only a suggested target; no OBS configuration changes until confirmed.
   const [targetMode, setTargetMode] = useState<'desktop' | 'independent'>('desktop');
   const targetInitialized = useRef(false);
-  const [desktopSelection, setDesktopSelection] = useState('');
-  const [chooseDesktop, setChooseDesktop] = useState(false);
   async function refreshCommentary() {
     const response = await fetch('/local/v1/obs/remote-commentary', { cache: 'no-store' });
     if (!response.ok) throw new Error('无法读取远端解说设置。');
@@ -99,9 +88,7 @@ export function ObsAudioRouting() {
       setMessage('分离采集的选择已保存。需要独立分路时，请在上方选择并切回。');
     } else if (!Object.values(current.bindings).some(Boolean)) {
       setCommentaryPreparing(false);
-      setMessage(
-        '分离采集的选择已保存。请在上方准备独立分路；若提示旧配置未登记，请先在下方“手动绑定与来源详情”中绑定。',
-      );
+      setMessage('分离采集的选择已保存。请先准备 OBS 场景，再在上方准备独立分路。');
     } else if (mode === 'autoTeamspeak') await prepareCommentary();
     else setCommentaryPreparing(false);
   }
@@ -138,9 +125,7 @@ export function ObsAudioRouting() {
     });
     if (current.desktop) setMessage('分离采集的应用已保存。需要独立分路时，请在上方选择并切回。');
     else if (!Object.values(current.bindings).some(Boolean))
-      setMessage(
-        '分离采集的应用已保存。请在上方准备独立分路；若提示旧配置未登记，请先在下方“手动绑定与来源详情”中绑定。',
-      );
+      setMessage('分离采集的应用已保存。请先准备 OBS 场景，再在上方准备独立分路。');
     else await prepareCommentary();
   }
   function commentaryReady(current: ObsAudioRoutingStatus) {
@@ -199,7 +184,7 @@ export function ObsAudioRouting() {
       setBusy(false);
     }
   }
-  async function switchMode(mode: 'desktop' | 'independent' | 'cancel') {
+  async function switchMode(mode: 'desktop' | 'independent' | 'cancel' | 'recover') {
     if (!status) return;
     const cancelling = mode === 'cancel';
     const response = await fetch('/operator/obs/audio-mode', {
@@ -208,14 +193,10 @@ export function ObsAudioRouting() {
       body: JSON.stringify({
         revision: status.revision,
         mode,
-        ...(mode === 'desktop' && desktopSelection ? { selectionId: desktopSelection } : {}),
       }),
     });
     if (!response.ok) {
       const result = (await response.json()) as { error?: string; message?: string };
-      if (result.error === 'audio_desktop_choice_required') setChooseDesktop(true);
-      // The refreshed list has new short-lived selection IDs.
-      setDesktopSelection('');
       await refresh().catch(() => undefined);
       throw new Error(
         result.message ??
@@ -224,50 +205,29 @@ export function ObsAudioRouting() {
     }
     const result = (await response.json()) as { monitorPending?: boolean; waiting?: boolean };
     if (cancelling) setCommentaryPreparing(false);
-    await refresh();
-    setDesktopSelection('');
-    setChooseDesktop(false);
-    if (!cancelling && !result.waiting)
-      setTargetMode(mode === 'desktop' ? 'independent' : 'desktop');
+    const current = await refresh();
+    if (!cancelling && !result.waiting) setTargetMode(current.desktop ? 'independent' : 'desktop');
     setMessage(
-      cancelling
-        ? '已取消等待。'
-        : result.waiting
-          ? '解说来源尚未就绪，桌面混音仍可用。准备好后请再次点击切回。'
-          : result.monitorPending
-            ? '已切换桌面混音；音乐仍播出，本机监听暂缓。'
-            : mode === 'desktop'
-              ? '已切换桌面混音。请录制试听。'
-              : '已切换独立分路。请录制试听。',
+      mode === 'recover'
+        ? '已核对并恢复音频状态，请录制试听。'
+        : cancelling
+          ? '已取消等待。'
+          : result.waiting
+            ? '解说来源尚未就绪，桌面混音仍可用。准备好后请再次点击切回。'
+            : result.monitorPending
+              ? '已切换桌面混音；音乐仍播出，本机监听暂缓。'
+              : mode === 'desktop'
+                ? '已切换桌面混音。请录制试听。'
+                : '已切换独立分路。请录制试听。',
     );
-  }
-  async function bind(role: ObsAudioRole, selectionId: string | null) {
-    if (!status) return;
-    const response = await fetch('/operator/obs/audio-routing', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role, selectionId, revision: status.revision }),
-    });
-    if (!response.ok) {
-      const result = (await response.json()) as { message?: string };
-      await refresh().catch(() => undefined);
-      throw new Error(result.message ?? '绑定结果未确认，请核对刷新后的状态再操作。');
-    }
-    try {
-      await refresh();
-      if (role === 'remoteCommentary') await refreshCommentary();
-    } catch {
-      setStatus(null);
-      throw new Error('绑定已保存，但状态刷新失败；请重新读取 OBS 来源核对。');
-    }
   }
   return (
     <div>
       <h3>音频模式</h3>
       <p>
         桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制。 OBS
-        中的音乐若同时直出并监听到该设备，可能重复收音，请核对监听并录制试听。 下方选择的是 OBS
-        来源，不是 Windows 播放设备；来源名称不能证明采集了哪个设备。
+        中的音乐若同时直出并监听到该设备，可能重复收音，请核对监听并录制试听。
+        请在采集设备中核对实际播放设备与麦克风。
       </p>
       <details>
         <summary>核对播放设备（包括 Sonar Chat / Gaming）</summary>
@@ -277,13 +237,12 @@ export function ObsAudioRouting() {
             Chat 与 Gaming 是不同设备；只采集其中一路不会自动包含另一路。
           </li>
           <li>
-            在 OBS 打开所选音频输出采集来源的属性，核对设备，不要仅凭来源名称或“默认”判断。
+            在下方读取设备，核对「桌面声音」所选设备，不要仅凭“默认”判断。
             若游戏与解说输出到不同设备，请保留独立分路，或先在播放端明确混合到同一设备。
           </li>
           <li>
-            不要修改个人场景共用来源的设备。需要另一个设备时，在 OBS 创建仅供 Mizar
-            使用的音频输出采集来源，先保持场景项禁用；切换到桌面混音时可读取并选择该来源。
-            当前已是桌面混音时不能直接换来源，需先切回独立分路；不要额外启用全局桌面音频。
+            使用下方「采集设备」设置固定的桌面声音和麦克风，不要另建或绑定任意 OBS 来源。 Mizar
+            会维护专用集合中的来源；请勿额外启用全局桌面音频。
           </li>
           <li>
             切换后让远端解说说话，并分别播放游戏和音乐，录制试听确认三者齐全且没有重复声音。
@@ -317,15 +276,18 @@ export function ObsAudioRouting() {
               当前 OBS 桌面来源：
               {status.candidates.find((candidate) => candidate.uuid === status.desktop?.inputUuid)
                 ?.name ?? '未找到，请检查 OBS'}
-              。更换来源需先切回独立分路；无法切回时请在 OBS 核对当前来源。
+              。停止输出后，可在下方更换采集设备。
             </p>
           )}
           {status.transition ? (
-            <p role="alert">
-              上次切换结果未确认。请立即在 OBS
-              核对直播电平和当前音源；如无声，先手动恢复可用来源并录制试听。Mizar
-              暂不能继续切换，请保存诊断包排查，勿反复切换。
-            </p>
+            <div>
+              <p role="alert">
+                上次切换结果未确认。请核对当前音源和电平，再恢复音频状态；恢复可能改变当前可听路径。
+              </p>
+              <Button disabled={busy} onClick={() => void run(() => switchMode('recover'))}>
+                恢复音频状态
+              </Button>
+            </div>
           ) : status.waitingIndependent ? (
             <>
               <Button disabled={busy} onClick={() => void run(() => switchMode('cancel'))}>
@@ -343,8 +305,6 @@ export function ObsAudioRouting() {
                 disabled={busy}
                 onChange={(event) => {
                   setTargetMode(event.target.value as 'desktop' | 'independent');
-                  setDesktopSelection('');
-                  setChooseDesktop(false);
                 }}
               >
                 <option value="desktop">桌面混音（新设置推荐）</option>
@@ -354,28 +314,10 @@ export function ObsAudioRouting() {
                 选择目标本身不会切换模式。场景准备可能先添加默认桌面音频和麦克风，请在 OBS
                 核对设备。
               </p>
-              {targetMode === 'desktop' && !status.desktop && (
-                <Select
-                  label="OBS 桌面音频来源（不是播放设备）"
-                  value={desktopSelection}
-                  disabled={busy}
-                  onChange={(event) => setDesktopSelection(event.target.value)}
-                >
-                  <option value="">自动选择桌面音频来源</option>
-                  {status.candidates
-                    .filter((candidate) => candidate.kind === 'wasapi_output_capture')
-                    .map((candidate) => (
-                      <option key={candidate.selectionId} value={candidate.selectionId}>
-                        {candidate.name}
-                      </option>
-                    ))}
-                </Select>
-              )}{' '}
               <Button
                 disabled={
                   busy ||
                   (targetMode === 'desktop' && Boolean(status.desktop)) ||
-                  (targetMode === 'desktop' && chooseDesktop && !desktopSelection) ||
                   (targetMode === 'independent' &&
                     !status.desktop &&
                     (Boolean(
@@ -505,57 +447,24 @@ export function ObsAudioRouting() {
         </p>
       )}
       {message && <p role="alert">{message}</p>}
+      {active && !busy && !status?.transition && (
+        <ObsAudioMeter key={`meter:${status?.revision ?? 'unavailable'}`} />
+      )}
+      <ObsAudioDevices
+        key={`devices:${status?.revision ?? 'unavailable'}`}
+        disabled={busy || Boolean(status?.transition || status?.waitingIndependent)}
+      />
       <details className="obs-audio-advanced">
-        <summary>手动绑定与来源详情</summary>
-        <h3>音频分路绑定</h3>
+        <summary>来源详情</summary>
         <p>
-          从 OBS 已有来源明确选择；TeamSpeak 多个客户端需自行辨认。绑定不会修改来源、监听或音轨。
+          游戏声音、其他解说和麦克风使用专用集合内的固定来源。解说应用在上方选择，游戏目标沿用 Mizar
+          的游戏准备。
         </p>
-        <Button disabled={busy} onClick={() => void run(refresh)}>
-          刷新 OBS 音频来源
-        </Button>
         {status && (
           <>
             <p>
               当前 OBS：{status.endpoint}；场景集合：{status.collection}
             </p>
-            {(Object.keys(labels) as ObsAudioRole[]).map((role) => (
-              <div key={role}>
-                <Select
-                  label={labels[role]}
-                  disabled={busy || Boolean(status.desktop || status.transition)}
-                  value=""
-                  onChange={(event) => void run(() => bind(role, event.target.value || null))}
-                >
-                  <option value="">选择来源或解除绑定</option>
-                  {status.candidates.map((candidate, index) => (
-                    <option key={candidate.selectionId} value={candidate.selectionId}>
-                      {candidate.name} · {sourceTypes[candidate.kind] ?? '其他音频来源'}
-                      {status.candidates.filter(
-                        (item) => item.name === candidate.name && item.kind === candidate.kind,
-                      ).length > 1
-                        ? ` · ${status.candidates.slice(0, index + 1).filter((item) => item.name === candidate.name && item.kind === candidate.kind).length}`
-                        : ''}
-                    </option>
-                  ))}
-                </Select>{' '}
-                <Button
-                  disabled={
-                    busy || Boolean(status.desktop || status.transition) || !status.bindings[role]
-                  }
-                  onClick={() => void run(() => bind(role, null))}
-                >
-                  解除绑定
-                </Button>
-                <p>
-                  {status.bindings[role]
-                    ? status.bindings[role].valid
-                      ? `已绑定：${status.bindings[role].name}`
-                      : '绑定来源不可用，请重新核对。'
-                    : '尚未绑定'}
-                </p>
-              </div>
-            ))}
             <ul>
               {status.findings.map((finding) => (
                 <li key={finding}>{finding}</li>

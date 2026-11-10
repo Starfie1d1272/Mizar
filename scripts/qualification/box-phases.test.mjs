@@ -285,15 +285,19 @@ test('separate lanes reuse verified files and publish only after receipts and fu
     finalCheck(root, receipts, box, async () => {}),
     /内容冲突/,
   );
+  await assert.rejects(updatePointer(root, receipts, box));
   assert.ok(!box.files.has('/Updates/latest.json'));
+  assert.ok(!box.writes.includes('/Updates/latest.json'));
   box.files.set(resourcePath, Buffer.from('pack'));
+  await finalCheck(root, receipts, box, async () => {});
   const missing = join(receipts, 'resources.json');
   const saved = await readFile(missing);
   await rm(missing);
   await assert.rejects(finalCheck(root, receipts, box, async () => {}));
+  await assert.rejects(updatePointer(root, receipts, box));
   assert.ok(!box.files.has('/Updates/latest.json'));
+  assert.ok(!box.writes.includes('/Updates/latest.json'));
   await writeFile(missing, saved);
-  await finalCheck(root, receipts, box, async () => {});
   await updatePointer(root, receipts, box);
   await verifyPointer(root, receipts, box);
   await verifyEntry(root, receipts, async () => {});

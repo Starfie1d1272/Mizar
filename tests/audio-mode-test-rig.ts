@@ -115,7 +115,7 @@ export async function audioModeRig(initialMonitor = 'OBS_MONITORING_TYPE_MONITOR
             'GetInputKindList',
           ],
         };
-      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar 制播' };
       if (type === 'GetStreamStatus' || type === 'GetRecordStatus') return { outputActive: false };
       if (type === 'GetSpecialInputs') return {};
       if (type === 'GetSceneList') return { scenes: names.map((sceneName) => ({ sceneName })) };
