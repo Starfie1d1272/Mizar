@@ -2042,13 +2042,13 @@ impl ManagedCs2 {
                     if self.store.spectator_hud_identity()?.as_deref() != Some(identity) {
                         return Err("HUD 键身份记录不一致。".into());
                     }
-                    crate::cs2_spectator::install_hud(&executable, identity)
-                } else {
-                    crate::cs2_spectator::install(&executable)
                 }
+                Ok::<(), String>(())
             })() {
-                journal["spectatorCfg"] = json!(false);
-                journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
+                let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
+                journal["spectatorWarning"] = json!(warning);
+                self.store.save(&journal)?;
+                return Err(warning);
             }
         }
         if !preserve {
@@ -2219,9 +2219,11 @@ impl ManagedCs2 {
                         command.args(["+exec", cfg]);
                     }
                     Err(error) => {
-                        journal["spectatorCfg"] = json!(false);
-                        journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
+                        let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
+                        journal["spectatorWarning"] = json!(warning);
+                        self.store.save(&journal)?;
                         self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
+                        return Err(warning);
                     }
                 }
             }

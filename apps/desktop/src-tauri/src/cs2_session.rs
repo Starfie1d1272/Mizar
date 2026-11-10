@@ -788,16 +788,7 @@ impl SessionStore {
             return Err("Steam 账号、游戏路径或观战启动身份已变化。".into());
         }
         self.validate_spectator_launch()?;
-        let identity = if record["version"] == 3 {
-            Some(
-                record["hud"]["identity"]
-                    .as_str()
-                    .ok_or("HUD 键身份缺失。")?,
-            )
-        } else {
-            None
-        };
-        crate::cs2_spectator::validate_installed(executable, identity)
+        crate::cs2_spectator::validate_installed(executable, &record)
     }
     pub(crate) fn cancel_unsubmitted_mulnx_observer(&self) -> Result<(), String> {
         let guard = self.acquire_write_guard()?;
@@ -878,15 +869,16 @@ impl SessionStore {
         {
             return Ok(None);
         }
-        Ok(Some(record["version"] == 3))
+        Ok(Some(crate::cs2_spectator::has_hud(&record)?))
     }
     pub(crate) fn mulnx_observer_native(&self) -> Result<bool, String> {
-        Ok(self.spectator_record()?.is_some_and(|record| {
-            record["version"] == 3
-                && record["loadAttempted"] == true
-                && record["mulnx"]["pid"].as_u64().is_some_and(|n| n > 0)
-                && record["mulnx"]["created"].as_u64().is_some_and(|n| n > 0)
-        }))
+        let Some(record) = self.spectator_record()? else {
+            return Ok(false);
+        };
+        Ok(crate::cs2_spectator::has_hud(&record)?
+            && record["loadAttempted"] == true
+            && record["mulnx"]["pid"].as_u64().is_some_and(|n| n > 0)
+            && record["mulnx"]["created"].as_u64().is_some_and(|n| n > 0))
     }
     pub(crate) fn mulnx_observer_target(&self) -> Result<Option<(PathBuf, PathBuf, u32)>, String> {
         let Some(record) = self.spectator_record()? else {
@@ -914,21 +906,13 @@ impl SessionStore {
     }
     pub fn validate_spectator_launch(&self) -> Result<(), String> {
         let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 && record["version"] != 3 {
-            return Err("观战原绑定备份版本无法核实。".into());
-        }
-        let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
-        crate::cs2_spectator::check_archive(video)?;
-        crate::cs2_spectator::validate_bindings(video, &record["bindings"])?;
-        if record["version"] == 3 {
-            crate::cs2_spectator::validate_hud(video, &record["hud"])?;
-        }
+        crate::cs2_spectator::validate_prepared(&record)?;
         crate::cs2_spectator::startup_files(&record, crate::cs2_spectator::StartupFiles::Validate)?;
         Ok(())
     }
     pub fn spectator_hud_identity(&self) -> Result<Option<String>, String> {
         let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 3 {
+        if !crate::cs2_spectator::has_hud(&record)? {
             return Ok(None);
         }
         let identity = record["hud"]["identity"]
@@ -952,7 +936,7 @@ impl SessionStore {
             self.validate_spectator_launch()?;
         }
         let mut record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 && record["version"] != 3 {
+        if record["version"] != 2 && record["version"] != 3 && record["version"] != 4 {
             return Err("观战原绑定备份版本无法核实。".into());
         }
         record["loadAttempted"] = json!(attempted);
@@ -973,7 +957,11 @@ impl SessionStore {
             return Ok(());
         };
         let result = (|| {
-            if record["version"] != 1 && record["version"] != 2 && record["version"] != 3 {
+            if record["version"] != 1
+                && record["version"] != 2
+                && record["version"] != 3
+                && record["version"] != 4
+            {
                 return Err("观战恢复记录版本不支持。".into());
             }
             let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
@@ -981,32 +969,37 @@ impl SessionStore {
                 return Err("观战恢复路径无效。".into());
             }
             // CFGs may already have been applied before Steam was submitted.
-            crate::cs2_spectator::startup_files(
+            let startup_result = crate::cs2_spectator::startup_files(
                 &record,
                 crate::cs2_spectator::StartupFiles::Restore,
-            )?;
-            if record["version"] == 2 || record["version"] == 3 {
+            );
+            if record["version"] != 1 {
                 match record["loadAttempted"].as_bool() {
                     Some(false) => {
+                        startup_result?;
                         return fs::remove_file(self.spectator_path())
-                            .map_err(|e| io_error("未加载的观战备份记录未能清理，请重试。", &e))
+                            .map_err(|e| io_error("未加载的观战备份记录未能清理，请重试。", &e));
                     }
                     Some(true) => (),
                     None => return Err("观战加载记录无法核实，原值备份仍保留。".into()),
                 }
             }
-            let bindings_result = if record["version"] == 3 {
-                crate::cs2_spectator::restore_v3_bindings(
+            let bindings_result = match record["version"].as_u64() {
+                Some(2) => {
+                    crate::cs2_spectator::restore_keys(video, Some(&record["bindings"]), None)
+                }
+                Some(3) => crate::cs2_spectator::restore_keys(
                     video,
-                    &record["bindings"],
-                    &record["hud"],
-                )
-            } else if record["version"] == 2 {
-                crate::cs2_spectator::restore_bindings(video, &record["bindings"])
-            } else {
-                Ok(()) // Legacy records own only the spectator convar.
+                    Some(&record["bindings"]),
+                    Some(&record["hud"]),
+                ),
+                Some(4) => crate::cs2_spectator::restore_keys(video, None, Some(&record["hud"])),
+                _ => Ok(()), // Version 1 owns only the spectator convar.
             };
             let convar_result = (|| {
+                if record["version"] == 4 {
+                    return Ok(());
+                }
                 crate::cs2_spectator::check_archive(video)?;
                 let original = record["original"].as_str().ok_or("观战原值备份缺失。")?;
                 if original.len() > 256 * 1024 {
@@ -1043,6 +1036,7 @@ impl SessionStore {
                 .err()
                 .into_iter()
                 .chain(convar_result.err())
+                .chain(startup_result.err())
                 .collect();
             if !errors.is_empty() {
                 return Err(errors.join(" "));
@@ -1495,11 +1489,14 @@ impl SessionStore {
                 Ok(record) => {
                     self.save_new_spectator_record(&record)?;
                     value["spectatorCfg"] = json!(true);
-                    value["nativeHudToggle"] = json!(record["version"] == 3);
-                    if record["version"] == 3 {
+                    value["nativeHudToggle"] = json!(crate::cs2_spectator::has_hud(&record)?);
+                    if crate::cs2_spectator::has_hud(&record)? {
                         value["hudIdentity"] = record["hud"]["identity"].clone();
                     }
-                    if let Some(warning) = record["hudWarning"].as_str() {
+                    if let Some(warning) = record["hudWarning"]
+                        .as_str()
+                        .or_else(|| record["numberWarning"].as_str())
+                    {
                         value["spectatorWarning"] = json!(warning);
                     }
                 }
@@ -1588,11 +1585,14 @@ impl SessionStore {
                     // Save key originals before any startup CFG can execute our bindings.
                     self.save_new_spectator_record(&record)?;
                     journal["spectatorCfg"] = json!(true);
-                    journal["nativeHudToggle"] = json!(record["version"] == 3);
-                    if record["version"] == 3 {
+                    journal["nativeHudToggle"] = json!(crate::cs2_spectator::has_hud(&record)?);
+                    if crate::cs2_spectator::has_hud(&record)? {
                         journal["hudIdentity"] = record["hud"]["identity"].clone();
                     }
-                    if let Some(warning) = record["hudWarning"].as_str() {
+                    if let Some(warning) = record["hudWarning"]
+                        .as_str()
+                        .or_else(|| record["numberWarning"].as_str())
+                    {
                         journal["spectatorWarning"] = json!(warning);
                     }
                 }
