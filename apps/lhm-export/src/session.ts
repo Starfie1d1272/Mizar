@@ -1,0 +1,171 @@
+import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
+import { avatarUrl, matchTeamIds, parseMatch, type LhmMatch } from './context';
+import { createLhmProjection } from './projection';
+
+type Snapshot = NonNullable<ReturnType<ReturnType<typeof createLhmProjection>>>;
+const STALE_AFTER_MS = 20_000;
+const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
+
+async function readHostJson(path: string, signal: AbortSignal): Promise<unknown> {
+  const response = await fetch(path, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+  });
+  if (!response.ok) throw new Error('host data unavailable');
+  return response.json() as Promise<unknown>;
+}
+
+/** Own one host connection's input, metadata requests and their retirement. */
+export function createLhmSession({
+  onSnapshot,
+  origin,
+  readJson = readHostJson,
+}: {
+  onSnapshot: (snapshot: Snapshot | null) => void;
+  origin: string;
+  readJson?: (path: string, signal: AbortSignal) => Promise<unknown>;
+}) {
+  let alive = true;
+  let project = createLhmProjection();
+  let match: LhmMatch | null = null;
+  let knownMatchId: string | null | undefined;
+  let avatars = new Map<string, string>();
+  let requestedAvatars = new Set<string>();
+  let currentPlayerIds: readonly string[] = [];
+  let metadata = new AbortController();
+  const retries = new Set<ReturnType<typeof setTimeout>>();
+  let stale: ReturnType<typeof setTimeout> | undefined;
+  let objectiveExpiry: ReturnType<typeof setTimeout> | undefined;
+
+  const clearInputTimers = () => {
+    clearTimeout(stale);
+    clearTimeout(objectiveExpiry);
+  };
+  const retireMetadata = () => {
+    metadata.abort();
+    for (const timer of retries) clearTimeout(timer);
+    retries.clear();
+    metadata = new AbortController();
+    match = null;
+    avatars = new Map();
+    requestedAvatars = new Set();
+  };
+  const clearInput = () => {
+    clearInputTimers();
+    project = createLhmProjection();
+    currentPlayerIds = [];
+    onSnapshot(null);
+  };
+  const publishMetadata = () => {
+    project.setMetadata(match, avatars);
+    onSnapshot(project.refresh());
+  };
+  const request = <T>(load: (signal: AbortSignal) => Promise<T>, accept: (value: T) => void) => {
+    const owner = metadata;
+    let attempt = 0;
+    const current = () => alive && !owner.signal.aborted;
+    const run = () => {
+      if (!current()) return;
+      void load(owner.signal)
+        .then((value) => {
+          if (current()) accept(value);
+        })
+        .catch(() => {
+          if (!current()) return;
+          const delay = RETRY_DELAYS_MS[attempt++];
+          if (delay === undefined) return;
+          const timer = setTimeout(() => {
+            retries.delete(timer);
+            run();
+          }, delay);
+          retries.add(timer);
+        });
+    };
+    run();
+  };
+  const loadAvatars = () => {
+    for (const id of currentPlayerIds) {
+      if (!/^\d{17}$/.test(id) || requestedAvatars.has(id)) continue;
+      requestedAvatars.add(id);
+      request(
+        async (signal) => {
+          const value = await readJson(`/api/players/avatar/steamid/${id}`, signal);
+          const url = avatarUrl(value, origin);
+          if (!url) throw new Error('host avatar unavailable');
+          return url;
+        },
+        (url) => {
+          avatars.set(id, url);
+          publishMetadata();
+        },
+      );
+    }
+  };
+  const loadMatch = () => {
+    if (!alive) return;
+    retireMetadata();
+    publishMetadata();
+    request(
+      async (signal) => {
+        const data = await readJson('/api/match/current', signal);
+        const ids = matchTeamIds(data);
+        if (!ids) return null;
+        const [a, b] = await Promise.all(
+          ids.map((id) => readJson(`/api/teams/${encodeURIComponent(id)}`, signal)),
+        );
+        const parsed = parseMatch(data, a, b);
+        if (!parsed) throw new Error('host match unavailable');
+        return parsed;
+      },
+      (next) => {
+        const nextId = next?.id ?? null;
+        if (knownMatchId !== undefined && nextId !== knownMatchId) {
+          // A different match cannot borrow a previously accepted gameplay frame.
+          retireMetadata();
+          clearInput();
+        }
+        knownMatchId = nextId;
+        match = next;
+        publishMetadata();
+      },
+    );
+    loadAvatars();
+  };
+  const update = (raw: unknown) => {
+    if (!alive) return;
+    let next: Snapshot | null;
+    try {
+      next = project(raw);
+    } catch {
+      return;
+    }
+    if (!next) return;
+    onSnapshot(next);
+    currentPlayerIds = next.program.payload.players.map((player) => player.sourcePlayerId);
+    loadAvatars();
+    clearInputTimers();
+    objectiveExpiry = setTimeout(
+      () => {
+        if (alive) onSnapshot(project.refresh());
+      },
+      getObjectiveClockLeaseMs({ staleAfterMs: STALE_AFTER_MS }) + 1,
+    );
+    stale = setTimeout(() => {
+      if (alive) onSnapshot(null);
+    }, STALE_AFTER_MS);
+  };
+  return {
+    update,
+    loadMatch,
+    disconnect() {
+      if (!alive) return;
+      retireMetadata();
+      knownMatchId = undefined;
+      clearInput();
+    },
+    dispose() {
+      alive = false;
+      retireMetadata();
+      clearInputTimers();
+    },
+  };
+}
