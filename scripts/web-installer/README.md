@@ -34,4 +34,4 @@ Box 过渡期只新增原始 latest 与每版机器元数据；旧 WebInstaller 
 
 ## 验证边界
 
-常规 CI 的 `installer / Windows / update` 与 `installer / Windows / faults` 在两台隔离 runner 分别执行安装/更新恢复链和独立失败生命周期；两组共同进入 ci-gate 和发行源码门禁，复用真实 Native 控件、下载、SDK、Store、App 与受控历史 NSIS 回归。`verify.ps1` 在 runner 独立目录执行；测试与截图保存在 CI artifacts，不进入 Release 附件。原 NSIS 用例全集按 case identity 核验，两组必须都成功且覆盖完整；证据绑定同 run、精确源码与各自最新 attempt，最新损坏记录不能回退旧结果。
+常规 CI 在相关改动时编译 WebInstaller C# 源码；脚本测试从生产 PowerShell 提取恢复函数，以隔离文件目录和模拟登记检查事务归属。它们不运行真实安装器，也不证明 Windows 进程、注册表、快捷方式或 UI 生命周期通过。正式安装与恢复仍须独立 Windows 验收，见[开发验证](../../docs/development/development-validation.md)。
