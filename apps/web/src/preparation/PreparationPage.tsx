@@ -106,7 +106,11 @@ export function PreparationPage() {
     reload: reloadLibrary,
     reloading: libraryReloading,
   } = useLocalTournament();
-  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
+  const local =
+    envelope?.source === 'local' ||
+    (envelope?.source === 'cache' && envelope.cachedFrom === 'local');
+  const canWriteLocal =
+    local && libraryStatus === 'ready' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{
@@ -753,7 +757,7 @@ export function PreparationPage() {
                   <summary>{tab === 'roster' ? '编辑队伍与名单' : '编辑比赛资料'}</summary>
                   <LocalTournamentEditor
                     document={match}
-                    canSave={libraryStatus === 'ready'}
+                    canSave={canWriteLocal}
                     section={tab as MatchSection}
                     view={view}
                     refresh={refresh}
@@ -799,7 +803,7 @@ export function PreparationPage() {
               <MatchBpSection
                 document={match}
                 local={local}
-                canWrite={libraryStatus === 'ready'}
+                canWrite={canWriteLocal}
                 contextRevision={view?.contextRevision}
               />
             ) : null}
