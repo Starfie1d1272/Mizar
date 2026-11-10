@@ -2597,11 +2597,20 @@ impl ManagedCs2 {
                         if crate::demo_test::requires_recovery(&self.log, None) {
                             return Err(error);
                         }
-                        self.log.event("demo_playback_cleanup", "retained", Some(&json!({
-                            "reason":error,"gameLaunchContinues":true,
-                            "files":"unchanged; cleanup can be retried after game exit"
-                        }).to_string()));
-                        self.message = Some("原设置已恢复；旧试播文件仍保留，可稍后重试清理，不影响新启动。".into());
+                        self.log.event(
+                            "demo_playback_cleanup",
+                            "retained",
+                            Some(
+                                &json!({
+                                    "reason":error,"gameLaunchContinues":true,
+                                    "files":"unchanged; cleanup can be retried after game exit"
+                                })
+                                .to_string(),
+                            ),
+                        );
+                        self.message = Some(
+                            "原设置已恢复；旧试播文件仍保留，可稍后重试清理，不影响新启动。".into(),
+                        );
                     }
                 }
             }

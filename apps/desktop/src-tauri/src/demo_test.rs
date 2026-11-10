@@ -332,10 +332,7 @@ pub(crate) fn install_playback_cfg_with(
     }
     result.map_err(|error| {
         (
-            crate::cs2_session::io_error(
-                "Demo 播放 CFG 未能完整发布，已有文件保持原样。",
-                &error,
-            ),
+            crate::cs2_session::io_error("Demo 播放 CFG 未能完整发布，已有文件保持原样。", &error),
             false,
         )
     })
