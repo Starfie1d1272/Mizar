@@ -407,6 +407,9 @@ test('readback retries the link and body with a fresh 180-second deadline', asyn
 });
 
 test('upload-link timeout retries before any upload using a fresh deadline', async (t) => {
+  // Keep the calculated attempt timeout exact; wall-clock ticks can shorten it.
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
   const timeout = AbortSignal.timeout.bind(AbortSignal);
   const timers = [];
   t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
@@ -420,16 +423,23 @@ test('upload-link timeout retries before any upload using a fresh deadline', asy
   t.mock.method(Math, 'random', () => 0);
   let links = 0,
     uploads = 0;
+  let firstSignal;
   const box = client(async () => {
     uploads++;
     return Response.json([{ name: 'payload' }]);
   });
   box.api = async (_endpoint, _path, _method, _body, signal) => {
     links++;
+    assert.equal(uploads, 0);
+    assert.equal(timers.length, links);
     if (links === 1) {
+      firstSignal = signal;
+      now += 180000;
       timers[0].abort();
       signal.throwIfAborted();
     }
+    assert.notEqual(signal, firstSignal);
+    assert.equal(firstSignal.aborted, true);
     assert.equal(signal.aborted, false);
     return 'https://box.example/upload';
   };

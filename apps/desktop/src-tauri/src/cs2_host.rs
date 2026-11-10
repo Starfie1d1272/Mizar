@@ -26,6 +26,20 @@ pub(crate) async fn status(app: tauri::AppHandle) -> Result<serde_json::Value, S
     .map_err(|_| "CS2 配置状态不可用。".to_string())?
 }
 
+/// Read-only owner proof for preparation retry; never repairs a running source in place.
+pub(crate) async fn preparation_status(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
+        let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        cs2.preparation_status(&id)
+    })
+    .await
+    .map_err(|_| "游戏准备证据不可用。".to_string())?
+}
+
 pub(crate) async fn preflight(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<production_exit::ExitGate>().check()?;
