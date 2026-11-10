@@ -10,7 +10,6 @@ import { OutputService } from '../src/output/service.js';
 
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   const path = join(dir, 'connection.json');
   const snapshot = parseLiveSnapshotV1(
     JSON.parse(
@@ -155,12 +154,22 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   };
   const connection = new RivalHubConnection(path, fetcher, 'https://example.com');
   await connection.load();
+  let owner = connection;
+  let output: OutputService | undefined;
+  t.after(async () => {
+    await owner.abortSourceCaptureStartup();
+    await output?.close();
+    await rm(dir, { recursive: true, force: true });
+  });
   connection.setSourceSettlement(
     async () => settle,
     () => undefined,
   );
   return {
     connection,
+    setOutput: (value: OutputService) => {
+      output = value;
+    },
     snapshot,
     event,
     path,
@@ -169,8 +178,11 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     reliableRequests: () => reliableRequests,
     liveRequests: () => liveRequests,
     restart: async () => {
+      await owner.abortSourceCaptureStartup();
       const restarted = new RivalHubConnection(path, fetcher, 'https://example.com');
       await restarted.load();
+      assert.equal(restarted.view().sourceState, 'ready');
+      owner = restarted;
       restarted.setSourceSettlement(
         async () => settle,
         () => undefined,
@@ -277,25 +289,9 @@ test('a failed same-source claim keeps the previous exact authority for release'
   assert.equal(h.releases[0]?.authority, '1');
 });
 
-test('LIVE 403 stops delivery but finish releases the exact owned source', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  await h.connection.sendReliable(h.event, h.snapshot);
-  h.setLive(403);
-  await assert.rejects(h.connection.sendLive(h.snapshot));
-  await h.connection.release();
-  assert.deepEqual(h.releases, [
-    { matchId: h.snapshot.matchId, authority: '1', authorization: 'Bearer old-secret' },
-  ]);
-});
-
 for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] as const) {
   test(`a LIVE 403 drains the existing outbox during ${operation}`, async (t) => {
     const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false);
-    await h.connection.sendReliable(h.event, h.snapshot);
-    h.setLive(403);
-    await assert.rejects(h.connection.sendLive(h.snapshot));
     const tail = parseReliableEventV1({
       ...h.event,
       kind: 'series_ended',
@@ -304,21 +300,22 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
       idempotencyKey: 'pending-series-end',
       cursor: { ...h.event.cursor, runtimeSeq: h.event.cursor.runtimeSeq + 1 },
     });
-    const before = h.reliableRequests();
-    assert.equal(await h.connection.sendReliable(tail, h.snapshot), 'retry');
-    assert.equal(h.reliableRequests(), before);
     const outbox = new ReliableOutbox(join(h.path, '..', 'reliable.json'));
     let now = new Date();
     const output = new OutputService({
       outbox,
       now: () => now,
+      exactSource: () => h.connection.reliableExactSource(),
+      authorityScope: () => h.connection.reliableAuthorityScope(),
       sink: {
-        send: (event, signal, lineup) =>
-          h.connection.sendReliable(event, h.snapshot, signal, lineup),
+        send: (event, signal, lineup, source) =>
+          source
+            ? h.connection.sendRetainedReliable(event, source, h.snapshot, signal, lineup)
+            : h.connection.sendReliable(event, h.snapshot, signal, lineup),
       },
     });
     await output.start();
-    t.after(() => output.close());
+    h.setOutput(output);
     const binding = {
       origin: 'online',
       freshness: 'fresh',
@@ -342,7 +339,30 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
       identity: { issues: [] },
     };
     output.setCurrent(bundle as never, binding as never);
-    await outbox.enqueue(tail, now);
+    await h.connection.setSourceCaptureLifecycle({
+      createReference: (cursor) => output.createCaptureReference(cursor),
+      arm: (identity, reference) => output.armSourceCapture(identity, reference),
+      activate: (identity) => output.activateSourceCapture(identity),
+      restore: (identity, reference) => output.restoreSourceCapture(identity, reference),
+      seal: (identity) => output.sealSourceCapture(identity),
+      coverage: (identity) => output.sourceCaptureCoverage(identity),
+    });
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await h.connection.sendReliable(h.event, h.snapshot);
+    h.setLive(403);
+    await assert.rejects(h.connection.sendLive(h.snapshot));
+    const before = h.reliableRequests();
+    assert.equal(await h.connection.sendReliable(tail, h.snapshot), 'retry');
+    assert.equal(h.reliableRequests(), before);
+    await outbox.enqueue(
+      tail,
+      now,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      h.connection.reliableExactSource(),
+    );
     h.connection.setSourceSettlement(
       (scope) => output.settleSourceForRelease(scope),
       (scope) => output.resumeSource(scope),
@@ -359,6 +379,13 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
       const next = structuredClone(h.snapshot);
       next.matchId = 'match-b';
       next.cursor.liveSessionId = 'live-b';
+      output.setCurrent(
+        {
+          ...bundle,
+          program: { ...bundle.program, cursor: next.cursor, match: { matchId: next.matchId } },
+        } as never,
+        { ...binding, context: { ...binding.context, matchId: next.matchId } } as never,
+      );
       await h.connection.claim(next, 'revision', false);
       assert.equal(h.connection.view().activeSourceMatchId, 'match-b');
     } else {
@@ -368,11 +395,11 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
           ?.status,
         'pending',
       );
-      await assert.rejects(h.connection.release(), /可靠事件/);
+      await assert.rejects(h.connection.release(), /待重试或核对/);
       assert.equal(h.releases.length, 0);
       const liveBefore = h.liveRequests();
       h.setLive(200);
-      await h.connection.sendLive(h.snapshot);
+      await assert.rejects(h.connection.sendLive(h.snapshot), /rivalhub_live_unavailable/);
       assert.equal(h.liveRequests(), liveBefore);
       now = new Date(now.getTime() + 1001);
       await output.retry();
@@ -385,7 +412,11 @@ for (const operation of ['finish', 'shutdown', 'pairing', 'switch', 'backoff'] a
       'accepted',
     );
     assert.equal(h.releases.length, 1);
-    assert.equal(h.releases[0]?.authorization, 'Bearer old-secret');
+    assert.deepEqual(h.releases[0], {
+      matchId: h.snapshot.matchId,
+      authority: '1',
+      authorization: 'Bearer old-secret',
+    });
   });
 }
 
@@ -429,7 +460,7 @@ test('pending reliable scope prevents release and later retry retains identity',
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);
   h.setSettle(false);
-  await assert.rejects(h.connection.release(), /可靠事件/);
+  await assert.rejects(h.connection.release(), /待重试或核对/);
   assert.equal(h.releases.length, 0);
   h.setSettle(true);
   await h.connection.release();
@@ -655,10 +686,11 @@ test('retirement fences new events before enabling drain while LIVE is still in 
     },
     () => undefined,
   );
+  const identity = h.connection.reliableExactSource()!;
   const release = h.connection.release();
   await fenced;
   const before = h.reliableRequests();
-  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'accepted');
+  assert.equal(await h.connection.sendRetainedReliable(h.event, identity, h.snapshot), 'accepted');
   assert.equal(h.reliableRequests(), before + 1);
   assert.equal(h.releases.length, 0);
   finishLive();
