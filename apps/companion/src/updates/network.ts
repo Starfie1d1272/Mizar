@@ -1,3 +1,4 @@
+import { MACHINE_METADATA_MAX_BYTES } from '@mizar/resource-pack-contract/transport';
 import { UpdateRequestError } from './diagnostics.js';
 import { BOX_READ_TOKEN, UPDATE_REPOSITORY } from './contract.js';
 
@@ -6,7 +7,10 @@ export function allowedUpdateUrl(url: URL): boolean {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash)
     return false;
   if (url.hostname === 'github.com')
-    return url.pathname.startsWith(`/${UPDATE_REPOSITORY}/releases/download/`);
+    return (
+      url.pathname.startsWith(`/${UPDATE_REPOSITORY}/releases/download/`) ||
+      url.pathname === `/${UPDATE_REPOSITORY}/releases/latest/download/machine-metadata.json`
+    );
   if (url.hostname === 'release-assets.githubusercontent.com') return true;
   if (url.hostname === 'box.nju.edu.cn')
     return (
@@ -41,6 +45,14 @@ export async function updateRequest(
     const proxyRedirect =
       original &&
       (url.href === original.href ||
+        (original.pathname ===
+          `/${UPDATE_REPOSITORY}/releases/latest/download/machine-metadata.json` &&
+          url.origin === 'https://github.com' &&
+          !url.search &&
+          allowedUpdateUrl(url) &&
+          new RegExp(
+            `^/${UPDATE_REPOSITORY}/releases/download/v(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)/machine-metadata\\.json$`,
+          ).test(url.pathname)) ||
         (url.hostname === 'release-assets.githubusercontent.com' && allowedUpdateUrl(url)));
     if (options?.proxyAsset ? !(isProxyAsset || proxyRedirect) : !allowedUpdateUrl(url))
       throw new Error('update_url_forbidden');
@@ -131,4 +143,35 @@ export async function updateJson(
   return JSON.parse(
     (await boundedBytes(await updateRequest(url, signal, fetcher), limit)).toString('utf8'),
   ) as unknown;
+}
+
+/** Public bytes only. Authentication happens once, after transport succeeds. */
+export async function githubMetadata(
+  url: string,
+  signal: AbortSignal,
+  fetcher: UpdateFetch = globalThis.fetch,
+  diagnostic?: (stage: string, error: unknown) => void,
+): Promise<Buffer> {
+  const sources = [url, `https://gh-proxy.com/${url}`];
+  const failures: unknown[] = [];
+  for (const [index, source] of sources.entries()) {
+    signal.throwIfAborted();
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+    try {
+      return await boundedBytes(
+        await updateRequest(
+          source,
+          deadline,
+          fetcher,
+          index === 0 ? undefined : { proxyAsset: url },
+        ),
+        MACHINE_METADATA_MAX_BYTES,
+      );
+    } catch (error) {
+      signal.throwIfAborted();
+      diagnostic?.(index === 0 ? 'github_metadata_fallback' : 'proxy_metadata_failed', error);
+      failures.push(error);
+    }
+  }
+  throw new AggregateError(failures, 'update_network_failed', { cause: failures.at(-1) });
 }

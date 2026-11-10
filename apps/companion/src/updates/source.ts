@@ -1,15 +1,10 @@
-import {
-  MACHINE_METADATA_NAME,
-  MACHINE_METADATA_MAX_BYTES,
-  readMachineFile,
-} from '@mizar/resource-pack-contract/transport';
+import { MACHINE_METADATA_NAME, readMachineFile } from '@mizar/resource-pack-contract/transport';
 import { createHash } from 'node:crypto';
 import { selectQualifiedCore } from './core.js';
-import { BoxSource } from './box.js';
 import type { Bundle, BundleVerifier } from 'sigstore';
 import { createTufVerifier } from '@mizar/resource-pack-contract/attestation';
 import { z } from 'zod';
-import { boundedBytes, updateRequest, type UpdateFetch } from './network.js';
+import { githubMetadata, type UpdateFetch } from './network.js';
 import {
   compareVersions,
   UPDATE_REPOSITORY,
@@ -180,26 +175,8 @@ export class StableSource {
     if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
     return manifest;
   }
-  private async selectCore(manifest: UpdateManifest, signal: AbortSignal, carrier?: Buffer) {
+  private async selectCore(manifest: UpdateManifest, signal: AbortSignal, carrier: Buffer) {
     if (compareVersions(manifest.version, '1.2.0') < 0) return manifest;
-    if (!carrier) {
-      try {
-        carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
-          new BoxSource(this.fetcher).machine(manifest.version, deadline),
-        );
-      } catch (error) {
-        this.diagnostic?.('box_core_fallback', error);
-        signal.throwIfAborted();
-      }
-      carrier ??= await boundedBytes(
-        await updateRequest(
-          `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${manifest.version}/${MACHINE_METADATA_NAME}`,
-          signal,
-          this.fetcher,
-        ),
-        MACHINE_METADATA_MAX_BYTES,
-      );
-    }
     const verifier = await this.verifier(UPDATE_WORKFLOW, signal);
     signal.throwIfAborted();
     return selectQualifiedCore(carrier, manifest, verifier);
@@ -265,12 +242,22 @@ export class StableSource {
     );
     return { manifest, publication };
   }
+  private machine(version: string | undefined, signal: AbortSignal) {
+    const path = version === undefined ? 'latest/download' : `download/v${version}`;
+    return this.phase('github_metadata', signal, 30_000, (deadline) =>
+      githubMetadata(
+        `https://github.com/${UPDATE_REPOSITORY}/releases/${path}/${MACHINE_METADATA_NAME}`,
+        deadline,
+        this.fetcher,
+        this.diagnostic,
+      ),
+    );
+  }
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
     this.mirrorCandidate = undefined;
+    const carrier = await this.machine(undefined, signal);
     const { manifest, publication } = await this.authenticateIndex(
-      await this.phase('box_metadata', signal, 15_000, (deadline) =>
-        new BoxSource(this.fetcher).metadata(deadline),
-      ),
+      readMachineFile(carrier, 'update-index.json'),
       signal,
     );
     if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
@@ -282,7 +269,7 @@ export class StableSource {
       published_at: publication.publishedAt,
       assets: [],
     };
-    this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, signal) };
+    this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, signal, carrier) };
     return release;
   }
   async authenticate(release: Release, signal: AbortSignal): Promise<UpdateManifest> {
@@ -294,9 +281,7 @@ export class StableSource {
   async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {
     if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
       throw new Error('update_version_invalid');
-    const carrier = await this.phase('box_core_metadata', signal, 15_000, (deadline) =>
-      new BoxSource(this.fetcher).machine(version, deadline),
-    );
+    const carrier = await this.machine(version, signal);
     const { manifest } = await this.authenticateIndex(
       readMachineFile(carrier, 'update-index.json'),
       signal,

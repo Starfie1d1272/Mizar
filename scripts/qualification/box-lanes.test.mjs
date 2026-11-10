@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { URL } from 'node:url';
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
-import { runLanes } from './box-lanes.mjs';
+import { runLanes, runWorker } from './box-lanes.mjs';
 
 test('failure joins other lanes and retains successful receipt and earliest recovery', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'box-lanes-test-'));
@@ -150,3 +150,22 @@ test(
     );
   },
 );
+
+test('workers verify all GitHub payloads without any Box transfer', async () => {
+  const calls = [];
+  const operations = {
+    downloadLane: async (_root, lane, asset) => calls.push(['download', lane, asset]),
+    verifyLane: async (_root, lane) => calls.push(['verify', lane]),
+  };
+  for (const lane of ['runtime', 'resources', 'downloads'])
+    await runWorker(lane, 'root', operations);
+  assert.deepEqual(calls, [
+    ['download', 'runtime', 'metadata'],
+    ['download', 'runtime', 'core'],
+    ['verify', 'runtime'],
+    ['download', 'resources', undefined],
+    ['verify', 'resources'],
+    ['download', 'downloads', undefined],
+    ['verify', 'downloads'],
+  ]);
+});

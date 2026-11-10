@@ -15,7 +15,6 @@ import { updateRequest, type UpdateFetch } from './network.js';
 import { transfer } from '../distribution/transfer.js';
 import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 import { installerUrl, StableSource } from './source.js';
-import { BoxSource } from './box.js';
 
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 const configSchema = z.strictObject({
@@ -73,6 +72,7 @@ export class UpdateManager {
   private planning = false;
   private settingsInvalid = false;
   private initializationError: string | null = null;
+  private completedReadyCleanup = false;
   private checkFailure: unknown;
   private lastResult: string | null = null;
   private operationId = randomUUID();
@@ -187,16 +187,7 @@ export class UpdateManager {
     } catch (cause) {
       this.disableInitialization('directory_scan', cause);
     }
-    for (const name of names) {
-      if (/^download-[A-Za-z0-9_-]+$/.test(name) && name !== this.ready?.directory) {
-        try {
-          await rm(join(this.root, name), { recursive: true, force: true });
-        } catch (cause) {
-          this.disableInitialization('download_cleanup', cause);
-          break;
-        }
-      }
-    }
+    await this.cleanupDownloads(names);
     try {
       const result = z
         .object({
@@ -244,11 +235,9 @@ export class UpdateManager {
           ) {
             // Only consume the download proven to be this completed installation.
             // Keep other candidates and all recovery records/backups untouched.
-            try {
-              await this.discard();
-            } catch (cause) {
-              this.disableInitialization('installed_download_cleanup', cause);
-            }
+            this.ready = null;
+            this.completedReadyCleanup = true;
+            await this.cleanupDownloads();
           }
         } catch (error) {
           /* No reliable payload identity: retain the recorded result. */
@@ -258,6 +247,30 @@ export class UpdateManager {
     } catch (error) {
       /* No completed attempt. */
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
+    }
+  }
+  private async cleanupDownloads(names?: string[]) {
+    if (this.completedReadyCleanup && !this.ready) {
+      try {
+        await rm(join(this.root, 'ready.json'), { force: true });
+        this.completedReadyCleanup = false;
+      } catch (cause) {
+        this.failure('installed_download_cleanup', cause);
+      }
+    }
+    try {
+      for (const name of names ?? (await readdir(this.root))) {
+        if (!/^download-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory) continue;
+        try {
+          await rm(join(this.root, name), { recursive: true, force: true });
+        } catch (cause) {
+          // Abandoned downloads cannot authorize installation. Keep the failure
+          // visible and retry on the next operation without disabling updates.
+          this.failure('download_cleanup', cause);
+        }
+      }
+    } catch (cause) {
+      this.failure('download_cleanup_scan', cause);
     }
   }
   start() {
@@ -413,6 +426,7 @@ export class UpdateManager {
     this.checkFailure = undefined;
     this.event('check', `update_check_${reason}`);
     try {
+      await this.cleanupDownloads();
       await this.saveConfig();
       const release = await this.source.latest(signal, this.config.highestVersion ?? undefined);
       if (!release) {
@@ -524,6 +538,7 @@ export class UpdateManager {
     let directory: string | undefined;
     try {
       await this.discard();
+      await this.cleanupDownloads();
       directory = await mkdtemp(join(this.root, 'download-'));
       const path = join(directory, manifest.installer.name);
       const origin = installerUrl(manifest);
@@ -547,17 +562,6 @@ export class UpdateManager {
               proxyAsset: origin,
               ...(end === undefined ? {} : { rangeEnd: end }),
             }),
-        },
-        {
-          name: '南大云盘',
-          stage: 'box_download',
-          request: async (attempt: AbortSignal, end?: number) =>
-            updateRequest(
-              await new BoxSource(this.options.fetcher).installer(manifest, attempt),
-              attempt,
-              this.options.fetcher,
-              end === undefined ? undefined : { rangeEnd: end },
-            ),
         },
       ];
       const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;
@@ -651,6 +655,7 @@ export class UpdateManager {
       await rm(join(this.root, this.ready.directory), { recursive: true, force: true });
     this.ready = null;
     await rm(join(this.root, 'ready.json'), { force: true });
+    this.completedReadyCleanup = false;
   }
   async prepare() {
     this.requireInitialized();

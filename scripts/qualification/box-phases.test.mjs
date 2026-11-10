@@ -13,13 +13,10 @@ import { createBoxPlan } from './box-phase-contract.mjs';
 import { digest } from './box-sync.mjs';
 import {
   downloadLane,
-  transferLane,
-  transferVerifiedRuntime,
   verifyLane,
   finalCheck,
   updatePointer,
   verifyPointer,
-  verifyEntry,
   boxPhaseDiagnostic,
 } from './box-phases.mjs';
 
@@ -138,7 +135,7 @@ function fakeBox() {
     },
   };
 }
-test('separate lanes reuse verified files and publish only after receipts and full readback', async (t) => {
+test('verified GitHub lanes publish only original metadata, preserve history and reject rollback', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-box-phases-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const sha = 'b'.repeat(40),
@@ -212,96 +209,60 @@ test('separate lanes reuse verified files and publish only after receipts and fu
   const box = fakeBox();
   const bootstrapPath = join(root, 'payload', 'downloads', assets.downloads[0].name);
   await writeFile(bootstrapPath, 'tampered');
-  await assert.rejects(transferLane(root, 'downloads', undefined, box), /原字节不一致/);
+  await assert.rejects(verifyLane(root, 'downloads'), /原字节不一致/);
   assert.equal(box.writes.length, 0);
   await writeFile(bootstrapPath, Buffer.from('web'));
-  const uncertainBox = fakeBox();
-  uncertainBox.upload = async () => {
-    throw Object.assign(new Error('uncertain write'), { uploadOutcomeUnknown: true });
-  };
-  await assert.rejects(transferVerifiedRuntime(root, 'metadata', uncertainBox), /uncertain write/);
-  await assert.rejects(readFile(join(root, 'verified', 'metadata.json')), { code: 'ENOENT' });
-  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
-  await transferVerifiedRuntime(root, 'metadata', box);
-  const runtimeMetadata = `/Runtime/v1.10.0/${assets.runtime[0].name}`;
-  assert.ok(box.reads.includes(runtimeMetadata));
-  await transferVerifiedRuntime(root, 'core', box);
-  const runtimeCore = `/Runtime/v1.10.0/${assets.runtime[1].name}`;
-  assert.ok(box.reads.includes(runtimeCore));
-  assert.ok(await readFile(join(root, 'receipt', 'runtime.json')));
-  await transferLane(root, 'resources', undefined, box);
-  await transferLane(root, 'downloads', undefined, box);
-  const beforeRetry = box.writes.length;
-  await transferLane(root, 'runtime', 'core', box);
-  assert.equal(box.writes.length, beforeRetry);
-  const corePath = `/Runtime/v1.10.0/${assets.runtime[1].name}`;
-  box.files.set(corePath, Buffer.from('conflict'));
-  await assert.rejects(transferLane(root, 'runtime', 'core', box), /内容冲突/);
-  assert.equal(box.writes.length, beforeRetry);
-  box.files.set(corePath, Buffer.from('core'));
-  await rm(join(root, 'receipt', 'runtime.json'));
-  await rm(join(root, 'verified', 'metadata.json'));
-  await rm(join(root, 'verified', 'core.json'));
-  box.reads.length = 0;
-  await transferVerifiedRuntime(root, 'metadata', box);
-  await transferVerifiedRuntime(root, 'core', box);
-  assert.equal(box.writes.length, beforeRetry);
-  assert.ok(box.reads.includes(runtimeMetadata));
-  assert.ok(box.reads.includes(runtimeCore));
-  assert.ok(await readFile(join(root, 'receipt', 'runtime.json')));
-  await rm(join(root, 'receipt', 'runtime.json'));
-  const metadataMarker = join(root, 'verified', 'metadata.json');
-  const originalMarker = await readFile(metadataMarker, 'utf8');
-  const staleMarker = JSON.parse(originalMarker);
-  staleMarker.attempt = 2;
-  await writeFile(metadataMarker, JSON.stringify(staleMarker));
-  await rm(join(root, 'verified', 'core.json'));
-  await assert.rejects(transferVerifiedRuntime(root, 'core', box), /机器元数据回读记录不一致/);
-  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
-  await rm(join(root, 'verified', 'core.json'));
-  await writeFile(metadataMarker, originalMarker);
-  box.files.set(corePath, Buffer.from('conflict'));
-  await assert.rejects(transferVerifiedRuntime(root, 'core', box), /内容冲突/);
-  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
-  box.files.set(corePath, Buffer.from('core'));
-  await rm(join(root, 'verified', 'metadata.json'));
-  await assert.rejects(transferVerifiedRuntime(root, 'core', box), { code: 'ENOENT' });
-  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
-  await rm(join(root, 'verified', 'core.json'));
-  await assert.rejects(
-    verifyLane(root, 'runtime', 'core', box, async () => {}),
-    { code: 'ENOENT' },
-  );
-  await assert.rejects(readFile(join(root, 'receipt', 'runtime.json')), { code: 'ENOENT' });
-  await rm(join(root, 'verified', 'core.json'));
-  await verifyLane(root, 'runtime', 'metadata', box, async () => {});
-  await verifyLane(root, 'runtime', 'core', box, async () => {});
-  for (const lane of ['resources', 'downloads'])
-    await verifyLane(root, lane, undefined, box, async () => {});
+  for (const lane of ['runtime', 'resources', 'downloads']) await verifyLane(root, lane);
   const receipts = join(root, 'receipt');
-  const resourcePath = `/Resources/v1.10.0/${assets.resources[0].name}`;
-  box.files.set(resourcePath, Buffer.from('changed'));
-  await assert.rejects(
-    finalCheck(root, receipts, box, async () => {}),
-    /内容冲突/,
-  );
-  await assert.rejects(updatePointer(root, receipts, box));
-  assert.ok(!box.files.has('/Updates/latest.json'));
-  assert.ok(!box.writes.includes('/Updates/latest.json'));
-  box.files.set(resourcePath, Buffer.from('pack'));
-  await finalCheck(root, receipts, box, async () => {});
   const missing = join(receipts, 'resources.json');
   const saved = await readFile(missing);
   await rm(missing);
-  await assert.rejects(finalCheck(root, receipts, box, async () => {}));
+  await assert.rejects(finalCheck(root, receipts, box));
   await assert.rejects(updatePointer(root, receipts, box));
-  assert.ok(!box.files.has('/Updates/latest.json'));
-  assert.ok(!box.writes.includes('/Updates/latest.json'));
+  assert.equal(box.writes.length, 0);
   await writeFile(missing, saved);
+  // Keep every historical file, including old Core and unrelated user resources.
+  box.directories.add('/Runtime/v1.10.0');
+  box.files.set('/Runtime/v1.10.0/old-backend.exe', Buffer.from('old'));
+  box.files.set('/Stable/Downloads/old.exe', Buffer.from('old'));
+  const metadataPath = '/Runtime/v1.10.0/machine-metadata.json';
+  const uncertain = fakeBox();
+  uncertain.upload = async () => {
+    throw new Error('uncertain write');
+  };
+  await assert.rejects(finalCheck(root, receipts, uncertain), /uncertain write/);
+  await assert.rejects(updatePointer(root, receipts, uncertain));
+  box.files.set(metadataPath, Buffer.from('conflict'));
+  await assert.rejects(finalCheck(root, receipts, box), /内容冲突/);
+  assert.equal(box.writes.length, 0);
+  box.files.delete(metadataPath);
+  await finalCheck(root, receipts, box);
+  assert.ok(box.reads.filter((path) => path === metadataPath).length >= 2);
+  await rm(join(root, 'final-verified.json'));
+  await finalCheck(root, receipts, box);
+  assert.deepEqual(box.writes, [metadataPath]);
   await updatePointer(root, receipts, box);
   await verifyPointer(root, receipts, box);
-  await verifyEntry(root, receipts, async () => {});
+  await updatePointer(root, receipts, box);
+  assert.deepEqual(box.writes, [metadataPath, '/Updates/latest.json']);
   assert.deepEqual(box.files.get('/Updates/latest.json'), index);
+  assert.equal(box.files.get('/Runtime/v1.10.0/old-backend.exe').toString(), 'old');
+  assert.equal(box.files.get('/Stable/Downloads/old.exe').toString(), 'old');
+  let previousVersion = '1.11.0';
+  box.readIndex = async () =>
+    Buffer.from(
+      JSON.stringify({
+        schemaVersion: 'mizar.update-index.v2',
+        manifestBase64: Buffer.from(JSON.stringify({ version: previousVersion })).toString(
+          'base64',
+        ),
+      }),
+    );
+  box.files.set('/Updates/latest.json', Buffer.from('newer-index'));
+  await assert.rejects(updatePointer(root, receipts, box), /拒绝回退/);
+  previousVersion = '1.10.0';
+  await assert.rejects(updatePointer(root, receipts, box), /拒绝回退/);
+  assert.deepEqual(box.writes, [metadataPath, '/Updates/latest.json']);
 });
 
 test('prepare writes only metadata and the exact authenticated asset plan', async (t) => {
