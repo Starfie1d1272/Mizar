@@ -378,18 +378,20 @@ export class MatchContextController {
     input: Parameters<LocalTournamentStore['saveEvent']>[0],
   ): Promise<void> {
     this.requireFormal();
-    const generation = this.activeSelectionGeneration;
-    const revision = this.getActiveRevision();
-    const active = this.activeBinding;
-    const affected =
-      active?.origin === 'local' &&
-      active.localAuthoringMode === 'standalone' &&
-      active.context.competition?.competitionId === input.eventId;
-    const canCommit = () =>
-      !this.temporary &&
-      generation === this.activeSelectionGeneration &&
-      revision === this.getActiveRevision();
     await this.commitQueue.run(async () => {
+      this.requireFormal();
+      // A preceding selection may have changed which local match this event affects.
+      const generation = this.activeSelectionGeneration;
+      const revision = this.getActiveRevision();
+      const active = this.activeBinding;
+      const affected =
+        active?.origin === 'local' &&
+        active.localAuthoringMode === 'standalone' &&
+        active.context.competition?.competitionId === input.eventId;
+      const canCommit = () =>
+        !this.temporary &&
+        generation === this.activeSelectionGeneration &&
+        revision === this.getActiveRevision();
       if (affected && !canCommit()) throw new Error('local_context_conflict');
       try {
         await store.saveEvent(input, affected ? canCommit : undefined);
