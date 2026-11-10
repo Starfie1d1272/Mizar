@@ -92,15 +92,36 @@ export class ManagedObsResources {
       ['音乐', 'ffmpeg_source'],
       ['音效', 'ffmpeg_source'],
     ]);
-    let registry = (await this.load()).find((item) => item.endpoint === endpoint);
+    const saved = await this.load();
+    let registry = saved.find((item) => item.endpoint === endpoint);
     const inventory = async () => ({
       inputs: rows((await raw.call('GetInputList')).inputs),
       scenes: rows((await raw.call('GetSceneList')).scenes),
     });
     const active = async () =>
       (await raw.call('GetSceneCollectionList')).currentSceneCollectionName === OBS_COLLECTION;
+    const hasRegisteredIdentity = (item: Registry, inputs: Row[], scenes: Row[]) =>
+      Object.values(item.roles).some((role) =>
+        role.kind === 'scene'
+          ? scenes.some((row) => row.sceneUuid === role.uuid)
+          : inputs.some((row) => row.inputUuid === role.uuid && row.inputKind === role.kind),
+      );
+    // A changed address first resolves an instance candidate, not write authority.
+    // Read-only calls never select a collection. Explicit preparation may select
+    // the dedicated collection, but must prove its saved UUID graph before repair.
+    if (!registry && saved.length) {
+      const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+      let matches = saved.filter((item) => !item.creating && item.instance === marker);
+      if (matches.length && (await active())) {
+        const { inputs, scenes } = await inventory();
+        matches = matches.filter((item) => hasRegisteredIdentity(item, inputs, scenes));
+      }
+      if (matches.length > 1) throw conflict();
+      registry = matches[0];
+    }
+    const identityEndpoint = registry?.endpoint ?? endpoint;
     const verify = async () => {
-      registry = (await this.load()).find((item) => item.endpoint === endpoint);
+      registry = (await this.load()).find((item) => item.endpoint === identityEndpoint);
       if (
         !registry ||
         registry.creating ||
@@ -111,14 +132,7 @@ export class ManagedObsResources {
       const { inputs, scenes } = await inventory();
       // A deleted/recreated same-name collection is not proof of ownership. A
       // surviving UUID lets us repair every other manually removed/changed role.
-      if (
-        !Object.values(registry.roles).some((role) =>
-          [...inputs, ...scenes].some(
-            (row) => (role.kind === 'scene' ? row.sceneUuid : row.inputUuid) === role.uuid,
-          ),
-        )
-      )
-        throw conflict();
+      if (!hasRegisteredIdentity(registry, inputs, scenes)) throw conflict();
     };
     const observe = async () => {
       if (!registry) return false;
@@ -128,81 +142,97 @@ export class ManagedObsResources {
       return true;
     };
     const prepare = async (allowChange: boolean, writer: ObsRpc, beforeMutation?: () => void) => {
-      registry = (await this.load()).find((item) => item.endpoint === endpoint);
+      registry = (await this.load()).find((item) => item.endpoint === identityEndpoint);
       await assertNoVideoOutput(raw);
       const collection = await raw.call('GetSceneCollectionList');
+      if (typeof collection.currentSceneCollectionName !== 'string') throw conflict();
       const exists =
         Array.isArray(collection.sceneCollections) &&
         collection.sceneCollections.includes(OBS_COLLECTION);
       if (!allowChange && collection.currentSceneCollectionName !== OBS_COLLECTION)
         throw conflict();
-      if (!registry) {
-        if (exists) throw conflict();
-        const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
-        if (marker && !z.string().uuid().safeParse(marker).success) throw conflict();
-        registry = {
-          endpoint,
-          instance: typeof marker === 'string' && marker ? marker : randomUUID(),
-          collectionIdentity: randomUUID(),
-          roles: {},
-          creating: true,
-          creationSent: false,
-        };
-        await this.save(registry);
-      }
-      if (registry.creating) {
-        if (registry.creationSent || exists) throw conflict();
-        await assertNoVideoOutput(writer);
-        registry.creationSent = true;
-        await this.save(registry);
-        try {
+      let switchedFrom: string | undefined;
+      try {
+        if (!registry) {
+          if (exists) throw conflict();
+          const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+          if (marker && !z.string().uuid().safeParse(marker).success) throw conflict();
+          registry = {
+            endpoint,
+            instance: typeof marker === 'string' && marker ? marker : randomUUID(),
+            collectionIdentity: randomUUID(),
+            roles: {},
+            creating: true,
+            creationSent: false,
+          };
+          await this.save(registry);
+        }
+        if (registry.creating) {
+          if (registry.creationSent || exists) throw conflict();
           await assertNoVideoOutput(writer);
-          beforeMutation?.();
-        } catch (error) {
-          // The collection request has not been dispatched. Preserve the same
-          // reserved identity, but permit a later explicit preparation to retry.
+          registry.creationSent = true;
+          await this.save(registry);
+          try {
+            await assertNoVideoOutput(writer);
+            beforeMutation?.();
+          } catch (error) {
+            // The collection request has not been dispatched. Preserve the same
+            // reserved identity, but permit a later explicit preparation to retry.
+            registry.creationSent = false;
+            await this.save(registry);
+            throw error;
+          }
+          await raw.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+          if (!(await active())) throw conflict();
+          const initial = await inventory();
+          for (const [index, scene] of initial.scenes.entries()) {
+            if (typeof scene.sceneUuid !== 'string') throw conflict();
+            registry.roles[`bootstrap:${index}`] = { uuid: scene.sceneUuid, kind: 'scene' };
+          }
+          if (!Object.keys(registry.roles).length) throw conflict();
+          registry.creating = false;
           registry.creationSent = false;
           await this.save(registry);
-          throw error;
+        } else {
+          if (!exists) throw conflict();
+          if (collection.currentSceneCollectionName !== OBS_COLLECTION) {
+            await assertNoVideoOutput(writer);
+            beforeMutation?.();
+            switchedFrom = collection.currentSceneCollectionName;
+            await raw.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+          }
         }
-        await raw.call('CreateSceneCollection', { sceneCollectionName: OBS_COLLECTION });
-        if (!(await active())) throw conflict();
-        const initial = await inventory();
-        for (const [index, scene] of initial.scenes.entries()) {
-          if (typeof scene.sceneUuid !== 'string') throw conflict();
-          registry.roles[`bootstrap:${index}`] = { uuid: scene.sceneUuid, kind: 'scene' };
-        }
-        if (!Object.keys(registry.roles).length) throw conflict();
-        registry.creating = false;
-        registry.creationSent = false;
-        await this.save(registry);
-      } else {
-        if (!exists) throw conflict();
-        if (collection.currentSceneCollectionName !== OBS_COLLECTION) {
+        const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+        if (marker !== registry.instance) {
+          if (marker || !(await active())) throw conflict();
+          const { inputs, scenes } = await inventory();
+          if (!hasRegisteredIdentity(registry, inputs, scenes)) throw conflict();
           await assertNoVideoOutput(writer);
+          // An empty slot plus the saved UUID graph permits this idempotent
+          // registration to resume after a lost reply, never a foreign marker.
           beforeMutation?.();
-          await raw.call('SetCurrentSceneCollection', { sceneCollectionName: OBS_COLLECTION });
+          await raw.call('SetPersistentData', { ...markerArgs, slotValue: registry.instance });
         }
+        await verify();
+      } catch (cause) {
+        if (switchedFrom) {
+          try {
+            await assertNoVideoOutput(writer);
+            if (!(await active())) throw conflict();
+            beforeMutation?.();
+            await raw.call('SetCurrentSceneCollection', { sceneCollectionName: switchedFrom });
+            if (
+              (await raw.call('GetSceneCollectionList')).currentSceneCollectionName !== switchedFrom
+            )
+              throw conflict();
+          } catch (recovery) {
+            throw new AggregateError([cause], 'OBS 专用集合核验失败，无法安全返回原集合。', {
+              cause: recovery,
+            });
+          }
+        }
+        throw cause;
       }
-      const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
-      if (marker !== registry.instance) {
-        if (marker || !(await active())) throw conflict();
-        const { inputs, scenes } = await inventory();
-        if (
-          !Object.values(registry.roles).some((role) =>
-            [...inputs, ...scenes].some(
-              (row) => (role.kind === 'scene' ? row.sceneUuid : row.inputUuid) === role.uuid,
-            ),
-          )
-        )
-          throw conflict();
-        await assertNoVideoOutput(writer);
-        // An empty slot plus the saved UUID graph permits this idempotent
-        // registration to resume after a lost reply, never a foreign marker.
-        beforeMutation?.();
-        await raw.call('SetPersistentData', { ...markerArgs, slotValue: registry.instance });
-      }
-      await verify();
     };
     const globalInputs = async () => {
       const specials = await raw.call('GetSpecialInputs');
@@ -497,8 +527,14 @@ export class ManagedObsResources {
           await writer.call('RemoveInput', { inputUuid: input.inputUuid });
       }
     };
+    const dispatch = (type: string, data?: Row, onDispatch?: () => void) => {
+      if (!raw.reportsDispatch) onDispatch?.();
+      return raw.call(type, data, onDispatch);
+    };
     const scoped = (beforeMutation?: () => void): ObsRpc => ({
       ...raw,
+      reportsDispatch: true,
+      identityEndpoint,
       withMutationGuard: (guard) =>
         scoped(() => {
           beforeMutation?.();
@@ -520,13 +556,13 @@ export class ManagedObsResources {
       },
       ownershipScope: async () => {
         await verify();
-        return `${endpoint}|${OBS_COLLECTION}|${registry!.instance}|${registry!.collectionIdentity}`;
+        return `${identityEndpoint}|${OBS_COLLECTION}|${registry!.instance}|${registry!.collectionIdentity}`;
       },
-      call: async (type, args) => {
+      call: async (type, args, onDispatch) => {
         const mutating = /^(Create|Set|Remove|Press|Trigger)/.test(type);
         if (!/Scene|Input|Source|Filter/.test(type) || type === 'GetSceneCollectionList') {
           if (mutating) beforeMutation?.();
-          return raw.call(type, args);
+          return dispatch(type, args, onDispatch);
         }
         if (mutating) await verify();
         const name = type === 'CreateInput' ? String(args?.inputName) : undefined;
@@ -567,7 +603,7 @@ export class ManagedObsResources {
             (item) => item.sceneItemId === data?.sceneItemId && item.sourceUuid === microphone.uuid,
           );
         if (mutating) beforeMutation?.();
-        const result = await raw.call(type, data);
+        const result = await dispatch(type, data, onDispatch);
         if (type === 'CreateScene' || type === 'CreateInput') {
           const name = String(type === 'CreateScene' ? args?.sceneName : args?.inputName);
           const kind =

@@ -227,14 +227,15 @@ async function createMusicResource(
   valid: () => boolean,
 ) {
   // A missing final-dispatch hook is unknown, never evidence that nothing ran.
-  let dispatched = !obs.withMutationGuard;
+  let dispatched = !obs.reportsDispatch;
   const writer =
     obs.withMutationGuard?.(() => {
       if (!valid()) throw new Error('music_cancelled');
-      dispatched = true;
     }) ?? obs;
   try {
-    return await writer.call(type, data);
+    return await writer.call(type, data, () => {
+      dispatched = true;
+    });
   } catch (error) {
     if (!dispatched)
       await store.update((state) => {
