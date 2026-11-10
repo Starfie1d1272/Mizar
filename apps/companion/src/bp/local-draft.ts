@@ -162,7 +162,8 @@ export function createLocalBpManifest(
     baseManifest !== undefined &&
     !editableStandalone &&
     (draft.competitionName.trim() !== (baseManifest.match.competition?.name ?? '').trim() ||
-      draft.stage.trim() !== (baseManifest.match.stage ?? '').trim() ||
+      draft.stage.trim() !==
+        (baseManifest.match.stageLabel ?? baseManifest.match.stage ?? '').trim() ||
       draft.format !== baseManifest.match.format ||
       draft.entrants.a.name.trim() !== baseManifest.entrants.a.name.trim() ||
       draft.entrants.b.name.trim() !== baseManifest.entrants.b.name.trim() ||
@@ -346,7 +347,8 @@ export function createLocalBpManifest(
                       : localSlug(competitionName),
                 },
           format: draft.format,
-          stage,
+          stage: baseManifest.match.stageKey === undefined ? stage : baseManifest.match.stage,
+          stageLabel: stage,
         }
       : baseManifest.match;
     const entrants = editableStandalone
@@ -494,7 +496,7 @@ export function bpAuthoringDraftFromBinding(
       : (sideChoices.get(deciderName)?.side ?? null);
   return {
     competitionName: manifest.match.competition?.name ?? '',
-    stage: manifest.match.stage ?? '',
+    stage: manifest.match.stageLabel ?? manifest.match.stage ?? '',
     format: manifest.match.format,
     entrants: {
       a: { name: manifest.entrants.a.name, logoUrl: manifest.entrants.a.logoUrl },

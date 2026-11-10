@@ -1269,6 +1269,19 @@ impl ManagedCs2 {
             json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": pending.is_none() && self.check_preserved_start().is_ok(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
+    /// Preparation may reuse only this owner's live process and installed source proof.
+    pub(crate) fn preparation_status(&self, id: &str) -> Result<Value, String> {
+        let mut value = self.status()?;
+        let journal = self.store.load()?;
+        if value["running"] == true && value["preparationId"] == id {
+            let journal = journal.as_ref().ok_or("受管游戏记录不可用。")?;
+            self.store.verify_gsi_source(journal)?;
+        }
+        // Pending/unknown launches and external games are not proof of an ended attempt.
+        value["restartAllowed"] = json!(journal.is_none() && !any_cs2_running(&self.log)?);
+        Ok(value)
+    }
+
     pub fn preferences(
         &mut self,
         preferences: crate::cs2_preferences::Preferences,

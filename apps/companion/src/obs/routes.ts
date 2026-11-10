@@ -491,7 +491,11 @@ export function registerObsRoutes(
       return reply
         .code(409)
         .send({ error: 'capture_warmup_changed', message: 'OBS 游戏画面检查已中断，请重新检查。' });
-    const diagnostic = await captureDiagnostic(true, body.data.since);
+    // A read-only recheck has no new warmup boundary: retain current-session failures.
+    const diagnostic = await captureDiagnostic(
+      true,
+      body.data.transactionId === null ? 0 : body.data.since,
+    );
     try {
       const status = await options.adapter.captureInitialization(
         diagnostic,
