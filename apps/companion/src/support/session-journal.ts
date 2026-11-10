@@ -1,7 +1,7 @@
 import { isDocumentDiagnosticEvent, type DiagnosticEvent } from '@mizar/protocol';
 import { diagnosticSegmentNames } from './segments.js';
 import { ProducerRetention, type IncidentParticipant } from './retention.js';
-import { diagnosticEnvelope } from './envelope.js';
+import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BOX_READ_TOKEN } from '../updates/contract.js';
 import { atomicJson, safePath } from '../resource-store/files.js';
@@ -295,6 +295,30 @@ export class SessionJournal {
     const context = this.requestContext.getStore();
     const detail =
       evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
+    // Repeated successful lease observations retain their original source span
+    // and delta count in the canonical envelope, including export/consent checks.
+    const from = stage === 'runtime_renewal' ? diagnosticSourceUtc(detail.firstObservedAt) : null;
+    const to = stage === 'runtime_renewal' ? diagnosticSourceUtc(detail.lastObservedAt) : null;
+    const repeated =
+      from &&
+      to &&
+      from <= to &&
+      Number.isSafeInteger(detail.occurrences) &&
+      Number(detail.occurrences) > 0
+        ? { from, to, occurrences: Number(detail.occurrences) }
+        : null;
+    // A changed renewal group can reveal an earlier start only at completion.
+    // Preserve that source time rather than moving it across a consent boundary.
+    const deferredStart =
+      detail.deferredUntilResult === true
+        ? diagnosticSourceUtc(
+            stage === 'operation_received'
+              ? detail.receivedAt
+              : stage === 'operation_begin'
+                ? detail.startedAt
+                : null,
+          )
+        : null;
     const line =
       JSON.stringify({
         schema: 'mizar-diagnostic-event/2',
@@ -305,10 +329,14 @@ export class SessionJournal {
         kind: stage,
         phase: typeof detail.phase === 'string' ? detail.phase : null,
         outcome: typeof detail.result === 'string' ? detail.result : null,
-        observedAt: diagnosticEnvelope({ stage, evidence, time: now }).times[0] ?? null,
+        observedAt:
+          repeated?.from ??
+          deferredStart ??
+          diagnosticEnvelope({ stage, evidence, time: now }).times[0] ??
+          null,
         recordedAt: now,
         monotonicMs: performance.now(),
-        sourceInterval: null,
+        sourceInterval: repeated ? { from: repeated.from, to: repeated.to } : null,
         taskId: context?.taskId ?? null,
         operationId: context?.browserOperationId ?? context?.requestId ?? null,
         parentOperationId: context?.parentOperationId ?? null,
@@ -320,7 +348,7 @@ export class SessionJournal {
           unknown: ['cross-process-clock-order'],
           excluded: [],
           replayCount: 0,
-          occurrences: 1,
+          occurrences: repeated?.occurrences ?? 1,
         },
         // Read-only compatibility aliases for existing in-process observers. No second body.
         time: now,
