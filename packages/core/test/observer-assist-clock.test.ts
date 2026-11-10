@@ -67,8 +67,6 @@ function run(
     sourceRemaining?: number;
     programRemaining?: number;
     round?: number;
-    victimDead?: boolean;
-    programGeneration?: number;
   } = {},
 ) {
   const generation = options.generation ?? 1;
@@ -80,17 +78,7 @@ function run(
     generation,
     lastReceiveMonotonicMs: now,
   };
-  const base = program(now, options.epoch);
-  const view: ObserverProgramView = {
-    ...base,
-    cursor: { ...base.cursor, programSourceGeneration: options.programGeneration ?? 1 },
-    players: options.victimDead
-      ? base.players.map((player) =>
-          player.sourcePlayerId === 'player-1' ? { ...player, lifeState: 'dead' } : player,
-        )
-      : base.players,
-  };
-  return timeline.project(view, settings, now, source, now, {
+  return timeline.project(program(now, options.epoch), settings, now, source, now, {
     sourceExecution: options.execution ?? 1,
     source: {
       round,
