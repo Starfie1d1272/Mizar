@@ -181,9 +181,9 @@ function guardedObs(obs: ObsRpc, valid: () => boolean): ObsRpc {
   const guarded = obs.withMutationGuard?.(assertCurrent) ?? obs;
   return {
     ...guarded,
-    call: (type, data) => {
+    call: (type, data, onDispatch) => {
       assertCurrent();
-      return guarded.call(type, data);
+      return guarded.call(type, data, onDispatch);
     },
   };
 }
@@ -714,7 +714,7 @@ export class ObsAdapter {
   }
 
   private async withObs<T>(
-    operation: (obs: ObsRpc, endpoint: string) => Promise<T>,
+    operation: (obs: ObsRpc, endpoint: string, recovery: ObsRpc) => Promise<T>,
     timeoutMs = TIMEOUT_MS,
     diagnosticStage?: string,
     observeAudioIdentity = false,
@@ -794,12 +794,13 @@ export class ObsAdapter {
         }
         stage = 'obs_request';
         const rpc: ObsRpc = {
+          reportsDispatch: true,
           onTransitionVideoEnded: (listener) => {
             const onEnded = (event: { transitionName: string }) => listener(event.transitionName);
             client.on('SceneTransitionVideoEnded', onEnded);
             return () => client.off('SceneTransitionVideoEnded', onEnded);
           },
-          call: async (type, data) => {
+          call: async (type, data, onDispatch) => {
             if (!active) throw new Error('obs_operation_cancelled');
             if (
               type === 'SetCurrentProgramScene' &&
@@ -823,6 +824,7 @@ export class ObsAdapter {
               }, 2000);
               timer.unref();
             }
+            onDispatch?.();
             const result = await (
               client.call as (
                 name: string,
@@ -833,14 +835,13 @@ export class ObsAdapter {
             return result;
           },
         };
-        const result = await operation(
-          await this.configStore.managedResources.bind(
-            rpc,
-            `ws://${config.host}:${config.port}`,
-            this.browserBaseUrl,
-          ),
-          `ws://${config.host}:${config.port}`,
+        const endpoint = `ws://${config.host}:${config.port}`;
+        const managed = await this.configStore.managedResources.bind(
+          rpc,
+          endpoint,
+          this.browserBaseUrl,
         );
+        const result = await operation(managed, managed.identityEndpoint ?? endpoint, rpc);
         if (!active) throw new Error('obs_operation_cancelled');
         commitObservation?.(result);
         return result;
@@ -912,6 +913,11 @@ export class ObsAdapter {
         this.browserBaseUrl,
         await this.bpOwner.hiddenHud(obs, this.browserBaseUrl),
       ));
+    if ((await this.captureWarmup?.status().catch(() => 'cleanup_pending')) === 'cleanup_pending')
+      findings.push({
+        code: 'capture_warmup_pending',
+        message: '上次游戏画面检查仍待清理，请停止 OBS 输出后重新配置 Mizar 场景。',
+      });
     if (
       findings.some((item) =>
         ['collection_missing', 'collection_inactive', 'scene_missing'].includes(item.code),
@@ -1460,9 +1466,9 @@ export class ObsAdapter {
         let metadataCommitAttempted = false;
         const obs: ObsRpc = {
           ...guarded,
-          call: (type, data) => {
+          call: (type, data, onDispatch) => {
             if (/^(Create|Set|Remove)/.test(type)) obsWriteAttempted = true;
-            return guarded.call(type, data);
+            return guarded.call(type, data, onDispatch);
           },
         };
         const completedPath = `${this.commentary!.journal}.dedicated-mode`;
@@ -2421,12 +2427,12 @@ export class ObsAdapter {
             throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
           const guarded: ObsRpc = {
             ...obs,
-            call: (type, data) => {
+            call: (type, data, onDispatch) => {
               if (/^(Create|Set|Remove)/.test(type) && !lease())
                 throw new ObsPreparationWriteBlocked(
                   new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。'),
                 );
-              return obs.call(type, data);
+              return obs.call(type, data, onDispatch);
             },
           };
           const id = await this.videoTransaction.prepare(
@@ -2469,7 +2475,7 @@ export class ObsAdapter {
           this.videoTransaction!.restore(
             {
               ...obs,
-              call: (type, data) => {
+              call: (type, data, onDispatch) => {
                 if (/^(Create|Set|Remove)/.test(type) && (!valid() || !lease()))
                   throw new ObsPreparationWriteBlocked(
                     new ObsVideoError(
@@ -2477,7 +2483,7 @@ export class ObsAdapter {
                       'OBS 输出状态已变化，视频设置待恢复。',
                     ),
                   );
-                return obs.call(type, data);
+                return obs.call(type, data, onDispatch);
               },
             },
             endpoint,
@@ -2535,14 +2541,25 @@ export class ObsAdapter {
         );
         return {
           ...obs,
-          call: (type, data) => {
+          call: (type, data, onDispatch) => {
             if (/^(Create|Set|Remove)/.test(type)) assertPreparationOutput();
-            return obs.call(type, data);
+            return obs.call(type, data, onDispatch);
           },
         };
       };
-      const prepared = await this.withObs(async (connection, endpoint) => {
+      const prepared = await this.withObs(async (connection, endpoint, recovery) => {
         const obs = preparationObs(connection);
+        // The journal owns exact legacy UUIDs; dedicated collection ownership
+        // cannot authorize or identify its old temporary item.
+        await this.captureWarmup?.recoverBeforePreparation(
+          preparationObs(recovery),
+          endpoint,
+          () =>
+            current() &&
+            (!entry || entry.valid()) &&
+            this.outputs.preparationOutputEpoch() === outputEpoch,
+          true,
+        );
         if (this.audioRouting && this.commentary)
           await captureAudioCollectionTransfer(
             obs,
@@ -3077,8 +3094,10 @@ export class ObsAdapter {
         }
       }
       const rpc: ObsRpc = {
-        call: (type, data) => {
+        reportsDispatch: true,
+        call: (type, data, onDispatch) => {
           if (!valid()) throw new Error('OBS 切场请求已失效。');
+          onDispatch?.();
           return (
             client.call as (
               name: string,
