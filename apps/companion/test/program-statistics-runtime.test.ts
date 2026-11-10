@@ -194,6 +194,111 @@ it('freezes halftime and permits only same-execution final evidence to settle', 
       ),
     })),
   };
+  // A terminal frame can retain identities while current player fields are absent.
+  const missingFinal = {
+    ...base,
+    players: base.players.map((p) => ({ ...p, lineupEvidence: 'retained' as const })),
+  };
+  const nextFinal = {
+    ...base,
+    cursor: {
+      ...base.cursor,
+      runtimeSeq: base.cursor.runtimeSeq + 1,
+      programReceiveSequence: (base.cursor.programReceiveSequence ?? 0) + 1,
+    },
+  };
+  const finalRecovery = new ProgramPresentationStore();
+  finalRecovery.update(missingFinal, 'r');
+  expect(finalRecovery.get().completed[0]!.players).toEqual({ a: [], b: [] });
+  const invalidFinals = [
+    { ...nextFinal, cursor: { ...nextFinal.cursor, producerInstanceId: 'different' } },
+    { ...nextFinal, cursor: { ...nextFinal.cursor, liveSessionId: 'different' } },
+    { ...nextFinal, cursor: { ...nextFinal.cursor, mapEpoch: base.cursor.mapEpoch + 1 } },
+    {
+      ...nextFinal,
+      cursor: {
+        ...nextFinal.cursor,
+        programSourceGeneration: base.cursor.programSourceGeneration + 1,
+      },
+    },
+    { ...nextFinal, cursor: { ...nextFinal.cursor, runtimeSeq: base.cursor.runtimeSeq } },
+    {
+      ...nextFinal,
+      cursor: {
+        ...nextFinal.cursor,
+        programReceiveSequence: (base.cursor.programReceiveSequence ?? 1) - 1,
+      },
+    },
+    { ...nextFinal, status: { ...nextFinal.status, telemetry: 'stale' as const } },
+    { ...nextFinal, status: { ...nextFinal.status, identity: 'mismatch' as const } },
+    {
+      ...nextFinal,
+      players: nextFinal.players.map((p, i) =>
+        i === 0 ? { ...p, sourcePlayerId: '76561198000009999' } : p,
+      ),
+    },
+    {
+      ...nextFinal,
+      players: nextFinal.players.map((p) => ({
+        ...p,
+        side: p.side === 'CT' ? ('T' as const) : ('CT' as const),
+      })),
+    },
+    {
+      ...nextFinal,
+      players: nextFinal.players.map((p, i) =>
+        i === 1 ? { ...p, sourcePlayerId: nextFinal.players[0]!.sourcePlayerId } : p,
+      ),
+    },
+    {
+      ...nextFinal,
+      series: {
+        ...nextFinal.series!,
+        maps: nextFinal.series!.maps.map((m) =>
+          m.finalScore ? { ...m, finalScore: { a: m.finalScore.a + 1, b: m.finalScore.b } } : m,
+        ),
+      },
+    },
+  ];
+  for (const [index, invalid] of invalidFinals.entries()) {
+    finalRecovery.update(invalid, 'r');
+    expect(finalRecovery.get().completed[0]!.players, `invalid case ${index}`).toEqual({
+      a: [],
+      b: [],
+    });
+  }
+  finalRecovery.update(nextFinal, 'r');
+  expect(finalRecovery.get().completed[0]!.players.a).toHaveLength(5);
+  expect(finalRecovery.get().completed[0]!.players.b).toHaveLength(5);
+  const partialFinal = new ProgramPresentationStore();
+  partialFinal.update(
+    {
+      ...missingFinal,
+      players: missingFinal.players.map((p, i) =>
+        i === 0 ? { ...p, lineupEvidence: 'current' as const } : p,
+      ),
+    },
+    'r',
+  );
+  const savedPlayer = [
+    ...partialFinal.get().completed[0]!.players.a,
+    ...partialFinal.get().completed[0]!.players.b,
+  ][0]!;
+  partialFinal.update(
+    { ...nextFinal, players: nextFinal.players.map((p) => ({ ...p, displayName: 'later name' })) },
+    'r',
+  );
+  const recoveredPlayers = [
+    ...partialFinal.get().completed[0]!.players.a,
+    ...partialFinal.get().completed[0]!.players.b,
+  ];
+  expect(recoveredPlayers).toHaveLength(10);
+  expect(recoveredPlayers.find((p) => p.id === savedPlayer.id)!.name).toBe(savedPlayer.name);
+  // Without a complete terminal identity baseline, an empty result cannot acquire identities.
+  const unknownFinal = new ProgramPresentationStore();
+  unknownFinal.update({ ...base, players: [] }, 'r');
+  unknownFinal.update(nextFinal, 'r');
+  expect(unknownFinal.get().completed[0]!.players).toEqual({ a: [], b: [] });
   const store = new ProgramPresentationStore();
   const halftime = {
     ...base,

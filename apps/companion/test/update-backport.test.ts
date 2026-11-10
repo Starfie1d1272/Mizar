@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { UpdateManager } from '../src/updates/manager.js';
 import { transfer } from '../src/distribution/transfer.js';
-import { updateRequest, boundedBytes } from '../src/updates/network.js';
+import { updateRequest, boundedBytes, githubMetadata } from '../src/updates/network.js';
 
 test('preserves existing transfer targets and permits bounded gzip text only by explicit policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-transfer-backport-'));
@@ -56,11 +56,14 @@ test('preserves existing transfer targets and permits bounded gzip text only by 
   }
 });
 
-test('rejects anonymous GitHub APIs before transport and does not fall back after mirror failure', async () => {
+test('uses public fixed GitHub metadata and transport-only proxy fallback without API or Box', async () => {
   const { StableSource } = await import('../src/updates/source.js');
   const hosts: string[] = [];
+  const urls: string[] = [];
   const fetcher: typeof fetch = async (input) => {
-    hosts.push(new URL(input instanceof Request ? input.url : input.toString()).hostname);
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    hosts.push(url.hostname);
+    urls.push(url.href);
     return new Response(null, { status: 503 });
   };
   const signal = new AbortController().signal;
@@ -74,7 +77,31 @@ test('rejects anonymous GitHub APIs before transport and does not fall back afte
   const source = new StableSource('unused-trust-cache', fetcher);
   await assert.rejects(source.latest(signal), /update_network_failed/);
   await assert.rejects(source.authenticateVersion('1.10.1', signal), /update_network_failed/);
-  assert.deepEqual(hosts, ['box.nju.edu.cn', 'box.nju.edu.cn']);
+  assert.deepEqual(hosts, ['github.com', 'gh-proxy.com', 'github.com', 'gh-proxy.com']);
+  assert.ok(urls[0]!.endsWith('/releases/latest/download/machine-metadata.json'));
+  assert.ok(urls[2]!.endsWith('/releases/download/v1.10.1/machine-metadata.json'));
+  const latest = urls[0]!;
+  const fixed = urls[2]!;
+  const seen: string[] = [];
+  const redirected: typeof fetch = async (input, init) => {
+    const url = input.toString();
+    seen.push(url);
+    assert.equal(new Headers(init?.headers).has('authorization'), false);
+    if (url === latest) return new Response(null, { status: 503 });
+    if (url.startsWith('https://gh-proxy.com/'))
+      return new Response(null, { status: 302, headers: { location: fixed } });
+    assert.equal(url, fixed);
+    return new Response('original bytes');
+  };
+  assert.equal((await githubMetadata(latest, signal, redirected)).toString(), 'original bytes');
+  assert.equal(seen.length, 3);
+  seen.length = 0;
+  const corrupt = new StableSource('unused-trust-cache', async (input) => {
+    seen.push(input.toString());
+    return new Response('{}');
+  });
+  await assert.rejects(corrupt.latest(signal), /Invalid machine metadata structure/);
+  assert.deepEqual(seen, [latest]);
 });
 
 test('Mizar download sorts authenticated sources, labels fallback and verifies full bytes', async () => {
@@ -128,6 +155,8 @@ test('Mizar download sorts authenticated sources, labels fallback and verifies f
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(manager.status().phase, 'ready');
     assert.equal(manager.status().downloadSource, 'GitHub');
+    await manager.check();
+    assert.equal(manager.status().phase, 'ready');
     assert.deepEqual(full, ['gh-proxy.com', 'github.com']);
     const ready = JSON.parse(await readFile(join(root, 'updates', 'ready.json'), 'utf8')) as {
       directory: string;

@@ -55,20 +55,22 @@ export function isRegulationHalftime(p: ProgramProjection): boolean {
   );
 }
 
+function sideForEntry(p: ProgramProjection, entryId: string) {
+  return p.teams.ct.mode === 'canonical' && p.teams.ct.entryId === entryId
+    ? 'CT'
+    : p.teams.t.mode === 'canonical' && p.teams.t.entryId === entryId
+      ? 'T'
+      : null;
+}
+
 export function summarizeMap(
   p: ProgramProjection,
   mapOrder: number,
   finalScore?: { a: number; b: number },
 ): MapSummary | null {
   if (!p.match || !p.series) return null;
-  const sideFor = (entryId: string) =>
-    p.teams.ct.mode === 'canonical' && p.teams.ct.entryId === entryId
-      ? 'CT'
-      : p.teams.t.mode === 'canonical' && p.teams.t.entryId === entryId
-        ? 'T'
-        : null;
   const players = (entryId: string) => {
-    const side = sideFor(entryId);
+    const side = sideForEntry(p, entryId);
     return side === null
       ? []
       : p.players
@@ -85,7 +87,11 @@ export function summarizeMap(
           }));
   };
   const score = (entryId: string) =>
-    sideFor(entryId) === 'CT' ? p.map.score.ct : sideFor(entryId) === 'T' ? p.map.score.t : null;
+    sideForEntry(p, entryId) === 'CT'
+      ? p.map.score.ct
+      : sideForEntry(p, entryId) === 'T'
+        ? p.map.score.t
+        : null;
   return {
     matchId: p.match.matchId,
     mapOrder,
@@ -141,6 +147,8 @@ function supplementHalftime(prior: MapSummary, next: MapSummary): MapSummary {
 /** Scores freeze at map-ended; terminal KAD may settle within that exact execution. */
 export class ProgramPresentationStore {
   private key: string | null = null;
+  // Keep only identities, including retained ones, to prove later missing entries.
+  private readonly finalLineups = new Map<number, { a: string[]; b: string[] }>();
   private value: ProgramPresentation = this.empty();
   private empty(): ProgramPresentation {
     return {
@@ -172,6 +180,7 @@ export class ProgramPresentationStore {
     if (key !== this.key) {
       this.key = key;
       this.value = this.empty();
+      this.finalLineups.clear();
     }
     if (!p.match || !p.series || p.status.context !== 'fresh' || p.status.identity === 'mismatch')
       return;
@@ -202,6 +211,21 @@ export class ProgramPresentationStore {
     if (!snapshot) return;
     const prior = this.value.completed.find((item) => item.mapOrder === completed.mapOrder);
     if (!prior) {
+      const ids = (side: 'a' | 'b') => {
+        const team = sideForEntry(p, p.series!.entrants[side].entryId);
+        return team === null
+          ? []
+          : p.players
+              .filter((player) => player.side === team)
+              .map((player) => player.sourcePlayerId);
+      };
+      const lineup = { a: ids('a'), b: ids('b') };
+      if (
+        lineup.a.length === 5 &&
+        lineup.b.length === 5 &&
+        new Set([...lineup.a, ...lineup.b]).size === 10
+      )
+        this.finalLineups.set(completed.mapOrder, lineup);
       this.value.completed = [...this.value.completed, snapshot].slice(-5);
       return;
     }
@@ -221,21 +245,34 @@ export class ProgramPresentationStore {
       prior.score.b !== snapshot.score.b
     )
       return;
+    const nextIds = [...snapshot.players.a, ...snapshot.players.b].map((player) => player.id);
+    if (new Set(nextIds).size !== nextIds.length) return;
+    const lineup = this.finalLineups.get(completed.mapOrder);
     for (const side of ['a', 'b'] as const) {
       const oldPlayers = prior.players[side];
       const newPlayers = snapshot.players[side];
       if (
-        oldPlayers.length === 0 ||
-        oldPlayers.length !== newPlayers.length ||
-        oldPlayers.some((player) => !newPlayers.some((item) => item.id === player.id))
+        newPlayers.length > 5 ||
+        oldPlayers.some((player) => !newPlayers.some((item) => item.id === player.id)) ||
+        newPlayers.some(
+          (player) =>
+            !oldPlayers.some((item) => item.id === player.id) &&
+            !lineup?.[side].includes(player.id),
+        )
       )
         return;
     }
     // Preserve complete metric groups if a later frame loses evidence. Each
     // selected group is an already-computed Core result, including its basis.
     const players = (side: 'a' | 'b') =>
-      prior.players[side].map((player) => {
+      [
+        ...prior.players[side],
+        ...snapshot.players[side].filter(
+          (player) => !prior.players[side].some((item) => item.id === player.id),
+        ),
+      ].map((player) => {
         const latest = snapshot.players[side].find((item) => item.id === player.id)!;
+        if (!prior.players[side].some((item) => item.id === player.id)) return latest;
         const preserve = <T extends Record<string, { value: number | null }>>(old: T, next: T) =>
           Object.keys(old).some((key) => old[key]!.value !== null && next[key]!.value === null)
             ? old

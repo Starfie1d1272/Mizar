@@ -8,9 +8,13 @@ import {
   parseScheduleWindowV1,
 } from '@mizar/protocol/context';
 
-import { replaceDurableJson } from './durable-json.js';
+import { durableJsonByteLength, replaceDurableJson } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
 import type { LocalBo3BpRules } from '@mizar/protocol/bp';
+
+const MAX_STORE_BYTES = 2_000_000;
+// Read-only migration ceiling for the old indented encoding, never a new write budget.
+const MAX_LEGACY_STORE_BYTES = 32_000_000;
 
 export const LOCAL_TOURNAMENT_STORE_VERSION = 'mizar.local-tournament-store.v1' as const;
 
@@ -99,9 +103,13 @@ function recoverPersistedLinks(input: unknown): boolean {
   return links.length > 0;
 }
 
-async function preserveOriginalLinks(filePath: string, bytes: Buffer): Promise<void> {
+async function preserveOriginal(
+  filePath: string,
+  bytes: Buffer,
+  reason: 'live-stream-url' | 'compact-json',
+): Promise<void> {
   const digest = createHash('sha256').update(bytes).digest('hex');
-  const backupPath = `${filePath}.before-live-stream-url-${digest}.json`;
+  const backupPath = `${filePath}.before-${reason}-${digest}.json`;
   try {
     await writeFile(backupPath, bytes, { flag: 'wx', mode: 0o600, flush: true });
   } catch (error) {
@@ -114,7 +122,7 @@ async function preserveOriginalLinks(filePath: string, bytes: Buffer): Promise<v
 }
 
 function readState(input: unknown): LocalTournamentState {
-  if (Buffer.byteLength(JSON.stringify(input)) > 2_000_000)
+  if (durableJsonByteLength(input, true) > MAX_STORE_BYTES)
     throw new Error('local_store_too_large');
   const { events, teams, matches, trashedMatches, selectedMatchId, selectedAt } =
     localTournamentStateV1Schema.parse(input);
@@ -216,18 +224,30 @@ export class LocalTournamentStore {
     await this.queue.run(async () => {
       let bytes: Buffer;
       try {
+        const stat = await lstat(this.filePath);
+        if (stat.size > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
         bytes = await readFile(this.filePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
         throw error;
       }
-      if (bytes.length > 2_000_000) throw new Error('local_store_too_large');
+      if (bytes.length > MAX_LEGACY_STORE_BYTES) throw new Error('local_store_too_large');
       const input: unknown = JSON.parse(bytes.toString('utf8'));
+      const oversizedLegacy = bytes.length > MAX_STORE_BYTES;
+      // Only the representation written by the old Store qualifies for size recovery.
+      if (oversizedLegacy && !bytes.equals(Buffer.from(`${JSON.stringify(input, null, 2)}\n`)))
+        throw new Error('local_store_too_large');
       const recovered = recoverPersistedLinks(input);
       const state = readState(input);
-      if (recovered) {
-        await preserveOriginalLinks(this.filePath, bytes);
-        await replaceDurableJson(this.filePath, state);
+      if (durableJsonByteLength(state, true) > MAX_STORE_BYTES)
+        throw new Error('local_store_too_large');
+      if (recovered || oversizedLegacy) {
+        await preserveOriginal(
+          this.filePath,
+          bytes,
+          recovered ? 'live-stream-url' : 'compact-json',
+        );
+        await replaceDurableJson(this.filePath, state, { compact: true });
       }
       this.state = state;
     });
@@ -708,7 +728,14 @@ export class LocalTournamentStore {
 
   private async commit(next: LocalTournamentState, canCommit?: () => boolean): Promise<void> {
     const validated = readState(next);
-    if (!(await replaceDurableJson(this.filePath, validated, canCommit ? { canCommit } : {})))
+    if (durableJsonByteLength(validated, true) > MAX_STORE_BYTES)
+      throw new Error('local_store_too_large');
+    if (
+      !(await replaceDurableJson(this.filePath, validated, {
+        compact: true,
+        ...(canCommit ? { canCommit } : {}),
+      }))
+    )
       throw new Error('local_evidence_changed');
     this.state = validated;
   }

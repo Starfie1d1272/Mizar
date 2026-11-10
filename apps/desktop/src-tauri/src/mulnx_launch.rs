@@ -466,7 +466,7 @@ fn launch_operation(
         return Err("请先完成未结束的启动或恢复，再保留画质与帧率启动。".into());
     }
     if status["pending"] == true
-        || status["demoCleanupPending"] == true
+        || (demo.is_none() && crate::demo_test::requires_recovery(log, None))
         || (!automatic && status["spectatorRecoveryPending"] == true)
     {
         return Err("请先完成原有 CS2 配置恢复，再通过 MulNX 启动。".into());

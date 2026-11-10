@@ -333,6 +333,7 @@ export function ResourceModules({
   >({});
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
+  const repairAudioInput = useRef<HTMLInputElement>(null);
   const scrollToSelection = useRef(
     Boolean(new URLSearchParams(window.location.search).get('resource')),
   );
@@ -473,6 +474,31 @@ export function ResourceModules({
       scrollToSelection.current = true;
       setSelected(target.id);
       onImported();
+    }
+  }
+  async function repairAudio(files: File[]) {
+    if (busy || !files.length) return;
+    setBusy(true);
+    setNotice(null);
+    let restored = 0;
+    try {
+      for (const file of files) {
+        await localFile<UploadedMusicTrack>(
+          '/operator/music/track/repair',
+          file,
+          'application/x-mizar-audio',
+        );
+        restored++;
+      }
+      setNotice({ tone: 'success', message: '音频已保存，原配置保留；请检查资源状态后重新使用。' });
+    } catch (error) {
+      setNotice({
+        tone: 'danger',
+        message: `${restored ? `已保存 ${restored} 个音频。` : ''}${error instanceof Error ? error.message : '音频未恢复，请检查文件后重试。'}原配置保留，尚未重新使用。`,
+      });
+    } finally {
+      setBusy(false);
+      refreshAll();
     }
   }
   async function inspectFile(file: File) {
@@ -619,6 +645,20 @@ export function ResourceModules({
           </div>
         </details>
       </div>
+      <input
+        ref={repairAudioInput}
+        hidden
+        type="file"
+        accept=".wav,.mp3,.ogg,.flac,.m4a"
+        multiple
+        disabled={busy}
+        aria-label="选择待恢复的原音频"
+        onChange={(event) => {
+          const files = [...(event.currentTarget.files ?? [])];
+          event.currentTarget.value = '';
+          void repairAudio(files);
+        }}
+      />
       {notice && <StatusBanner tone={notice.tone}>{notice.message}</StatusBanner>}
       {editing && (
         <Panel aria-label={`编辑${editing.name}`}>
@@ -951,6 +991,22 @@ export function ResourceModules({
                         : '所需资源不可用，请重新导入或恢复资源后重试。'}
                     </StatusBanner>
                   )}
+                  {entry.kind === 'music' &&
+                    availability?.state === 'dependency_missing' &&
+                    Object.values(entry.value.groups).some((group) =>
+                      group.tracks.some((track) =>
+                        track.asset.resource.id.startsWith('local:music:'),
+                      ),
+                    ) && (
+                      <div>
+                        <p>
+                          原音乐配置和曲目引用已保留。恢复文件后重新使用；损坏文件会另存保留，不会自动播放。
+                        </p>
+                        <Button disabled={busy} onClick={() => repairAudioInput.current?.click()}>
+                          恢复原音频
+                        </Button>
+                      </div>
+                    )}
                   {previewsEnabled && (entry.kind === 'hud' || entry.kind === 'program') && (
                     <PresetVisualPreview
                       key={entry.id}

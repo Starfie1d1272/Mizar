@@ -10,7 +10,7 @@ import type { HudConfigState } from '../hud-config/store.js';
 import type { MusicStore } from '../music/store.js';
 import type { OrchestrationStore } from '../orchestration/store.js';
 import { migrateLegacyBroadcast, type LegacyBroadcastMigration } from './migrate.js';
-import { portableMusicConfig } from './music-assets.js';
+import { portableMusicDraft } from './music-assets.js';
 import type { PendingLegacyCamera } from './store.js';
 
 export type PreparedLegacyMigration =
@@ -68,9 +68,21 @@ export async function prepareLegacyMigration(input: {
         active: input.camera.preset,
         automaticEnabled: input.camera.automaticEnabled,
       },
-      musicConfig: (value) => portableMusicConfig(input.music, value, input.musicAutomaticEnabled),
+      musicConfig: (value) =>
+        Promise.resolve(portableMusicDraft(value, input.musicAutomaticEnabled)),
       cameraConfig: input.cameraConfig ?? emptyCamera,
-      lock: input.lock ?? localLock,
+      lock: async (resolved) => {
+        // Unavailable legacy audio remains a desired configuration, not a successful application.
+        // Verify the independent modules now; the music consumer verifies every track on bind/retry.
+        const lock = input.lock
+          ? await input.lock({ ...resolved, music: null })
+          : await localLock(resolved);
+        const music = await localLock(resolved);
+        const resources = new Map(
+          [...lock.resources, ...music.resources].map((ref) => [canonicalJson(ref), ref]),
+        );
+        return { ...lock, resources: [...resources.values()] };
+      },
       skipCamera,
     });
   try {
