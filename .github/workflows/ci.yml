@@ -60,6 +60,7 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.gitattributes
+            /.gitignore
             /.cargo/
             /rust-toolchain
             /rust-toolchain.toml

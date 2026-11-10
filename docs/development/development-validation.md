@@ -63,7 +63,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## CI 检查
 
-常规 CI 执行类型检查、构建、格式、基础 lint 与仓库保留的全部 JavaScript / TypeScript 独立测试，并启动实际构建的 Companion、在 Chromium 打开主页面和正常退出；main、手动运行和涉及桌面宿主、其嵌入资源或 CI 工作流的 PR 另在 Windows 编译宿主，无法确定差异时也编译。Windows 作业仅检出宿主、嵌入文件和缓存工具；Git 仍保留完整提交树用于原有差异判断，不下载无关网页媒体。`ci-gate` 要求所选构建成功并检查从运行创建到门禁的 180 秒预算。Cargo 缓存优先精确命中，其次选择同锁文件的构建；同平台、工具链、profile 和编译参数的其他旧构建可作为最后回退，由 Cargo 重新核对依赖、源码与编译指纹。超时在门禁判定；排队或任务运行不能保证在期限到达瞬间中断。正式发行仍须验证产物身份及来源证明。产品行为由实机检查验证。
+常规 CI 执行类型检查、构建、格式、基础 lint 与仓库保留的全部 JavaScript / TypeScript 独立测试，并启动实际构建的 Companion、在 Chromium 打开主页面和正常退出；main、手动运行和涉及桌面宿主、其嵌入资源或 CI 工作流的 PR 另在 Windows 编译宿主，无法确定差异时也编译。Windows 作业仅检出宿主、嵌入文件、缓存工具及 Git 属性和忽略规则，供 Cargo 正确扫描包文件；Git 仍保留完整提交树用于原有差异判断，不下载无关网页媒体。`ci-gate` 要求所选构建成功并检查从运行创建到门禁的 180 秒预算。Cargo 缓存优先精确命中，其次选择同锁文件的构建；同平台、工具链、profile 和编译参数的其他旧构建可作为最后回退，由 Cargo 重新核对依赖、源码与编译指纹。超时在门禁判定；排队或任务运行不能保证在期限到达瞬间中断。正式发行仍须验证产物身份及来源证明。产品行为由实机检查验证。
 
 测试入口 `node scripts/ci/tests.mjs scripts` 在 quality 作业运行脚本测试，`node scripts/ci/tests.mjs product` 在 build 作业完成生产构建后运行其余测试。入口从 Git 跟踪文件发现 `*.test.*` 与 `*.spec.*`，按 `node:test` 或 Vitest 导入分派；无法识别或同时使用两种框架时失败，不维护逐文件允许列表。需要 DOM 的用例使用文件内的 jsdom 声明。保留的 JavaScript / TypeScript 独立测试必须在常规 CI 执行，不能靠外部素材或手动开关默认跳过；本地执行 product 组前先运行 `pnpm build`。Rust 内联测试不由此入口发现；Windows 原生作业仍执行 build/clippy，不能将编译成功记为原生测试通过。
 
