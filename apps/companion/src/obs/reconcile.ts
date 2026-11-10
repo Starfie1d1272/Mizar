@@ -13,6 +13,12 @@ import {
   ObsVideoError,
 } from './video-transaction.js';
 
+export interface ObsSceneItemRef {
+  readonly sceneName: string;
+  readonly sceneItemId: number;
+  readonly sourceUuid: string;
+}
+
 export interface ObsRpc {
   /** The call forwards onDispatch to the transport after all asynchronous guards. */
   readonly reportsDispatch?: true;
@@ -26,8 +32,16 @@ export interface ObsRpc {
   observeManagedResources?(): Promise<boolean>;
   prepareManagedCollection?(allowChange: boolean, writer: ObsRpc): Promise<void>;
   managedResourcesDrift?(): Promise<boolean>;
-  normalizeManagedResources?(writer: ObsRpc): Promise<void>;
-  pruneManagedResources?(writer: ObsRpc): Promise<void>;
+  normalizeManagedResources?(
+    writer: ObsRpc,
+    protectedItems?: readonly ObsSceneItemRef[],
+  ): Promise<void>;
+  pruneManagedResources?(
+    writer: ObsRpc,
+    protectedItems?: readonly ObsSceneItemRef[],
+  ): Promise<void>;
+  /** Audio graph cleanup runs only after its journals and bindings are confirmed. */
+  reconcileManagedAudioResources?(writer: ObsRpc): Promise<void>;
   call(
     type: string,
     data?: Record<string, unknown>,
@@ -359,8 +373,7 @@ export async function checkObsConfiguration(
       settings?.capture_mode !== 'window' ||
       !isCs2Window(settings.window) ||
       (currentWindow.source === 'enumerated' && settings.window !== currentWindow.window) ||
-      settings.priority !== 2 ||
-      settings.capture_audio !== false
+      settings.priority !== 2
     )
       findings.push({
         code: 'capture_drift',
@@ -461,7 +474,11 @@ export async function checkObsConfiguration(
 export async function repairObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
-  options: { readonly allowCollectionChange?: boolean; readonly force?: boolean } = {},
+  options: {
+    readonly allowCollectionChange?: boolean;
+    readonly force?: boolean;
+    readonly protectedItems?: readonly ObsSceneItemRef[];
+  } = {},
 ): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const before = await checkObsConfiguration(obs, baseUrl);
@@ -486,7 +503,7 @@ export async function repairObsConfiguration(
     throw new Error('OBS 场景集合已改变，请在 OBS 中选择「Mizar 制播」后重新检查。');
   if (!obs.prepareManagedCollection) throw new Error('OBS 专用集合管理不可用。');
   await obs.prepareManagedCollection(options.allowCollectionChange !== false, obs);
-  await obs.normalizeManagedResources?.(obs);
+  await obs.normalizeManagedResources?.(obs, options.protectedItems);
   const scenes = await obs.call('GetSceneList');
   const sceneNames = new Set(names(scenes.scenes, 'sceneName'));
   const inputs = await obs.call('GetInputList');
@@ -511,7 +528,6 @@ export async function repairObsConfiguration(
         ...(target.source === 'enumerated' ? { window: target.window } : {}),
         priority: 2,
         capture_cursor: false,
-        capture_audio: false,
       },
       overlay: true,
     });
@@ -585,7 +601,15 @@ export async function repairObsConfiguration(
     for (const [source, transform] of sceneTransforms(scene)) {
       const item = items.find((candidate) => candidate.sourceName === source);
       if (!item) continue;
-      if (item.sceneItemEnabled === false)
+      if (
+        item.sceneItemEnabled === false &&
+        !options.protectedItems?.some(
+          (ref) =>
+            ref.sceneName === scene.sceneName &&
+            ref.sceneItemId === item.sceneItemId &&
+            ref.sourceUuid === item.sourceUuid,
+        )
+      )
         await obs.call('SetSceneItemEnabled', {
           sceneName: scene.sceneName,
           sceneItemId: item.sceneItemId,
@@ -604,7 +628,7 @@ export async function repairObsConfiguration(
         });
     }
   }
-  await obs.pruneManagedResources?.(obs);
+  await obs.pruneManagedResources?.(obs, options.protectedItems);
   return checkObsConfiguration(obs, baseUrl);
 }
 
@@ -625,6 +649,42 @@ export async function switchObsScene(
   const sceneList = await obs.call('GetSceneList');
   const scenes = names(sceneList.scenes, 'sceneName');
   if (!scenes.includes(name)) throw new Error('目标 OBS 场景尚未就绪，请先检查配置。');
+  // A target owns only its actual visual dependencies, not whole-collection readiness.
+  const items = objects((await obs.call('GetSceneItemList', { sceneName: name })).sceneItems);
+  const desired = obsDesiredScenes('http://127.0.0.1').find((scene) => scene.id === sceneId)!;
+  for (const source of desired.sources) {
+    const matches = items.filter((item) => item.sourceName === source);
+    const identity = await obs.managedInputIdentity?.(source);
+    if (
+      matches.length !== 1 ||
+      matches[0]?.sceneItemEnabled !== true ||
+      (obs.managedInputIdentity && (!identity || matches[0]?.sourceUuid !== identity.uuid))
+    )
+      throw new ObsVideoError(
+        'scene_target_unavailable',
+        '目标场景的画面来源未确认，请核对该场景。',
+      );
+  }
+  for (const item of items.filter(
+    (item) => ['音乐', '音效'].includes(String(item.sourceName)) && item.sceneItemEnabled !== false,
+  )) {
+    const identity = await obs.managedInputIdentity?.(String(item.sourceName));
+    const transform = (
+      await obs.call('GetSceneItemTransform', { sceneName: name, sceneItemId: item.sceneItemId })
+    ).sceneItemTransform as Record<string, unknown> | undefined;
+    if (
+      !identity ||
+      identity.uuid !== item.sourceUuid ||
+      identity.kind !== 'ffmpeg_source' ||
+      transform?.boundsType !== 'OBS_BOUNDS_NONE' ||
+      transform.scaleX !== 0 ||
+      transform.scaleY !== 0
+    )
+      throw new ObsVideoError(
+        'scene_music_layout_unconfirmed',
+        '目标场景的音乐纯音频布局未确认，请核对该场景。',
+      );
+  }
   // OBS emits no transition event when the requested scene is already on air.
   if (sceneList.currentProgramSceneName === name) {
     const progress = await obs.call('GetCurrentSceneTransitionCursor');
@@ -719,6 +779,7 @@ export async function ensureObsConfiguration(
   baseUrl: string,
   activeScene: () => ProgramSceneId = () => 'waiting',
   allowCollectionChange = false,
+  protectedItems: readonly ObsSceneItemRef[] = [],
 ): Promise<ObsFinding[]> {
   const findings = await checkObsConfiguration(obs, baseUrl);
   const collectionChanged = findings.some((finding) =>
@@ -727,7 +788,7 @@ export async function ensureObsConfiguration(
   if (allowCollectionChange) {
     // Explicit preparation owns the complete template, including manual edits
     // that do not affect the lightweight runtime readiness checks.
-    const repaired = await repairObsConfiguration(obs, baseUrl, { force: true });
+    const repaired = await repairObsConfiguration(obs, baseUrl, { force: true, protectedItems });
     if (
       collectionChanged &&
       !repaired.some((item) =>
@@ -753,6 +814,6 @@ export async function ensureObsConfiguration(
     'source_disabled',
   ]);
   if (findings.some((finding) => repairable.has(finding.code)))
-    return repairObsConfiguration(obs, baseUrl, { allowCollectionChange: false });
+    return repairObsConfiguration(obs, baseUrl, { allowCollectionChange: false, protectedItems });
   return findings;
 }

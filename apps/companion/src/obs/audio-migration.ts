@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import type { ObsRpc } from './reconcile.js';
+import type { ObsRpc, ObsSceneItemRef } from './reconcile.js';
 
 const ref = z
   .object({
@@ -120,6 +120,40 @@ export class AudioMigration {
   }
   async pending(): Promise<Journal | null> {
     return this.readJournal(this.path);
+  }
+  /** Expose only exact scene-item duties shared with visual repair; never settle them here. */
+  async visualResponsibilities(
+    endpoint: string,
+    collection: string,
+    completedPath: string,
+  ): Promise<{ pending: boolean; items: ObsSceneItemRef[]; captureAudio: string[] }> {
+    const pending = await this.pending();
+    const completed = await this.readJournal(completedPath);
+    const current = (journal: Journal | null) =>
+      journal?.endpoint === endpoint && journal.collection === collection;
+    const items = [pending, completed].filter(current).flatMap((journal) =>
+      journal!.fields
+        .filter(
+          (entry): entry is z.infer<typeof field> =>
+            'sceneName' in entry && !entry.group && entry.phase !== 'restored',
+        )
+        .map(({ sceneName, sceneItemId, sourceUuid }) => ({
+          sceneName,
+          sceneItemId,
+          sourceUuid,
+        })),
+    );
+    const captureAudio = [pending, completed]
+      .filter(current)
+      .flatMap((journal) =>
+        journal!.fields
+          .filter(
+            (entry): entry is z.infer<typeof inputField> =>
+              'inputKind' in entry && entry.phase !== 'restored',
+          )
+          .map((entry) => entry.inputUuid),
+      );
+    return { pending: current(pending), items, captureAudio };
   }
   private async readJournal(path: string): Promise<Journal | null> {
     try {
