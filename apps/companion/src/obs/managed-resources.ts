@@ -9,7 +9,7 @@ import {
   OBS_WIDTH,
   obsDesiredScenes,
 } from './desired-state.js';
-import type { ObsRpc, ObsSceneItemRef } from './reconcile.js';
+import type { ObsRpc, ObsVisualProtection } from './reconcile.js';
 import { assertNoVideoOutput, ObsVideoError } from './video-transaction.js';
 
 type Row = Record<string, unknown>;
@@ -293,10 +293,32 @@ export class ManagedObsResources {
         (id === 'gameplay' && name === '禁选紧凑底栏')
       );
     };
+    const protectsSource = async (
+      protection: ObsVisualProtection,
+      item: Row,
+      visited = new Set<string>(),
+    ): Promise<boolean> => {
+      if (protection.sourceUuids?.includes(String(item.sourceUuid))) return true;
+      if ((!item.isGroup && !item.sceneUuid) || !protection.sourceUuids?.length) return false;
+      const uuid = String(item.sourceUuid ?? item.sceneUuid ?? '');
+      if (!uuid || visited.has(uuid)) return true;
+      visited.add(uuid);
+      const children = rows(
+        (
+          await raw.call(item.isGroup ? 'GetGroupSceneItemList' : 'GetSceneItemList', {
+            sceneUuid: uuid,
+          })
+        ).sceneItems,
+      );
+      for (const child of children)
+        if (await protectsSource(protection, child, visited)) return true;
+      visited.delete(uuid);
+      return false;
+    };
     const normalize = async (
       writer: ObsRpc,
       visualsOnly = false,
-      protectedItems: readonly ObsSceneItemRef[] = [],
+      protection: ObsVisualProtection = {},
     ) => {
       await assertNoVideoOutput(raw);
       await verify();
@@ -317,6 +339,11 @@ export class ManagedObsResources {
         const collision = (await inventory()).inputs.find(
           (row) => row.inputName === name && row.inputUuid !== input.inputUuid,
         );
+        if (collision && protection.sourceUuids?.includes(String(collision.inputUuid)))
+          throw new ObsVideoError(
+            'audio_resource_conflict',
+            '音频恢复仍持有同名来源，请先核对并恢复该音频来源。',
+          );
         if (collision) await writer.call('RemoveInput', { inputUuid: collision.inputUuid });
         if (input.inputName !== name)
           await writer.call('SetInputName', { inputUuid: input.inputUuid, newInputName: name });
@@ -328,6 +355,7 @@ export class ManagedObsResources {
       }
       // Keep an initial scene until the real scenes exist, so there is always a
       // durable identity anchor and OBS never has to remove its final scene.
+      const blocked: string[] = [];
       let listed = await inventory();
       for (const [name, kind] of specs) {
         if (visualsOnly && audio.has(name)) continue;
@@ -344,13 +372,16 @@ export class ManagedObsResources {
             (row.inputUuid ?? row.sceneUuid) !== role?.uuid,
         );
         if (
-          visualsOnly &&
           collision &&
-          (collision.sceneUuid ||
-            protectedItems.some((ref) => ref.sourceUuid === collision.inputUuid) ||
-            !['browser_source', 'game_capture'].includes(String(collision.inputKind)))
-        )
-          throw conflict();
+          (protection.sourceUuids?.includes(String(collision.inputUuid)) ||
+            (collision.sceneUuid && (await protectsSource(protection, collision))) ||
+            (visualsOnly &&
+              (collision.sceneUuid ||
+                !['browser_source', 'game_capture'].includes(String(collision.inputKind)))))
+        ) {
+          blocked.push(name);
+          continue;
+        }
         if (collision && !globals.some((input) => input.inputUuid === collision.inputUuid)) {
           await writer.call(
             collision.sceneUuid ? 'RemoveScene' : 'RemoveInput',
@@ -394,11 +425,12 @@ export class ManagedObsResources {
         }
         listed = await inventory();
       }
+      return blocked;
     };
     const prune = async (
       writer: ObsRpc,
       visualsOnly = false,
-      protectedItems: readonly ObsSceneItemRef[] = [],
+      protection: ObsVisualProtection = {},
     ) => {
       await assertNoVideoOutput(raw);
       await verify();
@@ -469,6 +501,13 @@ export class ManagedObsResources {
         );
         if (!wanted) {
           if (visualsOnly) continue;
+          const items = rows(
+            (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
+          );
+          let protectedScene = false;
+          for (const item of items)
+            if (await protectsSource(protection, item)) protectedScene = true;
+          if (protectedScene) continue;
           await writer.call('RemoveScene', { sceneUuid: scene.sceneUuid });
           continue;
         }
@@ -478,7 +517,8 @@ export class ManagedObsResources {
         )) {
           if (visualsOnly && !visualName(String(item.sourceName))) continue;
           if (
-            protectedItems.some(
+            (await protectsSource(protection, item)) ||
+            protection.items?.some(
               (ref) =>
                 ref.sceneName === wanted.sceneName &&
                 ref.sceneItemId === item.sceneItemId &&
@@ -514,7 +554,11 @@ export class ManagedObsResources {
       }
       // Removing a final scene reference may already destroy its input.
       for (const input of visualsOnly ? [] : (await inventory()).inputs) {
-        if (globals.some((global) => global.inputUuid === input.inputUuid)) continue;
+        if (
+          globals.some((global) => global.inputUuid === input.inputUuid) ||
+          protection.sourceUuids?.includes(String(input.inputUuid))
+        )
+          continue;
         if (
           ![...specs].some(
             ([name, kind]) => kind !== 'scene' && registry!.roles[name]?.uuid === input.inputUuid,
@@ -543,12 +587,28 @@ export class ManagedObsResources {
         return task;
       },
       managedResourcesDrift: drift,
-      normalizeManagedResources: (writer, protectedItems) =>
-        normalize(writer, true, protectedItems),
-      pruneManagedResources: (writer, protectedItems) => prune(writer, true, protectedItems),
-      reconcileManagedAudioResources: async (writer) => {
-        await normalize(writer);
-        await prune(writer);
+      managedResourceConflicts: async () => {
+        await verify();
+        const { inputs, scenes } = await inventory();
+        return [...specs]
+          .filter(([name, kind]) => {
+            if (audio.has(name)) return false;
+            const named = (kind === 'scene' ? scenes : inputs).find(
+              (row) => (row.sceneName ?? row.inputName) === name,
+            );
+            return named && (named.sceneUuid ?? named.inputUuid) !== registry!.roles[name]?.uuid;
+          })
+          .map(([name]) => name);
+      },
+      normalizeManagedResources: (writer, protection) => normalize(writer, true, protection),
+      pruneManagedResources: (writer, protection) => prune(writer, true, protection),
+      reconcileManagedAudioResources: async (writer, protection) => {
+        if ((await normalize(writer, false, protection)).length)
+          throw new ObsVideoError(
+            'audio_resource_conflict',
+            '音频恢复仍持有同名来源，请先核对并恢复该音频来源。',
+          );
+        await prune(writer, false, protection);
       },
       managedInputIdentity: async (name) => {
         await verify();

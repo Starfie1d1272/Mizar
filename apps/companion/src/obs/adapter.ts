@@ -47,7 +47,7 @@ import {
   saveCommentarySwitch,
 } from './commentary-switch.js';
 import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import {
   commentaryTargetReady,
   configureIndependentAudio,
@@ -2657,6 +2657,7 @@ export class ObsAdapter {
         );
         const protectedItems: { sceneName: string; sceneItemId: number; sourceUuid: string }[] = [];
         const protectedCaptureAudio = new Set<string>();
+        const protectedSourceUuids = new Set<string>();
         let audioResponsibilityUnknown = false;
         if (this.commentary) {
           try {
@@ -2668,6 +2669,17 @@ export class ObsAdapter {
               `${this.commentary.journal}.dedicated-mode`,
             );
             protectedItems.push(...responsibility.items);
+            for (const uuid of responsibility.sourceUuids) protectedSourceUuids.add(uuid);
+            for (const path of [this.commentary.journal, `${this.commentary.journal}.game`]) {
+              const pending = await readCommentarySwitch(`${path}.switch`);
+              if (pending?.endpoint === endpoint && pending.collection === OBS_COLLECTION) {
+                protectedSourceUuids.add(pending.uuid);
+                audioBlocked ??= {
+                  code: 'audio_mode_pending',
+                  message: '音频切换尚未完成，请在声音设置中恢复。',
+                };
+              }
+            }
             for (const uuid of responsibility.captureAudio) protectedCaptureAudio.add(uuid);
             if (responsibility.pending)
               audioBlocked ??= {
@@ -2677,14 +2689,16 @@ export class ObsAdapter {
           } catch (error) {
             audioResponsibilityUnknown = true;
             audioBlocked = audioFailure(error, 'obs_audio_responsibility');
-            // An unreadable audio journal cannot authorize changes to shared
-            // capture-item enable fields. Other visual fields remain repairable.
+            // Unknown audio duties cannot authorize source destruction. Preserve
+            // existing source lifetimes and shared enable fields, not other visuals.
+            const inputs = (await obs.call('GetInputList')).inputs as { inputUuid: string }[];
+            for (const input of inputs) protectedSourceUuids.add(input.inputUuid);
             const scenes = (await obs.call('GetSceneList')).scenes as { sceneName: string }[];
             for (const scene of scenes) {
               const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
                 .sceneItems as { sceneItemId: number; sourceUuid: string; sourceName: string }[];
               for (const item of items)
-                if (item.sourceName === OBS_CAPTURE_INPUT)
+                if (protectedSourceUuids.has(item.sourceUuid))
                   protectedItems.push({
                     sceneName: scene.sceneName,
                     sceneItemId: item.sceneItemId,
@@ -2693,12 +2707,13 @@ export class ObsAdapter {
             }
           }
         }
+        const visualProtection = { items: protectedItems, sourceUuids: [...protectedSourceUuids] };
         const visual = await ensureObsConfiguration(
           obs,
           this.browserBaseUrl,
           activeScene,
           true,
-          protectedItems,
+          visualProtection,
         );
         if (
           visual.some((item) =>
@@ -2723,7 +2738,7 @@ export class ObsAdapter {
         let audioReady = true;
         try {
           const audioObs = guardedPreparationWrites(obs);
-          await obs.reconcileManagedAudioResources?.(audioObs);
+          await obs.reconcileManagedAudioResources?.(audioObs, visualProtection);
           if (this.audioRouting) {
             await applyAudioCollectionTransfer(
               audioObs,

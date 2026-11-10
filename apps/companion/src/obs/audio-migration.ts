@@ -121,40 +121,43 @@ export class AudioMigration {
   async pending(): Promise<Journal | null> {
     return this.readJournal(this.path);
   }
-  /** Expose only exact scene-item duties shared with visual repair; never settle them here. */
+  /** Expose shared field duties and source lifetimes; visual repair never settles them. */
   async visualResponsibilities(
     endpoint: string,
     collection: string,
     completedPath: string,
-  ): Promise<{ pending: boolean; items: ObsSceneItemRef[]; captureAudio: string[] }> {
+  ): Promise<{
+    pending: boolean;
+    items: ObsSceneItemRef[];
+    captureAudio: string[];
+    sourceUuids: string[];
+  }> {
     const pending = await this.pending();
     const completed = await this.readJournal(completedPath);
     const current = (journal: Journal | null) =>
       journal?.endpoint === endpoint && journal.collection === collection;
-    const items = [pending, completed].filter(current).flatMap((journal) =>
-      journal!.fields
-        .filter(
-          (entry): entry is z.infer<typeof field> =>
-            'sceneName' in entry && !entry.group && entry.phase !== 'restored',
-        )
-        .map(({ sceneName, sceneItemId, sourceUuid }) => ({
-          sceneName,
-          sceneItemId,
-          sourceUuid,
-        })),
-    );
-    const captureAudio = [pending, completed]
-      .filter(current)
-      .flatMap((journal) =>
-        journal!.fields
-          .filter(
-            (entry): entry is z.infer<typeof inputField> =>
-              'inputKind' in entry && entry.phase !== 'restored',
-          )
-          .map((entry) => entry.inputUuid),
-      );
-    return { pending: current(pending), items, captureAudio };
+    const items: ObsSceneItemRef[] = [];
+    const captureAudio: string[] = [];
+    const sourceUuids = new Set<string>();
+    for (const journal of [pending, completed]) {
+      if (!journal || !current(journal)) continue;
+      for (const entry of journal.fields) {
+        if (entry.phase === 'restored') continue;
+        if ('sourceUuid' in entry) {
+          sourceUuids.add(entry.sourceUuid);
+          if (!entry.group) {
+            const { sceneName, sceneItemId, sourceUuid } = entry;
+            items.push({ sceneName, sceneItemId, sourceUuid });
+          }
+        } else {
+          sourceUuids.add(entry.inputUuid);
+          if ('inputKind' in entry) captureAudio.push(entry.inputUuid);
+        }
+      }
+    }
+    return { pending: current(pending), items, captureAudio, sourceUuids: [...sourceUuids] };
   }
+
   private async readJournal(path: string): Promise<Journal | null> {
     try {
       return journalSchema.parse(JSON.parse(await readFile(path, 'utf8')));
