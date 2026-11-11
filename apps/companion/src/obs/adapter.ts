@@ -201,7 +201,13 @@ export class ObsAdapter {
   private expectedCollection: string | undefined;
   private programGeneration = 0;
   private entryPermit:
-    | { id: string; outputEpoch: number; programGeneration: number; valid: () => boolean }
+    | {
+        id: string;
+        outputEpoch: number;
+        configurationEpoch: number;
+        programGeneration: number;
+        valid: () => boolean;
+      }
     | undefined;
   onProgramChanged(callback: (kind: 'disconnected' | 'changed') => void): void {
     this.programChanged = callback;
@@ -226,8 +232,6 @@ export class ObsAdapter {
   private recoveryClosed = false;
   private recoveryGeneration = 0;
   private recoveryPaused = false;
-  private recoveryPrepared = false;
-  private preparedConfigurationEpoch: number | undefined;
   private browserRecoveryPermission:
     { recovery: number; program: number; production: () => boolean } | undefined;
   private browserRefreshSubmitted = false;
@@ -264,7 +268,7 @@ export class ObsAdapter {
           this.expectedScene = undefined;
           this.expectedCollection = undefined;
           this.programGeneration++;
-          this.recoveryPrepared = false;
+          this.entryPermit = undefined;
           this.browserRecoveryPermission = undefined;
           this.programChanged('disconnected');
           return;
@@ -283,7 +287,7 @@ export class ObsAdapter {
           return;
         }
         this.programGeneration++;
-        this.recoveryPrepared = false;
+        this.entryPermit = undefined;
         this.browserRecoveryPermission = undefined;
         this.programChanged('changed');
       },
@@ -388,7 +392,7 @@ export class ObsAdapter {
 
   pauseAutomatic(): void {
     this.recoveryPaused = true;
-    this.recoveryPrepared = false;
+    this.entryPermit = undefined;
     this.browserRecoveryPermission = undefined;
     this.recoveryGeneration++;
     clearTimeout(this.recoveryTimer);
@@ -399,14 +403,6 @@ export class ObsAdapter {
 
   resumeAutomatic(): void {
     this.recoveryPaused = false;
-  }
-
-  hasCurrentPreparation(): boolean {
-    return (
-      this.recoveryPrepared &&
-      this.outputs.canObservePreparation() &&
-      this.preparedConfigurationEpoch === this.outputs.preparationConfigurationEpoch()
-    );
   }
 
   private preparationValidity(): () => boolean {
@@ -1175,8 +1171,6 @@ export class ObsAdapter {
           // Commit before finishing this observation; the slower program evidence
           // below cannot renew a configuration snapshot invalidated in the meantime.
           if (preparationCurrent()) {
-            this.preparedConfigurationEpoch = this.outputs.preparationConfigurationEpoch();
-            this.recoveryPrepared = obsFindingReadiness(findings).blockingFindings.length === 0;
             this.findings = [...findings];
           }
         },
@@ -1295,8 +1289,6 @@ export class ObsAdapter {
         undefined,
         (findings) => {
           if (!current()) return;
-          this.preparedConfigurationEpoch = this.outputs.preparationConfigurationEpoch();
-          this.recoveryPrepared = obsFindingReadiness(findings).blockingFindings.length === 0;
           this.findings = findings;
         },
       );
@@ -3108,8 +3100,8 @@ export class ObsAdapter {
       // Owned writes may advance configuration freshness. Recheck their final result
       // rather than attaching a new generation to the earlier visual snapshot.
       const configurationEpoch = this.outputs.preparationConfigurationEpoch();
-      this.recoveryPrepared = false;
-      this.findings = await this.withObs(
+      this.entryPermit = undefined;
+      const findings = await this.withObs(
         (obs, endpoint) => this.configurationFindings(obs, endpoint),
         12_000,
         undefined,
@@ -3117,23 +3109,21 @@ export class ObsAdapter {
         false,
         false,
         true,
-        (findings) => {
-          this.preparedConfigurationEpoch = configurationEpoch;
-          this.recoveryPrepared =
-            current() &&
-            this.outputs.canObservePreparation() &&
-            configurationEpoch === this.outputs.preparationConfigurationEpoch() &&
-            prepared.ready &&
-            obsFindingReadiness(findings).blockingFindings.length === 0;
-        },
       );
+      this.findings = findings;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       if (entry) {
         await this.withObs(confirmOutput);
-        if (this.hasCurrentPreparation())
+        if (
+          prepared.ready &&
+          this.outputs.canObservePreparation() &&
+          configurationEpoch === this.outputs.preparationConfigurationEpoch() &&
+          obsFindingReadiness(findings).blockingFindings.length === 0
+        )
           this.entryPermit = {
             id: entry.id,
             outputEpoch,
+            configurationEpoch,
             programGeneration: generation,
             valid: entry.valid,
           };
@@ -3153,7 +3143,8 @@ export class ObsAdapter {
           permit.id !== id ||
           this.entryPermit !== permit ||
           !permit.valid() ||
-          !this.hasCurrentPreparation() ||
+          !this.outputs.canObservePreparation() ||
+          permit.configurationEpoch !== this.outputs.preparationConfigurationEpoch() ||
           permit.programGeneration !== this.programGeneration ||
           permit.outputEpoch !== this.outputs.preparationOutputEpoch() ||
           reason
@@ -3346,7 +3337,7 @@ export class ObsAdapter {
           await client.disconnect().catch(() => undefined);
         }
       } catch (error) {
-        this.recoveryPrepared = false;
+        this.entryPermit = undefined;
         this.bpOwner.invalidate();
         if (this.bpClient === client) this.bpClient = undefined;
         await client.disconnect().catch(() => undefined);

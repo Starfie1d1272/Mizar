@@ -281,7 +281,6 @@ export class ObsAudioRouting {
     obs: ObsRpc,
     endpoint: string,
     music?: {
-      owner: string;
       sources: { bgm: string | null; stinger: string | null };
       baseUrl: string;
     },

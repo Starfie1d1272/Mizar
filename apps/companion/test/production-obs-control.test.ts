@@ -56,7 +56,6 @@ test('browser recovery is granted after entering and revoked on exit intent', as
       pauseAutomatic: () => {},
       resumeAutomatic: () => {},
       startCommentaryRecovery: () => {},
-      hasCurrentPreparation: () => false,
       settleAutomatic: async () => {},
       restoreVideo: async () => {},
       startBrowserRecovery: (sessionValid: () => boolean) => {
