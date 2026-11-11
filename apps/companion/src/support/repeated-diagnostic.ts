@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { SessionJournal } from './session-journal.js';
 
 /** Coalesce only a caller's unchanged diagnostic state, never operations or delivery. */
 export class RepeatedDiagnostic {
@@ -77,4 +78,42 @@ export class RepeatedDiagnostic {
       totalOccurrences: active.totalOccurrences,
     });
   }
+}
+
+export function renewalDiagnostics(
+  routes: readonly string[],
+  journal: Pick<SessionJournal, 'record' | 'withSystem'> | undefined,
+) {
+  const observations = new Map(
+    routes.map((route) => [
+      route,
+      {
+        identity: '',
+        key: '',
+        repeated: new RepeatedDiagnostic((stage, evidence) => {
+          const scope = { operation: route, identity: evidence.repetitionId };
+          if (evidence.totalOccurrences === 1)
+            journal?.record('operation_result', { ...evidence, scope });
+          else {
+            // Later observations retain the first result's identity and omit its full context.
+            const summary: Record<string, unknown> = { ...evidence, scope };
+            delete summary.before;
+            delete summary.after;
+            journal?.withSystem(() => journal.record(stage, summary));
+          }
+        }),
+        clear() {
+          this.repeated.clear();
+          this.identity = '';
+          this.key = '';
+        },
+      },
+    ]),
+  );
+  return {
+    get: (route: string) => observations.get(route),
+    clear: () => {
+      for (const observation of observations.values()) observation.clear();
+    },
+  };
 }

@@ -1,6 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  unlink,
+  type FileHandle,
+} from 'node:fs/promises';
 import {
   dirname,
   isAbsolute,
@@ -159,60 +168,133 @@ export async function checkTree(root: string): Promise<void> {
   await walk(root, 0);
 }
 
-export async function verifiedRead(
+type TrustedFile = TrustedPack['files'][number];
+const readBlockBytes = 256 * 1024;
+const fingerprint = (stat: BigIntStats) =>
+  [stat.dev, stat.ino, stat.nlink, stat.size, stat.birthtimeNs, stat.mtimeNs, stat.ctimeNs].join(
+    ':',
+  );
+
+async function withVerifiedFile<T>(
   root: string,
-  file: TrustedPack['files'][number],
+  file: TrustedFile,
   signal: AbortSignal,
-  consume: (chunk: Buffer, offset: number) => void | Promise<void>,
-): Promise<string> {
+  read: (handle: FileHandle, identity: string) => Promise<T>,
+): Promise<{ path: string; result: T }> {
   signal.throwIfAborted();
   const path = await safePath(root, file.path);
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    const before = await handle.stat();
-    const named = await lstat(await safePath(root, file.path));
+    const before = await handle.stat({ bigint: true });
+    const identity = fingerprint(before);
+    const named = async () => lstat(await safePath(root, file.path), { bigint: true });
     if (
       !before.isFile() ||
-      before.nlink !== 1 ||
-      before.size !== file.bytes ||
-      before.ino !== named.ino ||
-      before.dev !== named.dev
+      before.nlink !== 1n ||
+      before.size !== BigInt(file.bytes) ||
+      fingerprint(await named()) !== identity
     )
       throw new ResourceStoreError('resource_file_changed');
-    const digest = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (true) {
-      signal.throwIfAborted();
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
-      if (!bytesRead) break;
-      offset += bytesRead;
-      if (offset > file.bytes) throw new ResourceStoreError('resource_size_mismatch');
-      const chunk = buffer.subarray(0, bytesRead);
-      digest.update(chunk);
-      await consume(chunk, offset - bytesRead);
-    }
-    const after = await handle.stat();
+    const result = await read(handle, identity);
+    signal.throwIfAborted();
     if (
-      offset !== file.bytes ||
-      digest.digest('hex') !== file.sha256 ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
+      fingerprint(await handle.stat({ bigint: true })) !== identity ||
+      fingerprint(await named()) !== identity
     )
       throw new ResourceStoreError('resource_integrity_failed');
-    const finalNamed = await lstat(await safePath(root, file.path));
-    if (
-      finalNamed.ino !== after.ino ||
-      finalNamed.dev !== after.dev ||
-      finalNamed.size !== after.size ||
-      finalNamed.mtimeMs !== after.mtimeMs
-    )
-      throw new ResourceStoreError('resource_file_changed');
-    return path;
+    return { path, result };
   } finally {
     await handle.close();
   }
+}
+
+async function readBlock(
+  handle: FileHandle,
+  buffer: Buffer,
+  length: number,
+  offset: number,
+  signal: AbortSignal,
+) {
+  let done = 0;
+  while (done < length) {
+    signal.throwIfAborted();
+    const { bytesRead } = await handle.read(buffer, done, length - done, offset + done);
+    if (!bytesRead) throw new ResourceStoreError('resource_size_mismatch');
+    done += bytesRead;
+  }
+  return buffer.subarray(0, length);
+}
+
+export async function verifiedRead(
+  root: string,
+  file: TrustedFile,
+  signal: AbortSignal,
+  consume: (chunk: Buffer, offset: number) => void | Promise<void>,
+): Promise<string> {
+  const { path } = await withVerifiedFile(root, file, signal, async (handle) => {
+    const digest = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (let offset = 0; offset < file.bytes; offset += buffer.length) {
+      const chunk = await readBlock(
+        handle,
+        buffer,
+        Math.min(buffer.length, file.bytes - offset),
+        offset,
+        signal,
+      );
+      digest.update(chunk);
+      await consume(chunk, offset);
+    }
+    if (digest.digest('hex') !== file.sha256)
+      throw new ResourceStoreError('resource_integrity_failed');
+  });
+  return path;
+}
+
+export interface VerifiedRangeProof {
+  readonly identity: string;
+  readonly blocks: readonly string[];
+}
+
+/** Cache only block digests derived from an unchanged file with the signed whole-file digest. */
+export async function verifiedRange(
+  root: string,
+  file: TrustedFile,
+  signal: AbortSignal,
+  start: number,
+  destination: Buffer,
+  cached?: VerifiedRangeProof,
+): Promise<{ proof: VerifiedRangeProof; readBytes: number; reused: boolean }> {
+  const { result } = await withVerifiedFile(root, file, signal, async (handle, identity) => {
+    const proof = cached?.identity === identity ? cached : undefined;
+    const end = start + destination.length;
+    const first = proof ? Math.floor(start / readBlockBytes) : 0;
+    const last = Math.ceil((proof ? end : file.bytes) / readBlockBytes);
+    const digest = proof ? null : createHash('sha256');
+    const blocks: string[] = [];
+    const buffer = Buffer.allocUnsafe(Math.min(file.bytes, readBlockBytes));
+    let readBytes = 0;
+    for (let i = first; i < last; i++) {
+      const offset = i * readBlockBytes;
+      const length = Math.min(buffer.length, file.bytes - offset);
+      const chunk = await readBlock(handle, buffer, length, offset, signal);
+      readBytes += length;
+      const hash = createHash('sha256').update(chunk).digest('hex');
+      if (proof) {
+        if (proof.blocks[i] !== hash) throw new ResourceStoreError('resource_integrity_failed');
+      } else {
+        digest!.update(chunk);
+        blocks.push(hash);
+      }
+      const from = Math.max(start, offset);
+      const to = Math.min(end, offset + chunk.length);
+      if (to > from) chunk.copy(destination, from - start, from - offset, to - offset);
+    }
+    if (digest && digest.digest('hex') !== file.sha256)
+      throw new ResourceStoreError('resource_integrity_failed');
+    return { proof: proof ?? { identity, blocks }, readBytes, reused: !!proof };
+  });
+  return result;
 }
 
 export async function readJson(root: string, relative: string): Promise<unknown> {

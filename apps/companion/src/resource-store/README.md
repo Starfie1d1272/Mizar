@@ -40,7 +40,7 @@ Full 可用且无活动独立缓存时，卡片以「内置素材可用」为主
 
 ## 只读资源
 
-`read(packId, relativePath, range?)` 返回独立字节快照，限定 manifest 中的相对路径及数据媒体类型。文件以只读 fd 打开；同一次读取核对完整摘要、尺寸及变化，并收集请求的 Range 字节。全部校验完成前没有响应字节离开 Store，避免验证后重新打开路径的竞态。最多八个读取、合计 128 MiB 返回缓冲区；视频 Range 仍复验完整文件。浏览器断开会中止正在处理的静态资源读取并释放配额，取消不判为文件损坏。
+`read(packId, relativePath, range?)` 返回独立字节快照，限定 manifest 中的相对路径及数据媒体类型。文件以只读 fd 打开；同一只读句柄核对身份、尺寸、变化和交付字节。完整读取每次核对完整摘要。全部校验完成前没有响应字节离开 Store，避免验证后重新打开路径的竞态。最多八个读取、合计 128 MiB 返回缓冲区；视频 Range 首次校验完整文件并从该可信摘要生成分块证明。对同一文件身份的后续请求，复验覆盖所请求区间的完整分块；文件身份、大小或时间变化后重新核对完整摘要。分块证明仅在进程内保存，最多 32 个文件。浏览器断开会中止正在处理的静态资源读取并释放配额，取消不判为文件损坏。
 
 `resolveReadOnlyPath` 仅供原生集成检查已验证路径；路径返回后仍可能被本机其它进程改动，HTTP 必须用 `read`，不能将此路径重新交给静态服务打开。
 
@@ -48,7 +48,7 @@ Full 可用且无活动独立缓存时，卡片以「内置素材可用」为主
 
 ## 验证边界
 
-`apps/companion/test/resource-store/store.test.ts` 使用明确标注的假授权对象验证缓存/状态与文件系统拒绝行为、取消/并发、断电残留、直播准备/回退、旧素材复制、TOCTOU 和 Fastify Range。它不证明正式签名通过。`app-integration.test.ts` 用真实 SDK 和公开 TUF snapshot 验证离线密码学拒绝且不调用网络，并验证真实 App 单例/Full 回退、异步制作互斥和原 URL 的 Range/损坏拒绝。原 URL 的活动版本正例是明确的 HTTP 授权 fixture，不是正式签名通过证据。正式签名正例仍须用真实发布包跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
+`apps/companion/test/resource-store/store.test.ts` 用假授权对象验证缓存、文件系统、并发、安装与回退以及 Range。需要对真实资源生产器和验证器检查未签包的拒绝时，使用同目录的 `verify-real-pack.mts`，输入当前生产器源码检出目录。正式签名正例仍须用真实发布包跑安装与离线重启；Windows 路径、持久目录和实机直播保护也需要真实环境证据。
 
 跨分支接线可执行 `pnpm --filter @mizar/companion exec tsx test/resource-store/verify-real-pack.mts <Pack/Trust-checkout>`。该脚本使用实际 producer、shared parser 和运行时 SDK，把真实 EPL 的未签反例送入 Store；必须到达 bundle/签名拒绝才通过，TUF 网络初始化失败明确不能冒充密码学拒绝。它不声明新资源包的正式签发成功，也不代替签名 receipt 的离线缓存验证。
 

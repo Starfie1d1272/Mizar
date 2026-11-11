@@ -40,7 +40,6 @@ export class OutboxReadView {
     this.archived.clear();
     for (const interval of index.intervals) this.setInterval(interval);
     for (const item of index.unknown) this.unknown.set(sourceKey(item.source), item);
-    for (const key of index.archived) this.archived.add(key);
   }
 
   setInterval(interval: CaptureInterval): void {

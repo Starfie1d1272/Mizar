@@ -40,9 +40,10 @@ import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
-import { RepeatedDiagnostic } from './support/repeated-diagnostic.js';
+import { renewalDiagnostics } from './support/repeated-diagnostic.js';
 import { isDocumentDiagnosticEvent } from '@mizar/protocol';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
+import { observeRuntime } from './support/runtime-observation.js';
 import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
@@ -120,7 +121,7 @@ import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+import { performance } from 'node:perf_hooks';
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
@@ -635,35 +636,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       hud: state.hud,
       match: state.match,
     });
-  const renewalObservations = new Map(
-    renewalRoutes.map((route) => [
-      route,
-      {
-        identity: '',
-        key: '',
-        repeated: new RepeatedDiagnostic((stage, evidence) => {
-          const scope = { operation: route, identity: evidence.repetitionId };
-          if (evidence.totalOccurrences === 1)
-            sessionJournal?.record('operation_result', { ...evidence, scope });
-          else {
-            // The first result retains the full control context. Later facts refer
-            // to that repetition identity, without copying it on every lease pulse.
-            const summary: Record<string, unknown> = { ...evidence, scope };
-            delete summary.before;
-            delete summary.after;
-            sessionJournal?.withSystem(() => sessionJournal.record(stage, summary));
-          }
-        }),
-      },
-    ]),
-  );
-  const clearRenewalObservations = () => {
-    for (const observation of renewalObservations.values()) {
-      observation.repeated.clear();
-      observation.identity = '';
-      observation.key = '';
-    }
-  };
+  const renewalObservations = renewalDiagnostics(renewalRoutes, sessionJournal);
   const recordRenewalStart = (request: FastifyRequest, deferredUntilResult = false) => {
     const renewal = renewalRequests.get(request);
     if (!renewal || renewal.beforeRecorded) return;
@@ -795,9 +768,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         });
       } else {
         if (observation) {
-          observation.repeated.clear();
-          observation.identity = '';
-          observation.key = '';
+          observation.clear();
           recordRenewalStart(request, true);
         }
         sessionJournal.record('operation_result', evidence);
@@ -1188,13 +1159,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             programCueCoordinator.afterRuntimeMutation();
           },
         });
-  let performanceWindowStart = performance.now();
-  let processing = { count: 0, totalMs: 0, maxMs: 0 };
   let latestInput: TelemetryObservation['receive'] | null = null;
-  let latestRawInput: { sequence: number; receivedAt: string; receivedMonotonicMs: number } | null =
-    null;
-  let slowProcessingCount = 0;
-  const slowProcessing: { time: string; sequence: number; durationMs: number }[] = [];
   const publishRuntimeCommit = (
     result: Parameters<typeof projectionCoordinator.afterRuntimeMutation>[0],
   ) => {
@@ -1241,23 +1206,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
       throw error;
     } finally {
-      const durationMs = performance.now() - processingStarted;
-      processing.count++;
-      processing.totalMs += durationMs;
-      processing.maxMs = Math.max(processing.maxMs, durationMs);
-      if (durationMs >= 50) {
-        performanceContext?.trigger('slow_observation', {
-          sequence: observation.receive.sequence,
-          durationMs,
-        });
-        slowProcessingCount++;
-        slowProcessing.push({
-          time: new Date().toISOString(),
-          sequence: observation.receive.sequence,
-          durationMs,
-        });
-        if (slowProcessing.length > 8) slowProcessing.shift();
-      }
+      runtimeObservation.observation(
+        observation.receive.sequence,
+        performance.now() - processingStarted,
+      );
     }
   };
 
@@ -2199,93 +2151,42 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }),
   );
 
-  const eventLoopDelay = sessionJournal ? monitorEventLoopDelay({ resolution: 20 }) : undefined;
-  eventLoopDelay?.enable();
-  const recordPerformanceWindow = (reason: string) => {
-    if (!sessionJournal) return;
-    const now = performance.now();
-    const channels = (['program', 'radar', 'operator', 'assist'] as const).map((channel) => {
-      const publisher = projectionCoordinator.getPublisher(channel);
-      const current = publisher.getCurrent();
+  const runtimeObservation = observeRuntime({
+    journal: sessionJournal,
+    context: performanceContext,
+    monotonicNow: () => debugClock.nowMonotonicMs(),
+    snapshot: () => {
+      const now = debugClock.nowMonotonicMs();
       return {
-        channel,
-        channelSeq: current?.channelSeq ?? null,
-        cursor: current?.cursor ?? null,
-        subscribers: publisher.getHealth?.() ?? null,
+        input: {
+          raw: runtimeObservation.latestRaw,
+          normalized: latestInput,
+          ageMs: latestInput ? Math.max(0, now - latestInput.receivedMonotonicMs) : null,
+        },
+        outbox: outbox?.takePersistenceTiming() ?? null,
+        resources: resources?.takeRangeTiming() ?? null,
+        runtime: debugEvidenceStore.getSupportSummary(now),
+        recorder: currentRecorder().getHealth(),
+        delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
+        channels: (['program', 'radar', 'operator', 'assist'] as const).map((channel) => {
+          const publisher = projectionCoordinator.getPublisher(channel);
+          const current = publisher.getCurrent();
+          return {
+            channel,
+            channelSeq: current?.channelSeq ?? null,
+            cursor: current?.cursor ?? null,
+            subscribers: publisher.getHealth?.() ?? null,
+          };
+        }),
+        anomalyContext: performanceContext?.health() ?? null,
+        nativeSource: nativeSource?.health() ?? null,
+        cstv: {
+          program: cstvSources.program.getHealth(),
+          lookahead: cstvSources.lookahead.getHealth(),
+        },
       };
-    });
-    const eventLoop =
-      eventLoopDelay && eventLoopDelay.count
-        ? { p99Ms: eventLoopDelay.percentile(99) / 1e6, maxMs: eventLoopDelay.max / 1e6 }
-        : null;
-    eventLoopDelay?.reset();
-    sessionJournal.record('runtime_performance_window', {
-      reason,
-      windowMs: now - performanceWindowStart,
-      schedulerDelayMs:
-        reason === 'interval' ? Math.max(0, now - performanceWindowStart - 15000) : null,
-      input: {
-        raw: latestRawInput,
-        normalized: latestInput,
-        ageMs: latestInput
-          ? Math.max(0, debugClock.nowMonotonicMs() - latestInput.receivedMonotonicMs)
-          : null,
-      },
-      processing: {
-        ...processing,
-        meanMs: processing.count ? processing.totalMs / processing.count : null,
-        scope:
-          'synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery',
-      },
-      eventLoop,
-      outbox: outbox?.takePersistenceTiming() ?? null,
-      slowProcessing: {
-        count: slowProcessingCount,
-        omittedSamples: Math.max(0, slowProcessingCount - slowProcessing.length),
-        samples: slowProcessing.splice(0),
-      },
-      runtime: debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
-      recorder: currentRecorder().getHealth(),
-      delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
-      channels,
-      anomalyContext: performanceContext?.health() ?? null,
-      nativeSource: nativeSource?.health() ?? null,
-      cstv: {
-        program: cstvSources.program.getHealth(),
-        lookahead: cstvSources.lookahead.getHealth(),
-      },
-      scope:
-        'producer publish and local send counters do not prove pixels rendered or OBS capture latency',
-    });
-    processing = { count: 0, totalMs: 0, maxMs: 0 };
-    slowProcessingCount = 0;
-    performanceWindowStart = now;
-  };
-  const performanceTimer = sessionJournal
-    ? setInterval(() => recordPerformanceWindow('interval'), 15000)
-    : undefined;
-  performanceTimer?.unref();
-  let inputGapReported = false;
-  const contextTimer = performanceContext
-    ? setInterval(() => {
-        performanceContext.tick();
-        const now = debugClock.nowMonotonicMs();
-        // Input silence is evidence, not proof that rendering or the game froze.
-        if (
-          latestRawInput &&
-          !inputGapReported &&
-          now - latestRawInput.receivedMonotonicMs >= 1000
-        ) {
-          inputGapReported = true;
-          performanceContext.trigger('input_silence', {
-            lastRaw: latestRawInput,
-            ageMs: now - latestRawInput.receivedMonotonicMs,
-            interpretation: 'source stopped sending; may be normal game/menu inactivity',
-          });
-        }
-      }, 1000)
-    : undefined;
-  contextTimer?.unref();
+    },
+  });
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
   app.post('/debug/control-event', { bodyLimit: 32 * 1024 }, async (request, reply) => {
@@ -2325,7 +2226,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     onConsent: async () => {
       // The delivery owner invokes this only after durable consent. Do not let
       // a stable pre-consent group carry its old interval/count into this scope.
-      clearRenewalObservations();
+      renewalObservations.clear();
       await recordConfiguration();
     },
     deliveryParticipants: () => [
@@ -2337,7 +2238,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
     ],
     onReport: () => {
-      recordPerformanceWindow('problem_report');
+      runtimeObservation.record('problem_report');
       performanceContext?.trigger('problem_report', {
         interpretation:
           'context begins at report receipt; past untriggered buffers are unavailable',
@@ -2357,7 +2258,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     exportParticipants: () => {
       // Enqueue completed observations before the journal freezes its export watermark.
-      clearRenewalObservations();
+      renewalObservations.clear();
       return [
         ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
         ...(performanceContext ? [performanceContext.exportParticipant()] : []),
@@ -2393,21 +2294,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ? {}
         : { sequenceSource: options.gsiSequenceSource }),
       onAcceptedRaw: (input) => {
-        if (
-          latestRawInput &&
-          input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs >= 1000
-        )
-          performanceContext?.trigger('input_resumed_after_gap', {
-            previous: latestRawInput,
-            sequence: input.sequence,
-            gapMs: input.receivedMonotonicMs - latestRawInput.receivedMonotonicMs,
-          });
-        inputGapReported = false;
-        latestRawInput = {
-          sequence: input.sequence,
-          receivedAt: input.receivedAt,
-          receivedMonotonicMs: input.receivedMonotonicMs,
-        };
+        runtimeObservation.acceptRaw(input);
         if (performanceContext?.shouldSample(input.receivedMonotonicMs))
           performanceContext.sample({
             time: input.receivedAt,
@@ -2573,11 +2460,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         failures.push(error);
       }
     };
-    clearInterval(performanceTimer);
-    clearInterval(contextTimer);
     clearInterval(directorTimer);
-    await closeStep(() => recordPerformanceWindow('close'));
-    eventLoopDelay?.disable();
+    await closeStep(() => runtimeObservation.close());
     await closeStep(() => presentationUnsubscribe());
     await closeStep(() => objectiveReferenceUnsubscribe?.());
     await closeStep(() => cameraDirector?.close());
@@ -2652,7 +2536,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
     });
     await closeStep(() => unsubscribeObserverEvidence?.());
-    await closeStep(clearRenewalObservations);
+    await closeStep(renewalObservations.clear);
     await closeStep(async () => {
       await sessionJournal?.close();
       if (sessionJournal) {

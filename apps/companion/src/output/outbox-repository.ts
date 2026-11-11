@@ -36,6 +36,14 @@ const MAX_CAPTURE_INTERVALS = 4096;
 const MAX_CAPTURE_UNKNOWN_SOURCES = 192;
 const MAX_CAPTURE_RECEIPTS = 16_384;
 
+// A released, sealed capture keeps its original rows and fence. It no longer
+// occupies an active capture slot or needs to be hydrated on every launch.
+const archivedCapture = `EXISTS(
+  SELECT 1 FROM sources s WHERE s.source_key=i.source_key AND s.disposition='archived'
+  AND NOT EXISTS(SELECT 1 FROM damaged_scopes d WHERE d.scope=s.scope)
+) AND NOT EXISTS(SELECT 1 FROM capture_unknown u WHERE u.source_key=i.source_key)
+  AND COALESCE(json_extract(i.payload, '$.state')='sealed', 0)`;
+
 export type HistoryKind = 'archived' | 'revoked' | 'legacy';
 export type HistoryItem =
   | { readonly kind: 'record'; readonly value: ReliableOutboxRecord }
@@ -307,13 +315,14 @@ export class OutboxRepository {
       });
       repository.captureStoreId();
       for (const [table, max] of [
-        ['capture_intervals', MAX_CAPTURE_INTERVALS],
         ['capture_unknown', MAX_CAPTURE_UNKNOWN_SOURCES],
         ['capture_receipts', MAX_CAPTURE_RECEIPTS],
       ] as const) {
         const count = (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
         if (count > max) throw new Error('capture_store_capacity_exhausted');
       }
+      if (repository.activeCaptureCount() > MAX_CAPTURE_INTERVALS)
+        throw new Error('capture_store_capacity_exhausted');
       return repository;
     } catch (error) {
       db.close();
@@ -351,7 +360,7 @@ export class OutboxRepository {
     }
   }
 
-  commit<T>(value: OutboxCommit, view: () => T): T {
+  commit<T>(value: OutboxCommit, activeJson: string, view: () => T): T {
     return this.transaction(() => {
       if (value.boundaryCapture && this.boundaryCaptureReceipt(value.boundaryCapture))
         throw new Error('boundary_capture_already_committed');
@@ -387,7 +396,7 @@ export class OutboxRepository {
             value.active.commit!.sha256,
           );
       }
-      this.write(value);
+      this.write(value, activeJson);
       for (const history of value.history ?? []) {
         if (history.disposition !== 'archived' || !history.source) continue;
         const interval = this.captureIntervalForSource(history.source);
@@ -510,26 +519,34 @@ export class OutboxRepository {
     });
   }
 
+  private activeCaptureCount() {
+    return (
+      this.db
+        .prepare(`SELECT count(*) AS n FROM capture_intervals i WHERE NOT (${archivedCapture})`)
+        .get() as { n: number }
+    ).n;
+  }
+
   captureCapacity() {
-    return Object.fromEntries(
-      (
-        [
-          ['intervals', 'capture_intervals', MAX_CAPTURE_INTERVALS],
-          ['unknownSources', 'capture_unknown', MAX_CAPTURE_UNKNOWN_SOURCES],
-          ['receipts', 'capture_receipts', MAX_CAPTURE_RECEIPTS],
-        ] as const
-      ).map(([key, table, limit]) => {
-        const { n: used } = this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {
-          n: number;
-        };
-        return [key, { used, limit, nearLimit: used >= limit * 0.9 }];
-      }),
-    );
+    const capacity = (used: number, limit: number) => ({
+      used,
+      limit,
+      nearLimit: used >= limit * 0.9,
+    });
+    const count = (table: 'capture_unknown' | 'capture_receipts') =>
+      (this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+    return {
+      intervals: capacity(this.activeCaptureCount(), MAX_CAPTURE_INTERVALS),
+      unknownSources: capacity(count('capture_unknown'), MAX_CAPTURE_UNKNOWN_SOURCES),
+      receipts: capacity(count('capture_receipts'), MAX_CAPTURE_RECEIPTS),
+    };
   }
 
   captureIndex() {
     const intervals = (
-      this.db.prepare('SELECT payload FROM capture_intervals').all() as { payload: string }[]
+      this.db
+        .prepare(`SELECT payload FROM capture_intervals i WHERE NOT (${archivedCapture})`)
+        .all() as { payload: string }[]
     ).map((row) => this.parseInterval(row.payload));
     const unknown = this.db.prepare('SELECT source, reason FROM capture_unknown').all() as {
       source: string;
@@ -542,10 +559,16 @@ export class OutboxRepository {
         source: parseSource(JSON.parse(source)),
         reason: parseCaptureUnknownReason(reason),
       })),
-      archived: intervals
-        .filter((interval) => this.sourceDisposition(interval.source).includes('archived'))
-        .map((interval) => sourceKey(interval.source)),
     };
+  }
+
+  archivedInterval(source: ExactSource): CaptureInterval | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT payload FROM capture_intervals i WHERE i.source_key=? AND (${archivedCapture})`,
+      )
+      .get(sourceKey(source)) as { payload: string } | undefined;
+    return row ? this.parseInterval(row.payload) : undefined;
   }
 
   captureReceipt(ticket: CaptureTicket): string | undefined {
@@ -639,10 +662,8 @@ export class OutboxRepository {
 
   createCaptureInterval(interval: CaptureInterval): void {
     this.transaction(() => {
-      const count = (
-        this.db.prepare('SELECT count(*) AS n FROM capture_intervals').get() as { n: number }
-      ).n;
-      if (count >= MAX_CAPTURE_INTERVALS) throw new Error('capture_interval_capacity_exhausted');
+      if (this.activeCaptureCount() >= MAX_CAPTURE_INTERVALS)
+        throw new Error('capture_interval_capacity_exhausted');
       if (
         this.captureInterval(interval.reference.id) ||
         this.captureIntervalForSource(interval.source)
@@ -678,14 +699,13 @@ export class OutboxRepository {
     });
   }
 
-  private write(value: OutboxCommit): void {
-    const activeBytes = JSON.stringify(value.active);
-    parseOutbox(Buffer.from(activeBytes));
+  private write(value: OutboxCommit, activeJson = JSON.stringify(value.active)): void {
+    parseOutbox(Buffer.from(activeJson));
     this.db
       .prepare(
-        "INSERT INTO metadata VALUES ('active', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO metadata VALUES ('active', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE metadata.value<>excluded.value",
       )
-      .run(activeBytes);
+      .run(activeJson);
     const sourceInsert = this.db.prepare(
       'INSERT INTO sources VALUES (?, ?, ?, ?) ON CONFLICT(source_key, disposition) DO UPDATE SET payload=excluded.payload',
     );

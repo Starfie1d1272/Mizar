@@ -14,6 +14,7 @@ export class OutboxWorkerClient {
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      startedAt: number;
     }
   >();
   private nextId = 0;
@@ -21,6 +22,7 @@ export class OutboxWorkerClient {
   private termination: Promise<number> | undefined;
   private closed = false;
   private timing = { count: 0, totalMs: 0, maxMs: 0 };
+  private roundTrip = { count: 0, totalMs: 0, maxMs: 0 };
 
   constructor(
     filePath: string,
@@ -40,6 +42,10 @@ export class OutboxWorkerClient {
       if (!request) return;
       this.pending.delete(reply.id);
       clearTimeout(request.timer);
+      const elapsed = performance.now() - request.startedAt;
+      this.roundTrip.count++;
+      this.roundTrip.totalMs += elapsed;
+      this.roundTrip.maxMs = Math.max(this.roundTrip.maxMs, elapsed);
       this.timing.count += reply.timing.count;
       this.timing.totalMs += reply.timing.totalMs;
       this.timing.maxMs = Math.max(this.timing.maxMs, reply.timing.maxMs);
@@ -72,10 +78,12 @@ export class OutboxWorkerClient {
       : 'outbox_worker_failed';
   }
 
-  takeTransactionTiming() {
-    const timing = this.timing;
+  takeTiming() {
+    const sqlite = this.timing;
+    const roundTrip = this.roundTrip;
     this.timing = { count: 0, totalMs: 0, maxMs: 0 };
-    return timing;
+    this.roundTrip = { count: 0, totalMs: 0, maxMs: 0 };
+    return { sqlite, roundTrip };
   }
 
   request<K extends keyof OutboxOperations>(
@@ -91,7 +99,7 @@ export class OutboxWorkerClient {
         () => this.fail(new Error(`outbox_worker_reply_timeout:${operation}`)),
         operation === 'load' ? LOAD_DEADLINE_MS : REPLY_DEADLINE_MS,
       );
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, startedAt: performance.now() });
       try {
         this.worker.postMessage({ id, operation, args } as OutboxRequest);
       } catch (error) {

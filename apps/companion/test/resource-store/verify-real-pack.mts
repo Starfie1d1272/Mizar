@@ -155,7 +155,7 @@ try {
       rejection,
       wallMs: performance.now() - started,
       limitation:
-        'Online unsigned-install negative only; authenticated publication positive requires formal signing. Offline receipt cryptography is covered by app-integration.test.ts.',
+        'Online unsigned-install negative only; authenticated publication positive requires formal signing. Offline receipt and authenticated publication require the original signed release.',
     }),
   );
 } finally {
