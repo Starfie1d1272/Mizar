@@ -1907,6 +1907,7 @@ export class MusicDirector {
     const previewOwned = this.preview.busy;
     this.preview.cancel('shutdown');
     this.commandRevision++;
+    this.resumeLayers.clear();
     this.closed = true;
     this.invalidate();
     this.operationFailures.clear();
@@ -1941,6 +1942,14 @@ export class MusicDirector {
         } while (this.preview.busy && current());
         guard();
         if (this.isExternalHold()) return;
+        // Closing is also a control boundary: the last poll may predate an OBS edit.
+        try {
+          if (await this.observeManualControls(obs, current, previewOwned)) return;
+        } catch (error) {
+          // The observer sets the in-memory hold before persisting it.
+          if (this.isExternalHold()) localWriteFailure = error;
+          throw error;
+        }
         for (const layer of ['bgm', 'stinger'] as const) {
           const playback = this.store.state[layer];
           if (
@@ -1952,7 +1961,40 @@ export class MusicDirector {
           const name = await findMusicInput(obs, this.store, layer, current);
           if (!name) continue;
           const inputUuid = this.store.state.sources[layer]!;
-          const media = await obs.call('GetMediaInputStatus', { inputUuid });
+          const args = { inputUuid };
+          const [media, mute, volume, settings, path] = await Promise.all([
+            obs.call('GetMediaInputStatus', args),
+            obs.call('GetInputMute', args),
+            obs.call('GetInputVolume', args),
+            obs.call('GetInputSettings', args),
+            this.store.trackPath(playback.track.id),
+          ]);
+          guard();
+          if (
+            this.manualControlObserved(
+              layer,
+              media.mediaState,
+              mute.inputMuted,
+              volume.inputVolumeMul,
+            ) ||
+            (path && (settings.inputSettings as Record<string, unknown>)?.local_file !== path)
+          ) {
+            try {
+              await this.holdForObsControl();
+            } catch (error) {
+              localWriteFailure = error;
+              throw error;
+            }
+            return;
+          }
+          if (
+            !path ||
+            observedPlayback(media.mediaState) === 'unknown' ||
+            typeof mute.inputMuted !== 'boolean' ||
+            typeof volume.inputVolumeMul !== 'number' ||
+            !Number.isFinite(volume.inputVolumeMul)
+          )
+            throw new Error('music_close_media_unconfirmed');
           await this.stopMedia(obs, layer, inputUuid, current);
           try {
             await this.store.update((s) => {
