@@ -3,6 +3,7 @@ use crate::{
     cs2_activity, demo_test, managed_cs2, observer_workspace, startup_log::DesktopLog,
     workspace_presentation,
 };
+use crate::desktop_lifecycle::{WorkspaceExitStage, WorkspaceExitStatus};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -85,11 +86,15 @@ impl ExitGate {
 }
 
 /// UI feedback only; production and restoration facts remain with their owners.
-#[derive(Clone, Default)]
-pub struct WorkspaceExitStatus {
-    pub busy: bool,
-    pub stage: String,
-    pub message: Option<String>,
+impl Default for WorkspaceExitStatus {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            stage: WorkspaceExitStage::Idle,
+            message: None,
+            window_message: None,
+        }
+    }
 }
 #[derive(Default)]
 pub struct WorkspaceExit(std::sync::Mutex<WorkspaceExitStatus>);
@@ -97,11 +102,12 @@ impl WorkspaceExit {
     pub fn status(&self) -> WorkspaceExitStatus {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
-    pub fn stage(&self, stage: &str) {
+    pub fn stage(&self, stage: WorkspaceExitStage) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = WorkspaceExitStatus {
             busy: true,
-            stage: stage.into(),
+            stage,
             message: None,
+            window_message: None,
         };
     }
     pub fn complete(&self, result: &Result<(), String>) {
@@ -109,7 +115,7 @@ impl WorkspaceExit {
         state.busy = false;
         state.message = result.as_ref().err().cloned();
         if result.is_ok() {
-            state.stage.clear();
+            state.stage = WorkspaceExitStage::Idle;
         }
     }
 }
@@ -792,7 +798,7 @@ pub(crate) async fn finish_workspace(
     }
     let _gate = crate::production_exit::WorkspaceExitGuard(&gate);
     let feedback = app.state::<crate::production_exit::WorkspaceExit>();
-    feedback.stage("checking");
+    feedback.stage(WorkspaceExitStage::Checking);
     command_log.with_task(native_task_id.as_deref(), native_operation_id.as_deref(), native_trigger.as_deref(), || app.state::<DesktopLog>().event("workspace_exit", "begin", Some(&serde_json::json!({"phase":"checking", "confirmSteamCancelled":confirm_steam_cancelled}).to_string())));
     // Keep a visible waiting record if a native lock, process or presentation call stalls.
     let (waiting_done, waiting) = std::sync::mpsc::channel::<()>();
@@ -834,20 +840,20 @@ pub(crate) async fn finish_workspace(
                 Some(&format!("phase=workspace_recovery_window; cause={error}")),
             );
         }
-        feedback.stage("restoration");
+        feedback.stage(WorkspaceExitStage::Restoration);
         let game = crate::production_exit::restore_then_cleanup(
         || log.step("workspace_exit_observer", || observer_workspace::finish_locked(&log)),
         || -> Result<(), String> {
         // Host-owned recovery evidence determines local work even when Companion is offline.
         if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {
-            feedback.stage("restoration");
+            feedback.stage(WorkspaceExitStage::Restoration);
             let _activity = activity.begin(2);
             if confirm_steam_cancelled == Some(true) {
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
             log.step("workspace_exit_game_finish", || cs2.finish())?;
         } else {
-            feedback.stage("restoration");
+            feedback.stage(WorkspaceExitStage::Restoration);
             let _activity = activity.begin(2);
             crate::production_exit::finish_managed_game(&log, |requires_proof| {
                 if confirm_steam_cancelled == Some(true) {
@@ -864,7 +870,7 @@ pub(crate) async fn finish_workspace(
         });
         workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
         drop(cs2);
-        feedback.stage("presentation");
+        feedback.stage(WorkspaceExitStage::Presentation);
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
         let presentation = log.step("workspace_exit_presentation", || workspace_presentation::present_production_inner_checked(&host, false, None, None));
@@ -893,7 +899,7 @@ pub(crate) async fn finish_workspace(
             "failure",
             Some(&format!(
                 "phase=workspace_{}; cause={error}",
-                feedback.status().stage
+                feedback.status().stage.name()
             )),
         );
     }

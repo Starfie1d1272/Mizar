@@ -10,7 +10,7 @@
 | 公开快照与可靠事件 | [output.ts](../../packages/protocol/src/output.ts) |
 | 本地通道版本与消息 | [version.ts](../../packages/protocol/src/version.ts)、[协议包](../../packages/protocol/src/) |
 | 制作、场景与展示 | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts)、[跨语言生命周期](../../apps/companion/src/match-context/lifecycle-contract.json) |
-| 桌面生命周期 IPC | [Rust 命令注册与窗口权限](../../apps/desktop/src-tauri/ipc_commands.rs)、[关键命令参数与回执](../../packages/protocol/src/desktop-lifecycle.ts) |
+| 桌面生命周期 IPC | [关键命令、窗口权限和参数与回执](../../apps/desktop/src-tauri/ipc_lifecycle_contract.rs)、[前端校验入口](../../packages/protocol/src/desktop-lifecycle.ts) |
 | RivalHub 输入 | [来源适配器](../../packages/rivalhub/src/) |
 | HUD 与播出模块 | [hud-config](../../packages/hud-config/src/index.ts)、[broadcast-config](../../packages/broadcast-config/README.md) |
 | 音乐、混音与运镜 | [music.ts](../../packages/protocol/src/music.ts)、[mixer.ts](../../packages/protocol/src/mixer.ts)、[orchestration.ts](../../packages/protocol/src/orchestration.ts) |

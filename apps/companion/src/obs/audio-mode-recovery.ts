@@ -1,5 +1,6 @@
 import type { ObsAudioRole } from '@mizar/protocol/obs';
 import type { MusicAudioRecovery } from '../music/device.js';
+import { readMonitorOriginals } from '../music/monitor-journal.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRouting } from './audio-routing.js';
 import type { RemoteCommentary } from './remote-commentary.js';
@@ -83,7 +84,10 @@ export async function recoverAudioModeTransaction(
     const relationship = transition.targetDesktop
       ? await desktopMonitorRelationship(obs, transition.targetDesktop.inputUuid)
       : 'independent';
-    if (!commentaryReady || !music.monitorPlanCompatible(relationship, transition.musicAfter)) {
+    if (
+      !commentaryReady ||
+      !music.monitorPlanCompatible(relationship, readMonitorOriginals(transition.musicAfter))
+    ) {
       await migration.recover(obs, endpoint, observer, true);
     } else {
       if (
@@ -110,7 +114,11 @@ export async function recoverAudioModeTransaction(
     if (event.type !== 'programChanged' || !event.managed) changed = true;
   });
   try {
-    await music.commitDesktopMonitorOriginals(transition.musicBefore, transition.musicAfter, side);
+    await music.commitDesktopMonitorOriginals(
+      readMonitorOriginals(transition.musicBefore),
+      readMonitorOriginals(transition.musicAfter),
+      side,
+    );
     if (
       pending &&
       (await migration.inspectMode(obs, endpoint, observer, transition.id)) !==

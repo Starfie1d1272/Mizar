@@ -104,16 +104,11 @@ pnpm architecture:check
 
 **常规 CI 不运行真实安装、同版更新、取消或回滚生命周期。** `verify-update-recovery.mjs` 是显式 Windows 受控验证，不在常规 CI 中。编译、脚本桩和门禁成功均不能代替安装验收或实机音画。
 
-## 可靠输出性能
+## 桌面 IPC 与可靠输出
 
-`runtime_performance_window` 分别记录 Outbox 快照准备、SQLite 写事务及本进程事件循环延迟。诊断使用 20 ms 采样间隔，观察到的延迟包含其他主线程工作；结合写事务及 GSI 接收间隔判断原因。
+修改[桌面 IPC 声明](../../apps/desktop/src-tauri/ipc_lifecycle_contract.rs)后，从 `apps/desktop/src-tauri` 编译并运行 `ipc_generate.rs`，命令为 `rustc --edition=2021 ipc_generate.rs -o <临时可执行文件路径>`。Windows 构建核对生成的命令名和生命周期校验。
 
-```sh
-pnpm --filter @mizar/companion... --fail-if-no-match run build
-node apps/companion/bench/outbox.mjs
-```
-
-基准使用临时 SQLite 和接近容量上限的合成记录，分别测量本机磁盘和人为停顿的提交，并重开数据库核对记录。人为停顿用于定位同步阻塞；实际制作机的磁盘耗时和接收延迟以现场诊断为准。
+`runtime_performance_window` 分别记录 Outbox worker 的快照准备、SQLite 写事务以及 Companion 主线程的事件循环延迟。主线程诊断使用 20 ms 采样间隔，实际制作机的接收间隔以现场诊断为准。
 
 ## 样例、重放与来源
 

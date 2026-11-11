@@ -1,4 +1,5 @@
 //! The desktop owns preparation independently of any webview lifetime.
+use crate::desktop_lifecycle::{PreparationStatus, PreparationSteps};
 use crate::host_state::HostState;
 use crate::{
     entry_intent::EntryIntent, preparation_evidence, preparation_gate, production_exit,
@@ -1153,25 +1154,21 @@ pub(crate) fn waiting_for_game() -> Result<bool, String> {
         task.entered() && task.running && !task.game && !task.cancelled() && !task.retire_requested
     }))
 }
-pub(crate) fn status() -> Result<Value, String> {
-    Ok(snapshot()?
-        .map(|task| {
-            json!({
-                "id": task.id,
-                "running": task.running,
-                "cancelled": task.cancelled(),
-                "entered": task.entered(),
-                "message": task.message,
-                "steps": {
-                    "obs": task.obs,
-                    "gameConfiguration": task.gsi,
-                    "game": task.game,
-                    "capture": task.capture,
-                    "camera": task.camera
-                }
-            })
-        })
-        .unwrap_or(Value::Null))
+pub(crate) fn status() -> Result<Option<PreparationStatus>, String> {
+    Ok(snapshot()?.map(|task| PreparationStatus {
+        cancelled: task.cancelled(),
+        entered: task.entered(),
+        id: task.id,
+        running: task.running,
+        message: task.message,
+        steps: PreparationSteps {
+            obs: task.obs,
+            game_configuration: task.gsi,
+            game: task.game,
+            capture: task.capture,
+            camera: task.camera,
+        },
+    }))
 }
 fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;

@@ -1,29 +1,12 @@
 use serde_json::{json, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Quality {
-    VeryHigh,
-    High,
-    Medium,
-    Preserve,
-}
+use crate::desktop_lifecycle::FrameRateLimit;
+pub use crate::desktop_lifecycle::QualityPreset as Quality;
+
 impl Quality {
     pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "very-high" => Ok(Self::VeryHigh),
-            "high" => Ok(Self::High),
-            "medium" => Ok(Self::Medium),
-            "preserve" => Ok(Self::Preserve),
-            _ => Err("CS2 画质选项无效。".into()),
-        }
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::VeryHigh => "very-high",
-            Self::High => "high",
-            Self::Medium => "medium",
-            Self::Preserve => "preserve",
-        }
+        let input = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value);
+        serde::Deserialize::deserialize(input).map_err(|_| "CS2 画质选项无效。".into())
     }
 }
 
@@ -44,7 +27,7 @@ impl Default for Preferences {
 }
 impl Preferences {
     pub fn new(quality: &str, frame_rate_limit: u16) -> Result<Self, String> {
-        if ![0, 30, 60].contains(&frame_rate_limit) {
+        if FrameRateLimit::try_from(frame_rate_limit).is_err() {
             return Err("CS2 帧率仅支持 60、30 或不限帧。".into());
         }
         Ok(Self {
