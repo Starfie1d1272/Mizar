@@ -14,6 +14,7 @@
   [string]$ParentReceiptPath,
   [string]$InstallationOwner,
   [string]$ExpectedBootstrap,
+  [long]$BootstrapLease = 0,
   [switch]$ProbeWriter
 )
 $ErrorActionPreference = 'Stop'
@@ -74,6 +75,38 @@ public static class MizarUpdateFiles {
     var expanded=new System.Text.StringBuilder(32768);
     uint length=GetLongPathNameW(path,expanded,(uint)expanded.Capacity);
     return length>0 && length<expanded.Capacity ? expanded.ToString() : path;
+  }
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] static extern bool DuplicateHandle(IntPtr from, IntPtr source, IntPtr to, out IntPtr duplicate, uint access, bool inherit, uint options);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)] static extern uint GetFinalPathNameByHandleW(IntPtr handle, System.Text.StringBuilder path, uint size, uint flags);
+  static IntPtr Duplicate(int from, IntPtr source, int to) {
+    IntPtr parent=OpenProcess(0x40,false,from), child=OpenProcess(0x40,false,to), copied;
+    try {
+      if(parent==IntPtr.Zero || child==IntPtr.Zero || !DuplicateHandle(parent,source,child,out copied,0,false,2)) throw new IOException("update_handoff_lease_unknown",new System.ComponentModel.Win32Exception());
+      return copied;
+    } finally { if(parent!=IntPtr.Zero) CloseHandle(parent); if(child!=IntPtr.Zero) CloseHandle(child); }
+  }
+  public static FileStream BorrowLease(int parent, long handle, string path) {
+    var safe=new Microsoft.Win32.SafeHandles.SafeFileHandle(Duplicate(parent,new IntPtr(handle),System.Diagnostics.Process.GetCurrentProcess().Id),true);
+    FileStream lease=null;
+    try {
+      var final=new System.Text.StringBuilder(32768);
+      uint count=GetFinalPathNameByHandleW(safe.DangerousGetHandle(),final,(uint)final.Capacity,0);
+      string name=final.ToString();
+      if(name.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase)) name=@"\\"+name.Substring(8);
+      else if(name.StartsWith(@"\\?\",StringComparison.OrdinalIgnoreCase)) name=name.Substring(4);
+      if(count==0 || count>=final.Capacity || !String.Equals(LongPath(Path.GetFullPath(path)),name,StringComparison.OrdinalIgnoreCase)) throw new IOException("update_handoff_lease_unknown");
+      lease=new FileStream(safe,FileAccess.ReadWrite);
+      bool exclusive=false;
+      try { using(var probe=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) { } }
+      catch(IOException error) { int code=error.HResult&65535; if(code==32 || code==33) exclusive=true; else throw; }
+      if(!exclusive) throw new IOException("update_handoff_lease_unknown");
+      return lease;
+    } catch { if(lease!=null) lease.Dispose(); else safe.Dispose(); throw; }
+  }
+  public static long RetainLease(FileStream lease, int caller) {
+    return Duplicate(System.Diagnostics.Process.GetCurrentProcess().Id,lease.SafeFileHandle.DangerousGetHandle(),caller).ToInt64();
   }
   public static string[] Arguments(string command) {
     int count; IntPtr memory=CommandLineToArgvW(command,out count);
@@ -375,13 +408,40 @@ function Handoff-Caller([string]$target, [int]$processId, [string]$parentReceipt
     # actual named mutex owner; a stale receipt or /MIZARUPDATE is insufficient.
     $caller = $setup
   }
+  $leaseParent = if ($parentReceipt) { @{ process = $setup; handle = $receipt.leaseHandle } } else { $null }
   $owner = [MizarUpdateFiles]::WriterOwnerPid()
-  if ($owner -eq 0) { return @{ needsWriter = $true; caller = $caller } }
-  if ($owner -eq $caller.process.Id) { return @{ needsWriter = $false; caller = $caller } }
+  if ($owner -eq 0) { return @{ needsWriter = $true; caller = $caller; leaseParent = $leaseParent } }
+  if ($owner -eq $caller.process.Id) { return @{ needsWriter = $false; caller = $caller; leaseParent = $leaseParent } }
   if ($owner -ne $caller.snapshot.ParentProcessId) { throw 'update_transaction_busy' }
   $context = Handoff-UpdateParent $caller $target
-  $context.needsWriter = $false; $context.caller = $caller
+  $context.needsWriter = $false; $context.caller = $caller; $context.leaseParent = $leaseParent
   return $context
+}
+function Handoff-LeasePath {
+  $cache = Join-Path (Join-Path $env:LOCALAPPDATA 'Mizar') 'bootstrap-cache'
+  Assert-PlainPath $cache
+  [IO.Directory]::CreateDirectory($cache) | Out-Null
+  $path = Join-Path $cache 'fresh-install.lock'; Assert-PlainPath $path
+  return $path
+}
+function Handoff-BootstrapParent($child, [string]$target, [string]$stage, [string]$token = '') {
+  $parent = Handoff-Process $child.snapshot.ParentProcessId
+  $pending = Read-HandoffJson ((Handoff-LeasePath) -replace 'fresh-install.lock$', 'fresh-install.pending') -SharedSnapshot
+  if ($parent.started -gt $child.started -or $pending.schemaVersion -ne 'mizar.bootstrap-pending.v1' -or
+    $pending.ownerPid -ne $parent.process.Id -or $pending.ownerStarted -ne $parent.started -or
+    $pending.bootstrapSha256 -ne [MizarUpdateFiles]::Hash($parent.snapshot.ExecutablePath) -or
+    (Handoff-Path $pending.target) -ne $target -or ($stage -and (Handoff-Path $pending.updateStage) -ne $stage) -or
+    ($token -and $pending.token -ne $token)) { throw 'update_handoff_bootstrap_owner_changed' }
+  return $parent
+}
+function Open-HandoffLease($parent = $null, [long]$handle = 0) {
+  $path = Handoff-LeasePath
+  if ($handle -ne 0) {
+    if (!$parent) { throw 'update_handoff_lease_unknown' }
+    return [MizarUpdateFiles]::BorrowLease($parent.process.Id, $handle, $path)
+  }
+  try { return [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+  catch { throw [IO.IOException]::new('update_handoff_bootstrap_active', $_.Exception) }
 }
 function Assert-HandoffProcessEnded($processId, $started) {
   if ($processId -isnot [int] -or $processId -le 0 -or $started -isnot [long] -or $started -le 0) { throw 'update_handoff_process_unknown' }
@@ -407,9 +467,13 @@ function Publish-HandoffRefusal([string]$path, [string]$text) {
 }
 function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentStage = '', $context = $null) {
   $target = Handoff-Path $target; $state = Handoff-Path $state
-  if (!$context -and [MizarUpdateFiles]::WriterOwnerPid() -ne $PID) { throw 'update_handoff_writer_unknown' }
+  if ((!$context -or !$context.caller) -and [MizarUpdateFiles]::WriterOwnerPid() -ne $PID) { throw 'update_handoff_writer_unknown' }
   if ($context -and $context.stage) { $currentStage = $context.stage; $state = $context.state }
   if ($state -eq $target -or $state.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
+  $lease = $null
+  $locks = [Collections.Generic.List[IDisposable]]::new()
+  try {
+  if (!$context -or !$context.lease) { $lease = Open-HandoffLease }
   $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   [void]$roots.Add($state)
   [void]$roots.Add((Join-Path $env:LOCALAPPDATA 'Mizar'))
@@ -461,18 +525,6 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
       $candidates += @{ cmdHash = $cmdHash; stage = $directory.FullName; source = $source; archive = $archive; archived = $archived; hash = $hash; cmd = $cmd; plan = $binding }
     }
   }
-  # No dormant execution capability is being retired. In particular a current
-  # legacy bootstrap may retain its own lease and its one authenticated stage.
-  if (!$candidates.Count) { return $state }
-  $lease = $null
-  $locks = [Collections.Generic.List[IDisposable]]::new()
-  try {
-    $cache = Join-Path (Join-Path $env:LOCALAPPDATA 'Mizar') 'bootstrap-cache'
-    Assert-PlainPath $cache
-    [IO.Directory]::CreateDirectory($cache) | Out-Null
-    $leasePath = Join-Path $cache 'fresh-install.lock'; Assert-PlainPath $leasePath
-    try { $lease = [IO.File]::Open($leasePath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
-    catch { throw [IO.IOException]::new('update_handoff_bootstrap_active', $_.Exception) }
     # Exclude late standard loads before observing any already loaded processes.
     foreach ($candidate in $candidates) {
       if (!$candidate.archived) {
@@ -496,6 +548,17 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
         if ($owner.ReturnValue -ne 0 -or $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { throw 'update_handoff_process_unknown' }
         continue
       }
+      # A crashed bootstrap may leave Prepare running before plan.json exists.
+      # Its standard script path still identifies the loaded legacy source.
+      $arguments = @(Handoff-Arguments $snapshot)
+      foreach ($argument in $arguments) {
+        if ($argument -notmatch '(?i)\.ps1$' -or ![IO.Path]::IsPathRooted($argument) -or !(Test-Path -LiteralPath $argument -PathType Leaf)) { continue }
+        if (!(Test-LegacyHelperHash ([MizarUpdateFiles]::Hash($argument)))) { continue }
+        $runningStage = Handoff-Argument $arguments '-StageRoot'
+        if ($currentStage -and $runningStage -and (Handoff-Path $runningStage) -eq $currentStage) { continue }
+        $active = Handoff-Process $snapshot.ProcessId
+        if (!$active.process.HasExited) { throw 'update_handoff_process_active' }
+      }
       # Script parameters accept abbreviations and colon syntax. Retirement is
       # conservative: any mention of a candidate's path is enough to refuse;
       # only parent authorization uses the stricter canonical argument parser.
@@ -517,6 +580,7 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
         if (!$active.process.HasExited) { throw 'update_handoff_process_active' }
       }
     }
+    if (!$candidates.Count) { return $state }
     foreach ($candidate in $candidates) {
       $installer = Join-Path $candidate.stage 'Installer.exe'; Assert-PlainPath $installer
       if (Test-Path -LiteralPath $installer) {
@@ -963,10 +1027,22 @@ if ($Mode -eq 'Handoff') {
         if ((Test-Path -LiteralPath $marker) -and (Get-Content -LiteralPath $marker -Raw) -ne $expected) { throw 'update_handoff_bootstrap_owner_changed' }
       }
     }
+    $leaseParent = $null; $leaseHandle = $BootstrapLease
+    if ($context.leaseParent) { $leaseParent = $context.leaseParent.process; $leaseHandle = $context.leaseParent.handle }
+    elseif ($BootstrapLease -ne 0) {
+      if ($context.helper) { $leaseParent = $context.helper }
+      elseif ($ExpectedBootstrap) { $leaseParent = Handoff-BootstrapParent $context.caller $target '' $ExpectedBootstrap.Substring(10) }
+      else { throw 'update_handoff_lease_unknown' }
+    }
+    $context.lease = Open-HandoffLease $leaseParent $leaseHandle
+    $script:handoffHandles.Add($context.lease)
+    # The NSIS process owns a duplicate until it exits, including its entire
+    # marker/payload window. Parent death cannot release this file object early.
+    $retainedLease = [MizarUpdateFiles]::RetainLease($context.lease, $CallerProcessId)
     $root = Invoke-LegacyHandoff $target $HandoffState '' $context
     if ($ReceiptPath) {
       if ($InstallationOwner -notmatch '^[a-zA-Z0-9{}_-]{1,64}$') { throw 'update_handoff_caller_unknown' }
-      $receipt = @{ schema = 'mizar.handoff.v1'; callerPid = $CallerProcessId; callerStarted = $context.caller.started; callerSha256 = [MizarUpdateFiles]::Hash($context.caller.snapshot.ExecutablePath); target = $target; state = $root; installationOwner = $InstallationOwner }
+      $receipt = @{ schema = 'mizar.handoff.v1'; callerPid = $CallerProcessId; callerStarted = $context.caller.started; callerSha256 = [MizarUpdateFiles]::Hash($context.caller.snapshot.ExecutablePath); target = $target; state = $root; installationOwner = $InstallationOwner; leaseHandle = $retainedLease }
       Publish-HandoffRefusal $ReceiptPath ($receipt | ConvertTo-Json -Compress)
     }
     [Console]::Write($root)
@@ -1038,11 +1114,12 @@ try {
     $ready = [Threading.EventWaitHandle]::OpenExisting($ReadyEvent)
     try { [void]$ready.Set() } finally { $ready.Dispose() }
   }
-if ($Mode -eq 'Install') {
   $script:handoffHandles = [Collections.Generic.List[IDisposable]]::new()
-  try { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot) }
-  finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
-}
+  try {
+    $parent = if ($BootstrapLease -ne 0) { Handoff-BootstrapParent (Handoff-Process $PID) (Handoff-Path $plan.bundleRoot) (Handoff-Path $StageRoot) }
+    $script:bootstrapLease = Open-HandoffLease $parent $BootstrapLease
+    if ($Mode -eq 'Install') { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:bootstrapLease }) }
+  } finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
 # Reject stale recovery before any registration/result write or automatic rollback.
 $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
 if ($Mode -in @('Recover', 'Rollback')) {
@@ -1128,7 +1205,7 @@ try {
     }
   }
   Invoke-UpdatePhase 'nsis-install' {
-    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/MIZAROWNER=' + (Split-Path -Leaf $StageRoot)), ('"/MIZARSTATE=' + $plan.stateRoot + '"'), ('/D=' + $plan.bundleRoot)) -PassThru
+    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/MIZAROWNER=' + (Split-Path -Leaf $StageRoot)), ('/MIZARSTATE="' + $plan.stateRoot + '"'), ('/MIZARLEASE=' + $script:bootstrapLease.SafeFileHandle.DangerousGetHandle().ToInt64()), ('/D=' + $plan.bundleRoot)) -PassThru
     $installer.WaitForExit()
     if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
   }
@@ -1201,6 +1278,7 @@ try {
   if ($null -ne $script:programGate) { $script:programGate.Dispose(); $script:programGate = $null }
   if ($null -ne $desktop) { $desktop.Dispose() }
   if ($null -ne $active) { $active.Dispose() }
+  if ($script:bootstrapLease) { $script:bootstrapLease.Dispose(); $script:bootstrapLease = $null }
   if ($writerOwned) { $writer.ReleaseMutex() }
   $writer.Dispose()
 }

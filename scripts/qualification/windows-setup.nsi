@@ -11,6 +11,7 @@ Var HandoffStateRoot
 Var HandoffParentReceipt
 Var HandoffProcessId
 Var HandoffBootstrapOwner
+Var HandoffLease
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -77,6 +78,8 @@ Function .onInit
   StrCpy $UpdateWriter "0"
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/MIZARLEASE=" $HandoffLease
   ReadRegStr $HandoffStateRoot HKCU "Software\Mizar" "StateRoot"
   ReadEnvStr $1 "MIZAR_STATE_ROOT"
   StrCmp $1 "" +2
@@ -194,8 +197,10 @@ Section "-Mizar" SecMain
   StrCmp $1 "bootstrap-" 0 +2
   StrCpy $HandoffBootstrapOwner $InstallationOwner
   StrCpy $2 ""
+  StrCmp $HandoffLease "" +2
+  StrCpy $2 ' -BootstrapLease $HandoffLease'
   StrCmp $HandoffBootstrapOwner "" +2
-  StrCpy $2 ' -ExpectedBootstrap "$HandoffBootstrapOwner"'
+  StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
   Pop $0
   Pop $1
@@ -240,7 +245,7 @@ Section "-Mizar" SecMain
   keep_bootstrap_owner:
   ; The previous uninstaller only removes its own recorded payload. User data is separate.
   IfFileExists "$INSTDIR\Uninstall.exe" 0 install
-  ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE "/MIZARHANDOFF=$PLUGINSDIR\handoff.json" "/MIZARSTATE=$HandoffStateRoot" _?=$INSTDIR' $0
+  ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE /MIZARHANDOFF="$PLUGINSDIR\handoff.json" /MIZARSTATE="$HandoffStateRoot" _?=$INSTDIR' $0
   StrCmp $0 "0" install
   Abort "旧版本卸载未完成，请正常退出应用后重试。"
   install:
@@ -296,6 +301,8 @@ Function un.onInit
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
   ClearErrors
+  ${GetOptions} $0 "/MIZARLEASE=" $HandoffLease
+  ClearErrors
   ${GetOptions} $0 "/MIZARSTATE=" $1
   IfErrors +2
   StrCpy $HandoffStateRoot $1
@@ -329,8 +336,10 @@ Section "Uninstall"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   StrCpy $2 ""
+  StrCmp $HandoffLease "" +2
+  StrCpy $2 ' -BootstrapLease $HandoffLease'
   StrCmp $HandoffParentReceipt "" +2
-  StrCpy $2 ' -ParentReceiptPath "$HandoffParentReceipt"'
+  StrCpy $2 '$2 -ParentReceiptPath "$HandoffParentReceipt"'
   StrCmp $HandoffBootstrapOwner "" +2
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId$2 -NoStatusWindow'

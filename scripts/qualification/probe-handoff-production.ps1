@@ -36,6 +36,20 @@ foreach($function in $functions) { Invoke-Expression $function.Extent.Text }
 $add=$ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Type'},$true)|Select-Object -First 1
 Invoke-Expression $add.Extent.Text
 $script:handoffHandles=[Collections.Generic.List[IDisposable]]::new()
+# Duplicate the real file object, then let its original process exit normally.
+$leaseProducer=Join-Path $root 'lease-producer.ps1';$leaseRecord=Join-Path $root 'lease-record.json'
+Put $leaseProducer 'param($Path,$Record) $lease=[IO.File]::Open($Path,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); @{pid=$PID;handle=$lease.SafeFileHandle.DangerousGetHandle().ToInt64()}|ConvertTo-Json|Set-Content $Record; Start-Sleep -Seconds 4; $lease.Dispose()'
+$leaseTest=Join-Path $root 'duplicate.lock'
+$producer=Start-Process powershell.exe -ArgumentList ('-NoProfile -NonInteractive -File "'+$leaseProducer+'" "'+$leaseTest+'" "'+$leaseRecord+'"') -PassThru -WindowStyle Hidden
+$watch=[Diagnostics.Stopwatch]::StartNew();while(!(Test-Path -LiteralPath $leaseRecord) -and $watch.ElapsedMilliseconds -lt 10000){Start-Sleep -Milliseconds 50};Assert (Test-Path -LiteralPath $leaseRecord) 'Lease producer did not publish'
+$record=Get-Content $leaseRecord -Raw|ConvertFrom-Json
+$borrowed=[MizarUpdateFiles]::BorrowLease($record.pid,$record.handle,$leaseTest)
+$producer.WaitForExit();$producer.Dispose()
+$blocked=$false;try{$other=[IO.File]::Open($leaseTest,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$other.Dispose()}catch{$blocked=$true}
+Assert $blocked 'Parent exit released the duplicated lease';$borrowed.Dispose()
+$other=[IO.File]::Open($leaseTest,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$other.Dispose()
+Write-Output 'PASS actual lease duplication preserves exclusion after original parent exits and releases with final handle'
+
 function Stage([string]$digit='1') {
   $stage=Join-Path $state ('updates\install-'+($digit*32))
   [IO.Directory]::CreateDirectory($stage)|Out-Null
@@ -66,7 +80,7 @@ try {
   Assert (!$script:registry[$runKey].ContainsKey('!MizarUpdateRecovery')) 'Exact old RunOnce retained'
   Invoke-LegacyHandoff $target $state|Out-Null
   $completedLease=[IO.File]::Open((Join-Path (Split-Path -Parent $pending) 'fresh-install.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-  try { Invoke-LegacyHandoff $target $state|Out-Null } finally { $completedLease.Dispose() }
+  try { Reject { Invoke-LegacyHandoff $target $state } 'update_handoff_bootstrap_active' } finally { $completedLease.Dispose() }
   Write-Output 'PASS production retirement + repeat: original plan/journal/helper/backup preserved, same-location successor unchanged, pending/cmd/RunOnce retired'
   # Resume the exact crash boundary after rename, before refusal publication.
   $interrupted=Stage '2';Move-Item (Join-Path $interrupted 'update-install.ps1') (Join-Path $interrupted 'update-install.ps1.retired')
@@ -111,11 +125,20 @@ $nsisProbe=Join-Path $root 'fixture.nsi'
 $nsisText=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'windows-setup.nsi'))
 $nsisText=$nsisText.Replace('  DetailPrint "$1"', ('  DetailPrint "$1"'+"`r`n"+'  FileOpen $2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $2 "$0: $1$\r$\n"'+"`r`n"+'  FileClose $2'))
 $nsisText=[regex]::Replace($nsisText, '(?m)^  Abort(.*)$', ('  FileOpen $$2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $$2 "abort $$0: $$1$$\r$$\n"'+"`r`n"+'  FileClose $$2'+"`r`n"+'  Abort$1'))
+$barrier=Join-Path $root 'native-gate.signal'
+$nsisText=$nsisText.Replace('  handoff_ready:', ('  handoff_ready:'+"`r`n"+'  FileOpen $2 "'+$barrier+'" w'+"`r`n"+'  FileClose $2'+"`r`n"+'  Sleep 2000'))
 Put $nsisProbe $nsisText
 & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$payload" "/DOUTPUT=$installer" /DVERSION=1.2.0 "/DICON=$PSScriptRoot/../../apps/desktop/src-tauri/icons/icon.ico" "/DREMOVE_FILES=$remove" $nsisProbe
 Assert ($LASTEXITCODE -eq 0) 'NSIS compilation failed'
 function Run-Setup {
-  $p=Start-Process $installer -ArgumentList @('/S',('"/MIZARSTATE='+$state+'"'),('/D='+$target)) -PassThru
+  if(Test-Path -LiteralPath $barrier){Remove-Item -LiteralPath $barrier}
+  $p=Start-Process $installer -ArgumentList @('/S',('/MIZARSTATE="'+$state+'"'),('/D='+$target)) -PassThru
+  $wait=[Diagnostics.Stopwatch]::StartNew()
+  while(!(Test-Path -LiteralPath $barrier) -and !$p.HasExited -and $wait.ElapsedMilliseconds -lt 30000){Start-Sleep -Milliseconds 50}
+  if(Test-Path -LiteralPath $barrier){
+    $blocked=$false;try{$other=[IO.File]::Open((Handoff-LeasePath),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$other.Dispose()}catch{$blocked=$true}
+    Assert $blocked 'Independent NSIS released bootstrap exclusion before payload mutation'
+  }
   Assert ($p.WaitForExit(60000)) 'NSIS fixture exceeded its bounded wait; do not kill it'
   if($p.ExitCode -ne 0) { $native=Join-Path $root 'nsis-error.log'; if(Test-Path -LiteralPath $native){Get-Content -LiteralPath $native|Write-Output}; $log=Join-Path $state 'updates/handoff-last.log'; if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log|Write-Output} }
   Assert ($p.ExitCode -eq 0) ('NSIS fixture failed '+$p.ExitCode);$p.Dispose(); Write-Output 'PASS one actual Setup invocation'
