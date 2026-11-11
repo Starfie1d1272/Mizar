@@ -503,7 +503,7 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
     foreach ($directory in (Get-ChildItem -LiteralPath $updates -Directory -Force)) {
       if ($directory.Name -notmatch '^install-[a-f0-9]{32}$' -or $directory.FullName -eq $currentStage) { continue }
       $planPath = Join-Path $directory.FullName 'plan.json'
-      if (!(Test-Path -LiteralPath $planPath -PathType Leaf)) { continue }
+      if (!(Test-Path -LiteralPath $planPath -PathType Leaf)) { throw 'update_handoff_record_incomplete' }
       $binding = Read-HandoffJson $planPath
       if ((Handoff-Path $binding.bundleRoot) -ne $target) { continue }
       $binding = Handoff-Plan $directory.FullName $target (Handoff-Path $root)

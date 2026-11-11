@@ -201,6 +201,9 @@ try {
   Assert (Test-Path -LiteralPath (Join-Path $extra 'update-install.ps1.retired')) 'Independent uninstall did not retire legacy stage'
   Assert (Test-Path -LiteralPath (Join-Path $extra 'previous/sentinel')) 'Independent uninstall deleted recovery backup'
   Write-Output 'PASS actual independent uninstall retires legacy execution first and preserves recovery backup'
+} catch {
+  foreach($diagnostic in @((Join-Path $root 'nsis-error.log'),(Join-Path $state 'updates/handoff-last.log'))){if(Test-Path -LiteralPath $diagnostic){Get-Content -LiteralPath $diagnostic|Write-Output}}
+  throw
 } finally {
   $env:LOCALAPPDATA=$oldLocal
   # CI runner and isolated temp directory remain available in logs on failure.
