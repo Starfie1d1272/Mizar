@@ -244,10 +244,6 @@ export function workspacePackageName(specifier, workspaces = workspacePaths) {
   return workspaces.has(name) ? name : undefined;
 }
 
-export function isWorkspacePackageSpecifier(specifier) {
-  return Boolean(workspacePackageName(specifier));
-}
-
 export function isNodeBuiltin(specifier) {
   const normalized = specifier.replaceAll('\\', '/');
   const withoutProtocol = normalized.startsWith('node:')

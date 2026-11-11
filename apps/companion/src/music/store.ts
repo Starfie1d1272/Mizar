@@ -12,6 +12,7 @@ import {
 } from '@mizar/protocol/music';
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
 import { audioBytes, readMusicPack } from './archive.js';
+import { preserveDamagedTrack } from './asset-repair.js';
 
 const playbackSchema = z
   .object({
@@ -36,6 +37,26 @@ const stateSchema = z
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
+    previewMonitorLeases: z
+      .array(
+        z
+          .object({
+            uuid: z.string().min(1),
+            scope: z.string().min(1),
+            before: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+              'OBS_MONITORING_TYPE_NONE',
+            ]),
+            applied: z.enum([
+              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+              'OBS_MONITORING_TYPE_MONITOR_ONLY',
+            ]),
+            phase: z.enum(['borrowed', 'restoring']),
+          })
+          .strict(),
+      )
+      .default([]),
     desktopMonitorOriginal: z
       .object({
         bgm: z
@@ -82,8 +103,28 @@ const stateSchema = z
     held: z.boolean(),
     holdReason: z.enum(['external', 'stop']).optional(),
     stingerHeld: z.boolean().optional(),
-    owner: z.string().uuid(),
+    sourceScopes: z
+      .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
+      .strict()
+      .default({ bgm: null, stinger: null }),
     sources: z.object({ bgm: z.string().nullable(), stinger: z.string().nullable() }).strict(),
+    sourceInitialization: z
+      .array(
+        z
+          .object({
+            layer: z.enum(['bgm', 'stinger']),
+            scope: z.string().nullable(),
+            inputUuid: z.string().min(1).nullable(),
+            requestedName: z.string().min(1).optional(),
+            sceneUuid: z.string().min(1),
+            sceneItemId: z.number().int().nullable(),
+            phase: z.enum(['create', 'locate', 'transform', 'enable']),
+            before: z.record(z.string(), z.union([z.number().finite(), z.string()])).nullable(),
+          })
+          .strict(),
+      )
+      .max(128)
+      .default([]),
     bgm: playbackSchema.nullable(),
     stinger: playbackSchema.nullable(),
     pause: z.object({ map: z.string(), id: z.string() }).nullable(),
@@ -91,6 +132,14 @@ const stateSchema = z
   })
   .strict();
 const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
+// Older state.json and runtime.json files carried an unused source-owner UUID.
+const legacyStateSchema = z
+  .object({ owner: z.string().uuid().optional() })
+  .passthrough()
+  .transform((value) => {
+    delete value.owner;
+    return value;
+  });
 export type MusicState = z.infer<typeof stateSchema>;
 export interface MusicConfigPersistence {
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
@@ -127,11 +176,13 @@ export class MusicStore {
     master: 1,
     muted: false,
     monitorPreference: true,
+    previewMonitorLeases: [],
     desktopMonitorOriginal: { bgm: null, stinger: null },
     monitorConfigured: { bgm: null, stinger: null },
     held: false,
-    owner: randomUUID(),
+    sourceScopes: { bgm: null, stinger: null },
     sources: { bgm: null, stinger: null },
+    sourceInitialization: [],
     bgm: null,
     stinger: null,
     pause: null,
@@ -205,7 +256,7 @@ export class MusicStore {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
         throw new Error('music_state_invalid');
       const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
-      this.state = stateSchema.parse(raw);
+      this.state = stateSchema.parse(legacyStateSchema.parse(raw));
       const legacy = z
         .object({
           configRevision: z.unknown().optional(),
@@ -251,7 +302,7 @@ export class MusicStore {
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
       throw new Error('music_state_invalid');
-    return runtimeSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    return runtimeSchema.parse(legacyStateSchema.parse(JSON.parse(await readFile(path, 'utf8'))));
   }
   /** Preserve runtime controls before the unified configuration becomes authoritative. */
   async prepareRuntimeMigration(): Promise<void> {
@@ -384,7 +435,7 @@ export class MusicStore {
     return this.installTrackAsset(name, bytes);
   }
   /** Install a validated package asset without requiring music playback to be initialized. */
-  async installTrackAsset(name: string, bytes: Buffer) {
+  async installTrackAsset(name: string, bytes: Buffer, repair = false) {
     await this.stage('music_validate', { name, bytes: bytes.length }, () => {
       if (!audioBytes(name, bytes)) throw new Error('music_track_invalid');
     });
@@ -394,13 +445,18 @@ export class MusicStore {
     const temporary = join(this.directory, 'tracks', `tmp-${randomUUID()}`);
     await ensureDirectory(join(this.directory, 'tracks'));
     await safePath(join(this.directory, 'tracks'));
+    let unchanged: (() => Promise<void>) | undefined;
     try {
       // OBS may hold the existing media file open on Windows. Reuse it only
       // after the same integrity and path checks used for playback.
       await this.trackPath(id);
       return track;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (!repair || !(error instanceof Error) || error.message !== 'music_track_invalid')
+          throw error;
+        unchanged = await preserveDamagedTrack(this.directory, id);
+      }
     }
     const fd = await this.stage('music_open_track', { name, id, target, temporary }, () =>
       open(temporary, 'wx', 0o600),
@@ -415,6 +471,7 @@ export class MusicStore {
     }
     try {
       await this.stage('music_commit_track', { name, id }, async () => {
+        await unchanged?.();
         try {
           await rename(temporary, target);
         } catch (error) {

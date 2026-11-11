@@ -58,13 +58,21 @@ export type ObsOutputCommand = z.infer<typeof obsOutputCommandSchema>;
 export type ObsOutputKind = ObsOutputCommand['output'];
 export type ObsOutputPhase =
   'unknown' | 'idle' | 'starting' | 'active' | 'stopping' | 'reconnecting' | 'paused';
+export interface ObsOutputResult {
+  readonly action: 'start' | 'stop';
+  readonly state: 'accepted' | 'pending' | 'started' | 'stopped' | 'failed' | 'unknown';
+  readonly code?: string;
+  readonly message?: string;
+}
 export interface ObsOutputStatus {
+  readonly result?: ObsOutputResult;
   readonly phase: ObsOutputPhase;
   readonly active: boolean | null;
   readonly pending: 'start' | 'stop' | null;
   readonly revision: string;
 }
 export interface ObsOutputsStatus {
+  readonly preparation?: 'checking' | 'cleanup_pending' | null;
   readonly stream: ObsOutputStatus;
   readonly record: ObsOutputStatus;
 }
@@ -85,4 +93,13 @@ export interface ObsCaptureDiagnostic {
     readonly code: number | null;
   } | null;
   readonly owner: 'unknown';
+}
+
+/** Independent observations for setup guidance. Unknown is never inferred as stopped. */
+export interface ObsConnectionFacts {
+  readonly executable: 'found' | 'not_found' | 'unknown';
+  readonly process: 'running' | 'stopped' | 'unknown';
+  readonly listener: 'reachable' | 'refused' | 'unknown';
+  readonly authentication: 'accepted' | 'required' | 'rejected' | 'unknown';
+  readonly resources: 'ready' | 'needs_configuration' | 'unknown';
 }

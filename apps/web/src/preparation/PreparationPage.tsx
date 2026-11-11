@@ -6,7 +6,7 @@ import { EventMatchWorkspace } from './EventMatchWorkspace';
 import { HudPresetDirectory } from './HudPresetDirectory';
 import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import './production.css';
-import { AutomaticPreparation } from './AutomaticPreparation';
+import { AutomaticPreparation, usePreparationStatus } from './AutomaticPreparation';
 import { DemoTestPanel } from './DemoTestPanel';
 import { matchRound } from './match-presentation';
 import { ProductionStatus } from '../workspace/ProductionStatus';
@@ -29,17 +29,14 @@ import {
   openTool,
   productionAction,
   retryObsExit,
-  enterProductionManually,
   useLocalRead,
   type Production,
 } from './client';
 import { Settings } from './Settings';
 import { UpdateNotification } from './UpdateNotification';
 import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
-import { SpectatorHudCommands } from './SpectatorHudCommands';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
-import { SpectatorWorkflow } from './SpectatorWorkflow';
 import './preparation.css';
 
 const tabs = {
@@ -54,7 +51,7 @@ const tabs = {
   '/settings': [
     ['gsi', '游戏与观战'],
     ['obs', 'OBS'],
-    ['observer', '观察辅助'],
+    ['observer', '提前提示'],
     ['music', '声音'],
     ['camera', '运镜'],
     ['rivalhub', 'RivalHub'],
@@ -100,8 +97,20 @@ export function PreparationPage() {
       : null,
     5000,
   );
-  const { view, refresh, status: libraryStatus } = useLocalTournament();
-  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
+  const {
+    view,
+    refresh,
+    status: libraryStatus,
+    unavailable: libraryUnavailable,
+    error: libraryError,
+    reload: reloadLibrary,
+    reloading: libraryReloading,
+  } = useLocalTournament();
+  const local =
+    envelope?.source === 'local' ||
+    (envelope?.source === 'cache' && envelope.cachedFrom === 'local');
+  const canWriteLocal =
+    local && libraryStatus === 'ready' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{
@@ -116,16 +125,18 @@ export function PreparationPage() {
   }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [handoffRetrying, setHandoffRetrying] = useState(false);
+  const [handoffError, setHandoffError] = useState('');
   const [obsRetrying, setObsRetrying] = useState(false);
   const [obsRetryMessage, setObsRetryMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
-  const [entering, setEntering] = useState(false);
+  const preparation = usePreparationStatus();
+  const entering = Boolean(preparation?.running && !preparation.entered);
   const [submittingEntry, setSubmittingEntry] = useState(false);
   const [cancellingEntry, setCancellingEntry] = useState(false);
   const [cancelFailed, setCancelFailed] = useState(false);
   const [cancelError, setCancelError] = useState('');
-  const entryGeneration = useRef(0);
   const cancelling = useRef(false);
   const [demoOpen, setDemoOpen] = useState(() =>
     new URLSearchParams(window.location.search).has('demoTest'),
@@ -150,33 +161,6 @@ export function PreparationPage() {
       setBusy(false);
     }
   }
-
-  useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      const generation = entryGeneration.current;
-      try {
-        const status = await desktopInvoke<{ running: boolean; message: string } | null>(
-          'preparation_status',
-        );
-        if (active && generation === entryGeneration.current) {
-          setEntering(status?.running ?? false);
-          if (!status) setCancelFailed(false);
-          if (status && !status.running && status.message) setMessage(status.message);
-        }
-      } catch {
-        /* The desktop may still be starting. */
-      }
-      if (active) timer = setTimeout(() => void poll(), 1000);
-    };
-    void poll();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, []);
 
   useEffect(() => {
     const enter = () => {
@@ -210,20 +194,25 @@ export function PreparationPage() {
     </div>
   );
 
-  const capabilities =
-    useLocalRead<
-      { label: string; ready: boolean; reason: string; href: string; action: string | null }[]
-    >('/local/v1/readiness');
+  const capabilities = useLocalRead<
+    {
+      id: string;
+      label: string;
+      ready: boolean;
+      attention: boolean;
+      reason: string;
+      href: string;
+      action: string | null;
+    }[]
+  >('/local/v1/readiness');
 
-  const problems = (capabilities ?? []).filter((item) => !item.ready && item.action);
-  const pending = (capabilities ?? []).filter((item) => !item.ready && !item.action);
-  const completed = (capabilities ?? []).filter((item) => item.ready);
+  const problems = (capabilities ?? []).filter((item) => item.attention && item.action);
   const settingsTitle: Record<string, string> = {
     gsi: '游戏设置',
     obs: 'OBS 连接',
     music: '声音',
     camera: '运镜',
-    observer: '观察辅助',
+    observer: '提前提示',
     rivalhub: '赛事平台',
     advanced: '高级设置',
   };
@@ -233,6 +222,11 @@ export function PreparationPage() {
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
         <UpdateNotification />
+        {preparation?.message ? (
+          <StatusBanner tone={preparation.running ? 'info' : 'warning'}>
+            {preparation.message}
+          </StatusBanner>
+        ) : null}
         {production?.mode === 'preparation' && production.obsExitState === 'pending' ? (
           <StatusBanner tone="info">正在确认 OBS 等待画面。</StatusBanner>
         ) : null}
@@ -267,12 +261,60 @@ export function PreparationPage() {
         ) : null}
         {production?.mode === 'preparation' &&
         (production.releaseHandoffState === 'pending' ||
-          (production.releaseHandoffState === 'unconfirmed' && !rivalhub?.sourceCleanup) ||
+          production.releaseHandoffState === 'unconfirmed' ||
           (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ||
           (rivalhub?.sourceCleanup?.pending ?? 0) > 0 ||
           (rivalhub?.sourceCleanup?.blocked ?? 0) > 0 ||
           rivalhub?.sourceCleanup?.claimIntent) ? (
-          <StatusBanner tone="warning">网站数据源收尾尚未确认，请查看连接状态。</StatusBanner>
+          <StatusBanner tone="warning">
+            {handoffError || '网站数据源收尾尚未确认，请查看连接状态。'}
+            {production.releaseHandoffState === 'unconfirmed' ||
+            (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ? (
+              <Button
+                disabled={
+                  handoffRetrying ||
+                  Boolean(exit?.busy) ||
+                  production.releaseHandoffState === 'pending'
+                }
+                onClick={() => {
+                  setHandoffRetrying(true);
+                  setHandoffError('');
+                  const retryFrozenOnly = production.releaseHandoffState !== 'unconfirmed';
+                  void fetch(
+                    retryFrozenOnly
+                      ? '/operator/rivalhub/source/retry-handoff'
+                      : '/operator/production',
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(
+                        retryFrozenOnly
+                          ? {}
+                          : { action: 'retry-handoff', expectedRevision: production.revision },
+                      ),
+                      signal: AbortSignal.timeout(10000),
+                    },
+                  )
+                    .then(async (response) => {
+                      if (!response.ok) {
+                        const body = (await response.json().catch(() => ({}))) as {
+                          message?: string;
+                        };
+                        throw new Error(body.message ?? '数据源交接重试未完成。');
+                      }
+                    })
+                    .catch((error: unknown) =>
+                      setHandoffError(
+                        error instanceof Error ? error.message : '数据源交接重试未完成。',
+                      ),
+                    )
+                    .finally(() => setHandoffRetrying(false));
+                }}
+              >
+                {handoffRetrying ? '正在重试…' : '重试数据源交接'}
+              </Button>
+            ) : null}
+          </StatusBanner>
         ) : null}
         <header className="preparation-heading">
           <div>
@@ -289,54 +331,29 @@ export function PreparationPage() {
             </h1>
           </div>
           <Button
-            variant={match ? 'primary' : 'secondary'}
+            variant="primary"
             disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
             onClick={() =>
               production &&
               void action(async () => {
-                entryGeneration.current += 1;
                 setSubmittingEntry(true);
                 try {
-                  const result = await productionAction('enter', production);
-                  if (
-                    result === 'confirmed' &&
-                    production.mode === 'preparation' &&
-                    window.__TAURI_INTERNALS__
-                  )
-                    setEntering(true);
+                  await productionAction('enter', production);
                 } finally {
-                  entryGeneration.current += 1;
                   setSubmittingEntry(false);
                 }
               })
             }
           >
             {entering || submittingEntry
-              ? '正在自动准备工作台…'
-              : production?.mode === 'hidden'
+              ? '正在打开工作台…'
+              : production?.mode !== 'preparation'
                 ? '返回工作台'
-                : '启动并进入工作台'}
+                : '打开工作台'}
           </Button>
         </header>
         {production?.mode === 'preparation' ? (
-          <>
-            <p>启动时自动准备游戏和 OBS；如已有 CS2，将正常关闭后重新启动。</p>
-            {window.__TAURI_INTERNALS__ ? (
-              <Button
-                disabled={
-                  busy || cancellingEntry || entering || submittingEntry || Boolean(exit?.busy)
-                }
-                onClick={() =>
-                  void action(async () => {
-                    await enterProductionManually(production);
-                  })
-                }
-              >
-                手动进入工作台
-              </Button>
-            ) : null}
-            {window.__TAURI_INTERNALS__ ? <p>手动进入不会自动启动游戏或配置 OBS。</p> : null}
-          </>
+          <p>打开后自动准备游戏和 OBS，比赛资料可稍后选择。如已有 CS2，将正常关闭后重新启动。</p>
         ) : null}
         {entering || submittingEntry || cancellingEntry || cancelFailed ? (
           <Button
@@ -344,7 +361,6 @@ export function PreparationPage() {
             onClick={() => {
               if (cancelling.current) return;
               cancelling.current = true;
-              entryGeneration.current += 1;
               setCancellingEntry(true);
               setCancelError('');
               void cancelProductionEntry()
@@ -354,7 +370,6 @@ export function PreparationPage() {
                   setCancelError(error instanceof Error ? error.message : '操作未完成。');
                 })
                 .finally(() => {
-                  entryGeneration.current += 1;
                   cancelling.current = false;
                   setCancellingEntry(false);
                 });
@@ -401,7 +416,7 @@ export function PreparationPage() {
                   <div className="preparation-task-header">
                     <div>
                       <h2>选择比赛</h2>
-                      <p>先选择已有比赛，或创建本地比赛；只检查画面可用 Demo 试播。</p>
+                      <p>可先进入工作台准备 OBS、音画和音乐，再选择比赛。</p>
                     </div>
                   </div>
                   <div className="preparation-actions">
@@ -608,45 +623,14 @@ export function PreparationPage() {
               </nav>
             ) : null}
             <div className="preparation-overview">
-              {match ? (
+              {problems.length ? (
                 <Panel>
-                  <div className="preparation-check-heading">
-                    <h2>开播检查</h2>
-                    <StatusPill
-                      tone={
-                        capabilities === null
-                          ? 'info'
-                          : problems.length
-                            ? 'warning'
-                            : pending.length
-                              ? 'info'
-                              : 'success'
-                      }
-                    >
-                      {capabilities === null
-                        ? '读取中'
-                        : problems.length
-                          ? `${problems.length} 项待处理`
-                          : pending.length
-                            ? '待确认'
-                            : '已就绪'}
-                    </StatusPill>
-                  </div>
-                  {completed.length ? (
-                    <div className="preparation-completed" aria-label="已完成检查">
-                      {completed.map(({ label }) => (
-                        <span key={label}>
-                          <span aria-hidden="true">✓ </span>
-                          {label === '比赛上下文' ? '比赛资料' : label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {problems.map(({ label, reason, href, action: nextAction }) => (
+                  <h2>需要处理</h2>
+                  {problems.map(({ id, label, reason, href, action: nextAction }) => (
                     <a
                       className="preparation-readiness"
                       data-tone="warning"
-                      key={label}
+                      key={id}
                       href={href}
                       aria-label={nextAction ?? `检查 ${label}`}
                     >
@@ -664,23 +648,12 @@ export function PreparationPage() {
                         <circle cx="12" cy="17" r="0.75" fill="currentColor" stroke="none" />
                       </svg>
                       <div>
-                        <strong>{label === '比赛上下文' ? '比赛资料' : label}</strong>
+                        <strong>{label}</strong>
                         <p>{reason}</p>
                       </div>
-                      <span className="mizar-button">{label === 'OBS' ? '配置' : '检查'}</span>
+                      <span className="mizar-button">{nextAction}</span>
                     </a>
                   ))}
-                  {pending.length ? (
-                    <details className="preparation-pending">
-                      <summary>待确认 · {pending.length} 项</summary>
-                      {pending.map(({ label, reason, href }) => (
-                        <a key={label} href={href}>
-                          <strong>{label}</strong>
-                          <span>{reason}</span>
-                        </a>
-                      ))}
-                    </details>
-                  ) : null}
                 </Panel>
               ) : null}
               <Panel className="preparation-quick-tools">
@@ -697,7 +670,6 @@ export function PreparationPage() {
               <DemoTestPanel forceExpanded={demoOpen} />
             </Dialog>
 
-            <SpectatorWorkflow capabilities={capabilities} production={production} />
             {match && production && production.mode !== 'preparation' ? (
               <ProductionStatus matchId={match.matchId} />
             ) : null}
@@ -725,8 +697,14 @@ export function PreparationPage() {
                 <StatusBanner tone="warning">
                   {libraryStatus === 'loading'
                     ? '正在读取比赛库…'
-                    : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
+                    : (libraryError ??
+                      '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。')}
                 </StatusBanner>
+              ) : null}
+              {libraryUnavailable ? (
+                <Button loading={libraryReloading} onClick={() => void reloadLibrary()}>
+                  重新加载资料库
+                </Button>
               ) : null}
               {view ? (
                 <EventMatchWorkspace
@@ -761,6 +739,12 @@ export function PreparationPage() {
             </details>
             {match && local ? (
               <>
+                {libraryError ? <StatusBanner tone="warning">{libraryError}</StatusBanner> : null}
+                {libraryUnavailable ? (
+                  <Button loading={libraryReloading} onClick={() => void reloadLibrary()}>
+                    重新加载资料库
+                  </Button>
+                ) : null}
                 {tab === 'roster' ? (
                   <StatusBanner tone="info">
                     现场首发可在工作台连接服务器后识别；这里维护队伍资料与完整名单。
@@ -773,6 +757,7 @@ export function PreparationPage() {
                   <summary>{tab === 'roster' ? '编辑队伍与名单' : '编辑比赛资料'}</summary>
                   <LocalTournamentEditor
                     document={match}
+                    canSave={canWriteLocal}
                     section={tab as MatchSection}
                     view={view}
                     refresh={refresh}
@@ -818,6 +803,7 @@ export function PreparationPage() {
               <MatchBpSection
                 document={match}
                 local={local}
+                canWrite={canWriteLocal}
                 contextRevision={view?.contextRevision}
               />
             ) : null}
@@ -850,9 +836,7 @@ export function PreparationPage() {
                 </header>
                 <LocalOverlayControls />
               </Panel>
-              <Panel>
-                <SpectatorHudCommands />
-              </Panel>
+              <Panel></Panel>
             </div>
           )
         ) : (

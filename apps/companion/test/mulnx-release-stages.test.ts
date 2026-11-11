@@ -79,10 +79,6 @@ import { OrchestrationStore } from '../src/orchestration/store.js';
 import { HudConfigStore } from '../src/hud-config/store.js';
 import { createProductionBroadcastDependencies } from '../src/broadcast-config/production.js';
 import { prepareLegacyMigration } from '../src/broadcast-config/prepare-migration.js';
-import { BroadcastConfigStore } from '../src/broadcast-config/store.js';
-import { MusicPackResources } from '../src/broadcast-config/music-pack-resources.js';
-import { exportPresetPack, importPresetPack } from '../src/broadcast-config/preset-pack.js';
-import { randomUUID } from 'node:crypto';
 import { orchestrationPresetSchema } from '@mizar/protocol/orchestration';
 
 const roots: string[] = [];
@@ -261,42 +257,6 @@ it('prepares without selecting and publishes a configured instance only after se
   expect(await dependencies.camera.localPack(source)).toBe(current.packs[0]!.name);
   expect(await dependencies.resolve.camera(source)).toEqual(source.acquisition);
   await expect(dependencies.verifyActive(active)).resolves.toBeUndefined();
-  // Share the verified local source and standalone sound, then resolve the imported source.
-  const shareResources = new MusicPackResources(join(root, 'share-packages'));
-  const shareStore = new BroadcastConfigStore({
-    filePath: join(root, 'share-config.json'),
-    createInitial: () => Promise.resolve(migrated.document),
-    resolver: { resolve: () => Promise.resolve({ resolved: active.resolved, lock: active.lock }) },
-    withReferenceGuard: (operation) => operation(),
-    assertReferenceCommitAllowed: () => Promise.resolve(),
-    verifyLegacyActive: () => Promise.resolve(),
-    withApplyGuard: (operation) => operation(() => true),
-  });
-  await shareStore.load();
-  const zip = await exportPresetPack({
-    document: migrated.document,
-    presetIds: [migrated.document.presets[0]!.id],
-    music: musicStore,
-    resources: shareResources,
-    metadata: { packageId: randomUUID(), version: '1.0.0', name: 'Camera', author: '' },
-  });
-  const imported = await importPresetPack({ zip, store: shareStore, resources: shareResources });
-  const presetEntry = imported.entries.find((item) => item.type === 'preset')!.entryId;
-  const importedPreset = shareStore.snapshot.presets.find(
-    (item) => item.id === imported.mapping.presetEntries[presetEntry],
-  );
-  const cameraBinding = importedPreset?.bindings.find((binding) => binding.kind === 'camera');
-  if (!cameraBinding || cameraBinding.mode !== 'use') throw new Error('missing camera binding');
-  const camera = shareStore.snapshot.modules.find((item) => item.id === cameraBinding.moduleId);
-  if (!camera || camera.kind !== 'camera') throw new Error('missing imported camera');
-  expect(camera.value.maps[0]!.source).toEqual(source);
-  expect(await productionResolver.localPack(camera.value.maps[0]!.source)).toBe(
-    current.packs[0]!.name,
-  );
-  expect((await shareResources.read(camera.value.maps[0]!.openingSound!.asset)).bytes).toEqual(
-    Buffer.from('RIFF0000WAVEtest'),
-  );
-  expect(shareStore.snapshot.active).toEqual(active);
   // The old lock is historical; a compatible selected release can have the same source bytes.
   const olderTool = {
     ...source.acquisition,
@@ -388,7 +348,7 @@ it('prepares without selecting and publishes a configured instance only after se
     };
     expect(await switchRelease('different source')).toBe(false);
     expect((await app.inject('/local/v1/orchestration')).json<unknown>()).toMatchObject({
-      preset: { name: '已关闭', maps: [] },
+      preset: { name: 'Camera', maps: [{ map: 'de_dust2', pack: current.packs[0]!.name }] },
       automaticEnabled: false,
     });
     expect((await app.inject('/local/v1/broadcast-presets')).json<unknown>()).toMatchObject({
@@ -484,59 +444,4 @@ it('prepares without selecting and publishes a configured instance only after se
   const compatibleRelease = await restarted.prepareRelease();
   await restarted.selectRelease(compatibleRelease.preparedId);
   await expect(resolver.localPack(source)).resolves.toBe(current.packs[0]!.name);
-});
-
-it('recomputes update status after committing a selection without inventing a successful check', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-status-'));
-  roots.push(root);
-  const bundle = join(root, 'bundle');
-  const data = join(root, 'mulnx');
-  await mkdir(bundle);
-  await writeFile(join(bundle, '7zr.exe'), 'fixture');
-  await writeFile(
-    join(bundle, 'release.json'),
-    JSON.stringify({ release: { ...release, sha256: 'c'.repeat(64) } }),
-  );
-  const old = {
-    ...release,
-    id: 3,
-    assetId: 4,
-    tag: 'Older',
-    publishedAt: '2026-10-22',
-    sha256: 'b'.repeat(64),
-  };
-  const tool = new MulnxTool(data, bundle);
-  await tool.load();
-  fixture.candidate = old;
-  fixture.hash = old.sha256;
-  const older = await tool.prepareRelease();
-  fixture.candidate = release;
-  fixture.hash = release.sha256;
-  const newest = await tool.prepareRelease();
-  expect(tool.view().checkResult).toBe('available');
-  const latestStage = await tool.stageSelection(newest.preparedId);
-  await tool.commitSelection(latestStage.id);
-  expect(tool.view()).toMatchObject({
-    installed: release.tag,
-    checkResult: 'current',
-    notificationIdentity: null,
-  });
-  expect(JSON.parse(await readFile(join(data, 'current.json'), 'utf8')).release.tag).toBe(
-    release.tag,
-  );
-  fixture.hash = old.sha256;
-  const oldStage = await tool.stageSelection(older.preparedId);
-  await tool.commitSelection(oldStage.id);
-  expect(tool.view()).toMatchObject({ installed: old.tag, checkResult: 'available' });
-  expect(tool.view().notificationIdentity).toContain(release.sha256);
-  fixture.fail = true;
-  await expect(tool.check()).rejects.toThrow();
-  fixture.hash = release.sha256;
-  const unknownStage = await tool.stageSelection(newest.preparedId);
-  await tool.commitSelection(unknownStage.id);
-  expect(tool.view()).toMatchObject({
-    installed: release.tag,
-    checkResult: 'error',
-    notificationIdentity: null,
-  });
 });

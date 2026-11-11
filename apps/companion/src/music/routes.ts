@@ -190,36 +190,44 @@ export function registerMusicRoutes(
       return reply.code(400).send({ message: '内置音乐未加载，原配置已保留。' });
     }
   });
-  app.post('/operator/music/track', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
-    if (!allowed(request.headers.origin))
-      return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    try {
-      const name = decodeURIComponent(String(request.headers['x-mizar-filename'] ?? ''));
-      if (!Buffer.isBuffer(request.body) || !name || /[\\/]/.test(name))
-        throw new Error('music_track_invalid');
-      const track = await store.add(name, request.body);
-      return { ...track, portable: await portableMusicTrack(store, track) };
-    } catch (error) {
-      request.log.error(
-        {
-          stage: 'music_operation',
-          result: 'failure',
-          reason: error instanceof Error ? error.message : 'music_unknown',
-          error: diagnosticValue(error),
-        },
-        '音乐操作失败',
-      );
-      return reply.code(400).send({
-        error: 'music_track_invalid',
-        requestId: request.id,
-        message:
-          store.failure || !store.ready
-            ? '音乐存储尚未就绪，请先重新检查音乐存储。'
-            : (error as NodeJS.ErrnoException).code === 'EACCES' ||
-                (error as NodeJS.ErrnoException).code === 'EPERM'
-              ? '曲目未保存，请检查 Mizar 数据目录的写入权限。'
-              : '曲目未添加，请选择有效的本地音频（最大 32 MiB）。',
-      });
-    }
-  });
+  for (const repair of [false, true])
+    app.post(
+      repair ? '/operator/music/track/repair' : '/operator/music/track',
+      { bodyLimit: 32 * 1024 * 1024 },
+      async (request, reply) => {
+        if (!allowed(request.headers.origin))
+          return reply.code(403).send({ error: 'operator_origin_forbidden' });
+        try {
+          const name = decodeURIComponent(String(request.headers['x-mizar-filename'] ?? ''));
+          if (!Buffer.isBuffer(request.body) || !name || /[\\/]/.test(name))
+            throw new Error('music_track_invalid');
+          // Resource repair must remain available when the active music configuration cannot load.
+          // Installing verified bytes does not change configuration or start playback.
+          const track = await store.installTrackAsset(name, request.body, repair);
+          return { ...track, portable: await portableMusicTrack(store, track) };
+        } catch (error) {
+          request.log.error(
+            {
+              stage: 'music_operation',
+              result: 'failure',
+              reason: error instanceof Error ? error.message : 'music_unknown',
+              error: diagnosticValue(error),
+            },
+            '音乐操作失败',
+          );
+          return reply.code(400).send({
+            error: 'music_track_invalid',
+            requestId: request.id,
+            message: repair
+              ? '音频恢复未完成，原配置与已保存的备份保留。请检查文件与数据目录权限后重试。'
+              : store.failure || !store.ready
+                ? '音乐存储尚未就绪，请先重新检查音乐存储。'
+                : (error as NodeJS.ErrnoException).code === 'EACCES' ||
+                    (error as NodeJS.ErrnoException).code === 'EPERM'
+                  ? '曲目未保存，请检查 Mizar 数据目录的写入权限。'
+                  : '曲目未添加，请选择有效的本地音频（最大 32 MiB）。',
+          });
+        }
+      },
+    );
 }

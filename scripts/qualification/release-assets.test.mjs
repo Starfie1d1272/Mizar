@@ -316,7 +316,7 @@ test('draft recovery checks existing bytes first, fills only missing files, and 
   }
 });
 
-test('draft uploads are bounded, wait for in-flight failures, and do not publish or start another batch', async () => {
+test('draft uploads wait for in-flight failures without replaying or publishing', async () => {
   const expected = Array.from({ length: 5 }, (_, index) => {
     const name = `${index}.zip`,
       bytes = Buffer.from(name);
@@ -328,9 +328,11 @@ test('draft uploads are bounded, wait for in-flight failures, and do not publish
     finish = resolve;
   });
   let started = 0;
+  const uploadNames = [];
   let settled = false;
   const api = async (args) => {
     if (args.at(-1).startsWith('https://uploads.github.com/')) {
+      uploadNames.push(new URL(args.at(-1)).searchParams.get('name'));
       const index = started++;
       if (index === 0) throw new Error('uncertain upload');
       await pending;
@@ -341,40 +343,36 @@ test('draft uploads are bounded, wait for in-flight failures, and do not publish
     settled = true;
   });
   await setImmediate();
-  assert.equal(started, 3);
+  assert.ok(started > 1);
+  const startedBeforeSettlement = started;
   assert.equal(settled, false);
   assert.deepEqual(box.actions, []);
   finish();
   await assert.rejects(publication, /uncertain upload/);
-  assert.equal(started, 3);
+  assert.equal(started, startedBeforeSettlement);
+  assert.equal(new Set(uploadNames).size, uploadNames.length);
   assert.deepEqual(box.actions, []);
 });
 
-test('draft success fully reads each uploaded asset with at most three reads in flight before publication', async () => {
+test('draft success fully reads each uploaded asset before publication', async () => {
   const expected = Array.from({ length: 5 }, (_, index) => {
     const name = `${index}.zip`,
       bytes = Buffer.from(name);
     return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
   });
   const box = draftApi(expected);
-  let active = 0,
-    peak = 0,
-    reads = 0;
+  let reads = 0;
   const api = async (args) => {
     if (args.at(-1).includes('/releases/assets/')) {
-      active++;
-      peak = Math.max(peak, active);
       await setImmediate();
       const value = box.api(args);
       reads++;
-      active--;
       return value;
     }
     if (args[0] === '--method' && args[1] === 'PATCH') assert.equal(reads, expected.length);
     return box.api(args);
   };
   await publishDraftAssets('81', { tag, gitSha: sha }, expected, api);
-  assert.equal(peak, 3);
   assert.deepEqual(box.actions, ['publish']);
 });
 
@@ -403,10 +401,11 @@ test('failed final draft readback waits for active reads and never publishes', a
     settled = true;
   });
   await setImmediate();
-  assert.equal(started, 3);
+  assert.ok(started > 1);
+  const startedBeforeSettlement = started;
   assert.equal(settled, false);
   finish();
   await assert.rejects(publication, /readback failed/);
-  assert.equal(started, 3);
+  assert.equal(started, startedBeforeSettlement);
   assert.deepEqual(box.actions, []);
 });

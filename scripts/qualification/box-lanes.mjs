@@ -3,21 +3,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { appendFile, copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  boxPhaseDiagnostic,
-  downloadLane,
-  transferLane,
-  transferVerifiedRuntime,
-  verifyLane,
-} from './box-phases.mjs';
+import { boxPhaseDiagnostic, downloadLane, verifyLane } from './box-phases.mjs';
 import { getBoxRecoveryStartedAt } from './box-sync.mjs';
 
 const lanes = ['runtime', 'resources', 'downloads'];
-export async function runWorker(
-  lane,
-  root,
-  operations = { downloadLane, transferLane, transferVerifiedRuntime, verifyLane },
-) {
+export async function runWorker(lane, root, operations = { downloadLane, verifyLane }) {
   if (!lanes.includes(lane)) throw new Error('Unknown Box lane');
   let phase = 'download',
     selected;
@@ -27,18 +17,11 @@ export async function runWorker(
       await operations.downloadLane(root, lane, selected);
       selected = 'core';
       await operations.downloadLane(root, lane, selected);
-      phase = 'transfer-verified-runtime';
-      selected = 'metadata';
-      await operations.transferVerifiedRuntime(root, selected);
-      selected = 'core';
-      await operations.transferVerifiedRuntime(root, selected);
     } else {
       await operations.downloadLane(root, lane);
-      phase = 'transfer';
-      await operations.transferLane(root, lane);
-      phase = 'verify';
-      await operations.verifyLane(root, lane);
     }
+    phase = 'verify';
+    await operations.verifyLane(root, lane);
   } catch (error) {
     console.error(boxPhaseDiagnostic(phase, lane, selected, error));
     throw new Error(`Box lane failed: ${lane}`, { cause: error });

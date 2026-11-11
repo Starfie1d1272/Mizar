@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmodSync } from 'node:fs';
+import { mkdir, open, readFile, readdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import {
   durableJsonByteLength,
@@ -8,6 +10,7 @@ import {
   type DurableJsonFaultInjector,
 } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import { parseCaptureReference, type CaptureReference } from '../output/capture-interval.js';
 
 const MAX_RECORDS = 64;
 const MAX_BYTES = 256 * 1024;
@@ -47,9 +50,11 @@ const exactSchema = scopeSchema
   .extend({ authorityRevision: z.number().int().positive().safe() })
   .strict();
 const causeSchema = z.enum(['finish', 'switch', 'shutdown', 'recovery', 'authority_check']);
+const captureReferenceSchema = z.unknown().transform(parseCaptureReference);
 const recordSchema = z
   .object({
     identity: exactSchema,
+    captureReference: captureReferenceSchema.optional(),
     state: z.enum(['owned', 'release_pending', 'blocked', 'archive_pending']),
     installationRevoked: z.literal(true).optional(),
     quarantineUncertain: z.literal(true).optional(),
@@ -67,6 +72,7 @@ const intentSchema = z
   .object({
     id: z.string().uuid(),
     scope: scopeSchema,
+    captureReference: captureReferenceSchema.optional(),
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
     quarantineUncertain: z.literal(true).optional(),
     // Proof that this intent re-claimed an exact authority already held before
@@ -79,22 +85,34 @@ const quarantineSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('intent'), intent: intentSchema }).strict(),
   z.object({ kind: z.literal('watermark'), identity: exactSchema }).strict(),
 ]);
-const envelopeSchema = z
+const legacyEnvelopeSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     records: z.array(recordSchema).max(MAX_RECORDS),
     intent: intentSchema.nullable(),
     revokedIntents: z.array(intentSchema).max(MAX_RECORDS).default([]),
     watermarks: z.array(exactSchema).max(MAX_RECORDS).default([]),
   })
-  .strict()
+  .strict();
+
+const validateRecords = (state: { records: SourceRecord[] }, ctx: z.RefinementCtx) => {
+  const keys = state.records.map((record) => exactKey(record.identity));
+  if (
+    new Set(keys).size !== keys.length ||
+    state.records.filter((record) => record.state === 'owned').length > 1
+  )
+    ctx.addIssue({ code: 'custom', message: 'duplicate or multiple owned sources' });
+};
+
+const envelopeSchema = legacyEnvelopeSchema
+  .omit({ intent: true })
+  .extend({ version: z.literal(3), intents: z.array(intentSchema).max(MAX_RECORDS) })
   .superRefine((state, ctx) => {
-    const keys = state.records.map((record) => exactKey(record.identity));
-    if (
-      new Set(keys).size !== keys.length ||
-      state.records.filter((record) => record.state === 'owned').length > 1
-    )
-      ctx.addIssue({ code: 'custom', message: 'duplicate or multiple owned sources' });
+    validateRecords(state, ctx);
+    const ids = state.intents.map((intent) => intent.id);
+    const matches = state.intents.map((intent) => matchKey(intent.scope));
+    if (new Set(ids).size !== ids.length || new Set(matches).size !== matches.length)
+      ctx.addIssue({ code: 'custom', message: 'duplicate pending claims' });
   });
 
 export type SourceScope = z.infer<typeof scopeSchema>;
@@ -130,6 +148,10 @@ function exactKey(identity: ExactSource): string {
     identity.authorityRevision,
   ]);
 }
+function matchKey(scope: SourceScope): string {
+  return JSON.stringify([scope.baseUrl, scope.competitionId, scope.installationId, scope.matchId]);
+}
+
 function sameScope(a: SourceScope, b: SourceScope): boolean {
   return (
     a.baseUrl === b.baseUrl &&
@@ -145,6 +167,7 @@ function sameScope(a: SourceScope, b: SourceScope): boolean {
 export class RivalHubSourceState {
   private readonly queue = new SerialCommitQueue();
   private state: SourceState | undefined;
+  private writer: DatabaseSync | undefined;
   private revokedScanCursor = 0;
   constructor(
     private readonly path: string,
@@ -353,28 +376,25 @@ export class RivalHubSourceState {
       watermarks.push(identity);
     }
     state.watermarks = watermarks;
-    if (state.intent) {
+    const intents: ClaimIntent[] = [];
+    for (const intent of state.intents) {
       let evidence: QuarantineEvidence[];
       try {
-        evidence = await this.evidenceForScope(state.intent.scope);
+        evidence = await this.evidenceForScope(intent.scope);
       } catch {
         await this.quarantine({
           kind: 'intent',
-          intent: { ...state.intent, quarantineUncertain: true },
+          intent: { ...intent, quarantineUncertain: true },
         });
-        state.intent = null;
         changed = true;
-        evidence = [];
+        continue;
       }
-      if (
-        state.intent &&
-        evidence.some((item) => item.kind === 'intent' && item.intent.id === state.intent?.id)
-      ) {
-        await this.quarantine({ kind: 'intent', intent: state.intent });
-        state.intent = null;
+      if (evidence.some((item) => item.kind === 'intent' && item.intent.id === intent.id)) {
+        await this.quarantine({ kind: 'intent', intent });
         changed = true;
-      }
+      } else intents.push(intent);
     }
+    state.intents = intents;
     for (const intent of state.revokedIntents) {
       try {
         await this.quarantine({ kind: 'intent', intent });
@@ -388,41 +408,101 @@ export class RivalHubSourceState {
   }
 
   invalidate(): void {
+    // Invalid state does not relinquish the lifetime writer while another
+    // already-queued operation might still be using it.
     this.state = undefined;
+  }
+
+  /** An operating-system lock has no stale PID/lease to guess after a process interruption. */
+  private async acquireWriter(): Promise<void> {
+    if (this.writer) return;
+    await mkdir(dirname(this.path), { recursive: true });
+    const path = `${this.path}.owner.sqlite`;
+    const writer = new DatabaseSync(path);
+    try {
+      chmodSync(path, 0o600);
+      writer.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE');
+      this.writer = writer;
+    } catch (error) {
+      writer.close();
+      throw error;
+    }
+  }
+
+  close(): Promise<void> {
+    return this.queue.run(() => {
+      this.invalidate();
+      this.writer?.close();
+      this.writer = undefined;
+    });
   }
 
   async load(): Promise<SourceState> {
     return this.queue.run(async () => {
       if (this.state) return structuredClone(this.state);
-      let bytes: Buffer;
       try {
-        const file = await open(this.path, 'r');
+        await this.acquireWriter();
+        let bytes: Buffer;
         try {
-          const stat = await file.stat();
-          if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('invalid source state size');
-          bytes = await file.readFile();
-          if (bytes.length > MAX_BYTES) throw new Error('invalid source state size');
-        } finally {
-          await file.close();
+          const file = await open(this.path, 'r');
+          try {
+            const stat = await file.stat();
+            if (!stat.isFile() || stat.size > MAX_BYTES)
+              throw new Error('invalid source state size');
+            bytes = await file.readFile();
+            if (bytes.length > MAX_BYTES) throw new Error('invalid source state size');
+          } finally {
+            await file.close();
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          this.state = {
+            version: 3,
+            records: [],
+            intents: [],
+            revokedIntents: [],
+            watermarks: [],
+          };
+          return structuredClone(this.state);
         }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        this.state = { version: 1, records: [], intent: null, revokedIntents: [], watermarks: [] };
+        const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+        const legacy = raw?.version === 1 || raw?.version === 2;
+        if (
+          raw?.version === 1 &&
+          ((raw.intent && typeof raw.intent === 'object' && 'captureReference' in raw.intent) ||
+            (Array.isArray(raw.records) &&
+              raw.records.some(
+                (record: unknown) =>
+                  record && typeof record === 'object' && 'captureReference' in record,
+              )))
+        )
+          throw new Error('source_legacy_capture_reference_invalid');
+        let migrated: unknown = raw;
+        if (legacy) {
+          const { intent, ...rest } = legacyEnvelopeSchema.superRefine(validateRecords).parse({
+            ...raw,
+            version: 2,
+          });
+          migrated = { ...rest, version: 3, intents: intent ? [intent] : [] };
+        }
+        const loaded = envelopeSchema.parse(migrated);
+        const reconciled = await this.reconcileQuarantine(loaded);
+        if (legacy || reconciled) {
+          const validated = envelopeSchema.parse(loaded);
+          if (durableJsonByteLength(validated) > MAX_BYTES)
+            throw new Error('source state capacity exceeded');
+          await replaceDurableJson(
+            this.path,
+            validated,
+            this.faultInjector ? { faultInjector: this.faultInjector } : {},
+          );
+        }
+        this.state = loaded;
         return structuredClone(this.state);
+      } catch (error) {
+        this.invalidate();
+        throw error;
       }
-      const loaded = envelopeSchema.parse(JSON.parse(bytes.toString('utf8')) as unknown);
-      if (await this.reconcileQuarantine(loaded)) {
-        const validated = envelopeSchema.parse(loaded);
-        if (durableJsonByteLength(validated) > MAX_BYTES)
-          throw new Error('source state capacity exceeded');
-        await replaceDurableJson(
-          this.path,
-          validated,
-          this.faultInjector ? { faultInjector: this.faultInjector } : {},
-        );
-      }
-      this.state = loaded;
-      return structuredClone(this.state);
     });
   }
 
@@ -451,15 +531,25 @@ export class RivalHubSourceState {
     });
   }
 
-  /** Persist before sending claim. A previous unknown claim must be resolved first. */
+  /** Persist before sending claim. Unknown claims block only their installation and match. */
   async beginClaim(
     scope: SourceScope,
     previousAuthorityRevision: number | null,
+    captureReference?: CaptureReference,
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
       await this.reconcileQuarantine(state);
-      if (state.intent) throw new Error('source claim requires reconciliation');
       const validScope = scopeSchema.parse(scope);
+      if (state.intents.some((intent) => matchKey(intent.scope) === matchKey(validScope)))
+        throw new Error('source claim requires reconciliation');
+      if (captureReference) {
+        captureReference = parseCaptureReference(captureReference);
+        if (
+          captureReference.startCursor.producerInstanceId !== validScope.producerInstanceId ||
+          captureReference.startCursor.liveSessionId !== validScope.liveSessionId
+        )
+          throw new Error('source_capture_reference_mismatch');
+      }
       const quarantined = await this.evidenceForScope(validScope);
       if (quarantined.some((item) => item.kind !== 'watermark'))
         throw new Error('source requires cleanup before claim');
@@ -495,7 +585,8 @@ export class RivalHubSourceState {
         owned.cause = 'switch';
       }
       // Reserve a slot before contacting the server; unresolved identities are never evicted.
-      if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
+      if (state.records.length + state.intents.length >= MAX_RECORDS)
+        throw new Error('source state capacity exceeded');
       const known = scopes
         .filter((item) => sameScope(item, validScope))
         .map((item) => item.authorityRevision);
@@ -508,6 +599,7 @@ export class RivalHubSourceState {
       const intent = intentSchema.parse({
         id: randomUUID(),
         scope: validScope,
+        ...(captureReference ? { captureReference } : {}),
         previousAuthorityRevision: known.length ? Math.max(...known) : null,
         ...(owned &&
         sameScope(owned.identity, validScope) &&
@@ -525,27 +617,35 @@ export class RivalHubSourceState {
           ? { idempotentAuthorityRevision: owned.identity.authorityRevision }
           : {}),
       });
-      state.intent = intent;
+      state.intents.push(intent);
       return intent;
     });
   }
 
   /** Persist the exact authority before the caller enables sends. */
-  async confirmClaim(intentId: string, authorityRevision: number): Promise<ExactSource> {
+  async confirmClaim(
+    intentId: string,
+    authorityRevision: number,
+    disposition: 'owned' | 'release_pending' = 'owned',
+  ): Promise<ExactSource> {
     return this.change((state) => {
-      const intent = state.intent;
-      if (!intent || intent.id !== intentId) throw new Error('stale source claim');
+      const intent = state.intents.find((item) => item.id === intentId);
+      if (!intent) throw new Error('stale source claim');
       const identity = exactSchema.parse({ ...intent.scope, authorityRevision });
       const key = exactKey(identity);
       for (const record of state.records) {
-        if (record.state === 'owned' && exactKey(record.identity) !== key) {
+        if (
+          record.state === 'owned' &&
+          exactKey(record.identity) !== key &&
+          (disposition === 'owned' || sameScope(record.identity, intent.scope))
+        ) {
           record.state = 'release_pending';
           record.cause = 'switch';
         }
       }
       const existing = state.records.find((record) => exactKey(record.identity) === key);
       if (existing) {
-        existing.state = 'owned';
+        existing.state = disposition;
         delete existing.installationRevoked;
         existing.cause = 'recovery';
         existing.attempts = 0;
@@ -556,14 +656,15 @@ export class RivalHubSourceState {
         if (state.records.length >= MAX_RECORDS) throw new Error('source state capacity exceeded');
         state.records.push({
           identity,
-          state: 'owned',
+          ...(intent.captureReference ? { captureReference: intent.captureReference } : {}),
+          state: disposition,
           cause: 'recovery',
           attempts: 0,
           nextAttemptAt: null,
           lastFailureCode: null,
         });
       }
-      state.intent = null;
+      state.intents = state.intents.filter((item) => item.id !== intentId);
       return identity;
     });
   }
@@ -571,8 +672,9 @@ export class RivalHubSourceState {
   /** Only call after a conclusive response or exact status lookup proves no claim occurred. */
   async clearIntent(intentId: string): Promise<void> {
     await this.change((state) => {
-      if (!state.intent || state.intent.id !== intentId) throw new Error('stale source claim');
-      state.intent = null;
+      if (!state.intents.some((item) => item.id === intentId))
+        throw new Error('stale source claim');
+      state.intents = state.intents.filter((item) => item.id !== intentId);
     });
   }
 
@@ -638,17 +740,17 @@ export class RivalHubSourceState {
         throw new Error('source is not archive pending');
       // Upgrade legacy in-flight intents before removing their only durable
       // proof that the equal revision was held when the claim began.
-      if (
-        state.intent &&
-        state.intent.idempotentAuthorityRevision === undefined &&
-        sameScope(state.intent.scope, identity) &&
-        state.intent.previousAuthorityRevision === identity.authorityRevision &&
-        !state.watermarks.some(
-          (item) =>
-            sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
+      for (const intent of state.intents)
+        if (
+          intent.idempotentAuthorityRevision === undefined &&
+          sameScope(intent.scope, identity) &&
+          intent.previousAuthorityRevision === identity.authorityRevision &&
+          !state.watermarks.some(
+            (item) =>
+              sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
+          )
         )
-      )
-        state.intent.idempotentAuthorityRevision = identity.authorityRevision;
+          intent.idempotentAuthorityRevision = identity.authorityRevision;
       if (state.records[index]?.installationRevoked) {
         await this.quarantine({ kind: 'watermark', identity });
       } else {
@@ -708,10 +810,9 @@ export class RivalHubSourceState {
         else watermarks.push(identity);
       }
       state.watermarks = watermarks;
-      if (state.intent && matches(state.intent.scope)) {
-        await this.quarantine({ kind: 'intent', intent: state.intent });
-        state.intent = null;
-      }
+      for (const intent of state.intents)
+        if (matches(intent.scope)) await this.quarantine({ kind: 'intent', intent });
+      state.intents = state.intents.filter((intent) => !matches(intent.scope));
       return revoked;
     });
   }

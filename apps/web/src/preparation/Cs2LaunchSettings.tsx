@@ -6,10 +6,10 @@ import { useCs2Status, type Cs2ConfigStatus } from './cs2-status';
 
 export function Cs2LaunchSettings() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
-  const { status, phase, refresh, error: statusError } = useCs2Status();
+  const { status, refresh, error: statusError } = useCs2Status();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const disabled = !status || busy || Boolean(phase) || status.pending;
+  const disabled = !status || busy;
   const qualityLabels = { 'very-high': '最高', high: '高', medium: '中', preserve: '保留原画质' };
   const [draft, setDraft] = useState<Pick<
     Cs2ConfigStatus,
@@ -50,8 +50,8 @@ export function Cs2LaunchSettings() {
   }
   return (
     <Panel className="settings-card">
-      <h2>CS2 启动设置</h2>
-      <p>画质与帧率在下次由 Mizar 启动游戏时生效；接入已有游戏时保留其画质与帧率。</p>
+      <h2>下次启动设置</h2>
+      <p>画质与帧率在下次启动游戏时生效，不改变当前游戏画面。</p>
       {desktop ? (
         <form
           onSubmit={(event) => {
@@ -69,12 +69,12 @@ export function Cs2LaunchSettings() {
                   edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
               }}
             >
-              <option value="steam">标准启动（Mizar 管理）</option>
+              <option value="steam">标准启动</option>
               <option value="mulnx">MulNX 官方启动器</option>
             </Select>
             <Select
               label="游戏画质"
-              value={preferences?.qualityPreset ?? 'very-high'}
+              value={preferences?.qualityPreset ?? 'medium'}
               disabled={disabled}
               onChange={(event) => {
                 if (preferences)
@@ -149,7 +149,7 @@ export function Cs2LaunchSettings() {
       <details className="settings-details">
         <summary>启动方式说明</summary>
         <p>无边框窗口 · 分辨率适配工作台</p>
-        <p>首次先安装 GSI，并在 OBS 启用 WebSocket 服务器、连接并检查场景。</p>
+        <p>游戏与 OBS 分别自动准备；OBS 首次使用需启用 WebSocket 服务器。</p>
         <p>
           解说配置包含数字键 1–9 与 0 的观战选择及 CS2 原生 HUD 切换。
           键位无法应用或恢复时会显示原因。
@@ -164,10 +164,7 @@ export function Cs2LaunchSettings() {
             本次帧率同时应用到游戏配置和启动时加载的配置文件，退出后恢复。存在无法处理的冲突时会提示检查配置。
           </p>
         </div>
-        <p>
-          退出工作台或退出 Mizar
-          时关闭受管游戏并恢复原设置；接入的已有游戏继续运行，隐藏工作区也保留游戏。
-        </p>
+        <p>结束本次制作或退出 Mizar 时关闭本次游戏并恢复设置。返回设置和隐藏工作区会保留游戏。</p>
       </details>
       {error || statusError ? (
         <StatusBanner tone="danger">{error || statusError}</StatusBanner>

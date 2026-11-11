@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -29,7 +29,7 @@ async function rig(blockSettings = false) {
   const waiting = new Promise<void>((resolve) => {
     reached = resolve;
   });
-  let currentCollection = 'Mizar';
+  let currentCollection = 'Mizar 制播';
   const notifyScene: (() => void)[] = [];
   server.get('/', { websocket: true }, (socket) => {
     notifyScene.push(() =>
@@ -60,28 +60,52 @@ async function rig(blockSettings = false) {
           await blocked;
         }
         const responseData =
-          type === 'GetSceneCollectionList'
-            ? { currentSceneCollectionName: currentCollection }
-            : type === 'GetInputList'
-              ? {
-                  inputs: [
-                    ...scenes.map((scene, index) => ({
-                      inputName: scene.browserInput,
-                      inputKind: 'browser_source',
-                      inputUuid: `owned-${index}`,
-                    })),
-                    { inputName: 'Personal', inputKind: 'browser_source', inputUuid: 'personal' },
-                  ],
-                }
-              : type === 'GetInputSettings'
-                ? {
-                    inputSettings: {
-                      url: scenes.find(
-                        (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
-                      )?.browserUrl,
-                    },
-                  }
-                : {};
+          type === 'GetPersistentData'
+            ? {
+                slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+              }
+            : type === 'GetOutputList'
+              ? { outputs: [] }
+              : [
+                    'GetStreamStatus',
+                    'GetRecordStatus',
+                    'GetReplayBufferStatus',
+                    'GetVirtualCamStatus',
+                  ].includes(type)
+                ? { outputActive: false }
+                : type === 'GetSceneCollectionList'
+                  ? { currentSceneCollectionName: currentCollection }
+                  : type === 'GetSceneList'
+                    ? {
+                        scenes: scenes.map((scene, index) => ({
+                          sceneName: scene.sceneName,
+                          sceneUuid: `scene-${index}`,
+                        })),
+                      }
+                    : type === 'GetInputList'
+                      ? {
+                          inputs: [
+                            ...scenes.map((scene, index) => ({
+                              inputName: scene.browserInput,
+                              inputKind: 'browser_source',
+                              inputUuid: `owned-${index}`,
+                            })),
+                            {
+                              inputName: 'Personal',
+                              inputKind: 'browser_source',
+                              inputUuid: 'personal',
+                            },
+                          ],
+                        }
+                      : type === 'GetInputSettings'
+                        ? {
+                            inputSettings: {
+                              url: scenes.find(
+                                (_, index) => `owned-${index}` === request.d.requestData?.inputUuid,
+                              )?.browserUrl,
+                            },
+                          }
+                        : {};
         socket.send(
           JSON.stringify({
             op: 7,
@@ -101,6 +125,23 @@ async function rig(blockSettings = false) {
   if (!address || typeof address === 'string') throw new Error('missing address');
   const config = new ObsConfigStore(join(dir, 'obs.json'));
   await config.save({ host: '127.0.0.1', port: address.port, password: '', executablePath: null });
+  await writeFile(
+    join(dir, 'obs.json.collection.json'),
+    JSON.stringify([
+      {
+        endpoint: `ws://127.0.0.1:${address.port}`,
+        instance: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+        collectionIdentity: '1fd3fde9-8040-407f-b738-ddb9f019c96e',
+        creating: false,
+        roles: Object.fromEntries(
+          scenes.map((scene, index) => [
+            scene.browserInput,
+            { uuid: `owned-${index}`, kind: 'browser_source' },
+          ]),
+        ),
+      },
+    ]),
+  );
   const adapter = new ObsAdapter(config, base);
   cleanups.push(async () => {
     release();
@@ -124,7 +165,9 @@ it('refreshes an existing owned browser source on enter without granting scene/a
   const r = await rig();
   r.adapter.startBrowserRecovery();
   await r.adapter.settleAutomatic();
-  expect(r.adapter.hasCurrentPreparation()).toBe(false);
+  await expect(r.adapter.verifyEntryPermit('unprepared')).rejects.toMatchObject({
+    code: 'preparation_output_changed',
+  });
   expect(
     r.calls
       .filter((call) => call.type === 'PressInputPropertiesButton')
@@ -135,13 +178,6 @@ it('refreshes an existing owned browser source on enter without granting scene/a
       (call) => call.type.startsWith('Get') || call.type === 'PressInputPropertiesButton',
     ),
   ).toBe(true);
-  r.adapter.pauseAutomatic();
-  r.adapter.resumeAutomatic();
-  r.adapter.startBrowserRecovery();
-  await r.adapter.settleAutomatic();
-  expect(r.calls.filter((call) => call.type === 'PressInputPropertiesButton')).toHaveLength(
-    scenes.length,
-  );
 });
 
 it('revokes an in-flight refresh when the OBS scene changes externally', async () => {

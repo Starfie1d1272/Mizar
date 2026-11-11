@@ -192,7 +192,7 @@ unsafe extern "system" fn collect_window(hwnd: Hwnd, data: isize) -> i32 {
     }
     let mut pid = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid != 0 && is_cs2(pid) && client_rect(hwnd).is_some() {
+    if pid != 0 && is_cs2(pid) {
         let windows = &mut *(data as *mut Vec<Cs2Window>);
         windows.push(Cs2Window { pid, hwnd });
     }
@@ -413,8 +413,9 @@ pub struct GameTracker {
     pub window: Option<Cs2Window>,
     pub generation: u64,
     monitor: Monitor,
-    pub managed: bool,
-    pub preserve_settings: bool,
+    pub layout_aligned: bool,
+    explicit_layout: bool,
+    initial_layout_started: bool,
     pub overlay_enabled: bool,
     pub fullscreen_layout: bool,
     frame: Option<crate::window_frame::GameFrame>,
@@ -441,7 +442,7 @@ impl GameTracker {
     pub fn retire_layout(&mut self) -> Result<(), std::io::Error> {
         let submitted = self.frame.as_mut().map_or(Ok(()), |frame| frame.retire());
         self.frame = None;
-        self.managed = false;
+        self.layout_aligned = false;
         self.alignment_retries = 0;
         if let Err(error) = &submitted {
             self.alignment_failure = Some(AlignmentFailure {
@@ -453,7 +454,13 @@ impl GameTracker {
         submitted
     }
     pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
-        self.owner = owner.filter(|process| process.is_running());
+        let owner = owner.filter(|process| process.is_running());
+        if self.owner.as_ref().map(|p| (p.pid, p.created))
+            != owner.as_ref().map(|p| (p.pid, p.created))
+        {
+            self.initial_layout_started = false;
+        }
+        self.owner = owner;
     }
     pub fn finish_session_feedback(
         &mut self,
@@ -471,7 +478,7 @@ impl GameTracker {
         self.alignment_failure = None;
         self.reported_alignment_failure = None;
         self.group_failure = None;
-        self.managed = false;
+        self.layout_aligned = false;
         Ok(true)
     }
     pub fn alignment_event(&mut self) -> Option<AlignmentFailure> {
@@ -480,6 +487,18 @@ impl GameTracker {
         changed.then_some(self.alignment_failure).flatten()
     }
     pub fn window_message(&self) -> Option<String> {
+        if self.owner.as_ref().is_some_and(|owner| owner.is_running()) {
+            match self.owned_window() {
+                None => return Some("未找到已核验的游戏窗口，请返回 CS2 检查。".into()),
+                Some(window)
+                    if unsafe { IsIconic(window.hwnd) == 0 }
+                        && client_rect(window.hwnd).is_none() =>
+                {
+                    return Some("游戏画面范围暂不可用，请还原游戏窗口后复查。".into())
+                }
+                _ => {}
+            }
+        }
         self.alignment_failure
             .map(AlignmentFailure::message)
             .or_else(|| {
@@ -494,18 +513,20 @@ impl GameTracker {
         let work_area = monitor_layout_area(self.monitor, false);
         let layout_area = self.last_work_area;
         let target = layout_area.map(|work| workspace_layout(work).game);
-        let client = self.window.and_then(|window| client_rect(window.hwnd));
+        let client = self
+            .owned_window()
+            .and_then(|window| client_rect(window.hwnd));
         let outer = self.window.and_then(|window| unsafe {
             let mut value = WinRect::default();
             (GetWindowRect(window.hwnd, &mut value) != 0).then(|| rect(value))
         });
         serde_json::json!({
             "dpi": self.window.map(|window| unsafe { GetDpiForWindow(window.hwnd) }).filter(|dpi| *dpi != 0),
-            "client": client.map(area), "outer": outer.map(area),
+            "client": client.map(area), "actualClientRect": client.map(area),
+            "ownedWindow": self.owned_window().is_some(), "layoutAligned": self.layout_aligned, "outer": outer.map(area),
             "monitorBounds": monitor_bounds.map(area), "workArea": work_area.map(area),
             "layoutArea": layout_area.map(area), "target": target.map(area),
             "alignmentRetries": self.alignment_retries,
-            "preserveSettings": self.preserve_settings,
             "fullscreenLayout": self.fullscreen_layout,
             "alignmentFailure": self.alignment_failure.map(AlignmentFailure::diagnostic),
             "groupFailure": self.group_failure.map(crate::workspace_group::Failure::diagnostic),
@@ -519,14 +540,15 @@ impl GameTracker {
         }
         self.frame = None;
         self.window = found;
+        self.explicit_layout = false;
         self.generation += 1;
-        self.managed = false;
+        self.layout_aligned = false;
         self.alignment_failure = None;
         self.reported_alignment_failure = None;
         self.group_failure = None;
         self.last_client = None;
         self.last_dpi = 0;
-        self.alignment_retries = 30;
+        self.alignment_retries = if self.initial_layout_started { 0 } else { 30 };
         self.last_alignment = None;
         true
     }
@@ -562,6 +584,8 @@ impl GameTracker {
         let _coordinates = PhysicalCoordinates::enter();
         self.refresh_target();
         self.alignment_retries = 30;
+        // Only an explicit request rearms placement after initial alignment.
+        self.explicit_layout = true;
         self.apply_locked_layout()
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
@@ -572,14 +596,17 @@ impl GameTracker {
                 .is_some_and(|failure| failure.stage == "pending");
         self.last_work_area = Some(work);
         let mut layout = workspace_layout(work);
-        if self.preserve_settings {
-            self.managed = false;
+        if !self.explicit_layout && self.initial_layout_started && self.alignment_retries == 0 {
             self.alignment_retries = 0;
             self.alignment_failure = None;
-            self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
+            self.last_client = self
+                .owned_window()
+                .and_then(|window| client_rect(window.hwnd));
+            self.layout_aligned = self.last_client == Some(layout.game);
             return Some(layout);
         }
         if let Some(window) = self.window {
+            self.initial_layout_started = true;
             if self.frame.is_none() {
                 self.frame = self
                     .owner
@@ -604,15 +631,32 @@ impl GameTracker {
                 align_cs2(window, layout.game, correcting)
             }
         });
-        self.managed = matches!(alignment, Some(Ok(())));
+        self.layout_aligned = matches!(alignment, Some(Ok(())));
         self.alignment_failure = alignment.and_then(Result::err);
-        if let Some(window) = self.window.filter(|_| self.managed) {
+        if self
+            .alignment_failure
+            .is_some_and(|failure| failure.last_error == Some(1400))
+        {
+            // Destroyed between identity validation and Win32 placement: exit
+            // race, not a reason to widen retries or take another window.
+            self.observe(None);
+            self.alignment_retries = 0;
+            return Some(layout);
+        }
+        if let Some(window) = self.window.filter(|_| self.layout_aligned) {
             let mut outer = WinRect::default();
             if unsafe { GetWindowRect(window.hwnd, &mut outer) } != 0 {
                 layout = avoid_game_frame(layout, rect(outer));
             }
         }
-        self.alignment_retries = self.alignment_retries.saturating_sub(1);
+        self.alignment_retries = if self.layout_aligned {
+            0
+        } else {
+            self.alignment_retries.saturating_sub(1)
+        };
+        if self.alignment_retries == 0 {
+            self.explicit_layout = false;
+        }
         if self.alignment_retries == 0
             && self
                 .alignment_failure
@@ -633,6 +677,7 @@ impl GameTracker {
     }
     pub fn tick(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
+        let previous = self.window;
         let changed = self.refresh_target();
         if self
             .window
@@ -642,20 +687,43 @@ impl GameTracker {
         }
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout);
         if self.monitor == 0 || work.is_none() {
-            return self.restore_layout();
+            return self.apply_locked_layout();
         }
-        if work != self.last_work_area {
-            return self.restore_layout();
+        if work != self.last_work_area
+            && previous == self.window
+            && self.last_work_area.is_some()
+            && self.alignment_retries == 0
+        {
+            // After a request ends, monitor/DPI changes rearrange panels only.
+            self.last_work_area = work;
+            self.alignment_retries = 0;
+            self.layout_aligned = false;
+            return work.map(workspace_layout);
         }
-        if changed {
+        if work != self.last_work_area || changed {
             return self.apply_locked_layout();
         }
         let Some(window) = self.window else {
             return None;
         };
-        // CS2 can reject an early resize while constructing its render window.
-        // Retry on a bounded cadence; do not continuously fight user settings.
-        if !self.managed
+        let client = client_rect(window.hwnd);
+        let dpi = unsafe { GetDpiForWindow(window.hwnd) };
+        if client != self.last_client || dpi != self.last_dpi {
+            self.last_client = client;
+            self.last_dpi = dpi;
+            self.layout_aligned =
+                work.is_some_and(|area| client == Some(workspace_layout(area).game));
+            // SetWindowPos is asynchronous. Intermediate client/DPI changes
+            // must not cancel the existing confirmation/correction budget.
+            if self.layout_aligned || self.alignment_retries == 0 {
+                self.alignment_retries = 0;
+                self.alignment_failure = None;
+                self.explicit_layout = false;
+            }
+        }
+        // Initial and explicit requests share one bounded confirmation budget.
+        // Once finished, external geometry changes never rearm that request.
+        if !self.layout_aligned
             && self.alignment_retries > 0
             && self
                 .last_alignment
@@ -663,36 +731,23 @@ impl GameTracker {
         {
             return self.apply_locked_layout();
         }
-        let client = client_rect(window.hwnd);
-        let dpi = unsafe { GetDpiForWindow(window.hwnd) };
-        let recovered = alignment_geometry_recovered(self.last_client, self.last_dpi, client, dpi);
-        if client != self.last_client || dpi != self.last_dpi {
-            self.last_client = client;
-            self.last_dpi = dpi;
-            if self.managed {
-                return self.apply_locked_layout();
-            }
-            // A failed DPI/client query can outlive the startup retry window.
-            // Re-arm only when unavailable geometry becomes valid, not on user resizing.
-            if !self.preserve_settings && self.alignment_failure.is_some() && recovered {
-                self.alignment_retries = 30;
-                return self.apply_locked_layout();
-            }
-        }
         None
     }
     /// Cheap final check on the UI thread after a worker computed the rectangle.
     pub fn overlay_still_allowed(&self, panels: &[isize]) -> bool {
-        self.window.is_some_and(|game| {
+        self.owned_window().is_some_and(|game| {
             let mut pid = 0;
             unsafe {
                 GetWindowThreadProcessId(game.hwnd, &mut pid);
             }
             pid == game.pid
-                && !self.preserve_settings
-                && self.managed
+                && client_rect(game.hwnd).is_some()
                 && self.overlay_enabled
-                && unsafe { IsWindow(game.hwnd) != 0 && IsIconic(game.hwnd) == 0 }
+                && unsafe {
+                    IsWindow(game.hwnd) != 0
+                        && IsWindowVisible(game.hwnd) != 0
+                        && IsIconic(game.hwnd) == 0
+                }
                 && overlay_foreground_allowed(foreground(), game.hwnd, panels)
         })
     }
@@ -704,7 +759,7 @@ impl GameTracker {
         let foreground_allowed =
             overlay_foreground_allowed(foreground, window.hwnd, workspace_windows);
         overlay_visible(
-            !self.preserve_settings && self.managed && self.overlay_enabled,
+            self.overlay_enabled,
             unsafe { IsIconic(window.hwnd) != 0 },
             client,
             foreground_allowed,
@@ -775,13 +830,4 @@ pub fn overlay_diagnostic(
 
 fn overlay_foreground_allowed(foreground: isize, game: isize, workspace_windows: &[isize]) -> bool {
     foreground != 0 && (foreground == game || workspace_windows.contains(&foreground))
-}
-
-fn alignment_geometry_recovered(
-    previous: Option<Rect>,
-    previous_dpi: u32,
-    current: Option<Rect>,
-    dpi: u32,
-) -> bool {
-    (previous.is_none() || previous_dpi == 0) && current.is_some() && dpi != 0
 }

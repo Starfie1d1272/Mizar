@@ -67,8 +67,20 @@ it.each(['idle', 'streaming', 'late'])('video guard %s', async (scenario) => {
         const { requestType, requestId, requestData } = message.d;
         calls.push(requestType);
         let responseData: Record<string, unknown> = {};
-        if (requestType === 'GetProfileList') responseData = { currentProfileName: 'Personal' };
-        else if (requestType === 'GetStreamStatus' || requestType === 'GetRecordStatus')
+        if (requestType === 'GetSceneCollectionList')
+          responseData = { currentSceneCollectionName: 'Mizar 制播' };
+        else if (requestType === 'GetCurrentProgramScene')
+          responseData = { currentProgramSceneName: '赛前等待' };
+        else if (requestType === 'GetProfileList')
+          responseData = { currentProfileName: 'Personal' };
+        else if (
+          [
+            'GetStreamStatus',
+            'GetRecordStatus',
+            'GetReplayBufferStatus',
+            'GetVirtualCamStatus',
+          ].includes(requestType)
+        )
           responseData = {
             outputActive: streaming && requestType === 'GetStreamStatus',
             outputPaused: false,

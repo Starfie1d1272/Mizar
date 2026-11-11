@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -103,6 +103,43 @@ fn replace(from: &Path, to: &Path) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn read_config_bytes(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|e| io_error("无法读取原始游戏配置。", &e))?;
+    if !file
+        .metadata()
+        .map_err(|e| io_error("无法核实配置文件。", &e))?
+        .is_file()
+    {
+        return Err("原始游戏配置不是普通文件。".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io_error("无法读取原始游戏配置。", &e))?;
+    if bytes.len() > limit {
+        return Err("原始游戏配置超过读取上限，未修改设置。".into());
+    }
+    Ok(bytes)
+}
+
+fn original_files(video: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>, String> {
+    let convars = video
+        .parent()
+        .ok_or("配置目录缺失。")?
+        .join("cs2_machine_convars.vcfg");
+    let mut files = Vec::new();
+    for (path, limit) in [(video, 128 * 1024), (convars.as_path(), 256 * 1024)] {
+        if path == convars
+            && fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            files.push((path.to_path_buf(), None));
+        } else {
+            files.push((path.to_path_buf(), Some(read_config_bytes(path, limit)?)));
+        }
+    }
+    Ok(files)
 }
 
 struct StoreGuard {
@@ -402,110 +439,6 @@ impl SessionStore {
         !fs::symlink_metadata(self.root.join("spectator-full-pending.json"))
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     }
-    /// Caller must validate the current Steam account and that CS2 is stopped.
-    pub(crate) fn capture_spectator_snapshot(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-    ) -> Result<(), String> {
-        let guard = self.acquire_write_guard()?;
-        self.capture_spectator_snapshot_locked(&guard, video, executable, account, owned, applied)
-    }
-    fn capture_spectator_snapshot_locked(
-        &self,
-        _guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-    ) -> Result<(), String> {
-        if self.load()?.is_some() || self.spectator_pending() {
-            return Err("snapshot_pending".into());
-        }
-        crate::spectator_snapshot::capture(
-            &self.root,
-            video,
-            executable,
-            account,
-            owned,
-            applied,
-            atomic_write,
-        )
-    }
-    /// Explicit session capture; legacy pending records remain exclusive.
-    pub(crate) fn capture_spectator_snapshot_for_session(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-        session: &crate::cs2_config_identity::SessionIdentity,
-    ) -> Result<(), String> {
-        let guard = self.acquire_write_guard()?;
-        self.capture_spectator_snapshot_for_session_locked(
-            &guard, video, executable, account, owned, applied, session,
-        )
-    }
-    fn capture_spectator_snapshot_for_session_locked(
-        &self,
-        _guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-        session: &crate::cs2_config_identity::SessionIdentity,
-    ) -> Result<(), String> {
-        if self.load()?.is_some() || self.spectator_pending() {
-            return Err("snapshot_pending".into());
-        }
-        crate::spectator_snapshot::capture_for_session(
-            &self.root,
-            video,
-            executable,
-            account,
-            owned,
-            applied,
-            atomic_write,
-            Some(session),
-        )
-    }
-    /// Inspection only; caller supplies independently discovered identity.
-    pub(crate) fn spectator_snapshot_status(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-    ) -> Result<crate::spectator_snapshot::Status, String> {
-        let guard = self.acquire_write_guard()?;
-        self.spectator_snapshot_status_locked(&guard, video, executable, account)
-    }
-    fn spectator_snapshot_status_locked(
-        &self,
-        _guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-    ) -> Result<crate::spectator_snapshot::Status, String> {
-        Ok(crate::spectator_snapshot::status(
-            &self.root, video, executable, account,
-        ))
-    }
-    /// Caller must rediscover the same Steam account and confirm CS2 has exited.
-    pub(crate) fn recover_spectator_snapshot(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-    ) -> Result<(), String> {
-        let guard = self.acquire_write_guard()?;
-        self.recover_spectator_snapshot_locked(&guard, video, executable, account)
-    }
     fn recover_spectator_snapshot_locked(
         &self,
         _guard: &StoreGuard,
@@ -710,62 +643,6 @@ impl SessionStore {
         atomic_write(&self.spectator_path(), &bytes)?;
         crate::cs2_spectator::startup_files(record, crate::cs2_spectator::StartupFiles::Apply)
     }
-    /// Arm a bounded spectator-only transaction before a MulNX launch request.
-    pub(crate) fn prepare_mulnx_observer(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-    ) -> Result<bool, String> {
-        let guard = self.acquire_write_guard()?;
-        if self.load()?.is_some()
-            || self.spectator_pending()
-            || self.full_spectator_pending()
-            || self.playback_cleanup_pending()
-        {
-            return Err("请先完成上次游戏配置恢复。".into());
-        }
-        let mut record = crate::cs2_spectator::prepare_standalone(video, executable)?;
-        record["mulnx"] = json!({"account":account,"executable":fs::canonicalize(executable).map_err(|e| io_error("游戏路径无法确认。", &e))?,"pid":null,"created":null,"finished":false,"optionsClean":false});
-        self.save_new_spectator_record(&record)?;
-        self.spectator_load_attempted_locked(&guard, true)?;
-        Ok(true)
-    }
-    pub(crate) fn validate_unsubmitted_mulnx_observer(
-        &self,
-        video: &Path,
-        executable: &Path,
-        account: u32,
-    ) -> Result<(), String> {
-        let _guard = self.acquire_write_guard()?;
-        let record = self.spectator_record()?.ok_or("观战备份缺失。")?;
-        let saved_video = record["video"].as_str().ok_or("观战恢复目标缺失。")?;
-        let saved_exe = record["mulnx"]["executable"]
-            .as_str()
-            .ok_or("观战程序路径缺失。")?;
-        if record["loadAttempted"] != true
-            || record["mulnx"]["account"] != json!(account)
-            || !record["mulnx"]["pid"].is_null()
-            || !record["mulnx"]["created"].is_null()
-            || fs::canonicalize(saved_video).map_err(|e| io_error("观战目标无法确认。", &e))?
-                != fs::canonicalize(video).map_err(|e| io_error("当前目标无法确认。", &e))?
-            || fs::canonicalize(saved_exe).map_err(|e| io_error("观战程序无法确认。", &e))?
-                != fs::canonicalize(executable).map_err(|e| io_error("当前程序无法确认。", &e))?
-        {
-            return Err("Steam 账号、游戏路径或观战启动身份已变化。".into());
-        }
-        self.validate_spectator_launch()?;
-        let identity = if record["version"] == 3 {
-            Some(
-                record["hud"]["identity"]
-                    .as_str()
-                    .ok_or("HUD 键身份缺失。")?,
-            )
-        } else {
-            None
-        };
-        crate::cs2_spectator::validate_installed(executable, identity)
-    }
     pub(crate) fn cancel_unsubmitted_mulnx_observer(&self) -> Result<(), String> {
         let guard = self.acquire_write_guard()?;
         let record = self.spectator_record()?.ok_or("观战备份缺失。")?;
@@ -799,34 +676,6 @@ impl SessionStore {
                 .map_err(|e| json_error("观战状态无法保存。", &e))?,
         )
     }
-    pub(crate) fn bind_mulnx_observer(
-        &self,
-        pid: u32,
-        created: u64,
-        executable: &Path,
-    ) -> Result<(), String> {
-        let _guard = self.acquire_write_guard()?;
-        let mut record = self.spectator_record()?.ok_or("观战备份缺失。")?;
-        let actual =
-            fs::canonicalize(executable).map_err(|e| io_error("游戏路径无法确认。", &e))?;
-        if record["loadAttempted"] != true
-            || record["mulnx"]["finished"] == true
-            || record["mulnx"]["executable"] != json!(actual)
-            || !record["mulnx"]["pid"].is_null()
-            || !record["mulnx"]["created"].is_null()
-            || pid == 0
-            || created == 0
-        {
-            return Err("MulNX 观战启动身份无法确认。".into());
-        }
-        record["mulnx"]["pid"] = json!(pid);
-        record["mulnx"]["created"] = json!(created);
-        atomic_write(
-            &self.spectator_path(),
-            &serde_json::to_vec_pretty(&record)
-                .map_err(|e| json_error("观战身份无法保存。", &e))?,
-        )
-    }
     pub(crate) fn mulnx_observer_matches(
         &self,
         pid: u32,
@@ -845,15 +694,7 @@ impl SessionStore {
         {
             return Ok(None);
         }
-        Ok(Some(record["version"] == 3))
-    }
-    pub(crate) fn mulnx_observer_native(&self) -> Result<bool, String> {
-        Ok(self.spectator_record()?.is_some_and(|record| {
-            record["version"] == 3
-                && record["loadAttempted"] == true
-                && record["mulnx"]["pid"].as_u64().is_some_and(|n| n > 0)
-                && record["mulnx"]["created"].as_u64().is_some_and(|n| n > 0)
-        }))
+        Ok(Some(crate::cs2_spectator::has_hud(&record)?))
     }
     pub(crate) fn mulnx_observer_target(&self) -> Result<Option<(PathBuf, PathBuf, u32)>, String> {
         let Some(record) = self.spectator_record()? else {
@@ -881,21 +722,13 @@ impl SessionStore {
     }
     pub fn validate_spectator_launch(&self) -> Result<(), String> {
         let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 && record["version"] != 3 {
-            return Err("观战原绑定备份版本无法核实。".into());
-        }
-        let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
-        crate::cs2_spectator::check_archive(video)?;
-        crate::cs2_spectator::validate_bindings(video, &record["bindings"])?;
-        if record["version"] == 3 {
-            crate::cs2_spectator::validate_hud(video, &record["hud"])?;
-        }
+        crate::cs2_spectator::validate_prepared(&record)?;
         crate::cs2_spectator::startup_files(&record, crate::cs2_spectator::StartupFiles::Validate)?;
         Ok(())
     }
     pub fn spectator_hud_identity(&self) -> Result<Option<String>, String> {
         let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 3 {
+        if !crate::cs2_spectator::has_hud(&record)? {
             return Ok(None);
         }
         let identity = record["hud"]["identity"]
@@ -919,7 +752,7 @@ impl SessionStore {
             self.validate_spectator_launch()?;
         }
         let mut record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-        if record["version"] != 2 && record["version"] != 3 {
+        if record["version"] != 2 && record["version"] != 3 && record["version"] != 4 {
             return Err("观战原绑定备份版本无法核实。".into());
         }
         record["loadAttempted"] = json!(attempted);
@@ -940,7 +773,11 @@ impl SessionStore {
             return Ok(());
         };
         let result = (|| {
-            if record["version"] != 1 && record["version"] != 2 && record["version"] != 3 {
+            if record["version"] != 1
+                && record["version"] != 2
+                && record["version"] != 3
+                && record["version"] != 4
+            {
                 return Err("观战恢复记录版本不支持。".into());
             }
             let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
@@ -948,32 +785,37 @@ impl SessionStore {
                 return Err("观战恢复路径无效。".into());
             }
             // CFGs may already have been applied before Steam was submitted.
-            crate::cs2_spectator::startup_files(
+            let startup_result = crate::cs2_spectator::startup_files(
                 &record,
                 crate::cs2_spectator::StartupFiles::Restore,
-            )?;
-            if record["version"] == 2 || record["version"] == 3 {
+            );
+            if record["version"] != 1 {
                 match record["loadAttempted"].as_bool() {
                     Some(false) => {
+                        startup_result?;
                         return fs::remove_file(self.spectator_path())
-                            .map_err(|e| io_error("未加载的观战备份记录未能清理，请重试。", &e))
+                            .map_err(|e| io_error("未加载的观战备份记录未能清理，请重试。", &e));
                     }
                     Some(true) => (),
                     None => return Err("观战加载记录无法核实，原值备份仍保留。".into()),
                 }
             }
-            let bindings_result = if record["version"] == 3 {
-                crate::cs2_spectator::restore_v3_bindings(
+            let bindings_result = match record["version"].as_u64() {
+                Some(2) => {
+                    crate::cs2_spectator::restore_keys(video, Some(&record["bindings"]), None)
+                }
+                Some(3) => crate::cs2_spectator::restore_keys(
                     video,
-                    &record["bindings"],
-                    &record["hud"],
-                )
-            } else if record["version"] == 2 {
-                crate::cs2_spectator::restore_bindings(video, &record["bindings"])
-            } else {
-                Ok(()) // Legacy records own only the spectator convar.
+                    Some(&record["bindings"]),
+                    Some(&record["hud"]),
+                ),
+                Some(4) => crate::cs2_spectator::restore_keys(video, None, Some(&record["hud"])),
+                _ => Ok(()), // Version 1 owns only the spectator convar.
             };
             let convar_result = (|| {
+                if record["version"] == 4 {
+                    return Ok(());
+                }
                 crate::cs2_spectator::check_archive(video)?;
                 let original = record["original"].as_str().ok_or("观战原值备份缺失。")?;
                 if original.len() > 256 * 1024 {
@@ -1010,6 +852,7 @@ impl SessionStore {
                 .err()
                 .into_iter()
                 .chain(convar_result.err())
+                .chain(startup_result.err())
                 .collect();
             if !errors.is_empty() {
                 return Err(errors.join(" "));
@@ -1168,73 +1011,6 @@ impl SessionStore {
             Err(_) => Err("CS2 画质设置无法读取。".into()),
         }
     }
-    fn full_optins(&self) -> Result<Value, String> {
-        let path = self.root.join("full-spectator-optins.json");
-        match fs::symlink_metadata(&path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(json!({"version":1,"accounts":{}}))
-            }
-            Err(_) => Err("完整解说键位选择无法读取。".into()),
-            Ok(metadata) => {
-                if !metadata.is_file()
-                    || metadata.len() > 64 * 1024
-                    || crate::spectator_snapshot::check_path(&path, false).is_err()
-                {
-                    return Err("完整解说键位选择无法安全读取。".into());
-                }
-                let bytes = fs::read(&path).map_err(|_| "完整解说键位选择无法读取。")?;
-                if bytes.len() > 64 * 1024 {
-                    return Err("完整解说键位选择过大。".into());
-                }
-                let value: Value =
-                    serde_json::from_slice(&bytes).map_err(|_| "完整解说键位选择损坏。")?;
-                if value["version"] != 1
-                    || value["accounts"].as_object().is_none_or(|v| {
-                        v.len() > 128
-                            || v.iter().any(|(k, v)| {
-                                k.parse::<u32>().ok().filter(|n| *n != 0).is_none() || v != true
-                            })
-                    })
-                {
-                    return Err("完整解说键位选择损坏。".into());
-                }
-                Ok(value)
-            }
-        }
-    }
-    pub(crate) fn full_optin(&self, account: u32) -> Result<bool, String> {
-        if account == 0 {
-            return Err("Steam 账号无法确认。".into());
-        }
-        Ok(self.full_optins()?["accounts"]
-            .get(account.to_string())
-            .is_some())
-    }
-    pub(crate) fn set_full_optin(&self, account: u32, enabled: bool) -> Result<(), String> {
-        let _guard = self.acquire_write_guard()?;
-        if account == 0 {
-            return Err("Steam 账号无法确认。".into());
-        }
-        if self.load()?.is_some() {
-            return Err("请结束制作后修改解说键位选择。".into());
-        }
-        let mut value = self.full_optins()?;
-        let accounts = value["accounts"]
-            .as_object_mut()
-            .ok_or("完整解说键位选择损坏。")?;
-        if enabled {
-            if accounts.len() >= 128 && !accounts.contains_key(&account.to_string()) {
-                return Err("保存的账号选择过多。".into());
-            }
-            accounts.insert(account.to_string(), json!(true));
-        } else {
-            accounts.remove(&account.to_string());
-        }
-        atomic_write(
-            &self.root.join("full-spectator-optins.json"),
-            &serde_json::to_vec(&value).map_err(|_| "完整解说键位选择无法保存。")?,
-        )
-    }
 
     pub fn set_preferences(&self, preferences: Preferences) -> Result<(), String> {
         let guard = self.acquire_write_guard()?;
@@ -1245,13 +1021,23 @@ impl SessionStore {
         _guard: &StoreGuard,
         preferences: Preferences,
     ) -> Result<(), String> {
-        if self.load()?.is_some() {
-            return Err("请结束制作并恢复配置后再修改启动设置。".into());
-        }
+        // Preferences are for the next launch only. The active session's
+        // original/applied values and restoration ownership stay immutable.
         atomic_write(
             &self.root.join("preferences.json"),
             &serde_json::to_vec(&preferences.json()).unwrap(),
         )
+    }
+
+    pub(crate) fn check_start_recovery(&self) -> Result<(), String> {
+        if self.load()?.is_some() || self.full_spectator_pending() {
+            return Err("请先完成上次游戏设置恢复。".into());
+        }
+        // Even an unsubmitted record may already own applied startup scripts.
+        if self.spectator_record()?.is_some() {
+            return Err("请先恢复上次观战原值。".into());
+        }
+        Ok(())
     }
 
     /// Save opaque source bytes before attempting any interpretation. These
@@ -1265,10 +1051,7 @@ impl SessionStore {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
         let target = fs::canonicalize(video).map_err(|_| "无法核实备份目标。")?;
-        let convars = video
-            .parent()
-            .ok_or("配置目录缺失。")?
-            .join("cs2_machine_convars.vcfg");
+        let files = original_files(video)?;
         let snapshot = self.root.join(format!(
             "original-{}",
             std::time::SystemTime::now()
@@ -1279,31 +1062,12 @@ impl SessionStore {
         fs::create_dir_all(&self.root).map_err(|_| "无法创建原始配置备份目录。")?;
         fs::create_dir(&snapshot).map_err(|_| "无法创建独立的原始配置备份。")?;
         let mut absent = Vec::new();
-        for (path, limit) in [(video, 128 * 1024), (convars.as_path(), 256 * 1024)] {
-            let metadata = match fs::metadata(path) {
-                Ok(metadata) => metadata,
-                Err(error)
-                    if path == convars
-                        && error.kind() == std::io::ErrorKind::NotFound
-                        && fs::symlink_metadata(path)
-                            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    absent.push("cs2_machine_convars.vcfg");
-                    continue;
-                }
-                Err(_) => return Err("无法读取原始配置大小或权限，未修改设置。".into()),
-            };
-            if metadata.len() > limit as u64 {
-                return Err("原始游戏配置超过备份上限，未修改设置。".into());
+        for (path, bytes) in files {
+            let name = path.file_name().ok_or("备份文件名缺失。")?;
+            match bytes {
+                Some(bytes) => atomic_write(&snapshot.join(name), &bytes)?,
+                None => absent.push(name.to_string_lossy().to_string()),
             }
-            let bytes = fs::read(path).map_err(|_| "无法备份原始游戏配置，未修改设置。")?;
-            if bytes.len() > limit {
-                return Err("原始游戏配置超过备份上限，未修改设置。".into());
-            }
-            atomic_write(
-                &snapshot.join(path.file_name().ok_or("备份文件名缺失。")?),
-                &bytes,
-            )?;
         }
         atomic_write(
             &snapshot.join("absent.json"),
@@ -1342,8 +1106,8 @@ impl SessionStore {
         original: &str,
         frame: Option<(&str, &str)>,
     ) -> Result<(), String> {
-        if self.spectator_pending() || self.playback_cleanup_pending() {
-            return Err("请先完成上次观战或试播恢复。".into());
+        if self.spectator_pending() {
+            return Err("请先完成上次观战恢复。".into());
         }
         let restored = cs2_video::compatible_restore(backup, original)?;
         let machine = video
@@ -1442,63 +1206,78 @@ impl SessionStore {
         fs::remove_file(self.journal_path())
             .map_err(|e| io_error("设置已恢复，记录清理失败，请重试。", &e))
     }
-    pub fn prepare_preserved(&self, video: &Path, executable: &Path) -> Result<Value, String> {
+    pub fn prepare_preserved(
+        &self,
+        video: &Path,
+        executable: &Path,
+        size: cs2_video::VideoSize,
+    ) -> Result<Value, String> {
         let guard = self.acquire_write_guard()?;
-        self.prepare_preserved_locked(&guard, video, executable)
+        self.prepare_preserved_locked(&guard, video, executable, size)
     }
     fn prepare_preserved_locked(
         &self,
         guard: &StoreGuard,
         video: &Path,
         executable: &Path,
+        size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        if self.mulnx_observer_target()?.is_some() {
-            return Err("请先恢复上次 MulNX 观战键位。".into());
-        }
+        self.check_start_recovery()?;
         self.backup_originals_locked(guard, video)?;
-        let mut value = json!({"version":3,"preserveSettings":true,"video":video,"executable":executable,
-            "launchAttempted":false,"pid":null,"created":null});
-        let spectator = if self.spectator_pending() || self.full_spectator_pending() {
-            Err("上次观战键位尚未恢复，本次未加载观战 CFG。".into())
-        } else {
-            crate::cs2_spectator::prepare_standalone(video, executable)
-        };
-        match spectator {
-            Ok(record) => {
-                // A failed or partial CFG write must never fall through to launch.
-                self.save_new_spectator_record(&record)?;
-                value["spectatorCfg"] = json!(true);
-                value["nativeHudToggle"] = json!(record["version"] == 3);
-                if record["version"] == 3 {
-                    value["hudIdentity"] = record["hud"]["identity"].clone();
+        let original = String::from_utf8(read_config_bytes(video, 128 * 1024)?)
+            .map_err(|_| "视频配置编码不支持，未修改游戏设置。")?;
+        let owned = cs2_video::launch_geometry(size);
+        let applied = cs2_video::apply_geometry(&original, &owned)?;
+        // The existing video-only transaction owns geometry, never rendering or FPS.
+        let mut value = json!({"version":1,"preserveSettings":true,"video":video,"executable":executable,
+            "original":original,"applied":applied,"owned":owned,"launchAttempted":false,"pid":null,"created":null});
+        let spectator = crate::cs2_spectator::prepare_standalone(video, executable);
+        let new_spectator = spectator.is_ok();
+        let result = (|| {
+            match spectator {
+                Ok(record) => {
+                    self.save_new_spectator_record(&record)?;
+                    value["spectatorCfg"] = json!(true);
+                    let native_hud_toggle = crate::cs2_spectator::has_hud(&record)?;
+                    value["nativeHudToggle"] = json!(native_hud_toggle);
+                    if native_hud_toggle {
+                        value["hudIdentity"] = record["hud"]["identity"].clone();
+                    }
+                    if let Some(warning) = record["hudWarning"]
+                        .as_str()
+                        .or_else(|| record["numberWarning"].as_str())
+                    {
+                        value["spectatorWarning"] = json!(warning);
+                    }
                 }
-                if let Some(warning) = record["hudWarning"].as_str() {
-                    value["spectatorWarning"] = json!(warning);
-                }
+                Err(warning) => value["spectatorWarning"] = json!(warning),
             }
-            Err(warning) => value["spectatorWarning"] = json!(warning),
+            self.commit_files_locked(guard, &value, atomic_write)?;
+            Ok(value)
+        })();
+        if result.is_err() && new_spectator && self.load()?.is_none() {
+            if let Err(cleanup) = self.restore_spectator_locked(guard) {
+                return Err(format!(
+                    "{} 观战准备未能收尾：{cleanup}",
+                    result.unwrap_err()
+                ));
+            }
         }
-        self.save_locked(guard, &value)?;
-        Ok(value)
+        result
     }
-    pub fn prepare_with_frame_rate(
-        &self,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-    ) -> Result<Value, String> {
-        let guard = self.acquire_write_guard()?;
-        self.prepare_with_frame_rate_locked(&guard, video, executable, size)
-    }
-    fn prepare_with_frame_rate_locked(
-        &self,
-        guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-    ) -> Result<Value, String> {
-        self.backup_originals_locked(guard, video)?;
-        self.prepare_backed_up_locked(guard, video, executable, size)
+
+    /// Disk edits between preparation and submission are not launch permission.
+    pub(crate) fn validate_video_launch(&self) -> Result<(), String> {
+        let _guard = self.acquire_write_guard()?;
+        let value = self.load()?.ok_or("游戏窗口配置事务缺失。")?;
+        let video = Path::new(value["video"].as_str().ok_or("游戏窗口配置路径缺失。")?);
+        let applied = value["applied"]
+            .as_str()
+            .ok_or("请先恢复原启动记录，再重新打开工作台。")?;
+        if read_config_bytes(video, 128 * 1024)? != applied.as_bytes() {
+            return Err("游戏配置在启动前发生变化，未启动游戏；请先恢复后重试。".into());
+        }
+        Ok(())
     }
     pub fn prepare_backed_up(
         &self,
@@ -1516,62 +1295,57 @@ impl SessionStore {
         executable: &Path,
         size: cs2_video::VideoSize,
     ) -> Result<Value, String> {
-        if self.mulnx_observer_target()?.is_some() {
-            return Err("请先恢复上次 MulNX 观战键位。".into());
-        }
+        self.check_start_recovery()?;
         let preferences = self.preferences()?;
         let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
-        let spectator = if self.spectator_pending() || self.full_spectator_pending() {
-            Err("上次观战字段或键位尚未恢复，本次未加载观战 CFG；可退出游戏后重试恢复。".into())
-        } else {
-            crate::cs2_spectator::prepare(&frames, video, executable)
-        };
-        let frames = if spectator.is_ok() {
-            cs2_frame_rate::prepare_with_observer(
-                video,
-                executable,
-                preferences.frame_rate_limit,
-                true,
-            )?
-        } else {
-            frames
-        };
-        if let Ok(record) = &spectator {
-            // Save key originals before any startup CFG can execute our bindings.
-            self.save_new_spectator_record(record)?;
-        }
-        let mut journal =
-            self.prepare_files_locked(guard, video, executable, size, Some(frames))?;
-        match spectator {
-            Ok(_) => {
-                journal["spectatorCfg"] = json!(true);
-                let record = self.spectator_record()?.ok_or("观战原值备份缺失。")?;
-                journal["nativeHudToggle"] = json!(record["version"] == 3);
-                if record["version"] == 3 {
-                    journal["hudIdentity"] = record["hud"]["identity"].clone();
+        // Video/FPS validation must finish before spectator::prepare can install a CFG.
+        let mut journal = self.plan_files(video, executable, size, Some(frames.clone()))?;
+        let spectator = crate::cs2_spectator::prepare(&frames, video, executable);
+        let new_spectator = spectator.is_ok();
+        let result = (|| {
+            match spectator {
+                Ok(record) => {
+                    let frames = cs2_frame_rate::prepare_with_observer(
+                        video,
+                        executable,
+                        preferences.frame_rate_limit,
+                        true,
+                    )?;
+                    journal["frameRateFiles"] = json!(frames);
+                    frame_files(&journal, video, executable)?;
+                    // Save key originals before any startup CFG can execute our bindings.
+                    self.save_new_spectator_record(&record)?;
+                    journal["spectatorCfg"] = json!(true);
+                    let native_hud_toggle = crate::cs2_spectator::has_hud(&record)?;
+                    journal["nativeHudToggle"] = json!(native_hud_toggle);
+                    if native_hud_toggle {
+                        journal["hudIdentity"] = record["hud"]["identity"].clone();
+                    }
+                    if let Some(warning) = record["hudWarning"]
+                        .as_str()
+                        .or_else(|| record["numberWarning"].as_str())
+                    {
+                        journal["spectatorWarning"] = json!(warning);
+                    }
                 }
-                if let Some(warning) = record["hudWarning"].as_str() {
-                    journal["spectatorWarning"] = json!(warning);
+                Err(warning) => {
+                    journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"));
                 }
             }
-            Err(warning) => {
-                journal["spectatorWarning"] = json!(format!("数字键观战预设未应用：{warning}"))
+            self.commit_files_locked(guard, &journal, atomic_write)?;
+            Ok(journal)
+        })();
+        if result.is_err() && new_spectator && self.load()?.is_none() {
+            // Only this call's unsubmitted optional record can be retired. A saved
+            // core journal owns any partial write and must remain recoverable.
+            if let Err(cleanup) = self.restore_spectator_locked(guard) {
+                return Err(format!(
+                    "{} 观战准备未能收尾：{cleanup}",
+                    result.unwrap_err()
+                ));
             }
         }
-        self.save_locked(guard, &journal)?;
-        Ok(journal)
-    }
-    fn prepare_files_locked(
-        &self,
-        guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        frames: Option<Vec<Value>>,
-    ) -> Result<Value, String> {
-        let plan = self.plan_files(video, executable, size, frames)?;
-        self.commit_files_locked(guard, &plan, atomic_write)?;
-        Ok(plan)
+        result
     }
 
     /// Construct a plan from current files without creating a journal or writing configuration.
@@ -1585,11 +1359,7 @@ impl SessionStore {
         if self.load()?.is_some() {
             return Err("上次 CS2 配置尚未恢复，请先退出游戏并重试恢复。".into());
         }
-        let bytes =
-            fs::read(video).map_err(|_| "未找到当前 Steam 账号的视频配置，请先运行一次 CS2。")?;
-        if bytes.len() > 128 * 1024 {
-            return Err("CS2 视频配置过大，未修改游戏设置。".into());
-        }
+        let bytes = read_config_bytes(video, 128 * 1024)?;
         let original =
             String::from_utf8(bytes).map_err(|_| "视频配置编码不支持，未修改游戏设置。")?;
         let preferences = self.preferences()?;
@@ -1604,371 +1374,6 @@ impl SessionStore {
         // Validate frame paths and scope while constructing the plan.
         frame_files(&value, video, executable)?;
         Ok(value)
-    }
-
-    /// Annotate an independently constructed plan; callers still own identity verification.
-    fn plan_files_for_session(
-        &self,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        frames: Option<Vec<Value>>,
-        session: &crate::cs2_config_identity::SessionIdentity,
-    ) -> Result<Value, String> {
-        if fs::canonicalize(video).map_err(|_| "identity_invalid")? != session.config.video
-            || fs::canonicalize(executable).map_err(|_| "identity_invalid")?
-                != session.config.executable
-        {
-            return Err("identity_changed".into());
-        }
-        let mut plan = self.plan_files(video, executable, size, frames)?;
-        session.write(&mut plan).map_err(str::to_string)?;
-        Ok(plan)
-    }
-
-    /// Prepare both owners under the same Store guard. The Host must have
-    /// independently verified the Steam account and confirmed CS2 is stopped.
-    pub(crate) fn prepare_coordinated(
-        &self,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        frames: Option<Vec<Value>>,
-        session: &crate::cs2_config_identity::SessionIdentity,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-        candidate: &str,
-    ) -> Result<Value, String> {
-        let guard = self.acquire_write_guard()?;
-        self.prepare_coordinated_locked(
-            &guard,
-            video,
-            executable,
-            size,
-            frames,
-            session,
-            owned,
-            applied,
-            candidate,
-            atomic_write,
-            None,
-            None,
-        )
-    }
-
-    /// Commit a source-bound, explicitly selected full configuration.
-    pub(crate) fn prepare_eligible(
-        &self,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        session_id: &str,
-        fingerprint: &crate::spectator_eligibility::Fingerprint,
-        attachments: &Value,
-    ) -> Result<Value, String> {
-        self.prepare_eligible_with_writer(
-            video,
-            executable,
-            size,
-            session_id,
-            fingerprint,
-            attachments,
-            atomic_write,
-        )
-    }
-    pub(crate) fn prepare_eligible_with_writer(
-        &self,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        session_id: &str,
-        fingerprint: &crate::spectator_eligibility::Fingerprint,
-        attachments: &Value,
-        write: fn(&Path, &[u8]) -> Result<(), String>,
-    ) -> Result<Value, String> {
-        let guard = self.acquire_write_guard()?;
-        let eligible = crate::spectator_eligibility::revalidate(
-            fingerprint,
-            video,
-            executable,
-            fingerprint.identity.account,
-        )
-        .map_err(|e| e.message().to_string())?;
-        let original = fs::read_to_string(&fingerprint.identity.keys)
-            .map_err(|_| "键位配置无法读取，使用基础观战模式。")?;
-        let (owned, applied, candidate) =
-            crate::spectator_eligibility::build_plan(&eligible, &original)
-                .map_err(|e| e.message().to_string())?;
-        let preferences = self.preferences()?;
-        let frames = cs2_frame_rate::prepare(video, executable, preferences.frame_rate_limit)?;
-        crate::cs2_spectator::full_mode_convar_compatible(&frames, video)?;
-        let session = crate::cs2_config_identity::SessionIdentity {
-            session_id: session_id.into(),
-            config: fingerprint.identity.clone(),
-        };
-        self.prepare_coordinated_locked(
-            &guard,
-            video,
-            executable,
-            size,
-            Some(frames),
-            &session,
-            &owned,
-            &applied,
-            &candidate,
-            write,
-            Some(fingerprint),
-            Some(attachments),
-        )
-    }
-
-    /// Recheck frozen source and expected applied bytes before submitting Steam.
-    pub(crate) fn validate_full_launch(
-        &self,
-        fingerprint: &crate::spectator_eligibility::Fingerprint,
-    ) -> Result<(), String> {
-        let _guard = self.acquire_write_guard()?;
-        let core = self.load()?.ok_or("完整解说键位记录缺失。")?;
-        let session = crate::cs2_config_identity::SessionIdentity::read(&core)
-            .map_err(str::to_string)?
-            .ok_or("完整解说键位身份缺失。")?;
-        if core["fullSnapshot"] != true
-            || core["configWriteAttempted"] != true
-            || session.config != fingerprint.identity
-            || crate::spectator_snapshot::linked_session(&self.root)?.as_ref() != Some(&session)
-        {
-            return Err("完整解说键位身份已变化，请恢复后重试。".into());
-        }
-        let video = Path::new(core["video"].as_str().ok_or("完整解说键位路径缺失。")?);
-        let exe = Path::new(
-            core["executable"]
-                .as_str()
-                .ok_or("完整解说键位路径缺失。")?,
-        );
-        let applied = core["fullAppliedSha256"]
-            .as_str()
-            .ok_or("完整解说键位摘要缺失。")?;
-        let frames = frame_files(&core, video, exe)?;
-        unchanged(
-            video,
-            core["applied"]
-                .as_str()
-                .ok_or("完整解说键位记录损坏。")?
-                .as_bytes(),
-        )?;
-        for (path, _, next) in &frames {
-            unchanged(path, next.as_bytes())?;
-        }
-        crate::spectator_eligibility::verify_for_launch(
-            fingerprint,
-            applied,
-            video,
-            exe,
-            session.config.account,
-            &frames,
-        )
-        .map_err(|e| e.message().to_string())
-    }
-
-    fn prepare_coordinated_locked(
-        &self,
-        guard: &StoreGuard,
-        video: &Path,
-        executable: &Path,
-        size: cs2_video::VideoSize,
-        frames: Option<Vec<Value>>,
-        session: &crate::cs2_config_identity::SessionIdentity,
-        owned: &std::collections::BTreeSet<crate::spectator_recovery_plan::Input>,
-        applied: &crate::spectator_recovery_plan::Bindings,
-        candidate: &str,
-        write: fn(&Path, &[u8]) -> Result<(), String>,
-        eligibility: Option<&crate::spectator_eligibility::Fingerprint>,
-        attachments: Option<&Value>,
-    ) -> Result<Value, String> {
-        if self.load()?.is_some() || self.spectator_pending() || self.full_spectator_pending() {
-            return Err("snapshot_pending".into());
-        }
-        let mut core = self.plan_files_for_session(video, executable, size, frames, session)?;
-        if let Some(attachment) = attachments {
-            let object = attachment.as_object().ok_or("invalid_plan")?;
-            if object.keys().any(|key| {
-                !["consoleDiagnostics", "consoleDiagnosticsWarning"].contains(&key.as_str())
-            }) {
-                return Err("invalid_plan".into());
-            }
-            for (key, value) in object {
-                core[key] = value.clone();
-            }
-        }
-        if let Some(fingerprint) = eligibility {
-            if fingerprint.identity != session.config {
-                return Err("identity_changed".into());
-            }
-            crate::spectator_eligibility::revalidate(
-                fingerprint,
-                video,
-                executable,
-                session.config.account,
-            )
-            .map_err(|e| e.message().to_string())?;
-            core["fullSource"] =
-                json!({"sha256":fingerprint.default_sha256,"source":fingerprint.source});
-        }
-        let (key, original_keys, applied_keys) = crate::spectator_snapshot::plan_application(
-            video,
-            executable,
-            session.config.account,
-            session,
-            owned,
-            applied,
-            candidate,
-        )?;
-        if eligibility.is_some() {
-            use sha2::{Digest, Sha256};
-            core["fullAppliedSha256"] = json!(format!("{:x}", Sha256::digest(&applied_keys)));
-        }
-        let key_identity = fs::canonicalize(&key).map_err(|_| "identity_invalid")?;
-        if key_identity != session.config.keys
-            || fs::canonicalize(video).map_err(|_| "identity_invalid")? == key_identity
-        {
-            return Err("scope_overlap".into());
-        }
-        for (path, _, _) in frame_files(&core, video, executable)? {
-            if fs::canonicalize(path).map_err(|_| "identity_invalid")? == key_identity {
-                return Err("scope_overlap".into());
-            }
-        }
-        self.preflight_core_plan(&core)?;
-        crate::spectator_snapshot::capture_coordinated(
-            &self.root,
-            video,
-            executable,
-            session.config.account,
-            owned,
-            applied,
-            write,
-            session,
-        )?;
-        crate::spectator_snapshot::verify_prepared(
-            &self.root,
-            video,
-            executable,
-            session.config.account,
-            session,
-            owned,
-            applied,
-            &original_keys,
-            false,
-        )?;
-        core["fullSnapshot"] = json!(true);
-        core["configWriteAttempted"] = json!(false);
-        self.save_coordinated_locked(guard, &core, write)?;
-        // Both records independently say a write may occur before either owner writes.
-        crate::spectator_snapshot::mark_coordinated_write(
-            &self.root,
-            video,
-            executable,
-            session.config.account,
-            session,
-            owned,
-            applied,
-            &original_keys,
-            write,
-        )?;
-        core["configWriteAttempted"] = json!(true);
-        self.save_coordinated_locked(guard, &core, write)?;
-        self.preflight_core_plan(&core)?;
-        crate::spectator_snapshot::verify_prepared(
-            &self.root,
-            video,
-            executable,
-            session.config.account,
-            session,
-            owned,
-            applied,
-            &original_keys,
-            true,
-        )?;
-        if let Some(fingerprint) = eligibility {
-            crate::spectator_eligibility::revalidate(
-                fingerprint,
-                video,
-                executable,
-                session.config.account,
-            )
-            .map_err(|e| e.message().to_string())?;
-        }
-        let applied_video = core["applied"].as_str().ok_or("invalid_plan")?;
-        write(video, applied_video.as_bytes())?;
-        unchanged(video, applied_video.as_bytes())?;
-        for (path, original, next) in frame_files(&core, video, executable)? {
-            unchanged(path, original.as_bytes())?;
-            write(path, next.as_bytes())?;
-            unchanged(path, next.as_bytes())?;
-        }
-        crate::spectator_snapshot::verify_prepared(
-            &self.root,
-            video,
-            executable,
-            session.config.account,
-            session,
-            owned,
-            applied,
-            &original_keys,
-            true,
-        )?;
-        if let Some(fingerprint) = eligibility {
-            let frames = frame_files(&core, video, executable)?;
-            crate::spectator_eligibility::revalidate_after_core(
-                fingerprint,
-                video,
-                executable,
-                session.config.account,
-                &frames,
-            )
-            .map_err(|e| e.message().to_string())?;
-        }
-        if applied_keys != original_keys {
-            write(&key, &applied_keys)?;
-        }
-        crate::spectator_snapshot::verify_applied(
-            video,
-            executable,
-            session.config.account,
-            session,
-            &applied_keys,
-        )?;
-        Ok(core)
-    }
-
-    fn save_coordinated_locked(
-        &self,
-        _guard: &StoreGuard,
-        value: &Value,
-        write: fn(&Path, &[u8]) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let bytes = serde_json::to_vec_pretty(value).map_err(|_| "invalid_plan")?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err("invalid_plan".into());
-        }
-        write(&self.journal_path(), &bytes)?;
-        if fs::read(self.journal_path()).map_err(|_| "journal_readback_failed")? != bytes
-            || self.load()?.as_ref() != Some(value)
-        {
-            return Err("journal_readback_failed".into());
-        }
-        Ok(())
-    }
-
-    fn preflight_core_plan(&self, value: &Value) -> Result<(), String> {
-        let video = Path::new(value["video"].as_str().ok_or("invalid_plan")?);
-        let executable = Path::new(value["executable"].as_str().ok_or("invalid_plan")?);
-        let original = value["original"].as_str().ok_or("invalid_plan")?;
-        unchanged(video, original.as_bytes())?;
-        for (path, original, _) in frame_files(value, video, executable)? {
-            unchanged(path, original.as_bytes())?;
-        }
-        Ok(())
     }
 
     /// Recheck every original, then durably save the plan before the first write.
@@ -2142,10 +1547,22 @@ impl SessionStore {
         let applied = value["applied"].as_str().ok_or("CS2 应用记录缺失。")?;
         let owned: BTreeMap<String, String> =
             serde_json::from_value(value["owned"].clone()).map_err(|_| "CS2 字段恢复记录损坏。")?;
-        if !cs2_video::supported_preset(&owned) {
-            return Err("CS2 字段恢复记录不支持。".into());
-        }
-        if cs2_video::apply(original, &owned)? != applied {
+        let geometry_only = value["preserveSettings"] == true;
+        let expected = if geometry_only {
+            if value["version"] != 1
+                || value.get("frameRateFiles").is_some()
+                || value.get("frameRateLimit").is_some()
+            {
+                return Err("窗口几何恢复记录范围无效。".into());
+            }
+            cs2_video::apply_geometry(original, &owned)?
+        } else {
+            if !cs2_video::supported_preset(&owned) {
+                return Err("CS2 字段恢复记录不支持。".into());
+            }
+            cs2_video::apply(original, &owned)?
+        };
+        if expected != applied {
             return Err("CS2 原配置与应用记录不一致，备份仍保留。".into());
         }
         let executable = Path::new(value["executable"].as_str().ok_or("CS2 程序路径缺失。")?);
@@ -2163,12 +1580,17 @@ impl SessionStore {
                 cs2_frame_rate::restored(&value["frameRateFiles"][index], &current)?,
             ));
         }
-        let current =
-            fs::read_to_string(path).map_err(|_| "无法读取游戏视频配置；原配置备份仍保留。")?;
-        let restored = if current == original {
-            current.clone()
+        let current = String::from_utf8(read_config_bytes(path, 128 * 1024)?)
+            .map_err(|_| "游戏视频配置编码不支持，原配置备份仍保留。")?;
+        let (restored, geometry_yielded) = if current == original {
+            (current.clone(), false)
+        } else if geometry_only {
+            cs2_video::restore_geometry(original, applied, &current, &owned)?
         } else {
-            cs2_video::restore(original, applied, &current, &owned)?
+            (
+                cs2_video::restore(original, applied, &current, &owned)?,
+                false,
+            )
         };
         // Recheck all inputs before the first write, and each file immediately
         // before replacement. A later conflict retains the journal for retry.
@@ -2196,8 +1618,15 @@ impl SessionStore {
         }
         // Optional errors retain their own original + diagnostic and cannot
         // prevent completion of the existing FPS/video transaction.
-        let spectator_error = self.restore_core_spectator_locked(guard);
-        self.finish_core_restore_locked(guard, playback_handoff, spectator_error)
+        let mut warning = self.restore_core_spectator_locked(guard);
+        if geometry_yielded {
+            let notice = "窗口设置已被更改，已保留这些新值；其余受管设置已恢复。";
+            warning = Some(match warning {
+                Some(other) => format!("{notice} {other}"),
+                None => notice.into(),
+            });
+        }
+        self.finish_core_restore_locked(guard, playback_handoff, warning)
     }
 }
 

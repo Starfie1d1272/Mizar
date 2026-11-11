@@ -1,3 +1,4 @@
+import type { IncidentParticipant } from './retention.js';
 import { randomUUID } from 'node:crypto';
 import { setImmediate as yieldIO } from 'node:timers/promises';
 import type { SessionJournal } from './session-journal.js';
@@ -77,7 +78,6 @@ export class PerformanceWindow {
   private readonly spool: PerformanceSpool | undefined;
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
-  private exportSnapshot: ReturnType<typeof performanceRecordEvent>[] | undefined;
   private nextAttemptAt = 0;
   private writeFailures = 0;
   private writeError: unknown = null;
@@ -271,7 +271,7 @@ export class PerformanceWindow {
     }
     clearTimeout(this.batchTimer);
     this.batchTimer = undefined;
-    this.writing = this.journal.withSystem(() =>
+    const writing = this.journal.withSystem(() =>
       this.drain()
         .catch((error: unknown) => {
           this.writeFailures++;
@@ -279,13 +279,8 @@ export class PerformanceWindow {
           if (this.nextAttemptAt <= Date.now()) this.nextAttemptAt = Date.now() + 1000;
         })
         .finally(() => {
-          this.writing = undefined;
-          if (
-            !this.closed &&
-            (this.pending.length ||
-              this.spool?.health().pendingFiles ||
-              this.spool?.health().unreadableFiles)
-          ) {
+          if (this.writing === writing) this.writing = undefined;
+          if (!this.closed && (this.pending.length || this.spool?.health().unreadableFiles)) {
             clearTimeout(this.retryTimer);
             this.retryTimer = setTimeout(
               () => {
@@ -301,6 +296,7 @@ export class PerformanceWindow {
           }
         }),
     );
+    this.writing = writing;
   }
   private remove(ids: string[]) {
     const committed = new Set(ids);
@@ -350,15 +346,7 @@ export class PerformanceWindow {
           throw new Error('performance_spool_append_failed', { cause: appendFailure });
         return;
       }
-      let packet;
-      while ((packet = await this.spool.oldest())) {
-        await this.promote(packet.records);
-        await this.spool.acknowledge(
-          packet.name,
-          packet.records.map((record) => record.id),
-        );
-        await yieldIO();
-      }
+      // The compressed spool is final retained evidence, not a copy to promote into SessionJournal.
       // A full spool must be drained before new input is admitted again; an
       // append failure cannot prevent already durable evidence from recovering.
       if (appendFailure && this.pending.length)
@@ -406,43 +394,51 @@ export class PerformanceWindow {
     this.startWriter(true);
     await this.writing;
   }
-  exportMemory() {
-    return (
-      this.exportSnapshot ??
-      this.pending.map((item) =>
-        performanceRecordEvent(diagnosticValue(item.record) as PendingPerformanceRecord),
-      )
-    );
+  incidentParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('incident');
   }
-  async beginExport(): Promise<() => Promise<void>> {
-    this.exporting++;
-    await this.writing;
-    this.exportSnapshot = this.exportMemory();
-    let release: (() => Promise<void>) | undefined;
-    try {
-      release = await this.spool?.pin();
-    } catch (error) {
-      this.writeError = diagnosticValue(error);
-      this.writeFailures++;
-    }
-    if (release) {
-      this.exporting--;
-      this.startWriter();
-    }
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      try {
-        await release?.();
-      } catch (error) {
-        this.writeError = diagnosticValue(error);
-        this.writeFailures++;
-      } finally {
-        this.exportSnapshot = undefined;
-        if (!release) this.exporting--;
-        if (!this.closed) this.startWriter();
-      }
+  exportParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('export');
+  }
+  deliveryParticipant(): IncidentParticipant {
+    return this.evidenceParticipant('delivery');
+  }
+  private evidenceParticipant(kind: 'incident' | 'export' | 'delivery'): IncidentParticipant {
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+      this.exporting++;
+      // Pins and body writes mutate the same retained ledger. Reserve their
+      // position synchronously; waiting for a writer alone does not serialize pins.
+      const task = (this.writing ?? Promise.resolve()).then(operation);
+      const writing = task
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => {
+          if (this.writing === writing) this.writing = undefined;
+          this.exporting--;
+          if (!this.closed) this.startWriter();
+        });
+      this.writing = writing;
+      return task;
+    };
+    const source = () => {
+      if (!this.spool) throw new Error('performance_source_unavailable');
+      return this.spool.incidentParticipant(kind);
+    };
+    return {
+      producerId: 'performance',
+      prepare: (pinId) =>
+        serialize(async () => ({
+          ...(await source().prepare(pinId)),
+          sourceState: {
+            asOf: new Date().toISOString(),
+            health: this.health(),
+            memoryOnly: { included: false, reason: 'not-durably-committed' },
+          },
+        })),
+      commit: (pinId) => serialize(() => source().commit(pinId)),
+      release: (pinId) => serialize(() => source().release(pinId)),
     };
   }
 }

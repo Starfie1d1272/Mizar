@@ -44,6 +44,11 @@ export class ProgramSceneController {
   cancelAutomatic(): void {
     this.automaticSwitch?.abort();
   }
+  interruptAutomatic(): void {
+    this.controlGeneration++;
+    this.director?.interrupt();
+    this.automaticSwitch?.abort();
+  }
   holdAutomatic(): void {
     this.controlGeneration++;
     this.director?.hold();
@@ -320,9 +325,18 @@ export class ProgramSceneController {
               : this.switchObs?.(target, options)
         : this.switchObs;
     const valid = () => current() && (automaticValid?.() ?? true);
-    if (!valid()) return { ok: false as const, message: '自动编排请求已失效，保持当前场景。' };
+    if (!valid())
+      return {
+        ok: false as const,
+        cancelled: automaticValid !== undefined,
+        message: '自动编排请求已失效，保持当前场景。',
+      };
     if (expectedRevision !== this.revision)
-      return { ok: false as const, message: '播出场景已变化，请核对后重试。' };
+      return {
+        ok: false as const,
+        cancelled: automaticValid !== undefined,
+        message: '播出场景已变化，请核对后重试。',
+      };
     const reason = this.blockedReason(id, automaticValid !== undefined);
     if (reason !== null) return { ok: false as const, message: reason };
     if (this.active === id && !automaticValid) {
@@ -554,10 +568,14 @@ export function registerProgramSceneRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly controller: ProgramSceneController;
     readonly canControl?: () => boolean;
+    readonly productionActive?: () => boolean;
   },
 ) {
   app.get('/local/v1/program-scenes', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(options.controller.get()),
+    reply.header('cache-control', 'no-store').send({
+      ...options.controller.get(),
+      productionActive: options.productionActive?.() ?? false,
+    }),
   );
   app.post('/operator/program-director', { bodyLimit: 1024 }, (request, reply) => {
     if (

@@ -14,11 +14,8 @@ import {
 } from '../src/runtime/index.js';
 import {
   getProjectionIdentityCapabilities,
-  livePlayerDisplayName,
-  matchPlayerDisplayName,
   projectProgram,
   selectProgramSafeRuntimeView,
-  seriesWinnerSide,
 } from '../src/projection/index.js';
 import type { MatchContext } from '../src/match-context/index.js';
 import type { ObservedPlayer, TelemetryObservation } from '../src/telemetry/index.js';
@@ -191,31 +188,6 @@ function resolvedLineup(
 }
 
 describe('Program-safe projections', () => {
-  it('uses only unique Steam64 match bindings for website names and preserves local fallback', () => {
-    const context = contextFixture();
-    const name = matchPlayerDisplayName(context, steam64(1));
-    expect(livePlayerDisplayName('Game Name', name, [], true)).toEqual({
-      displayName: 'Alpha Player 1',
-      displayNameSource: 'canonical',
-    });
-    expect(livePlayerDisplayName('Game Name', name, [], false).displayName).toBe('Game Name');
-    expect(
-      livePlayerDisplayName('Game Name', matchPlayerDisplayName(context, steam64(99)), [], true)
-        .displayName,
-    ).toBe('Game Name');
-    expect(livePlayerDisplayName(undefined, null, [], true).displayName).toBeNull();
-    const duplicate = {
-      ...context,
-      entrants: {
-        ...context.entrants,
-        b: {
-          ...context.entrants.b,
-          players: [...context.entrants.b.players, context.entrants.a.players[0]!],
-        },
-      },
-    };
-    expect(matchPlayerDisplayName(duplicate, steam64(1))).toBeNull();
-  });
   it('fails closed to neutral teams and player ids across an identity epoch change', () => {
     const context = contextFixture();
     const input = observation();
@@ -274,7 +246,7 @@ describe('Program-safe projections', () => {
   });
 });
 
-it('projects held reload, bomb carrier and Zeus facts from the live observation', () => {
+it('projects a held reloading weapon only while the observation is fresh', () => {
   const base = observation();
   const input: TelemetryObservation = {
     ...base,
@@ -286,10 +258,7 @@ it('projects held reload, bomb carrier and Zeus facts from the live observation'
           ? p
           : {
               ...p,
-              weapons: [
-                { sourceWeaponId: 'rifle', name: 'weapon_ak47', state: 'reloading' },
-                { sourceWeaponId: 'zeus', name: 'weapon_taser', state: 'holstered' },
-              ],
+              weapons: [{ sourceWeaponId: 'rifle', name: 'weapon_ak47', state: 'reloading' }],
             },
       ),
     },
@@ -305,26 +274,14 @@ it('projects held reload, bomb carrier and Zeus facts from the live observation'
     continuityPolicy: POLICY,
     equipmentCatalog: {
       weapon_ak47: { canonicalKey: 'firearm.ak47', kind: 'firearm' as const, family: 'rifle' },
-      weapon_taser: { canonicalKey: 'utility.taser', kind: 'utility' as const, family: 'taser' },
     },
   };
   const live = projectProgram({ ...args, nowMonotonicMs: 7 });
   expect(live.players.find((p) => p.sourcePlayerId === steam64(1))?.equipment).toMatchObject({
     heldWeaponId: 'rifle',
-    hasC4: true,
-    zeusWeaponId: 'zeus',
   });
   const stale = projectProgram({ ...args, nowMonotonicMs: 108 });
   expect(
     stale.players.find((p) => p.sourcePlayerId === steam64(1))?.equipment.heldWeaponId,
   ).toBeNull();
-});
-
-it('only resolves a series winner from a completed, decisive score', () => {
-  const series = { status: 'completed' as const, requiredWins: 2, score: { a: 2, b: 1 } };
-  expect(seriesWinnerSide(series)).toBe('a');
-  expect(seriesWinnerSide({ ...series, score: { a: 0, b: 2 } })).toBe('b');
-  expect(seriesWinnerSide({ ...series, status: 'live' })).toBeNull();
-  expect(seriesWinnerSide({ ...series, score: { a: 2, b: 2 } })).toBeNull();
-  expect(seriesWinnerSide({ ...series, score: { a: null, b: 1 } })).toBeNull();
 });

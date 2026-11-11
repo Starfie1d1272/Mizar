@@ -134,8 +134,10 @@ export function applyMatch(
   if (!match || payload.status.telemetry !== 'fresh') return { ...payload, players };
   if (ctLeft === null || !payload.map.name) return { ...payload, players };
   const mapName = payload.map.name.slice(payload.map.name.lastIndexOf('/') + 1);
-  const matches = match.veto.filter((item) => item.mapName === mapName);
-  if (matches.length > 1) return { ...payload, players };
+  const plan = match.veto.filter((item) => item.type !== 'ban');
+  const matches = plan.filter((item) => item.mapName === mapName);
+  if (matches.length > 1 || (plan.length > 0 && matches.length === 0))
+    return { ...payload, players };
   const reversed = matches[0]?.reverseSide ?? false;
   const left = reversed ? match.b : match.a;
   const right = reversed ? match.a : match.b;
@@ -146,28 +148,26 @@ export function applyMatch(
     logoUrl: team.logo,
     seriesScore: team.wins,
   });
-  const maps = match.veto
-    .filter((item) => item.type !== 'ban')
-    .map((item, index) => ({
-      mapId: null,
-      mapOrder: index + 1,
-      mapName: item.mapName,
-      selection:
-        item.type === 'decider'
-          ? { kind: 'decider' as const }
-          : item.entryId
-            ? { kind: 'pick' as const, entryId: item.entryId }
-            : { kind: 'unknown' as const },
-      teamAStartSide: null,
-      status: item.completed
-        ? ('completed' as const)
-        : item.mapName === mapName
-          ? ('current' as const)
-          : ('pending' as const),
-      finalScore:
-        item.scoreA !== null && item.scoreB !== null ? { a: item.scoreA, b: item.scoreB } : null,
-      winnerEntryId: item.winner,
-    }));
+  const maps = plan.map((item, index) => ({
+    mapId: null,
+    mapOrder: index + 1,
+    mapName: item.mapName,
+    selection:
+      item.type === 'decider'
+        ? { kind: 'decider' as const }
+        : item.entryId
+          ? { kind: 'pick' as const, entryId: item.entryId }
+          : { kind: 'unknown' as const },
+    teamAStartSide: null,
+    status: item.completed
+      ? ('completed' as const)
+      : item.mapName === mapName
+        ? ('current' as const)
+        : ('pending' as const),
+    finalScore:
+      item.scoreA !== null && item.scoreB !== null ? { a: item.scoreA, b: item.scoreB } : null,
+    winnerEntryId: item.winner,
+  }));
   const requiredWins = match.format === 'bo1' ? 1 : match.format === 'bo3' ? 2 : 3;
   return {
     ...payload,

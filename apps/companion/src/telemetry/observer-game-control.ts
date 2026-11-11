@@ -2,11 +2,22 @@ import { formatObserverConnection, type ObserverConnection } from '@mizar/protoc
 import { fileURLToPath } from 'node:url';
 
 /** Fixed operations through MulNX's existing command queue, scoped by the native game lease. */
-export async function sendObserverGameCommand(command: string): Promise<void> {
+export async function sendObserverGameCommand(
+  command: string,
+  current: () => boolean = () => true,
+): Promise<void> {
+  const canSend = () => {
+    try {
+      return current();
+    } catch {
+      return false;
+    }
+  };
   const deadline = Date.now() + 5000;
   for (;;) {
+    if (!canSend()) throw new Error('observer_game_control_cancelled');
     try {
-      await submit(command);
+      await submit(command, canSend);
       return;
     } catch (error) {
       // Retry readiness only. Once open, submission may have reached the engine.
@@ -20,7 +31,7 @@ export async function sendObserverGameCommand(command: string): Promise<void> {
     }
   }
 }
-function submit(command: string): Promise<void> {
+function submit(command: string, canSend: () => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket('ws://127.0.0.1:55202');
     const wire = JSON.stringify({
@@ -39,9 +50,14 @@ function submit(command: string): Promise<void> {
       else resolve();
     };
     socket.addEventListener('open', () => {
+      if (done) return;
       opened = true;
       clearTimeout(timer);
       timer = setTimeout(() => finish(new Error('observer_game_control_timeout')), 3000);
+      if (!canSend()) {
+        finish(new Error('observer_game_control_cancelled'));
+        return;
+      }
       try {
         socket.send(wire);
       } catch {
@@ -64,15 +80,19 @@ function submit(command: string): Promise<void> {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (
-    args[0] !== '--observer-query' ||
-    ![2, 3].includes(args.length) ||
-    (args[2] !== undefined && args[2] !== '0' && args[2] !== '1')
-  )
-    throw new Error('observer_hud_arguments');
-  await sendObserverGameCommand(
-    observerHudQuery(args[1]!, args[2] === undefined ? undefined : (Number(args[2]) as 0 | 1)),
-  );
+  if (args[0] === '--frame-rate-query' && [2, 3].includes(args.length)) {
+    await sendObserverGameCommand(frameRateQuery(args[1]!, args[2]));
+  } else {
+    if (
+      args[0] !== '--observer-query' ||
+      ![2, 3].includes(args.length) ||
+      (args[2] !== undefined && args[2] !== '0' && args[2] !== '1')
+    )
+      throw new Error('observer_hud_arguments');
+    await sendObserverGameCommand(
+      observerHudQuery(args[1]!, args[2] === undefined ? undefined : (Number(args[2]) as 0 | 1)),
+    );
+  }
   console.log(JSON.stringify({ queued: true }));
 }
 
@@ -82,4 +102,17 @@ export function observerConnectCommand(connection: ObserverConnection, hideHud: 
 export function observerHudQuery(marker: string, value?: 0 | 1) {
   if (!/^MIZAR_HUD_[a-f0-9]{32}$/.test(marker)) throw new Error('observer_hud_marker');
   return `echo ${marker};${value === undefined ? '' : `cl_draw_only_deathnotices ${value};`}cl_draw_only_deathnotices`;
+}
+
+/** Fixed fps_max only. A queue receipt is never an execution receipt. */
+export function frameRateQuery(marker: string, value?: string) {
+  if (!/^MIZAR_FPS_[a-f0-9]{32}$/.test(marker)) throw new Error('frame_rate_marker');
+  if (
+    value !== undefined &&
+    (!/^[0-9]+(?:\.[0-9]+)?$/.test(value) ||
+      !Number.isFinite(Number(value)) ||
+      Number(value) > 10000)
+  )
+    throw new Error('frame_rate_value');
+  return `echo ${marker};${value === undefined ? '' : `fps_max ${value};`}fps_max;echo ${marker}_END`;
 }

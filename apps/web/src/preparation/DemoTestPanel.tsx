@@ -23,6 +23,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
   const [teamBName, setTeamBName] = useState('队伍 B');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [audioWarning, setAudioWarning] = useState('');
   const operation = useRef(false);
   const form = useRef<HTMLFormElement>(null);
   const attemptedEntry = useRef<string | null>(null);
@@ -39,6 +40,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
     operation.current = true;
     setBusy(true);
     setMessage('');
+    setAudioWarning('');
     try {
       await action();
     } catch (error) {
@@ -52,7 +54,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
   const start = (preserveSettings = false) =>
     run(async () => {
       if (!selected || !editor.revision || !activePreset) return;
-      if (!(await checkObsBeforeLaunch(true))) return;
+      if (!(await checkObsBeforeLaunch(true, undefined, undefined, setAudioWarning))) return;
       if (activePreset !== editor.document?.activePreset.sourceId) {
         const result = await mutateHudConfig({
           kind: 'activate-preset',
@@ -288,18 +290,16 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
           </Button>
           {game?.canPreserve ? (
             <>
-              <p>
-                配置接管未完成，可保持原游戏设置继续；此时不应用自动画质、帧率、窗口布局和本机 HUD
-                覆盖。
-              </p>
+              <p>可保留画质与帧率继续；游戏仍调整为工作台窗口布局，本机 HUD 仍可使用。</p>
               <Button disabled={startDisabled} onClick={() => void start(true)}>
-                保持原设置启动试播
+                保留画质与帧率启动试播
               </Button>
             </>
           ) : null}
         </form>
       )}
       {!desktop ? <p>请在 Mizar 桌面准备中心选择并启动本地 Demo。</p> : null}
+      {audioWarning ? <StatusBanner tone="warning">{audioWarning}</StatusBanner> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
       {shown && !trial?.active && editor.error ? (
         <StatusBanner tone="warning">画面设置暂不可用，请检查本地服务后重试。</StatusBanner>

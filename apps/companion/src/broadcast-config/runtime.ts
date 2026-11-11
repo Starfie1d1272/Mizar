@@ -312,7 +312,6 @@ export function createBroadcastRuntime(input: {
         return;
       }
       try {
-        await deps.verifyActive(prepared.document.active);
         for (const ref of broadcastResourceReferences(prepared.document))
           if (await deps.isDeleting(ref)) throw new Error('resource_deleting');
       } catch (error) {
@@ -329,7 +328,8 @@ export function createBroadcastRuntime(input: {
       await music.prepareRuntimeMigration();
     }
     await store.load();
-    if (existing) {
+    {
+      // First migration and restart share dependency isolation and consumer validation.
       const active = store.snapshot.active;
       try {
         await deps.verifyActive(active);

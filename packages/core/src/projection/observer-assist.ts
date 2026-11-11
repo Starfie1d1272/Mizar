@@ -121,13 +121,6 @@ export class ObserverHintTimeline {
   private evidenceCount = 0;
   private evidenceSpreadMs: number | null = null;
   private estimateReason = 'awaiting-evidence';
-  private continuityLost = false;
-  private continuityEstablished = false;
-  private lastHealthCheckAt: number | null = null;
-  private lastProgramSequence: number | null = null;
-  private lastProgramProgressAt: number | null = null;
-  private lastSourceReceiveMs: number | null = null;
-  private lastSourceProgressAt: number | null = null;
   private earliest = -Infinity;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
@@ -181,11 +174,6 @@ export class ObserverHintTimeline {
         evidenceSpreadMs: this.evidenceSpreadMs,
         lastEvidenceMonotonicMs: this.lastEvidenceAt,
         reason: this.estimateReason,
-        continuity: this.continuityLost
-          ? 'lost'
-          : this.continuityEstablished
-            ? 'observed'
-            : 'unknown',
       },
       lastReset: { ...this.lastReset },
       blocked: this.blocked,
@@ -223,13 +211,6 @@ export class ObserverHintTimeline {
     this.evidenceCount = 0;
     this.evidenceSpreadMs = null;
     this.estimateReason = 'awaiting-evidence';
-    this.continuityLost = false;
-    this.continuityEstablished = false;
-    this.lastHealthCheckAt = null;
-    this.lastProgramSequence = null;
-    this.lastProgramProgressAt = null;
-    this.lastSourceReceiveMs = null;
-    this.lastSourceProgressAt = null;
     this.previous.clear();
     this.seenReceive = null;
     this.nextDueMs = null;
@@ -250,8 +231,8 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
+      this.clockGenerationChanged(true);
       this.generation = event.cursor.generation;
-      this.lastSourceReceiveMs = null;
       this.lastMatchedDeathOffsetMs = null;
     }
     if (event.kind !== 'player-death') return;
@@ -287,44 +268,44 @@ export class ObserverHintTimeline {
       this.discard('capacity');
     }
   }
-  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' | 'reacquiring' {
+  recalibrate(now: number): void {
+    // Only an explicit operator action replaces a calibration within this map.
+    // Already shown estimated events must not reappear with a later deadline.
+    for (const kill of this.kills) {
+      if (kill.shownDueMs !== null && !kill.retired) {
+        kill.retired = true;
+        this.discard('manual-recalibration');
+      }
+    }
+    this.effectiveDelayMs = null;
+    this.lastEvidenceAt = null;
+    this.evidenceCount = 0;
+    this.evidenceSpreadMs = null;
+    this.lastMatchedDeathOffsetMs = null;
+    this.lastProgramClock = null;
+    this.clockEvidence = [];
+    this.programPhase = null;
+    this.freezeOffset = null;
+    this.previous.clear();
+    this.seenReceive = null;
+    this.estimateReason = 'manual-recalibration';
+    this.lastReset = { reason: 'manual-recalibration', atMonotonicMs: now };
+  }
+  private clockGenerationChanged(source: boolean): void {
+    this.lastProgramClock = null;
+    this.clockEvidence = [];
+    this.programPhase = null;
+    this.freezeOffset = null;
+    if (source) {
+      this.sourceClocks = [];
+      this.freezeEnds = [];
+      this.clockSegment++;
+    }
+  }
+  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' {
     if (this.effectiveDelayMs === null) return 'uncalibrated';
     const age = this.lastEvidenceAt === null ? Infinity : now - this.lastEvidenceAt;
-    if (this.continuityLost || (age > 180000 && !this.continuityEstablished)) return 'reacquiring';
     return age <= 60000 ? 'measured' : 'held';
-  }
-
-  private observeContinuity(now: number, sequence: number | null, received: number | null) {
-    if (
-      this.effectiveDelayMs !== null &&
-      this.lastHealthCheckAt !== null &&
-      now - this.lastHealthCheckAt > 30000 &&
-      this.continuityEstablished
-    )
-      this.continuityLost = true;
-    this.lastHealthCheckAt = now;
-    if (sequence !== null && sequence !== this.lastProgramSequence) {
-      if (this.lastProgramSequence !== null && sequence < this.lastProgramSequence)
-        this.continuityLost = true;
-      this.lastProgramSequence = sequence;
-      this.lastProgramProgressAt = now;
-    }
-    if (received !== null && received <= now && received !== this.lastSourceReceiveMs) {
-      if (this.lastSourceReceiveMs !== null) {
-        if (received < this.lastSourceReceiveMs) this.continuityLost = true;
-        else if (this.lastProgramProgressAt !== null) this.continuityEstablished = true;
-      }
-      this.lastSourceReceiveMs = received;
-      this.lastSourceProgressAt = now;
-    }
-    if (
-      this.continuityEstablished &&
-      (this.lastProgramProgressAt === null ||
-        now - this.lastProgramProgressAt > 30000 ||
-        this.lastSourceProgressAt === null ||
-        now - this.lastSourceProgressAt > 30000)
-    )
-      this.continuityLost = true;
   }
 
   private observeClock(
@@ -430,6 +411,9 @@ export class ObserverHintTimeline {
     }
     // Keep source samples while isolated, but never calibrate against the previous execution.
     if (this.sourceExecutionChanged) return;
+    // Calibrate once per map execution. Reconnects and later clock noise never
+    // change this baseline or gate otherwise usable hints.
+    if (this.effectiveDelayMs !== null) return;
     if (!program) {
       this.lastProgramClock = null;
       this.clockEvidence = [];
@@ -476,15 +460,18 @@ export class ObserverHintTimeline {
       )
         candidates.push({ delay, segment: a.segment });
     }
-    if (candidates.length !== 1) return;
+    if (candidates.length !== 1) {
+      this.clockEvidence = [];
+      return;
+    }
     const lastEvidence = this.clockEvidence.at(-1);
     // Limit correlated samples; paced backlog cannot be identified from this contract.
     if (
       lastEvidence &&
       (lastEvidence.round !== program.round || lastEvidence.segment !== candidates[0]!.segment)
-    )
+    ) {
       this.clockEvidence = [];
-    else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
+    } else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
     this.clockEvidence.push({
       delay: candidates[0]!.delay,
       segment: candidates[0]!.segment,
@@ -519,7 +506,6 @@ export class ObserverHintTimeline {
     this.evidenceCount = delays.length;
     this.evidenceSpreadMs = spread;
     this.lastEvidenceAt = now;
-    this.continuityLost = false;
     this.estimateReason = 'consistent-round-clock';
   }
   project(
@@ -540,7 +526,7 @@ export class ObserverHintTimeline {
     this.lastNow = now;
     this.configuration = { ...settings };
     if (this.programSource.generation !== program.cursor.programSourceGeneration) {
-      this.lastProgramSequence = null;
+      this.clockGenerationChanged(false);
       this.seenReceive = null;
       this.previous.clear();
       this.lastMatchedDeathOffsetMs = null;
@@ -619,8 +605,8 @@ export class ObserverHintTimeline {
       };
     }
     if (this.generation === undefined || source.generation > this.generation) {
+      this.clockGenerationChanged(true);
       this.generation = source.generation;
-      this.lastSourceReceiveMs = null;
       this.lastMatchedDeathOffsetMs = null;
     }
     if (!source.connected) {
@@ -759,11 +745,6 @@ export class ObserverHintTimeline {
         },
       };
     }
-    this.observeContinuity(
-      now,
-      program.cursor.programReceiveSequence,
-      source.lastReceiveMonotonicMs ?? null,
-    );
     this.blocked = null;
     this.observeClock(
       clock?.source,
@@ -785,8 +766,6 @@ export class ObserverHintTimeline {
         .filter((p) => p.lifeState !== 'unknown')
         .map((p) => [p.sourcePlayerId, p.lifeState === 'alive']),
     );
-    const reacquiring = this.calibrationState(now) === 'reacquiring';
-    if (reacquiring) this.continuityLost = true;
     if (program.cursor.programReceiveSequence !== this.seenReceive) {
       const fallen = [...alive]
         .filter(([id, live]) => !live && this.previous.get(id) === true)
@@ -815,9 +794,8 @@ export class ObserverHintTimeline {
     }
     const keepSince = now - 780000;
     this.kills = this.kills.filter((kill) => kill.sourceMs >= keepSince);
-    if (this.effectiveDelayMs === null || this.calibrationState(now) === 'reacquiring') {
-      this.blocked =
-        this.effectiveDelayMs === null ? 'calibration-pending' : 'calibration-reacquiring';
+    if (this.effectiveDelayMs === null) {
+      this.blocked = 'calibration-pending';
       this.nextDueMs = null;
       this.nextWindowMs = null;
       return empty('unavailable');

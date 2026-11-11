@@ -19,14 +19,3 @@
   overflow: auto;
   min-height: 0;
 }
-.desktop-canvas__canvas > .mizar-tool-shell {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-.desktop-canvas__canvas #tool-content {
-  overflow: auto;
-  min-height: 0;
-}
-.desktop-canvas__canvas > .mizar-tool-shell[data-context='true'] {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}

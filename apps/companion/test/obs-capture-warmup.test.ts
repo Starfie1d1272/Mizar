@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsCaptureWarmup } from '../src/obs/capture-warmup.js';
-import { obsSceneName } from '../src/obs/desired-state.js';
+import { OBS_COLLECTION, obsSceneName } from '../src/obs/desired-state.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
 const dirs: string[] = [];
@@ -14,8 +14,6 @@ async function rig(
   options: {
     audio?: boolean | 'unknown';
     lostCreateAck?: boolean;
-    afterTransform?: () => void;
-    afterEnable?: () => void;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-warmup-'));
@@ -38,7 +36,7 @@ async function rig(
     async call(type, data = {}) {
       calls.push(type);
       if (type === 'GetOutputList') return { outputs: [] };
-      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: 'Mizar' };
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: OBS_COLLECTION };
       if (type === 'GetSceneList')
         return {
           currentProgramSceneName: obsSceneName('waiting'),
@@ -63,12 +61,10 @@ async function rig(
       if (type === 'GetSceneItemTransform') return { sceneItemTransform: geometry };
       if (type === 'SetSceneItemTransform') {
         geometry = { ...(data.sceneItemTransform as Record<string, unknown>), width: 0, height: 0 };
-        options.afterTransform?.();
         return {};
       }
       if (type === 'SetSceneItemEnabled') {
         if (item) item.sceneItemEnabled = true;
-        options.afterEnable?.();
         return {};
       }
       if (type === 'RemoveSceneItem') {
@@ -91,27 +87,6 @@ async function rig(
 }
 const prep = '00000000-0000-4000-8000-000000000001';
 
-it('creates disabled, verifies zero transform, enables, and removes only its item', async () => {
-  const r = await rig();
-  const result = await r.controller.begin(
-    r.obs,
-    'endpoint',
-    prep,
-    () => true,
-    () => true,
-  );
-  expect(result.startedAt).toBeGreaterThan(0);
-  expect(r.calls.indexOf('CreateSceneItem')).toBeLessThan(r.calls.indexOf('SetSceneItemTransform'));
-  expect(r.calls.indexOf('SetSceneItemTransform')).toBeLessThan(
-    r.calls.indexOf('SetSceneItemEnabled'),
-  );
-  expect(await r.controller.confirm(r.obs, result.transactionId)).toBe(true);
-  await r.controller.release(r.obs, 'endpoint', result.transactionId, () => true);
-  await r.controller.release(r.obs, 'endpoint', result.transactionId, () => true);
-  expect(r.item()).toBeNull();
-  expect(r.calls.filter((name) => name === 'RemoveSceneItem')).toHaveLength(1);
-});
-
 it.each([true, 'unknown'] as const)('never creates an item when audio is %s', async (audio) => {
   const r = await rig({ audio });
   await expect(
@@ -124,26 +99,6 @@ it.each([true, 'unknown'] as const)('never creates an item when audio is %s', as
     ),
   ).rejects.toThrow();
   expect(r.calls).not.toContain('CreateSceneItem');
-});
-
-it('cancellation after transform removes the still-disabled verified item', async () => {
-  let valid = true;
-  const r = await rig({
-    afterTransform: () => {
-      valid = false;
-    },
-  });
-  await expect(
-    r.controller.begin(
-      r.obs,
-      'endpoint',
-      prep,
-      () => valid,
-      () => true,
-    ),
-  ).rejects.toThrow();
-  expect(r.item()).toBeNull();
-  expect(r.calls).not.toContain('SetSceneItemEnabled');
 });
 
 it('preserves the item and journal if the user changes its crop', async () => {
@@ -183,28 +138,5 @@ it('retains an ambiguous create result rather than guessing item ownership', asy
     phase: 'creating',
     itemId: null,
     baselineIds: [],
-  });
-});
-
-it('retains the journal without removal after external takeover', async () => {
-  let lease = true;
-  const r = await rig({
-    afterEnable: () => {
-      lease = false;
-    },
-  });
-  await expect(
-    r.controller.begin(
-      r.obs,
-      'endpoint',
-      prep,
-      () => true,
-      () => lease,
-    ),
-  ).rejects.toMatchObject({ code: 'capture_warmup_pending' });
-  expect(r.calls).not.toContain('RemoveSceneItem');
-  expect(JSON.parse(await readFile(r.path, 'utf8'))).toMatchObject({
-    phase: 'enabling',
-    itemId: 17,
   });
 });

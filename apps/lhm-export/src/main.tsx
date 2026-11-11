@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { io } from 'socket.io-client';
 import { resolvedHudSchema, type ResolvedHudModule } from '@mizar/broadcast-config';
-import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
 import { AssetProvider, ProgramCanvas, ProgramView } from '@mizar/hud-view';
-import { createLhmProjection } from './projection';
-import { avatarUrl, matchTeamIds, parseMatch, type LhmMatch } from './context';
+import type { createLhmProjection } from './projection';
+import { createLhmSession } from './session';
 import '@mizar/design-tokens/tokens.css';
 import '@fontsource/inter/400.css';
 import '@fontsource/inter/500.css';
@@ -42,80 +41,11 @@ function App() {
         if (alive) setPreset(null);
       });
     const socket = io('/');
-    let project = createLhmProjection();
-    let generation = 0;
-    let match: LhmMatch | null = null;
-    let avatars = new Map<string, string>();
-    let requestedAvatars = new Set<string>();
-    let currentPlayerIds: readonly string[] = [];
-    const publishMetadata = () => {
-      project.setMetadata(match, avatars);
-      if (alive) setSnapshot(project.refresh());
-    };
-    const readJson = async (path: string): Promise<unknown> => {
-      const response = await fetch(path, { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) throw new Error('host data unavailable');
-      return response.json() as Promise<unknown>;
-    };
-    const loadMatch = () => {
-      const requestGeneration = ++generation;
-      match = null;
-      avatars = new Map();
-      requestedAvatars = new Set();
-      publishMetadata();
-      loadAvatars(currentPlayerIds);
-      void (async () => {
-        const data = await readJson('/api/match/current');
-        const ids = matchTeamIds(data);
-        if (!ids) return;
-        const [a, b] = await Promise.all(
-          ids.map((id) => readJson(`/api/teams/${encodeURIComponent(id)}`)),
-        );
-        if (!alive || requestGeneration !== generation) return;
-        match = parseMatch(data, a, b);
-        publishMetadata();
-      })().catch(() => {});
-    };
-    const loadAvatars = (ids: readonly string[]) => {
-      const requestGeneration = generation;
-      for (const id of ids) {
-        if (!/^\d{17}$/.test(id) || requestedAvatars.has(id)) continue;
-        requestedAvatars.add(id);
-        void readJson(`/api/players/avatar/steamid/${id}`)
-          .then((value) => {
-            if (!alive || requestGeneration !== generation) return;
-            const url = avatarUrl(value, window.location.origin);
-            if (!url) return;
-            avatars.set(id, url);
-            publishMetadata();
-          })
-          .catch(() => {});
-      }
-    };
-    let stale: ReturnType<typeof setTimeout> | undefined;
-    let objectiveExpiry: ReturnType<typeof setTimeout> | undefined;
-    const update = (raw: unknown) => {
-      if (!alive) return;
-      let next: Snapshot | null;
-      try {
-        next = project(raw);
-      } catch {
-        return;
-      }
-      if (!next) return;
-      setSnapshot(next);
-      currentPlayerIds = next.program.payload.players.map((player) => player.sourcePlayerId);
-      loadAvatars(currentPlayerIds);
-      clearTimeout(objectiveExpiry);
-      objectiveExpiry = setTimeout(
-        () => {
-          if (alive) setSnapshot(project.refresh());
-        },
-        getObjectiveClockLeaseMs({ staleAfterMs: 20_000 }) + 1,
-      );
-      clearTimeout(stale);
-      stale = setTimeout(() => setSnapshot(null), 20_000);
-    };
+    const session = createLhmSession({
+      onSnapshot: setSnapshot,
+      origin: window.location.origin,
+    });
+    const update = session.update;
     let ipc: { receive: (event: string, listener: (raw: unknown) => void) => void } | undefined;
     try {
       ipc = (window.parent as unknown as { ipcApi?: typeof ipc }).ipcApi;
@@ -136,25 +66,14 @@ function App() {
         );
     });
     socket.on('update', update);
-    socket.on('match', loadMatch);
-    socket.on('connect', loadMatch);
+    socket.on('match', session.loadMatch);
+    socket.on('connect', session.loadMatch);
     socket.on('refreshHUD', () => window.location.reload());
-    socket.on('disconnect', () => {
-      generation++;
-      match = null;
-      avatars = new Map();
-      requestedAvatars = new Set();
-      currentPlayerIds = [];
-      clearTimeout(stale);
-      clearTimeout(objectiveExpiry);
-      setSnapshot(null);
-      project = createLhmProjection();
-    });
+    socket.on('disconnect', session.disconnect);
     socket.emit('started');
     return () => {
       alive = false;
-      clearTimeout(stale);
-      clearTimeout(objectiveExpiry);
+      session.dispose();
       window.removeEventListener('resize', resize);
       socket.disconnect();
     };

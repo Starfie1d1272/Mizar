@@ -17,19 +17,14 @@ import { releaseAttestationArgs } from './release-identity.mjs';
 import { assertPublication } from './update-publication.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
 import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
-import { LIMITS } from '../../packages/resource-pack-contract/index.mjs';
-import { resourceAssetInventory } from '../ci/resource-release.mjs';
 import { apiRequest, multipartUpload } from './box-upload.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { fetch, AbortSignal, FormData } = globalThis;
 
 const origin = 'https://box.nju.edu.cn';
-const offlinePattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64\.zip$/;
 const downloadsFolder = '/Stable/Downloads';
 const publicShare = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/';
-const bootstrapPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-WebInstaller\.exe$/;
-const setupPattern = /^Mizar-v(\d+\.\d+\.\d+)-Windows-x64-Setup\.exe$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export class MirrorError extends Error {
@@ -446,6 +441,28 @@ export class BoxClient {
     );
     return url;
   }
+  async readIndex() {
+    const signal = AbortSignal.timeout(180000);
+    const url = this.temporaryUrl(
+      await this.api('download-link', '/Updates/latest.json', 'GET', undefined, signal),
+    );
+    return checkedFetch(
+      url,
+      { redirect: 'error', signal },
+      180000,
+      this.downloadTransport,
+      async (response) => {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.length;
+          requireValue(size <= 2097152, '更新信封超限');
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      },
+    );
+  }
   async hash(path, signal) {
     const deadline = Date.now() + 570000;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -702,205 +719,7 @@ export async function verifyRemote(box, path, identity, signal) {
   );
 }
 
-async function moveVerified(box, from, to, identity) {
-  try {
-    await box.move(from, to, identity.name);
-  } catch (error) {
-    if (!error.uploadOutcomeUnknown) throw error;
-    recordRecovery();
-    try {
-      const signal = AbortSignal.timeout(90000);
-      for (const delay of reconciliationDelays) {
-        if (delay) await timers.setTimeout(delay, undefined, { signal });
-        const source = (await box.list(from, signal)).filter(
-          (entry) => entry.name === identity.name,
-        );
-        const target = (await box.list(to, signal)).filter((entry) => entry.name === identity.name);
-        requireValue(
-          source.length <= 1 &&
-            target.length <= 1 &&
-            target.every((entry) => entry.type === 'file'),
-          '移动恢复目标无效；保留现场',
-        );
-        if (target.length) await verifyRemote(box, `${to}/${identity.name}`, identity, signal);
-        if (!source.length && target.length) return;
-      }
-    } catch (readError) {
-      readError.retryableRead = false;
-      throw readError;
-    }
-    throw error;
-  }
-}
-
-// Upload and verify before removing anything from Stable. Archive is never pruned here.
-async function ensureDownloads(box) {
-  const directories = (await box.list('/Stable')).filter((e) => e.name === 'Downloads');
-  requireValue(
-    directories.length <= 1 && (!directories.length || directories[0].type === 'dir'),
-    'Downloads 必须是独立目录',
-  );
-  if (!directories.length) await box.api('dir', downloadsFolder, 'POST', { operation: 'mkdir' });
-}
-async function syncPackage({ box, identity, bytes, resolveIdentity }, folder, pattern) {
-  requireValue(
-    bytes.length === identity.size && digest(bytes) === identity.sha256,
-    '本地安装包校验失败',
-  );
-  requireValue(pattern.exec(identity.name)?.[1] === identity.version, '分发包名称或版本无效');
-  await box.initialize();
-  if (folder === '/Offline') {
-    const matches = (await box.list('/')).filter((entry) => entry.name === 'Offline');
-    requireValue(
-      matches.length <= 1 && (!matches.length || matches[0].type === 'dir'),
-      'Offline 必须是独立目录',
-    );
-    if (!matches.length) await box.api('dir', '/Offline', 'POST', { operation: 'mkdir' });
-  }
-  if (folder === downloadsFolder) await ensureDownloads(box);
-  const current = await box.list(folder);
-  requireValue(
-    new Set(current.map((e) => e.name)).size === current.length &&
-      current.every(
-        (e) =>
-          (folder === '/Stable' && e.type === 'dir' && e.name === 'Downloads') ||
-          (e.type === 'file' &&
-            (pattern.test(e.name) ||
-              (folder === '/Stable' &&
-                (setupPattern.test(e.name) || bootstrapPattern.test(e.name))) ||
-              (folder === downloadsFolder &&
-                (offlinePattern.test(e.name) || bootstrapPattern.test(e.name))))),
-      ),
-    `${folder.slice(1)} 存在不支持的分发文件；请维护者核对`,
-  );
-  for (const entry of current.filter((e) => e.type === 'file')) {
-    const version = (offlinePattern.exec(entry.name) ||
-      setupPattern.exec(entry.name) ||
-      bootstrapPattern.exec(entry.name))?.[1];
-    requireValue(
-      version === identity.version || older(version, identity.version),
-      '已有更新版本，拒绝降级同步',
-    );
-  }
-  const old = current.filter((e) => pattern.test(e.name) && e.name !== identity.name);
-  const verified = [];
-  // Validate all names and published identities before any mutation, including downgrade retries.
-  for (const entry of old) {
-    const version = pattern.exec(entry.name)[1];
-    requireValue(
-      older(version, identity.version),
-      `${folder.slice(1)} 已有更新版本；跳过旧版本同步`,
-    );
-    const previous = await resolveIdentity(`v${version}`);
-    requireValue(previous.name === entry.name, '旧安装包名称不一致');
-    await verifyRemote(box, `${folder}/${entry.name}`, previous);
-    verified.push(previous);
-  }
-  const archive = await box.list('/Archive');
-  for (const previous of verified) {
-    if (archive.some((e) => e.name === previous.name))
-      await verifyRemote(box, `/Archive/${previous.name}`, previous);
-  }
-  if (!current.some((e) => e.name === identity.name))
-    await box.upload(folder, identity.name, bytes);
-  await verifyRemote(box, `${folder}/${identity.name}`, identity);
-  for (const previous of verified) {
-    // The new bytes were verified above. Old bytes remain verified in Archive;
-    // the new public bytes are read back again before publishing the update pointer.
-    if (archive.some((e) => e.name === previous.name)) {
-      await verifyRemote(box, `/Archive/${previous.name}`, previous);
-      await box.remove(`${folder}/${previous.name}`);
-    } else {
-      await moveVerified(box, folder, '/Archive', previous);
-      await verifyRemote(box, `/Archive/${previous.name}`, previous);
-    }
-  }
-  const after = (await box.list(folder)).filter((e) => pattern.test(e.name));
-  requireValue(
-    after.length === 1 && after[0].name === identity.name,
-    `新版已保留；${folder.slice(1)} 尚需整理，可重试同一版本`,
-  );
-  return `同步成功：${folder.slice(1)} 已保留一个经过校验的正式分发包；Archive 保留回滚版本。`;
-}
-
-export async function syncBootstrap(options) {
-  return syncPackage(options, downloadsFolder, bootstrapPattern);
-}
-
-// Retire redundant distributions without deleting the only copy or trusting filenames.
-// Resolve and verify every source/destination before changing the public directory.
-async function planFullDownloadRetirement(box, version, resolveIdentity) {
-  const plans = [];
-  const archive = await box.list('/Archive');
-  for (const folder of ['/Stable', downloadsFolder]) {
-    const entries = await box.list(folder);
-    requireValue(
-      new Set(entries.map((entry) => entry.name)).size === entries.length,
-      '分发目录存在重复文件',
-    );
-    for (const entry of entries) {
-      // Music is independent user content, never an application distribution source.
-      if (
-        folder === '/Stable' &&
-        entry.type === 'dir' &&
-        (entry.name === 'Downloads' || entry.name === 'Music')
-      )
-        continue;
-      const match =
-        setupPattern.exec(entry.name) ||
-        offlinePattern.exec(entry.name) ||
-        bootstrapPattern.exec(entry.name);
-      requireValue(entry.type === 'file' && match, '分发目录存在未知内容，保留原文件');
-      const previousVersion = match[1];
-      requireValue(
-        previousVersion === version || older(previousVersion, version),
-        '已有更新版本，拒绝降级同步',
-      );
-      if (folder === downloadsFolder && bootstrapPattern.test(entry.name)) continue;
-      const release = await resolveIdentity('v' + previousVersion);
-      const identity = offlinePattern.test(entry.name)
-        ? release.offline
-        : bootstrapPattern.test(entry.name)
-          ? release.bootstrap
-          : release;
-      requireValue(identity?.name === entry.name, '待归档文件缺少原发行身份');
-      await verifyRemote(box, folder + '/' + entry.name, identity);
-      const existing = archive.find((row) => row.name === entry.name);
-      if (existing) {
-        requireValue(existing.type === 'file', '归档目标不是文件');
-        await verifyRemote(box, '/Archive/' + entry.name, identity);
-      }
-      plans.push({ folder, identity, existing: Boolean(existing) });
-    }
-  }
-  return async () => {
-    for (const { folder, identity, existing } of plans) {
-      if (existing) {
-        await verifyRemote(box, '/Archive/' + identity.name, identity);
-        await box.remove(folder + '/' + identity.name);
-      } else await moveVerified(box, folder, '/Archive', identity);
-      await verifyRemote(box, '/Archive/' + identity.name, identity);
-    }
-  };
-}
-
-export async function syncUserDownloads({
-  box,
-  bootstrap,
-  resolveIdentity,
-  accept = verifyPublicDownloads,
-}) {
-  requireValue(bootstrap?.identity && bootstrap.bytes, '用户下载缺少轻量安装器');
-  await ensureDownloads(box);
-  const retire = await planFullDownloadRetirement(box, bootstrap.identity.version, resolveIdentity);
-  await syncBootstrap({ box, ...bootstrap });
-  await retire();
-  await accept({ bootstrap });
-}
-
-// One public directory reader serves migration inventory and anonymous acceptance.
-// It cannot list private folders or authorize a write; every retired file still
-// requires its original signed release identity and authenticated full-byte readback.
+// Public listing is read-only; publication uses the authenticated phased workflow.
 export async function readPublicDownloadDirectory(signal) {
   const listing = await checkedFetch(
     'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
@@ -997,220 +816,37 @@ export async function verifyPublicDownloads(
   return '匿名验收成功：用户入口仅提供轻量 EXE，下载原字节一致；完整离线 ZIP 由 GitHub 提供。';
 }
 
-export async function syncResourceFiles({
-  box,
-  version,
-  files,
-  metadataInRuntime = false,
-  reuseVersion,
-}) {
-  requireValue(/^\d+\.\d+\.\d+$/.test(version), '资源镜像版本无效');
-  requireValue(
-    !reuseVersion || (/^\d+\.\d+\.\d+$/.test(reuseVersion) && older(reuseVersion, version)),
-    '原资源镜像版本无效',
-  );
-  const zip = files.filter((f) => /^Mizar-official-epl-default-\d+\.\d+\.\d+\.zip$/.test(f.name));
-  const expected = [...(metadataInRuntime ? [] : Object.values(resourceNames)), zip[0]?.name];
-  requireValue(
-    zip.length === 1 &&
-      files.length === expected.length &&
-      new Set(files.map((f) => f.name)).size === expected.length &&
-      files.every(
-        (f) =>
-          expected.includes(f.name) && f.bytes.length === f.size && digest(f.bytes) === f.sha256,
-      ),
-    '资源镜像缺少唯一原文件或摘要不一致',
-  );
-  const root = await box.list('/');
-  const resources = root.filter((e) => e.name === 'Resources');
-  requireValue(
-    resources.length <= 1 && (!resources.length || resources[0].type === 'dir'),
-    'Resources 必须是独立目录',
-  );
-  if (!resources.length) await box.api('dir', '/Resources', 'POST', { operation: 'mkdir' });
-  const folders = (await box.list('/Resources')).filter((e) => e.name === `v${version}`);
-  requireValue(
-    folders.length <= 1 && (!folders.length || folders[0].type === 'dir'),
-    '资源版本目录无效',
-  );
-  const folder = `/Resources/v${version}`;
-  if (!folders.length) await box.api('dir', folder, 'POST', { operation: 'mkdir' });
-  const existing = await box.list(folder);
-  requireValue(
-    existing.every((e) => e.type === 'file' && expected.includes(e.name)) &&
-      new Set(existing.map((e) => e.name)).size === existing.length,
-    '已有资源目录含未知或重复文件',
-  );
-  for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
-    await verifyRemote(box, `${folder}/${file.name}`, file);
-  for (const file of files.filter((f) => !existing.some((e) => e.name === f.name))) {
-    let copied = false;
-    if (file.name.endsWith('.zip') && reuseVersion) {
-      const source = `/Resources/v${reuseVersion}`;
-      if (
-        (await box.list('/Resources')).some(
-          (e) => e.name === `v${reuseVersion}` && e.type === 'dir',
-        ) &&
-        (await box.list(source)).some((e) => e.name === file.name && e.type === 'file')
-      ) {
-        // A directory hint is not provenance: both sides must match the currently verified original ZIP.
-        await verifyRemote(box, `${source}/${file.name}`, file);
-        try {
-          await box.copy(source, folder, file.name);
-          copied = true;
-        } catch (error) {
-          // 404 may mean the verified source disappeared, not an unsupported endpoint.
-          if (![405, 501].includes(error.httpStatus) && !error.uploadOutcomeUnknown) throw error;
-          let copiedAfterTimeout;
-          try {
-            copiedAfterTimeout = await waitForWrittenFile(
-              box,
-              folder,
-              file.name,
-              file,
-              undefined,
-              false,
-              Boolean(error.uploadOutcomeUnknown),
-            );
-          } catch (readError) {
-            if (error.uploadOutcomeUnknown) readError.retryableRead = false;
-            throw readError;
-          }
-          copied = copiedAfterTimeout;
-          // A timed-out copy may still complete later. Only a verified existing
-          // destination proves success; absence does not authorize another write.
-          if (!copied && error.uploadOutcomeUnknown) throw error;
-          if (!copied) console.log('Box 服务端复制未提供；使用已验证原资源上传，保留原目录');
-        }
-      }
-    }
-    if (!copied) await box.upload(folder, file.name, file.bytes);
-    await verifyRemote(box, `${folder}/${file.name}`, file);
-  }
-}
-// A unique staging directory avoids mixing chunks from previous attempts. Only
-// a fully read-back match may enter Runtime; failed staging is left untouched.
-async function uploadRuntimeChunks(box, folder, file) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const staging = `/Archive/mizar-runtime-${randomUUID()}`;
-    await box.api('dir', staging, 'POST', { operation: 'mkdir' });
-    try {
-      await box.uploadChunks(staging, file.name, file.bytes);
-      await verifyRemote(box, `${staging}/${file.name}`, file);
-    } catch (error) {
-      // No request body reached the server, so no completed file can result
-      // from this failed chunk. Do not wait for an impossible late commit.
-      if (error.retrySafeUpload) {
-        error.retryableRead = false;
-        throw error;
-      }
-      if (!error.uploadOutcomeUnknown) {
-        error.retryableRead = false;
-        throw error;
-      }
-      recordRecovery();
-      let confirmed;
-      try {
-        confirmed = await waitForWrittenFile(box, staging, file.name, file);
-      } catch (readError) {
-        readError.retryableRead = false;
-        throw readError;
-      }
-      if (!confirmed) {
-        if (attempt === 2) throw error;
-        recordRecovery();
-        console.log(`Box 分块结果未落盘，使用新暂存目录重试 ${attempt + 1}/2`);
-        continue;
-      }
-    }
-    const target = (await box.list(folder)).filter((entry) => entry.name === file.name);
+export async function syncCompatibilityMetadata({ box, version, bytes }) {
+  requireValue(/^\d+\.\d+\.\d+$/.test(version), 'Invalid Runtime version');
+  readMachineMetadata(bytes);
+  for (const [parent, name] of [
+    ['/', 'Runtime'],
+    ['/Runtime', `v${version}`],
+  ]) {
+    const entries = (await box.list(parent)).filter((entry) => entry.name === name);
     requireValue(
-      target.length <= 1 && target.every((entry) => entry.type === 'file'),
-      'Runtime 目标无效',
+      entries.length <= 1 && (!entries.length || entries[0].type === 'dir'),
+      'Invalid Runtime directory',
     );
-    if (target.length) await verifyRemote(box, `${folder}/${file.name}`, file);
-    else await moveVerified(box, staging, folder, file);
-    if ((await box.list(staging)).length === 0) await box.api('dir', staging, 'DELETE');
-    return;
+    if (!entries.length)
+      await box.api('dir', `${parent === '/' ? '' : parent}/${name}`, 'POST', {
+        operation: 'mkdir',
+      });
   }
-}
-export async function syncRuntimeFiles({ box, version, files, selected }) {
+  const folder = `/Runtime/v${version}`;
+  const existing = (await box.list(folder)).filter((entry) => entry.name === MACHINE_METADATA_NAME);
   requireValue(
-    /^\d+\.\d+\.\d+$/.test(version) &&
-      files.length === 2 &&
-      new Set(files.map((f) => f.name)).size === 2 &&
-      files.some((f) => f.name === MACHINE_METADATA_NAME) &&
-      files.some((f) => f.name === `Mizar-v${version}-Windows-x64-Core-Setup.exe`) &&
-      files.every((f) => f.bytes.length === f.size && digest(f.bytes) === f.sha256),
-    'Invalid immutable Runtime files',
+    existing.length <= 1 && (!existing.length || existing[0].type === 'file'),
+    'Invalid Runtime metadata',
   );
-  readMachineMetadata(files.find((f) => f.name === MACHINE_METADATA_NAME).bytes);
-  requireValue(!selected || files.some((file) => file.name === selected), 'Unknown Runtime asset');
-  const root = await box.list('/');
-  const runtime = root.filter((e) => e.name === 'Runtime');
-  requireValue(
-    runtime.length <= 1 && (!runtime.length || runtime[0].type === 'dir'),
-    'Invalid Runtime directory',
-  );
-  if (!runtime.length) await box.api('dir', '/Runtime', 'POST', { operation: 'mkdir' });
-  const versionName = 'v' + version;
-  const versions = (await box.list('/Runtime')).filter((e) => e.name === versionName);
-  requireValue(
-    versions.length <= 1 && (!versions.length || versions[0].type === 'dir'),
-    'Invalid Runtime version',
-  );
-  const folder = '/Runtime/' + versionName;
-  if (!versions.length) await box.api('dir', folder, 'POST', { operation: 'mkdir' });
-  const existing = await box.list(folder);
-  requireValue(
-    new Set(existing.map((e) => e.name)).size === existing.length &&
-      existing.every((e) => e.type === 'file' && files.some((f) => f.name === e.name)),
-    'Unexpected Runtime content',
-  );
-  for (const file of files.filter((f) => existing.some((e) => e.name === f.name)))
-    await verifyRemote(box, folder + '/' + file.name, file);
-  for (const file of files.filter(
-    (f) => (!selected || f.name === selected) && !existing.some((e) => e.name === f.name),
-  )) {
-    if (file.name === MACHINE_METADATA_NAME) await box.upload(folder, file.name, file.bytes);
-    else await uploadRuntimeChunks(box, folder, file);
-    await verifyRemote(box, folder + '/' + file.name, file);
-  }
-}
-const settle = async (tasks) => {
-  const results = await Promise.allSettled(tasks);
-  // Never restart after a sibling's uncertain write merely because a read
-  // happened to fail first. Every in-flight operation has settled here.
-  const failed =
-    results.find((result) => result.status === 'rejected' && !result.reason?.retryableRead) ??
-    results.find((result) => result.status === 'rejected');
-  if (failed) throw failed.reason;
-  return results.map((result) => result.value);
-};
-
-export async function verifyStableReadbacks({ box, identity, bootstrap, resources, runtime }) {
-  // A pointer is published only after upload/hash verification and complete
-  // archival. Failed cleanup never advertises a new update to clients.
-  const readbacks = [
-    ...(runtime ?? [])
-      .filter((file) => file.name === `Mizar-v${identity.version}-Windows-x64-Core-Setup.exe`)
-      .map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
-    [`${downloadsFolder}/${bootstrap.identity.name}`, bootstrap.identity],
-    ...(resources ?? []).map((file) => [`/Resources/v${identity.version}/${file.name}`, file]),
-    ...(runtime ?? [])
-      .filter((file) => file.name !== `Mizar-v${identity.version}-Windows-x64-Core-Setup.exe`)
-      .map((file) => [`/Runtime/v${identity.version}/${file.name}`, file]),
-  ];
-  // Complete every post-write full hash before publishing. Bound only independent
-  // reads; a failed batch joins its active siblings and starts no further batch.
-  await boxStage('发布前完整回读', async () => {
-    for (let offset = 0; offset < readbacks.length; offset += 3)
-      await settle(
-        readbacks.slice(offset, offset + 3).map(([path, file]) => verifyRemote(box, path, file)),
-      );
+  // Historical backends and other files are deliberately neither inspected nor changed.
+  if (!existing.length) await box.upload(folder, MACHINE_METADATA_NAME, bytes);
+  await verifyRemote(box, `${folder}/${MACHINE_METADATA_NAME}`, {
+    size: bytes.length,
+    sha256: digest(bytes),
   });
 }
-export async function publishStablePointer({ box, updateIndex }) {
+export async function publishStablePointer({ box, updateIndex, version }) {
   const root = await box.list('/');
   const updates = root.find((e) => e.name === 'Updates');
   requireValue(!updates || updates.type === 'dir', 'Updates 必须是独立目录');
@@ -1221,6 +857,16 @@ export async function publishStablePointer({ box, updateIndex }) {
     const previous = await box.hash('/Updates/latest.json');
     if (previous.sha256 === indexIdentity.sha256 && previous.size === indexIdentity.size)
       return '拆分分发已核验，更新清单保持一致。';
+  }
+  if (version && entries.some((entry) => entry.name === 'latest.json')) {
+    const previous = JSON.parse(await box.readIndex());
+    requireValue(previous.schemaVersion === 'mizar.update-index.v2', '现有更新信封格式无效');
+    const previousVersion = JSON.parse(Buffer.from(previous.manifestBase64, 'base64')).version;
+    // Existing metadata is only a conservative overwrite guard, never authorization.
+    requireValue(
+      /^\d+\.\d+\.\d+$/.test(previousVersion) && older(previousVersion, version),
+      '拒绝回退或替换同版本不同内容的更新清单',
+    );
   }
   // Seafile replace=1 publishes one complete file after its upload completes;
   // the signature and original manifest travel in this one atomic envelope.
@@ -1233,60 +879,6 @@ export async function verifyStablePointer({ box, updateIndex }) {
     sha256: digest(updateIndex),
   });
 }
-export async function finalizeStableRelease(options) {
-  await verifyStableReadbacks(options);
-  const result = await publishStablePointer(options);
-  await verifyStablePointer(options);
-  return result === '更新清单已提交；等待完整回读核验。'
-    ? '同步成功：拆分分发与历史归档已核验，Updates 最新清单已发布并核对。'
-    : result;
-}
-
-async function syncStableReleaseOnce({
-  box,
-  identity,
-  resolveIdentity,
-  bootstrap,
-  resources,
-  updateIndex,
-  runtime,
-  resourceReuseVersion,
-  accept,
-}) {
-  requireValue(
-    bootstrap?.identity && runtime?.length && resources?.length && updateIndex,
-    '拆分分发必须提供轻量安装器、Core 与已签更新清单；旧版本请从 GitHub 获取',
-  );
-  requireValue(
-    !older(identity.version, '1.6.0') &&
-      bootstrap.identity.version === identity.version &&
-      bootstrap.identity.gitSha === identity.gitSha &&
-      bootstrap.identity.releaseId === identity.releaseId,
-    '仅同步同源同版的 1.6.0 及以后拆分发行',
-  );
-  await box.initialize();
-  // Wait for every writer before reporting failure. No failed sibling may publish the pointer.
-
-  await settle([
-    runtime ? syncRuntimeFiles({ box, version: identity.version, files: runtime }) : undefined,
-    resources
-      ? syncResourceFiles({
-          box,
-          version: identity.version,
-          files: resources,
-          metadataInRuntime: Boolean(runtime),
-          reuseVersion: resourceReuseVersion,
-        })
-      : undefined,
-    syncUserDownloads({ box, bootstrap, resolveIdentity, accept }),
-  ]);
-  return finalizeStableRelease({ box, identity, bootstrap, resources, runtime, updateIndex });
-}
-
-export async function syncStableRelease(options) {
-  return syncStableReleaseOnce(options);
-}
-
 export async function probe(box) {
   await box.initialize();
   const name = `mizar-api-probe-${randomUUID()}.txt`;
@@ -1549,12 +1141,13 @@ export async function verifiedUpdateIndex(identity, tag) {
       'update-publication-provenance.json',
     ].includes(a.name),
   );
-  let updateIndex;
+  let updateIndex, originalIndex;
   const indexAsset = release.assets.filter((a) => a.name === 'update-index.json');
   if (identity.originals) updateIndex = identity.originals.get('update-index.json');
   if (indexAsset.length || updateIndex) {
     requireValue(updateIndex || indexAsset.length === 1, '更新信封不唯一');
     updateIndex ??= await downloadReleaseAsset(release, tag, 'update-index.json', 2097152);
+    originalIndex = updateIndex;
     const index = JSON.parse(updateIndex);
     requireValue(index.schemaVersion === 'mizar.update-index.v2', '更新信封格式无效');
     const extracted = [
@@ -1648,19 +1241,7 @@ export async function verifiedUpdateIndex(identity, tag) {
     }
   }
   requireValue(updateIndex, '正式发行缺少已签更新信封');
-  return updateIndex;
-}
-
-export function cacheReleaseIdentities(resolveIdentity) {
-  const identities = new Map();
-  return (tag) => {
-    if (!identities.has(tag))
-      identities.set(
-        tag,
-        Promise.resolve().then(() => resolveIdentity(tag)),
-      );
-    return identities.get(tag);
-  };
+  return originalIndex ?? updateIndex;
 }
 
 export async function resolveBoxTag() {
@@ -1697,87 +1278,13 @@ async function main() {
           process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
         );
   if (mode === 'probe') return probe(box);
-  const resolveIdentity = cacheReleaseIdentities(releaseIdentity);
-  const identity = await resolveIdentity(tag);
-  const downloads = {
-    box,
-    identity,
-    bootstrap: identity.bootstrap
-      ? { identity: identity.bootstrap, bytes: identity.bootstrap.data }
-      : undefined,
-  };
-  if (mode === 'verify-downloads') return verifyPublicDownloads(downloads);
-  requireValue(mode === 'sync', '不支持该同步模式');
-
-  requireValue(
-    identity.asset.browser_download_url ===
-      `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${identity.name}`,
-    '安装包地址不一致',
-  );
-  const release = identity.release;
-  requireValue(
-    identity.runtime && identity.bootstrap && !older(identity.version, '1.6.0'),
-    '仅同步 1.6.0 及以后的拆分发行',
-  );
-  const updateIndex = await verifiedUpdateIndex(identity, tag);
-  let resources, resourceReuseVersion;
-  if (identity.originals || release.assets.some((a) => a.name === resourceNames.descriptor)) {
-    const directory = await mkdtemp(join(tmpdir(), 'mizar-mirror-resources-'));
-    try {
-      for (const name of Object.values(resourceNames))
-        await writeFile(
-          join(directory, name),
-          identity.originals?.get(name) ??
-            (await downloadReleaseAsset(
-              release,
-              tag,
-              name,
-              name.includes('provenance') ? 2097152 : 65536,
-            )),
-        );
-      const descriptor = JSON.parse(await readFile(join(directory, resourceNames.descriptor)));
-      const name = descriptor.resources?.[0]?.archive?.name;
-      requireValue(
-        /^Mizar-official-epl-default-\d+\.\d+\.\d+\.zip$/.test(name),
-        '资源归档名称无效',
-      );
-      await writeFile(
-        join(directory, name),
-        await downloadReleaseAsset(release, tag, name, LIMITS.archiveBytes),
-      );
-      resources = await Promise.all(
-        (await resourceAssetInventory(directory, identity.core ?? identity.manifest, true)).map(
-          async (file) => ({
-            ...file,
-            bytes: await readFile(join(directory, file.name)),
-          }),
-        ),
-      );
-      // This is only a storage hint after original publication verification above.
-      const originalVersion = JSON.parse(await readFile(join(directory, resourceNames.catalog)))
-        .origin?.publication?.releaseVersion;
-      resourceReuseVersion =
-        originalVersion && older(originalVersion, identity.version) ? originalVersion : undefined;
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+  if (mode === 'verify-downloads') {
+    const identity = await releaseIdentity(tag, { runtime: false });
+    return verifyPublicDownloads({ identity, bootstrap: { identity: identity.bootstrap } });
   }
-  return syncStableRelease({
-    box,
-    identity,
-    runtime: identity.runtime,
-    resolveIdentity,
-    bootstrap: identity.bootstrap
-      ? {
-          identity: identity.bootstrap,
-          bytes: identity.bootstrap.data,
-          resolveIdentity: async (tag) => (await resolveIdentity(tag)).bootstrap,
-        }
-      : undefined,
-    resources: identity.runtime ? resources.filter((f) => f.name.endsWith('.zip')) : resources,
-    resourceReuseVersion,
-    updateIndex,
-  });
+  // The phased workflow is the only publication entry point. This avoids an
+  // alternate CLI path uploading or moving historical executable/resource files.
+  throw new MirrorError('请通过 Box Sync 工作流同步兼容元数据');
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {

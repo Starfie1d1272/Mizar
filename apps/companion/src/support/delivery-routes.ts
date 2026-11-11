@@ -1,10 +1,13 @@
+import {
+  IncidentPinCoordinator,
+  hostIncidentParticipant,
+  type IncidentParticipant,
+} from './retention.js';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import type { FastifyInstance } from 'fastify';
-import { DiagnosticDelivery, type RetainedDiagnosticBatch } from './delivery.js';
+import { DiagnosticDelivery } from './delivery.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
-import { fullLogArchive } from './archive.js';
-import { IncidentStore } from './incident-store.js';
 
 export function registerDiagnosticDelivery(
   app: FastifyInstance,
@@ -13,17 +16,28 @@ export function registerDiagnosticDelivery(
     journal?: SessionJournal;
     originPolicy: LocalWebOriginPolicy;
     endpoint?: string;
+    endpointSource?: 'product_default' | 'environment_override';
     fetch?: typeof fetch;
     onConsent?: () => Promise<void>;
+    incidentParticipants?: () => IncidentParticipant[];
+    deliveryParticipants?: () => IncidentParticipant[];
     onReport?: (report: { category: string; observedAt: string }) => void;
   },
 ) {
+  const incidentPins = options.directory
+    ? new IncidentPinCoordinator(options.directory)
+    : undefined;
+  const participants = (hostPinId?: string) => [
+    ...(options.incidentParticipants?.() ?? []),
+    ...(hostPinId && options.directory
+      ? [hostIncidentParticipant(options.directory, hostPinId)]
+      : []),
+  ];
   let delivery: DiagnosticDelivery | undefined;
   let failure: string | null = null;
   let ready = false;
   let closing = false;
   let initializing = Promise.resolve();
-  const incidents = options.directory ? new IncidentStore(options.directory) : undefined;
   const status = () => ({
     available: ready,
     ...(delivery?.status() ?? {
@@ -46,10 +60,22 @@ export function registerDiagnosticDelivery(
     // Diagnostics initialization never holds service readiness or live controls.
     initializing = (async () => {
       try {
+        await incidentPins?.recover(participants(), (pinId) => [
+          hostIncidentParticipant(directory, pinId),
+        ]);
+      } catch (error) {
+        journal.record('problem_report_pin_failure', {
+          phase: 'recover',
+          error: diagnosticValue(error),
+        });
+      }
+      try {
         delivery = new DiagnosticDelivery(directory, journal, {
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+          ...(options.endpointSource ? { endpointSource: options.endpointSource } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
           ...(options.onConsent ? { onConsent: options.onConsent } : {}),
+          participants: options.deliveryParticipants ?? (() => [journal.deliveryParticipant()]),
         });
         await delivery.initialize();
         ready = true;
@@ -68,6 +94,7 @@ export function registerDiagnosticDelivery(
         '/local/v1/diagnostics/delivery',
         '/operator/diagnostics/consent',
         '/operator/diagnostics/report',
+        '/operator/diagnostics/report/confirm',
         '/operator/diagnostics/pause',
       ].includes(request.url.split('?')[0]!)
     )
@@ -127,12 +154,18 @@ export function registerDiagnosticDelivery(
     }
   });
   app.post('/operator/diagnostics/report', { bodyLimit: 1024 }, async (request, reply) => {
-    const body = request.body as { category?: unknown; observedAt?: unknown } | null;
+    const body = request.body as {
+      category?: unknown;
+      observedAt?: unknown;
+      hostPinId?: unknown;
+    } | null;
     if (
       !body ||
       typeof body.category !== 'string' ||
       !['hud', 'music', 'workspace', 'recovery', 'other'].includes(body.category) ||
-      typeof body.observedAt !== 'string'
+      typeof body.observedAt !== 'string' ||
+      (body.hostPinId !== undefined &&
+        (typeof body.hostPinId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.hostPinId)))
     )
       return reply.code(400).send({ message: '请选择问题类型和发生时间。' });
     const time = Date.parse(body.observedAt);
@@ -148,19 +181,55 @@ export function registerDiagnosticDelivery(
         trigger: 'user',
         upload: delivery?.status().consent ? 'queued_when_capacity_available' : 'local_only',
       });
-      options.onReport?.(report);
-      await options.journal.flush();
-      if (!incidents) throw new Error('incident_directory_unavailable');
-      const incident = await incidents.capture(async () => ({
-        schema: 'mizar-incident/1',
-        capturedAt: new Date().toISOString(),
-        report: { ...report, sequence },
-        files: (await fullLogArchive(options.directory, {}, [], { includeIncidents: false })).files,
-      }));
+      let after = options.onReport ? 'sampling' : 'unknown';
+      try {
+        options.onReport?.(report);
+      } catch (error) {
+        after = 'unavailable';
+        options.journal.record('problem_report_sampling_failure', {
+          sequence,
+          error: diagnosticValue(error),
+        });
+      }
+      let pinned: {
+        evidenceRetained: boolean;
+        pinId: string | null;
+        requiresHostCommit?: boolean;
+        reason: string;
+      } = { evidenceRetained: false, pinId: null, reason: 'pin_coordinator_unavailable' };
+      if (incidentPins) {
+        try {
+          pinned = await incidentPins.capture(
+            { ...report, eventId: `${options.journal.sessionId}:${sequence}` },
+            participants(body.hostPinId as string | undefined),
+            [
+              'companion',
+              'performance',
+              ...(options.journal.hostStartupSessionId || body.hostPinId ? ['host'] : []),
+            ],
+            body.hostPinId as string | undefined,
+          );
+        } catch (error) {
+          options.journal.record('problem_report_pin_failure', {
+            sequence,
+            error: diagnosticValue(error),
+          });
+        }
+      }
       return {
         recorded: true,
-        evidenceRetained: true,
-        incident,
+        ...pinned,
+        evidenceRetained: pinned.evidenceRetained,
+        retention: pinned.evidenceRetained ? 'fixed' : 'unfixed',
+        message: pinned.evidenceRetained
+          ? '标记及已提交现场证据已固定；后续采样仍在进行。'
+          : '标记已记录，现场证据未完整固定；请立即导出诊断包。',
+        nextAction: 'export',
+        coverage: {
+          before: pinned.evidenceRetained ? 'fixed' : 'unfixed',
+          after,
+          producerPins: pinned.evidenceRetained ? 'confirmed' : 'unconfirmed',
+        },
         sequence,
         ...report,
         cloud: delivery?.status() ?? null,
@@ -175,6 +244,32 @@ export function registerDiagnosticDelivery(
         .send({ message: '问题现场未确认完整保存；请立即导出诊断包，并检查本机状态目录和空间。' });
     }
   });
+  app.post('/operator/diagnostics/report/confirm', { bodyLimit: 1024 }, async (request, reply) => {
+    const body = request.body as { pinId?: unknown } | null;
+    if (!body || typeof body.pinId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.pinId))
+      return reply.code(400).send({ message: '现场标记编号无效。' });
+    if (!incidentPins || closing)
+      return reply.code(503).send({ message: '现场证据固定结果尚未确认，请立即导出诊断包。' });
+    try {
+      const result = await incidentPins.confirm(body.pinId, participants(body.pinId));
+      options.journal?.record('problem_report_pin_result', {
+        pinId: body.pinId,
+        result: result.evidenceRetained ? 'success' : 'unconfirmed',
+      });
+      return {
+        ...result,
+        message: result.evidenceRetained
+          ? '已提交的现场证据已固定；后续采样仍在进行。'
+          : '标记已记录，现场证据未完整固定；请立即导出诊断包。',
+      };
+    } catch (error) {
+      options.journal?.record('problem_report_pin_failure', {
+        pinId: body.pinId,
+        error: diagnosticValue(error),
+      });
+      return reply.code(503).send({ message: '现场证据固定结果尚未确认，请立即导出诊断包。' });
+    }
+  });
   return {
     status,
     snapshotStatus: () => ({
@@ -182,13 +277,6 @@ export function registerDiagnosticDelivery(
       error: ready ? (delivery?.status().error ?? null) : failure,
       delivery: ready ? (delivery?.status() ?? null) : null,
     }),
-    async retainedBatches(): Promise<RetainedDiagnosticBatch[]> {
-      await initializing;
-      if (!options.directory) return [];
-      if (!ready || !delivery)
-        return [{ id: null, sourceBytes: 0, error: failure ?? 'queue_not_ready' }];
-      return delivery.retainedBatches();
-    },
     async close() {
       closing = true;
       ready = false;

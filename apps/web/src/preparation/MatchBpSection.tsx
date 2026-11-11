@@ -10,10 +10,12 @@ import '@mizar/hud-view/bp.css';
 export function MatchBpSection({
   document,
   local,
+  canWrite = true,
   contextRevision,
 }: {
   document: MatchDocumentV1;
   local: boolean;
+  canWrite?: boolean;
   contextRevision: string | undefined;
 }) {
   const confirmation = useConfirmation();
@@ -29,6 +31,7 @@ export function MatchBpSection({
   };
   const editable =
     local &&
+    canWrite &&
     contextRevision !== savedRevision &&
     connected &&
     workspace?.source === 'local' &&

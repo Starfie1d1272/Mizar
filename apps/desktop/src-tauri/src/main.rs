@@ -5,13 +5,12 @@ mod cs2_config_identity;
 mod cs2_console;
 mod cs2_diagnostics;
 mod cs2_frame_rate;
+mod cs2_frame_rate_live;
 mod cs2_host;
 mod cs2_preferences;
 mod cs2_session;
 mod cs2_spectator;
 mod cs2_video;
-mod default_resource;
-mod default_resource_vpk;
 mod demo_host;
 mod demo_test;
 mod desktop_worker;
@@ -30,11 +29,11 @@ mod observer_job;
 mod observer_workspace;
 mod overlay_recovery;
 mod powershell;
+mod preparation_evidence;
 mod preparation_gate;
 mod preparation_ipc;
 mod preparation_task;
 mod production_exit;
-mod spectator_eligibility;
 mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;
 mod spectator_snapshot;
@@ -456,7 +455,7 @@ async fn set_program_overlay_enabled(
 fn cs2_host_status(state: tauri::State<'_, HostState>) -> Result<serde_json::Value, String> {
     match state.tracker.try_lock() {
         Ok(tracker) => Ok(
-            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.managed, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
+            serde_json::json!({ "found": tracker.window.is_some(), "managed": tracker.layout_aligned, "layoutAligned": tracker.layout_aligned, "generation": tracker.generation, "geometry": tracker.geometry_diagnostics(), "message": tracker.window_message(), "layoutPending": state.layout_request.load(Ordering::Acquire) != state.layout_completed.load(Ordering::Acquire), "visible": state.visible.load(Ordering::Acquire) }),
         ),
         Err(std::sync::TryLockError::WouldBlock) => {
             Err("游戏窗口操作正在进行，请稍后重试。".into())
@@ -963,7 +962,9 @@ async fn present_workbench_panels(
     app: tauri::AppHandle,
     preparation_id: String,
 ) -> Result<(), String> {
-    workspace_presentation::panels(app, preparation_id).await
+    workspace_presentation::panels(app, preparation_id)
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1134,9 +1135,8 @@ fn open_update_page(
 ) -> Result<(), String> {
     let diagnostic_log = log.inner().clone();
     let diagnostic_result: Result<(), String> = (|| {
-        let url = if source == "mirror" {
-            "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads".to_string()
-        } else if source == "github" {
+        // Retain the old source value for an already-loaded WebView. New assets live on GitHub.
+        let url = if source == "github" || source == "mirror" {
             let base = "https://github.com/Starfie1d1272/Mizar/releases";
             if let Some(version) = version {
                 let parts: Vec<_> = version.split('.').collect();
@@ -1350,28 +1350,151 @@ async fn gsi_status(log: tauri::State<'_, DesktopLog>) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-async fn save_support_bundle(app: tauri::AppHandle, contents: String) -> Result<bool, String> {
-    support_export::validate(&contents)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(file) = app
-            .dialog()
-            .file()
-            .set_title("保存 Mizar 诊断包")
-            .set_file_name(format!(
-                "mizar-support-{}.json",
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ))
-            .add_filter("Mizar 诊断包", &["json"])
-            .blocking_save_file()
-        else {
+async fn probe_cs2_frame_rate(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    cs2_host::probe_frame_rate(app).await
+}
+
+#[tauri::command]
+async fn control_cs2_frame_rate(
+    app: tauri::AppHandle,
+    action: String,
+    frame_rate_limit: Option<u16>,
+    diagnostic_operation_id: Option<String>,
+    diagnostic_task_id: Option<String>,
+    diagnostic_trigger: Option<String>,
+) -> Result<serde_json::Value, String> {
+    cs2_host::control_frame_rate(
+        app,
+        action,
+        frame_rate_limit,
+        diagnostic_operation_id,
+        diagnostic_task_id,
+        diagnostic_trigger,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn persist_diagnostic_events(
+    log: tauri::State<'_, DesktopLog>,
+    events: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.persist_document_events(&events))
+        .await
+        .map_err(|error| format!("诊断持久写入任务未完成：{error}"))?
+}
+
+#[tauri::command]
+async fn diagnostic_pin(
+    log: tauri::State<'_, DesktopLog>,
+    action: String,
+    pin_id: String,
+    kind: String,
+) -> Result<serde_json::Value, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.diagnostic_pin(&action, &pin_id, &kind))
+        .await
+        .map_err(|error| format!("诊断固定任务未完成：{error}"))?
+}
+
+#[tauri::command]
+async fn save_support_bundle(
+    app: tauri::AppHandle,
+    export_id: String,
+    diagnostic_operation_id: Option<String>,
+) -> Result<bool, String> {
+    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
+    diagnostic_log.event(
+        "support_save",
+        "begin",
+        Some(
+            &serde_json::json!({
+                "exportId": export_id,
+                "operationId": diagnostic_operation_id,
+            })
+            .to_string(),
+        ),
+    );
+    let state_root = app.state::<DesktopLog>().state_root.clone();
+    let save_log = diagnostic_log.clone();
+    let operation_id = diagnostic_operation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let prepared = support_export::prepare_generated(&state_root, &export_id)?;
+        let dialog_started = std::time::Instant::now();
+        let destination = match prepared.suggested_filename() {
+            Some(name) => app
+                .dialog()
+                .file()
+                .set_title("保存 Mizar 诊断包")
+                .set_file_name(name)
+                .add_filter("ZIP 诊断包", &["zip"])
+                .blocking_save_file(),
+            None => app
+                .dialog()
+                .file()
+                .set_title("选择 Mizar 诊断分卷保存目录")
+                .blocking_pick_folder(),
+        };
+        save_log.event(
+            "support_save",
+            "dialog",
+            Some(
+                &serde_json::json!({
+                    "exportId": export_id,
+                    "operationId": operation_id,
+                    "dialogMs": dialog_started.elapsed().as_millis(),
+                    "cancelled": destination.is_none(),
+                })
+                .to_string(),
+            ),
+        );
+        let Some(destination) = destination else {
             return Ok(false);
         };
-        let path = file.into_path().map_err(|_| "保存位置无效，请重新选择。")?;
-        support_export::save(&path, &contents)?;
+        let path = destination
+            .into_path()
+            .map_err(|_| "保存位置无效，请重新选择。")?;
+        let copy_started = std::time::Instant::now();
+        let saved = prepared.save(&path);
+        save_log.event(
+            "support_save",
+            "copy",
+            Some(
+                &serde_json::json!({
+                    "exportId": export_id,
+                    "operationId": operation_id,
+                    "copyMs": copy_started.elapsed().as_millis(),
+                    "success": saved.is_ok(),
+                })
+                .to_string(),
+            ),
+        );
+        saved?;
         Ok(true)
     })
     .await
-    .map_err(|_| "保存窗口未能打开，请重试。".to_string())?
+    .map_err(|_| "保存窗口未能打开，请重试。".to_string())
+    .and_then(|result| result);
+    if matches!(result, Ok(false)) {
+        diagnostic_log.event(
+            "support_save",
+            "cancelled",
+            Some(
+                &serde_json::json!({
+                    "operationId": diagnostic_operation_id,
+                })
+                .to_string(),
+            ),
+        );
+    } else {
+        diagnostic_log.native_outcome(
+            "save_support_bundle",
+            diagnostic_operation_id.as_deref(),
+            &result,
+        );
+    }
+    result
 }
 
 #[tauri::command]
@@ -1421,8 +1544,10 @@ fn run_desktop(
     log: DesktopLog,
     exit_signal: ExitSignal,
     job: Arc<RuntimeJob>,
-    update_stage: Arc<Mutex<Option<PathBuf>>>,
+    pending_update: updates::PendingUpdate,
 ) -> Result<(), String> {
+    // Bind before publishing this GUI or accepting any renderer command.
+    let pending_update = pending_update.for_gui();
     let exit_request = Arc::new(
         ExitRequest::new(&shutdown_scope(&host_runtime::bundle_root()?)?)
             .map_err(|error| error.to_string())?,
@@ -1435,7 +1560,6 @@ fn run_desktop(
     let camera_state = managed.camera_state();
     let mut tracker = GameTracker::default();
     tracker.overlay_enabled = true;
-    tracker.preserve_settings = managed.preserve_settings();
     let running = Arc::new(AtomicBool::new(true));
     let worker = Arc::new(Mutex::new(None::<thread::JoinHandle<()>>));
     let setup_worker = worker.clone();
@@ -1481,10 +1605,10 @@ fn run_desktop(
         .manage(production_exit::WorkspaceExit::default())
         .manage(production_exit::VerifiedStop::default())
         .manage(preparation_gate::PreparationGate::default())
-        .manage(updates::PendingUpdate::new(update_stage))
+        .manage(pending_update.clone())
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "read_obs_configuration_context", "save_support_bundle"].contains(&command) {
+            if !["gsi_status", "mulnx_handoff_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),
@@ -1578,10 +1702,18 @@ fn run_desktop(
                 }
             }
             setup_log.event("setup_complete", "success", None);
-            updates::check_on_startup(setup_log.clone());
+            updates::check_on_startup(handle.clone());
             let host = handle.clone();
 
             let worker_running = host.state::<HostState>().running.clone();
+            let observer_running = worker_running.clone();
+            let observer_host = host.clone();
+            thread::spawn(move || {
+                while observer_running.load(Ordering::Acquire) {
+                    observer_workspace::pulse(&observer_host);
+                    thread::sleep(Duration::from_secs(2));
+                }
+            });
             let camera_running = worker_running.clone();
             let camera_log = setup_log.clone();
             thread::spawn(move || {
@@ -1631,10 +1763,8 @@ fn run_desktop(
                         if let Some(_operation) = observer_workspace::try_operation() {
                           if let Ok(mut cs2) = host.state::<Mutex<managed_cs2::ManagedCs2>>().try_lock() {
                             cs2.poll();
-                            observer_workspace::pulse_locked(&host, &cs2);
                             workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
                             if let Ok(mut tracker) = worker_tracker.lock() {
-                                tracker.preserve_settings = cs2.preserve_settings();
                                 tracker.set_owner(cs2.workspace_process().ok().flatten());
                             }
                           }
@@ -1901,6 +2031,7 @@ fn run_desktop(
                 }
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
+                    updates::recheck(&cleanup_host)?;
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let _operation = observer_workspace::cleanup_operation();
@@ -1968,7 +2099,8 @@ fn run_desktop(
                     production_exit::cleanup_results(
                         production_exit::cleanup_results(exit_intent, production),
                         cleanup,
-                    )
+                    )?;
+                    updates::recheck(&cleanup_host)
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
@@ -2011,6 +2143,7 @@ fn run_desktop(
             });
         }
         tauri::RunEvent::Exit => {
+            app.state::<updates::PendingUpdate>().invalidate();
             DesktopWorker {
                 running: running.clone(),
                 dispatch: dispatch.clone(),
@@ -2020,6 +2153,7 @@ fn run_desktop(
         }
         _ => (),
     });
+    pending_update.invalidate();
     worker_guard.stop();
     console_guard.stop();
     // Tauri APIs must not be used after run_return has cleaned up the application.
@@ -2033,8 +2167,12 @@ fn run_desktop(
     }
 }
 
-fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
-    let update_stage = Arc::new(Mutex::new(None));
+fn start_gui(
+    root: &Path,
+    log: &DesktopLog,
+    pending_update: &updates::PendingUpdate,
+) -> Result<(), String> {
+    let update_stage = pending_update.stage.clone();
     let scope = log.step("shutdown_scope", || shutdown_scope(root))?;
     let exit_signal = log.step("shutdown_signal", || ExitSignal::new(&scope))?;
     let _observer_job = log.step("observer_job", || observer_job::create(&log.session_id))?;
@@ -2060,13 +2198,19 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         let version = log.step("webview2_preflight", webview_preflight)?;
         log.event("webview2_version", "success", Some(&version));
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_desktop(log.clone(), exit_signal, job.clone(), update_stage.clone())
+            run_desktop(
+                log.clone(),
+                exit_signal,
+                job.clone(),
+                pending_update.clone(),
+            )
         })) {
             Ok(result) => result,
             Err(_) => Err("桌面界面启动或运行时发生异常；原始 panic 信息已记录。".into()),
         }
     })();
     let cleanup_stage = if outcome.is_err() {
+        pending_update.cancel(log);
         "startup_rollback"
     } else {
         "shutdown"
@@ -2097,11 +2241,7 @@ fn start_gui(root: &Path, log: &DesktopLog) -> Result<(), String> {
         Ok(())
     };
     if let Err(error) = stop_result {
-        if let Ok(mut pending) = update_stage.lock() {
-            if let Some(stage) = pending.take() {
-                let _ = fs::remove_dir_all(stage);
-            }
-        }
+        pending_update.cancel(log);
         if error.starts_with("runtime_stop_timeout:") {
             // Explicit timeout is an abnormal recovery path, never a successful flush.
             let _ = job.terminate();
@@ -2282,7 +2422,11 @@ fn main() {
         "success",
         Some(&windows_startup::windows_version()),
     );
-    while let Err(error) = start_gui(&root, &log) {
+    // One owner survives GUI recovery within this Host process. Late staging
+    // cannot acquire a fresh GUI's update slot or publish an old exit intent.
+    let pending_update = updates::PendingUpdate::new(Arc::new(Mutex::new(None)));
+    while let Err(error) = start_gui(&root, &log, &pending_update) {
+        pending_update.cancel(&log);
         log.event("startup_failed", "failure", Some(&error));
         if error.starts_with("webview2_preflight:") {
             if windows_startup::recover_webview(&log, webview_preflight) {

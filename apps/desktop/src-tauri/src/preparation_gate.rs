@@ -52,25 +52,18 @@ impl PreparationGuard<'_> {
         Ok(())
     }
     pub fn commit<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-        match self.gate {
-            Some(gate) => gate.commit(self.id, || {
-                if let Some(verify) = self.verify {
-                    verify()?;
-                }
-                match self.exit {
-                    Some((exit, ticket)) => exit.commit(ticket, action),
-                    None => action(),
-                }
-            }),
-            None => {
-                if let Some(verify) = self.verify {
-                    verify()?;
-                }
-                match self.exit {
-                    Some((exit, ticket)) => exit.commit(ticket, action),
-                    None => action(),
-                }
+        let guarded_action = || {
+            if let Some(verify) = self.verify {
+                verify()?;
             }
+            match self.exit {
+                Some((exit, ticket)) => exit.commit(ticket, action),
+                None => action(),
+            }
+        };
+        match self.gate {
+            Some(gate) => gate.commit(self.id, guarded_action),
+            None => guarded_action(),
         }
     }
 }

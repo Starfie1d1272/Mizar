@@ -13,7 +13,10 @@ function settings(value: unknown): Record<string, unknown> {
 }
 
 /** Make the legacy built-in game-capture default explicit without changing an enabled source. */
-export async function prepareCaptureAudio(obs: ObsRpc): Promise<void> {
+export async function prepareCaptureAudio(
+  obs: ObsRpc,
+  mayInitialize: (uuid: string) => boolean = () => true,
+): Promise<void> {
   const read = async (type: string, data: Record<string, unknown>, field: string) => {
     try {
       return settings((await obs.call(type, data))[field]);
@@ -57,6 +60,7 @@ export async function prepareCaptureAudio(obs: ObsRpc): Promise<void> {
   if (current.capture_audio === true) throw enabled();
   if (current.capture_audio !== undefined || (await identity()) !== uuid) throw unknown();
 
+  if (!mayInitialize(uuid)) throw unknown();
   try {
     await guardedPreparationWrites(obs).call('SetInputSettings', {
       inputUuid: uuid,

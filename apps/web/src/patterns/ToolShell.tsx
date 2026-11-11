@@ -7,15 +7,17 @@ export function ToolShell({
   title,
   context,
   fill = false,
+  responsive = false,
   children,
 }: {
   title: string;
   fill?: boolean;
+  responsive?: boolean;
   context?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <DesktopCanvas kind="product">
+    <DesktopCanvas kind="product" responsive={responsive}>
       <div
         className="product-shell mizar-tool-shell mizar-surface"
         data-context={Boolean(context)}
@@ -32,7 +34,7 @@ export function ToolShell({
           <span>{title}</span>
         </header>
         {context}
-        <div id="tool-content" tabIndex={-1}>
+        <div id="tool-content" className="mizar-tool-content" tabIndex={-1}>
           {children}
         </div>
       </div>

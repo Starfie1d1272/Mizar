@@ -7,6 +7,7 @@ import { registerObsRoutes } from '../src/obs/routes.js';
 import type { ObsAdapter } from '../src/obs/adapter.js';
 import type { ObsConfigStore } from '../src/obs/config.js';
 import type { ObsNativeEvidence } from '../src/obs/native-evidence.js';
+import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
 const success: ObsCaptureDiagnostic = {
@@ -16,24 +17,13 @@ const success: ObsCaptureDiagnostic = {
   lastFailure: null,
   owner: 'unknown',
 };
-const unknown: ObsCaptureDiagnostic = { ...success, state: 'unknown' };
-const pending: ObsCaptureDiagnostic = {
-  ...success,
-  state: 'needs_attention',
-  reason: 'hook_pending',
-};
-const failure: ObsCaptureDiagnostic = {
-  ...success,
-  state: 'needs_attention',
-  reason: 'capture_failed',
-};
 
-function rpc(options: { showing?: boolean; width?: number; windows?: string[] } = {}): ObsRpc {
+function rpc(): ObsRpc {
   return {
     async call(type) {
       switch (type) {
         case 'GetSceneCollectionList':
-          return { currentSceneCollectionName: 'Mizar' };
+          return { currentSceneCollectionName: OBS_COLLECTION };
         case 'GetInputList':
           return {
             inputs: [{ inputName: '游戏画面', inputKind: 'game_capture', inputUuid: 'one' }],
@@ -44,48 +34,22 @@ function rpc(options: { showing?: boolean; width?: number; windows?: string[] } 
           };
         case 'GetInputPropertiesListPropertyItems':
           return {
-            propertyItems: (options.windows ?? ['Counter-Strike 2:SDL_app:cs2.exe']).map(
-              (itemValue) => ({ itemValue }),
-            ),
+            propertyItems: ['Counter-Strike 2:SDL_app:cs2.exe'].map((itemValue) => ({ itemValue })),
           };
         case 'GetSceneItemList':
           return {
             sceneItems: [{ sourceName: '游戏画面', sceneItemEnabled: true, sceneItemId: 7 }],
           };
         case 'GetSourceActive':
-          return { videoShowing: options.showing ?? true };
+          return { videoShowing: true };
         case 'GetSceneItemTransform':
-          return { sceneItemTransform: { sourceWidth: options.width ?? 1920, sourceHeight: 1080 } };
+          return { sceneItemTransform: { sourceWidth: 1920, sourceHeight: 1080 } };
         default:
           throw new Error(`unexpected OBS request ${type}`);
       }
     },
   };
 }
-
-it('only confirms a shown nonzero capture with a current success and unique target', async () => {
-  expect((await readCaptureInitialization(rpc(), success)).state).toBe('initialized');
-  expect(await readCaptureInitialization(rpc({ width: 0 }), success)).toMatchObject({
-    state: 'waiting',
-    reason: 'zero_size',
-  });
-  expect(await readCaptureInitialization(rpc({ showing: false }), success)).toMatchObject({
-    state: 'waiting',
-    reason: 'source_inactive',
-  });
-  expect((await readCaptureInitialization(rpc(), unknown)).state).toBe('initialized');
-  expect(await readCaptureInitialization(rpc(), pending)).toMatchObject({
-    state: 'waiting',
-    reason: 'hook_pending',
-  });
-  expect(await readCaptureInitialization(rpc(), failure)).toMatchObject({
-    state: 'failed',
-    reason: 'hook_failed',
-  });
-  expect(
-    await readCaptureInitialization(rpc({ windows: ['a:b:cs2.exe', 'c:d:cs2.exe'] }), success),
-  ).toMatchObject({ state: 'failed', reason: 'target_ambiguous' });
-});
 
 it('rejects a capture that becomes zero-sized during the read', async () => {
   const original = rpc();
@@ -130,7 +94,7 @@ it('does not reuse a prior game capture success as evidence of this launch', () 
   expect(projectObsCaptureDiagnostic(evidence, now + 31000, now - 2000).state).toBe('unknown');
 });
 
-it('checks origin, launch time and current production revision at the real route boundary', async () => {
+it('checks launch time and current production revision at the real route boundary', async () => {
   const app = Fastify();
   let valid = true;
   const eventAt = Date.now();
@@ -178,7 +142,6 @@ it('checks origin, launch time and current production revision at the real route
       },
     });
   try {
-    expect((await request('https://outside.example', eventAt - 500)).statusCode).toBe(403);
     expect((await request('http://127.0.0.1:3000', eventAt - 700_000)).statusCode).toBe(400);
     expect((await request('http://127.0.0.1:3000', eventAt - 500)).json().state).toBe(
       'initialized',

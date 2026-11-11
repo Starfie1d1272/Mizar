@@ -685,6 +685,12 @@ export class ProjectionCoordinator {
       }),
     );
   }
+  recalibrateObserver(): boolean {
+    if (this.closed || !this.current) return false;
+    this.observerTimeline.recalibrate(this.nowMonotonicMs());
+    this.refreshAssist();
+    return true;
+  }
   resetObserverAssist(): void {
     this.observerTimeline.resetForMap(this.nowMonotonicMs());
     this.refreshAssist();

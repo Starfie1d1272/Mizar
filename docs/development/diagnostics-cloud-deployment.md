@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | Cloudflare 账户 | `754634a82d628d202a3da6771b5fb348` | 只在此账户操作，不改变套餐或账单设置 |
 | Worker | `mizar-diagnostics` | 部署接收、身份校验、维护检索/读取与定时清理；版本预览和正文日志关闭 |
-| HTTPS 入口 | 待核实的 HTTPS 入口 | 仓库配置关闭 `workers.dev` 和预览 URL；实际入口以部署记录及云端配置为准，不开通 R2 公共入口 |
+| HTTPS 入口 | 客户端固定使用 `https://mizar-diagnostics.duxinyu475.workers.dev` | 接管前核实此账户的子域及 Worker 已启用该入口；保留既有路由，关闭预览 URL，不开通 R2 公共入口 |
 | R2 Standard | 已准备的私有 `mizar-telemetry` | 绑定唯一桶；正文只写 `v1/` 前缀，读取/撤回/到期清理仅作用于该前缀；添加七天到期规则前先读取并保留已有规则 |
 | D1 | `mizar-telemetry`，ID `e85505ac-5388-471c-abbe-7a4d9e15bde7` | 绑定唯一数据库；创建诊断专用表/索引，不存正文，不修改未知表或其他数据库 |
 | 定时器 | 该 Worker 的 Cron Trigger | 有界分批清理七天正文及过期索引，失败保留待处理状态并重试 |
-| 客户端 | 当前未配置端点 | 云端验证完成后才配置审查过的 HTTPS 源；仍默认关闭并要求明确同意 |
+| 客户端 | 正式产品默认配置维护者接收地址，可由环境覆盖 | 地址选择见[回传契约](../reference/diagnostics-delivery.md#当前实现阶段)；配置存在不证明生产接收能力，仍默认关闭并要求明确同意 |
 
 部署前先只读核实桶的私有状态、现有生命周期规则、D1 表及账户现有 Worker。目标资源或状态与清单不一致时停止写入，不通过删除或覆盖未知配置解决。实际域名、代码 head、schema 摘要、绑定、配额变量和验证结果须在执行记录中补齐。
 
@@ -64,6 +64,60 @@ D1 维护已登记写入者数量。并发撤回先封禁身份，再删除正�
 
 接收许可的每日新摘要数量与正文批次数分别计数，均受同一全局/单安装批次数预算上限约束；重取既有许可不新增围栏或重复扣签发配额。真实 D1 事务验证并发同摘要签发只记一次，跨日正文重试不会把昨日许可配额带入新日。仅申请许可不传正文也不能无限积累围栏。旧版围栏 SQLite 分配量测不适用于新增创建/到期索引后的 schema，最终有限期限版本须重新量测并保留准确源码身份。
 
+## 发行同步与首次接管
+
+Release Promotion 成功完成后，通过 `workflow_run` 触发独立的 Diagnostics Release；不依赖 `GITHUB_TOKEN` 发布 Release 后不会触发的普通 `release` 事件。先核对原仓库、main、成功晋级作业、实际公开 Release、标签和已签产品清单，再构建该精确源码的接收器，不部署运行时最新 main。预发布、未公开草稿和已被新 Stable 取代的历史恢复记录跳过原因，不进入生产环境。接收器使用固定生产并发组，正式同步和手动恢复不会交错。接收器失败独立可见，不反向阻断客户端发行或 Box Sync。
+
+首次接管必须先完成上文资源、协议、实际版本与隐私边界审查。在 GitHub 建立受保护的 `diagnostics-production` Environment，限制部署控制流程来源为 `main`。只让独立接收器同步作业使用它，客户端发行、预发布和草稿不经过该环境。审核策略按已批准的自动化权限设置；要求每次人工审核会使自动同步等待。不得把创建同名空 Environment 当作已完成保护。
+
+仅在这个 Environment 配置：
+
+- Secrets：`DIAGNOSTICS_CLOUDFLARE_API_TOKEN`、既有 `DIAGNOSTICS_ADMIN_KEY`。部署 Token 仅需目标账户的 Workers Scripts 写权限和 D1 读权限；不申请 D1 写、R2 管理、DNS 或账单权限。账户级权限不能声称只限单 Worker，脚本另核对目标。
+- Variables：`DIAGNOSTICS_ENDPOINT` 必须为客户端既有的 `https://mizar-diagnostics.duxinyu475.workers.dev`；`DIAGNOSTICS_BASELINE_VERSION` 为接管时实际全量部署的 Cloudflare 版本 ID；`DIAGNOSTICS_BASELINE_TAG` 为已核实的最低允许客户端正式版本，不猜测旧线上源码。
+- `DIAGNOSTICS_CONFIG_SHA256` 与 `DIAGNOSTICS_SCHEMA_SHA256` 为实际配置（包含固定入口、已启用的 workers.dev 与关闭的预览）、SQLite schema 的审查摘要。先冻结安装依赖，在已有安全凭据环境中执行 `node scripts/diagnostics/release.mjs inspect`，只输出版本 ID、摘要和迁移名称。这个只读命令不设置变量、不生成运行时密钥，也不证明真实收数验收已完成。原始配置与凭据不上传为构件。
+
+接管要求已有 `d1_migrations` 记录与源码迁移名称一致，线上 schema 与源码在本地空库生成的 schema、已审摘要都一致。此前手工初始化但没有迁移记录时，先独立核实实际 schema 并按已审迁移流程登记；自动同步不创建迁移账本、不执行 `0001`，也不把未知表删掉来凑齐摘要。后续新增迁移必须先独立审查兼容性、只应用尚未应用的增量，并核验更新基线；本实现遇到待迁移或 schema 漂移明确阻断，不自动执行数据库写入。
+
+部署使用锁文件固定的 Wrangler，先准备共享协议与 Worker，再生成冻结模块。摘要覆盖 Worker、完整共享协议、锁文件、工作区与 TypeScript 构建配置及实际模块字节。使用 `versions upload --keep-vars` 和指定版本的全量切换，不调用会同步路由和定时器的普通 `deploy`。仓库零预算模板不作为生产变量发送，既有三个运行时密钥、接收预算、资源绑定、限流、清理计划、入口和正文日志边界保持不变。额外绑定、兼容日期变化、无法证明的版本、最新未核验上传版本或配置差异都会阻断。
+
+每次当前正式发行都检查实际部署。线上已具有相同输入与模块摘要时仍核验数据库、配置、event/2、实际 HTTPS 接收器版本与预算，记录 `matched`；需要更新时记录 `deployed`。健康检查只读取维护接口，不上传用户诊断，不能替代真实登记、许可、持久确认和清理验收。
+
+### 按已审源码完成首次接管
+
+旧正式标签可能不含 `deploymentVersionId`，不能通过手动恢复旧标签来部署尚未发行的实现，也不能把新源码标记为旧发行。首次接管使用独立的 `bootstrap` 身份，只记录准确 SHA、输入和模块摘要，不宣称客户端已经发行；后续正式同步仍要求已签公开发行身份。以下操作由有 Cloudflare 权限的本地执行者完成，准备命令本身不访问生产。
+
+1. 从原仓库更新 `origin/main`，使用已完成审查、包含当前 main 的准确提交创建干净工作树。设 `ROOT` 为该工作树绝对路径，`REVIEWED_SHA` 为其完整 40 位 SHA，`OUT` 为工作树外的绝对输出目录。准备与激活都会检查 SHA，首次准备还要求构建输入无修改；不要填写猜测的提交或未审工作区。
+2. 在 `ROOT` 执行 `pnpm install --frozen-lockfile`、`pnpm --filter @mizar/diagnostics-worker... --fail-if-no-match run build` 和对应 `run typecheck`。执行 `node scripts/diagnostics/release.mjs prepare-bootstrap "$ROOT" "$REVIEWED_SHA" "$OUT"`。保留 `candidate.json`、冻结 bundle 与配置；此时没有上传或切流量。
+3. 在安全凭据环境设置 `CLOUDFLARE_API_TOKEN`（上述部署 Token），执行 `node scripts/diagnostics/release.mjs inspect`。独立核实账户、旧版本实际源码、R2 私有状态与生命周期、D1 schema/迁移账本、预算、三项 secret 是否存在、关闭日志和预览、Cron 与既有路由。工具只读取，不补迁移或配置。固定 workers.dev 入口必须已启用，账户子域必须为 `duxinyu475`；否则停止并单独核实，不能通过关闭入口使检查通过。自定义域名不能代替旧客户端入口，工具不创建、删除或修改路由。未知绑定或状态均阻断。
+4. 将本次核实的版本 ID、配置摘要、schema 摘要分别设为 `DIAGNOSTICS_BASELINE_VERSION`、`DIAGNOSTICS_CONFIG_SHA256`、`DIAGNOSTICS_SCHEMA_SHA256`。将经独立核实兼容的最低正式客户端标签设为 `DIAGNOSTICS_BASELINE_TAG`，这不是新 Worker 的发行标签。设置准确的 `DIAGNOSTICS_ENDPOINT` 及既有 `DIAGNOSTICS_ADMIN_KEY`。对比候选 schema 与实际 schema、迁移名称；不一致须先独立审查增量迁移，禁止重放初始化脚本或伪造账本。
+5. 在受控部署窗口执行 `node scripts/diagnostics/release.mjs bootstrap "$ROOT" "$REVIEWED_SHA" "$OUT"`。这是实际上传并切换全量生产流量的命令，不是 dry-run。它仅接管基线版本或恢复同一 SHA 的接管，保留变量、secret、路由与定时器；激活后核对实际版本、event/2、预算、schema 和私有健康结果。失败先读 `result.json` 核实阶段与远端状态，不能盲目重试或擅自切回。
+6. 按本页完成真实登记、许可、gzip 持久确认、维护读取、撤回和清理验收，覆盖既有客户端；记录实际结果，不能以健康响应代替。再将核实的基线与凭据配置到受保护的 `diagnostics-production` Environment。后续正式 patch 晋级会自动同步其准确发行源码；不需要先发布 RC。预发布仍跳过，首次接管不会发布 GitHub Release。
+
+首次接管前记录准确旧版本与兼容性证据。确需回退时按下一节受控回退步骤处理，不能假设旧版本具备新增私有身份字段；回退后用其实际能力核验既有客户端，并将自动同步保持阻断直至重新建立已核实基线。任何管理权限、生产启用或数据库修订均应遵循既有批准范围。
+
+### 失败与恢复
+
+在对应 Diagnostics Release 的 `diagnostics-source-*` 查看来源或跳过原因，在 `diagnostics-deployment-*` 查看 `candidate.json` 与 `result.json`。记录客户端 tag/SHA、输入和模块摘要、前后部署/版本 ID、迁移清单、失败阶段及验证状态；不包含令牌、原始配置、预算值或诊断正文。上传或激活前先保存状态，后续失败不会写成成功，也不撤销已公开的客户端。
+
+上传成功但未切换时，重跑会核对并复用来自同一前置版本的相同构件；已切换但健康检查失败时，再次核实线上版本与配置，不重复部署。可在 Diagnostics Release 手动填写同一个已公开正式版本的 `tag` 恢复，不重新构建客户端或重走客户端发行。历史标签低于最新 Stable 时记录 `superseded` 并跳过，不妨碍旧发行补传资产；执行前若出现更新版本、低于接管基线或低于当前接收器记录则拒绝降级。缺少私有版本回读能力的旧源码也在准备阶段拒绝自动部署。无法核实状态、混合流量或配置变化时停止，不盲重试。
+
+如确需回退，先从 `result.json` 取得此前实际版本，审查该版本与当前数据库、新旧客户端的兼容性，再在受控部署窗口切回该准确版本并重新验证。这里不提供绕过版本检查的 `force` 参数，也不自动回退；Worker 版本回退不会恢复 D1/R2 数据或撤销迁移。首次接管仍须完成真实自动部署、失败恢复与获准的上传持久确认，不能仅凭代码合并或 CI 通过宣称生产已同步。
+
+此异步链用于现有 event/2 的向后兼容更新，不保证新能力先于客户端上线。未来新增接收协议或改变客户端最低接收能力时，必须先扩展明确的兼容契约与前置部署验证，服务端通过后才公开依赖它的客户端；不能只沿用发行后同步并宣称满足这个顺序。
+
 ## 集成采集容量验收
 
 采集频率、队列容量、接收限额或清理策略变更时，须针对当前实现重新量测并保存报告。合成输入和本地运行结果不能证明线上额度或 Windows / CS2 实机表现。
+
+
+既有 `scripts/diagnostics/measure-capacity.mjs` 使用当前 document event/2 HTTP 合同；Host 合成输入沿当前 DesktopLog 的 event/2 字段，在追加前按一 MiB 目标轮转，导出回执逐段记录长度与摘要；每分钟等待所有源文件的身份和字节游标持久确认，不能只凭某个相同偏移判定已读完。ProgramChat 只计聊天输入，不再把技术控制台和 Host 操作复制进 SessionJournal。应用只有一个实际待传队列；应用关闭后通过当前恢复流程补扫保留的 Host 与性能来源，并逐个核对 Host 非聊天事件和文档 eventId。聊天正文的排除及其传输序号缺口分别保留计数，不把这些排除称为技术事件丢失。
+
+可在仓库根目录复测有界样本，先按工作区构建图准备 Companion 依赖，再运行：
+
+```sh
+node --import ./apps/companion/node_modules/tsx/dist/loader.mjs scripts/diagnostics/measure-capacity.mjs /tmp/capacity.json --profile-only --minutes=2 --artifacts=/tmp/capacity-artifacts
+```
+
+`--minutes` 在样本模式可设 1–120；省略参数的原完整模型仍使用 120 分钟输入及后续本地云端模拟。短样本不运行每日多用户、共享 IP 或积压容量模型，也不能据此批准云端配额。`--artifacts` 可选，保留实际导出路由生成的 ZIP 与内部清单；工具调用当前离线读取器验证正文、控制台记录与聊天排除。报告记录源码与文件摘要、实际字节、批数、导出测量及输入频率。
+
+所有输入时间均为加速模型，真实采集定时器与批次时钟不随模型时间加速；报告中的补扫是当前保留源恢复，不能称为实际两小时的发送节奏。Host 正文与 pin 回执是按现行合同生成的公开合成输入，不证明 Windows 原生 writer、游戏或保存对话框执行。实际网络发送被暂停且拦截；样本执行无外部账户请求。全量容量结论仍须另看当前完整模型与实机报告，不沿用旧版容量数字。

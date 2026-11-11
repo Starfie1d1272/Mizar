@@ -1,5 +1,44 @@
+import type { DocumentHandoffCoverage } from '@mizar/protocol';
+
 let controlDeliveryFailures = 0;
+let unconfirmedRecords = 0;
+const httpPending = new Map<number, Promise<void>>();
 let browserDocumentId: string | null = null;
+let documentSequence = 0;
+const hostQueue: Record<string, unknown>[] = [];
+let hostSending: Promise<void> | undefined;
+let hostRetry: ReturnType<typeof setTimeout> | undefined;
+function handoffHost(): Promise<void> {
+  if (hostSending) return hostSending;
+  if (!hostQueue.length) return Promise.resolve();
+  const events: Record<string, unknown>[] = [];
+  let bytes = 2;
+  for (const event of hostQueue.slice(0, 64)) {
+    const length = JSON.stringify(event).length * 3 + 1;
+    if (bytes + length > 240 * 1024) break;
+    events.push(event);
+    bytes += length;
+  }
+  hostSending = window
+    .__TAURI_INTERNALS__!.invoke<{ eventIds: string[] }>('persist_diagnostic_events', { events })
+    .then((receipt) => {
+      const ids = new Set(receipt.eventIds);
+      for (let i = hostQueue.length - 1; i >= 0; i--)
+        if (ids.has(hostQueue[i]!.eventId as string)) hostQueue.splice(i, 1);
+    })
+    .catch(() => {
+      controlDeliveryFailures++;
+    })
+    .finally(() => {
+      hostSending = undefined;
+      if (hostQueue.length && !hostRetry)
+        hostRetry = setTimeout(() => {
+          hostRetry = undefined;
+          void handoffHost();
+        }, 1000);
+    });
+  return hostSending;
+}
 
 export function browserErrorEvidence(error: unknown, seen = new Set<unknown>()): unknown {
   if (!(error instanceof Error)) return error;
@@ -24,13 +63,68 @@ export function sendControlEvidence(
   phase: string,
   evidence: unknown,
 ): Promise<void> {
+  let retainedByHost = false;
   try {
     browserDocumentId ??= crypto.randomUUID();
     const context =
       evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>) : {};
+    // ControlTask owns its terminal result inside the current task evidence envelope.
+    // Native command results may be objects/booleans; keep those in evidence only.
+    const taskEvidence =
+      operation === 'task' &&
+      (phase === 'terminal' || phase === 'step_terminal') &&
+      context.evidence &&
+      typeof context.evidence === 'object'
+        ? (context.evidence as Record<string, unknown>)
+        : null;
+    const result = taskEvidence ? taskEvidence.result : context.result;
+    const outcome =
+      typeof result === 'string' && result.length > 0 && result.length <= 160 ? result : null;
+    const sequence = ++documentSequence;
+    const now = new Date().toISOString();
+    const event = {
+      schema: 'mizar-diagnostic-event/2',
+      eventId: `${browserDocumentId}:${sequence}`,
+      producerKind: 'document',
+      producerRunId: browserDocumentId,
+      sequence,
+      kind: operation,
+      phase,
+      outcome,
+      observedAt: now,
+      recordedAt: now,
+      monotonicMs: performance.now(),
+      sourceInterval: null,
+      taskId: context.taskId ?? null,
+      operationId: context.operationId ?? null,
+      parentOperationId: context.parentOperationId ?? null,
+      attemptId: context.attemptId ?? null,
+      scope: { page: location.pathname },
+      evidence,
+      coverage: {
+        durability: 'pending',
+        unknown: ['document-termination-before-handoff'],
+        excluded: controlDeliveryFailures
+          ? [`unhanded_records_or_attempt_failures:${controlDeliveryFailures}`]
+          : [],
+        replayCount: 0,
+        occurrences: 1,
+      },
+    };
+    if (window.__TAURI_INTERNALS__) {
+      if (hostQueue.length >= 256 || JSON.stringify(event).length > 32768) {
+        controlDeliveryFailures++;
+        unconfirmedRecords++;
+        return Promise.resolve();
+      }
+      hostQueue.push(event);
+      retainedByHost = true;
+      return handoffHost();
+    }
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     for (const [field, header] of [
       ['taskId', 'x-mizar-task-id'],
+      ['attemptId', 'x-mizar-attempt-id'],
       ['operationId', 'x-mizar-operation-id'],
       ['parentOperationId', 'x-mizar-parent-operation-id'],
     ] as const) {
@@ -40,28 +134,31 @@ export function sendControlEvidence(
     }
     if (context.trigger === 'user' || context.trigger === 'system')
       headers['x-mizar-trigger'] = context.trigger;
-    return fetch('/debug/control-event', {
+    const delivery = fetch('/debug/control-event', {
       method: 'POST',
       signal: AbortSignal.timeout(3000),
       headers,
-      body: JSON.stringify({
-        operation,
-        phase,
-        time: new Date().toISOString(),
-        browserDocumentId,
-        deliveryFailuresBefore: controlDeliveryFailures,
-        evidence,
-      }),
+      body: JSON.stringify(event),
       keepalive: true,
     })
       .then((response) => {
-        if (!response.ok) controlDeliveryFailures++;
+        if (!response.ok) {
+          controlDeliveryFailures++;
+          unconfirmedRecords++;
+        }
       })
       .catch(() => {
         controlDeliveryFailures++;
+        unconfirmedRecords++;
+      })
+      .finally(() => {
+        httpPending.delete(sequence);
       });
+    httpPending.set(sequence, delivery);
+    return delivery;
   } catch {
     controlDeliveryFailures++;
+    if (!retainedByHost) unconfirmedRecords++;
     /* Diagnostics cannot change the operation. */
     return Promise.resolve();
   }
@@ -230,20 +327,84 @@ export function nativeSnapshot(operation: string, result: unknown): void {
     controlEvidence(operation, 'snapshot_failed', { reason: 'unserializable_snapshot' });
   }
 }
-export async function flushControlSnapshots(): Promise<void> {
-  await Promise.allSettled(
-    [...nativeSnapshots].map(([operation, evidence]) =>
-      fetch('/debug/control-event', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          operation,
-          phase: 'snapshot_aggregate',
-          time: new Date().toISOString(),
-          evidence: snapshotEvidence(evidence),
+export function flushControlSnapshots(): void {
+  for (const [operation, evidence] of nativeSnapshots)
+    void sendControlEvidence(operation, 'snapshot_aggregate', snapshotEvidence(evidence));
+}
+
+/** Drain a fixed prefix only. A hung IPC or continuously arriving events cannot hold export. */
+export async function flushControlEvidence(): Promise<DocumentHandoffCoverage> {
+  const throughSequence = documentSequence;
+  const transport = window.__TAURI_INTERNALS__ ? 'host' : 'http';
+  const budgetMs = 3000;
+  const deadline = performance.now() + budgetMs;
+  const pending = () =>
+    (transport === 'host'
+      ? hostQueue.map((event) => event.sequence as number)
+      : [...httpPending.keys()]
+    ).filter((sequence) => sequence <= throughSequence);
+  let stopReason: DocumentHandoffCoverage['stopReason'] = 'drained';
+  let attempts = 0;
+  while (pending().length) {
+    if (attempts >= 16) {
+      stopReason = 'attempt-limit';
+      break;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      stopReason = 'deadline';
+      break;
+    }
+    const before = pending().length;
+    const delivery = Promise.resolve().then<unknown>(() =>
+      transport === 'host'
+        ? handoffHost()
+        : Promise.allSettled(
+            [...httpPending]
+              .filter(([sequence]) => sequence <= throughSequence)
+              .map(([, promise]) => promise),
+          ),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled: boolean;
+    try {
+      settled = await Promise.race([
+        delivery.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), remaining);
         }),
-        signal: AbortSignal.timeout(2000),
-      }),
-    ),
-  );
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    attempts++;
+    if (!settled) {
+      stopReason = 'deadline';
+      break;
+    }
+    if (pending().length >= before) {
+      stopReason = 'no-progress';
+      break;
+    }
+  }
+  const remaining = pending();
+  return {
+    documentId: browserDocumentId,
+    throughSequence,
+    observedAt: new Date().toISOString(),
+    transport,
+    stopReason,
+    pendingRecords: remaining.length,
+    firstPendingSequence: remaining.length ? remaining.reduce((a, b) => Math.min(a, b)) : null,
+    lastPendingSequence: remaining.length ? remaining.reduce((a, b) => Math.max(a, b)) : null,
+    // These cumulative counters include this document's lifetime through observedAt,
+    // not just the selected export time range, and failed HTTP receipts may have committed.
+    unconfirmedRecordsObserved: unconfirmedRecords,
+    deliveryFailureAttemptsObserved: controlDeliveryFailures,
+    budgetMs,
+    attempts,
+  };
 }

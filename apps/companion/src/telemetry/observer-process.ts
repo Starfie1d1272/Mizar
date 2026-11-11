@@ -441,7 +441,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       stopping ??= (async () => {
         stoppingRequested = true;
         clearTimeout(startupTimer);
-        if (keepManager) manager.disconnectObserver();
+        if (keepManager) manager.disconnectObserver('cancelled');
         else await manager.stop();
         if (!exited) child.stdin.end();
         // Allow the component's bounded parser/output finalizers to finish first.

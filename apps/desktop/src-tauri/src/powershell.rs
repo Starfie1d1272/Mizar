@@ -170,6 +170,7 @@ pub(crate) fn background() -> Command {
     // PowerShell 7's inherited module path hides Windows PowerShell's built-in
     // modules (including Get-FileHash). Let the child initialize its own path.
     command
+        .args(["-NoProfile", "-NonInteractive"])
         .env_remove("PSModulePath")
         .stdin(Stdio::null())
         .creation_flags(0x08000000);

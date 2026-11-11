@@ -13,14 +13,16 @@ const surfaces = {
 export function DesktopCanvas({
   kind,
   children,
+  responsive: adaptive,
 }: {
   kind: keyof typeof surfaces;
   children: ReactNode;
+  responsive?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const size = surfaces[kind];
-  const responsive = kind === 'left';
+  const responsive = adaptive ?? kind === 'left';
   useLayoutEffect(() => {
     if (responsive) return;
     const element = host.current;

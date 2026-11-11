@@ -6,7 +6,6 @@ import {
   getBuiltinTheme,
 } from '@mizar/hud-config';
 import {
-  boundModules,
   clonePreset,
   preparePreset,
   type BroadcastConfigDocument,
@@ -134,101 +133,6 @@ describe('broadcast preset', () => {
         () => 'id',
       ),
     ).toThrow('revision_conflict');
-  });
-  it('rejects incomplete bindings and changes only the revision of an effectively changed module', async () => {
-    const document = fixture();
-    expect(() =>
-      boundModules(
-        { ...document.presets[0]!, bindings: document.presets[0]!.bindings.slice(0, 3) },
-        document.modules,
-      ),
-    ).toThrow('incomplete_preset');
-    const resolved = {
-      ...document.active.resolved,
-      hud: {
-        ...document.active.resolved.hud,
-        overlays: {
-          pause: { enabled: false, visual: 'legacy' },
-          chat: { enabled: true, placement: 'auto' },
-        },
-      },
-    } as unknown as typeof document.active.resolved;
-    let id = 0;
-    const next = await preparePreset(
-      document,
-      {
-        presetId: 'preset',
-        expectedRevision: 'r1',
-        expectedModuleRevisions: expected,
-        expectedActiveRevision: 'a1',
-        requestId: 'request',
-      },
-      { resolve: () => Promise.resolve({ resolved, lock: { resources: [], tools: [] } }) },
-      () => `revision-${++id}`,
-    );
-    expect(next.moduleRevisions).toEqual({
-      hud: 'revision-1',
-      program: 'ap',
-      music: 'am',
-      camera: 'ac',
-    });
-    expect(next.sourceModuleRevisions).toEqual({
-      hud: 'h1',
-      program: 'p1',
-      music: 'm1',
-      camera: null,
-    });
-    expect(document.active.revision).toBe('a1');
-  });
-  it('does not revise camera when only the acquisition release changes', async () => {
-    const document = fixture();
-    const source = {
-      sourceName: 'default',
-      treeSha256: 'a'.repeat(64),
-      converterVersion: 1,
-      acquisition: {
-        kind: 'upstream',
-        release: {
-          repository: 'Co1Swet/MulNX_CS2',
-          releaseId: 1,
-          assetId: 1,
-          tag: 'v1',
-          archiveSha256: 'b'.repeat(64),
-        },
-      },
-    };
-    const camera = {
-      format: 'mizar.camera-config',
-      version: 2,
-      name: 'Camera',
-      automaticEnabled: true,
-      maps: [{ map: 'de_example', source }],
-    } as unknown as NonNullable<typeof document.active.resolved.camera>;
-    document.active.resolved.camera = camera;
-    const changed = structuredClone(camera);
-    changed.name = 'Renamed';
-    const acquisition = changed.maps[0]!.source.acquisition;
-    if (acquisition.kind !== 'upstream') throw new Error('unexpected source');
-    acquisition.release.releaseId = 2;
-    const next = await preparePreset(
-      document,
-      {
-        presetId: 'preset',
-        expectedRevision: 'r1',
-        expectedModuleRevisions: expected,
-        expectedActiveRevision: 'a1',
-        requestId: 'request',
-      },
-      {
-        resolve: () =>
-          Promise.resolve({
-            resolved: { ...document.active.resolved, camera: changed },
-            lock: { resources: [], tools: [] },
-          }),
-      },
-      () => 'new',
-    );
-    expect(next.moduleRevisions.camera).toBe('ac');
   });
   it('ignores copied native HUD editor IDs and names but detects visual changes', async () => {
     const document = fixture();

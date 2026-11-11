@@ -377,6 +377,7 @@ public class UpdateFixture {
     using (var uninstall = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar")) uninstall.SetValue("DisplayVersion", "1.1.0");
     if (mode == "success") {
       Copy(Path.Combine(stage, "new-payload"), target);
+      File.WriteAllText(Path.Combine(target, "installed.flag"), "mizar.install.v1:" + Path.GetFileName(stage));
       if (Environment.GetEnvironmentVariable("MIZAR_UPDATE_TEST_HOLD") == "1") {
         File.WriteAllText(Path.Combine(stage, "writer-ready.txt"), "ready");
         var deadline = DateTime.UtcNow.AddSeconds(20);
@@ -506,7 +507,15 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     assert.equal(desktop.code, 0, desktop.errors);
     const shortcut = join(desktop.output, 'Mizar.lnk');
     await rm(shortcut, { force: true });
-    if (scenario !== 'success-no-shortcut') await writeFile(shortcut, 'existing user shortcut');
+    let originalShortcut;
+    if (scenario !== 'success-no-shortcut') {
+      const createdShortcut = await run([
+        '-Command',
+        `$shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save()`,
+      ]);
+      assert.equal(createdShortcut.code, 0, createdShortcut.errors);
+      originalShortcut = await readFile(shortcut);
+    }
     const nextPath = join(area, 'next payload'),
       next = await payload(nextPath, '1.1.0', binary);
     const installer = join(state, 'updates/download-test/Mizar-v1.1.0-Windows-x64-Setup.exe');
@@ -542,6 +551,10 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario.startsWith('committed-')) {
       await cp(installed, join(stage, 'previous'), { recursive: true });
       await cp(nextPath, installed, { recursive: true });
+      await writeFile(
+        join(installed, 'installed.flag'),
+        `mizar.install.v1:${stage.split(/[\\/]/).at(-1)}`,
+      );
       await writeFile(join(stage, 'journal.json'), JSON.stringify({ phase: 'committed' }));
       if (scenario === 'committed-corrupt')
         await writeFile(
@@ -771,7 +784,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario === 'success-no-shortcut')
       await assert.rejects(readFile(shortcut), { code: 'ENOENT' });
     else if (scenario !== 'interrupted')
-      assert.equal(await readFile(shortcut, 'utf8'), 'existing user shortcut');
+      assert.deepEqual(await readFile(shortcut), originalShortcut);
     await rm(shortcut, { force: true });
     process.stdout.write(`Stub-installer recovery ${scenario}: PASS\n`);
   }

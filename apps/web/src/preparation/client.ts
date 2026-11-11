@@ -70,11 +70,13 @@ export async function enterDemoTest(
   return !signal?.aborted && isCurrent();
 }
 
-export type Tool = 'hud' | 'bp' | 'diagnostics';
+export type Tool = 'hud' | 'bp' | 'diagnostics' | 'connection' | 'game-picture';
 const toolPaths = {
   hud: '/operator/hud',
   bp: '/matches#match-bp',
   diagnostics: '/debug',
+  connection: '/workspace/connection',
+  'game-picture': '/workspace/game-picture',
 };
 export async function openTool(tool: Tool, presetId?: string) {
   if (window.__TAURI_INTERNALS__) {
@@ -93,6 +95,11 @@ export async function openTool(tool: Tool, presetId?: string) {
           editor.dispatchEvent(new CustomEvent('mizar:hud-select-preset', { detail: presetId }));
         editor.focus();
       } else editor.location.assign(path);
+    } else if (tool === 'connection' || tool === 'game-picture') {
+      const toolWindow = window.open('', `mizar-${tool}`);
+      if (!toolWindow) throw new Error('请允许打开工具窗口后重试。');
+      if (toolWindow.location.pathname !== path) toolWindow.location.assign(path);
+      toolWindow.focus();
     } else window.open(path, `mizar-${tool}`);
   }
 }
@@ -156,6 +163,7 @@ export async function checkObsBeforeLaunch(
   requireStoppedOutput = false,
   task?: ControlTask,
   entry?: { revision: string; signal: AbortSignal },
+  onAudioWarning?: (message: string) => void,
 ) {
   // Installation is checkable before launch; fresh telemetry is not.
   if (window.__TAURI_INTERNALS__) {
@@ -180,22 +188,42 @@ export async function checkObsBeforeLaunch(
         response.ok
           ? ((await response.json()) as {
               connection: string;
-              findings: readonly unknown[];
-              streaming?: boolean;
-              recording?: boolean;
+              findings: readonly { code?: string; message?: string }[];
+              readiness?: {
+                blockingFindings?: readonly unknown[];
+                warnings?: readonly { message?: string }[];
+              };
+              streaming?: boolean | null;
+              recording?: boolean | null;
             })
           : null,
       )
       .catch(() => null);
   let obs = await readObs();
-  if (entry && obs?.connection === 'connected' && !obs.streaming && !obs.recording) {
+  if (
+    entry &&
+    obs?.connection === 'connected' &&
+    obs.streaming === false &&
+    obs.recording === false
+  ) {
     await prepareObs(entry.revision, entry.signal);
     obs = await readObs();
   }
-  if (obs?.connection !== 'connected' || obs.findings.length > 0) {
+  const isAudioFinding = (code: string | undefined) =>
+    Boolean(
+      code &&
+      (code.startsWith('audio_') || code === 'game_audio_missing' || code === 'commentary_pending'),
+    );
+  const blocking =
+    obs?.readiness?.blockingFindings ?? obs?.findings.filter((item) => !isAudioFinding(item.code));
+  if (obs?.connection !== 'connected' || !Array.isArray(blocking) || blocking.length > 0) {
     window.location.assign('/settings?tab=obs&prepare=1');
     return false;
   }
+  const warnings =
+    obs.readiness?.warnings ?? obs.findings.filter((item) => isAudioFinding(item.code));
+  const warning = warnings.find((item) => typeof item.message === 'string')?.message;
+  if (warning) onAudioWarning?.(`${warning} 请在 OBS 核对并录制试听。`);
   if (requireStoppedOutput && obs.streaming !== false)
     throw new Error('请先在 OBS 停止推流并确认状态，再开始 Demo 试播。');
   return true;
@@ -232,8 +260,6 @@ async function enterDesktopWorkspace(
   activeEntryId = preparationId;
   const cancel = () =>
     void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
-  window.addEventListener('pagehide', cancel);
-  window.addEventListener('popstate', cancel);
   signal?.addEventListener('abort', cancel);
   try {
     const document = await desktopInvoke<string>('entry_document');
@@ -260,21 +286,18 @@ async function enterDesktopWorkspace(
   }
 }
 
-export async function enterProductionManually(state: Production) {
-  await enterDesktopWorkspace({ expectedRevision: state.revision, manual: true });
-}
-
 export async function productionAction(
   action: 'enter' | 'hide' | 'finish',
   state: Production,
   preserveSettings = false,
   parentTask?: ControlTask,
   external?: ExternalGameIdentity,
+  confirmation?: { confirmSteamCancelled: boolean },
 ) {
   const task = new ControlTask(
     `production_${action}`,
     'user',
-    { ...state, preserveSettings, external },
+    { ...state, preserveSettings, external, confirmation },
     parentTask,
   );
   const entryAbort =
@@ -282,7 +305,7 @@ export async function productionAction(
   if (entryAbort) pendingEntry = entryAbort;
   try {
     if (window.__TAURI_INTERNALS__ && action === 'finish') {
-      await desktopInvoke('finish_workspace', undefined, task);
+      await desktopInvoke('finish_workspace', confirmation, task);
       const [production, source] = await Promise.all([
         fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
           .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
@@ -336,20 +359,6 @@ export async function productionAction(
         entryAbort?.signal,
       );
     } else {
-      if (
-        !window.__TAURI_INTERNALS__ &&
-        action === 'enter' &&
-        !(await checkObsBeforeLaunch(
-          false,
-          task,
-          state.mode === 'preparation'
-            ? { revision: state.revision, signal: AbortSignal.timeout(40_000) }
-            : undefined,
-        ))
-      ) {
-        task.finish('blocked', { reason: 'preflight_requires_attention' });
-        return task.result;
-      }
       await command('/operator/production', { action, expectedRevision: state.revision }, task);
       if (window.__TAURI_INTERNALS__)
         await desktopInvoke('present_production', { live: action === 'enter' }, task);

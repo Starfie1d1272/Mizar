@@ -23,13 +23,7 @@ pub(crate) fn gsi_script(
     let bundle = crate::host_runtime::bundle_root()?;
     let mut command = powershell::background();
     command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
+        .args(["-ExecutionPolicy", "Bypass", "-File"])
         .arg(bundle.join("resources/scripts").join(name))
         .current_dir(&bundle);
     if name != "gsi-status.ps1" {

@@ -1,4 +1,4 @@
-import { BusinessHistory } from './business-history.js';
+import { SessionJournal } from './session-journal.js';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { MatchContextBinding } from '../match-context/index.js';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
@@ -11,11 +11,14 @@ import {
   object,
   version,
 } from './business-evidence.js';
-export { businessEvidence, BUSINESS_LOG_FILES } from './business-evidence.js';
+export { businessEvidence } from './business-evidence.js';
 
 /** Diagnostics observe existing decisions; they never authorize or replay output. */
 export class BusinessJournal {
-  private readonly history: BusinessHistory;
+  private failures = 0;
+  private readonly standalone: SessionJournal | undefined;
+  private readonly onEvidence: ((entry: unknown) => void) | undefined;
+  private readonly onFailure: () => void;
   private readonly sourceVersion: string;
   private previousRuntime = '';
   private readonly delivery = new Map<string, string>();
@@ -26,7 +29,12 @@ export class BusinessJournal {
     onEvidence?: (entry: unknown) => void,
   ) {
     this.sourceVersion = version(sourceVersion) ?? businessVersion();
-    this.history = new BusinessHistory(directory, onFailure, this.sourceVersion, onEvidence);
+    this.onFailure = onFailure;
+    this.standalone = onEvidence
+      ? undefined
+      : new SessionJournal(directory, { appVersion: this.sourceVersion });
+    this.onEvidence =
+      onEvidence ?? ((entry) => this.standalone!.record('business_evidence', entry));
     this.write('business_session', {});
   }
   runtime(
@@ -158,6 +166,8 @@ export class BusinessJournal {
       receiverOutcome: record.receiverOutcome,
       recoveryState: record.recoveryState,
       rejectionReason: record.rejection?.reason,
+      dispositionReason: record.dispositionReason,
+      supersessionReason: record.supersessionReason,
       requestId: record.rejection?.requestId,
       recovery: record.rejection?.recovery,
       attempts: record.attempts,
@@ -172,18 +182,47 @@ export class BusinessJournal {
     this.write('business_delivery', evidence);
   }
   write(stage: string, evidence: unknown): void {
-    this.history.append(stage, businessEvidence({ ...object(evidence), schema: 2 }));
+    try {
+      if (!this.onEvidence) throw new Error('canonical_journal_unavailable');
+      this.onEvidence({
+        stage,
+        recordedAt: new Date().toISOString(),
+        version: this.sourceVersion,
+        evidence: businessEvidence({ ...object(evidence), schema: 2 }),
+      });
+    } catch {
+      this.failures++;
+      try {
+        this.onFailure();
+      } catch {
+        /* Diagnostic failure reporting must never affect production. */
+      }
+    }
   }
   flush(): Promise<void> {
-    return this.history.flush();
+    return this.standalone?.flush() ?? Promise.resolve();
   }
   close(): Promise<void> {
-    return this.history.close();
+    return this.standalone?.close() ?? Promise.resolve();
   }
   getHealth() {
-    return this.history.getHealth();
+    return {
+      writer: 'session-journal',
+      writeFailures: this.failures,
+      droppedPendingEvents: 0,
+      coalescedEvents: 0,
+      committedWriteFailures: 0,
+      uncommittedWriteFailures: this.failures,
+      queuedEvents: 0,
+      queuedBytes: 0,
+      uncommittedEvents: 0,
+      uncommittedAggregates: 0,
+      uncommittedChanges: false,
+      committedWrites: 0,
+      coverage: 'See canonical journal watermark; derived business history is not a second writer',
+    };
   }
   getStatus(): 'available' | 'write_failed' {
-    return this.history.getStatus();
+    return this.failures ? 'write_failed' : 'available';
   }
 }
