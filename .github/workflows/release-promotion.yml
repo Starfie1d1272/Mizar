@@ -19,22 +19,29 @@ on:
         required: false
         default: false
         type: boolean
+      field_acceptance_comment:
+        description: Maintainer issue-comment ID for a new stable release
+        required: false
+        type: string
       draft_release_id:
         description: Stage verified assets into this existing unpublished draft without creating a tag
         required: false
         type: string
 permissions:
-  contents: write
-  actions: read
-  id-token: write
-  attestations: write
+  contents: read
 concurrency:
-  group: release-promotion-${{ inputs.tag || github.event.workflow_run.display_title }}
+  group: release-promotion-${{ contains(inputs.tag || github.event.workflow_run.display_title, '-') && (inputs.tag || github.event.workflow_run.display_title) || 'stable' }}
   cancel-in-progress: false
 jobs:
   promote:
     name: 发布 Mizar ${{ inputs.tag || github.event.workflow_run.display_title }}
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-qualification.yml' && github.event.workflow_run.event == 'workflow_dispatch') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-qualification.yml' && github.event.workflow_run.event == 'workflow_dispatch' && contains(github.event.workflow_run.display_title, '-')) }}
+    permissions:
+      contents: write
+      actions: read
+      issues: read
+      id-token: write
+      attestations: write
     runs-on: windows-2025
     timeout-minutes: 15
     env:
@@ -44,6 +51,7 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
       RELEASE_DRAFT_ID: ${{ inputs.draft_release_id }}
+      RELEASE_FIELD_ACCEPTANCE_COMMENT: ${{ inputs.field_acceptance_comment }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
       RESOURCE_FROZEN_ROOT: ${{ github.workspace }}/frozen-resources
@@ -53,6 +61,8 @@ jobs:
         run: |
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Promotion must run from main' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
@@ -217,6 +227,18 @@ jobs:
         run: |
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Release/tag existence is unknown or conflicts; refusing mutation' }
+      - name: Require exact-candidate field evidence for stable publication
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_FOUND -eq 'true' -and -not ((Get-Content existing-release.json -Raw | ConvertFrom-Json).draft)) {
+            Write-Output 'Existing public release; only its verified original assets may be reconciled.'
+            exit 0
+          }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-acceptance.mjs" $env:GH_REPO "$env:RELEASE_FIELD_ACCEPTANCE_COMMENT" product $env:RUN_ID field-acceptance.json
+          if ($LASTEXITCODE -ne 0) { throw 'Stable field acceptance failed' }
+          $evidence = Get-Content field-acceptance.json -Raw | ConvertFrom-Json
+          "Field acceptance: $($evidence.mode), $($evidence.commentUrl)" >> $env:GITHUB_STEP_SUMMARY
       - name: Prepare prerelease original machine carrier
         if: ${{ env.RELEASE_DRAFT_ID == '' && contains(env.RELEASE_TAG, '-') && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
@@ -236,6 +258,10 @@ jobs:
             $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
             if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
+            if (Test-Path field-acceptance.json) {
+              $field = Get-Content field-acceptance.json -Raw | ConvertFrom-Json
+              Add-Content -LiteralPath release-notes.md -Value "`n实机验收与放行记录：$($field.commentUrl)"
+            }
             $releaseArguments = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $prereleaseFlags
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" @releaseArguments
             if ($LASTEXITCODE -ne 0) { throw 'Draft creation uncertain; retry must reconcile original assets' }
@@ -254,6 +280,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Existing tag lookup failed' }
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" reconcile product existing-release.json existing-ref.json promotion-identity.json "$resources"
             if ($LASTEXITCODE -ne 0) { throw 'Existing asset mismatch or missing-asset upload failed; no overwrite' }
+            node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" read-published existing-release.json promotion-identity.json existing-release.json existing-ref.json
+            if ($LASTEXITCODE -ne 0) { throw 'Reconciled public release readback failed' }
           }
           $existing = Get-Content existing-release.json -Raw | ConvertFrom-Json
           if ($env:RELEASE_TAG -notmatch '-' -and @($existing.assets | Where-Object { $_.name -in @('machine-metadata.json', 'update-index.json') }).Count) {
@@ -265,19 +293,13 @@ jobs:
         if: ${{ env.RELEASE_DRAFT_ID == '' && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
         run: |
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > resource-published-release.json
-          if ($LASTEXITCODE -ne 0) { throw 'Published resource readback failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json resource-published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" published-release "$env:RESOURCE_FROZEN_ROOT" product/core-release-manifest.json existing-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Public resources differ from the signed immutable candidate' }
       - name: Confirm the published Stable and prepare its authorization
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
         shell: pwsh
         run: |
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
-          if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" > published-ref.json
-          if ($LASTEXITCODE -ne 0) { throw 'Published tag lookup failed' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" create published-release.json published-ref.json $env:RELEASE_TAG product update-publication.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" create existing-release.json existing-ref.json $env:RELEASE_TAG product update-publication.json
           if ($LASTEXITCODE -ne 0) { throw 'Published Stable authorization preparation failed' }
       - name: Attest the actual Stable publication
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') && env.RELEASE_ALREADY_PUBLISHED != 'true' }}
@@ -300,11 +322,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Original machine metadata aggregation failed' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" release upload $env:RELEASE_TAG machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization upload failed; do not overwrite assets' }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" > published-release.json
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" read-published existing-release.json promotion-identity.json published-release.json published-ref.json machine-metadata.json
           if ($LASTEXITCODE -ne 0) { throw 'Publication authorization readback failed' }
           $resourceArgument = if ($env:RESOURCE_ENABLED -eq 'true') { $env:RESOURCE_FROZEN_ROOT } else { '-' }
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/update-publication.mjs" verify-existing published-release.json published-ref.json $env:RELEASE_TAG product "$resourceArgument"
           if ($LASTEXITCODE -ne 0) { throw 'Published asset readback verification failed' }
+
+      - name: Point Latest at the verified stable release
+        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
+        shell: pwsh
+        run: |
+          $verified = if (Test-Path published-release.json) { 'published-release.json' } else { 'existing-release.json' }
+          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-assets.mjs" mark-latest $verified
+          if ($LASTEXITCODE -ne 0) { throw 'Latest release verification failed' }
 
       - name: Record qualification trigger through verified publication timing
         if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
@@ -320,6 +350,7 @@ jobs:
           path: |
             promotion-identity.json
             promotion-ci.json
+            field-acceptance.json
             release-timings.json
             update-publication.json
             update-publication-provenance.json

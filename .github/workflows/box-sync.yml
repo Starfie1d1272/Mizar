@@ -124,4 +124,4 @@ jobs:
         with:
           name: release-timings-${{ github.run_id }}-${{ github.run_attempt }}
           path: release-timings.json
-          retention-days: 7
+          retention-days: 90

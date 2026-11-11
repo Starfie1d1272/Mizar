@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as wait } from 'node:timers/promises';
 import { validateReleaseTag } from './app-version.mjs';
 const repo = 'Starfie1d1272/Mizar';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -214,18 +215,100 @@ export async function stageDraftAssets(releaseId, identity, expected, api = gith
   await ensureNoTag();
 }
 
+async function readGithubJson(api, path) {
+  try {
+    return JSON.parse((await api([path])).toString());
+  } catch (error) {
+    if (error.stderr?.toString().includes('(HTTP 404)')) return null;
+    throw error;
+  }
+}
+
+async function waitForReadback(read, delay) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const result = await read();
+    if (result !== null) return result;
+    if (attempt < 5) await delay(1500);
+  }
+  throw new Error('Published release readback unavailable; retry with the original release ID');
+}
+
+export function readPublishedRelease(releaseId, identity, asset, api = githubApi, delay = wait) {
+  if (!/^\d+$/.test(releaseId)) throw new Error('Invalid published release ID');
+  validateReleaseTag(identity.tag, identity.tag.slice(1));
+  return waitForReadback(async () => {
+    const release = await readGithubJson(api, `repos/${repo}/releases/tags/${identity.tag}`);
+    if (!release) return null;
+    if (
+      String(release.id) !== releaseId ||
+      release.tag_name !== identity.tag ||
+      release.draft !== false ||
+      !release.published_at ||
+      release.prerelease !== !/^v\d+\.\d+\.\d+$/.test(identity.tag)
+    )
+      throw new Error('Published release ID differs from verified draft');
+    const ref = await readGithubJson(api, `repos/${repo}/git/ref/tags/${identity.tag}`);
+    if (!ref) return null;
+    if (ref.object?.type !== 'commit' || ref.object.sha !== identity.gitSha)
+      throw new Error('发行或标签身份不一致');
+    if (asset && !release.assets.some((item) => item.name === asset)) return null;
+    return { release, ref };
+  }, delay);
+}
+
+function stableVersion(tag) {
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error('Latest requires a stable version');
+  return tag.slice(1).split('.').map(BigInt);
+}
+
+export async function markLatest(release, api = githubApi, delay = wait) {
+  const version = stableVersion(release.tag_name);
+  if (
+    !Number.isSafeInteger(release.id) ||
+    release.id <= 0 ||
+    release.draft !== false ||
+    release.prerelease !== false ||
+    !release.published_at
+  )
+    throw new Error('Latest requires a public stable release');
+
+  const path = `repos/${repo}/releases/latest`;
+  const latest = await readGithubJson(api, path);
+  if (latest?.id === release.id && latest.tag_name === release.tag_name) return;
+  if (latest) {
+    const current = stableVersion(latest.tag_name);
+    const difference = current.findIndex((part, index) => part !== version[index]);
+    if (difference < 0) throw new Error('Stable tag has a different latest release ID');
+    if (current[difference] > version[difference]) return;
+  }
+  if (!release.assets.some((asset) => asset.name === 'machine-metadata.json'))
+    throw new Error('Latest requires verified stable update metadata');
+  await api([
+    '--method',
+    'PATCH',
+    `repos/${repo}/releases/${release.id}`,
+    '-f',
+    'make_latest=true',
+  ]);
+  await waitForReadback(async () => {
+    const result = await readGithubJson(api, path);
+    return result?.id === release.id && result.tag_name === release.tag_name ? result : null;
+  }, delay);
+}
+
 // Publish only the exact draft just fully checked; an uncertain PATCH is never replayed here.
 export async function publishDraftAssets(releaseId, identity, expected, api = githubApi) {
   await stageDraftAssets(releaseId, identity, expected, api);
-  const args = ['--method', 'PATCH', `repos/${repo}/releases/${releaseId}`, '-F', 'draft=false'];
-  if (!/^v\d+\.\d+\.\d+$/.test(identity.tag)) args.push('-f', 'make_latest=false');
-  await api(args);
-  const release = JSON.parse(
-    (await api([`repos/${repo}/releases/tags/${identity.tag}`])).toString(),
-  );
-  const ref = JSON.parse((await api([`repos/${repo}/git/ref/tags/${identity.tag}`])).toString());
-  if (String(release.id) !== releaseId || release.draft !== false)
-    throw new Error('Published release ID differs from verified draft');
+  await api([
+    '--method',
+    'PATCH',
+    `repos/${repo}/releases/${releaseId}`,
+    '-F',
+    'draft=false',
+    '-f',
+    'make_latest=false',
+  ]);
+  const { release, ref } = await readPublishedRelease(releaseId, identity, undefined, api);
   await reconcileAssets(
     release,
     ref,
@@ -270,6 +353,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       await writeFile(releaseOutput, JSON.stringify(result.release));
       await writeFile(refOutput, JSON.stringify(result.ref));
     }
+  } else if (mode === 'read-published') {
+    const [known, identityPath, releaseOutput, refOutput, requiredAsset] = args;
+    const expected = JSON.parse(await readFile(known, 'utf8'));
+    const identity = JSON.parse(await readFile(identityPath, 'utf8'));
+    const result = await readPublishedRelease(String(expected.id), identity, requiredAsset);
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(releaseOutput, JSON.stringify(result.release));
+    await writeFile(refOutput, JSON.stringify(result.ref));
+  } else if (mode === 'mark-latest') {
+    await markLatest(JSON.parse(await readFile(args[0], 'utf8')));
   } else if (mode === 'reconcile') {
     const [releasePath, refPath, identityPath, resources] = args;
     if (resources && resources !== '-') {
