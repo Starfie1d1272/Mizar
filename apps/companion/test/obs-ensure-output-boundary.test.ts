@@ -586,7 +586,8 @@ it.each([
         expect(unexpected).toEqual([]);
         return;
       }
-      expect(response.json().findings).toEqual(
+      expect(response.json()).toHaveProperty(
+        'findings',
         expect.arrayContaining([
           expect.objectContaining({
             code: audioStall === 1 ? 'audio_prepare_failed' : 'audio_check_failed',
