@@ -9,6 +9,7 @@ import { OBS_CAPTURE_INPUT, obsDesiredScenes } from '../apps/companion/src/obs/d
 import { RemoteCommentary } from '../apps/companion/src/obs/remote-commentary.js';
 import { registerObsRoutes } from '../apps/companion/src/obs/routes.js';
 import { createLocalWebOriginPolicy } from '../apps/companion/src/local-web/origin-policy.js';
+import type { MusicAudioMode } from '../apps/companion/src/music/device.js';
 import type {
   MigrationEvent,
   MigrationObserver,
@@ -240,14 +241,11 @@ export async function audioModeRig(initialMonitor = 'OBS_MONITORING_TYPE_MONITOR
     withObs: (fn: (rpc: ObsRpc, ep: string) => unknown) => fn(obs, endpoint),
   });
   const empty = { bgm: null, stinger: null };
-  const music = {
-    store: { state: { monitorPreference: false } },
-    withAudioModeRecovery: async (fn: () => Promise<unknown>) => fn(),
-    prepareDesktopMix: async (
-      _rpc: unknown,
-      _rel: unknown,
-      fn: (plan: unknown) => Promise<unknown>,
-    ) => fn({ changes: [], musicBefore: empty, musicAfter: empty, managedMusicUuids: [] }),
+  const music: MusicAudioMode = {
+    wantsMonitor: () => false,
+    withAudioModeRecovery: async (fn) => fn(() => true),
+    prepareDesktopMix: async (_device, _relationship, fn) =>
+      fn({ changes: [], musicBefore: empty, musicAfter: empty, managedMusicUuids: [] }),
     commitDesktopMonitorOriginals: async () => {},
     monitorPlanCompatible: () => true,
   };
@@ -259,7 +257,7 @@ export async function audioModeRig(initialMonitor = 'OBS_MONITORING_TYPE_MONITOR
     activeScene: () => 'waiting',
     preparationValid: () => () => true,
     gameAudio: { switchMode: async (fn: () => Promise<unknown>) => fn() } as never,
-    musicDirector: () => music as never,
+    musicAudio: () => music,
   });
   const headers = { origin: base, referer: `${base}/`, 'sec-fetch-site': 'same-origin' };
   const request = (method: 'GET' | 'POST', url: string, payload?: unknown) =>

@@ -56,7 +56,7 @@ it('closes independent paths before restoring desktop after a partial transition
   rig.failIndependent();
   expect((await change(rig, 'independent')).statusCode).toBe(409);
   expect(rig.violations).toEqual([]);
-  await rig.adapter.recoverAudioMode(rig.music as never);
+  await rig.adapter.recoverAudioMode(rig.music);
   expect(rig.violations).toEqual([]);
   for (const items of rig.scenes.values()) {
     expect(items.find((item) => item.sourceUuid === 'desktop')?.sceneItemEnabled).toBe(true);
@@ -79,6 +79,6 @@ it('does not restore an unselected video audio path alongside independent game a
     expect(items.find((item) => item.sourceUuid === 'ts')?.sceneItemEnabled).toBe(false);
   }
   expect(rig.monitor()).toBe('OBS_MONITORING_TYPE_NONE');
-  await rig.adapter.recoverAudioMode(rig.music as never);
+  await rig.adapter.recoverAudioMode(rig.music);
   expect((await rig.routing.modeRecoveryState()).transition).toBeNull();
 });
