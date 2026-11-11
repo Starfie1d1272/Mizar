@@ -51,7 +51,6 @@ pub fn workspace_layout(work: Rect) -> Layout {
     }
 }
 
-
 /// CS2's non-client borders extend beyond its aligned client viewport.
 pub fn avoid_game_frame(mut layout: Layout, outer: Rect) -> Layout {
     let bottom = layout.dock.bottom();

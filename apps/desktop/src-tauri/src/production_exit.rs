@@ -559,7 +559,6 @@ pub fn prepare_external_entry(
     invalidate_local_match_exit(log)
 }
 
-
 /// Existing private runtime identity; browsers cannot renew a native lease.
 pub fn cleanup_mulnx(
     log: &DesktopLog,
