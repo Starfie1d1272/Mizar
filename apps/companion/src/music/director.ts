@@ -297,6 +297,7 @@ export class MusicDirector {
     )
       throw new Error('music_stop_unconfirmed');
     if (layer === 'stinger') this.preview.confirmStopped(uuid);
+    this.expectedStops.delete(layer);
   }
   async setMixer(volume?: number, muted?: boolean): Promise<boolean> {
     if (this.closed || !this.store.ready || this.store.failure)
@@ -1071,8 +1072,9 @@ export class MusicDirector {
         tracks.length
     ]!;
   }
-  private reconcilePreview(obs: ObsRpc, epoch: number, valid: () => boolean, safe = false) {
-    return this.preview.reconcile(
+  private async reconcilePreview(obs: ObsRpc, epoch: number, valid: () => boolean, safe = false) {
+    const previewOwned = this.preview.busy;
+    await this.preview.reconcile(
       obs,
       epoch,
       valid,
@@ -1080,6 +1082,7 @@ export class MusicDirector {
       (uuid) => this.expectedStops.set('stinger', uuid),
       () => this.holdForPreviewControl(valid),
     );
+    if (previewOwned && !this.preview.busy) this.expectedStops.delete('stinger');
   }
   async tick(): Promise<void> {
     if (this.closed) return;
@@ -1336,6 +1339,13 @@ export class MusicDirector {
   ) {
     if (this.isHeld() || this.resumeLayers.has(layer)) return false;
     const saved = this.store.state[layer];
+    if (
+      (saved?.finished || saved?.suspended) &&
+      ['OBS_MEDIA_STATE_STOPPED', 'OBS_MEDIA_STATE_ENDED', 'OBS_MEDIA_STATE_NONE'].includes(
+        String(state),
+      )
+    )
+      this.expectedStops.delete(layer);
     const active = [
       'OBS_MEDIA_STATE_PLAYING',
       'OBS_MEDIA_STATE_OPENING',
@@ -1932,7 +1942,6 @@ export class MusicDirector {
           if (
             !playback ||
             playback.finished ||
-            playback.suspended ||
             (layer === 'stinger' && (previewOwned || this.isStingerHeld()))
           )
             continue;
