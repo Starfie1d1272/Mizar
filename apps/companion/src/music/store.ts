@@ -168,7 +168,6 @@ export class MusicStore {
   constructor(
     readonly directory: string,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
-    readonly builtinPack?: string,
   ) {}
   private async stage<T>(stage: string, evidence: unknown, run: () => Promise<T> | T): Promise<T> {
     this.diagnostic(stage, { result: 'begin', ...(evidence as object) });
@@ -188,11 +187,11 @@ export class MusicStore {
       /* Diagnostics cannot own playback. */
     }
   }
-  async load(initialPack?: Buffer) {
+  async load() {
     const run = async () => {
       try {
         await this.stage('music_load', { directory: this.directory }, () =>
-          this.persistence ? this.loadDelegatedState() : this.loadState(initialPack),
+          this.persistence ? this.loadDelegatedState() : this.loadState(),
         );
       } catch (error) {
         this.failure = true;
@@ -205,7 +204,7 @@ export class MusicStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
-  private async loadState(initialPack?: Buffer) {
+  private async loadState() {
     await ensureDirectory(this.directory);
     await ensureDirectory(join(this.directory, 'tracks'));
     await safePath(this.directory);
@@ -220,8 +219,7 @@ export class MusicStore {
     if (!exists) {
       this.failure = false;
       this.ready = true;
-      if (initialPack) await this.import(initialPack);
-      else await this.update(() => undefined);
+      await this.update(() => undefined);
       this.diagnostic('music_loaded_snapshot', { state: this.state });
       return;
     }

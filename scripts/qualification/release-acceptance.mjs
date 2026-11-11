@@ -74,8 +74,10 @@ async function fromComment(repo, commentId, product, runId) {
   }
   const manifest = JSON.parse(await readFile(join(product, 'release-manifest.json'), 'utf8'));
   const installer = JSON.parse(await readFile(join(product, 'web-installer-build.json'), 'utf8'));
-  const setup = JSON.parse(
-    await readFile(join(product, 'core-distribution-manifest.json'), 'utf8'),
+  const [fullSetup, coreSetup] = await Promise.all(
+    ['distribution-manifest.json', 'core-distribution-manifest.json'].map(async (name) =>
+      JSON.parse(await readFile(join(product, name), 'utf8')),
+    ),
   );
   const json = /^```json\r?\n([\s\S]+)\r?\n```$/.exec(comment.body?.trim())?.[1];
   requireValue(
@@ -87,7 +89,8 @@ async function fromComment(repo, commentId, product, runId) {
     gitSha: manifest.gitSha,
     archiveSha256: manifest.archiveSha256,
     webInstallerSha256: installer.sha256,
-    coreSetupSha256: setup.archiveSha256,
+    fullSetupSha256: fullSetup.archiveSha256,
+    coreSetupSha256: coreSetup.archiveSha256,
   });
   return {
     ...record,

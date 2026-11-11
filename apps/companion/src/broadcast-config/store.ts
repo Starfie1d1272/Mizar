@@ -478,16 +478,6 @@ export class BroadcastConfigStore {
       } else if (addMissingBuiltinModules(next.document, false)) await this.commit(next);
     });
   }
-  async addBuiltinMusic(module: ModuleRecord<'music'>): Promise<void> {
-    await this.queue.run(async () => {
-      if (!this.envelope || module.id !== BUILTIN_MODULE_IDS.music)
-        throw new Error('broadcast_config_invalid');
-      if (this.envelope.document.modules.some((item) => item.id === module.id)) return;
-      const next = structuredClone(this.envelope);
-      next.document.modules.push(module);
-      await this.commit(next);
-    });
-  }
   hasReceipt(requestId: string): boolean {
     return this.envelope !== null && receiptFor(this.envelope, requestId) !== undefined;
   }

@@ -192,6 +192,25 @@ jobs:
           New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'release-manifest.json') $evidenceRoot
           Copy-Item (Join-Path $env:QUALIFICATION_BUILD_ROOT 'build-timings.json') $evidenceRoot
+          $executables = @(
+            Get-Item -LiteralPath (Join-Path $full 'Mizar.exe')
+            Get-ChildItem -LiteralPath $env:QUALIFICATION_BUILD_ROOT -File -Filter 'Mizar-*.exe' | Sort-Object Name
+          )
+          $publishers = @($executables | ForEach-Object {
+            $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
+            [ordered]@{
+              name = $_.Name
+              sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              authenticode = $signature.Status.ToString()
+              signer = $signature.SignerCertificate.Subject
+              certificateThumbprint = $signature.SignerCertificate.Thumbprint
+            }
+          })
+          $publisherReport = Join-Path $env:QUALIFICATION_BUILD_ROOT 'windows-publisher.json'
+          [ordered]@{ gitSha = $manifest.gitSha; files = $publishers } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $publisherReport -Encoding utf8NoBOM
+          Copy-Item -LiteralPath $publisherReport $evidenceRoot
+          $publishers | ForEach-Object { "- $($_.name): Authenticode $($_.authenticode)" } >> $env:GITHUB_STEP_SUMMARY
           Compress-Archive -Path (Join-Path $evidenceRoot '*') -DestinationPath (Join-Path $env:RUNNER_TEMP "Mizar-$env:RELEASE_LABEL-evidence.zip")
 
       - name: Attest qualified products and current resource provenance
@@ -203,6 +222,7 @@ jobs:
             ${{ env.QUALIFICATION_BUILD_ROOT }}/Mizar-*.exe
             ${{ env.QUALIFICATION_BUILD_ROOT }}/NSIS-LICENSE.txt
             ${{ env.QUALIFICATION_BUILD_ROOT }}/web-installer-build.json
+            ${{ env.QUALIFICATION_BUILD_ROOT }}/windows-publisher.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/core-distribution-manifest.json
             ${{ env.QUALIFICATION_BUILD_ROOT }}/release-manifest.json

@@ -236,7 +236,6 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
-  readonly builtinMusicPack?: string;
   readonly mulnxCamPacksRoot?: string;
   readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
@@ -1597,16 +1596,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const musicStore = new MusicStore(
       join(dirname(options.obsConfigPath), 'music'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
-      options.builtinMusicPack,
     );
     app.addHook('onReady', async () => {
       try {
-        await loadLegacyMusic(
-          musicStore,
-          broadcastConfig!.path,
-          options.builtinMusicPack,
-          (error) => app.log.error({ stage: 'music_builtin', err: error }, '内置音乐不可用'),
-        );
+        await loadLegacyMusic(musicStore, broadcastConfig!.path);
       } catch (error) {
         app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
@@ -1686,7 +1679,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       hud: hudConfigStore,
       music: musicStore,
       camera: cameraStore,
-      builtinMusicPack: options.builtinMusicPack,
       dependencies: withOfficialBroadcastResources(
         broadcastConfig,
         () => resources,
@@ -1727,7 +1719,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => runtime.restoreLegacyCamera(),
       (module) => runtime.moduleAvailability(module),
       () => runtime.displayAvailable,
-      () => runtime.builtinMusicAvailable,
     );
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);

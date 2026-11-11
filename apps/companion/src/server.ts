@@ -387,7 +387,6 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     ...(process.env.MIZAR_BUNDLE_ROOT
       ? {
           mulnxBundle: join(process.env.MIZAR_BUNDLE_ROOT, 'resources/mulnx'),
-          builtinMusicPack: join(process.env.MIZAR_BUNDLE_ROOT, 'resources/builtin-music.zip'),
         }
       : {}),
     ...(process.env.MIZAR_MULNX_CAM_PACKS_ROOT

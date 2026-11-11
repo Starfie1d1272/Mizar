@@ -39,9 +39,6 @@ export function AssetFonts() {
           '700',
           'truetype',
         ),
-        font('ESLLegend', '/brand/fonts/esl/legend-regular.woff2', '400', 'woff2'),
-        font('ESLLegend', '/brand/fonts/esl/legend-bold.woff2', '600 900', 'woff2'),
-        font('ESLLegend', '/brand/fonts/esl/legend-light.woff2', '300', 'woff2'),
         font('SourceHanSans', '/brand/fonts/esl/SourceHanSansCN-Regular.woff2', '400', 'woff2'),
       ].join('\n')}
     </style>

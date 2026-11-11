@@ -13,7 +13,13 @@
 
 更新中断时保留备份和恢复记录，按「应用更新」中的恢复提示处理；程序无法打开时，在用户数据 `updates/install-*/` 查找对应工具。运行 `Restore-Mizar.cmd` 前关闭 Mizar 与残留安装向导，核对它确实属于本次安装。历史旧工具不会因安装新版自动升级，不要用旧恢复记录覆盖后来重新安装的程序。详细边界见[应用内更新](../reference/updates.md)。自定义数据目录位于安装目录内时，先手动备份再更新。
 
-遇到 Windows 来源提示时，核对正式下载地址、文件名和发布页校验值，再决定是否继续。
+遇到 Windows 来源提示时，先核对正式下载地址和文件名。PowerShell 可用 `Get-FileHash -Algorithm SHA256 -LiteralPath '.\<下载的文件名>'`，对照同一 GitHub Release 资产的摘要。用 [GitHub CLI](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) 核对正式安装器的构建来源：
+
+```powershell
+gh attestation verify '.\<下载的文件名>' --repo Starfie1d1272/Mizar --signer-workflow Starfie1d1272/Mizar/.github/workflows/release-qualification.yml@refs/heads/main
+```
+
+核对结果里的源码摘要与该版本标签；Windows 发布者信息在文件属性中单独查看。
 
 ## 制作第一场比赛
 
@@ -132,7 +138,7 @@ BP 编辑不直接播出，未保存草稿不影响节目。工作台按有效�
 3. 现场可播放已保存曲目、暂停、继续、停止、下一首及恢复自动。人工播放独立于自动场景，离开页面不会停；恢复自动后重新按节目阶段控制。OBS 直接暂停、停止、静音或改音量同样保留人工控制。
 4. 自动音乐的单图胜利可跨图间播完再接等待，真实比赛恢复优先停音；最终图仅播整场主题。开场音效只跟随实际开场，不因刷新重放。
 
-支持 WAV、MP3、OGG、FLAC、M4A，单首最多 32 MiB，实际解码以 OBS 为准。空组静音。ZIP 导入会整体替换七组，失败保留原配置；下载入口不授予音乐许可，内置音乐来源和使用授权尚未核实，请自行核对直播、录制与再分发权。内容制作见[音乐契约](../reference/music.md#内容制作与交付)。
+支持 WAV、MP3、OGG、FLAC、M4A，单首最多 32 MiB，实际解码以 OBS 为准。空组静音。ZIP 导入会整体替换七组，失败保留原配置；请核对下载曲目的直播、录制与再分发许可。内容制作见[音乐契约](../reference/music.md#内容制作与交付)。
 
 试听可在音路安全时临时开启本机监听，结束后恢复借用字段，不改变长期偏好。若提示监听未开启或恢复未确认，在 OBS 核对设备与音路；OBS 断连时媒体可能仍在播放，直接检查「音乐」「音效」来源。监听听到的是 OBS 所在机器，电平与播放回执都不证明观众端有声。
 

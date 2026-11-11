@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
 import { parseHudResolvedPreset } from '@mizar/hud-config';
@@ -31,6 +31,12 @@ export async function exportLhmHud(webRoot: string, value: unknown): Promise<Buf
     files[name] = bytes;
   };
   let count = 0;
+  const addFile = async (path: string, name: string) => {
+    const file = await lstat(path);
+    if (!file.isFile()) throw new Error('lhm_export_invalid_asset');
+    if (file.size > MAX_BYTES - total) throw new Error('lhm_export_budget');
+    add(name, await readFile(path));
+  };
   const visit = async (directory: string, prefix: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (
@@ -43,15 +49,24 @@ export async function exportLhmHud(webRoot: string, value: unknown): Promise<Buf
       const path = join(directory, entry.name);
       const name = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await visit(path, name);
-      else if (entry.isFile()) {
-        if ((await stat(path)).size > MAX_BYTES - total) throw new Error('lhm_export_budget');
-        add(name, await readFile(path));
-      } else throw new Error('lhm_export_invalid_asset');
+      else if (entry.isFile()) await addFile(path, name);
+      else throw new Error('lhm_export_invalid_asset');
     }
   };
   await visit(join(webRoot, 'lhm-runtime'), '');
   if (!files['index.html']) throw new Error('lhm_export_runtime_missing');
-  await visit(join(webRoot, 'brand'), 'mizar-assets/brand');
+  for (const file of [
+    'fonts/barlow-condensed/BarlowCondensed-Bold.ttf',
+    'fonts/barlow-condensed/OFL.txt',
+    'fonts/esl/SourceHanSansCN-Regular.woff2',
+    'fonts/esl/SourceHanSans-LICENSE.txt',
+    'fonts/esl/sources.json',
+    'hud/esl/texture.svg',
+    'hud/ewc/contour.svg',
+    'mizar-mark-mono.svg',
+  ]) {
+    await addFile(join(webRoot, 'brand', file), `mizar-assets/brand/${file}`);
+  }
   await visit(join(webRoot, 'assets/cs2'), 'mizar-assets/assets/cs2');
   const json = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
   add(
