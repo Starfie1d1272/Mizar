@@ -222,7 +222,7 @@ macro_rules! desktop_ipc {
         $command!(async set_cs2_console_capture MAIN
             (app: tauri::AppHandle) required [enabled: bool, expected_generation: OptionalNullable(String)]
             (diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> ConsoleStatus = crate::desktop_commands::set_cs2_console_capture);
-        $command!(async set_cs2_preferences MAIN
+        $command!(async set_cs2_preferences GAME_PREFERENCES_WINDOWS
             (app: tauri::AppHandle) required [quality_preset: QualityPreset, frame_rate_limit: FrameRateLimit, prefer_mulnx: OptionalNullable(bool)]
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::set_cs2_preferences);
         $command!(async open_cs2_backup MAIN
@@ -294,7 +294,7 @@ macro_rules! desktop_ipc {
         $command!(async configure_gsi MAIN
             (app: tauri::AppHandle) required [restore: bool, choose: bool]
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::configure_gsi);
-        $command!(async observer_command MAIN_AND_CONNECTION
+        $command!(async observer_command OBSERVER_WINDOWS
             (window: tauri::WebviewWindow, app: tauri::AppHandle) required [action: ObserverAction, endpoint: OptionalNullable(String), password: OptionalNullable(String), expected_revision: OptionalNullable(String)]
             () -> ObserverResult = crate::desktop_commands::observer_command);
     };

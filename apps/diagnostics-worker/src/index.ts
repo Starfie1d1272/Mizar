@@ -484,11 +484,6 @@ async function upload(
     return json({ error: 'invalid_batch_permit' }, 400);
   if (firstPermit.wire_hex && firstPermit.wire_hex !== id)
     return json({ error: 'payload_encoding_conflict' }, 409);
-  if (
-    bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
-    !budget(env.INSTALLATION_DAILY_BATCHES)
-  )
-    return capacityDenied('upload_preflight', 'installation_capacity', 429);
   const existing = preflight[2]?.results[0] as BatchRow | undefined;
   if (existing && existing.expires_at <= now)
     return json({ error: 'batch_retention_expired' }, 410);
@@ -496,6 +491,11 @@ async function upload(
   if (existing && JSON.stringify(metadata(existing.metadata)) !== canonicalIndex)
     return json({ error: 'batch_metadata_conflict' }, 409);
   if (existing?.state === 'ready') return accepted(id);
+  if (
+    bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
+    !budget(env.INSTALLATION_DAILY_BATCHES)
+  )
+    return capacityDenied('upload_preflight', 'installation_capacity', 429);
   if (!(preflight[2]!.meta.size_after < budget(env.DATABASE_BYTES)))
     return capacityDenied('upload_preflight', 'index_allocation_budget', 503);
   if (existing && (existing.state === 'deleting' || existing.writers >= 8))

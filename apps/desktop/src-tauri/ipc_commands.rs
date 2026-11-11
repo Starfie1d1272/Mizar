@@ -24,7 +24,8 @@ const SUPPORT_WINDOWS: &[&str] = &[
     "workspace-left",
     "tool-review",
 ];
-const MAIN_AND_CONNECTION: &[&str] = &["main", "tool-connection"];
+const OBSERVER_WINDOWS: &[&str] = &["main", "tool-connection", "workspace-left"];
+const GAME_PREFERENCES_WINDOWS: &[&str] = &["main", "tool-game-picture"];
 const PROGRAM_OVERLAY: &[&str] = &["program-overlay"];
 const MAIN_AND_DOCK: &[&str] = &["main", "workspace-dock"];
 const GAME_PICTURE: &[&str] = &["tool-game-picture"];
