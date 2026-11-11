@@ -110,7 +110,20 @@ macro_rules! desktop_ipc {
         $string_enum!(PinActiveState { Prepared = "prepared", Committed = "committed" });
         $object!(PinReleased { pin_id: String, state: PinReleasedState });
         $object!(PinSegment { name: String, bytes: u64, sha256: String });
-        $object!(PinActive { source_state: JsonObject, schema: String, pin_id: String, producer_kind: String, producer_run_id: String,
+        $object!(PinMemoryEvidence { included: bool, events: Nullable(u64), bytes: Nullable(u64), reason: String });
+        $object!(PinLossReasons { overflow: u64, contended: u64, write_failed: u64 });
+        $object!(PinLossTotals {
+            reason: String, count: u64, bytes: u64,
+            first_observed_at: Nullable(String), last_observed_at: Nullable(String),
+        });
+        $object!(PinSourceState {
+            as_of: String,
+            memory_only: PinMemoryEvidence,
+            unreported_loss: PinLossReasons,
+            loss_totals: PinLossTotals,
+            #[serde(default)] post_cutoff_segments: Array(String),
+        });
+        $object!(PinActive { source_state: PinSourceState, schema: String, pin_id: String, producer_kind: String, producer_run_id: String,
             kind: String, state: PinActiveState, expires_at: Nullable(String), segments: Array(PinSegment),
             #[serde(default, skip_serializing_if = "Option::is_none")] delivery_owner: Optional(JsonObject),
         });
@@ -148,13 +161,13 @@ macro_rules! desktop_ipc {
             ) -> Unit = crate::desktop_commands::finish_workspace);
         $command!(async workspace_exit_status PRODUCT_WINDOWS (app: tauri::AppHandle) required [] ()
             -> WorkspaceExitStatus = crate::desktop_commands::workspace_exit_status);
-        $command!(async finish_managed_cs2 PRODUCT_WINDOWS (app: tauri::AppHandle) required [] (
+        $command!(async finish_managed_cs2 MAIN (app: tauri::AppHandle) required [] (
                 diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>,
                 diagnostic_trigger: Option<String>,
             ) -> Unit = crate::cs2_host::finish_managed_cs2);
         $command!(async cs2_config_status PRODUCT_WINDOWS (app: tauri::AppHandle) required [] ()
             -> Cs2Status = crate::cs2_host::config_status);
-        $command!(async restore_cs2_backup PRODUCT_WINDOWS
+        $command!(async restore_cs2_backup MAIN
             (app: tauri::AppHandle) required [confirm_steam_cancelled: bool] (
                 diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>,
                 diagnostic_trigger: Option<String>,
@@ -173,10 +186,10 @@ macro_rules! desktop_ipc {
         $command!(sync cs2_host_status PRODUCT_WINDOWS
             (state: tauri::State<'_, HostState>) required []
             () -> Cs2HostStatus = crate::desktop_commands::cs2_host_status);
-        $command!(async select_obs_executable PRODUCT_WINDOWS
+        $command!(async select_obs_executable MAIN
             (app: tauri::AppHandle) required []
             (diagnostic_operation_id: Option<String>) -> Nullable(String) = crate::desktop_commands::select_obs_executable);
-        $command!(async launch_obs PRODUCT_WINDOWS
+        $command!(async launch_obs MAIN
             (log: tauri::State<'_, DesktopLog>) required [executable_path: String]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::launch_obs);
         $command!(async begin_obs_configuration MAIN
@@ -203,16 +216,16 @@ macro_rules! desktop_ipc {
         $command!(async finish_demo_test MAIN_AND_WORKSPACE
             (window: tauri::WebviewWindow, app: tauri::AppHandle) optional [request_id: OptionalNullable(String)]
             (diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Unit = crate::desktop_commands::finish_demo_test);
-        $command!(async cs2_console_status MAIN_AND_DIAGNOSTICS
+        $command!(async cs2_console_status SUPPORT_WINDOWS
             (app: tauri::AppHandle) required []
             (diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> ConsoleStatus = crate::desktop_commands::cs2_console_status);
         $command!(async set_cs2_console_capture MAIN
             (app: tauri::AppHandle) required [enabled: bool, expected_generation: OptionalNullable(String)]
             (diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> ConsoleStatus = crate::desktop_commands::set_cs2_console_capture);
-        $command!(async set_cs2_preferences PRODUCT_WINDOWS
+        $command!(async set_cs2_preferences MAIN
             (app: tauri::AppHandle) required [quality_preset: QualityPreset, frame_rate_limit: FrameRateLimit, prefer_mulnx: OptionalNullable(bool)]
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::set_cs2_preferences);
-        $command!(async open_cs2_backup PRODUCT_WINDOWS
+        $command!(async open_cs2_backup MAIN
             (app: tauri::AppHandle) required []
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::open_cs2_backup);
         $command!(sync open_main PRODUCT_WINDOWS
@@ -221,10 +234,10 @@ macro_rules! desktop_ipc {
         $command!(async present_production PRODUCT_WINDOWS
             (app: tauri::AppHandle) required [live: bool, preparation_id: OptionalNullable(String)]
             (diagnostic_operation_id: Option<String>, diagnostic_task_id: Option<String>, diagnostic_trigger: Option<String>) -> Unit = crate::desktop_commands::present_production);
-        $command!(sync program_overlay_ready PRODUCT_WINDOWS
+        $command!(sync program_overlay_ready PROGRAM_OVERLAY
             (window: tauri::WebviewWindow) required [generation: u64, document_id: u64]
             () -> Unit = crate::desktop_commands::program_overlay_ready);
-        $command!(async recover_program_overlay PRODUCT_WINDOWS
+        $command!(async recover_program_overlay MAIN_AND_WORKSPACE
             (window: tauri::WebviewWindow) required []
             (diagnostic_operation_id: Option<String>) -> String = crate::desktop_commands::recover_program_overlay);
         $command!(sync close_review REVIEW
@@ -239,7 +252,7 @@ macro_rules! desktop_ipc {
         $command!(sync open_issue_report PRODUCT_WINDOWS
             (log: tauri::State<'_, DesktopLog>) required []
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::open_issue_report);
-        $command!(async install_update PRODUCT_WINDOWS
+        $command!(async install_update MAIN
             (window: tauri::WebviewWindow, app: tauri::AppHandle) required []
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::install_update);
         $command!(sync open_music_downloads PRODUCT_WINDOWS
@@ -248,7 +261,7 @@ macro_rules! desktop_ipc {
         $command!(sync open_update_page PRODUCT_WINDOWS
             (log: tauri::State<'_, DesktopLog>) required [source: String, version: OptionalNullable(String)]
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::open_update_page);
-        $command!(sync open_update_recovery PRODUCT_WINDOWS
+        $command!(sync open_update_recovery MAIN
             (app: tauri::AppHandle) required []
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::open_update_recovery);
         $command!(sync open_rivalhub_authorization PRODUCT_WINDOWS
@@ -266,22 +279,22 @@ macro_rules! desktop_ipc {
         $command!(async persist_diagnostic_events PRODUCT_WINDOWS
             (log: tauri::State<'_, DesktopLog>) required [events: Array(JsonValue)]
             () -> DiagnosticReceipt = crate::desktop_commands::persist_diagnostic_events);
-        $command!(async diagnostic_pin PRODUCT_WINDOWS
+        $command!(async diagnostic_pin SUPPORT_WINDOWS
             (log: tauri::State<'_, DesktopLog>) required [action: PinAction, pin_id: String, kind: PinKind]
             () -> DiagnosticPin = crate::desktop_commands::diagnostic_pin);
-        $command!(async save_support_bundle PRODUCT_WINDOWS
+        $command!(async save_support_bundle SUPPORT_WINDOWS
             (app: tauri::AppHandle) required [export_id: String]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::save_support_bundle);
-        $command!(async select_cs2_installation PRODUCT_WINDOWS
+        $command!(async select_cs2_installation MAIN
             (app: tauri::AppHandle) required [executable: bool]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::select_cs2_installation);
-        $command!(async open_cs2_config_directory PRODUCT_WINDOWS
+        $command!(async open_cs2_config_directory MAIN
             (log: tauri::State<'_, DesktopLog>) required []
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::open_cs2_config_directory);
-        $command!(async configure_gsi PRODUCT_WINDOWS
+        $command!(async configure_gsi MAIN
             (app: tauri::AppHandle) required [restore: bool, choose: bool]
             (diagnostic_operation_id: Option<String>) -> Unit = crate::desktop_commands::configure_gsi);
-        $command!(async observer_command PRODUCT_WINDOWS
+        $command!(async observer_command MAIN_AND_CONNECTION
             (window: tauri::WebviewWindow, app: tauri::AppHandle) required [action: ObserverAction, endpoint: OptionalNullable(String), password: OptionalNullable(String), expected_revision: OptionalNullable(String)]
             () -> ObserverResult = crate::desktop_commands::observer_command);
     };

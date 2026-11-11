@@ -38,20 +38,13 @@ fn main() {
     }
     handler.push(']');
     fs::write(out.join("ipc_handler.rs"), handler).expect("write handler");
-    for (path, expected) in [
-        (
-            "../../web/src/workspace/desktop-commands.generated.ts",
-            ipc_commands::frontend_commands(),
-        ),
-        (
-            "../../../packages/protocol/src/desktop-ipc.generated.ts",
-            ipc_contract_generate::frontend_contract(),
-        ),
-    ] {
-        println!("cargo:rerun-if-changed={path}");
-        assert_eq!(fs::read_to_string(path).expect("read generated IPC contract"), expected,
-            "{path} is stale; run rustc --edition=2021 ipc_generate.rs -o <temporary-path> and execute it from src-tauri");
-    }
+    let path = "../../../packages/protocol/src/desktop-ipc.generated.ts";
+    println!("cargo:rerun-if-changed={path}");
+    assert_eq!(
+        fs::read_to_string(path).expect("read generated IPC contract"),
+        ipc_contract_generate::frontend_contract(),
+        "{path} is stale; run rustc --edition=2021 ipc_generate.rs -o <temporary-path> and execute it from src-tauri"
+    );
     let pattern = format!("{}/*.json", capability_dir.display()).replace('\\', "/");
     tauri_build::try_build(
         tauri_build::Attributes::new()

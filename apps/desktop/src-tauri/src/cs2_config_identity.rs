@@ -56,7 +56,14 @@ pub(crate) struct SessionIdentity {
 }
 impl SessionIdentity {
     pub(crate) fn read(record: &Value) -> Result<Option<Self>, &'static str> {
-        match (record.get("sessionId"), record.get("configIdentity")) {
+        Self::read_fields(record.get("sessionId"), record.get("configIdentity"))
+    }
+
+    pub(crate) fn read_fields(
+        session: Option<&Value>,
+        config: Option<&Value>,
+    ) -> Result<Option<Self>, &'static str> {
+        match (session, config) {
             (None, None) => Ok(None),
             (Some(id), Some(config)) => {
                 let id = id

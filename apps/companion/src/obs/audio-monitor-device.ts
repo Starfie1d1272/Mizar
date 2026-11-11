@@ -63,12 +63,19 @@ export async function assertDesktopDeviceRoute(
         error.message === 'The specified input does not support audio.'
       )
         continue;
-      throw error;
+      throw Object.assign(new Error('audio_device_monitor_unknown', { cause: error }), {
+        stage: 'GetInputAudioMonitorType',
+        inputKind: input.inputKind,
+      });
     }
     if (monitor === 'OBS_MONITORING_TYPE_NONE') continue;
     if (monitor === 'OBS_MONITORING_TYPE_MONITOR_ONLY' && relationship === 'same') continue;
     if (monitor === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' && relationship === 'different')
       continue;
-    throw new Error('audio_device_monitor_conflict');
+    throw Object.assign(new Error('audio_device_monitor_conflict'), {
+      stage: 'GetInputAudioMonitorType',
+      inputKind: input.inputKind,
+      monitor,
+    });
   }
 }

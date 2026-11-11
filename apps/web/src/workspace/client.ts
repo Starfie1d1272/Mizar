@@ -1,5 +1,4 @@
 import { desktopTransport } from './desktop-transport';
-import type { DesktopCommand } from './desktop-commands.generated';
 import {
   type DesktopIpcCommand,
   type DesktopArgs,
@@ -64,21 +63,14 @@ export async function selectProgramScene(
 /** The Host retains this outcome; UI commands must not copy it into local state. */
 export class HostWindowControlError extends Error {}
 
-// Check the schema keys against the Rust-generated command registry.
-type RegisteredCommand<C extends DesktopCommand> = C;
-type IpcCommand = RegisteredCommand<DesktopIpcCommand>;
-// A newly registered native command must also have a payload contract.
-type ContractCommand<C extends DesktopIpcCommand> = C;
-type CompleteCommand = ContractCommand<DesktopCommand>;
-
-export function desktopInvoke<C extends IpcCommand>(
+export function desktopInvoke<C extends DesktopIpcCommand>(
   command: C,
   ...input: undefined extends DesktopArgs<NoInfer<C>>
     ? [args?: DesktopArgs<NoInfer<C>>, task?: ControlTask]
     : [args: DesktopArgs<NoInfer<C>>, task?: ControlTask]
 ): Promise<DesktopResult<C>>;
 export async function desktopInvoke(
-  command: CompleteCommand,
+  command: DesktopIpcCommand,
   args?: DesktopArgs<DesktopIpcCommand>,
   task?: ControlTask,
 ): Promise<unknown> {
