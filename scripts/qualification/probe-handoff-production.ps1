@@ -36,6 +36,10 @@ foreach($function in $functions) { Invoke-Expression $function.Extent.Text }
 $add=$ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Type'},$true)|Select-Object -First 1
 Invoke-Expression $add.Extent.Text
 $script:handoffHandles=[Collections.Generic.List[IDisposable]]::new()
+Reject { Handoff-Path 'C:relative' } 'update_path_invalid'
+Reject { Handoff-Path '\relative' } 'update_path_invalid'
+Reject { Handoff-Path 'C:\' } 'update_handoff_root_directory_forbidden'
+Write-Output 'PASS drive-relative, root-relative and volume-root handoff paths rejected'
 # Duplicate the real file object, then let its original process exit normally.
 $leaseProducer=Join-Path $root 'lease-producer.ps1';$leaseRecord=Join-Path $root 'lease-record.json'
 Put $leaseProducer 'param($Path,$Record) $lease=[IO.File]::Open($Path,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); @{pid=$PID;handle=$lease.SafeFileHandle.DangerousGetHandle().ToInt64()}|ConvertTo-Json|Set-Content $Record; Start-Sleep -Seconds 4; $lease.Dispose()'

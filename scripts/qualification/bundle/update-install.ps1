@@ -326,6 +326,7 @@ function Read-HandoffJson([string]$path, [switch]$SharedSnapshot) {
   } finally { $file.Dispose() }
 }
 function Handoff-Path([string]$path) {
+  if ($path -notmatch '^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)' -or $path -match '^\\\\[?.]\\') { throw 'update_path_invalid' }
   Assert-PlainPath $path
   $full = [IO.Path]::GetFullPath($path)
   if ($full -eq [IO.Path]::GetPathRoot($full)) { throw 'update_handoff_root_directory_forbidden' }
