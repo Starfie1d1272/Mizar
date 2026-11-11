@@ -1907,6 +1907,7 @@ export class MusicDirector {
     const previewOwned = this.preview.busy;
     this.preview.cancel('shutdown');
     this.commandRevision++;
+    this.resumeLayers.clear();
     this.closed = true;
     this.invalidate();
     this.operationFailures.clear();
@@ -1942,7 +1943,13 @@ export class MusicDirector {
         guard();
         if (this.isExternalHold()) return;
         // Closing is also a control boundary: the last poll may predate an OBS edit.
-        if (await this.observeManualControls(obs, current, previewOwned)) return;
+        try {
+          if (await this.observeManualControls(obs, current, previewOwned)) return;
+        } catch (error) {
+          // The observer sets the in-memory hold before persisting it.
+          if (this.isExternalHold()) localWriteFailure = error;
+          throw error;
+        }
         for (const layer of ['bgm', 'stinger'] as const) {
           const playback = this.store.state[layer];
           if (
@@ -1972,7 +1979,12 @@ export class MusicDirector {
             ) ||
             (path && (settings.inputSettings as Record<string, unknown>)?.local_file !== path)
           ) {
-            await this.holdForObsControl();
+            try {
+              await this.holdForObsControl();
+            } catch (error) {
+              localWriteFailure = error;
+              throw error;
+            }
             return;
           }
           if (
