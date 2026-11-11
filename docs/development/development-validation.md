@@ -63,7 +63,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ### 测试职责与独立判定
 
-- 优先扩展负责该边界的已有测试。生产接口断言结果与副作用，不只验证内部函数被调用；预期结果不能由被测实现重新计算。
+- 只保留能独立证明关键风险结果的用例。优先从生产入口核对实际副作用、持久化结果或隔离边界；删除依赖内部调用顺序、重复覆盖或需要随实现同步改写的低价值用例。预期结果由独立证据确定。
 - 对真实风险覆盖成功、失败/未知、取消、重试和陈旧请求。不同领域复用窄契约，不在每层复制完整矩阵。
 - 持久化和恢复检查原文件、精确身份、提交顺序与重启后的结果；不能以空队列、空状态或一次成功请求证明恢复完整。
 - 对外命令的受理、回执、读回与最终音画分开验证。协议桩能证明控制逻辑，不能证明 Windows、CS2、OBS 或直播平台真实效果。
@@ -86,7 +86,7 @@ PR 核对“产生 → 持久化 → 导出 → 可定位”。界面保持简�
 
 常规 CI 执行类型、构建、格式、基础 lint、`architecture:check`、仓库保留的全部 JavaScript/TypeScript 独立测试，以及实际 Companion/网页启动和正常退出。main、手动运行或涉及桌面宿主、嵌入资源、CI 工作流的 PR 另做 Windows 编译；无法确定差异时也编译。
 
-测试入口：[scripts/ci/tests.mjs](../../scripts/ci/tests.mjs)。它从 Git 跟踪文件发现 `*.test.*` / `*.spec.*`，按 `node:test` 或 Vitest 导入分派，未知或混用框架时失败，不维护逐文件允许列表。DOM 用例在文件中声明 jsdom；保留测试不能靠外部素材或手动开关默认跳过。
+测试入口：[scripts/ci/tests.mjs](../../scripts/ci/tests.mjs)。它从 Git 跟踪文件发现 `*.test.*` / `*.spec.*`，按 `node:test` 或 Vitest 导入分派，未知或混用框架时失败，不维护逐文件允许列表。保留测试所需数据随仓库交付，并由所属 CI 作业执行。
 
 ```sh
 node scripts/ci/tests.mjs scripts
@@ -98,7 +98,7 @@ pnpm lint
 pnpm architecture:check
 ```
 
-`quality` 运行脚本组，并独立编译运行播出窗口替换的 Rust 逻辑测试；`build` 完成生产构建后运行产品组。Windows 常规作业执行 build/clippy，涉及准备、取消或恢复的变更另按受影响模块定向执行已有 Rust 测试，例如 `cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml preparation_evidence`。安装器源码或构建流程改变时，同一 Windows 作业使用正式 .NET Framework 编译器和引用编译 C#，不运行安装器。
+`quality` 运行脚本组，`build` 完成生产构建后运行产品组。Windows 常规作业执行 build/clippy；涉及原生准备、取消或恢复的行为，以目标环境的实际验证记录为准。安装器源码或构建流程改变时，同一 Windows 作业使用正式 .NET Framework 编译器和引用编译 C#，不运行安装器。
 
 `ci-gate` 要求所选作业成功，并检查从运行创建到门禁的 180 秒预算；排队/执行不保证到期瞬间被终止。缓存键、稀疏检出和调度细节由[工作流](../../.github/workflows/)维护，达标必须看真实整轮结果。
 

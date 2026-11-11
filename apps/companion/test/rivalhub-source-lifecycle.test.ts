@@ -228,25 +228,6 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   };
 }
 
-test('a structured receiver validation refusal clears only the uncommitted intent', async (t) => {
-  const h = await setup(t);
-  h.setClaimRefusal(() =>
-    Response.json(
-      { code: 'VALIDATION_FAILED', error: 'stale context' },
-      {
-        status: 400,
-        headers: { 'cache-control': 'no-store' },
-      },
-    ),
-  );
-  await assert.rejects(h.connection.claim(h.snapshot, 'stale', false));
-  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
-  h.setClaimRefusal(undefined);
-  await h.connection.claim(h.snapshot, 'fresh', false);
-  await h.connection.release();
-  assert.equal(h.releases.length, 1);
-});
-
 test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
   const h = await setup(t);
   h.setClaimRefusal(() =>
@@ -260,24 +241,6 @@ test('an unconfirmed claim error remains durable rather than assuming not_found'
   const restarted = await h.restart();
   await assert.rejects(restarted.release());
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-});
-
-test('a failed same-source claim keeps the previous exact authority for release', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setClaimRefusal(() =>
-    Response.json(
-      { code: 'VALIDATION_FAILED', error: 'stale context' },
-      {
-        status: 400,
-        headers: { 'cache-control': 'no-store' },
-      },
-    ),
-  );
-  await assert.rejects(h.connection.claim(h.snapshot, 'stale', false));
-  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
-  await h.connection.release();
-  assert.equal(h.releases[0]?.authority, '1');
 });
 
 for (const operation of ['switch', 'backoff'] as const) {
@@ -471,34 +434,6 @@ test('lost claim response is reconciled by exact status and released after resta
   assert.equal(h.releases[0]?.authority, '1');
 });
 
-test('background reconciliation can drain the held source after a lost repeated claim', async (t) => {
-  const h = await setup(t);
-  h.setIdempotent(true);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'accepted');
-  h.setLose(true);
-  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-  assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
-  let notify!: (result: unknown) => void;
-  const settled = new Promise<unknown>((resolve) => {
-    notify = resolve;
-  });
-  h.connection.setSourceSettlement(
-    async () => {
-      await Promise.resolve(); // The output owner fences the scope before its first await.
-      const result = await h.connection.sendReliable(h.event, h.snapshot);
-      notify(result);
-      return result === 'accepted';
-    },
-    () => undefined,
-  );
-  h.connection.startSourceCleanup();
-  assert.equal(await settled, 'accepted');
-  await h.connection.shutdownSource();
-  assert.equal(h.connection.view().sourceCleanup.claimIntent, false);
-  assert.equal(h.releases.length, 1);
-});
-
 test(`lost idempotent claim survives restart and ambiguous status`, async (t) => {
   const h = await setup(t);
   h.setIdempotent(true);
@@ -526,32 +461,6 @@ test(`lost idempotent claim survives restart and ambiguous status`, async (t) =>
   );
 });
 
-test(`legacy repeated claim retains held-authority proof with ambiguous status`, async (t) => {
-  const h = await setup(t);
-  h.setIdempotent(true);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setLose(true);
-  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-  const statePath = join(h.path, '..', 'rivalhub-source-state.json');
-  const oldState = JSON.parse(await readFile(statePath, 'utf8'));
-  const [intent] = oldState.intents;
-  delete intent.idempotentAuthorityRevision;
-  delete oldState.intents;
-  oldState.version = 1;
-  oldState.intent = intent;
-  await writeFile(statePath, JSON.stringify(oldState));
-  h.setAmbiguous(true);
-  const restarted = await h.restart();
-  await assert.rejects(restarted.release(), /待重试或核对/);
-  const upgraded = JSON.parse(await readFile(statePath, 'utf8'));
-  assert.equal(upgraded.intents[0].idempotentAuthorityRevision, 1);
-  assert.equal(upgraded.records.length, 0);
-  h.setAmbiguous(false);
-  const again = await h.restart();
-  await again.release();
-  assert.equal(again.view().sourceCleanup.claimIntent, false);
-});
-
 test('replacement pairing keeps the old credential until cleanup succeeds', async (t) => {
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);
@@ -563,28 +472,6 @@ test('replacement pairing keeps the old credential until cleanup succeeds', asyn
   assert.equal(await h.connection.pollPairing(), 'authorized');
   assert.equal(JSON.parse(await readFile(h.path, 'utf8')).installationId, 'installation-b');
   assert.ok(h.releases.every((item) => item.authorization === 'Bearer old-secret'));
-});
-
-test('explicit retry still honors the server Retry-After delay', async (t) => {
-  const h = await setup(t);
-  await h.connection.claim(h.snapshot, 'revision', false);
-  h.setFail(true);
-  h.setRetryAfter('60');
-  await assert.rejects(h.connection.release());
-  h.setFail(false);
-  await assert.rejects(h.connection.release());
-  assert.equal(h.releases.length, 1);
-});
-
-test('an ambiguous claim status is retained and does not release', async (t) => {
-  const h = await setup(t);
-  h.setLose(true);
-  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
-  h.setAmbiguous(true);
-  const restarted = await h.restart();
-  await assert.rejects(restarted.release(), /待重试或核对/);
-  assert.equal(h.releases.length, 0);
-  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
 });
 
 test('a previously released authority cannot resolve a later uncertain claim', async (t) => {

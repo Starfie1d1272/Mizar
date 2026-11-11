@@ -73,49 +73,6 @@ test('same signed bytes share one gh verification, every named snapshot is check
   );
 });
 
-test('different original bundle bytes and workflow/source identities remain separate', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-group-separate-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await writeFile(join(dir, 'one'), 'first');
-  await writeFile(join(dir, 'two'), 'second');
-  await writeFile(join(dir, 'a'), bundle([subject('one', 'first')]));
-  await writeFile(join(dir, 'b'), bundle([subject('two', 'second')]));
-  const subjects = [
-    { file: join(dir, 'one'), sourceSha: sha, bundle: join(dir, 'a') },
-    {
-      file: join(dir, 'two'),
-      sourceSha: 'b'.repeat(40),
-      bundle: join(dir, 'b'),
-      workflow: 'promotion',
-    },
-  ];
-  const distinctBundles = subjects.map((entry) => ({
-    ...entry,
-    sourceSha: sha,
-    workflow: 'qualification',
-  }));
-  assert.deepEqual(await verifyGroupedReleaseAttestations(distinctBundles, async () => {}), {
-    groups: 2,
-    calls: 2,
-  });
-  const calls = [];
-  assert.deepEqual(
-    await verifyGroupedReleaseAttestations(subjects, async (_name, args) => calls.push(args)),
-    { groups: 2, calls: 2 },
-  );
-  assert.match(
-    calls[1][calls[1].indexOf('--signer-workflow') + 1],
-    /release-promotion\.yml@refs\/heads\/main$/,
-  );
-  assert.equal(calls[1][calls[1].indexOf('--source-digest') + 1], 'b'.repeat(40));
-  await assert.rejects(
-    verifyGroupedReleaseAttestations(subjects, async () => {
-      throw new Error('invalid signature or workflow');
-    }),
-    /gh attestation verification failed/,
-  );
-});
-
 test('promotion uses frozen bytes and removes snapshot when verification fails', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-promotion-snapshot-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

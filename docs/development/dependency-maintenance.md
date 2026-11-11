@@ -14,4 +14,4 @@ TypeScript 7 用于原生编译/类型检查。TypeScript 6 的最新稳定 API 
 
 桌面 Rust 依赖由 `Cargo.toml` / `Cargo.lock` 声明，使用 `cargo update --manifest-path apps/desktop/src-tauri/Cargo.toml` 更新兼容的间接依赖并生成锁文件，`cargo test --locked --profile ci` 验证。桌面宿主 当前使用 Windows 专属 API，实际 Rust 构建和测试以 Windows CI 为准；桌面宿主构建与运行以 Windows 为目标平台。Windows/CS2/OBS 验收仍在真实目标平台执行。
 
-浏览器验证需要当前 Playwright 版本配套的 Chromium：`pnpm exec playwright install chromium`。系统 Chromium 的存在不能证明 Playwright 默认配置可启动。云环境将 `PLAYWRIGHT_BROWSERS_PATH` 指向可写且可持久保存的目录。
+生产网页启停检查使用 Chrome 或 Chromium；需要指定浏览器时，给 `pnpm local-web:production-smoke` 设置 `CHROME_BIN`。

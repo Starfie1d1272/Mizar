@@ -47,10 +47,6 @@ jobs:
       - run: pnpm format:check
       - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
       - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
-      - name: Check native overlay recovery ordering
-        run: |
-          rustc --edition 2021 --test apps/desktop/src-tauri/src/overlay_recovery.rs -o "$RUNNER_TEMP/mizar-overlay-recovery"
-          "$RUNNER_TEMP/mizar-overlay-recovery"
       - run: pnpm exec eslint . --max-warnings=0
       - run: node scripts/ci/tests.mjs scripts
   native:

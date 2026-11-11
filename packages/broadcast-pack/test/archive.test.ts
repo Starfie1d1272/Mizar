@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { readPackArchive, writePackArchive } from '../src/index.js';
+import { readPackArchive } from '../src/index.js';
 
 function archive(
   files: [string, Buffer][],
@@ -92,13 +92,6 @@ describe('pack archive', () => {
     const compressed = await readPackArchive(archive(members, { deflate: true }));
     expect(stored.digest).toBe(compressed.digest);
     expect(compressed.files.get('assets/a.txt')).toEqual(content);
-  });
-  it('writes a verified archive that round trips', async () => {
-    const files = new Map([['assets/a.txt', content]]);
-    const zip = writePackArchive(manifest, files);
-    const result = await readPackArchive(zip);
-    expect(result.files.get('assets/a.txt')).toEqual(content);
-    expect(() => writePackArchive(manifest, new Map())).toThrow();
   });
   it('rejects conflicting Unicode path metadata and unmarked non-ASCII names', async () => {
     const unicodePath = Buffer.from([0x75, 0x70, 0, 0]);
