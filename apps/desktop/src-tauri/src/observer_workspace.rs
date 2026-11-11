@@ -245,17 +245,21 @@ pub async fn observer_command(
     password: Option<String>,
     expected_revision: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !["main", "workspace-left", "workspace-dock"].contains(&window.label())
-        && !(window.label() == "tool-connection"
-            && matches!(
+    let allowed = match window.label() {
+        "main" => true,
+        "workspace-left" => action == "start-configured",
+        "tool-connection" => {
+            matches!(
                 action.as_str(),
                 "start-configured" | "connection-mode" | "stop"
-            )
-            && window
+            ) && window
                 .url()
                 .ok()
-                .is_some_and(|url| url.path() == "/workspace/connection" && url.query().is_none()))
-    {
+                .is_some_and(|url| url.path() == "/workspace/connection" && url.query().is_none())
+        }
+        _ => false,
+    };
+    if !allowed {
         return Err("请在制播工作台操作观察辅助。".into());
     }
     let action_ticket = if matches!(

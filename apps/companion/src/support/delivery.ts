@@ -2309,7 +2309,10 @@ export class DiagnosticDelivery {
         accepted: boolean;
         error?: unknown;
       };
-      if ([400, 413, 422].includes(response.status)) {
+      if (
+        [400, 413, 422].includes(response.status) ||
+        (response.status === 409 && ack.error === 'batch_metadata_conflict')
+      ) {
         await this.retainExpiredBatch(batch, epoch, 'permanent_rejection');
         return;
       }
