@@ -260,104 +260,19 @@ export class ObsCaptureWarmup {
     );
   }
   /** Settle the previous warmup before changing its shared capture source. */
-  async recoverBeforePreparation(
+  private async recoverBeforePreparation(
     obs: ObsRpc,
     endpoint: string,
     lease: () => boolean,
-    allowCollectionChange = false,
   ): Promise<void> {
     if (!lease()) throw lost();
     const previous = await this.read();
-    if (previous) {
-      if (this.active?.id === previous.id && this.active.valid())
-        throw error('capture_warmup_busy', '正在检查 OBS 游戏画面，请等待检查完成。');
-      this.active = undefined;
-      if (endpoint !== previous.endpoint) throw lost();
-      if (!allowCollectionChange) {
-        await this.release(obs, endpoint, previous.id, lease);
-        return;
-      }
-      // Older journals have UUIDs but no collection name. Resolve those identities
-      // only in the two Mizar collections, before either graph is reconciled.
-      const before = await obs.call('GetSceneCollectionList');
-      const original = before.currentSceneCollectionName;
-      if (
-        typeof original !== 'string' ||
-        !Array.isArray(before.sceneCollections) ||
-        !before.sceneCollections.every((name) => typeof name === 'string')
-      )
-        throw lost();
-      let selected = original;
-      const select = async (name: string) => {
-        await assertNoVideoOutput(obs);
-        if (!lease()) throw lost();
-        if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== selected)
-          throw lost();
-        await obs.call('SetCurrentSceneCollection', { sceneCollectionName: name });
-        selected = name;
-        if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== name)
-          throw lost();
-      };
-      let failure: unknown;
-      let failed = false;
-      let absent = false;
-      try {
-        if (!(await recoveryIdentity(obs, previous))) {
-          const candidates = previous.collection
-            ? [previous.collection]
-            : ['Mizar', OBS_COLLECTION];
-          let found = false;
-          for (const candidate of candidates) {
-            if (
-              candidate === original ||
-              !Array.isArray(before.sceneCollections) ||
-              !before.sceneCollections.includes(candidate)
-            )
-              continue;
-            await select(candidate);
-            if (await recoveryIdentity(obs, previous)) {
-              found = true;
-              break;
-            }
-          }
-          absent = !found;
-        }
-        if (!absent) await this.release(obs, endpoint, previous.id, lease);
-      } catch (cause) {
-        failure = cause;
-        failed = true;
-      }
-      if (selected !== original) {
-        try {
-          await select(original);
-        } catch (cause) {
-          throw error(
-            'capture_warmup_pending',
-            '游戏画面检查恢复未完成，未能返回原 OBS 集合，请核对后重试。',
-            {
-              cause: new AggregateError(
-                failed ? [failure, cause] : [cause],
-                'Capture warmup recovery incomplete',
-              ),
-            },
-          );
-        }
-      }
-      if (failed) throw failure;
-      if (absent) {
-        // A deleted collection, scene or source cannot retain this temporary item.
-        // Preserve the evidence without making an obsolete journal a startup lock.
-        await assertNoVideoOutput(obs);
-        const latest = await obs.call('GetSceneCollectionList');
-        if (
-          !lease() ||
-          latest.currentSceneCollectionName !== original ||
-          !isDeepStrictEqual(latest.sceneCollections, before.sceneCollections)
-        )
-          throw lost();
-        await this.archive(previous);
-      }
-    }
+    if (!previous) return;
+    if (this.active?.id === previous.id && this.active.valid())
+      throw error('capture_warmup_busy', '正在检查 OBS 游戏画面，请等待检查完成。');
+    this.active = undefined;
+    if (endpoint !== previous.endpoint) throw lost();
+    await this.release(obs, endpoint, previous.id, lease);
   }
   async begin(
     obs: ObsRpc,

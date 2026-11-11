@@ -110,7 +110,6 @@ for (const condition of ['external output', 'OBS closed'] as const) {
           pauseAutomatic: () => {},
           resumeAutomatic: () => {},
           startCommentaryRecovery: () => {},
-          hasCurrentPreparation: () => false,
           settleAutomatic: async () => {},
           startBrowserRecovery: () => {},
           restoreVideo: () =>

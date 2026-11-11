@@ -1238,8 +1238,9 @@ impl SessionStore {
                 Ok(record) => {
                     self.save_new_spectator_record(&record)?;
                     value["spectatorCfg"] = json!(true);
-                    value["nativeHudToggle"] = json!(crate::cs2_spectator::has_hud(&record)?);
-                    if crate::cs2_spectator::has_hud(&record)? {
+                    let native_hud_toggle = crate::cs2_spectator::has_hud(&record)?;
+                    value["nativeHudToggle"] = json!(native_hud_toggle);
+                    if native_hud_toggle {
                         value["hudIdentity"] = record["hud"]["identity"].clone();
                     }
                     if let Some(warning) = record["hudWarning"]
@@ -1315,8 +1316,9 @@ impl SessionStore {
                     // Save key originals before any startup CFG can execute our bindings.
                     self.save_new_spectator_record(&record)?;
                     journal["spectatorCfg"] = json!(true);
-                    journal["nativeHudToggle"] = json!(crate::cs2_spectator::has_hud(&record)?);
-                    if crate::cs2_spectator::has_hud(&record)? {
+                    let native_hud_toggle = crate::cs2_spectator::has_hud(&record)?;
+                    journal["nativeHudToggle"] = json!(native_hud_toggle);
+                    if native_hud_toggle {
                         journal["hudIdentity"] = record["hud"]["identity"].clone();
                     }
                     if let Some(warning) = record["hudWarning"]

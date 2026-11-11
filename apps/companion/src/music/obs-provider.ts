@@ -456,7 +456,7 @@ export async function prepareMusicResources(
   store: MusicStore,
   layer: MusicLayer,
   valid: () => boolean,
-) {
+): Promise<void> {
   const assertCurrent = () => {
     if (!valid()) throw new Error('music_cancelled');
   };
@@ -685,5 +685,4 @@ export async function prepareMusicResources(
     await initializeMusicItem(obs, store, pending, scope, valid, true);
   }
   assertCurrent();
-  return name;
 }

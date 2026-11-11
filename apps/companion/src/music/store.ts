@@ -103,7 +103,6 @@ const stateSchema = z
     held: z.boolean(),
     holdReason: z.enum(['external', 'stop']).optional(),
     stingerHeld: z.boolean().optional(),
-    owner: z.string().uuid(),
     sourceScopes: z
       .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
       .strict()
@@ -133,6 +132,14 @@ const stateSchema = z
   })
   .strict();
 const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
+// Older state.json and runtime.json files carried an unused source-owner UUID.
+const legacyStateSchema = z
+  .object({ owner: z.string().uuid().optional() })
+  .passthrough()
+  .transform((value) => {
+    delete value.owner;
+    return value;
+  });
 export type MusicState = z.infer<typeof stateSchema>;
 export interface MusicConfigPersistence {
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
@@ -173,7 +180,6 @@ export class MusicStore {
     desktopMonitorOriginal: { bgm: null, stinger: null },
     monitorConfigured: { bgm: null, stinger: null },
     held: false,
-    owner: randomUUID(),
     sourceScopes: { bgm: null, stinger: null },
     sources: { bgm: null, stinger: null },
     sourceInitialization: [],
@@ -250,7 +256,7 @@ export class MusicStore {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
         throw new Error('music_state_invalid');
       const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
-      this.state = stateSchema.parse(raw);
+      this.state = stateSchema.parse(legacyStateSchema.parse(raw));
       const legacy = z
         .object({
           configRevision: z.unknown().optional(),
@@ -296,7 +302,7 @@ export class MusicStore {
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512 * 1024)
       throw new Error('music_state_invalid');
-    return runtimeSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    return runtimeSchema.parse(legacyStateSchema.parse(JSON.parse(await readFile(path, 'utf8'))));
   }
   /** Preserve runtime controls before the unified configuration becomes authoritative. */
   async prepareRuntimeMigration(): Promise<void> {
