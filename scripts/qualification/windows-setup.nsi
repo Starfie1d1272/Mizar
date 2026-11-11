@@ -187,7 +187,11 @@ Section "-Mizar" SecMain
   StrCmp $0 "10" 0 handoff_failed
   !insertmacro AcquireUpdateWriter
   handoff_writer_ready:
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner" -ExpectedBootstrap "$InstallationOwner" -NoStatusWindow'
+  StrCpy $HandoffBootstrapOwner ""
+  StrCpy $1 $InstallationOwner 10
+  StrCmp $1 "bootstrap-" 0 +2
+  StrCpy $HandoffBootstrapOwner $InstallationOwner
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner" -ExpectedBootstrap "$HandoffBootstrapOwner" -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 handoff_failed

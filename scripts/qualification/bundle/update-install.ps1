@@ -238,6 +238,10 @@ public static class MizarUpdateWindow {
         else if(code.Contains("update_installer_remaining")) hint.Text="先关闭安装向导并确认安装已停止，再点击“恢复旧版”。";
         else if(code.Contains("update_program_in_use")) hint.Text="程序文件仍被占用；关闭 Mizar 和安装向导后重试恢复。";
       }
+      if(!String.IsNullOrEmpty(code) && code.Contains("update_handoff_")) {
+        heading.Text="旧安装任务需要交接"; detail.Text="原程序和恢复资料已保留，本次替换尚未开始。";
+        hint.Text="请关闭旧更新窗口和轻量安装器，再使用完整安装包；不要运行旧脚本覆盖当前程序。"; cancel.Visible=false;
+      }
       if(!String.IsNullOrEmpty(code)) detail.Text+="\r\n诊断代码："+code;
       window.AcceptButton=close; window.CancelButton=close; close.Focus();
     });
@@ -381,8 +385,9 @@ function Publish-HandoffRefusal([string]$path, [string]$text) {
 }
 function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentStage = '', $context = $null) {
   $target = Handoff-Path $target; $state = Handoff-Path $state
-  if ($state -eq $target -or $state.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
+  if (!$context -and [MizarUpdateFiles]::WriterOwnerPid() -ne $PID) { throw 'update_handoff_writer_unknown' }
   if ($context -and $context.stage) { $currentStage = $context.stage; $state = $context.state }
+  if ($state -eq $target -or $state.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
   $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   [void]$roots.Add($state)
   [void]$roots.Add((Join-Path $env:LOCALAPPDATA 'Mizar'))
@@ -903,7 +908,7 @@ if ($Mode -eq 'Handoff') {
     $context = Handoff-Caller $target $CallerProcessId $ParentReceiptPath
     if ($ProbeWriter) { if ($context.needsWriter) { exit 10 }; exit 0 }
     if ($context.needsWriter) { throw 'update_handoff_writer_unknown' }
-    if ($ExpectedBootstrap -like 'bootstrap-*') {
+    if ($ExpectedBootstrap) {
       if ($ExpectedBootstrap -notmatch '^bootstrap-[a-f0-9]{32}$') { throw 'update_handoff_bootstrap_owner_changed' }
       $bootstrapMarker = Join-Path $target '.mizar-bootstrap-owner'; Assert-PlainPath $bootstrapMarker
       if ((Get-Content -LiteralPath $bootstrapMarker -Raw) -ne $ExpectedBootstrap.Substring(10)) { throw 'update_handoff_bootstrap_owner_changed' }

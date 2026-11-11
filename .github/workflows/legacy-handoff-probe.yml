@@ -24,10 +24,12 @@ jobs:
         shell: powershell
         run: ./.agent-tmp/verify-writer.ps1
       - name: Prepare pinned NSIS compiler
+        if: ${{ always() }}
         shell: powershell
         run: |
           choco install nsis --version=3.11 -y --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Pinned NSIS installation failed' }
       - name: Exercise production handoff and actual NSIS entry points
+        if: ${{ always() }}
         shell: powershell
         run: ./scripts/qualification/probe-handoff-production.ps1
