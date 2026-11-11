@@ -88,7 +88,7 @@ export function MatchConnectionDialog() {
       // Manual instructions depend on the Host's control capability, not whether the
       // optional hint receiver has started or has acquired its own game lease.
       if (window.__TAURI_INTERNALS__) {
-        const mode = await desktopInvoke<{ useMulnx: boolean | null }>('observer_command', {
+        const mode = await desktopInvoke('observer_command', {
           action: 'connection-mode',
         });
         if (
@@ -168,7 +168,7 @@ export function MatchConnectionDialog() {
         const result = await resumeObserverReceiver(view, task);
         if (result?.warning) setError(result.warning);
       } else if (window.__TAURI_INTERNALS__) {
-        const result = await desktopInvoke<{ warning?: string | null }>(
+        const result = await desktopInvoke(
           'observer_command',
           {
             action: 'start-configured',
@@ -339,7 +339,7 @@ export function MatchConnectionDialog() {
                   .then(async () => {
                     setCopied(true);
                     if (window.__TAURI_INTERNALS__) {
-                      const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+                      const focused = await desktopInvoke('restore_cs2_focus');
                       if (!focused) setError('已复制，请用 Alt+Tab 返回 CS2 并执行。');
                     }
                   })
@@ -356,7 +356,7 @@ export function MatchConnectionDialog() {
             variant="primary"
             onClick={() => {
               if (window.__TAURI_INTERNALS__)
-                void desktopInvoke<boolean>('restore_cs2_focus')
+                void desktopInvoke('restore_cs2_focus')
                   .then((focused) => {
                     if (!focused) setError('请用 Alt+Tab 返回 CS2。');
                   })

@@ -1,4 +1,5 @@
 //! Durable physical configuration transaction; production state remains in Companion.
+use crate::cs2_session_record::{GsiSource, SessionRecord};
 use crate::cs2_video;
 use crate::{cs2_frame_rate, cs2_preferences::Preferences};
 use serde_json::{json, Value};
@@ -20,13 +21,6 @@ fn full_recovery_warning(code: &str) -> &'static str {
         }
         _ => "暂时无法恢复观战键位，原备份仍保留；请检查文件访问后重试。",
     }
-}
-
-/// Missing game identity after a submitted Steam request is not proof of exit.
-pub fn unconfirmed_launch(value: &Value) -> bool {
-    value["launchAttempted"] == true
-        && value["launchCancelled"] != true
-        && (value["pid"].as_u64().is_none() || value["created"].as_u64().is_none())
 }
 
 /// Preserve system classification without forwarding custom messages, paths,
@@ -214,7 +208,7 @@ impl SessionStore {
 
     /// Only a missing installation record and a missing owned sender together
     /// establish that this installation has no managed GSI configuration.
-    pub(crate) fn gsi_is_uninstalled(&self, journal: &Value) -> Result<bool, String> {
+    pub(crate) fn gsi_is_uninstalled(&self, journal: &SessionRecord) -> Result<bool, String> {
         fn missing(path: &Path) -> Result<bool, String> {
             match fs::symlink_metadata(path) {
                 Ok(_) => Ok(false),
@@ -222,7 +216,7 @@ impl SessionStore {
                 Err(_) => Err("GSI 配置状态不可读取。".into()),
             }
         }
-        let executable = Path::new(journal["executable"].as_str().ok_or("游戏路径缺失。")?);
+        let executable = Path::new(&journal.executable);
         let game = executable.ancestors().nth(3).ok_or("游戏路径无效。")?;
         fs::canonicalize(game).map_err(|_| "游戏安装位置无法确认。")?;
         let state = self
@@ -271,7 +265,7 @@ impl SessionStore {
     /// side of an interrupted config/installation-record update.
     pub(crate) fn prepare_gsi_source(
         &self,
-        journal: &mut Value,
+        journal: &mut SessionRecord,
         ticket: &str,
         source_id: &str,
         uri: &str,
@@ -302,7 +296,7 @@ impl SessionStore {
         if cfg.file_name().and_then(|x| x.to_str()) != Some("gamestate_integration_mizar.cfg") {
             return Err("GSI 配置路径无效。".into());
         }
-        let executable = Path::new(journal["executable"].as_str().ok_or("游戏路径缺失。")?);
+        let executable = Path::new(&journal.executable);
         let game = executable.ancestors().nth(3).ok_or("游戏路径无效。")?;
         let expected_cfg = game.join("csgo/cfg/gamestate_integration_mizar.cfg");
         if fs::canonicalize(&cfg).ok() != fs::canonicalize(&expected_cfg).ok()
@@ -333,7 +327,13 @@ impl SessionStore {
         let applied_hash = format!("{:x}", Sha256::digest(applied.as_bytes()));
         let backup = self.root.join("gsi-source-original.cfg");
         atomic_write(&backup, &original)?;
-        journal["gsiSource"] = json!({"ticket":ticket,"sourceId":source_id,"cfgPath":cfg,"originalHash":original_hash,"appliedHash":applied_hash});
+        journal.gsi_source = Some(GsiSource::prepared(
+            ticket,
+            source_id,
+            cfg.to_string_lossy().into_owned(),
+            original_hash,
+            applied_hash.clone(),
+        ));
         self.save(journal)?;
         unchanged(&cfg, &original)?;
         atomic_write(&cfg, applied.as_bytes())?;
@@ -347,17 +347,14 @@ impl SessionStore {
     }
 
     /// Called only after the managed game has been confirmed stopped.
-    pub(crate) fn restore_gsi_source(&self, journal: &mut Value) -> Result<(), String> {
+    pub(crate) fn restore_gsi_source(&self, journal: &mut SessionRecord) -> Result<(), String> {
         use sha2::{Digest, Sha256};
-        if journal["gsiSource"].is_null() {
+        let Some(source) = journal.gsi_source.as_ref() else {
             return Ok(());
-        }
-        let source = &journal["gsiSource"];
-        let original_hash = source["originalHash"]
-            .as_str()
-            .ok_or("GSI 恢复记录无效。")?;
-        let applied_hash = source["appliedHash"].as_str().ok_or("GSI 恢复记录无效。")?;
-        let cfg = PathBuf::from(source["cfgPath"].as_str().ok_or("GSI 恢复记录无效。")?);
+        };
+        let original_hash = source.original_hash.as_str();
+        let applied_hash = source.applied_hash.as_str();
+        let cfg = PathBuf::from(&source.cfg_path);
         let state_path = self
             .root
             .parent()
@@ -389,21 +386,18 @@ impl SessionStore {
             &state_path,
             &serde_json::to_vec_pretty(&installation).map_err(|_| "GSI 安装记录无法保存。")?,
         )?;
-        journal
-            .as_object_mut()
-            .ok_or("GSI 恢复记录无效。")?
-            .remove("gsiSource");
+        journal.gsi_source = None;
         self.save(journal)?;
         fs::remove_file(backup).map_err(|_| "GSI 备份清理失败。")?;
         Ok(())
     }
 
-    pub(crate) fn verify_gsi_source(&self, journal: &Value) -> Result<(), String> {
+    pub(crate) fn verify_gsi_source(&self, journal: &SessionRecord) -> Result<(), String> {
         use sha2::{Digest, Sha256};
-        let source = &journal["gsiSource"];
-        let source_id = source["sourceId"].as_str().ok_or("受管来源记录无效。")?;
-        let cfg = PathBuf::from(source["cfgPath"].as_str().ok_or("受管来源记录无效。")?);
-        let applied_hash = source["appliedHash"].as_str().ok_or("受管来源记录无效。")?;
+        let source = journal.gsi_source.as_ref().ok_or("受管来源记录无效。")?;
+        let source_id = source.source_id.as_str();
+        let cfg = PathBuf::from(&source.cfg_path);
+        let applied_hash = source.applied_hash.as_str();
         let state_path = self
             .root
             .parent()
@@ -492,7 +486,7 @@ impl SessionStore {
     fn journal_path(&self) -> PathBuf {
         self.root.join("pending.json")
     }
-    pub fn load(&self) -> Result<Option<Value>, String> {
+    pub fn load(&self) -> Result<Option<SessionRecord>, String> {
         match fs::read(self.journal_path()) {
             Ok(bytes) => {
                 if bytes.len() > 4 * 1024 * 1024 {
@@ -500,27 +494,22 @@ impl SessionStore {
                 }
                 let value: Value = serde_json::from_slice(&bytes)
                     .map_err(|_| "CS2 恢复记录损坏，请检查原配置备份。")?;
-                if value["version"] != 1
-                    && value["version"] != 2
-                    && value["version"] != 3
-                    && value["version"] != 4
-                {
-                    return Err("CS2 恢复记录版本不支持。".into());
-                }
-                Ok(Some(value))
+                SessionRecord::from_value(value).map(Some)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(_) => Err("无法读取 CS2 恢复记录。".into()),
         }
     }
-    pub fn save(&self, value: &Value) -> Result<(), String> {
+    pub fn save(&self, value: &SessionRecord) -> Result<(), String> {
         let guard = self.acquire_write_guard()?;
         self.save_locked(&guard, value)
     }
-    fn save_locked(&self, _guard: &StoreGuard, value: &Value) -> Result<(), String> {
+    fn save_locked(&self, _guard: &StoreGuard, record: &SessionRecord) -> Result<(), String> {
+        record.validate()?;
+        let value = &record.value();
         // Ordinary sessions may continue without taking over keys, but cannot
         // adopt a pending full snapshot or arm the ten-key owner.
-        let previous = self.load()?;
+        let previous = self.load()?.map(|record| record.value());
         let full_pending = self.full_spectator_pending();
         if previous
             .as_ref()
@@ -642,18 +631,6 @@ impl SessionStore {
         }
         atomic_write(&self.spectator_path(), &bytes)?;
         crate::cs2_spectator::startup_files(record, crate::cs2_spectator::StartupFiles::Apply)
-    }
-    pub(crate) fn cancel_unsubmitted_mulnx_observer(&self) -> Result<(), String> {
-        let guard = self.acquire_write_guard()?;
-        let record = self.spectator_record()?.ok_or("观战备份缺失。")?;
-        if !record["mulnx"].is_object()
-            || !record["mulnx"]["pid"].is_null()
-            || !record["mulnx"]["created"].is_null()
-        {
-            return Err("游戏启动身份已确认，无法取消观战备份。".into());
-        }
-        self.spectator_load_attempted_locked(&guard, false)?;
-        self.restore_spectator_locked(&guard)
     }
     pub(crate) fn mulnx_observer_unconfirmed(&self) -> Result<bool, String> {
         Ok(self.spectator_record()?.is_some_and(|record| {
@@ -1127,7 +1104,7 @@ impl SessionStore {
         // All original bytes are durable before the forward-recovery journal.
         let record = json!({"version":4,"video":fs::canonicalize(video).map_err(|e| io_error("配置目标无法确认。", &e))?,
             "executable":executable,"launchAttempted":false,"files":files});
-        self.save_locked(guard, &record)?;
+        self.save_locked(guard, &SessionRecord::from_value(record.clone())?)?;
         self.restore_selected_backup_locked(guard, &record)
     }
     fn restore_selected_backup_locked(
@@ -1211,9 +1188,10 @@ impl SessionStore {
         video: &Path,
         executable: &Path,
         size: cs2_video::VideoSize,
-    ) -> Result<Value, String> {
+    ) -> Result<SessionRecord, String> {
         let guard = self.acquire_write_guard()?;
         self.prepare_preserved_locked(&guard, video, executable, size)
+            .and_then(SessionRecord::from_value)
     }
     fn prepare_preserved_locked(
         &self,
@@ -1269,7 +1247,7 @@ impl SessionStore {
     /// Disk edits between preparation and submission are not launch permission.
     pub(crate) fn validate_video_launch(&self) -> Result<(), String> {
         let _guard = self.acquire_write_guard()?;
-        let value = self.load()?.ok_or("游戏窗口配置事务缺失。")?;
+        let value = self.load()?.ok_or("游戏窗口配置事务缺失。")?.value();
         let video = Path::new(value["video"].as_str().ok_or("游戏窗口配置路径缺失。")?);
         let applied = value["applied"]
             .as_str()
@@ -1284,9 +1262,10 @@ impl SessionStore {
         video: &Path,
         executable: &Path,
         size: cs2_video::VideoSize,
-    ) -> Result<Value, String> {
+    ) -> Result<SessionRecord, String> {
         let guard = self.acquire_write_guard()?;
         self.prepare_backed_up_locked(&guard, video, executable, size)
+            .and_then(SessionRecord::from_value)
     }
     fn prepare_backed_up_locked(
         &self,
@@ -1402,7 +1381,7 @@ impl SessionStore {
             return Err("视频配置在准备期间发生变化，未修改配置。".into());
         }
         // The original is durable and read-back verified before touching the game.
-        self.save_locked(guard, value)?;
+        self.save_locked(guard, &SessionRecord::from_value(value.clone())?)?;
         write_config(video, applied.as_bytes())?;
         for (path, original, applied) in frame_files {
             if fs::read_to_string(path).map_err(|_| "无法读取启动配置，备份仍保留。")? != original
@@ -1421,10 +1400,11 @@ impl SessionStore {
         account: u32,
     ) -> Result<Option<String>, String> {
         let guard = self.acquire_write_guard()?;
-        if let Some(core) = self.load()? {
-            if core["fullSnapshot"] != true || unconfirmed_launch(&core) {
+        if let Some(record) = self.load()? {
+            if !record.full_snapshot || record.unconfirmed_launch() {
                 return Err("coordinated_recovery_required".into());
             }
+            let core = record.value();
             crate::spectator_snapshot::handoff(
                 &self.root,
                 video,
@@ -1499,9 +1479,10 @@ impl SessionStore {
         let Some(value) = self.load()? else {
             return Ok(None);
         };
-        if unconfirmed_launch(&value) {
+        if value.unconfirmed_launch() {
             return Err("Steam 启动结果待确认，恢复记录与备份仍保留。".into());
         }
+        let value = value.value();
         if value["fullSnapshot"] == true && !handoff_complete {
             return Err("coordinated_recovery_required".into());
         }

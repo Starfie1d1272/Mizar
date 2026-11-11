@@ -1,5 +1,5 @@
 //! Host exit and managed CS2 cleanup preserve Companion production safety boundaries.
-use crate::desktop_lifecycle::{WorkspaceExitStage, WorkspaceExitStatus};
+use crate::desktop_types::{WorkspaceExitStage, WorkspaceExitStatus};
 use crate::{
     cs2_activity, demo_test, managed_cs2, observer_workspace, startup_log::DesktopLog,
     workspace_presentation,

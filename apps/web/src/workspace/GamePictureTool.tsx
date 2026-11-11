@@ -1,3 +1,4 @@
+import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 import { useState } from 'react';
 import { ControlTask } from '../debug/control-task';
 import { Cs2LaunchSettings } from '../preparation/Cs2LaunchSettings';
@@ -6,14 +7,7 @@ import { desktopInvoke } from './client';
 import { ToolShell } from '../patterns';
 import '../preparation/match-connection.css';
 
-interface FrameRateReading {
-  status: 'confirmed' | 'unsupported' | 'unconfirmed';
-  current?: number;
-  transaction: 'idle' | 'pending' | 'applied' | 'restored' | 'relinquished' | 'ended';
-  canApply: boolean;
-  canRestore: boolean;
-  message: string;
-}
+type FrameRateReading = DesktopResult<'control_cs2_frame_rate'>;
 
 /** A production tool, never a production lifecycle transition. */
 export function GamePictureTool() {
@@ -25,7 +19,7 @@ export function GamePictureTool() {
   async function returnToGame() {
     setError('');
     try {
-      const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+      const focused = await desktopInvoke('restore_cs2_focus');
       if (!focused) setError('未能切回游戏，请用 Alt+Tab 返回 CS2。');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '请用 Alt+Tab 返回 CS2。');
@@ -41,7 +35,7 @@ export function GamePictureTool() {
       ...(action === 'apply' ? { frameRateLimit: limit } : {}),
     });
     try {
-      const result = await desktopInvoke<FrameRateReading>(
+      const result = await desktopInvoke(
         'control_cs2_frame_rate',
         { action, ...(action === 'apply' ? { frameRateLimit: limit } : {}) },
         task,

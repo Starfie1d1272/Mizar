@@ -63,6 +63,7 @@ export function checkArchitecture(options = {}) {
   const records = loadSourceRecords(repository, workspaces);
   checkImportEdges(records, repository, workspaces, report);
   checkDomainImportOwnership(records, repository, report);
+  checkDesktopTransportOwnership(records, report);
   checkCstvParserImportOwnership(records, report);
   checkProgramProjectionImportOwnership(records, repository, report);
   checkWorkspaceCycles(workspaces, report);
@@ -693,6 +694,38 @@ function checkDomainImportOwnership(records, repository, report) {
         });
       }
     }
+  }
+}
+
+function checkDesktopTransportOwnership(records, report) {
+  for (const record of records.values()) {
+    if (
+      record.kind !== 'production' ||
+      !record.path.startsWith('apps/web/src/') ||
+      record.path === 'apps/web/src/workspace/desktop-transport.ts'
+    )
+      continue;
+    const visit = (node) => {
+      const property = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)
+          ? node.argumentExpression.text
+          : undefined;
+      if (
+        property === 'invoke' &&
+        /__TAURI_INTERNALS__/.test(node.expression.getText(record.ast))
+      ) {
+        report({
+          ruleId: 'ARCH_DOMAIN_BOUNDARY',
+          file: record.path,
+          target: 'desktop-transport.ts',
+          message:
+            'Desktop IPC uses the shared transport to validate command arguments and receipts.',
+        });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(record.ast);
   }
 }
 

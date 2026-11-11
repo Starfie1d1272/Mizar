@@ -1,13 +1,13 @@
 mod ipc_commands;
-mod ipc_lifecycle_contract;
-mod ipc_lifecycle_generate;
+mod ipc_contract;
+mod ipc_contract_generate;
 
 use std::{collections::HashSet, env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=ipc_commands.rs");
-    println!("cargo:rerun-if-changed=ipc_lifecycle_contract.rs");
-    println!("cargo:rerun-if-changed=ipc_lifecycle_generate.rs");
+    println!("cargo:rerun-if-changed=ipc_contract.rs");
+    println!("cargo:rerun-if-changed=ipc_contract_generate.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let capability_dir = out.join("ipc-capabilities");
     fs::create_dir_all(&capability_dir).expect("create capability directory");
@@ -44,8 +44,8 @@ fn main() {
             ipc_commands::frontend_commands(),
         ),
         (
-            "../../../packages/protocol/src/desktop-lifecycle.generated.ts",
-            ipc_lifecycle_generate::frontend_lifecycle(),
+            "../../../packages/protocol/src/desktop-ipc.generated.ts",
+            ipc_contract_generate::frontend_contract(),
         ),
     ] {
         println!("cargo:rerun-if-changed={path}");

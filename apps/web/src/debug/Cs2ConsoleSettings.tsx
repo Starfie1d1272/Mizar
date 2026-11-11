@@ -1,14 +1,10 @@
+import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import { ControlTask } from './control-task';
 
-interface ConsoleStatus {
-  enabled: boolean;
-  generation: string | null;
-  revocationPending?: boolean;
-  runtime?: { phase?: string } | null;
-}
+type ConsoleStatus = DesktopResult<'cs2_console_status'>;
 export function Cs2ConsoleSettings() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
   const [status, setStatus] = useState<ConsoleStatus | null>(null);
@@ -28,7 +24,7 @@ export function Cs2ConsoleSettings() {
       const version = epoch.current;
       const task = new ControlTask('cs2_console_settings_read', 'system', {});
       try {
-        const value = await desktopInvoke<ConsoleStatus>('cs2_console_status', {}, task);
+        const value = await desktopInvoke('cs2_console_status', undefined, task);
         task.finish('confirmed', { enabled: value.enabled, phase: value.runtime?.phase });
         if (active && version === epoch.current) {
           setStatus(value);
@@ -74,7 +70,7 @@ export function Cs2ConsoleSettings() {
     setSaveError('');
     setSaved(false);
     try {
-      const value = await desktopInvoke<ConsoleStatus>(
+      const value = await desktopInvoke(
         'set_cs2_console_capture',
         { enabled, expectedGeneration: status.generation },
         task,

@@ -57,7 +57,7 @@ pub(crate) async fn enter(
                                     let log = host.state::<DesktopLog>();
                                     let camera_trial = cs2
                                         .console_source()?
-                                        .is_some_and(|(context, _)| context["mulnxLaunch"] == true);
+                                        .is_some_and(|(context, _)| context.mulnx_launch);
                                     if camera_trial && cs2.managed_camera_lease().is_none() {
                                         if !mulnx_launch::observer_control_available(&cs2, &log) {
                                             return Err(

@@ -1,5 +1,5 @@
 //! Process-scoped HUD value journal; game settings are restored through the existing MulNX queue.
-use crate::{cs2_console, managed_cs2, startup_log::DesktopLog};
+use crate::{cs2_console, startup_log::DesktopLog};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -144,7 +144,12 @@ fn validate_preflight(log: &DesktopLog, value: &Value) -> Result<bool, String> {
     }
     let hide = value["gameAutomation"]["hideGameHud"] == true;
     let recovery = load(log)?
-        .map(|record| managed_cs2::verified_session_process(&record, log))
+        .map(|record| {
+            crate::cs2_process::verified_process(
+                crate::cs2_process_identity::ProcessIdentity::read(&record)?.as_ref(),
+                log,
+            )
+        })
         .transpose()?
         .flatten()
         .is_some();
@@ -157,11 +162,16 @@ fn validate_preflight(log: &DesktopLog, value: &Value) -> Result<bool, String> {
 pub fn snapshot(
     log: &DesktopLog,
     executable: &Path,
-    process: &managed_cs2::WorkspaceProcess,
+    process: &crate::cs2_process::WorkspaceProcess,
 ) -> Result<u8, String> {
     let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
     if let Some(previous) = load(log)? {
-        if managed_cs2::verified_session_process(&previous, log)?.is_some() {
+        if crate::cs2_process::verified_process(
+            crate::cs2_process_identity::ProcessIdentity::read(&previous)?.as_ref(),
+            log,
+        )?
+        .is_some()
+        {
             if previous["pid"] == process.pid && previous["created"] == process.created {
                 return Ok(previous["original"].as_u64().unwrap() as u8);
             }
@@ -198,7 +208,7 @@ pub fn snapshot(
 pub fn initialize(
     log: &DesktopLog,
     executable: &Path,
-    process: &managed_cs2::WorkspaceProcess,
+    process: &crate::cs2_process::WorkspaceProcess,
 ) -> Result<(), String> {
     snapshot(log, executable, process)?;
     let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
@@ -235,7 +245,7 @@ pub fn pending(log: &DesktopLog) -> bool {
 /// writes for the next managed session instead of blocking unrelated startup.
 pub fn prepare_launch(log: &DesktopLog) -> Result<Option<String>, String> {
     let _guard = JOURNAL.lock().map_err(|_| "HUD 恢复记录正忙。")?;
-    if managed_cs2::any_cs2_running(log)? {
+    if crate::cs2_process::any_cs2_running(log)? {
         return Err("请先退出 CS2，再处理上次 HUD 记录。".into());
     }
     let record = match load(log) {
@@ -245,7 +255,12 @@ pub fn prepare_launch(log: &DesktopLog) -> Result<Option<String>, String> {
     };
     // Identity inspection is still mandatory for a readable record. Never turn
     // a live or uncertain process into permission to discard recovery evidence.
-    if managed_cs2::verified_session_process(&record, log)?.is_some() {
+    if crate::cs2_process::verified_process(
+        crate::cs2_process_identity::ProcessIdentity::read(&record)?.as_ref(),
+        log,
+    )?
+    .is_some()
+    {
         return Err("请先退出此前游戏实例，再处理 HUD 记录。".into());
     }
     match fs::remove_file(file(log)) {
@@ -264,7 +279,12 @@ pub fn restore(log: &DesktopLog) -> Result<(), String> {
     let Some(record) = load(log)? else {
         return Ok(());
     };
-    if managed_cs2::verified_session_process(&record, log)?.is_some() {
+    if crate::cs2_process::verified_process(
+        crate::cs2_process_identity::ProcessIdentity::read(&record)?.as_ref(),
+        log,
+    )?
+    .is_some()
+    {
         let original = record["original"].as_u64().unwrap() as u8;
         let executable = Path::new(
             record["executable"]

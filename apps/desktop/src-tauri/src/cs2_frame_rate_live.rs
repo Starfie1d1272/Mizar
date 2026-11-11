@@ -1,5 +1,5 @@
 //! One bounded, process-scoped fps_max transaction. Uncertain writes are never replayed.
-use crate::{cs2_console, cs2_session, managed_cs2, startup_log::DesktopLog};
+use crate::{cs2_console, cs2_session, startup_log::DesktopLog};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -92,7 +92,13 @@ fn save(log: &DesktopLog, record: &Value) -> Result<(), String> {
 pub(crate) fn retire_ended(log: &DesktopLog) -> Result<(), String> {
     let _guard = TRANSACTION.lock().map_err(|_| "帧率恢复记录正忙。")?;
     if let Some(mut record) = load(log)? {
-        if active(&record) && managed_cs2::verified_session_process(&record, log)?.is_none() {
+        if active(&record)
+            && crate::cs2_process::verified_process(
+                crate::cs2_process_identity::ProcessIdentity::read(&record)?.as_ref(),
+                log,
+            )?
+            .is_none()
+        {
             record["phase"] = "ended".into();
             save(log, &record)?;
         }
@@ -133,7 +139,7 @@ pub(crate) fn finish_restore(
 pub(crate) fn control(
     log: &DesktopLog,
     executable: &Path,
-    process: &managed_cs2::WorkspaceProcess,
+    process: &crate::cs2_process::WorkspaceProcess,
     action: &str,
     target: Option<u16>,
     mut valid: impl FnMut() -> bool,

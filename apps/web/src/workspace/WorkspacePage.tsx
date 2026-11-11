@@ -631,7 +631,7 @@ function WorkspaceDockContent() {
             aria-busy={busy}
             onClick={() =>
               void action(async () => {
-                const focused = await desktopInvoke<boolean>('restore_cs2_focus');
+                const focused = await desktopInvoke('restore_cs2_focus');
                 if (!focused) setMessage('操作已完成，未能将焦点交还 CS2。');
               })
             }
@@ -714,7 +714,7 @@ function WorkspaceDockContent() {
             onClick={() =>
               void action(async () => {
                 const request = ++layoutRequest.current;
-                const result = await desktopInvoke<string>('restore_layout');
+                const result = await desktopInvoke('restore_layout');
                 if (result === 'panels') {
                   setMessage('工作台面板布局请求已提交。');
                   return;
@@ -723,14 +723,7 @@ function WorkspaceDockContent() {
                 void (async () => {
                   for (let attempt = 0; attempt < 32; attempt++) {
                     await new Promise((resolve) => setTimeout(resolve, 1000));
-                    const status = await desktopInvoke<{
-                      layoutPending: boolean;
-                      visible: boolean;
-                      found: boolean;
-                      managed: boolean;
-                      message?: string | null;
-                      geometry?: { alignmentRetries?: number };
-                    }>('cs2_host_status').catch(() => null);
+                    const status = await desktopInvoke('cs2_host_status').catch(() => null);
                     if (request !== layoutRequest.current) return;
                     if (!status || status.layoutPending) continue;
                     if (!status.visible) return;
@@ -764,7 +757,7 @@ function WorkspaceDockContent() {
               void action(async () => {
                 setOverlayRecovering(true);
                 try {
-                  const result = await desktopInvoke<string>('recover_program_overlay');
+                  const result = await desktopInvoke('recover_program_overlay');
                   setMessage(result);
                 } finally {
                   setOverlayRecovering(false);

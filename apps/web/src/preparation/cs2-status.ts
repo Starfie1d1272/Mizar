@@ -1,12 +1,8 @@
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
-import type {
-  Cs2ConfigStatus,
-  Cs2Status,
-  WorkspaceExitStatus,
-} from '@mizar/protocol/desktop-lifecycle';
-export type { Cs2ConfigStatus } from '@mizar/protocol/desktop-lifecycle';
+import type { Cs2ConfigStatus, Cs2Status, WorkspaceExitStatus } from '@mizar/protocol/desktop-ipc';
+export type { Cs2ConfigStatus } from '@mizar/protocol/desktop-ipc';
 
 export function useCs2Status() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);

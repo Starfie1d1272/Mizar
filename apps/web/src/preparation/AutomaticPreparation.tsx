@@ -1,4 +1,4 @@
-import type { PreparationStatus } from '@mizar/protocol/desktop-lifecycle';
+import type { PreparationStatus } from '@mizar/protocol/desktop-ipc';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import { useLocalRead } from './client';
 import { useEffect, useState } from 'react';

@@ -1,5 +1,5 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
-use crate::desktop_lifecycle::{BackupAction, BackupSelection, Busy, Cs2BusyStatus, Cs2Status};
+use crate::desktop_types::{BackupAction, BackupSelection, Busy, Cs2BusyStatus, Cs2Status};
 use crate::{
     cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
     preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
@@ -805,24 +805,6 @@ pub(crate) async fn mulnx_control(
     .unwrap_or_else(|error| Err(format!("MulNX 操作失败：{error}")));
     evidence.native_outcome("mulnx_control", diagnostic_operation_id.as_deref(), &result);
     result
-}
-
-pub(crate) async fn handoff_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let result = state
-            .try_lock()
-            .map_err(|_| "CS2 正忙，请稍后检查。".to_string())?
-            .mulnx_handoff_status();
-        result
-    })
-    .await
-    .map_err(|_| "无法读取 CS2 进程身份。".to_string())?
-}
-
-/// Read back only; the transaction owner never replays an uncertain write.
-pub(crate) async fn probe_frame_rate(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    control_frame_rate(app, "inspect".into(), None, None, None, None).await
 }
 
 pub(crate) async fn control_frame_rate(

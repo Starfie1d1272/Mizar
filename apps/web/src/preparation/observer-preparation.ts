@@ -31,7 +31,7 @@ export async function resumeObserverReceiver(view: ConnectionPreparationView, ta
     task,
   );
   if (window.__TAURI_INTERNALS__)
-    return desktopInvoke<{ warning?: string | null }>(
+    return desktopInvoke(
       'observer_command',
       { action: 'start-configured', expectedRevision },
       task,

@@ -76,27 +76,4 @@ impl SessionIdentity {
             _ => Err("invalid_session"),
         }
     }
-    pub(crate) fn write(&self, record: &mut Value) -> Result<(), &'static str> {
-        let object = record.as_object_mut().ok_or("invalid_session")?;
-        object.insert("sessionId".into(), json!(self.session_id));
-        object.insert("configIdentity".into(), self.config.value());
-        if Self::read(record)?.as_ref() != Some(self) {
-            return Err("invalid_session");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Relation {
-    Same,
-    Different,
-    Legacy,
-}
-pub(crate) fn compare(a: Option<&SessionIdentity>, b: Option<&SessionIdentity>) -> Relation {
-    match (a, b) {
-        (Some(a), Some(b)) if a == b => Relation::Same,
-        (Some(_), Some(_)) => Relation::Different,
-        _ => Relation::Legacy,
-    }
 }

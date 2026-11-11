@@ -1,5 +1,5 @@
 //! The desktop owns preparation independently of any webview lifetime.
-use crate::desktop_lifecycle::{PreparationStatus, PreparationSteps};
+use crate::desktop_types::{PreparationStatus, PreparationSteps};
 use crate::host_state::HostState;
 use crate::{
     entry_intent::EntryIntent, preparation_evidence, preparation_gate, production_exit,

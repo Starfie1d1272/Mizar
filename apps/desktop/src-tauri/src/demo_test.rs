@@ -470,8 +470,11 @@ pub fn status(log: &DesktopLog) -> Result<Value, String> {
     rpc(log, None)
 }
 
-pub fn requires_recovery(log: &DesktopLog, journal: Option<&Value>) -> bool {
-    if journal.is_some_and(|value| value.get("demoTestRequestId").is_some()) {
+pub fn requires_recovery(
+    log: &DesktopLog,
+    journal: Option<&crate::cs2_session_record::SessionRecord>,
+) -> bool {
+    if journal.is_some_and(|value| value.demo_test_request_id.is_some()) {
         return true;
     }
     // Presence is only a fail-closed recovery hint, never a second source of
@@ -484,7 +487,7 @@ pub fn requires_recovery(log: &DesktopLog, journal: Option<&Value>) -> bool {
 
 pub fn quarantine_if_needed(
     log: &DesktopLog,
-    journal: Option<&Value>,
+    journal: Option<&crate::cs2_session_record::SessionRecord>,
 ) -> Result<Option<String>, String> {
     if requires_recovery(log, journal) {
         quarantine(log)

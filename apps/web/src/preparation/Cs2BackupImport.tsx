@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Button, Checkbox, StatusBanner } from '../ui';
 import { ControlTask } from '../debug/control-task';
 import { desktopInvoke } from '../workspace/client';
-import type { LifecycleResult } from '@mizar/protocol/desktop-lifecycle';
+import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 
-type Selection = NonNullable<LifecycleResult<'manage_cs2_backup'>>;
+type Selection = NonNullable<DesktopResult<'manage_cs2_backup'>>;
 
 export function Cs2BackupImport() {
   const [selection, setSelection] = useState<Selection | null>(null);

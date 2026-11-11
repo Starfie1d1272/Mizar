@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
-use crate::desktop_lifecycle::FrameRateLimit;
-pub use crate::desktop_lifecycle::QualityPreset as Quality;
+use crate::desktop_types::FrameRateLimit;
+pub use crate::desktop_types::QualityPreset as Quality;
 
 impl Quality {
     pub fn parse(value: &str) -> Result<Self, String> {

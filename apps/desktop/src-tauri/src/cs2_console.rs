@@ -607,13 +607,16 @@ pub struct Capture {
     cursor: Value,
 }
 impl Capture {
-    pub fn new(log: &DesktopLog, journal: &Value) -> Result<Self, String> {
-        let executable = PathBuf::from(journal["executable"].as_str().ok_or("CS2 日志来源缺失。")?);
+    pub fn new(
+        log: &DesktopLog,
+        journal: &crate::cs2_session_record::SessionRecord,
+    ) -> Result<Self, String> {
+        let executable = PathBuf::from(journal.executable.as_str());
         let config = settings(log)?;
         if config["enabled"] != true {
             return Err("CS2 技术日志读取已关闭。".into());
         }
-        if journal["consoleDiagnostics"]["version"] != 1 {
+        if journal.console_diagnostics["version"] != 1 {
             return Err("本次游戏未开启技术日志，下次由 Mizar 启动后生效。".into());
         }
         let generation = config["generation"]
@@ -623,12 +626,12 @@ impl Capture {
         let binding = digest(format!(
             "{}:{}:{}:{}",
             executable.display(),
-            journal["launchTime"],
-            journal["pid"],
-            journal["created"]
+            json!(journal.launch_time()),
+            json!(journal.pid()),
+            json!(journal.created())
         ));
-        let initial = if journal["consoleDiagnostics"]["generation"] == config["generation"] {
-            journal["consoleDiagnostics"].clone()
+        let initial = if journal.console_diagnostics["generation"] == config["generation"] {
+            journal.console_diagnostics.clone()
         } else {
             boundary(log, &executable)?.ok_or("CS2 技术日志读取已关闭。")?
         };
@@ -652,16 +655,13 @@ impl Capture {
             cursor,
         })
     }
-    pub fn generation(&self) -> &str {
-        &self.generation
-    }
-    pub fn binding(journal: &Value) -> String {
+    pub fn binding(journal: &crate::cs2_session_record::SessionRecord) -> String {
         digest(format!(
             "{}:{}:{}:{}",
-            journal["executable"].as_str().unwrap_or_default(),
-            journal["launchTime"],
-            journal["pid"],
-            journal["created"]
+            journal.executable.as_str(),
+            json!(journal.launch_time()),
+            json!(journal.pid()),
+            json!(journal.created())
         ))
     }
     pub fn health(&self) -> Value {
@@ -1282,10 +1282,10 @@ pub fn run_worker(
                     json!({"phase":"owned_process_unavailable","tail":"not read without current process proof","capturePreviouslyActive":had_capture}),
                 );
             };
-            if journal["consoleDiagnostics"]["version"] != 1 {
+            if journal.console_diagnostics["version"] != 1 {
                 capture = None;
                 return Ok(
-                    json!({"phase":if journal["consoleDiagnosticsWarning"].is_null() {"next_launch_required"} else {"unavailable"},"reason":journal["consoleDiagnosticsWarning"]}),
+                    json!({"phase":if journal.console_diagnostics_warning.is_null() {"next_launch_required"} else {"unavailable"},"reason":journal.console_diagnostics_warning}),
                 );
             }
             let binding = Capture::binding(&journal);

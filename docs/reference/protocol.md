@@ -10,7 +10,7 @@
 | 公开快照与可靠事件 | [output.ts](../../packages/protocol/src/output.ts) |
 | 本地通道版本与消息 | [version.ts](../../packages/protocol/src/version.ts)、[协议包](../../packages/protocol/src/) |
 | 制作、场景与展示 | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts)、[跨语言生命周期](../../apps/companion/src/match-context/lifecycle-contract.json) |
-| 桌面生命周期 IPC | [关键命令、窗口权限和参数与回执](../../apps/desktop/src-tauri/ipc_lifecycle_contract.rs)、[前端校验入口](../../packages/protocol/src/desktop-lifecycle.ts) |
+| 桌面 IPC | [命令、窗口权限和参数与回执](../../apps/desktop/src-tauri/ipc_contract.rs)、[前端校验入口](../../packages/protocol/src/desktop-ipc.ts) |
 | RivalHub 输入 | [来源适配器](../../packages/rivalhub/src/) |
 | HUD 与播出模块 | [hud-config](../../packages/hud-config/src/index.ts)、[broadcast-config](../../packages/broadcast-config/README.md) |
 | 音乐、混音与运镜 | [music.ts](../../packages/protocol/src/music.ts)、[mixer.ts](../../packages/protocol/src/mixer.ts)、[orchestration.ts](../../packages/protocol/src/orchestration.ts) |
@@ -18,7 +18,7 @@
 
 Mizar 契约严格校验结构、版本与大小，各契约独立演进；破坏性变化升级对应版本，不同步抬升所有通道。提供方 DTO 的兼容规则留在其适配器，不替代 Mizar 契约。
 
-桌面进入、取消、退出与配置恢复命令按命令名推导参数和返回类型，Web 在调用边界验证 Host 回执。CS2 状态忙碌时只表示当前操作，完整状态用于核对恢复结果。确认制作收尾还要读取并校验本地 OBS 与网站来源收尾证据。
+所有桌面 IPC 共用一份 Rust 声明，生成原生命令签名、窗口权限和 TypeScript 参数与结果校验。Web 通过统一传输入口验证参数和 Host 回执，诊断事件交接复用同一入口；调用方不能自行声明结果类型。诊断正文等不透明数据由所属领域继续校验。CS2 状态忙碌时只表示当前操作，完整状态用于核对恢复结果。确认制作收尾还要读取并校验本地 OBS 与网站来源收尾证据。
 
 带预期修订的修改在提交时核对；哪些请求需要该字段以对应路由为准，不给严格请求结构自行添加字段。冲突不自动覆盖草稿，也不能因为同为 HTTP 409 就重放；生命周期合同的 `status/error/retryable` 决定允许的自动重试，文案不参与机器判断。未知副作用先核对原操作，不能按未执行处理。
 

@@ -541,7 +541,7 @@ pub(crate) fn placement(window: &tauri::WebviewWindow, rect: Rect) {
 /// Use the same tracker/frame lease as the live workspace so exit can restore it.
 pub(crate) fn position_starting_game(
     app: &tauri::AppHandle,
-    process: managed_cs2::WorkspaceProcess,
+    process: crate::cs2_process::WorkspaceProcess,
 ) -> Result<bool, String> {
     let state = app.state::<HostState>();
     if !state.visible.load(Ordering::Acquire) {
@@ -715,7 +715,9 @@ pub(crate) fn present_overlay(app: &tauri::AppHandle, rect: Option<Rect>, epoch:
     });
 }
 
-pub(crate) fn focus_session(process: &managed_cs2::WorkspaceProcess) -> workspace_focus::Session {
+pub(crate) fn focus_session(
+    process: &crate::cs2_process::WorkspaceProcess,
+) -> workspace_focus::Session {
     workspace_focus::Session {
         pid: process.pid,
         created: process.created,
@@ -1482,39 +1484,6 @@ pub(crate) fn restore_cs2_focus(
         "restore_cs2_focus",
         diagnostic_operation_id.as_deref(),
         &Ok::<bool, String>(diagnostic_result),
-    );
-    diagnostic_result
-}
-
-pub(crate) fn set_overlay_enabled(
-    app: tauri::AppHandle,
-    enabled: bool,
-    diagnostic_operation_id: Option<String>,
-) -> Result<(), String> {
-    let state = app.state::<HostState>();
-    let diagnostic_log = app.state::<DesktopLog>().inner().clone();
-    let command_log = diagnostic_log.clone();
-    let native_operation_id = diagnostic_operation_id.clone();
-    let diagnostic_result: Result<(), String> = (|| {
-        state
-            .tracker
-            .lock()
-            .map_err(|error| {
-                command_log.preserve_error(
-                    "set_program_overlay_enabled",
-                    native_operation_id.as_deref(),
-                    &error,
-                    "桌面窗口状态不可用。",
-                )
-            })?
-            .overlay_enabled = enabled;
-        update_overlay(&app, &state);
-        Ok(())
-    })();
-    diagnostic_log.native_outcome(
-        "set_program_overlay_enabled",
-        diagnostic_operation_id.as_deref(),
-        &diagnostic_result,
     );
     diagnostic_result
 }

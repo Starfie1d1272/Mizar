@@ -409,7 +409,7 @@ fn align_cs2(window: Cs2Window, target: Rect, correcting: bool) -> Result<(), Al
 
 #[derive(Default)]
 pub struct GameTracker {
-    owner: Option<crate::managed_cs2::WorkspaceProcess>,
+    owner: Option<crate::cs2_process::WorkspaceProcess>,
     pub window: Option<Cs2Window>,
     pub generation: u64,
     monitor: Monitor,
@@ -453,7 +453,7 @@ impl GameTracker {
         }
         submitted
     }
-    pub fn set_owner(&mut self, owner: Option<crate::managed_cs2::WorkspaceProcess>) {
+    pub fn set_owner(&mut self, owner: Option<crate::cs2_process::WorkspaceProcess>) {
         let owner = owner.filter(|process| process.is_running());
         if self.owner.as_ref().map(|p| (p.pid, p.created))
             != owner.as_ref().map(|p| (p.pid, p.created))
@@ -771,7 +771,7 @@ impl GameTracker {
 /// Focus only the verified live game; the tracker is not held across this call.
 pub fn restore_focus(
     window: Cs2Window,
-    owner: &crate::managed_cs2::WorkspaceProcess,
+    owner: &crate::cs2_process::WorkspaceProcess,
     source: isize,
 ) -> bool {
     unsafe {

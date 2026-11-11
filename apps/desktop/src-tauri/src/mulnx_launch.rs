@@ -579,8 +579,11 @@ fn launch_operation(
         );
     }
     let dimension = |key: &str| {
-        journal["owned"][key]
-            .as_str()
+        journal
+            .owned
+            .as_ref()
+            .and_then(|owned| owned.get(key))
+            .map(String::as_str)
             .and_then(|value| value.parse::<i32>().ok())
             .ok_or("工作台窗口尺寸记录缺失。")
     };
@@ -588,8 +591,8 @@ fn launch_operation(
         dimension("setting.defaultres")?,
         dimension("setting.defaultresheight")?,
     )?;
-    let spectator_cfg = journal["spectatorCfg"] == true;
-    let demo_cfg = journal["demoPlaybackCfg"]["name"].as_str();
+    let spectator_cfg = journal.spectator_cfg;
+    let demo_cfg = journal.demo_playback_cfg["name"].as_str();
     let configured = match prepare_launcher(
         log,
         &executable,
@@ -599,7 +602,7 @@ fn launch_operation(
         true,
         preparation_id,
         Some(window_geometry),
-        Some(&journal),
+        Some(&journal.value()),
     ) {
         Ok(configured) => configured,
         Err(error) => {
@@ -905,7 +908,9 @@ fn resume_pending_launch(
         .and_then(|v| v.parse::<u64>().ok())
         .ok_or("无法确认游戏，请稍后重试。")?;
     verify_gateway_owner(log, 55202, game_pid)?;
-    if managed_cs2::process_parent(game_pid, log)? != Some(pid) || !cs2.owns_mulnx_launcher(pid)? {
+    if crate::cs2_process::process_parent(game_pid, log)? != Some(pid)
+        || !cs2.owns_mulnx_launcher(pid)?
+    {
         return Err("无法确认本次启动，请关闭游戏和 MulNX 后恢复设置。".into());
     }
     let commit = || {
@@ -936,39 +941,6 @@ fn cleanup_then_mark(
 ) -> Result<(), String> {
     cleanup()?;
     mark()
-}
-
-/// A backup can be disarmed only before the injector exists and after its
-/// launch options are restored. Unknown outcomes retain the recovery record.
-fn finish_observer_attempt<T>(
-    outcome: Result<T, String>,
-    options_cleanup: Result<(), String>,
-    spawned: bool,
-    cancel: impl FnOnce() -> Result<(), String>,
-) -> Result<T, String> {
-    if let Err(error) = options_cleanup {
-        let prior = outcome
-            .as_ref()
-            .err()
-            .map(|e| format!("{e} "))
-            .unwrap_or_default();
-        return Err(format!(
-            "{prior}解说启动参数清理或记录确认失败：{error}；原键位备份仍保留。"
-        ));
-    }
-    if !spawned {
-        if let Err(error) = cancel() {
-            let prior = outcome
-                .as_ref()
-                .err()
-                .map(|e| format!("{e} "))
-                .unwrap_or_default();
-            return Err(format!(
-                "{prior}未启动的观战备份未能清理：{error}；请检查恢复状态。"
-            ));
-        }
-    }
-    outcome
 }
 
 /// A matched receipt may resume only after temporary launcher options are
@@ -1051,16 +1023,14 @@ fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), Str
 fn controlled_game(
     cs2: &managed_cs2::ManagedCs2,
     log: &DesktopLog,
-) -> Result<managed_cs2::WorkspaceProcess, String> {
+) -> Result<crate::cs2_process::WorkspaceProcess, String> {
     let (context, game) = cs2
         .console_source()?
         .ok_or("当前受管游戏已失效或实例不唯一，请重新检查。")?;
     if !game.is_running() {
         return Err("当前游戏控制归属未确认，未发送停止命令。".into());
     }
-    let executable = context["executable"]
-        .as_str()
-        .ok_or("当前游戏安装位置未确认。")?;
+    let executable = context.executable.as_str();
     validate_game_identity(
         &cs2.mulnx_handoff_status()?,
         &json!({"pid":game.pid,"created":game.created.to_string()}),
@@ -1081,12 +1051,12 @@ fn controlled_game(
 pub(crate) fn observer_control_snapshot(
     cs2: &managed_cs2::ManagedCs2,
     log: &DesktopLog,
-) -> Option<managed_cs2::WorkspaceProcess> {
+) -> Option<crate::cs2_process::WorkspaceProcess> {
     controlled_game(cs2, log).ok()
 }
 
 pub(crate) fn observer_gateway_available(
-    game: &managed_cs2::WorkspaceProcess,
+    game: &crate::cs2_process::WorkspaceProcess,
     log: &DesktopLog,
 ) -> bool {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], 55202));
@@ -1109,12 +1079,8 @@ pub fn stop_managed_for_exit(
     let Some((context, game)) = cs2.console_source()? else {
         return Ok(());
     };
-    let executable = PathBuf::from(
-        context["executable"]
-            .as_str()
-            .ok_or("游戏安装位置未确认。")?,
-    );
-    if context["mulnxLaunch"] != true {
+    let executable = PathBuf::from(context.executable.as_str());
+    if !context.mulnx_launch {
         return Ok(());
     }
     verify_managed_launch(

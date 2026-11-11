@@ -94,9 +94,9 @@ export function ProductionStatus({
               onClick={(event) => {
                 if (!window.__TAURI_INTERNALS__) return;
                 event.preventDefault();
-                void desktopInvoke('open_rivalhub_workbench', { url: guidance.rivalhubUrl }).catch(
-                  () => setError('打开失败，请在浏览器中访问 RivalHub。'),
-                );
+                void desktopInvoke('open_rivalhub_workbench', {
+                  url: event.currentTarget.href,
+                }).catch(() => setError('打开失败，请在浏览器中访问 RivalHub。'));
               }}
             >
               {guidance.phase === 'match_end'

@@ -785,9 +785,10 @@ export function PreparationPage() {
                       onClick={(event) => {
                         if (!window.__TAURI_INTERNALS__) return;
                         event.preventDefault();
+                        const url = event.currentTarget.href;
                         void action(() =>
                           desktopInvoke('open_rivalhub_workbench', {
-                            url: matchGuidance.rivalhubUrl,
+                            url,
                           }),
                         );
                       }}

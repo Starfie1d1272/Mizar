@@ -1,652 +1,39 @@
+use crate::cs2_process::{
+    any_cs2_running, close_owned_process, cs2_pids, discover, identity, launch_timestamp, open,
+    process_pids, read_identity, same_executable, submit_steam, Process, WorkspaceProcess,
+};
 use crate::cs2_session::SessionStore;
-use crate::desktop_lifecycle::{
+use crate::cs2_session_record::SessionRecord;
+use crate::desktop_types::{
     BackupSelection, Cs2ConfigPhase, Cs2ConfigStatus, FrameRateLimit, Ready,
 };
 use serde_json::{json, Value};
 use std::{
     fs,
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
-pub const LAUNCH_ARGS: &[&str] = &[
-    "-applaunch",
-    "730",
-    "-windowed",
-    "-noborder",
-    "-console",
-    "-allow_third_party_software",
-    "-worldwide",
-];
-const DISCOVERY: &str = include_str!("../../../../scripts/qualification/bundle/gsi-discovery.ps1");
-
-// Fixed scripts only: no paths supplied by the webview are interpolated as code.
-fn powershell(
-    body: &str,
-    steam: &SteamProcess,
-    expected_account: Option<u32>,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<String, String> {
-    steam.validate(log)?;
-    let discovery = DISCOVERY.trim_start_matches('\u{feff}');
-    let script = format!(
-        r#"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
-{discovery}
-trap {{
-  [Console]::Error.WriteLine(($_ | Format-List * -Force | Out-String))
-  $code = [string]$_.Exception.Data['MizarCode']
-  if (-not $code) {{ $code = 'operation-failed' }}
-  @{{error=@{{code=$code;stage='launch'}}}} | ConvertTo-Json -Compress
-  exit 1
-}}
-$nativeSteam = $env:MIZAR_NATIVE_STEAM | ConvertFrom-Json
-{body}
-"#
-    );
-    let system = std::env::var_os("SystemRoot").ok_or("Windows 系统目录不可用。")?;
-    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let mut command = Command::new(executable);
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &script,
-        ])
-        .creation_flags(0x08000000);
-    // Paths are data in a private child environment, never PowerShell source.
-    command.env(
-        "MIZAR_NATIVE_STEAM",
-        json!({"pid": steam.pid, "executable": steam.executable, "account": expected_account})
-            .to_string(),
-    );
-    let output = crate::powershell::run(command, log, "CS2 启动配置检测", Duration::from_secs(15))?;
-    steam.validate(log)?;
-    Ok(output)
-}
-
-pub(crate) fn any_cs2_running(log: &crate::startup_log::DesktopLog) -> Result<bool, String> {
-    Ok(!cs2_pids(log)?.is_empty())
-}
-
-struct SteamLaunch {
-    process: SteamProcess,
-    account: u32,
-}
-impl SteamLaunch {
-    fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
-        let output = powershell(
-            "$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam; $context | ConvertTo-Json -Compress",
-            &self.process,
-            Some(self.account),
-            log,
-        )?;
-        let value = crate::powershell::parse(log, "Steam 启动身份复核", &output)?;
-        if value["account"].as_u64() != Some(u64::from(self.account)) {
-            return Err(steam_failure(log, "steam-account-unavailable"));
-        }
-        Ok(())
-    }
-}
-
-impl SteamLaunch {
-    fn validate_window_options(
-        &self,
-        size: crate::cs2_video::VideoSize,
-        protect_previous_console: bool,
-        log: &crate::startup_log::DesktopLog,
-    ) -> Result<(), String> {
-        let output = powershell(
-            r#"
-$context = Get-SteamLaunchContext -NativeIdentity $nativeSteam
-$path = Join-Path (Split-Path -Parent $context.executable) ('userdata\' + $context.account + '\config\localconfig.vdf')
-$options = ''
-if (Test-Path -LiteralPath $path -ErrorAction Stop) {
-  $file = Get-Item -LiteralPath $path -ErrorAction Stop
-  if (!$file.PSIsContainer -and $file.Length -le 8MB) {
-    $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
-    $tokens = @([regex]::Matches($text, '"(?:\\.|[^"\\])*"|[{}]|//[^\r\n]*|[^\s{}"]+') | ForEach-Object { $_.Value } | Where-Object { -not $_.StartsWith('//') })
-    $data = Read-SteamVdfObject $tokens @{ Index = 0 }
-    foreach ($key in @('UserLocalConfigStore','Software','Valve','Steam','apps','730')) {
-      if ($null -eq $data) { break }
-      if ($data -isnot [hashtable]) { throw 'steam-launch-options-invalid' }
-      $data = $data[$key]
-    }
-    if ($null -ne $data) {
-      if ($data -isnot [hashtable]) { throw 'steam-launch-options-invalid' }
-      if ($data.ContainsKey('LaunchOptions')) {
-        if ($data.LaunchOptions -isnot [string] -or $data.LaunchOptions.Length -gt 65536) { throw 'steam-launch-options-invalid' }
-        $options = $data.LaunchOptions
-      }
-    }
-  } else { throw 'steam-launch-options-invalid' }
-}
-@{account=$context.account; options=$options} | ConvertTo-Json -Compress
-"#,
-            &self.process,
-            Some(self.account),
-            log,
-        )?;
-        let value = crate::powershell::parse(log, "Steam 窗口启动参数核验", &output)?;
-        if value["account"].as_u64() != Some(u64::from(self.account)) {
-            return Err(steam_failure(log, "steam-account-unavailable"));
-        }
-        check_steam_window_options(
-            value["options"]
-                .as_str()
-                .ok_or("无法核实 Steam 启动参数。")?,
-            size,
-            protect_previous_console,
-        )
-    }
-}
-
-// Saved Steam options are read-only. Use Windows' own argument parser rather
-// than rejecting valid quoting or guessing the priority of duplicate switches.
-fn check_steam_window_options(
-    options: &str,
-    size: crate::cs2_video::VideoSize,
-    protect_previous_console: bool,
-) -> Result<(), String> {
-    use windows::{
-        core::PCWSTR,
-        Win32::{
-            Foundation::{LocalFree, HLOCAL},
-            UI::Shell::CommandLineToArgvW,
-        },
-    };
-    let error = "无法安全核实 Steam 窗口启动参数，请检查 CS2 的启动选项后重试。";
-    if options.len() > 65536 || options.contains(['\r', '\n', '\0']) {
-        return Err(error.into());
-    }
-    let command: Vec<u16> = format!("cs2.exe {options}")
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
-    let mut count = 0;
-    let arguments = unsafe { CommandLineToArgvW(PCWSTR(command.as_ptr()), &mut count) };
-    if arguments.is_null() {
-        return Err(error.into());
-    }
-    let words = if (1..=257).contains(&count) {
-        unsafe { std::slice::from_raw_parts(arguments.add(1), (count - 1) as usize) }
-            .iter()
-            .map(|word| unsafe { word.to_string() }.map(|word| word.to_ascii_lowercase()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| error.to_string())
-    } else {
-        Err(error.to_string())
-    };
-    unsafe { LocalFree(Some(HLOCAL(arguments.cast()))) };
-    let words = words?;
-    check_steam_window_arguments(&words, size)?;
-    if protect_previous_console {
-        check_console_preserving_arguments(&words)?;
-    }
-    Ok(())
-}
-
-// We cannot override Steam's saved options without changing the user's settings.
-// Only this explicit conflict, not optional archive failure, may stop submission.
-fn check_console_preserving_arguments(words: &[String]) -> Result<(), String> {
-    if words.iter().any(|word| {
-        let flag = word.split(['=', ':']).next().unwrap_or(word);
-        matches!(
-            flag,
-            "-condebug" | "-conclearlog" | "+con_logfile" | "+con_logfile_open"
-        )
-    }) {
-        return Err("上一场原始控制台未能归档，而 Steam 已保存的启动选项仍会写入或清空日志。请先归档 console.log，或移除 -condebug、-conclearlog 及 con_logfile 启动参数后重试；原日志和配置备份已保留。".into());
-    }
-    Ok(())
-}
-
-fn check_steam_window_arguments(
-    words: &[String],
-    size: crate::cs2_video::VideoSize,
-) -> Result<(), String> {
-    let error = "Steam 已保存的窗口启动参数与工作台冲突。请在 Steam 的 CS2 启动选项中移除全屏和尺寸覆盖后重试；启动前的配置修改仍可恢复。";
-    let mut i = 0;
-    while i < words.len() {
-        let word = words[i].as_str();
-        if matches!(
-            word,
-            "-fullscreen" | "-full" | "-border" | "+mat_setvideomode" | "+r_fullscreen"
-        ) || word == "%command%"
-        {
-            return Err(error.into());
-        }
-        let expected = match word {
-            "-w" | "-width" => Some(size.width),
-            "-h" | "-height" => Some(size.height),
-            _ => None,
-        };
-        if let Some(expected) = expected {
-            i += 1;
-            if words.get(i).and_then(|value| value.parse::<i32>().ok()) != Some(expected) {
-                return Err(error.into());
-            }
-        } else if word.split_once('=').is_some_and(|(flag, _)| {
-            matches!(
-                flag,
-                "-w" | "-width"
-                    | "-h"
-                    | "-height"
-                    | "-fullscreen"
-                    | "-full"
-                    | "-windowed"
-                    | "-window"
-                    | "-sw"
-                    | "-noborder"
-                    | "-border"
-            )
-        }) {
-            return Err(error.into());
-        }
-        i += 1;
-    }
-    Ok(())
-}
-
-fn discover(
-    log: &crate::startup_log::DesktopLog,
-) -> Result<(PathBuf, PathBuf, SteamLaunch), String> {
-    let steam = SteamProcess::discover(log)?;
-    let script = r#"
-$cfg = Resolve-CfgDirectory
-$game = Split-Path (Split-Path $cfg -Parent) -Parent
-$exe = Join-Path $game 'bin\win64\cs2.exe'
-if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { Stop-Cs2Discovery 'selected-path-invalid' }
-$steamContext = Get-SteamLaunchContext -NativeIdentity $nativeSteam
-$steamExe = $steamContext.executable
-$account = $steamContext.account
-$videos = @()
-foreach ($root in @(Get-UniqueSteamPaths (@((Split-Path -Parent $steamExe)) + @(Get-SteamInstallRoots)))) {
-  $candidate = Join-Path $root ('userdata\' + $account + '\730\local\cfg\cs2_video.txt')
-  if (Test-Path -LiteralPath $candidate -PathType Leaf) { $videos += (Resolve-Path -LiteralPath $candidate).Path }
-}
-$videos = @($videos | Select-Object -Unique)
-if ($videos.Count -eq 0) { Stop-Cs2Discovery 'video-config-missing' }
-if ($videos.Count -ne 1) { Stop-Cs2Discovery 'video-config-ambiguous' }
-$confirmed = Get-SteamLaunchContext -NativeIdentity $nativeSteam
-if ($confirmed.account -ne $account) { Stop-Cs2Discovery 'steam-account-unavailable' }
-@{executable=(Resolve-Path -LiteralPath $exe).Path; video=$videos[0]; account=$account} | ConvertTo-Json -Compress
-"#;
-    let output = powershell(script, &steam, None, log)?;
-    let value = crate::powershell::parse(log, "CS2 启动配置检测", &output)?;
-    let path = |key: &str| {
-        value[key]
-            .as_str()
-            .map(PathBuf::from)
-            .ok_or_else(|| "CS2 配置路径缺失。".to_string())
-    };
-    let account = value["account"]
-        .as_u64()
-        .and_then(|account| u32::try_from(account).ok())
-        .filter(|account| *account != 0)
-        .ok_or_else(|| steam_failure(log, "steam-account-unavailable"))?;
-    Ok((
-        path("executable")?,
-        path("video")?,
-        SteamLaunch {
-            process: steam,
-            account,
-        },
-    ))
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct FileTime {
-    low: u32,
-    high: u32,
-}
-type Handle = isize;
-#[repr(C)]
-struct ProcessEntry {
-    size: u32,
-    usage: u32,
-    pid: u32,
-    heap: usize,
-    module: u32,
-    threads: u32,
-    parent: u32,
-    priority: i32,
-    flags: u32,
-    executable: [u16; 260],
-}
-#[link(name = "kernel32")]
-extern "system" {
-    fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
-    fn CloseHandle(handle: Handle) -> i32;
-    fn GetLastError() -> u32;
-    fn GetProcessId(process: Handle) -> u32;
-    fn GetProcessTimes(
-        handle: Handle,
-        created: *mut FileTime,
-        exit: *mut FileTime,
-        kernel: *mut FileTime,
-        user: *mut FileTime,
-    ) -> i32;
-    fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
-    fn QueryFullProcessImageNameW(
-        handle: Handle,
-        flags: u32,
-        name: *mut u16,
-        length: *mut u32,
-    ) -> i32;
-    fn GetSystemTimeAsFileTime(time: *mut FileTime);
-    fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> Handle;
-    fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
-    fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
-}
-#[link(name = "user32")]
-extern "system" {
-    fn EnumWindows(callback: unsafe extern "system" fn(isize, isize) -> i32, data: isize) -> i32;
-    fn GetWindowThreadProcessId(window: isize, pid: *mut u32) -> u32;
-    fn PostMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
-}
-
-struct Process(Handle);
-impl Drop for Process {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.0);
-        }
-    }
-}
-fn cs2_pids(log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
-    process_pids("cs2.exe", log)
-}
-fn process_pids(name: &str, log: &crate::startup_log::DesktopLog) -> Result<Vec<u32>, String> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
-    if snapshot == -1 {
-        return Err(win32_failure(
-            log,
-            "CreateToolhelp32Snapshot",
-            "无法检查启动进程，未修改游戏设置。",
-        ));
-    }
-    let snapshot = Process(snapshot);
-    let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
-    entry.size = std::mem::size_of::<ProcessEntry>() as u32;
-    let mut pids = Vec::new();
-    let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
-    while found != 0 {
-        let len = entry.executable.iter().position(|v| *v == 0).unwrap_or(260);
-        if String::from_utf16_lossy(&entry.executable[..len]).eq_ignore_ascii_case(name) {
-            pids.push(entry.pid);
-        }
-        found = unsafe { Process32NextW(snapshot.0, &mut entry) };
-    }
-    if unsafe { GetLastError() } != 18 {
-        return Err(win32_failure(log, "Process32NextW", "启动进程检查未完成。"));
-    }
-    Ok(pids)
-}
-pub(crate) fn process_parent(
-    pid: u32,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<Option<u32>, String> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
-    if snapshot == -1 {
-        return Err(win32_failure(
-            log,
-            "CreateToolhelp32Snapshot",
-            "无法检查游戏进程，请重试。",
-        ));
-    }
-    let snapshot = Process(snapshot);
-    let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
-    entry.size = std::mem::size_of::<ProcessEntry>() as u32;
-    let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) };
-    while found != 0 {
-        if entry.pid == pid {
-            return Ok(Some(entry.parent));
-        }
-        found = unsafe { Process32NextW(snapshot.0, &mut entry) };
-    }
-    if unsafe { GetLastError() } != 18 {
-        return Err(win32_failure(
-            log,
-            "Process32NextW",
-            "无法检查游戏进程，请重试。",
-        ));
-    }
-    Ok(None)
-}
-fn open(pid: u32, log: &crate::startup_log::DesktopLog) -> Result<Option<Process>, String> {
-    let handle = unsafe { OpenProcess(0x1000 | 0x100000, 0, pid) };
-    if handle != 0 {
-        Ok(Some(Process(handle)))
-    } else if unsafe { GetLastError() } == 87 {
-        Ok(None)
-    } else {
-        Err(win32_failure(
-            log,
-            "OpenProcess",
-            "无法确认进程身份，未关闭游戏或恢复配置。",
-        ))
-    }
-}
-fn identity(
-    process: &Process,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<(u64, PathBuf), String> {
-    read_identity(process, log)?
-        .ok_or_else(|| "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into())
-}
-/// A temporarily unreadable image is unknown, never proof that the process is absent.
-/// Only the submitted-launch observer may wait for another complete observation.
-fn read_identity(
-    process: &Process,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<Option<(u64, PathBuf)>, String> {
-    let mut created = FileTime::default();
-    let mut exit = FileTime::default();
-    let mut kernel = FileTime::default();
-    let mut user = FileTime::default();
-    if unsafe { GetProcessTimes(process.0, &mut created, &mut exit, &mut kernel, &mut user) } == 0 {
-        return Err(identity_failure(
-            log,
-            process,
-            "GetProcessTimes",
-            "无法确认进程创建时间。",
-            None,
-        ));
-    }
-    let mut buffer = vec![0u16; 32768];
-    let mut len = buffer.len() as u32;
-    if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut len) } == 0 {
-        let code = unsafe { GetLastError() };
-        let message = identity_failure(
-            log,
-            process,
-            "QueryFullProcessImageNameW",
-            "无法确认进程程序路径。",
-            Some(((created.high as u64) << 32) | created.low as u64),
-        );
-        if code == 5 && unsafe { WaitForSingleObject(process.0, 0) } == 258 {
-            return Ok(None);
-        }
-        return Err(message);
-    }
-    Ok(Some((
-        ((created.high as u64) << 32) | created.low as u64,
-        PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
-    )))
-}
-fn identity_failure(
-    log: &crate::startup_log::DesktopLog,
-    process: &Process,
-    api: &str,
-    message: &str,
-    created: Option<u64>,
-) -> String {
-    // Preserve the failing API's error before any diagnostic observation changes it.
-    let code = unsafe { GetLastError() };
-    let pid = unsafe { GetProcessId(process.0) };
-    let waited = unsafe { WaitForSingleObject(process.0, 0) };
-    log.event("cs2_launch", "failure", Some(&format!(
-        "source=Win32; phase=process_identity; api={api}; code={code}; targetPid={}; targetCreated={created:?}; targetWaitResult={waited}; cause={}",
-        if pid == 0 { "unknown".into() } else { pid.to_string() },
-        std::io::Error::from_raw_os_error(code as i32)
-    )));
-    message.into()
-}
-fn win32_failure(log: &crate::startup_log::DesktopLog, api: &str, message: &str) -> String {
-    let code = unsafe { GetLastError() };
-    log.event(
-        "cs2_launch",
-        "failure",
-        Some(&format!(
-            "source=Win32; api={api}; code={code}; cause={}",
-            std::io::Error::from_raw_os_error(code as i32)
-        )),
-    );
-    message.into()
-}
-
-// The held handle binds every observation to the original Steam process, even
-// if it exits and its PID is reused. Registry install paths cannot prove this.
-struct SteamProcess {
-    process: Process,
-    pid: u32,
-    created: u64,
-    executable: PathBuf,
-}
-fn steam_failure(log: &crate::startup_log::DesktopLog, code: &str) -> String {
-    log.event(
-        "cs2_launch",
-        "failure",
-        Some(&format!("stage=steam_identity; code={code}")),
-    );
-    match code {
-        "steam-not-running" => "请先打开 Steam 并登录，再启动 CS2。",
-        "steam-not-unique" => "Steam 进程不唯一，无法确认启动位置。",
-        "steam-account-unavailable" => "Steam 当前账号不可用或已变化，请确认登录后重试。",
-        _ => "Steam 程序位置不可用或进程已变化，请确认 Steam 状态后重试。",
-    }
-    .into()
-}
-impl SteamProcess {
-    fn discover(log: &crate::startup_log::DesktopLog) -> Result<Self, String> {
-        let pids = process_pids("steam.exe", log)?;
-        let pid = match pids.as_slice() {
-            [] => return Err(steam_failure(log, "steam-not-running")),
-            [pid] => *pid,
-            _ => return Err(steam_failure(log, "steam-not-unique")),
-        };
-        let process =
-            open(pid, log)?.ok_or_else(|| steam_failure(log, "steam-path-unavailable"))?;
-        let (created, executable) = identity(&process, log)?;
-        if !executable
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("steam.exe"))
-        {
-            return Err(steam_failure(log, "steam-path-unavailable"));
-        }
-        let steam = Self {
-            process,
-            pid,
-            created,
-            executable,
-        };
-        steam.validate(log)?;
-        Ok(steam)
-    }
-    fn validate(&self, log: &crate::startup_log::DesktopLog) -> Result<(), String> {
-        let pids = process_pids("steam.exe", log)?;
-        if pids.len() > 1 {
-            return Err(steam_failure(log, "steam-not-unique"));
-        }
-        if pids.as_slice() != [self.pid] || unsafe { WaitForSingleObject(self.process.0, 0) } != 258
-        {
-            return Err(steam_failure(log, "steam-path-unavailable"));
-        }
-        let (created, executable) = identity(&self.process, log)?;
-        if created != self.created
-            || !same_executable(&executable, &self.executable.to_string_lossy())
-        {
-            return Err(steam_failure(log, "steam-path-unavailable"));
-        }
-        Ok(())
-    }
-}
-
-fn same_executable(actual: &std::path::Path, expected: &str) -> bool {
-    let normalize = |path: &std::path::Path| {
-        crate::powershell::provider_path(path)
-            .to_string_lossy()
-            .replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase()
-    };
-    normalize(actual) == normalize(std::path::Path::new(expected))
-}
-
 fn owned_process(
-    value: &Value,
+    record: &SessionRecord,
     log: &crate::startup_log::DesktopLog,
-) -> Result<Option<Process>, String> {
-    let Some(pid) = value["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
-    else {
-        return Ok(None);
-    };
-    let Some(process) = open(pid, log)? else {
-        return Ok(None);
-    };
-    match unsafe { WaitForSingleObject(process.0, 0) } {
-        0 => return Ok(None),
-        258 => (),
-        _ => {
-            return Err(win32_failure(
-                log,
-                "WaitForSingleObject",
-                "无法确认 CS2 是否退出，备份仍保留。",
-            ))
-        }
-    }
-    let (created, executable) = identity(&process, log)?;
-    let expected = value["executable"]
-        .as_str()
-        .ok_or("CS2 进程路径记录缺失。")?;
-    if value["created"].as_u64() != Some(created) || !same_executable(&executable, expected) {
-        return Ok(None);
-    }
-    Ok(Some(process))
+) -> Result<Option<WorkspaceProcess>, String> {
+    crate::cs2_process::verified_process(record.process_identity().as_ref(), log)
 }
 fn launched_process(
-    value: &Value,
+    value: &SessionRecord,
     log: &crate::startup_log::DesktopLog,
 ) -> Result<(Option<(u32, u64)>, Value), String> {
-    let launch_time = value["launchTime"]
-        .as_u64()
-        .ok_or("CS2 启动时间记录缺失。")?;
-    let executable = value["executable"]
-        .as_str()
-        .ok_or("CS2 程序路径记录缺失。")?;
+    let launch_time = value.launch_time().ok_or("CS2 启动时间记录缺失。")?;
+    let executable = value.executable.as_str();
     let mut candidates = Vec::new();
     let mut observations = Vec::new();
     for pid in cs2_pids(log)? {
         if let Some(process) = open(pid, log)? {
-            match unsafe { WaitForSingleObject(process.0, 0) } {
-                0 => continue,
-                258 => (),
-                _ => {
-                    return Err(win32_failure(
-                        log,
-                        "WaitForSingleObject",
-                        "无法确认 CS2 是否运行，备份仍保留。",
-                    ))
-                }
+            if !process.running(log, "无法确认 CS2 是否运行，备份仍保留。")? {
+                continue;
             }
             let (created, actual) = identity(&process, log)?;
             let matches = same_executable(&actual, executable);
@@ -661,89 +48,6 @@ fn launched_process(
         [found] => Ok((Some(*found), json!(observations))),
         _ => Err("CS2 启动身份不唯一，请退出游戏并取消 Steam 启动请求后恢复备份。".into()),
     }
-}
-
-struct CloseRequest {
-    pid: u32,
-    windows: u32,
-    error: Option<(&'static str, u32)>,
-}
-
-unsafe extern "system" fn close_window(window: isize, data: isize) -> i32 {
-    let request = &mut *(data as *mut CloseRequest);
-    let mut found = 0;
-    GetWindowThreadProcessId(window, &mut found);
-    if found == request.pid {
-        request.windows += 1;
-        if PostMessageW(window, 0x0010, 0, 0) == 0 {
-            // Capture on the failing thread before enumeration or waiting can
-            // overwrite it. Do not send further requests after a refusal.
-            request.error = Some(("PostMessageW", GetLastError()));
-            return 0;
-        }
-    }
-    1
-}
-
-/// Called only with a held, identity-verified process selected for this operation.
-fn close_owned_process(
-    process: &Process,
-    pid: u32,
-    created: u64,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<(), String> {
-    let mut request = CloseRequest {
-        pid,
-        windows: 0,
-        error: None,
-    };
-    if unsafe { EnumWindows(close_window, &mut request as *mut CloseRequest as isize) } == 0
-        && request.error.is_none()
-    {
-        request.error = Some(("EnumWindows", unsafe { GetLastError() }));
-    }
-    // A game that exited during enumeration no longer needs a close request.
-    // Failures and absent windows get an immediate stop check, not a 15s wait.
-    let wait_ms = if request.error.is_some() || request.windows == 0 {
-        0
-    } else {
-        15000
-    };
-    let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
-    if waited == 0 {
-        return Ok(());
-    }
-    let message = if let Some((api, code)) = request.error {
-        log.event("production_finish", "failure", Some(&format!(
-            "phase=game_close_request; api={api}; code={code}; pid={pid}; created={created}; windows={}; cause={}", request.windows, std::io::Error::from_raw_os_error(code as i32)
-        )));
-        if api == "PostMessageW" && code == 5 {
-            "Windows 拒绝向本次 CS2 发送正常关闭请求（PostMessageW，错误 5）。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
-        } else {
-            format!("本次 CS2 的正常关闭请求失败（{api}，Windows 错误 {code}）。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。")
-        }
-    } else if waited == 258 {
-        let phase = if request.windows == 0 {
-            "game_close_no_window"
-        } else {
-            "game_close_timeout"
-        };
-        log.event("production_finish", "failure", Some(&format!(
-            "phase={phase}; api=WaitForSingleObject; waitResult={waited}; pid={pid}; created={created}; windows={}", request.windows
-        )));
-        if request.windows == 0 {
-            "本次 CS2 仍在运行，但未找到可发送正常关闭请求的窗口。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
-        } else {
-            "已向本次 CS2 发送正常关闭请求，但 15 秒内尚未退出。请在游戏内正常退出，再重试退出或恢复配置；备份仍保留。".into()
-        }
-    } else {
-        let code = unsafe { GetLastError() };
-        log.event("production_finish", "failure", Some(&format!(
-            "phase=game_close_wait; api=WaitForSingleObject; code={code}; waitResult={waited}; pid={pid}; created={created}; cause={}", std::io::Error::from_raw_os_error(code as i32)
-        )));
-        format!("无法确认本次 CS2 是否已退出（WaitForSingleObject，Windows 错误 {code}）。请确认游戏正常退出后重试退出或恢复配置；备份仍保留。")
-    };
-    Err(message)
 }
 
 /// Read-only recovery facts usable before the local service or WebView exists.
@@ -779,14 +83,6 @@ pub struct ManagedCs2 {
     source_resume: Mutex<Option<(String, std::time::Instant, bool)>>,
 }
 
-/// A verified, Mizar-owned session process held open during window operations. Keeping the
-/// handle prevents PID reuse from turning a stale window into another game.
-#[derive(Clone)]
-pub struct WorkspaceProcess {
-    process: Arc<Process>,
-    pub pid: u32,
-    pub created: u64,
-}
 pub(crate) struct CameraLease {
     process: WorkspaceProcess,
     lease: String,
@@ -859,24 +155,6 @@ fn replacement_decision(
     // The selected process may have already exited; no process is closed here.
     Ok(false)
 }
-impl WorkspaceProcess {
-    pub fn is_running(&self) -> bool {
-        unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
-    }
-}
-pub fn verified_session_process(
-    value: &Value,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<Option<WorkspaceProcess>, String> {
-    let Some(process) = owned_process(value, log)? else {
-        return Ok(None);
-    };
-    Ok(Some(WorkspaceProcess {
-        process: Arc::new(process),
-        pid: value["pid"].as_u64().ok_or("CS2 进程记录缺失。")? as u32,
-        created: value["created"].as_u64().ok_or("CS2 进程记录缺失。")?,
-    }))
-}
 impl ManagedCs2 {
     pub fn new(log: crate::startup_log::DesktopLog) -> Self {
         Self {
@@ -912,12 +190,6 @@ impl ManagedCs2 {
     pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
         self.store.mark_mulnx_options_clean()
     }
-    pub(crate) fn cancel_unsubmitted_mulnx_observer(&mut self) -> Result<(), String> {
-        if any_cs2_running(&self.log)? || !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
-            return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
-        }
-        self.store.cancel_unsubmitted_mulnx_observer()
-    }
     pub(crate) fn mulnx_observer_receipt_matches(
         &self,
         pid: u32,
@@ -945,7 +217,7 @@ impl ManagedCs2 {
             running: any_cs2_running(&self.log)?,
             uncertain: journal
                 .as_ref()
-                .is_some_and(crate::cs2_session::unconfirmed_launch)
+                .is_some_and(SessionRecord::unconfirmed_launch)
                 || self.store.mulnx_observer_unconfirmed()?
                 || (journal.is_some()
                     && self
@@ -979,7 +251,7 @@ impl ManagedCs2 {
         let journal = self.store.load()?;
         if journal
             .as_ref()
-            .is_some_and(crate::cs2_session::unconfirmed_launch)
+            .is_some_and(SessionRecord::unconfirmed_launch)
         {
             return Err("上次游戏启动仍待确认，请等待游戏身份确认后重试。".into());
         }
@@ -991,18 +263,16 @@ impl ManagedCs2 {
         };
         let process = open(pid, &self.log)?.ok_or("游戏实例已变化，请重试。")?;
         let (created, actual) = identity(&process, &self.log)?;
-        if unsafe { WaitForSingleObject(process.0, 0) } != 258
+        if !process.is_running()
             || !same_executable(&actual, &executable.to_string_lossy())
             || cs2_pids(&self.log)? != vec![pid]
         {
             return Err("游戏身份或所选安装位置已变化，未关闭游戏。".into());
         }
         let managed = journal.as_ref().is_some_and(|v| {
-            v["pid"].as_u64() == Some(u64::from(pid))
-                && v["created"].as_u64() == Some(created)
-                && v["executable"]
-                    .as_str()
-                    .is_some_and(|v| same_executable(&actual, v))
+            v.pid() == Some(pid)
+                && v.created() == Some(created)
+                && same_executable(&actual, &v.executable)
         });
         Ok(Some(ReplacementTarget {
             process,
@@ -1017,7 +287,7 @@ impl ManagedCs2 {
         let journal = self.store.load()?;
         Ok(json!({
             "target": target.map(|p| json!({"pid":p.pid,"created":p.created.to_string(),"managed":p.managed})),
-            "preparationId": journal.as_ref().and_then(|v| v["preparationId"].as_str()),
+            "preparationId": journal.as_ref().and_then(|v| v.preparation_id.as_deref()),
         }))
     }
 
@@ -1036,7 +306,7 @@ impl ManagedCs2 {
             .store
             .load()?
             .as_ref()
-            .is_some_and(|v| v["preparationId"] == preparation_id);
+            .is_some_and(|v| v.preparation_id.as_deref() == Some(preparation_id));
         if replacement_decision(
             target.as_ref().map(|p| (p.pid, p.created, p.managed)),
             expected_pid,
@@ -1066,7 +336,7 @@ impl ManagedCs2 {
                     || !actual
                         .file_name()
                         .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
-                    || unsafe { WaitForSingleObject(target.process.0, 0) } != 258
+                    || !target.process.is_running()
                 {
                     return Err("游戏实例已变化，未关闭游戏；请重试。".into());
                 }
@@ -1103,10 +373,10 @@ impl ManagedCs2 {
         let Some(value) = self.store.load()? else {
             return Ok(None);
         };
-        verified_session_process(&value, &self.log)
+        owned_process(&value, &self.log)
     }
     /// Read-only diagnostics for the verified managed game.
-    pub fn console_source(&self) -> Result<Option<(Value, WorkspaceProcess)>, String> {
+    pub fn console_source(&self) -> Result<Option<(SessionRecord, WorkspaceProcess)>, String> {
         let Some(process) = self.workspace_process()? else {
             return Ok(None);
         };
@@ -1131,13 +401,13 @@ impl ManagedCs2 {
             let Some(process) = open(pid, &self.log)? else {
                 continue;
             };
-            if unsafe { WaitForSingleObject(process.0, 0) } == 0 {
+            if process.has_exited() {
                 continue;
             }
             let Some((created, executable)) = read_identity(&process, &self.log)? else {
                 return Ok(None);
             };
-            if unsafe { WaitForSingleObject(process.0, 0) } != 258
+            if !process.is_running()
                 || !executable
                     .file_name()
                     .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cs2.exe"))
@@ -1189,7 +459,7 @@ impl ManagedCs2 {
                     .exists());
         let mulnx_launch_resumable = if pending
             .as_ref()
-            .is_some_and(|v| v["mulnxLaunch"] == true && v["launchAttempted"] == true)
+            .is_some_and(|v| v.mulnx_launch && v.was_submitted())
         {
             std::fs::read(self.log.state_root.join("data/mulnx-launch/pending.json"))
                 .ok()
@@ -1200,7 +470,7 @@ impl ManagedCs2 {
                         && record["executable"].as_str().is_some_and(|path| {
                             pending
                                 .as_ref()
-                                .and_then(|v| v["executable"].as_str())
+                                .map(|v| v.executable.as_str())
                                 .is_some_and(|expected| path.eq_ignore_ascii_case(expected))
                         })
                 })
@@ -1219,7 +489,7 @@ impl ManagedCs2 {
             phase: if mulnx_uncertain
                 || pending
                     .as_ref()
-                    .is_some_and(crate::cs2_session::unconfirmed_launch)
+                    .is_some_and(SessionRecord::unconfirmed_launch)
             {
                 Cs2ConfigPhase::Uncertain
             } else if running {
@@ -1235,7 +505,7 @@ impl ManagedCs2 {
             prefer_mulnx: preferences.prefer_mulnx,
             preparation_id: pending
                 .as_ref()
-                .and_then(|v| v["preparationId"].as_str())
+                .and_then(|v| v.preparation_id.as_deref())
                 .map(str::to_owned),
             spectator_recovery_pending: (self.store.spectator_pending()
                 || self.store.full_spectator_pending())
@@ -1243,24 +513,22 @@ impl ManagedCs2 {
             native_hud_toggle: running
                 && pending
                     .as_ref()
-                    .is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true),
+                    .is_some_and(|v| v.native_hud_toggle && v.spectator_cfg),
             demo_cleanup_pending: self.store.playback_cleanup_pending() && pending.is_none(),
             demo_camera_request_id: pending
                 .as_ref()
-                .filter(|v| v["mulnxLaunch"] == true)
-                .and_then(|v| v["demoTestRequestId"].as_str())
+                .filter(|v| v.mulnx_launch)
+                .and_then(|v| v.demo_test_request_id.as_deref())
                 .map(str::to_owned),
             observer_hud_pending: crate::observer_hud::pending(&self.log),
             spectator_warning: self.store.spectator_warning().or_else(|| {
                 pending
                     .as_ref()
-                    .and_then(|value| value["spectatorWarning"].as_str())
+                    .and_then(|value| value.spectator_warning.as_deref())
                     .map(str::to_owned)
             }),
             can_preserve: pending.is_none() && self.check_preserved_start().is_ok(),
-            preserve_settings: pending
-                .as_ref()
-                .is_some_and(|v| v["preserveSettings"] == true),
+            preserve_settings: pending.as_ref().is_some_and(|v| v.preserve_settings),
             pending: pending.is_some(),
             mulnx_launch_resumable,
             camera_lease_ready: self.camera.lock().is_ok_and(|state| {
@@ -1295,28 +563,17 @@ impl ManagedCs2 {
         self.store.set_preferences(preferences)
     }
 
-    fn commit_managed_source(&self, journal: &mut Value) -> Result<(), String> {
-        if journal["gsiSource"].is_null() {
+    fn commit_managed_source(&self, journal: &mut SessionRecord) -> Result<(), String> {
+        if journal.gsi_source.is_none() {
             return Ok(());
         }
         self.store.verify_gsi_source(journal)?;
-        let pid = journal["pid"]
-            .as_u64()
-            .and_then(|n| u32::try_from(n).ok())
-            .ok_or("游戏身份未确认。")?;
-        let created = journal["created"].as_u64().ok_or("游戏身份未确认。")?;
-        let executable = journal["executable"]
-            .as_str()
-            .ok_or("游戏路径缺失。")?
-            .to_owned();
-        let ticket = journal["gsiSource"]["ticket"]
-            .as_str()
-            .ok_or("受管来源资格缺失。")?
-            .to_owned();
-        let source_id = journal["gsiSource"]["sourceId"]
-            .as_str()
-            .ok_or("受管来源资格缺失。")?
-            .to_owned();
+        let pid = journal.pid().ok_or("游戏身份未确认。")?;
+        let created = journal.created().ok_or("游戏身份未确认。")?;
+        let executable = journal.executable.as_str().to_owned();
+        let source = journal.gsi_source.as_ref().ok_or("受管来源资格缺失。")?;
+        let ticket = source.ticket.clone();
+        let source_id = source.source_id.clone();
         if cs2_pids(&self.log)? != vec![pid] {
             return Err("游戏身份不唯一。".into());
         }
@@ -1325,7 +582,7 @@ impl ManagedCs2 {
         if actual_created != created || !same_executable(&actual_executable, &executable) {
             return Err("游戏身份已变化。".into());
         }
-        let committed = journal["gsiSource"]["committed"] == true;
+        let committed = source.committed;
         let resume_key = if committed {
             let runtime: Value = serde_json::from_slice(
                 &fs::read(self.log.state_root.join("data/runtime.json"))
@@ -1369,7 +626,11 @@ impl ManagedCs2 {
             return Err("受管游戏来源未能确认。".into());
         }
         if !committed {
-            journal["gsiSource"]["committed"] = json!(true);
+            journal
+                .gsi_source
+                .as_mut()
+                .ok_or("受管来源资格缺失。")?
+                .committed = true;
             self.store.save(journal)?;
         }
         Ok(())
@@ -1456,11 +717,12 @@ impl ManagedCs2 {
             if any_cs2_running(&self.log)? || self.mulnx_launcher_running()? {
                 return Err("请先关闭 CS2 和 MulNX 启动器，再恢复配置。".into());
             }
-            let executable = value["executable"].as_str().ok_or("游戏路径记录缺失。")?;
+            let executable = value.executable.as_str();
             // An unsubmitted launch can be recovered while its workspace is
             // already live. Only its own still-active preparation grants access.
-            let preparation = value["preparationId"]
-                .as_str()
+            let preparation = value
+                .preparation_id
+                .as_deref()
                 .and_then(|id| crate::preparation_task::mulnx_context(id).ok());
             crate::production_exit::cleanup_mulnx(&self.log, Path::new(executable), preparation)?;
             std::fs::remove_file(self.log.state_root.join("data/mulnx-launch/pending.json"))
@@ -1468,15 +730,14 @@ impl ManagedCs2 {
         }
         // A delayed Steam launch remains a transaction until its identity is
         // known, or the operator explicitly cancels Steam's pending request.
-        if crate::cs2_session::unconfirmed_launch(&value) {
+        if SessionRecord::unconfirmed_launch(&value) {
             let (found, observation) = launched_process(&value, &self.log)?;
             if self.launch_observation.as_ref() != Some(&observation) {
-                self.log.event("cs2_launch", "success", Some(&json!({"stage":"observe", "launchTime":value["launchTime"], "expectedExecutable":value["executable"], "processes":observation}).to_string()));
+                self.log.event("cs2_launch", "success", Some(&json!({"stage":"observe", "launchTime":value.launch_time(), "expectedExecutable":value.executable, "processes":observation}).to_string()));
                 self.launch_observation = Some(observation);
             }
             if let Some((pid, created)) = found {
-                value["pid"] = json!(pid);
-                value["created"] = json!(created);
+                value.bind(pid, created)?;
                 self.store.save(&value)?;
                 // Running and preserveSettings already describe a successful launch.
                 // Retire the pending-launch message; do not turn success into recovery feedback.
@@ -1504,26 +765,20 @@ impl ManagedCs2 {
         if any_cs2_running(&self.log)? {
             return Err("等待 CS2 退出后恢复原配置。".into());
         }
-        if confirm_steam_cancelled && crate::cs2_session::unconfirmed_launch(&value) {
-            value["launchCancelled"] = json!(true);
+        if confirm_steam_cancelled && SessionRecord::unconfirmed_launch(&value) {
+            value.cancel()?;
             self.store.save(&value)?;
         }
-        if !value["gsiSource"].is_null() {
-            let source_id = value["gsiSource"]["sourceId"]
-                .as_str()
-                .ok_or("受管来源记录无效。")?
-                .to_owned();
+        if let Some(source) = value.gsi_source.as_ref() {
+            let source_id = source.source_id.clone();
             self.confirm_game_stopped()?;
             self.store
                 .remember_source_retire(&json!({"sourceId":source_id}))?;
-            if value["gsiSource"]["committed"] != true {
-                let ticket = value["gsiSource"]["ticket"]
-                    .as_str()
-                    .ok_or("受管来源资格缺失。")?
-                    .to_owned();
-                value["sourceCancelTicket"] = json!(ticket);
-            } else if let Some(object) = value.as_object_mut() {
-                object.remove("managedSourceRequestId");
+            if !source.committed {
+                let ticket = source.ticket.clone();
+                value.source_cancel_ticket = Some(ticket);
+            } else {
+                value.managed_source_request_id = None;
             }
             self.store.save(&value)?;
             self.store.restore_gsi_source(&mut value)?;
@@ -1532,8 +787,8 @@ impl ManagedCs2 {
             self.log
                 .event("managed_source", "pending", Some("stage=retire"));
         }
-        if let Some(request_id) = value["managedSourceRequestId"].as_str() {
-            let request = if let Some(ticket) = value["sourceCancelTicket"].as_str() {
+        if let Some(request_id) = value.managed_source_request_id.as_deref() {
+            let request = if let Some(ticket) = value.source_cancel_ticket.as_deref() {
                 json!({"action":"cancel","ticket":ticket})
             } else {
                 json!({"action":"cancel","requestId":request_id})
@@ -1543,16 +798,15 @@ impl ManagedCs2 {
                 self.log
                     .event("managed_source", "pending", Some("stage=cancel"));
             }
-            let object = value.as_object_mut().ok_or("游戏恢复记录无效。")?;
-            object.remove("managedSourceRequestId");
-            object.remove("sourceCancelTicket");
+            value.managed_source_request_id = None;
+            value.source_cancel_ticket = None;
             self.store.save(&value)?;
         }
-        if value["version"] == 4 {
+        if value.version() == 4 {
             let (_, video, steam) = discover(&self.log)?;
-            if value["video"]
-                != json!(std::fs::canonicalize(&video)
-                    .map_err(|e| crate::cs2_session::io_error("恢复目标无法确认。", &e))?)
+            if Path::new(&value.video)
+                != std::fs::canonicalize(&video)
+                    .map_err(|e| crate::cs2_session::io_error("恢复目标无法确认。", &e))?
             {
                 return Err("请登录原目标 Steam 账号后重试恢复。".into());
             }
@@ -1560,7 +814,7 @@ impl ManagedCs2 {
         }
         // Preserve Demo quarantine until all core cleanup has completed.
         let had_spectator = self.store.spectator_pending() || self.store.full_spectator_pending();
-        let spectator_error = if value["fullSnapshot"] == true {
+        let spectator_error = if value.full_snapshot {
             let (executable, video, account) = self.recovery_identity()?;
             if any_cs2_running(&self.log)? {
                 return Err("等待 CS2 退出后恢复原配置。".into());
@@ -1586,7 +840,7 @@ impl ManagedCs2 {
             );
             self.message = Some(format!(
                 "{} {}",
-                if value["preserveSettings"] == true {
+                if value.preserve_settings {
                     "本次受管设置已恢复，画质与帧率未接管；观战原值仍待恢复。"
                 } else {
                     "帧率与画质已恢复，观战原值仍待恢复。"
@@ -1653,16 +907,12 @@ impl ManagedCs2 {
                 "当前控制权限不支持可靠读回，请使用游戏原生设置。",
             ));
         };
-        if context["mulnxLaunch"] != true {
+        if !context.mulnx_launch {
             return Ok(unsupported(
                 "当前启动方式不支持现场帧率控制，请使用游戏原生设置。",
             ));
         }
-        let executable = PathBuf::from(
-            context["executable"]
-                .as_str()
-                .ok_or("受管游戏路径不可用。")?,
-        );
+        let executable = PathBuf::from(context.executable.as_str());
         crate::cs2_frame_rate_live::control(&log, &executable, &process, action, limit, || {
             process.is_running()
                 && self.workspace_process().is_ok_and(|now| {
@@ -1702,21 +952,6 @@ impl ManagedCs2 {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
     }
-    pub fn start(&mut self) -> Result<bool, String> {
-        self.start_with_settings(false)
-    }
-    pub fn start_with_settings(&mut self, preserve: bool) -> Result<bool, String> {
-        self.start_preparation(
-            preserve,
-            None,
-            &crate::preparation_gate::PreparationGuard {
-                gate: None,
-                id: None,
-                verify: None,
-                exit: None,
-            },
-        )
-    }
     pub fn start_preparation(
         &mut self,
         preserve: bool,
@@ -1725,7 +960,7 @@ impl ManagedCs2 {
     ) -> Result<bool, String> {
         let journal = self.store.load()?;
         if let (Some(id), Some(existing)) = (preparation_id, journal.as_ref()) {
-            if existing["preparationId"] != id {
+            if existing.preparation_id.as_deref() != Some(id) {
                 return Err("已有其他游戏事务，请先完成原配置恢复。".into());
             }
         }
@@ -1743,15 +978,12 @@ impl ManagedCs2 {
         preserve: bool,
         preparation_id: Option<&str>,
         guard: &crate::preparation_gate::PreparationGuard<'_>,
-    ) -> Result<Value, String> {
+    ) -> Result<SessionRecord, String> {
         if !self.start_internal(preserve, None, true, preparation_id, guard)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if !same_executable(
-            expected,
-            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
-        ) {
+        if !same_executable(expected, journal.executable.as_str()) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
         }
         Ok(journal)
@@ -1762,7 +994,7 @@ impl ManagedCs2 {
         preserve: bool,
         path: &Path,
         request_id: &str,
-    ) -> Result<Value, String> {
+    ) -> Result<SessionRecord, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
         if !self.start_internal(
@@ -1780,10 +1012,7 @@ impl ManagedCs2 {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if !same_executable(
-            expected,
-            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
-        ) {
+        if !same_executable(expected, journal.executable.as_str()) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
         }
         Ok(journal)
@@ -1791,24 +1020,16 @@ impl ManagedCs2 {
     pub(crate) fn submit_managed_mulnx(&self) -> Result<(), String> {
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         let (executable, _, _) = self.recovery_identity()?;
-        if !same_executable(
-            &executable,
-            journal["executable"].as_str().ok_or("游戏路径缺失。")?,
-        ) || any_cs2_running(&self.log)?
+        if !same_executable(&executable, journal.executable.as_str()) || any_cs2_running(&self.log)?
         {
             return Err("游戏身份已变化，未提交启动。".into());
         }
         self.store.validate_video_launch()?;
-        if journal["spectatorCfg"] == true {
+        if journal.spectator_cfg {
             self.store.validate_spectator_launch()?;
             self.store.spectator_load_attempted(true)?;
         }
-        let mut time = FileTime::default();
-        unsafe {
-            GetSystemTimeAsFileTime(&mut time);
-        }
-        journal["launchTime"] = json!(((time.high as u64) << 32) | time.low as u64);
-        journal["launchAttempted"] = json!(true);
+        journal.submit(launch_timestamp())?;
         self.store.save(&journal)
     }
     pub(crate) fn bind_managed_mulnx(
@@ -1819,8 +1040,7 @@ impl ManagedCs2 {
     ) -> Result<(), String> {
         let _process = self.verified_mulnx_process(pid, created, executable)?;
         let mut journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        journal["pid"] = json!(pid);
-        journal["created"] = json!(created);
+        journal.bind(pid, created)?;
         self.store.save(&journal)?;
         self.commit_managed_source(&mut journal)
     }
@@ -1833,16 +1053,15 @@ impl ManagedCs2 {
         executable: &Path,
     ) -> Result<WorkspaceProcess, String> {
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if (!journal["pid"].is_null() || !journal["created"].is_null())
-            && (journal["pid"].as_u64() != Some(pid as u64)
-                || journal["created"].as_u64() != Some(created))
+        if (journal.pid().is_some() || journal.created().is_some())
+            && (journal.pid() != Some(pid) || journal.created() != Some(created))
         {
             return Err("游戏已变化，请关闭游戏和 MulNX 后恢复设置。".into());
         }
-        if journal["launchAttempted"] != true
+        if !journal.was_submitted()
             || created
-                < journal["launchTime"]
-                    .as_u64()
+                < journal
+                    .launch_time()
                     .ok_or("无法确认本次启动，请恢复设置。")?
             || cs2_pids(&self.log)? != vec![pid]
         {
@@ -1852,18 +1071,11 @@ impl ManagedCs2 {
         let (actual_created, actual_executable) = identity(&process, &self.log)?;
         if actual_created != created
             || !same_executable(&actual_executable, &executable.to_string_lossy())
-            || !same_executable(
-                executable,
-                journal["executable"].as_str().ok_or("游戏路径缺失。")?,
-            )
+            || !same_executable(executable, journal.executable.as_str())
         {
             return Err("游戏身份已变化，原配置备份仍保留。".into());
         }
-        Ok(WorkspaceProcess {
-            process: Arc::new(process),
-            pid,
-            created,
-        })
+        Ok(WorkspaceProcess::hold_verified(process, pid, created))
     }
     pub fn ensure_demo_available(&self) -> Result<(), String> {
         if self.store.load()?.is_some() || any_cs2_running(&self.log)? {
@@ -1921,8 +1133,8 @@ impl ManagedCs2 {
         if let Some(journal) = self.store.load()? {
             if !crate::preparation_gate::may_recover_mulnx_journal(
                 Some(expected),
-                journal["preparationId"].as_str(),
-                journal["mulnxLaunch"] == true,
+                journal.preparation_id.as_deref(),
+                journal.mulnx_launch,
             ) {
                 return Err("游戏事务已变化，未恢复其他启动的配置。".into());
             }
@@ -1930,28 +1142,25 @@ impl ManagedCs2 {
         self.cancel_unsubmitted_mulnx()
     }
     pub fn demo_launch_attempted(&self) -> Result<bool, String> {
-        Ok(self
-            .store
-            .load()?
-            .is_some_and(|v| v["launchAttempted"] == true))
+        Ok(self.store.load()?.is_some_and(|v| v.was_submitted()))
     }
     pub(crate) fn matches_pending_demo(&self, request_id: &str) -> Result<bool, String> {
         Ok(self.store.load()?.is_some_and(|v| {
-            v["demoTestRequestId"].as_str() == Some(request_id)
-                && v["mulnxLaunch"] == true
-                && v["launchAttempted"] == true
+            v.demo_test_request_id.as_deref() == Some(request_id)
+                && v.mulnx_launch
+                && v.was_submitted()
         }))
     }
     pub fn has_demo_journal(&self) -> Result<bool, String> {
         Ok(self
             .store
             .load()?
-            .is_some_and(|v| v.get("demoTestRequestId").is_some()))
+            .is_some_and(|v| v.demo_test_request_id.is_some()))
     }
     pub fn validate_demo_running(&mut self, request_id: &str) -> Result<(), String> {
         self.recover(false)?;
         let journal = self.store.load()?.ok_or("Demo 游戏启动记录已失效。")?;
-        if journal["demoTestRequestId"].as_str() != Some(request_id)
+        if journal.demo_test_request_id.as_deref() != Some(request_id)
             || owned_process(&journal, &self.log)?.is_none()
         {
             return Err("正在等待本次 Demo 的 CS2 启动，请稍后重试。".into());
@@ -2030,21 +1239,21 @@ impl ManagedCs2 {
             }
         };
         if let Some(error) = hud_recovery_warning {
-            journal["hudRecoveryWarning"] = json!(error);
+            journal.hud_recovery_warning = Some(error.clone());
         }
         if prepare_only {
-            journal["mulnxLaunch"] = json!(true);
+            journal.mulnx_launch = true;
         }
         if let Some(id) = preparation_id {
-            journal["preparationId"] = json!(id);
+            journal.preparation_id = Some(id.to_owned());
             // Durable before any Steam or MulNX launch request is submitted.
             self.store.save(&journal)?;
         }
-        if journal["spectatorCfg"] == true {
+        if journal.spectator_cfg {
             if let Err(error) = (|| {
                 self.store.validate_spectator_launch()?;
-                if journal["nativeHudToggle"] == true {
-                    let identity = journal["hudIdentity"].as_str().ok_or("HUD 键身份缺失。")?;
+                if journal.native_hud_toggle {
+                    let identity = journal.hud_identity.as_deref().ok_or("HUD 键身份缺失。")?;
                     if self.store.spectator_hud_identity()?.as_deref() != Some(identity) {
                         return Err("HUD 键身份记录不一致。".into());
                     }
@@ -2052,7 +1261,7 @@ impl ManagedCs2 {
                 Ok::<(), String>(())
             })() {
                 let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
-                journal["spectatorWarning"] = json!(warning);
+                journal.spectator_warning = Some(warning.clone());
                 self.store.save(&journal)?;
                 return Err(warning);
             }
@@ -2060,50 +1269,49 @@ impl ManagedCs2 {
         if !preserve {
             self.log.event(
                 "cs2_spectator_cfg",
-                if journal["spectatorCfg"] == true || journal["fullSnapshot"] == true {
+                if journal.spectator_cfg || journal.full_snapshot {
                     "success"
                 } else {
                     "failure"
                 },
                 Some(
-                    &json!({"stage":"prepared", "file":if journal["fullSnapshot"] == true { None } else { Some(crate::cs2_spectator::CFG_NAME) },
-                    "runtime":"unverified", "reason":journal["spectatorWarning"]})
+                    &json!({"stage":"prepared", "file":if journal.full_snapshot { None } else { Some(crate::cs2_spectator::CFG_NAME) },
+                    "runtime":"unverified", "reason":journal.spectator_warning})
                     .to_string(),
                 ),
             );
         }
         if let Some((argument, request_id)) = demo {
-            journal["demoTestRequestId"] = json!(request_id);
-            journal["demoPlaybackCfg"] = crate::demo_test::playback_cfg_plan(request_id, argument)?;
+            journal.demo_test_request_id = Some(request_id.to_owned());
+            journal.demo_playback_cfg = crate::demo_test::playback_cfg_plan(request_id, argument)?;
             self.store.save(&journal)?;
-            if let Err((error, created)) = crate::demo_test::install_playback_cfg(&journal) {
+            if let Err((error, created)) = crate::demo_test::install_playback_cfg(&journal.value())
+            {
                 // A create_new collision never grants ownership of an existing file.
                 // Keep core configuration recovery available after a refused install.
                 if !created {
-                    if let Some(object) = journal.as_object_mut() {
-                        object.remove("demoPlaybackCfg");
-                    }
+                    journal.demo_playback_cfg = Value::Null;
                 } else {
-                    journal["demoPlaybackCfgError"] = json!(error);
+                    journal.demo_playback_cfg_error = Some(error.clone());
                 }
                 self.store.save(&journal)?;
                 return Err(error);
             }
         }
         match crate::cs2_console::prepare(&self.log, &executable) {
-            Ok(Some(prepared)) => journal["consoleDiagnostics"] = prepared,
+            Ok(Some(prepared)) => journal.console_diagnostics = prepared,
             Ok(None) => (),
             Err(error) => {
                 // Optional evidence must not gate gameplay. Keep the old raw file
                 // untouched and disable this launch's capture, including MulNX.
-                journal["consoleDiagnostics"] = Value::Null;
+                journal.console_diagnostics = Value::Null;
                 let code = if error.starts_with("raw_console_preservation_failed:") {
                     "raw_preservation_failed"
                 } else {
                     "source_prepare_failed"
                 };
                 self.log.event("cs2_console_prepare", "failure", Some(&json!({"error":error,"code":code,"condebugRequested":false,"gameLaunchContinues":true}).to_string()));
-                journal["consoleDiagnosticsWarning"] = json!({"code":code,"error":error});
+                journal.console_diagnostics_warning = json!({"code":code,"error":error});
             }
         }
         self.store.save(&journal)?;
@@ -2131,7 +1339,7 @@ impl ManagedCs2 {
                         .as_nanos()
                 )
             });
-            journal["managedSourceRequestId"] = json!(request_id.clone());
+            journal.managed_source_request_id = Some(request_id.clone());
             self.store.save(&journal)?;
             let mut request = json!({"action":"prepare","requestId":request_id});
             if let Some(id) = preparation_id {
@@ -2189,35 +1397,22 @@ impl ManagedCs2 {
             if any_cs2_running(&self.log)? {
                 return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
             }
-            let mut command = Command::new(&steam.process.executable);
-            command.current_dir(
-                steam
-                    .process
-                    .executable
-                    .parent()
-                    .ok_or("Steam 程序目录无效。")?,
-            );
-            command.args(LAUNCH_ARGS).args([
-                "-w",
-                &size.width.to_string(),
-                "-h",
-                &size.height.to_string(),
-            ]);
+            let mut command = steam.command(size)?;
             if !preserve {
                 command.args([
                     "+fps_max",
-                    &journal["frameRateLimit"]
-                        .as_u64()
+                    &journal
+                        .frame_rate_limit
                         .ok_or("帧率启动参数缺失。")?
                         .to_string(),
                 ]);
             }
-            if journal["spectatorCfg"] == true {
+            if journal.spectator_cfg {
                 match self.store.spectator_load_attempted(true) {
                     Ok(()) => {
-                        let cfg = if journal["nativeHudToggle"] == true {
+                        let cfg = if journal.native_hud_toggle {
                             crate::cs2_spectator::hud_cfg_name(
-                                journal["hudIdentity"].as_str().unwrap_or(""),
+                                journal.hud_identity.as_deref().unwrap_or(""),
                             )?
                         } else {
                             crate::cs2_spectator::CFG_NAME
@@ -2226,33 +1421,33 @@ impl ManagedCs2 {
                     }
                     Err(error) => {
                         let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
-                        journal["spectatorWarning"] = json!(warning);
+                        journal.spectator_warning = Some(warning.clone());
                         self.store.save(&journal)?;
-                        self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
+                        self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal.spectator_warning}).to_string()));
                         return Err(warning);
                     }
                 }
             }
 
-            if journal["consoleDiagnostics"]["version"] == 1 {
+            if journal.console_diagnostics["version"] == 1 {
                 match crate::cs2_console::settings(&self.log) {
                     Ok(config)
                         if config["enabled"] == true
                             && config["generation"]
-                                == journal["consoleDiagnostics"]["generation"] =>
+                                == journal.console_diagnostics["generation"] =>
                     {
                         command.arg("-condebug");
                     }
                     result => {
                         self.log.event("cs2_console_prepare", "interrupted", Some(&json!({"reason":"consent_changed_before_launch","current":format!("{result:?}"),"condebugRequested":false}).to_string()));
-                        journal["consoleDiagnostics"] = Value::Null;
+                        journal.console_diagnostics = Value::Null;
                     }
                 }
             }
             if demo.is_some() {
                 command.args([
                     "+exec",
-                    journal["demoPlaybackCfg"]["name"]
+                    journal.demo_playback_cfg["name"]
                         .as_str()
                         .ok_or("Demo 播放 CFG 名称缺失。")?,
                 ]);
@@ -2267,28 +1462,23 @@ impl ManagedCs2 {
             // Recheck the account, saved Steam arguments and key identity before submission.
             steam.validate_window_options(
                 size,
-                !journal["consoleDiagnosticsWarning"].is_null(),
+                !journal.console_diagnostics_warning.is_null(),
                 &self.log,
             )?;
             if any_cs2_running(&self.log)? {
                 return Err("请先退出已打开的 CS2，再由 Mizar 启动。".into());
             }
-            if journal["spectatorCfg"] == true {
+            if journal.spectator_cfg {
                 self.store.validate_spectator_launch()?;
             }
             self.store.validate_video_launch()?;
             // Commit the ambiguous-launch marker only after all checks and
             // argument validation, immediately before sending the Steam request.
-            let mut time = FileTime::default();
-            unsafe {
-                GetSystemTimeAsFileTime(&mut time);
-            }
-            let launch_time = ((time.high as u64) << 32) | time.low as u64;
-            journal["launchTime"] = json!(launch_time);
-            journal["launchAttempted"] = json!(true);
+            let launch_time = launch_timestamp();
+            journal.submit(launch_time)?;
             guard.commit(|| {
                 self.store.save(&journal)?;
-                self.submit_steam(&mut command).map_err(|error| {
+                submit_steam(&mut command).map_err(|error| {
                     self.log.event(
                         "cs2_launch",
                         "failure",
@@ -2297,12 +1487,8 @@ impl ManagedCs2 {
                         error.raw_os_error()
                     )),
                     );
-                    if journal["fullSnapshot"] == true {
-                        journal["launchCancelled"] = json!(true);
-                    } else {
-                        journal["launchAttempted"] = json!(false);
-                    }
-                    if journal["spectatorCfg"] == true {
+                    journal.submission_failed();
+                    if journal.spectator_cfg {
                         if let Err(error) = self.store.spectator_load_attempted(false) {
                             self.log
                                 .event("cs2_spectator_restore", "failure", Some(&error));
@@ -2338,15 +1524,6 @@ impl ManagedCs2 {
             Ok(true)
         })();
         self.complete_launch(launch, demo.is_some())
-    }
-    fn submit_steam(&self, command: &mut Command) -> std::io::Result<()> {
-        command
-            .creation_flags(0x08000000)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map(|_| ())
     }
     fn complete_launch(
         &mut self,
@@ -2399,11 +1576,7 @@ impl ManagedCs2 {
         let original = backup_text(&video, 128 * 1024)?;
         crate::cs2_video::compatible_restore(&backup, &original)?;
         let account_id = (76561197960265728u64 + u64::from(steam.account)).to_string();
-        let steam_root = steam
-            .process
-            .executable
-            .parent()
-            .ok_or("Steam 目录不可用。")?;
+        let steam_root = steam.directory()?;
         let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024 * 1024)?;
         let nickname = crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])
             .map_err(|error| format!("loginusers.vdf / 读取账号昵称：{error}"))?
@@ -2737,11 +1910,6 @@ impl ManagedCs2 {
         self.poll();
         if let Some(value) = self.store.load()? {
             if let Some(process) = owned_process(&value, &self.log)? {
-                let pid = value["pid"]
-                    .as_u64()
-                    .and_then(|v| u32::try_from(v).ok())
-                    .ok_or("CS2 进程记录缺失。")?;
-                let created = value["created"].as_u64().ok_or("CS2 进程记录缺失。")?;
                 // Every owned-game exit, including application shutdown and a
                 // failed workbench entry, must pass the same MulNX unload fence.
                 // External sessions have already returned through detach above.
@@ -2751,7 +1919,7 @@ impl ManagedCs2 {
                             crate::mulnx_launch::stop_managed_for_exit(self, &self.log)
                         })
                     },
-                    || guard.commit(|| close_owned_process(&process, pid, created, &self.log)),
+                    || guard.commit(|| process.close(&self.log)),
                 );
                 if let Err(error) = result {
                     self.message = Some(error.clone());
@@ -2763,7 +1931,7 @@ impl ManagedCs2 {
             .store
             .load()?
             .as_ref()
-            .is_some_and(crate::cs2_session::unconfirmed_launch)
+            .is_some_and(SessionRecord::unconfirmed_launch)
         {
             return Err(
                 "Steam 启动仍在等待。请先取消 Steam 启动请求，并确认 CS2 已关闭，再恢复备份。"

@@ -53,7 +53,7 @@ impl UnloadProof {
         }
         Ok(proof)
     }
-    pub fn confirm(&self, game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+    pub fn confirm(&self, game: &crate::cs2_process::WorkspaceProcess) -> Result<(), String> {
         if unsafe { WaitForSingleObject(self.0 .0, 10000) } != 0 {
             return Err("MulNX 卸载完成未确认，请保留游戏并检查后重试。".into());
         }
@@ -61,7 +61,7 @@ impl UnloadProof {
     }
 }
 
-fn module_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<bool, String> {
+fn module_present(game: &crate::cs2_process::WorkspaceProcess) -> Result<bool, String> {
     if !game.is_running() {
         return Err("游戏已退出，MulNX 状态无法单独确认。".into());
     }
@@ -96,7 +96,7 @@ fn module_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<bool, S
 
 /// A live gateway and loaded module establish the current injection before
 /// opening its event; the event name alone does not identify an injection cycle.
-pub fn verify_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+pub fn verify_present(game: &crate::cs2_process::WorkspaceProcess) -> Result<(), String> {
     if !module_present(game)? {
         return Err("当前游戏没有已启动的 MulNX 模块，未发送停止命令。".into());
     }
@@ -104,7 +104,7 @@ pub fn verify_present(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(),
 }
 
 /// Recheck the same live process on every retry, including after a restart.
-pub fn verify_absent(game: &crate::managed_cs2::WorkspaceProcess) -> Result<(), String> {
+pub fn verify_absent(game: &crate::cs2_process::WorkspaceProcess) -> Result<(), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if !module_present(game)? {
