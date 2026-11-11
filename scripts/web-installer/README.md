@@ -28,7 +28,7 @@ Box 过渡期只新增原始 latest 与每版机器元数据；旧 WebInstaller 
 
 确认网络下载失败或下载超时后，提示可点击「下载完整离线包」，从 [GitHub 正式发布页](https://github.com/Starfie1d1272/Mizar/releases/latest)选择完整 Setup 或离线 ZIP；首屏不显示此提示。文件验证、权限、发布验证超时与用户取消不显示网络下载指引，多个来源的聚合错误也保留这些区别。入口只打开固定的可信下载页，不执行下载或安装，也不改变验证约束。
 
-新事务保留固定安装计划摘要、安装器摘要、配对目录 token 和进程 PID/创建时间。重新打开同一安装器的「恢复安装」在原独占锁内核对记录与旧写入结束：完整程序继续资源准备；部分程序移到同级 `*.incomplete-<事务ID>` 原样保留，再安装到新目录。未知文本 marker、损坏记录、活动或无法查询的进程保持现场。卸载回滚也记录写入进程；旧写入确认结束后，残留安装原样保留再修复。进程启动与 PID/创建时间持久化之间的窗口，以及旧版只记录 `rollback` 的 marker，仍拒绝自动恢复，需要人工核对；不能直接删除 marker 强行重试。
+新事务保留固定安装计划摘要、安装器摘要、配对目录 token 和进程 PID/创建时间。跨异步步骤使用原文件独占锁；检查实例后隔离／预留目录、恢复和回滚清理的同步步骤另持有 NSIS／更新工具共同写者互斥，不跨异步等待持有线程锁。每次回滚清理重试重新核对实例，后继安装接管时保留现场。重新打开同一安装器的「恢复安装」在共同写者互斥内核对记录与旧写入结束：完整程序继续资源准备；部分程序移到同级 `*.incomplete-<事务ID>` 原样保留，再安装到新目录。未知文本 marker、损坏记录、活动或无法查询的进程保持现场。卸载回滚也记录写入进程；旧写入确认结束后，残留安装原样保留再修复。进程启动与 PID/创建时间持久化之间的窗口，以及旧版只记录 `rollback` 的 marker，仍拒绝自动恢复，需要人工核对；不能直接删除 marker 强行重试。
 
 资源目录 v2 将当前 Core 的 Qualification/Promotion 授权与原 Pack Qualification、原发行声明 Promotion 与原发布版本/规范地址分开；v1 保持原严格绑定。跨兼容 Core 复用保存原主 catalog，并在同一 receipt 附加当前 Core 授权，旧 Core 回滚仍可使用原主 catalog。Qualification 可选 `resource_source_run` 和可选精确 `resource_source_artifact`（默认从成功 Promotion 任务唯一的资源 artifact 选择；后续资格 artifact 必须保留原发行证明，旧的仅 Qualification 资源 artifact 会拒绝），先验证原始 Qualification/Promotion 签名与实际内容再复制原 ZIP/证明，只签发新 Core 描述符，不改写 Pack 原始 SHA 或重打包。
 
