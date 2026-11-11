@@ -33,6 +33,18 @@ export async function replaceDurableJson(
   value: unknown,
   options: DurableJsonReplaceOptions = {},
 ): Promise<boolean> {
+  return replaceDurableFile(
+    filePath,
+    () => serializeDurableJson(value, options.compact ?? false),
+    options,
+  );
+}
+
+export async function replaceDurableFile(
+  filePath: string,
+  body: () => string | Uint8Array,
+  options: Omit<DurableJsonReplaceOptions, 'compact'> = {},
+): Promise<boolean> {
   if (options.canCommit !== undefined && !options.canCommit()) return false;
 
   await mkdir(dirname(filePath), { recursive: true });
@@ -43,7 +55,8 @@ export async function replaceDurableJson(
 
   try {
     options.faultInjector?.('before-write');
-    await writeFile(temporaryPath, serializeDurableJson(value, options.compact ?? false), {
+    await writeFile(temporaryPath, body(), {
+      flag: 'wx',
       encoding: 'utf8',
       mode: 0o600,
       flush: true,

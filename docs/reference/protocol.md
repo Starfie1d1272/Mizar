@@ -28,7 +28,7 @@ Mizar 契约严格校验结构、版本与大小，各契约独立演进；破�
 
 默认仅监听 `127.0.0.1`，生产网页和 WebSocket 由同一服务提供。非回环查看须显式启用 `LOCAL_WEB_LAN_MODE=1` 并配置精确 `LOCAL_WEB_ALLOWED_ORIGINS`；**LAN 模式只开放公共查看，允许 Origin 不授予私有读取或写入权。**
 
-普通本机写入要求回环模式和可信 Origin。Host 私有 `/operator/runtime/*` 入口另要求本次运行的 `x-runtime-token` 并拒绝网页 Origin；具体入口仍核对制作、窗口或事务资格。GSI 认证、运行时能力、验收令牌和平台凭据互相独立，不混用。
+私有页面、HTTP 接口和私有 WebSocket 要求回环模式及回环 Host。Host 以请求实际 authority 为准。页面路径由[网页路径表](../../packages/protocol/src/local-pages.ts)和节目场景共用。普通本机写入另要求可信 Origin。Host 私有 `/operator/runtime/*` 入口另要求本次运行的 `x-runtime-token` 并拒绝网页 Origin；具体入口仍核对制作、窗口或事务资格。GSI 认证、运行时能力、验收令牌和平台凭据互相独立，不混用。
 
 WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业务数据；客户端业务消息以 1008 关闭。压缩关闭，心跳和缓冲有界。客户端按页面选择 `ws:`/`wss:`。凭据和底层密钥不进入公共投影或诊断导出。诊断可保留排查必需的技术路径，但不接受任意路径采集私人文件内容；高影响操作不离线排队后静默执行。
 
@@ -48,7 +48,7 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 | `GET /local/v1/tournament` | 本地库、选择和相邻赛程 |
 | `POST /operator/local-match/create`、`select`、`save` | 创建、选择、保存；修订与引用核对后原子提交 |
 | `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与顺序 |
-| `POST /operator/local-asset` | 有界 PNG/JPEG/WebP 资源 |
+| `POST /operator/local-asset` | 有界 PNG/JPEG/WebP 资源。按字节摘要原子写入，同内容重传可修复残缺文件，读取核对摘要 |
 | `POST /operator/local-tournament/reload` | 故障修复后显式重读资料库，不激活比赛 |
 
 队伍复用按明确 `teamId`，不按同名猜测。模板更新不追改其他比赛快照；`create` 的可选 `eventName` 仅在无 `eventId` 时创建赛事。比赛删除/恢复、当前引用和退出资格由[资料库路由](../../apps/companion/src/match-context/local-tournament-routes.ts)与[架构](architecture.md#比赛与赛事上下文)维护。

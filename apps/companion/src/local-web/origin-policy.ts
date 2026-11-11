@@ -35,6 +35,11 @@ export function isLoopbackBindHost(host: string): boolean {
   return isIP(normalized) === 4 && normalized === '127.0.0.1';
 }
 
+/** Check the HTTP authority itself, independent of Origin and forwarded headers. */
+export function isLoopbackHostHeader(host: string | undefined): boolean {
+  return host !== undefined && /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?$/i.test(host);
+}
+
 function normalizeAllowedOrigin(origin: string): string {
   const parsed = new URL(origin.trim());
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {

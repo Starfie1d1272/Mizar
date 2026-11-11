@@ -18,6 +18,7 @@ import {
 import {
   checkLocalWebOrigin,
   createLocalWebOriginPolicy,
+  isLoopbackHostHeader,
   type LocalWebOriginPolicy,
   type LocalWebOriginPolicyOptions,
 } from './origin-policy.js';
@@ -561,7 +562,8 @@ export function registerLocalWebSocketTransport(
   const policy = transport.getOriginPolicy();
   app.addHook('onRequest', async (request, reply) => {
     const path = request.url.split('?', 1)[0] ?? '';
-    if (policy.mode === 'lan' && localRouteVisibility(path) !== 'public')
+    if (localRouteVisibility(path) === 'public') return;
+    if (policy.mode === 'lan' || !isLoopbackHostHeader(request.headers.host))
       return reply.code(403).send({ error: 'private_surface_loopback_only' });
   });
   app.get('/local/protocol', async (_request, reply) =>

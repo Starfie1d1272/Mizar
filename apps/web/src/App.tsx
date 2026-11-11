@@ -36,6 +36,11 @@ import { ProgramScenePage } from './program/ProgramScenePage';
 import { StatsInsertPage } from './program/StatsInsertPage';
 import { programSceneForPath } from '@mizar/protocol/program-scenes';
 import {
+  LOCAL_TOOL_PATHS,
+  PREPARATION_PATHS,
+  PUBLIC_PROGRAM_PATHS,
+} from '@mizar/protocol/local-pages';
+import {
   WorkspaceDock,
   WorkspaceLeft,
   WorkspacePreview,
@@ -73,7 +78,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'debug',
-    path: '/debug',
+    path: LOCAL_TOOL_PATHS.debug,
     title: '运行诊断',
     description: '查看本地制播服务当前的输入、归一化结果、运行状态与退化信号。',
     realtimeChannel: null,
@@ -87,7 +92,7 @@ export const surfaceDefinitions = [
   },
   {
     id: 'hud',
-    path: '/operator/hud',
+    path: LOCAL_TOOL_PATHS.hud,
     title: 'HUD 编辑器',
     description: '编辑并预览 Gameplay HUD 的预设与布局。',
     realtimeChannel: null,
@@ -709,10 +714,9 @@ export function DebugPage() {
 
 export function App() {
   const pathname = window.location.pathname;
-  if (pathname === '/packages') return <ResourceLibraryPage />;
-  if (['/', '/operator', '/matches', '/resources', '/picture', '/settings'].includes(pathname))
-    return <PreparationPage />;
-  if (pathname === '/qualification')
+  if (pathname === LOCAL_TOOL_PATHS.packages) return <ResourceLibraryPage />;
+  if (PREPARATION_PATHS.includes(pathname)) return <PreparationPage />;
+  if (pathname === LOCAL_TOOL_PATHS.qualification)
     return (
       <OperatorShell active="/qualification">
         <main className="operator-shell">
@@ -752,14 +756,14 @@ export function App() {
   }
 
   if (pathname === '/program/bp') return <BpPage />;
-  if (pathname === '/program/bp-compact') return <BpPage compact />;
-  if (pathname === '/workspace') return <WorkspacePreview />;
-  if (pathname === '/workspace/game-picture') return <GamePictureTool />;
-  if (pathname === '/workspace/connection') return <MatchConnectionDialog />;
-  if (pathname === '/workspace/review') return <WorkspaceReview />;
-  if (pathname === '/workspace/left') return <WorkspaceLeft />;
-  if (pathname === '/workspace/dock') return <WorkspaceDock />;
-  if (pathname === '/program/stats') return <StatsInsertPage />;
+  if (pathname === PUBLIC_PROGRAM_PATHS.compactBp) return <BpPage compact />;
+  if (pathname === LOCAL_TOOL_PATHS.workspace) return <WorkspacePreview />;
+  if (pathname === LOCAL_TOOL_PATHS.workspaceGamePicture) return <GamePictureTool />;
+  if (pathname === LOCAL_TOOL_PATHS.workspaceConnection) return <MatchConnectionDialog />;
+  if (pathname === LOCAL_TOOL_PATHS.workspaceReview) return <WorkspaceReview />;
+  if (pathname === LOCAL_TOOL_PATHS.workspaceLeft) return <WorkspaceLeft />;
+  if (pathname === LOCAL_TOOL_PATHS.workspaceDock) return <WorkspaceDock />;
+  if (pathname === PUBLIC_PROGRAM_PATHS.statistics) return <StatsInsertPage />;
   const programScene = programSceneForPath(pathname);
   if (
     programScene?.id === 'gameplay' &&
@@ -768,7 +772,7 @@ export function App() {
     return <ProgramScenePage sceneId="gameplay" />;
   if (programScene && programScene.id !== 'gameplay' && programScene.id !== 'bp')
     return <ProgramScenePage sceneId={programScene.id} />;
-  if (pathname === '/operator/bp') return <LegacyBpRedirect />;
+  if (pathname === LOCAL_TOOL_PATHS.legacyBp) return <LegacyBpRedirect />;
   const surface = surfaceForPath(pathname);
   if (surface === undefined)
     return (

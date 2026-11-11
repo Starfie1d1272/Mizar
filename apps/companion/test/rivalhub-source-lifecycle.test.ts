@@ -54,6 +54,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let staleStatus = false;
   let liveGate: Promise<void> | null = null;
   let claimGate: Promise<void> | null = null;
+  let releaseGate: ((signal: AbortSignal | null | undefined) => Promise<void>) | undefined;
   let notifyClaim!: () => void;
   const claimStarted = new Promise<void>((resolve) => {
     notifyClaim = resolve;
@@ -138,6 +139,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         authority: headers.get('x-rivalhub-authority'),
         authorization: headers.get('authorization'),
       });
+      await releaseGate?.(init?.signal);
       if (failRelease)
         return new Response(null, {
           status: 503,
@@ -221,6 +223,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setClaimGate: (v: Promise<void>) => {
       claimGate = v;
+    },
+    setReleaseGate: (value: typeof releaseGate) => {
+      releaseGate = value;
     },
     setSettle: (v: boolean) => {
       settle = v;
@@ -554,4 +559,37 @@ test('a delayed claim after a binding switch cannot enable the old source', asyn
   assert.equal(h.connection.view().sourceCleanup.pending, 1);
   await h.connection.release();
   assert.equal(h.releases.length, 1);
+});
+
+test('a release response after shutdown cancellation preserves the original handoff for recovery', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  let releaseStarted!: (signal: AbortSignal | null | undefined) => void;
+  let respond!: () => void;
+  const started = new Promise<AbortSignal | null | undefined>((resolve) => {
+    releaseStarted = resolve;
+  });
+  const response = new Promise<void>((resolve) => {
+    respond = resolve;
+  });
+  h.setReleaseGate((signal) => {
+    releaseStarted(signal);
+    return response;
+  });
+  const shutdown = new AbortController();
+  const pending = h.connection.shutdownSource(shutdown.signal);
+  const requestSignal = await started;
+  shutdown.abort(new Error('shutdown timeout'));
+  assert.equal(requestSignal?.aborted, true);
+  await h.connection.closeSourceState();
+  respond();
+  await assert.rejects(pending, /shutdown timeout/);
+  const sourceState = JSON.parse(
+    await readFile(join(h.path, '..', 'rivalhub-source-state.json'), 'utf8'),
+  );
+  assert.equal(sourceState.records[0]?.state, 'release_pending');
+  assert.equal(sourceState.records[0]?.identity.matchId, h.snapshot.matchId);
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.pending, 0);
 });

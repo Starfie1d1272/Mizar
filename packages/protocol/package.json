@@ -62,6 +62,10 @@
       "types": "./dist/bp.d.ts",
       "import": "./dist/bp.js"
     },
+    "./local-pages": {
+      "types": "./dist/local-pages.d.ts",
+      "import": "./dist/local-pages.js"
+    },
     "./program-scenes": {
       "types": "./dist/program-scenes.d.ts",
       "import": "./dist/program-scenes.js"

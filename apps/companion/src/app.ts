@@ -1800,8 +1800,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.get('/local/v1/resource-library', (request, reply) => {
     const policy = localWebTransport.getOriginPolicy();
     if (
-      policy.mode !== 'loopback' ||
-      !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
       request.headers['sec-fetch-site'] === 'cross-site' ||
       (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
     )
@@ -2660,17 +2658,19 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     await closeStep(() => diagnosticDelivery.close());
 
-    // Remote release is best effort after local persistence; its uncertainty is
-    // retained by the connection for reconciliation on the next start.
+    // A remote release can remain pending. A local writer cannot outlive its receipt.
     if (options.rivalhubConnection?.shutdownSource) {
+      const remote = new AbortController();
+      const timeout = new Error('数据源远端收尾超时');
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          options.rivalhubConnection
-            .shutdownSource()
-            .finally(() => closeStep(() => outputService.close())),
+          options.rivalhubConnection.shutdownSource(remote.signal),
           new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('数据源远端收尾超时')), 9000);
+            timer = setTimeout(() => {
+              remote.abort(timeout);
+              reject(timeout);
+            }, 9000);
           }),
         ]);
       } catch (error) {
@@ -2679,7 +2679,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         if (timer) clearTimeout(timer);
       }
     }
-    if (!options.rivalhubConnection?.shutdownSource) await closeStep(() => outputService.close());
+    await closeStep(() => options.rivalhubConnection?.closeSourceState?.());
+    await closeStep(() => outputService.close());
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
     if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
       const stateRoot = process.env.MIZAR_STATE_ROOT;
