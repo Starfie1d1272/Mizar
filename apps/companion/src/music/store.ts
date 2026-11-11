@@ -13,6 +13,12 @@ import {
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
 import { audioBytes, readMusicPack } from './archive.js';
 import { preserveDamagedTrack } from './asset-repair.js';
+import type { MusicLayer } from './device.js';
+import {
+  storedAudibleMonitorMode,
+  storedMonitorMode,
+  storedMonitorOriginal,
+} from './monitor-journal.js';
 
 const playbackSchema = z
   .object({
@@ -43,15 +49,8 @@ const stateSchema = z
           .object({
             uuid: z.string().min(1),
             scope: z.string().min(1),
-            before: z.enum([
-              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-              'OBS_MONITORING_TYPE_MONITOR_ONLY',
-              'OBS_MONITORING_TYPE_NONE',
-            ]),
-            applied: z.enum([
-              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-              'OBS_MONITORING_TYPE_MONITOR_ONLY',
-            ]),
+            before: storedMonitorMode,
+            applied: storedAudibleMonitorMode,
             phase: z.enum(['borrowed', 'restoring']),
           })
           .strict(),
@@ -59,40 +58,8 @@ const stateSchema = z
       .default([]),
     desktopMonitorOriginal: z
       .object({
-        bgm: z
-          .object({
-            uuid: z.string(),
-            mode: z.enum([
-              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-              'OBS_MONITORING_TYPE_MONITOR_ONLY',
-              'OBS_MONITORING_TYPE_NONE',
-            ]),
-            applied: z
-              .enum([
-                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-                'OBS_MONITORING_TYPE_MONITOR_ONLY',
-                'OBS_MONITORING_TYPE_NONE',
-              ])
-              .optional(),
-          })
-          .nullable(),
-        stinger: z
-          .object({
-            uuid: z.string(),
-            mode: z.enum([
-              'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-              'OBS_MONITORING_TYPE_MONITOR_ONLY',
-              'OBS_MONITORING_TYPE_NONE',
-            ]),
-            applied: z
-              .enum([
-                'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-                'OBS_MONITORING_TYPE_MONITOR_ONLY',
-                'OBS_MONITORING_TYPE_NONE',
-              ])
-              .optional(),
-          })
-          .nullable(),
+        bgm: storedMonitorOriginal.nullable(),
+        stinger: storedMonitorOriginal.nullable(),
       })
       .strict()
       .default({ bgm: null, stinger: null }),
@@ -141,6 +108,14 @@ const legacyStateSchema = z
     return value;
   });
 export type MusicState = z.infer<typeof stateSchema>;
+export type MusicSourceState = Pick<
+  MusicState,
+  | 'sources'
+  | 'sourceScopes'
+  | 'sourceInitialization'
+  | 'desktopMonitorOriginal'
+  | 'monitorConfigured'
+>;
 export interface MusicConfigPersistence {
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
   readApplied?(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
@@ -398,6 +373,22 @@ export class MusicStore {
     this.failure = false;
     this.ready = true;
   }
+  commitSourceReplacement(
+    layer: MusicLayer,
+    change: (state: MusicSourceState) => void,
+  ): Promise<void> {
+    return this.update((state) => {
+      change(state);
+      const previous = state[layer];
+      if (!previous) return;
+      if (looping(previous.group)) state[layer] = null;
+      else {
+        state[layer] = { ...previous, finished: true };
+        state.consumed = [...state.consumed, previous.key].slice(-64);
+      }
+    });
+  }
+
   update(change: (state: MusicState) => void): Promise<void> {
     const result = this.queue.then(async () => {
       if (this.failure) throw new Error('music_state_invalid');

@@ -1,4 +1,5 @@
 import type { AudioMonitorChange } from './audio-monitor-contract.js';
+import { writeMonitorMode, writeMonitorOriginals } from '../music/monitor-journal.js';
 import { AudioMeter } from './audio-meter.js';
 import { ObsObservationConnection } from './observation-connection.js';
 import {
@@ -1509,7 +1510,15 @@ export class ObsAdapter {
               createMusicDevice(obs),
               desktop ? relationship : 'independent',
               async (plan) => {
-                const monitorChanges = [...microphoneChanges, ...plan.changes];
+                const monitorChanges: AudioMonitorChange[] = [
+                  ...microphoneChanges,
+                  ...plan.changes.map((change) => ({
+                    kind: 'monitor' as const,
+                    inputUuid: change.sourceId,
+                    before: writeMonitorMode(change.before),
+                    applied: writeMonitorMode(change.applied),
+                  })),
+                ];
                 if (monitorChanges.length) {
                   const graph = await inspectAudioSceneGraph(
                     obs,
@@ -1549,7 +1558,10 @@ export class ObsAdapter {
                   ))
                 )
                   throw new Error('audio_commentary_unavailable');
-                const modeId = await begin(plan.musicBefore, plan.musicAfter);
+                const modeId = await begin(
+                  writeMonitorOriginals(plan.musicBefore),
+                  writeMonitorOriginals(plan.musicAfter),
+                );
                 const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
                 const extraIndependent: {
                   sceneName: string;
@@ -1637,7 +1649,7 @@ export class ObsAdapter {
                     monitorChanges,
                     modeId,
                     extraIndependent,
-                    plan.managedMusicUuids ?? [],
+                    plan.managedSources,
                     extraDesktop,
                     Object.values(ids).filter((id): id is string => Boolean(id)),
                   ))

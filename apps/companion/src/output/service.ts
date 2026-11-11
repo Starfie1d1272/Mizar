@@ -132,7 +132,8 @@ export class OutputService {
   private mapStartScope: string | undefined;
   private mapStartRevision = 0;
   private publishedMapStart: { revision: number; key: string } | undefined;
-  private pendingMapStart: { revision: number; key: string; recovery?: string } | undefined;
+  private pendingMapStart:
+    { revision: number; key: string; recovery?: string; checkHistory: boolean } | undefined;
   private lastMapObservation: ReliableEventV1['cursor'] | undefined;
   private recoveredCursor: ReliableEventV1['cursor'] | undefined;
   private readonly boundaryEnqueues = new Set<ReliableEventV1>();
@@ -220,8 +221,17 @@ export class OutputService {
       return;
     const scope = this.boundaryScope(binding.context.matchId, bundle.program.cursor);
     if (!scope || this.outbox.hasBoundaryGap(scope)) return;
-    for (const intent of this.outbox.getBoundaryIntents(scope)) {
-      const c = bundle.program.cursor;
+    const intents = await this.outbox.lookupBoundaryIntents(scope);
+    for (const intent of intents) {
+      if (this.closed || this.quarantined || this.binding !== binding || !this.bundle) return;
+      const c = this.bundle.program.cursor;
+      if (
+        this.bundle.program.status.context !== 'fresh' ||
+        this.bundle.program.series?.status === 'completed' ||
+        this.boundaryAuthority() !== authority ||
+        !this.options.isActiveOnlineBinding?.(binding)
+      )
+        return;
       const e = intent.event.cursor;
       if (
         intent.expired ||
@@ -353,7 +363,7 @@ export class OutputService {
           item.recoveryState === undefined &&
           this.recoveryScope(item.event, item.lineupSteam64) !== undefined,
       );
-    if (!record || this.outbox.startRejections(record.event).length !== 1) return;
+    if (!record || (await this.outbox.lookupStartRejections(record.event)).length !== 1) return;
     const target = record.event.cursor;
     const matches = this.outbox.getRecords().filter((item) => {
       const e = item.event;
@@ -404,7 +414,7 @@ export class OutputService {
           item.recoveryState === undefined &&
           this.recoveryScope(item.event, item.lineupSteam64) !== undefined,
       );
-    if (!record || this.outbox.startRejections(record.event).length !== 1) return;
+    if (!record || (await this.outbox.lookupStartRejections(record.event)).length !== 1) return;
     const scope = this.recoveryScope(record.event, record.lineupSteam64);
     const authority = this.options.authorityScope?.();
     if (
@@ -663,6 +673,9 @@ export class OutputService {
     this.bundle = bundle;
     this.lastBundleAt = this.now().getTime();
     this.binding = binding;
+    this.outbox?.observeDelivery(
+      this.boundaryScope(binding?.context.matchId, bundle.program.cursor),
+    );
     const source = this.sourceFor(binding?.context.matchId, bundle.program.cursor);
     this.boundaryContext = {
       bundle,
@@ -1027,8 +1040,20 @@ export class OutputService {
     ) {
       const cursor = bundle.program.cursor;
       const map = bundle.program.map;
+      const completed = (bundle.program.series?.maps ?? []).filter(
+        (item) => item.status === 'completed',
+      );
+      const evidence = JSON.stringify([
+        cursor.liveSessionId,
+        cursor.programSourceGeneration,
+        cursor.mapEpoch,
+        map.name,
+        map.score.ct,
+        map.score.t,
+        completed.map((item) => [item.mapId, item.mapName, item.finalScore?.a, item.finalScore?.b]),
+      ]);
       void this.outbox
-        ?.supersedeWhere((event) => {
+        ?.supersedeWhere(evidence, (event) => {
           if (
             event.kind !== 'map_ended' ||
             event.cursor.liveSessionId !== cursor.liveSessionId ||
@@ -1036,9 +1061,9 @@ export class OutputService {
             event.cursor.programSourceGeneration !== cursor.programSourceGeneration
           )
             return false;
-          const final = bundle.program.series?.maps.find((item) => item.mapId === event.mapId);
+          const final = completed.find((item) => item.mapId === event.mapId);
           return (
-            (final?.status === 'completed' &&
+            (final &&
               final.finalScore !== null &&
               (final.finalScore.a !== event.payload.scoreA ||
                 final.finalScore.b !== event.payload.scoreB)) ||
@@ -1292,6 +1317,7 @@ export class OutputService {
           this.pendingMapStart = {
             revision: this.mapStartRevision,
             key: event.idempotencyKey,
+            checkHistory: !outputScope || !this.outbox.hasDeliveryHistory(outputScope),
             ...(recovery ? { recovery } : {}),
           };
       }
@@ -1337,8 +1363,11 @@ export class OutputService {
           start?.recovery,
           this.boundaryScope(event.matchId, event.cursor),
           eventSource,
+          false,
+          start?.checkHistory,
         )
-        .then(() => {
+        .then((written) => {
+          if (start?.checkHistory && !written) return;
           if (start !== undefined && start.revision === this.mapStartRevision)
             this.publishedMapStart = start;
           if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
@@ -1538,6 +1567,7 @@ export class OutputService {
       this.trialQuarantined ||
       this.faultQuarantined ||
       this.outboxUnavailable ||
+      (this.outbox !== undefined && !this.outbox.available) ||
       this.outbox?.getBoundaryCaptureRecovery().lost
     )
       return 'continuity_chain_missing';
@@ -1547,6 +1577,7 @@ export class OutputService {
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
     if (!scope) return null;
     if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
+    if (this.outbox && !this.outbox.hasDeliveryHistory(scope)) return 'continuity_waiting';
     const intents = this.outbox?.getBoundaryIntents(scope) ?? [];
     if (intents.some((intent) => intent.expired)) return 'continuity_chain_missing';
     const records = (this.outbox?.getRecords() ?? []).filter(
@@ -1585,7 +1616,7 @@ export class OutputService {
   }
 
   isReliableAvailable(): boolean {
-    return !this.outboxUnavailable;
+    return !this.outboxUnavailable && (this.outbox?.available ?? true);
   }
 
   getReliableRecovery() {
@@ -1629,7 +1660,7 @@ export class OutputService {
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
       this.outbox.hasPendingBoundaryCaptures(scope) ||
       this.outbox.hasBoundaryGap(frozenScope) ||
-      this.outbox.getBoundaryIntents(frozenScope).length
+      (await this.outbox.lookupBoundaryIntents(frozenScope)).length
     )
       return false;
     await this.outbox.flushPending();
@@ -1641,8 +1672,8 @@ export class OutputService {
       !this.outbox.hasPendingEnqueues(scope, exact) &&
       !this.outbox.hasPendingBoundaryCaptures(scope) &&
       !this.outbox.hasBoundaryGap(frozenScope) &&
-      this.outbox.getBoundaryIntents(frozenScope).length === 0 &&
-      this.outbox.getScopeDisposition(scope, exact).pending === 0
+      (await this.outbox.lookupBoundaryIntents(frozenScope)).length === 0 &&
+      (await this.outbox.getScopeDisposition(scope, exact)).pending === 0
     );
   }
 

@@ -1,4 +1,5 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
+use crate::desktop_lifecycle::{BackupAction, BackupSelection, Busy, Cs2BusyStatus, Cs2Status};
 use crate::{
     cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
     preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
@@ -7,23 +8,26 @@ use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-pub(crate) async fn status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub(crate) async fn config_status(app: tauri::AppHandle) -> Result<Cs2Status, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
         let result = match state.try_lock() {
-            Ok(cs2) => cs2.status(),
-            Err(std::sync::TryLockError::WouldBlock) => Ok(serde_json::json!({
-                "busy": true, "phase": app.state::<cs2_activity::Activity>().phase()
+            Ok(cs2) => cs2.status().map(Cs2Status::Ready),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(Cs2Status::Busy(Cs2BusyStatus {
+                busy: Busy,
+                phase: app.state::<cs2_activity::Activity>().phase_value(),
+                observer_hud_pending: observer_hud::pending(&app.state::<DesktopLog>()),
             })),
             Err(_) => Err("CS2 配置状态不可用。".into()),
         };
-        result.map(|mut value| {
-            value["observerHudPending"] = observer_hud::pending(&app.state::<DesktopLog>()).into();
-            value
-        })
+        result
     })
     .await
     .map_err(|_| "CS2 配置状态不可用。".to_string())?
+}
+
+pub(crate) async fn status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    serde_json::to_value(config_status(app).await?).map_err(|error| error.to_string())
 }
 
 /// Read-only owner proof for preparation retry; never repairs a running source in place.
@@ -163,7 +167,7 @@ pub(crate) async fn launch_mulnx(
             let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
             let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
             let status = cs2.status()?;
-            if status["pending"] == true && status["preparationId"] != id {
+            if status.pending && status.preparation_id.as_deref() != Some(id) {
                 return Err("已有其他游戏事务，请先完成原配置恢复。".into());
             }
         }
@@ -483,8 +487,7 @@ pub(crate) async fn set_preferences(
                         "CS2 配置状态不可用。",
                     )
                 })?;
-                preferences.prefer_mulnx =
-                    prefer_mulnx.unwrap_or(cs2.status()?["preferMulnx"].as_bool().unwrap_or(false));
+                preferences.prefer_mulnx = prefer_mulnx.unwrap_or(cs2.status()?.prefer_mulnx);
                 cs2.preferences(preferences)
             }
         })
@@ -584,10 +587,10 @@ pub(crate) async fn restore_backup(
 pub(crate) async fn manage_backup(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
-    action: String,
+    action: BackupAction,
     selection_id: Option<String>,
     diagnostic_operation_id: Option<String>,
-) -> Result<Option<serde_json::Value>, String> {
+) -> Result<Option<BackupSelection>, String> {
     if window.label() != "main" {
         return Err("请在制作中心恢复游戏设置。".into());
     }
@@ -601,7 +604,7 @@ pub(crate) async fn manage_backup(
         app.state::<production_exit::ExitGate>().check()?;
         app.state::<updates::PendingUpdate>().check()?;
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        if action == "select" {
+        if action == BackupAction::Select {
             // Retire prior approval before opening the modal native chooser.
             state
                 .lock()
@@ -635,14 +638,14 @@ pub(crate) async fn manage_backup(
         app.state::<production_exit::ExitGate>()
             .check_ticket(operation_ticket)?;
         let mut cs2 = state.lock().map_err(|_| "恢复状态不可用。")?;
-        match action.as_str() {
-            "cancel" => cs2.cancel_selected_backup(),
-            "apply" => {
+        match action {
+            BackupAction::Cancel => cs2.cancel_selected_backup(),
+            BackupAction::Apply => {
                 let activity = app.state::<cs2_activity::Activity>();
                 let _activity = activity.begin(2);
                 cs2.apply_selected_backup(selection_id.as_deref().ok_or("请先核对备份。")?)?;
             }
-            _ => return Err("备份操作无效。".into()),
+            BackupAction::Select => unreachable!("selection handled before the backup lock"),
         }
         Ok(None)
     })

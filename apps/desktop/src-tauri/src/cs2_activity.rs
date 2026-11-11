@@ -1,4 +1,5 @@
 //! A lock-free operation label shared by all desktop windows.
+use crate::desktop_lifecycle::Cs2ActivityPhase;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Default)]
@@ -10,11 +11,14 @@ impl Activity {
         Guard(self)
     }
     pub fn phase(&self) -> &'static str {
+        self.phase_value().name()
+    }
+    pub fn phase_value(&self) -> Cs2ActivityPhase {
         match self.0.load(Ordering::Acquire) {
-            1 => "starting",
-            2 => "restoring",
-            3 => "checking",
-            _ => "idle",
+            1 => Cs2ActivityPhase::Starting,
+            2 => Cs2ActivityPhase::Restoring,
+            3 => Cs2ActivityPhase::Checking,
+            _ => Cs2ActivityPhase::Idle,
         }
     }
 }

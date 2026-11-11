@@ -1,3 +1,5 @@
+use crate::ipc_lifecycle_contract::ipc_lifecycle;
+
 // Single source for handler registration, permissions and the frontend command type.
 // Each tuple is (Rust handler path, allowed window labels).
 const PRODUCT_WINDOWS: &[&str] = &[
@@ -20,7 +22,7 @@ const MAIN_AND_DOCK: &[&str] = &["main", "workspace-dock"];
 const DOCK: &[&str] = &["workspace-dock"];
 const REVIEW: &[&str] = &["tool-review"];
 
-pub const COMMANDS: &[(&str, &[&str])] = &[
+const OTHER_COMMANDS: &[(&str, &[&str])] = &[
     ("restore_layout", PRODUCT_WINDOWS),
     ("recover_program_overlay", PRODUCT_WINDOWS),
     ("program_overlay_ready", PRODUCT_WINDOWS),
@@ -34,7 +36,6 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("begin_obs_configuration", MAIN),
     ("finish_obs_configuration", MAIN),
     ("read_obs_configuration_context", MAIN),
-    ("cs2_config_status", PRODUCT_WINDOWS),
     ("mulnx_handoff_status", PRODUCT_WINDOWS),
     ("launch_mulnx", PRODUCT_WINDOWS),
     ("mulnx_control", MAIN),
@@ -46,28 +47,17 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("cancel_cs2_preparation", PRODUCT_WINDOWS),
     ("begin_managed_camera", PRODUCT_WINDOWS),
     ("cancel_managed_camera", PRODUCT_WINDOWS),
-    ("finish_managed_cs2", PRODUCT_WINDOWS),
-    ("finish_workspace", MAIN_AND_WORKSPACE),
-    ("workspace_exit_status", PRODUCT_WINDOWS),
     ("select_demo_file", MAIN),
     ("start_demo_test", MAIN),
     ("resume_demo_test", MAIN),
-    ("entry_document", MAIN),
-    ("cancel_entry_intent", MAIN),
     ("finish_demo_test", MAIN_AND_WORKSPACE),
-    ("restore_cs2_backup", PRODUCT_WINDOWS),
     ("open_cs2_backup", PRODUCT_WINDOWS),
-    ("manage_cs2_backup", MAIN),
     ("set_cs2_preferences", PRODUCT_WINDOWS),
     ("cs2_console_status", MAIN_AND_DIAGNOSTICS),
     ("set_cs2_console_capture", MAIN),
     ("open_main", PRODUCT_WINDOWS),
     ("present_production", PRODUCT_WINDOWS),
     ("present_workbench_panels", MAIN),
-    ("preparation_ipc::enter_workspace", MAIN),
-    ("preparation_ipc::preparation_status", MAIN_AND_DOCK),
-    ("preparation_ipc::retry_workspace_entry", MAIN_AND_DOCK),
-    ("preparation_ipc::cancel_workspace_entry", MAIN_AND_DOCK),
     ("workbench_status", DOCK),
     ("open_tool", PRODUCT_WINDOWS),
     ("close_review", REVIEW),
@@ -89,12 +79,34 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("open_cs2_config_directory", PRODUCT_WINDOWS),
 ];
 
+pub fn commands() -> Vec<(&'static str, &'static [&'static str])> {
+    let mut registered = OTHER_COMMANDS.to_vec();
+    macro_rules! ignore_declaration {
+        ($($tokens:tt)*) => {};
+    }
+    macro_rules! command {
+        ($execution:ident $name:ident $windows:ident $($signature:tt)*) => {
+            registered.push((concat!("desktop_lifecycle::", stringify!($name)), $windows));
+        };
+    }
+    ipc_lifecycle!(
+        ignore_declaration,
+        ignore_declaration,
+        ignore_declaration,
+        ignore_declaration,
+        ignore_declaration,
+        command
+    );
+    registered
+}
+
 /// Generate the frontend command union; invoked by build.rs and ipc_generate.rs.
 pub fn frontend_commands() -> String {
     let mut result = String::from("// Generated from desktop/src-tauri/ipc_commands.rs. Do not edit.\nexport type DesktopCommand =\n");
-    for (index, (path, _)) in COMMANDS.iter().enumerate() {
+    let commands = commands();
+    for (index, (path, _)) in commands.iter().enumerate() {
         let name = path.rsplit("::").next().expect("command name");
-        let suffix = if index + 1 == COMMANDS.len() { ";" } else { "" };
+        let suffix = if index + 1 == commands.len() { ";" } else { "" };
         result.push_str(&format!("  | '{name}'{suffix}\n"));
     }
     result

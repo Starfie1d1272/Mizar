@@ -55,6 +55,16 @@ export interface OutboxCommit {
   readonly damagedScopes?: readonly string[];
 }
 
+export type HistoryScope = Pick<BoundaryScope, 'producerInstanceId' | 'liveSessionId' | 'matchId'>;
+export type HistoryRow = HistoryItem & { readonly disposition: HistoryKind };
+type CaptureUnknownReason = 'legacy' | 'unclean' | 'mismatch';
+
+function parseCaptureUnknownReason(reason: string): CaptureUnknownReason {
+  if (reason !== 'legacy' && reason !== 'unclean' && reason !== 'mismatch')
+    throw new Error('capture_unknown_invalid');
+  return reason;
+}
+
 function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -304,7 +314,6 @@ export class OutboxRepository {
         const count = (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
         if (count > max) throw new Error('capture_store_capacity_exhausted');
       }
-      repository.unresolvedCaptureSources();
       return repository;
     } catch (error) {
       db.close();
@@ -312,14 +321,15 @@ export class OutboxRepository {
     }
   }
 
-  private transaction(operation: () => void): void {
+  private transaction<T>(operation: () => T): T {
     const started = performance.now();
     let begun = false;
     try {
       this.db.exec('BEGIN IMMEDIATE');
       begun = true;
-      operation();
+      const result = operation();
       this.db.exec('COMMIT');
+      return result;
     } catch (error) {
       if (!begun) throw error;
       let rollbackError: unknown;
@@ -341,8 +351,8 @@ export class OutboxRepository {
     }
   }
 
-  commit(value: OutboxCommit): void {
-    this.transaction(() => {
+  commit<T>(value: OutboxCommit, view: () => T): T {
+    return this.transaction(() => {
       if (value.boundaryCapture && this.boundaryCaptureReceipt(value.boundaryCapture))
         throw new Error('boundary_capture_already_committed');
       if (value.capture) {
@@ -405,6 +415,7 @@ export class OutboxRepository {
              FROM boundary_captures WHERE receipt IS NOT NULL)
            WHERE bytes > 4000000)`);
       }
+      return view();
     });
   }
 
@@ -477,16 +488,14 @@ export class OutboxRepository {
     return row.receipt ?? undefined;
   }
 
-  captureUnknownReason(source: ExactSource): 'legacy' | 'unclean' | 'mismatch' | undefined {
+  captureUnknownReason(source: ExactSource): CaptureUnknownReason | undefined {
     const row = this.db
       .prepare('SELECT reason FROM capture_unknown WHERE source_key = ?')
-      .get(sourceKey(source)) as { reason: 'legacy' | 'unclean' | 'mismatch' } | undefined;
-    if (row && !['legacy', 'unclean', 'mismatch'].includes(row.reason))
-      throw new Error('capture_unknown_invalid');
-    return row?.reason;
+      .get(sourceKey(source)) as { reason: string } | undefined;
+    return row && parseCaptureUnknownReason(row.reason);
   }
 
-  recordUnknownCapture(source: ExactSource, reason: 'legacy' | 'unclean' | 'mismatch'): void {
+  recordUnknownCapture(source: ExactSource, reason: CaptureUnknownReason): void {
     this.transaction(() => {
       if (!this.captureUnknownReason(source)) {
         const count = (
@@ -501,23 +510,25 @@ export class OutboxRepository {
     });
   }
 
-  unresolvedCaptureSources(): ExactSource[] {
+  captureIndex() {
     const intervals = (
       this.db.prepare('SELECT payload FROM capture_intervals').all() as { payload: string }[]
     ).map((row) => this.parseInterval(row.payload));
-    const unknown = (
-      this.db.prepare('SELECT source FROM capture_unknown').all() as { source: string }[]
-    ).map((row) => parseSource(JSON.parse(row.source)));
-    return [
-      ...unknown,
-      ...intervals
-        .filter(
-          (interval) =>
-            interval.state !== 'sealed' ||
-            !this.sourceDisposition(interval.source).includes('archived'),
-        )
-        .map((interval) => interval.source),
-    ];
+    const unknown = this.db.prepare('SELECT source, reason FROM capture_unknown').all() as {
+      source: string;
+      reason: string;
+    }[];
+    return {
+      storeId: this.captureStoreId(),
+      intervals,
+      unknown: unknown.map(({ source, reason }) => ({
+        source: parseSource(JSON.parse(source)),
+        reason: parseCaptureUnknownReason(reason),
+      })),
+      archived: intervals
+        .filter((interval) => this.sourceDisposition(interval.source).includes('archived'))
+        .map((interval) => sourceKey(interval.source)),
+    };
   }
 
   captureReceipt(ticket: CaptureTicket): string | undefined {
@@ -629,8 +640,8 @@ export class OutboxRepository {
     sequence: number,
     endCursor: NonNullable<CaptureInterval['endCursor']>,
     activationCursor?: CaptureInterval['activationCursor'],
-  ): void {
-    this.transaction(() => {
+  ): CaptureInterval {
+    return this.transaction(() => {
       const interval = this.captureInterval(id);
       if (!interval || interval.state !== 'armed' || interval.committedSequence !== sequence)
         throw new Error('capture_sequence_unconfirmed');
@@ -639,12 +650,14 @@ export class OutboxRepository {
         JSON.stringify(interval.activationCursor) !== JSON.stringify(activationCursor)
       )
         throw new Error('capture_activation_conflict');
-      this.writeCaptureInterval({
+      const sealed: CaptureInterval = {
         ...interval,
         state: 'sealed',
         endCursor,
         ...(activationCursor ? { activationCursor } : {}),
-      });
+      };
+      this.writeCaptureInterval(sealed);
+      return sealed;
     });
   }
 
@@ -757,9 +770,10 @@ export class OutboxRepository {
     return !!this.db.prepare('SELECT scope FROM damaged_scopes WHERE scope = ?').get(scope);
   }
   /** Indexed delivery queries never load other producers' history. */
-  forDelivery(scope: Pick<BoundaryScope, 'producerInstanceId' | 'liveSessionId' | 'matchId'>) {
+  forDelivery(scope: HistoryScope, includeArchived = true) {
     const terms = ["json_extract(payload, '$.event.cursor.producerInstanceId') = ?"];
     const values = [scope.producerInstanceId];
+    if (!includeArchived) terms.push("disposition <> 'archived'");
     if (scope.liveSessionId) {
       terms.push("json_extract(payload, '$.event.cursor.liveSessionId') = ?");
       values.push(scope.liveSessionId);
@@ -774,16 +788,20 @@ export class OutboxRepository {
         .all(...values),
     );
   }
-  private rows(rows: unknown) {
+  private rows(rows: unknown): HistoryRow[] {
     return (rows as { disposition: HistoryKind; kind: 'record' | 'intent'; payload: string }[]).map(
-      (row) => ({
-        disposition: row.disposition,
-        kind: row.kind,
-        value:
-          row.kind === 'record'
-            ? parseRecord(JSON.parse(row.payload))
-            : parseBoundaryIntent(JSON.parse(row.payload)),
-      }),
+      (row) =>
+        row.kind === 'record'
+          ? {
+              disposition: row.disposition,
+              kind: row.kind,
+              value: parseRecord(JSON.parse(row.payload)),
+            }
+          : {
+              disposition: row.disposition,
+              kind: row.kind,
+              value: parseBoundaryIntent(JSON.parse(row.payload)),
+            },
     );
   }
   revokedSummary() {

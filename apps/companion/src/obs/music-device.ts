@@ -4,14 +4,17 @@ import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from './config.js';
 import type { ObsRpc } from './reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
-import { looping, type MusicState } from '../music/store.js';
+import type { MusicState } from '../music/store.js';
 
 import type {
   MusicDevice,
   MusicDeviceProvider,
   MusicLayer,
+  MusicMediaState,
+  MusicMonitorMode,
   MusicSourceSetup,
 } from '../music/device.js';
+import { readMonitorMode, writeMonitorMode } from '../music/monitor-journal.js';
 import type { ObsAudioRouting } from './audio-routing.js';
 import { desktopMonitorRelationship } from './audio-monitor-device.js';
 
@@ -22,28 +25,111 @@ type MonitorAccess = {
 };
 type MonitorSession = MonitorAccess & { isCurrent(): Promise<boolean> };
 
+const mediaStates = new Map<unknown, MusicMediaState>([
+  ['OBS_MEDIA_STATE_PLAYING', 'playing'],
+  ['OBS_MEDIA_STATE_PAUSED', 'paused'],
+  ['OBS_MEDIA_STATE_OPENING', 'opening'],
+  ['OBS_MEDIA_STATE_BUFFERING', 'buffering'],
+  ['OBS_MEDIA_STATE_STOPPED', 'stopped'],
+  ['OBS_MEDIA_STATE_ENDED', 'ended'],
+  ['OBS_MEDIA_STATE_NONE', 'empty'],
+  ['OBS_MEDIA_STATE_ERROR', 'error'],
+]);
+const mediaMillis = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const mediaSettings = (path: string) => ({
+  is_local_file: true,
+  local_file: path,
+  looping: false,
+  restart_on_activate: false,
+  close_when_inactive: false,
+});
+
+async function managedMonitorModes(obs: ObsRpc) {
+  if (!obs.managedInputIdentity) throw new Error('music_monitor_unavailable');
+  const { inputs } = await obs.call('GetInputList');
+  if (!Array.isArray(inputs)) throw new Error('music_monitor_unknown');
+  const modes: (MusicMonitorMode | undefined)[] = [];
+  for (const name of ['音乐', '音效']) {
+    const identity = await obs.managedInputIdentity(name);
+    const input = identity && inputs.find((item) => item.inputUuid === identity.uuid);
+    if (!input || !identity) {
+      if (inputs.some((item) => item.inputName === name))
+        throw new Error('music_monitor_source_changed');
+      continue;
+    }
+    if (input.inputKind !== 'ffmpeg_source' || identity.kind !== 'ffmpeg_source')
+      throw new Error('music_monitor_source_changed');
+    const { monitorType } = await obs.call('GetInputAudioMonitorType', {
+      inputUuid: identity.uuid,
+    });
+    modes.push(readMonitorMode(monitorType));
+  }
+  return modes;
+}
+
 export function createMusicDevice(
   obs: ObsRpc,
   endpoint?: string,
   access?: MonitorSession,
 ): MusicDevice {
   return {
-    mediaStatus: (input) => obs.call('GetMediaInputStatus', input),
-    volume: (input) => obs.call('GetInputVolume', input),
-    mute: (input) => obs.call('GetInputMute', input),
-    monitorMode: (input) => obs.call('GetInputAudioMonitorType', input),
-    inputSettings: (input) => obs.call('GetInputSettings', input),
-    listInputs: () => obs.call('GetInputList'),
-    setVolume: (input) => obs.call('SetInputVolume', input),
-    setMute: (input) => obs.call('SetInputMute', input),
-    setMonitorMode: (input, onDispatch) => obs.call('SetInputAudioMonitorType', input, onDispatch),
-    setMediaCursor: (input) => obs.call('SetMediaInputCursor', input),
-    setInputSettings: (input) => obs.call('SetInputSettings', input),
-    controlMedia: ({ inputUuid, mediaAction }) =>
-      obs.call('TriggerMediaInputAction', {
-        inputUuid,
-        mediaAction: `OBS_WEBSOCKET_MEDIA_INPUT_ACTION_${mediaAction}`,
-      }),
+    async mediaStatus({ sourceId }) {
+      const status = await obs.call('GetMediaInputStatus', { inputUuid: sourceId });
+      return {
+        state: mediaStates.get(status.mediaState) ?? 'unknown',
+        cursorMs: mediaMillis(status.mediaCursor),
+        durationMs: mediaMillis(status.mediaDuration),
+      };
+    },
+    async volume({ sourceId }) {
+      const { inputVolumeMul } = await obs.call('GetInputVolume', { inputUuid: sourceId });
+      return typeof inputVolumeMul === 'number' && Number.isFinite(inputVolumeMul)
+        ? inputVolumeMul
+        : undefined;
+    },
+    async mute({ sourceId }) {
+      const { inputMuted } = await obs.call('GetInputMute', { inputUuid: sourceId });
+      return typeof inputMuted === 'boolean' ? inputMuted : undefined;
+    },
+    async monitorMode({ sourceId }) {
+      const { monitorType } = await obs.call('GetInputAudioMonitorType', { inputUuid: sourceId });
+      return readMonitorMode(monitorType);
+    },
+    async mediaFile({ sourceId }) {
+      const { inputSettings } = await obs.call('GetInputSettings', { inputUuid: sourceId });
+      const path = (inputSettings as { local_file?: unknown } | undefined)?.local_file;
+      return typeof path === 'string' ? path : undefined;
+    },
+    async setVolume({ sourceId, gain }) {
+      await obs.call('SetInputVolume', { inputUuid: sourceId, inputVolumeMul: gain });
+    },
+    async setMute({ sourceId, muted }) {
+      await obs.call('SetInputMute', { inputUuid: sourceId, inputMuted: muted });
+    },
+    async setMonitorMode({ sourceId, mode }, onDispatch) {
+      await obs.call(
+        'SetInputAudioMonitorType',
+        { inputUuid: sourceId, monitorType: writeMonitorMode(mode) },
+        onDispatch,
+      );
+    },
+    async setMediaCursor({ sourceId, cursorMs }) {
+      await obs.call('SetMediaInputCursor', { inputUuid: sourceId, mediaCursor: cursorMs });
+    },
+    async loadMedia({ sourceId, path }) {
+      await obs.call('SetInputSettings', {
+        inputUuid: sourceId,
+        overlay: true,
+        inputSettings: mediaSettings(path),
+      });
+    },
+    async controlMedia({ sourceId, action }) {
+      await obs.call('TriggerMediaInputAction', {
+        inputUuid: sourceId,
+        mediaAction: `OBS_WEBSOCKET_MEDIA_INPUT_ACTION_${action.toUpperCase()}`,
+      });
+    },
     reportsDispatch: Boolean(obs.reportsDispatch),
     guardWrites: (guard) =>
       createMusicDevice(obs.withMutationGuard?.(guard) ?? obs, endpoint, access),
@@ -66,10 +152,9 @@ export function createMusicDevice(
         access,
       ),
     ownershipScope: async () => obs.ownershipScope?.(),
-    ...(obs.managedInputIdentity
-      ? { managedInputIdentity: (name: string) => obs.managedInputIdentity!(name) }
-      : {}),
-    findInput: (store, layer, valid) => findMusicInput(obs, store, layer, valid),
+    readManagedMonitorModes: () => managedMonitorModes(obs),
+    hasSource: async (store, layer, valid) =>
+      Boolean(await findMusicInput(obs, store, layer, valid)),
     verifyPlayback: (store, layer, valid) => verifyMusicPlayback(obs, store, layer, valid),
     prepareResources: (store, layer, valid) => prepareMusicResources(obs, store, layer, valid),
     async outputsStopped() {
@@ -691,13 +776,7 @@ async function prepareMusicResources(
         sceneName: scenes[0]!.sceneName,
         inputName: name,
         inputKind: 'ffmpeg_source',
-        inputSettings: {
-          is_local_file: true,
-          local_file: '',
-          looping: false,
-          restart_on_activate: false,
-          close_when_inactive: false,
-        },
+        inputSettings: mediaSettings(''),
         // OBS also creates the first scene item. Do not expose album-art video
         // before that newly owned item's transform is made audio-only below.
         sceneItemEnabled: false,
@@ -716,7 +795,7 @@ async function prepareMusicResources(
       phase: Number.isInteger(result.sceneItemId) ? 'transform' : 'locate',
       before: null,
     };
-    await store.update((s) => {
+    await store.commitSourceReplacement(layer, (s) => {
       if (s.sourceScopes[layer] !== scope) {
         s.desktopMonitorOriginal[layer] = null;
         s.monitorConfigured[layer] = null;
@@ -728,14 +807,6 @@ async function prepareMusicResources(
       if (index < 0) throw new Error('music_initialization_unconfirmed');
       s.sourceInitialization[index] = pending;
       if (scope) s.sourceScopes[layer] = scope;
-      const previous = s[layer];
-      if (previous) {
-        if (looping(previous.group)) s[layer] = null;
-        else {
-          s[layer] = { ...previous, finished: true };
-          s.consumed = [...s.consumed, previous.key].slice(-64);
-        }
-      }
     });
     await initializeMusicItem(obs, store, pending, scope, valid, true);
   }

@@ -301,7 +301,7 @@ pub async fn observer_command(
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
                 let native = cs2.console_source()?.is_some_and(|(context, _)| context["nativeHudToggle"] == true && context["spectatorCfg"] == true);
-                let prefer_mulnx = !native && cs2.status()?["preferMulnx"] == true;
+                let prefer_mulnx = !native && cs2.status()?.prefer_mulnx;
                 drop(cs2);
                 if !native { crate::observer_hud::preflight(&log, prefer_mulnx)?; }
                 return Ok(());

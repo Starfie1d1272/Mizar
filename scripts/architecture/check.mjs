@@ -644,18 +644,20 @@ function checkDomainImportOwnership(records, repository, report) {
     for (const edge of record.allEdges) {
       const target = resolveRelativeModule(owner, edge.specifier, repository);
       let message;
-      if (
-        owner.startsWith(companion + 'music/') &&
-        target?.startsWith(companion + 'obs/') &&
-        (edge.runtime || basename(target) !== 'audio-monitor-contract.ts')
-      ) {
+      if (owner.startsWith(companion + 'music/') && target?.startsWith(companion + 'obs/')) {
         message = 'Music uses the music device port; raw OBS operations belong to the OBS adapter.';
       } else if (
         owner.startsWith(companion + 'obs/') &&
         target?.startsWith(companion + 'music/') &&
-        !['device.ts', 'store.ts'].includes(basename(target))
+        !['device.ts', 'store.ts', 'monitor-journal.ts'].includes(basename(target))
       ) {
         message = 'OBS uses music device and audio mode contracts; cue policy belongs to music.';
+      } else if (
+        edge.runtime &&
+        target === companion + 'output/outbox-repository.ts' &&
+        owner !== companion + 'output/outbox-worker.ts'
+      ) {
+        message = 'Only the Outbox worker owns the SQLite repository.';
       } else if (
         owner === companion + 'match-context/rivalhub-read-client.ts' &&
         (target?.startsWith(companion + 'output/') ||

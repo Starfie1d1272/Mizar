@@ -227,7 +227,7 @@ pub(crate) async fn select_installation(
                         "CS2 配置状态不可用。",
                     )
                 })?;
-                if cs2.status()?["pending"] == true {
+                if cs2.status()?.pending {
                     return Err("请先退出受管理 CS2 并恢复设置，再更改安装位置。".into());
                 }
                 let _guard = GSI_OPERATION_LOCK.lock().map_err(|error| {

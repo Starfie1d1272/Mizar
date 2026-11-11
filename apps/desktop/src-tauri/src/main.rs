@@ -13,12 +13,15 @@ mod cs2_spectator;
 mod cs2_video;
 mod demo_host;
 mod demo_test;
+mod desktop_lifecycle;
 mod desktop_worker;
 mod entry_intent;
 mod geometry;
 mod gsi_host;
 mod host_runtime;
 mod host_state;
+#[path = "../ipc_lifecycle_contract.rs"]
+mod ipc_lifecycle_contract;
 mod lifecycle_contract;
 mod managed_cs2;
 mod mulnx_launch;
@@ -31,7 +34,6 @@ mod overlay_recovery;
 mod powershell;
 mod preparation_evidence;
 mod preparation_gate;
-mod preparation_ipc;
 mod preparation_task;
 mod production_exit;
 mod spectator_recovery_plan;
@@ -526,11 +528,6 @@ async fn read_obs_configuration_context(
 }
 
 #[tauri::command]
-async fn cs2_config_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    cs2_host::status(app).await
-}
-
-#[tauri::command]
 async fn launch_mulnx(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -681,37 +678,23 @@ async fn cancel_managed_camera(
     cs2_host::cancel_camera(app).await
 }
 
-#[tauri::command]
-async fn finish_managed_cs2(
+async fn workspace_exit_status(
     app: tauri::AppHandle,
-    diagnostic_operation_id: Option<String>,
-    diagnostic_task_id: Option<String>,
-    diagnostic_trigger: Option<String>,
-) -> Result<(), String> {
-    cs2_host::finish_managed_cs2(
-        app,
-        diagnostic_operation_id,
-        diagnostic_task_id,
-        diagnostic_trigger,
-    )
-    .await
-}
-
-#[tauri::command]
-async fn workspace_exit_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+) -> Result<desktop_lifecycle::WorkspaceExitStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-    let state = app.state::<production_exit::WorkspaceExit>().status();
-    let window_message = app
-        .state::<HostState>()
-        .tracker
-        .lock()
-        .ok()
-        .and_then(|tracker| tracker.window_message());
-    serde_json::json!({ "busy": state.busy, "stage": state.stage, "message": state.message, "windowMessage": window_message })
-    }).await.map_err(|error| format!("退出状态不可用：{error}"))
+        let mut status = app.state::<production_exit::WorkspaceExit>().status();
+        status.window_message = app
+            .state::<HostState>()
+            .tracker
+            .lock()
+            .ok()
+            .and_then(|tracker| tracker.window_message());
+        status
+    })
+    .await
+    .map_err(|error| format!("退出状态不可用：{error}"))
 }
 
-#[tauri::command]
 async fn finish_workspace(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -774,13 +757,11 @@ async fn resume_demo_test(
     demo_host::resume(window, app, request_id).await
 }
 
-#[tauri::command]
 fn entry_document(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<String, String> {
     window_presentation::check_demo_main(&window)?;
     app.state::<EntryIntent>().generation()
 }
 
-#[tauri::command]
 fn cancel_entry_intent(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -870,35 +851,6 @@ async fn set_cs2_preferences(
         diagnostic_operation_id,
     )
     .await
-}
-
-#[tauri::command]
-async fn restore_cs2_backup(
-    app: tauri::AppHandle,
-    confirm_steam_cancelled: bool,
-    diagnostic_operation_id: Option<String>,
-    diagnostic_task_id: Option<String>,
-    diagnostic_trigger: Option<String>,
-) -> Result<(), String> {
-    cs2_host::restore_backup(
-        app,
-        confirm_steam_cancelled,
-        diagnostic_operation_id,
-        diagnostic_task_id,
-        diagnostic_trigger,
-    )
-    .await
-}
-
-#[tauri::command]
-async fn manage_cs2_backup(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    action: String,
-    selection_id: Option<String>,
-    diagnostic_operation_id: Option<String>,
-) -> Result<Option<serde_json::Value>, String> {
-    cs2_host::manage_backup(window, app, action, selection_id, diagnostic_operation_id).await
 }
 
 #[tauri::command]

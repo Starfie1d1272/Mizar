@@ -1,4 +1,7 @@
 use crate::cs2_session::SessionStore;
+use crate::desktop_lifecycle::{
+    BackupSelection, Cs2ConfigPhase, Cs2ConfigStatus, FrameRateLimit, Ready,
+};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -1167,7 +1170,7 @@ impl ManagedCs2 {
         Ok(())
     }
 
-    pub fn status(&self) -> Result<Value, String> {
+    pub fn status(&self) -> Result<Cs2ConfigStatus, String> {
         let pending = self.store.load()?;
         let owned_running = pending
             .as_ref()
@@ -1211,19 +1214,76 @@ impl ManagedCs2 {
         } else {
             false
         };
-        Ok(
-            json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": pending.is_none() && self.check_preserved_start().is_ok(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
-        )
+        Ok(Cs2ConfigStatus {
+            busy: Ready,
+            phase: if mulnx_uncertain
+                || pending
+                    .as_ref()
+                    .is_some_and(crate::cs2_session::unconfirmed_launch)
+            {
+                Cs2ConfigPhase::Uncertain
+            } else if running {
+                Cs2ConfigPhase::Running
+            } else if pending.is_some() {
+                Cs2ConfigPhase::Pending
+            } else {
+                Cs2ConfigPhase::Idle
+            },
+            quality_preset: preferences.quality,
+            frame_rate_limit: FrameRateLimit::try_from(preferences.frame_rate_limit)
+                .map_err(|_| "CS2 帧率设置无法读取。")?,
+            prefer_mulnx: preferences.prefer_mulnx,
+            preparation_id: pending
+                .as_ref()
+                .and_then(|v| v["preparationId"].as_str())
+                .map(str::to_owned),
+            spectator_recovery_pending: (self.store.spectator_pending()
+                || self.store.full_spectator_pending())
+                && pending.is_none(),
+            native_hud_toggle: running
+                && pending
+                    .as_ref()
+                    .is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true),
+            demo_cleanup_pending: self.store.playback_cleanup_pending() && pending.is_none(),
+            demo_camera_request_id: pending
+                .as_ref()
+                .filter(|v| v["mulnxLaunch"] == true)
+                .and_then(|v| v["demoTestRequestId"].as_str())
+                .map(str::to_owned),
+            observer_hud_pending: crate::observer_hud::pending(&self.log),
+            spectator_warning: self.store.spectator_warning().or_else(|| {
+                pending
+                    .as_ref()
+                    .and_then(|value| value["spectatorWarning"].as_str())
+                    .map(str::to_owned)
+            }),
+            can_preserve: pending.is_none() && self.check_preserved_start().is_ok(),
+            preserve_settings: pending
+                .as_ref()
+                .is_some_and(|v| v["preserveSettings"] == true),
+            pending: pending.is_some(),
+            mulnx_launch_resumable,
+            camera_lease_ready: self.camera.lock().is_ok_and(|state| {
+                state.as_ref().is_some_and(|camera| {
+                    !camera.invalidated
+                        && camera.process.is_running()
+                        && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])
+                })
+            }),
+            running,
+            message: self.message.clone(),
+        })
     }
     /// Preparation may reuse only this owner's live process and installed source proof.
     pub(crate) fn preparation_status(&self, id: &str) -> Result<Value, String> {
-        let mut value = self.status()?;
+        let status = self.status()?;
         let journal = self.store.load()?;
-        if value["running"] == true && value["preparationId"] == id {
+        if status.running && status.preparation_id.as_deref() == Some(id) {
             let journal = journal.as_ref().ok_or("受管游戏记录不可用。")?;
             self.store.verify_gsi_source(journal)?;
         }
         // Pending/unknown launches and external games are not proof of an ended attempt.
+        let mut value = serde_json::to_value(status).map_err(|error| error.to_string())?;
         value["restartAllowed"] = json!(journal.is_none() && !any_cs2_running(&self.log)?);
         Ok(value)
     }
@@ -2329,7 +2389,7 @@ impl ManagedCs2 {
     pub fn cancel_selected_backup(&mut self) {
         self.selected_backup = None;
     }
-    pub fn select_backup(&mut self, source: &std::path::Path) -> Result<Value, String> {
+    pub fn select_backup(&mut self, source: &std::path::Path) -> Result<BackupSelection, String> {
         self.selected_backup = None;
         self.require_backup_idle()?;
         let (executable, video, steam) = discover(&self.log)?;
@@ -2382,9 +2442,18 @@ impl ManagedCs2 {
             .map_err(|_| "系统时间不可用。")?
             .as_nanos()
             .to_string();
-        let preview = json!({"selectionId":id,"nickname":nickname,"avatar":avatar,
-            "sourceName":source.file_name().map(|n|n.to_string_lossy().to_string()),
-            "targetPath":video,"includesFrameRate":frame.is_some()});
+        let preview = BackupSelection {
+            selection_id: id.clone(),
+            nickname,
+            avatar,
+            source_name: source
+                .file_name()
+                .ok_or("备份文件名无法读取。")?
+                .to_string_lossy()
+                .into_owned(),
+            target_path: video.to_str().ok_or("配置路径无法读取。")?.to_owned(),
+            includes_frame_rate: frame.is_some(),
+        };
         self.selected_backup = Some(
             json!({"id":id,"source":source,"backup":backup,"original":original,
             "video":video,"executable":executable,"account":steam.account,"frame":frame}),

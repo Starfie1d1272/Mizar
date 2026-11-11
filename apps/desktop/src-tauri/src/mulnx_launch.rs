@@ -390,12 +390,12 @@ fn launch_operation(
         .try_lock()
         .map_err(|_| "CS2 正忙，请稍后重试。")?
         .status()?;
-    if preserve && status["canPreserve"] != true {
+    if preserve && !status.can_preserve {
         return Err("请先完成未结束的启动或恢复，再保留画质与帧率启动。".into());
     }
-    if status["pending"] == true
+    if status.pending
         || (demo.is_none() && crate::demo_test::requires_recovery(log, None))
-        || (!automatic && status["spectatorRecoveryPending"] == true)
+        || (!automatic && status.spectator_recovery_pending)
     {
         return Err("请先完成原有 CS2 配置恢复，再通过 MulNX 启动。".into());
     }
@@ -465,30 +465,26 @@ fn launch_operation(
                         .try_lock()
                         .map_err(|_| "CS2 正忙，请稍后重试。")?
                         .mulnx_observer_receipt_matches(pid, created, &executable)?;
-                    validate_observer_reuse(
-                        status["spectatorRecoveryPending"] == true,
-                        matched,
-                        || {
-                            cleanup_then_mark(
-                                || {
-                                    production_exit::cleanup_mulnx(
-                                        log,
-                                        &executable,
-                                        preparation_id.and_then(|id| {
-                                            crate::preparation_task::mulnx_context(id).ok()
-                                        }),
-                                    )
-                                    .map(|_| ())
-                                },
-                                || {
-                                    managed
-                                        .try_lock()
-                                        .map_err(|_| "CS2 正忙，请稍后重试。".to_string())?
-                                        .mark_observer_mulnx_options_clean()
-                                },
-                            )
-                        },
-                    )?;
+                    validate_observer_reuse(status.spectator_recovery_pending, matched, || {
+                        cleanup_then_mark(
+                            || {
+                                production_exit::cleanup_mulnx(
+                                    log,
+                                    &executable,
+                                    preparation_id.and_then(|id| {
+                                        crate::preparation_task::mulnx_context(id).ok()
+                                    }),
+                                )
+                                .map(|_| ())
+                            },
+                            || {
+                                managed
+                                    .try_lock()
+                                    .map_err(|_| "CS2 正忙，请稍后重试。".to_string())?
+                                    .mark_observer_mulnx_options_clean()
+                            },
+                        )
+                    })?;
                     log.event("mulnx_launch_reuse", "success", Some(&receipt.to_string()));
                     return Ok(receipt);
                 }
@@ -496,7 +492,7 @@ fn launch_operation(
             return Err("当前 CS2 不是由 Mizar 启动，请先退出游戏，再从 Mizar 打开工作台。".into());
         }
     }
-    if status["spectatorRecoveryPending"] == true {
+    if status.spectator_recovery_pending {
         return Err("请先完成上次游戏配置恢复。".into());
     }
     no_game()?;
