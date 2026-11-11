@@ -1,8 +1,9 @@
 import { expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
+vi.setConfig({ testTimeout: 60_000 });
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -66,6 +67,11 @@ it.each([
   },
   ...[
     { audioStall: 1, label: 'audio preparation timeout preserves verified entry' },
+    {
+      audioStall: 1,
+      nativeBudget: true,
+      label: 'native transport outlives independently bounded visual and audio work',
+    },
     { audioStall: 3, label: 'final audio timeout preserves verified entry' },
     { audioStall: 1, cancelAudio: true, label: 'cancelled stalled audio cannot grant entry' },
     {
@@ -81,6 +87,8 @@ it.each([
   const audioStall = 'audioStall' in scenario ? scenario.audioStall : undefined;
   const cancelAudio = 'cancelAudio' in scenario && scenario.cancelAudio;
   const unsafeVisual = 'unsafeVisual' in scenario && scenario.unsafeVisual;
+  const nativeBudget = 'nativeBudget' in scenario && scenario.nativeBudget;
+  let visualDelayed = false;
   let audioReads = 0;
   let releaseAudio: (() => void) | undefined;
   let audioReleased = false;
@@ -88,19 +96,22 @@ it.each([
   const realTimeout = globalThis.setTimeout;
   // Keep visual deadlines unchanged. Shorten only the independent audio phase
   // and ordinary RPC deadlines so a genuinely unanswered socket is affordable.
-  const timer = audioStall
-    ? vi
-        .spyOn(globalThis, 'setTimeout')
-        .mockImplementation(((callback, ms, ...args) =>
-          realTimeout(
-            callback,
-            (ms === 30_000 && String(callback).includes('OBS 操作超时') && ++longDeadlines === 2) ||
-              ms === 4000
-              ? 1000
-              : ms,
-            ...args,
-          )) as typeof setTimeout)
-    : undefined;
+  const timer =
+    audioStall && !nativeBudget
+      ? vi
+          .spyOn(globalThis, 'setTimeout')
+          .mockImplementation(((callback, ms, ...args) =>
+            realTimeout(
+              callback,
+              (ms === 30_000 &&
+                String(callback).includes('OBS 操作超时') &&
+                ++longDeadlines === 2) ||
+                ms === 4000
+                ? 1000
+                : ms,
+              ...args,
+            )) as typeof setTimeout)
+      : undefined;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -403,6 +414,11 @@ it.each([
             },
           }),
         );
+      if (nativeBudget && type === 'GetSceneItemTransform' && !visualDelayed) {
+        visualDelayed = true;
+        realTimeout(respond, 11_000);
+        return;
+      }
       if (type === 'GetInputAudioTracks') {
         audioReads++;
         if (audioReads === audioStall && !audioReleased) {
@@ -510,15 +526,40 @@ it.each([
     runtimeControlToken: 'a'.repeat(64),
   });
   try {
-    const response = await app.inject({
-      method: 'POST',
+    const request = {
+      method: 'POST' as const,
       url: '/operator/obs/ensure',
       headers: { origin: baseUrl },
       payload: {
         expectedRevision: 'revision',
         ...(entryMode ? { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' } : {}),
       },
-    });
+    };
+    const response = await (async () => {
+      if (!nativeBudget) return app.inject(request);
+      const native = await readFile(
+        new URL('../../desktop/src-tauri/src/preparation_task.rs', import.meta.url),
+        'utf8',
+      );
+      const seconds = Number(native.match(/const OBS_ENSURE_REQUEST_SECONDS: u64 = (\d+);/)?.[1]);
+      expect(seconds).toBe(240);
+      expect(native).toContain('Instant::now() + controlled_request_timeout(path)');
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('address unavailable');
+      const started = Date.now();
+      // Real HTTP, actual production deadlines, and the native transport cap.
+      // The old native 40s deadline aborts before the isolated audio can settle.
+      const result = await fetch(`http://127.0.0.1:${address.port}${request.url}`, {
+        method: request.method,
+        headers: { ...request.headers, 'content-type': 'application/json' },
+        body: JSON.stringify(request.payload),
+        signal: AbortSignal.timeout(seconds * 1000),
+      });
+      const body = await result.json();
+      expect(Date.now() - started).toBeGreaterThan(40_000);
+      return { statusCode: result.status, json: () => body };
+    })();
     if (audioStall) {
       expect(releaseAudio).toBeDefined();
       expect(response.statusCode, JSON.stringify(response.json())).toBe(
