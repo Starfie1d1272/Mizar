@@ -8,7 +8,7 @@ Box 文件上传默认使用 curl 和完整 multipart 请求体，分别限制�
 
 性能计时区分完整工作流、首次 runner 排队和重跑排队；重试及流程间等待仍计入端到端时间，不把最新尝试的启动时间当作首次排队。GitHub 最新 job 列表可能保留上一轮成功任务，其时间仍保留在证据中；本轮排队只从本轮启动后开始的 job 计算，没有此类任务时记为未知。内部资格汇总与晋级使用同步 ZIP 解压，之后仍完整核对 payload；便携及安装验收保留 Windows 资源管理器解压。解压性能对照必须使用固定原 ZIP 与来源证明，每次核对完整 payload；额外基准不能代替普通完整 CI 或新版本十分钟发行验收。
 
-本文所称发行签名和证明指用于验证分发来源及产物身份的 GitHub provenance 等证明，不表示 Windows EXE 已经过 Authenticode 代码签名。
+本文所称发行签名和证明指用于验证分发来源及产物身份的 GitHub provenance 等证明，不表示 Windows EXE 已经过 Authenticode 代码签名。 Qualification 的 `windows-publisher.json` 记录同一候选的主程序、Full/Core Setup 和 WebInstaller 的摘要、Windows 签名状态及可用的签发者。具备发布者证书时，应在生成包内清单及各安装器 SHA-256 前完成 Authenticode 和时间戳签名，资格阶段核对实际状态。
 
 ## 版本与兼容性
 
@@ -61,7 +61,7 @@ Windows 安装版与便携版属于不同的分发形态，用户数据路径和
 
 从 main 手动触发 Release Qualification，指定与应用版本一致的标签、资源参数和发行类型。资格只构建一次，生成同源 Full、Core、安装器、资源和来源证明。预发布资格成功后自动晋级，稳定版资格结束后下载原构件做相应实机验收，再从 main 手动触发 Promotion。两条签发工作流保留名称和来源约束。
 
-新稳定版的 Promotion 需要在本仓库验收 Issue 留存维护者的单个 JSON 代码块，输入该评论的数字 ID。记录 `qualificationRun`（字符串）、`gitSha`、`archiveSha256`（Full ZIP）、`coreSetupSha256`、`webInstallerSha256`、`mode` 和 `checks`。摘要分别来自原资格的 `release-manifest.json`、`core-distribution-manifest.json` 与 `web-installer-build.json`。检查项为 `windows`、`installer`、`defender`、`cs2`、`obs`。通过的项写 `{"status":"passed","evidence":"记录链接或可定位的实测结果"}`，确实不受影响的 CS2 或 OBS 项可写 `not_applicable` 并附 `reason`。记录实际 Defender/SmartScreen、原生启动及安装回退结果，详细证据可留在受限位置。
+新稳定版的 Promotion 需要在本仓库验收 Issue 留存维护者的单个 JSON 代码块，输入该评论的数字 ID。记录 `qualificationRun`（字符串）、`gitSha`、`archiveSha256`（Full ZIP）、`fullSetupSha256`、`coreSetupSha256`、`webInstallerSha256`、`mode` 和 `checks`。摘要分别来自原资格的 `release-manifest.json`、`distribution-manifest.json`、`core-distribution-manifest.json` 与 `web-installer-build.json`。检查项为 `windows`、`installer`、`defender`、`cs2`、`obs`。通过的项写 `{"status":"passed","evidence":"记录链接或可定位的实测结果"}`，确实不受影响的 CS2 或 OBS 项可写 `not_applicable` 并附 `reason`。记录主程序和对应下载入口的实际 Defender/SmartScreen、原生启动及安装回退结果。记录 Windows 版本和安全情报版本；出现隔离时保存保护历史和误报处理结果。详细证据可留在受限位置。
 
 紧急 Patch 使用 `mode: "hotfix"` 并填写 `reason`。需要延期的项写 `{"status":"deferred","reason":"延期原因"}` 并提供未来的 UTC `recheckBy`。原始构件和签发验证保持相同。已经公开的同版本只能补齐原资产，按已有 Release 身份恢复。稳定版公开原构件后，回读并验证同一 Release 的双签名机器元数据，再设置 Latest。旧版本补齐不得把 Latest 指回较旧版本。
 

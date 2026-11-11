@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { canonicalJson } from '@mizar/hud-config';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type {
@@ -8,7 +8,6 @@ import type {
   MulnxToolRef,
   ResourceRef,
 } from '@mizar/broadcast-config';
-import { readMusicPack } from '../music/archive.js';
 import { PACK_ID } from '../resource-store/runtime-adapter.js';
 import type { ResourceStore } from '../resource-store/store.js';
 import type { MusicStore } from '../music/store.js';
@@ -174,34 +173,11 @@ export function withOfficialBroadcastResources(
   };
 }
 
-export async function loadLegacyMusic(
-  music: MusicStore,
-  broadcastPath: string,
-  builtinPack: string | undefined,
-  onBuiltinError: (error: unknown) => void,
-) {
-  const missing = async (path: string) =>
-    lstat(path).then(
-      () => false,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return true;
-        throw error;
-      },
-    );
-  if (!(await missing(broadcastPath))) return;
-  let initialPack: Buffer | undefined;
-  if (
-    builtinPack &&
-    (await missing(join(music.directory, 'state.json'))) &&
-    (await missing(broadcastPath))
-  ) {
-    try {
-      initialPack = await readFile(builtinPack);
-      await readMusicPack(initialPack);
-    } catch (error) {
-      initialPack = undefined;
-      onBuiltinError(error);
-    }
+export async function loadLegacyMusic(music: MusicStore, broadcastPath: string) {
+  try {
+    await lstat(broadcastPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await music.load();
   }
-  await music.load(initialPack);
 }

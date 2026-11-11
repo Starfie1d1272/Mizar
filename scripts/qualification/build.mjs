@@ -539,10 +539,6 @@ async function assemble({
       join(resourcesDir, 'config', 'gamestate_integration_mizar.cfg.template'),
     );
     await cp(
-      join(rootDir, 'apps', 'companion', 'builtin-music.zip'),
-      join(resourcesDir, 'builtin-music.zip'),
-    );
-    await cp(
       join(rootDir, 'config', 'mizar_observer.cfg'),
       join(resourcesDir, 'config', 'mizar_observer.cfg'),
     );

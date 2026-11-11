@@ -732,7 +732,7 @@ export function RadarView({
           if (appearance === 'esl' && markerKind === 'dead') {
             ctx.globalAlpha *= 0.2;
             ctx.fillStyle = color;
-            ctx.font = `900 ${48 / z.scale}px ESLLegend, SourceHanSans, sans-serif`;
+            ctx.font = `900 ${48 / z.scale}px "Barlow Condensed", SourceHanSans, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(p.label ?? '', x, y + 1);
@@ -758,25 +758,16 @@ export function RadarView({
               ctx.save();
               ctx.translate(x, y);
               ctx.rotate((marker.angle * Math.PI) / 180);
-              const direction = imageFor('brand/hud/esl/playerBg.png');
-              if (direction) {
-                ctx.save();
-                ctx.rotate((135 * Math.PI) / 180);
-                ctx.drawImage(
-                  direction,
-                  -radius * 1.15,
-                  -radius * 1.15,
-                  radius * 2.3,
-                  radius * 2.3,
-                );
-                ctx.restore();
-              }
-              if (marker.shootingUntil > now) {
-                const fire = imageFor('brand/hud/esl/shootFire.png');
-                if (fire) {
-                  ctx.globalAlpha *= reduceMotion || Math.floor(now / 125) % 2 === 0 ? 1 : 0;
-                  ctx.drawImage(fire, 0, -radius * 2, radius * 4, radius * 4);
-                }
+              ctx.fillStyle = markerFill;
+              ctx.beginPath();
+              ctx.moveTo(radius * 1.5, 0);
+              ctx.lineTo(radius * 0.64, -radius * 0.56);
+              ctx.lineTo(radius * 0.64, radius * 0.56);
+              ctx.closePath();
+              ctx.fill();
+              if (marker.shootingUntil > now && (reduceMotion || Math.floor(now / 125) % 2 === 0)) {
+                ctx.fillStyle = '#fff4b0';
+                ctx.fillRect(radius * 1.62, -radius * 0.13, radius * 0.55, radius * 0.26);
               }
               ctx.restore();
             }
@@ -789,7 +780,7 @@ export function RadarView({
               ctx.globalAlpha = layerOpacity(marker.target, model.layer);
             }
             ctx.fillStyle = '#000000';
-            ctx.font = `900 ${48 / z.scale}px ESLLegend, SourceHanSans, sans-serif`;
+            ctx.font = `900 ${48 / z.scale}px "Barlow Condensed", SourceHanSans, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(p.label ?? '', x, y + 1);
