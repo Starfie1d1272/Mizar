@@ -1,3 +1,4 @@
+import { PRIVATE_PAGE_PATHS } from '@mizar/protocol/local-pages';
 import { LOCAL_WEB_ROUTES, type LocalWebChannel } from './transport-constants.js';
 
 /** Public program-time output is separate from private production and early information. */
@@ -34,10 +35,7 @@ export function localRouteVisibility(path: string): 'public' | 'operator' | 'hos
   if (
     path.startsWith('/local/') ||
     path === '/health' ||
-    ['/debug', '/operator', '/workspace', '/matches', '/packages', '/picture', '/settings'].some(
-      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
-    ) ||
-    path === '/'
+    PRIVATE_PAGE_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
   )
     return 'operator';
   // Public static program assets and authenticated GSI retain their existing handlers.

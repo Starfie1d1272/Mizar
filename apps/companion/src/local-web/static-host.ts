@@ -5,28 +5,20 @@ import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
+import {
+  LOCAL_TOOL_PATHS,
+  PRIVATE_PAGE_PATHS,
+  PUBLIC_PROGRAM_PATHS,
+} from '@mizar/protocol/local-pages';
 import { ResourceStoreError } from '../resource-store/contract.js';
 import type { ResourceStore } from '../resource-store/store.js';
 
 const SURFACE_ROUTES = [
-  ...new Set([
-    ...PROGRAM_SCENES.map((scene) => scene.path),
-    '/',
-    '/program/bp-compact',
-    '/program/stats',
-    '/matches',
-    '/packages',
-    '/picture',
-    '/settings',
-    '/operator',
-    '/operator/bp',
-    '/operator/hud',
-    '/debug',
-    '/workspace',
-    '/workspace/left',
-    '/workspace/dock',
-  ]),
+  ...PROGRAM_SCENES.map((scene) => scene.path),
+  ...Object.values(PUBLIC_PROGRAM_PATHS),
+  ...PRIVATE_PAGE_PATHS,
 ];
+
 const RESERVED_PREFIXES = [
   '/debug',
   '/operator/series',
@@ -106,13 +98,8 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
     },
   });
 
-  if (!options.qualificationMode) {
-    app.get('/qualification', async (_request, reply) =>
-      sendStaticFile(reply, 'index.html', 'no-store'),
-    );
-  }
-
   for (const route of SURFACE_ROUTES) {
+    if (route === LOCAL_TOOL_PATHS.qualification && options.qualificationMode) continue;
     app.get(route, async (_request, reply) => sendStaticFile(reply, 'index.html', 'no-store'));
   }
 

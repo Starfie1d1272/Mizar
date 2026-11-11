@@ -638,23 +638,33 @@ export class RivalHubConnection {
     this.unavailableLive.clear();
   }
 
-  async shutdownSource(): Promise<void> {
+  private shutdownSignal: AbortSignal | undefined;
+
+  async shutdownSource(signal: AbortSignal): Promise<void> {
+    this.shutdownSignal = signal;
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
     ++this.bindingGeneration;
     if (this.source) this.sealCapture(this.exactSource(this.source));
-    try {
-      await this.sourceCommands.run(async () => {
-        const deadline = Date.now() + 8000;
-        await this.retireCurrent('shutdown');
-        await this.cleanup(true, deadline);
-        if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
-      });
-    } finally {
-      this.sourceStateAvailable = false;
-      this.unavailableLive.clear();
-      await this.sourceState.close();
-    }
+    await this.sourceCommands.run(async () => {
+      signal.throwIfAborted();
+      const deadline = Date.now() + 8000;
+      await this.retireCurrent('shutdown');
+      await this.cleanup(true, deadline);
+      signal.throwIfAborted();
+      if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
+    });
+  }
+
+  async closeSourceState(): Promise<void> {
+    this.sourceStateAvailable = false;
+    this.unavailableLive.clear();
+    await this.sourceState.close();
+  }
+
+  private cleanupRequestSignal(deadline: number): AbortSignal {
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now())));
+    return this.shutdownSignal ? AbortSignal.any([this.shutdownSignal, timeout]) : timeout;
   }
 
   private async updateCleanupSummary(): Promise<void> {
@@ -826,7 +836,7 @@ export class RivalHubConnection {
       liveSessionId: intent.scope.liveSessionId,
     });
     const response = await this.authorization.request(`source-status?${query}`, {
-      signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+      signal: this.cleanupRequestSignal(deadline),
     });
     if (!response.ok) return;
     const result = (await readReliableBody(response)) as
@@ -835,6 +845,7 @@ export class RivalHubConnection {
           source?: Record<string, unknown>;
         }
       | undefined;
+    this.shutdownSignal?.throwIfAborted();
     if (result?.status !== 'found' || !result.source) return;
     const found = result.source;
     if (
@@ -995,6 +1006,7 @@ export class RivalHubConnection {
   }
 
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
+    this.shutdownSignal?.throwIfAborted();
     await this.persistExitHandoffs();
     await this.isolateRevokedSources();
     for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
@@ -1006,6 +1018,7 @@ export class RivalHubConnection {
     } catch (error) {
       this.onDiagnostic('source_status', error);
     }
+    this.shutdownSignal?.throwIfAborted();
     const state = await this.sourceState.snapshot();
     // A confirmed remote close needs only local work, even after disconnect or
     // switching installations. Never repeat release just to retry archiving.
@@ -1014,7 +1027,7 @@ export class RivalHubConnection {
       await this.archiveConfirmedSource(record.identity);
     }
     for (const record of state.records) {
-      if (Date.now() >= deadline) break;
+      if (this.shutdownSignal?.aborted || Date.now() >= deadline) break;
       if (record.state === 'owned' || record.state === 'archive_pending') continue;
       if (this.confirmedSourcesAwaitingPersistence.has(JSON.stringify(record.identity))) continue;
       if (!this.scopeMatches(record.identity)) {
@@ -1033,7 +1046,7 @@ export class RivalHubConnection {
         });
         try {
           const response = await this.authorization.request(`source-status?${query}`, {
-            signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+            signal: this.cleanupRequestSignal(deadline),
           });
           if (!response.ok) continue;
           const result = (await readReliableBody(response)) as
@@ -1042,6 +1055,7 @@ export class RivalHubConnection {
                 source?: Record<string, unknown>;
               }
             | undefined;
+          this.shutdownSignal?.throwIfAborted();
           const found = result?.source;
           if (
             result?.status === 'found' &&
@@ -1069,7 +1083,7 @@ export class RivalHubConnection {
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
       const identity = record.identity;
       if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
-      if (Date.now() >= deadline) break;
+      if (this.shutdownSignal?.aborted || Date.now() >= deadline) break;
       const count = (this.cleanupAttempts.get(attemptKey)?.count ?? 0) + 1;
       this.cleanupAttempts.set(attemptKey, {
         count,
@@ -1080,7 +1094,7 @@ export class RivalHubConnection {
         this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
         const response = await this.authorization.request('release', {
           method: 'POST',
-          signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
+          signal: this.cleanupRequestSignal(deadline),
           headers: {
             'content-type': 'application/json',
             'x-rivalhub-authority': String(identity.authorityRevision),
@@ -1092,6 +1106,7 @@ export class RivalHubConnection {
           }),
         });
         const result = response.ok ? await readReliableBody(response) : undefined;
+        this.shutdownSignal?.throwIfAborted();
         if (
           response.ok &&
           result &&
@@ -1149,6 +1164,7 @@ export class RivalHubConnection {
           record.attempts + 1,
         );
       } catch (error) {
+        if (this.shutdownSignal?.aborted) return;
         this.onDiagnostic('source_release', error);
         await this.sourceState.failure(
           identity,
@@ -1159,7 +1175,7 @@ export class RivalHubConnection {
         this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
       }
     }
-    await this.updateCleanupSummary();
+    if (!this.shutdownSignal?.aborted) await this.updateCleanupSummary();
   }
 
   private async isolateRevokedSources(preferred: readonly ExactSource[] = []): Promise<void> {
