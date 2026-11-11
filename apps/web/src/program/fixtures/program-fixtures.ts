@@ -1,4 +1,5 @@
 import type { ProgramSnapshot } from '@mizar/protocol/program';
+import { HUD_EDITOR_FIXTURE_LABELS } from './fixture-labels.js';
 import { realProgramFixtures, type RealProgramProvenance } from './real-program-fixtures.js';
 import { eplProgramFixtures } from './epl-program-fixtures.js';
 import {
@@ -38,28 +39,6 @@ export const programFixtures = {
 };
 export type ProgramFixtureId = keyof typeof programFixtures;
 export const PROGRAM_FIXTURE_IDS = Object.keys(programFixtures) as ProgramFixtureId[];
-// The operator preview stays small; the full registry remains available to visual/unit tests.
-export const HUD_EDITOR_FIXTURE_GROUPS = [
-  {
-    label: 'EPL S24 · Falcons 对 NAVI',
-    ids: [
-      'epl-live',
-      'epl-freeze',
-      'epl-planting',
-      'epl-planted',
-      'epl-defusing',
-      'epl-timeout',
-      'epl-halftime',
-      'epl-map-result',
-      'epl-match-result',
-    ],
-  },
-  { label: '必要边界', ids: ['awaiting-neutral'] },
-] as const satisfies readonly {
-  readonly label: string;
-  readonly ids: readonly ProgramFixtureId[];
-}[];
-export const HUD_EDITOR_DEFAULT_FIXTURE_ID: ProgramFixtureId = 'epl-live';
 export type ProgramFixtureProvenance =
   | RealProgramProvenance
   | { readonly kind: 'synthetic-edge' | 'synthetic-presentation'; readonly reason: string };
@@ -94,15 +73,7 @@ export function getProgramFixtureReplaySource(id: string) {
 }
 
 export const PROGRAM_FIXTURE_LABELS: Readonly<Record<ProgramFixtureId, string>> = {
-  'epl-live': 'Inferno · 完整 5v5',
-  'epl-freeze': 'Inferno · 第 4 回合冻结',
-  'epl-planting': 'Inferno · 安装 C4',
-  'epl-planted': 'Inferno · C4 已安装',
-  'epl-defusing': 'Inferno · 拆弹',
-  'epl-timeout': 'Inferno · Falcons 战术暂停',
-  'epl-halftime': 'Inferno · 半场换边',
-  'epl-map-result': 'Inferno · 单图结果',
-  'epl-match-result': 'Mirage · 整场结果',
+  ...HUD_EDITOR_FIXTURE_LABELS,
   'focused-avatar': '观察选手 · 显示头像',
   'focused-long-name': '观察选手 · 长名称与队徽',
   'focused-low-health-edge': '观察选手 · 低生命边界',
@@ -131,7 +102,6 @@ export const PROGRAM_FIXTURE_LABELS: Readonly<Record<ProgramFixtureId, string>> 
   'real-gameover': '实战 · 地图结束',
   'gameplay-map-ended-gg': '单图结束 · GG 过渡预览',
   'player-rails-freezetime': '选手栏 · 回合切换前置边界',
-  'awaiting-neutral': '等待初始状态',
   'live-neutral': '实时中 · 未绑定队伍',
   'live-canonical': '实时中 · 已匹配队伍',
   'context-stale': '比赛上下文过期',

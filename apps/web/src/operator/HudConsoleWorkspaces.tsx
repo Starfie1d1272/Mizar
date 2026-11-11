@@ -1,9 +1,12 @@
 import { Button } from '../ui';
 import {
   HUD_ANCHORS,
+  HUD_CANVAS_HEIGHT,
   HUD_GRID_SIZE,
   HUD_WIDGET_LABELS,
   HUD_WIDGET_REGISTRY,
+  resizeRadarPlacement,
+  placementToBox,
   type HudConfigDocument,
   type HudLayout,
   type HudPreset,
@@ -359,6 +362,28 @@ export function HudConsoleWorkspaces({
                 />
               </label>
             </div>
+            {selectedWidgetId === 'radar' ? (
+              <label className="hud-console__field">
+                雷达尺寸
+                <input
+                  max={HUD_CANVAS_HEIGHT}
+                  min={1}
+                  onChange={(event) => {
+                    const width = event.currentTarget.valueAsNumber;
+                    onUpdateSelectedPlacement((placement) =>
+                      resizeRadarPlacement(
+                        placement,
+                        width - placementToBox('radar', placement).width,
+                        false,
+                      ),
+                    );
+                  }}
+                  step={1}
+                  type="range"
+                  value={Math.round(selectedBox.width)}
+                />
+              </label>
+            ) : null}
             <dl className="hud-console__geometry-meta">
               <div>
                 <dt>位置</dt>
@@ -374,7 +399,7 @@ export function HudConsoleWorkspaces({
               </div>
             </dl>
             {selectedWidgetId === 'radar' ? (
-              <p className="hud-console__hint">拖动雷达右下角可调整尺寸。</p>
+              <p className="hud-console__hint">用方向键逐像素调整，或拖动雷达右下角。</p>
             ) : null}
           </div>
         )}

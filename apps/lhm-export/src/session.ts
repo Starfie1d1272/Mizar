@@ -6,6 +6,8 @@ type Snapshot = NonNullable<ReturnType<ReturnType<typeof createLhmProjection>>>;
 const STALE_AFTER_MS = 20_000;
 const CURRENT_MATCH_PATH = '/api/match/current';
 const NO_CURRENT_MATCH = Symbol('no-current-match');
+const NO_AVATAR = Symbol('no-avatar');
+const AVATAR_PATH = '/api/players/avatar/steamid/';
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000] as const;
 
 async function readHostJson(path: string, signal: AbortSignal): Promise<unknown> {
@@ -13,7 +15,10 @@ async function readHostJson(path: string, signal: AbortSignal): Promise<unknown>
     signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
   });
   // LHM and JT use this endpoint's 404, not a malformed 200 body, for no active match.
-  if (path === CURRENT_MATCH_PATH && response.status === 404) return NO_CURRENT_MATCH;
+  if (response.status === 404) {
+    if (path === CURRENT_MATCH_PATH) return NO_CURRENT_MATCH;
+    if (path.startsWith(AVATAR_PATH)) return NO_AVATAR;
+  }
   if (!response.ok) throw new Error('host data unavailable');
   return response.json() as Promise<unknown>;
 }
@@ -65,7 +70,11 @@ export function createLhmSession({
     project.setMetadata(match, avatars);
     if (inputVisible) onSnapshot(project.refresh());
   };
-  const request = <T>(load: (signal: AbortSignal) => Promise<T>, accept: (value: T) => void) => {
+  const request = <T>(
+    load: (signal: AbortSignal) => Promise<T>,
+    accept: (value: T) => void,
+    retryLimit = Infinity,
+  ) => {
     const owner = metadata;
     let attempt = 0;
     const current = () => alive && !owner.signal.aborted;
@@ -76,9 +85,8 @@ export function createLhmSession({
           if (current()) accept(value);
         })
         .catch(() => {
-          if (!current()) return;
-          const delay = RETRY_DELAYS_MS[attempt]!;
-          attempt = Math.min(attempt + 1, RETRY_DELAYS_MS.length - 1);
+          if (!current() || attempt >= retryLimit) return;
+          const delay = RETRY_DELAYS_MS[Math.min(attempt++, RETRY_DELAYS_MS.length - 1)]!;
           const timer = setTimeout(() => {
             retries.delete(timer);
             run();
@@ -94,15 +102,18 @@ export function createLhmSession({
       requestedAvatars.add(id);
       request(
         async (signal) => {
-          const value = await readJson(`/api/players/avatar/steamid/${id}`, signal);
+          const value = await readJson(AVATAR_PATH + id, signal);
+          if (value === NO_AVATAR) return null;
           const url = avatarUrl(value, origin);
           if (!url) throw new Error('host avatar unavailable');
           return url;
         },
         (url) => {
+          if (url === null) return;
           avatars.set(id, url);
           publishMetadata();
         },
+        RETRY_DELAYS_MS.length,
       );
     }
   };

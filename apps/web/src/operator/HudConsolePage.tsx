@@ -43,13 +43,11 @@ import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { defaultMapGeometryProvider } from '@mizar/radar';
 
 import {
-  getHudEditorFixture,
   HUD_EDITOR_DEFAULT_FIXTURE_ID,
   HUD_EDITOR_FIXTURE_GROUPS,
-  PROGRAM_FIXTURE_LABELS,
-  type ProgramFixtureId,
-} from '../program/fixtures';
-import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
+  HUD_EDITOR_FIXTURE_LABELS,
+  type HudEditorFixtureId,
+} from '../program/fixtures/fixture-labels';
 import { hasAcceptedProgramSnapshot } from '@mizar/hud-view';
 
 import { HudCanvasPreview } from './HudCanvasPreview';
@@ -113,8 +111,8 @@ function replayTimeLabel(elapsedUs: number): string {
   return `${minutes}:${seconds}.${milliseconds}`;
 }
 
-function fixtureLabel(id: ProgramFixtureId): string {
-  return id === 'awaiting-neutral' ? '等待数据' : PROGRAM_FIXTURE_LABELS[id];
+function fixtureLabel(id: HudEditorFixtureId): string {
+  return id === 'awaiting-neutral' ? '等待数据' : HUD_EDITOR_FIXTURE_LABELS[id];
 }
 
 function connectionLabel(state: LocalChannelConnectionState): string {
@@ -200,7 +198,9 @@ export function HudConsolePage() {
   const [previewSource, setPreviewSource] = useState<'fixture' | 'replay' | 'current-live'>(() =>
     new URLSearchParams(window.location.search).get('mode') === 'fixture' ? 'fixture' : 'replay',
   );
-  const [fixtureId, setFixtureId] = useState<ProgramFixtureId>(HUD_EDITOR_DEFAULT_FIXTURE_ID);
+  const [fixtureId, setFixtureId] = useState<HudEditorFixtureId | 'gameplay-map-ended-gg'>(
+    HUD_EDITOR_DEFAULT_FIXTURE_ID,
+  );
   const [replaySourceId, setReplaySourceId] = useState<ReplaySourceId>('epl-inferno-video');
   const [replayLoadState, setReplayLoadState] = useState<
     | {
@@ -250,11 +250,40 @@ export function HudConsolePage() {
     readonly startY: number;
     readonly placement: HudLayout['widgets'][HudWidgetId];
   } | null>(null);
-  const fixture = useMemo(() => getHudEditorFixture(fixtureId), [fixtureId]);
-  const fixtureRadarSnapshot = useMemo(
-    () => radarSnapshotForProgramFixture(fixtureId),
-    [fixtureId],
-  );
+  const [sample, setSample] = useState<
+    | { id: typeof fixtureId; status: 'failed' }
+    | {
+        id: typeof fixtureId;
+        status: 'ready';
+        program: ProgramSnapshot | null;
+        radar: ReturnType<
+          typeof import('../program/fixtures/radar-fixtures').radarSnapshotForProgramFixture
+        >;
+      }
+    | null
+  >(null);
+  useEffect(() => {
+    if (previewSource !== 'fixture') return;
+    let active = true;
+    void Promise.all([import('../program/fixtures'), import('../program/fixtures/radar-fixtures')])
+      .then(([program, radar]) => {
+        if (active)
+          setSample({
+            id: fixtureId,
+            status: 'ready',
+            program: program.getHudEditorFixture(fixtureId),
+            radar: radar.radarSnapshotForProgramFixture(fixtureId),
+          });
+      })
+      .catch(() => {
+        if (active) setSample({ id: fixtureId, status: 'failed' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [fixtureId, previewSource]);
+  const fixture = sample?.id === fixtureId && sample.status === 'ready' ? sample : null;
+  const sampleError = sample?.id === fixtureId && sample.status === 'failed';
   useEffect(() => {
     const generation = replayLoadGeneration.current + 1;
     replayLoadGeneration.current = generation;
@@ -316,12 +345,12 @@ export function HudConsolePage() {
       ? program.current
       : activePreviewSource === 'replay'
         ? (replayFrame?.program ?? null)
-        : fixture;
+        : (fixture?.program ?? null);
   const activeRadarSnapshot =
     activePreviewSource === 'replay'
       ? (replayFrame?.radar ?? null)
       : activePreviewSource === 'fixture'
-        ? fixtureRadarSnapshot
+        ? (fixture?.radar ?? null)
         : null;
   let unsupportedRadarMap: string | null = null;
   const previewRadarMapName =
@@ -1061,7 +1090,7 @@ export function HudConsolePage() {
                     <select
                       aria-label="示例比赛"
                       value={fixtureId}
-                      onChange={(event) => setFixtureId(event.target.value as ProgramFixtureId)}
+                      onChange={(event) => setFixtureId(event.target.value as HudEditorFixtureId)}
                     >
                       {HUD_EDITOR_FIXTURE_GROUPS.map((group) => (
                         <optgroup key={group.label} label={group.label}>
@@ -1119,7 +1148,11 @@ export function HudConsolePage() {
                         : '回放示例，非本场事实'
                       : '重放素材不可用'
                     : activePreviewSource === 'fixture'
-                      ? '示例资料，非本场事实'
+                      ? sampleError
+                        ? '示例资料不可用'
+                        : fixture === null
+                          ? '正在加载示例资料'
+                          : '示例资料，非本场事实'
                       : connectionLabel(program.state)}
                   {activePreviewSource === 'current-live' && unsupportedRadarMap !== null
                     ? ` · 雷达不可用：不支持地图 ${unsupportedRadarMap}`

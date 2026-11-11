@@ -29,7 +29,7 @@ function App() {
     let alive = true;
     void fetch('./mizar-config.json')
       .then((response) => {
-        if (!response.ok) throw new Error('config unavailable');
+        if (!response.ok) throw new Error(`config HTTP ${response.status}`);
         return response.json() as Promise<unknown>;
       })
       .then((value) => {
@@ -37,8 +37,15 @@ function App() {
         if (parsed.renderer !== 'native') throw new Error('unsupported HUD');
         if (alive) setPreset(parsed);
       })
-      .catch(() => {
-        if (alive) setPreset(null);
+      .catch((error: unknown) => {
+        if (!alive) return;
+        const message =
+          error instanceof SyntaxError
+            ? 'invalid JSON'
+            : error instanceof Error && /^config HTTP \d+$|^unsupported HUD$/.test(error.message)
+              ? error.message
+              : 'unavailable or invalid configuration';
+        console.error(`Mizar HUD: mizar-config.json — ${message}`);
       });
     const socket = io('/');
     const session = createLhmSession({

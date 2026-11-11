@@ -72,7 +72,8 @@ export function HudEditorOverlay({
             ></button>
             {descriptor.id === 'radar' && selected ? (
               <button
-                aria-label="调整雷达大小"
+                aria-label="拖动调整雷达大小"
+                tabIndex={-1}
                 className="hud-editor-overlay__resize-handle"
                 disabled={!interactive}
                 onPointerDown={onRadarResizePointerDown}
