@@ -12,6 +12,7 @@ Var HandoffParentReceipt
 Var HandoffProcessId
 Var HandoffBootstrapOwner
 Var HandoffLease
+Var HandoffPowerShell
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -75,6 +76,9 @@ SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
 
 Function .onInit
   SetShellVarContext current
+  StrCpy $HandoffPowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+  StrCpy $HandoffPowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   StrCpy $UpdateWriter "0"
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
@@ -185,7 +189,7 @@ Section "-Mizar" SecMain
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   StrCmp $UpdateWriter "0" 0 handoff_writer_ready
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ProbeWriter -NoStatusWindow'
+  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ProbeWriter -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" handoff_writer_ready
@@ -201,7 +205,7 @@ Section "-Mizar" SecMain
   StrCpy $2 ' -BootstrapLease $HandoffLease'
   StrCmp $HandoffBootstrapOwner "" +2
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
+  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 handoff_failed
@@ -291,6 +295,9 @@ SectionEnd
 
 Function un.onInit
   SetShellVarContext current
+  StrCpy $HandoffPowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+  StrCpy $HandoffPowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   StrCpy $UpdateWriter "0"
   ReadRegStr $HandoffStateRoot HKCU "Software\Mizar" "StateRoot"
   ReadEnvStr $1 "MIZAR_STATE_ROOT"
@@ -342,7 +349,7 @@ Section "Uninstall"
   StrCpy $2 '$2 -ParentReceiptPath "$HandoffParentReceipt"'
   StrCmp $HandoffBootstrapOwner "" +2
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId$2 -NoStatusWindow'
+  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" uninstall_handoff_ready

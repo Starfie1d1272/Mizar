@@ -1048,7 +1048,7 @@ if ($Mode -eq 'Handoff') {
     [Console]::Write($root)
     exit 0
   } catch {
-    $failure = $_.Exception.ToString()
+    $failure = $_.ToString() + "`r`n" + $_.ScriptStackTrace + "`r`n" + $_.Exception.ToString()
     [Console]::Error.WriteLine($failure)
     try {
       $logRoot = Handoff-Path $(if ($context -and $context.state) { $context.state } else { $HandoffState })
