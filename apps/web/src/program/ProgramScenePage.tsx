@@ -77,18 +77,25 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     ? programPreviewSnapshot('gameplay', params.get('variant'))
     : connection.current;
   const clock = snapshot?.payload.clock?.phase;
-  const canRotate =
-    !preview &&
-    (sceneId === 'waiting' || sceneId === 'intermap') &&
-    scenes?.active === sceneId &&
-    (scenes.director?.mode === 'auto' ||
-      (scenes.director?.mode === 'blocked' && scenes.director.blockCause === 'telemetry')) &&
-    !scenes.preparing &&
-    clock !== 'paused' &&
-    clock !== 'timeout_ct' &&
-    clock !== 'timeout_t';
   const matchId = data?.match?.matchId ?? null;
   const observedMatch = connection.current?.payload.match?.matchId;
+  const waiting = sceneId === 'waiting';
+  const canRotate =
+    !preview &&
+    (waiting || sceneId === 'intermap') &&
+    scenes?.active === sceneId &&
+    !scenes.preparing &&
+    (waiting
+      ? scenes.productionActive === true
+      : (scenes.director?.mode === 'auto' ||
+          (scenes.director?.mode === 'blocked' && scenes.director.blockCause === 'telemetry')) &&
+        clock !== 'paused' &&
+        clock !== 'timeout_ct' &&
+        clock !== 'timeout_t');
+  // Gameplay deliberately withholds its match before a map is bound. Static
+  // pre-match cards use the selected presentation, but never a conflicting match.
+  const sameMatch =
+    !connection.current || observedMatch === matchId || (waiting && observedMatch == null);
   if (!preview && display.current === null) return null;
   const sceneStyle = display.current
     ? (pulseTokenStyle(display.current.program) ?? undefined)
@@ -110,7 +117,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
       previewBackground={params.get('background') !== 'transparent'}
     />
   );
-  return canRotate && (!connection.current || observedMatch === matchId) && matchId ? (
+  return canRotate && sameMatch && matchId ? (
     <RotatingScene
       key={JSON.stringify([sceneId, matchId])}
       matchId={matchId}

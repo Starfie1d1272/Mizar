@@ -1,13 +1,14 @@
 import type { ProgramProjection } from '@mizar/core/projection';
-import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
+import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { MusicGroup, MusicTrack } from '@mizar/protocol/music';
 import { musicMapScope } from '../scope/identities.js';
-import { isRegulationHalftime } from '../program-scenes/presentation.js';
+import { hasFrozenMapResult, isRegulationHalftime } from '../program-scenes/presentation.js';
 
 export interface MusicTruth {
   program: ProgramProjection;
   active: ProgramSceneId;
   production: boolean;
+  presentation?: ProgramPresentation;
 }
 export interface MusicCue {
   group: MusicGroup;
@@ -48,7 +49,14 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
     ['waiting', 'bp'].includes(active)
   )
     return waiting;
-  if (!musicSafe(p) || p.status.telemetry !== 'fresh') return null;
+  if (!musicSafe(p)) return null;
+  // Only a result already frozen for this execution can outlive live telemetry.
+  const offlineResult =
+    p.map.phase === 'gameover' &&
+    ['map_result', 'intermap', 'match_result'].includes(active) &&
+    truth.presentation !== undefined &&
+    hasFrozenMapResult(p, truth.presentation);
+  if (p.status.telemetry !== 'fresh' && !offlineResult) return null;
   if (p.map.phase === 'gameover') {
     if (p.series?.status === 'completed')
       return ['map_result', 'match_result'].includes(active)

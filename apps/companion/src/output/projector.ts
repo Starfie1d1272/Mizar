@@ -18,15 +18,32 @@ import type { ProjectionBundle } from '../projections/projection-coordinator.js'
 
 type LiveProjectionInput = Pick<ProjectionBundle, 'program' | 'radar' | 'operator' | 'identity'>;
 
-function eligible(bundle: LiveProjectionInput, binding: MatchContextBinding | undefined): boolean {
-  return (
-    binding !== undefined &&
-    binding.freshness === 'fresh' &&
-    bundle.program.match?.matchId === binding.context.matchId &&
-    bundle.program.status.telemetry === 'fresh' &&
-    bundle.program.status.identity !== 'mismatch' &&
-    bundle.program.status.context === 'fresh'
-  );
+export type LiveSnapshotBlockedReason =
+  | 'binding_missing'
+  | 'binding_stale'
+  | 'competition_missing'
+  | 'snapshot_match_mismatch'
+  | 'telemetry_unavailable'
+  | 'telemetry_stale'
+  | 'identity_mismatch'
+  | 'context_stale';
+
+/** The same eligibility decision used by publication and its private explanation. */
+export function liveSnapshotBlockedReason(
+  bundle: LiveProjectionInput,
+  binding: MatchContextBinding | undefined,
+): LiveSnapshotBlockedReason | null {
+  if (!binding) return 'binding_missing';
+  if (binding.freshness !== 'fresh') return 'binding_stale';
+  if (binding.context.competition === null) return 'competition_missing';
+  if (bundle.program.match?.matchId !== binding.context.matchId) return 'snapshot_match_mismatch';
+  if (bundle.program.status.telemetry !== 'fresh')
+    return bundle.program.status.telemetry === 'stale'
+      ? 'telemetry_stale'
+      : 'telemetry_unavailable';
+  if (bundle.program.status.identity === 'mismatch') return 'identity_mismatch';
+  if (bundle.program.status.context !== 'fresh') return 'context_stale';
+  return null;
 }
 
 interface ReliableMapResult {
@@ -63,7 +80,11 @@ export function projectLiveSnapshotV1(input: {
   readonly includeRadar?: boolean;
 }): LiveSnapshotV1 | null {
   const { bundle, binding } = input;
-  if (!eligible(bundle, binding) || binding === undefined || binding.context.competition === null)
+  if (
+    liveSnapshotBlockedReason(bundle, binding) ||
+    binding === undefined ||
+    binding.context.competition === null
+  )
     return null;
   const { program, radar, operator } = bundle;
   const lineupMismatchOnly = hasLineupMismatchOnly(bundle, binding);

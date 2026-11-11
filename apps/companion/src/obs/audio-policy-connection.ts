@@ -50,7 +50,7 @@ export class GameAudioConnection {
       const config = await this.config.read();
       const endpoint = `ws://${config.host}:${config.port}`;
       const signature = JSON.stringify([endpoint, config.password, binding, revision]);
-      if (endpoint !== binding.endpoint || !valid()) {
+      if (!valid()) {
         this.invalidate();
         return;
       }
@@ -104,8 +104,10 @@ export class GameAudioConnection {
       const current = () =>
         !this.closed && this.client === client && this.epoch === epoch && valid();
       const rpc: ObsRpc = {
-        call: async (name, data) => {
+        reportsDispatch: true,
+        call: async (name, data, onDispatch) => {
           if (!current()) throw new Error('audio_cancelled');
+          onDispatch?.();
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             return await Promise.race([
@@ -127,6 +129,14 @@ export class GameAudioConnection {
           }
         },
       };
+      if (endpoint !== binding.endpoint) {
+        const managed = await this.config.managedResources.bind(
+          rpc,
+          endpoint,
+          'http://127.0.0.1:3000',
+        );
+        if (managed.identityEndpoint !== binding.endpoint) throw new Error('audio_binding_changed');
+      }
       const version = await rpc.call('GetVersion');
       if (
         !Array.isArray(version.availableRequests) ||

@@ -1,12 +1,13 @@
+import { ProducerRetention, type IncidentParticipant } from './retention.js';
 import { constants } from 'node:fs';
-import { mkdir, open, opendir, lstat, unlink } from 'node:fs/promises';
+import { mkdir, open, opendir, lstat, unlink, link, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { setImmediate as yieldIO } from 'node:timers/promises';
 import { z } from 'zod';
-import { atomicJson, safePath, syncDirectory } from '../resource-store/files.js';
+import { safePath, syncDirectory } from '../resource-store/files.js';
 import { diagnosticValue } from './session-journal.js';
 
 const compress = promisify(gzip);
@@ -45,19 +46,13 @@ const record = z
   })
   .strict();
 export type PendingPerformanceRecord = z.infer<typeof record>;
-const packet = z
-  .object({
-    schema: z.literal('mizar-performance-pending/1'),
-    windowId: z.uuid(),
-    part: z.number().int().min(0).max(65535),
-    firstTime: z.iso.datetime(),
-    lastTime: z.iso.datetime(),
-    expandedBytes: z.number().int().min(1).max(PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    gzipBase64: z.string().max(1450 * 1024),
-  })
-  .strict();
-type Packet = z.infer<typeof packet>;
+type Packet = {
+  windowId: string;
+  part: number;
+  firstTime: string;
+  lastTime: string;
+  expandedBytes: number;
+};
 type Entry = {
   name: string;
   bytes: number;
@@ -66,10 +61,42 @@ type Entry = {
   part: number;
   firstTime: string;
 };
-const filePattern = /^([a-f0-9-]{36})\.([a-f0-9]{4})\.json$/i;
+const filePattern = /^([a-f0-9-]{36})\.([a-f0-9]{4})\.gz$/i;
 
 export function performanceRecordEvent(value: PendingPerformanceRecord) {
+  const sampleTimes = Array.isArray(value.evidence.samples)
+    ? value.evidence.samples
+        .map((sample: { time?: unknown }) => sample?.time)
+        .filter(
+          (time): time is string => typeof time === 'string' && Number.isFinite(Date.parse(time)),
+        )
+        .sort()
+    : [];
   return {
+    schema: 'mizar-diagnostic-event/2',
+    eventId: value.id,
+    producerKind: 'companion',
+    producerRunId: value.source.sessionId,
+    sequence: value.source.recordSequence,
+    kind: value.stage,
+    phase: null,
+    outcome: null,
+    observedAt: value.source.time,
+    recordedAt: value.source.time,
+    monotonicMs: value.source.monotonicMs,
+    sourceInterval: sampleTimes.length ? { from: sampleTimes[0], to: sampleTimes.at(-1) } : null,
+    taskId: null,
+    operationId: null,
+    parentOperationId: null,
+    attemptId: null,
+    scope: { windowId: value.windowId },
+    coverage: {
+      durability: 'committed',
+      unknown: ['performance-source-has-independent-sequence'],
+      excluded: [],
+      replayCount: 0,
+      occurrences: 1,
+    },
     time: value.source.time,
     startupSessionId: value.source.sessionId,
     hostStartupSessionId: value.source.hostSessionId,
@@ -86,13 +113,20 @@ export function performanceRecordEvent(value: PendingPerformanceRecord) {
 /** A bounded, compressed write-ahead copy for these windows only. Never evicts unacknowledged evidence. */
 export class PerformanceSpool {
   private readonly directory: string;
+  private readonly retained: ProducerRetention;
   private entries: Entry[] = [];
   private initialized = false;
-  private pins = new Map<string, number>();
-  private acknowledged = new Set<string>();
   private unreadable = new Map<string, { bytes: number; error: unknown; retryAt: number }>();
   constructor(logDirectory: string) {
     this.directory = join(logDirectory, 'performance-pending');
+    this.retained = new ProducerRetention(logDirectory, 'performance', {
+      budgetBytes: PERFORMANCE_SPOOL_LIMITS.diskBytes,
+      retentionMs: 14 * 86400_000,
+    });
+  }
+  private ordinary(entries: readonly Entry[] = this.entries) {
+    const extra = this.retained.incidentSegmentNames();
+    return entries.filter((entry) => !extra.has('performance-pending/' + entry.name));
   }
   private used() {
     return (
@@ -142,25 +176,42 @@ export class PerformanceSpool {
         if (!result.bytesRead) throw new Error('performance_spool_incomplete_read');
         offset += result.bytesRead;
       }
-      const value = packet.parse(JSON.parse(bytes.toString('utf8')));
-      if (name !== `${value.windowId}.${value.part.toString(16).padStart(4, '0')}.json`)
-        throw new Error('performance_spool_identity_mismatch');
-      const raw = await decompress(Buffer.from(value.gzipBase64, 'base64'), {
+      const raw = await decompress(bytes, {
         maxOutputLength: PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes,
       });
-      if (raw.length !== value.expandedBytes || checksum(raw) !== value.sha256)
-        throw new Error('performance_spool_integrity');
+      const events = JSON.parse(raw.toString('utf8')) as {
+        eventId: string;
+        windowId: string;
+        stage: string;
+        evidence: Record<string, unknown> & { sourceRecord: Record<string, unknown> };
+      }[];
       const records = z
         .array(record)
         .min(1)
         .max(8192)
-        .parse(JSON.parse(raw.toString('utf8')));
-      if (
-        records.some((item) => item.windowId !== value.windowId) ||
-        records[0]?.source.time !== value.firstTime ||
-        records.at(-1)?.source.time !== value.lastTime
-      )
-        throw new Error('performance_spool_record_mismatch');
+        .parse(
+          events.map((event) => ({
+            id: event.eventId,
+            windowId: event.windowId,
+            stage: event.stage,
+            source: Object.fromEntries(
+              Object.entries(event.evidence.sourceRecord).filter(([key]) => key !== 'id'),
+            ),
+            evidence: Object.fromEntries(
+              Object.entries(event.evidence).filter(([key]) => key !== 'sourceRecord'),
+            ),
+          })),
+        );
+      const match = filePattern.exec(name)!;
+      if (records.some((record) => record.windowId !== match[1]))
+        throw new Error('performance_spool_identity_mismatch');
+      const value: Packet = {
+        windowId: records[0]!.windowId,
+        part: parseInt(match[2]!, 16),
+        firstTime: records[0]!.source.time,
+        lastTime: records.at(-1)!.source.time,
+        expandedBytes: raw.length,
+      };
       return { packet: value, records, bytes: bytes.length };
     } finally {
       await file.close();
@@ -168,6 +219,7 @@ export class PerformanceSpool {
   }
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    await this.retained.initialize();
     let directory: Awaited<ReturnType<typeof opendir>>;
     try {
       await safePath(this.directory);
@@ -180,15 +232,66 @@ export class PerformanceSpool {
       throw error;
     }
     const entries: Entry[] = [];
+    this.unreadable.clear();
+    // Repair publication links before reading any final, independent of directory order.
     for await (const file of directory) {
-      if (!filePattern.test(file.name)) continue;
-      if (entries.length + this.unreadable.size >= PERFORMANCE_SPOOL_LIMITS.files)
-        throw new Error('performance_spool_file_count_budget');
+      if (/^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz(?:\.[a-f0-9-]{36})?\.partial$/i.test(file.name)) {
+        // Complete a publication interrupted between link and unlink, only for the identical inode.
+        const target = file.name.slice(0, 44);
+        await safePath(this.directory);
+        const stagedPath = join(this.directory, file.name);
+        const staged = await lstat(stagedPath);
+        const published = await lstat(join(this.directory, target)).catch((error: unknown) => {
+          if (!missing(error)) throw error;
+          return null;
+        });
+        if (
+          published &&
+          staged.isFile() &&
+          published.isFile() &&
+          staged.ino === published.ino &&
+          staged.dev === published.dev &&
+          staged.nlink === 2 &&
+          published.nlink === 2
+        ) {
+          await safePath(this.directory);
+          const current = await lstat(stagedPath);
+          if (
+            !current.isFile() ||
+            current.ino !== staged.ino ||
+            current.dev !== staged.dev ||
+            current.nlink !== 2
+          )
+            throw new Error('performance_partial_changed');
+          await unlink(stagedPath);
+          await syncDirectory(this.directory);
+        } else {
+          // Unknown unpublished evidence stays cold; it cannot borrow an incident exemption.
+          await this.failed(file.name, new Error('unpublished_partial_retained'));
+          if (this.unreadable.size > PERFORMANCE_SPOOL_LIMITS.files)
+            throw new Error('performance_spool_file_count_budget');
+        }
+        continue;
+      }
+    }
+    for await (const file of await opendir(this.directory)) {
+      if (!filePattern.test(file.name) || entries.some((entry) => entry.name === file.name))
+        continue;
       try {
-        entries.push(this.entry(file.name, await this.read(file.name)));
+        const value = await this.read(file.name);
+        if (file.name.endsWith('.gz')) await this.register(file.name, value.records);
+        entries.push(this.entry(file.name, value));
+        this.unreadable.delete(file.name);
       } catch (error) {
         await this.failed(file.name, error);
       }
+      if (
+        entries.filter((entry) => !entry.name.endsWith('.gz')).length + this.unreadable.size >
+        PERFORMANCE_SPOOL_LIMITS.files
+      )
+        throw new Error('performance_spool_file_count_budget');
+      // Verified registered bodies may exceed ordinary capacity after an incident releases.
+      // The bounded retention inventory restores them; append's unified collector decides writes.
       await yieldIO();
     }
     this.entries = entries;
@@ -196,9 +299,11 @@ export class PerformanceSpool {
   }
   private async retryUnreadable() {
     for (const [name, value] of this.unreadable) {
-      if (Date.now() < value.retryAt) continue;
+      if (name.endsWith('.partial') || Date.now() < value.retryAt) continue;
       try {
-        this.entries.push(this.entry(name, await this.read(name)));
+        const value = await this.read(name);
+        if (name.endsWith('.gz')) await this.register(name, value.records);
+        this.entries.push(this.entry(name, value));
         this.unreadable.delete(name);
       } catch (error) {
         await this.failed(name, error);
@@ -212,46 +317,100 @@ export class PerformanceSpool {
     records: PendingPerformanceRecord[],
   ): Promise<Entry> {
     if (part > 65535) throw new Error('performance_spool_part_budget');
-    const raw = Buffer.from(JSON.stringify(records));
+    const raw = Buffer.from(JSON.stringify(records.map(performanceRecordEvent)));
     if (raw.length > PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes)
       throw new Error('performance_spool_packet_budget');
-    const value: Packet = {
-      schema: 'mizar-performance-pending/1',
-      windowId,
-      part,
-      firstTime: records[0]!.source.time,
-      lastTime: records.at(-1)!.source.time,
-      expandedBytes: raw.length,
-      sha256: checksum(raw),
-      gzipBase64: (await compress(raw)).toString('base64'),
-    };
-    const bytes = Buffer.byteLength(JSON.stringify(value));
-    const name = `${windowId}.${part.toString(16).padStart(4, '0')}.json`;
+    const compressed = await compress(raw);
+    const bytes = compressed.length;
+    if (bytes > PERFORMANCE_SPOOL_LIMITS.packetFileBytes)
+      throw new Error('performance_spool_packet_budget');
+    const name = `${windowId}.${part.toString(16).padStart(4, '0')}.gz`;
+    const inventory = new Set(this.retained.snapshot().segments.map((segment) => segment.name));
+    const unregistered = this.entries.filter(
+      (entry) => !inventory.has('performance-pending/' + entry.name),
+    );
+    const expanded = new Map(
+      this.entries.map((entry) => ['performance-pending/' + entry.name, entry.expandedBytes]),
+    );
+    const existing = this.ordinary().find((entry) => entry.name === name);
+    const admission = await this.retained.collect({
+      incomingBytes:
+        bytes -
+        (existing?.bytes ?? 0) +
+        unregistered.reduce((total, entry) => total + entry.bytes, 0) +
+        [...this.unreadable.values()].reduce((total, entry) => total + entry.bytes, 0),
+      capacity: [
+        {
+          limit: PERFORMANCE_SPOOL_LIMITS.files,
+          incoming: (existing ? 0 : 1) + unregistered.length + this.unreadable.size,
+          cost: () => 1,
+        },
+        {
+          limit: PERFORMANCE_SPOOL_LIMITS.expandedDiskBytes,
+          incoming:
+            raw.length -
+            (existing?.expandedBytes ?? 0) +
+            unregistered.reduce((total, entry) => total + entry.expandedBytes, 0) +
+            this.unreadable.size * PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes,
+          cost: (segment) =>
+            expanded.get(segment.name) ?? PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes,
+        },
+      ],
+    });
+    const retained = new Set(admission.segments.map((segment) => segment.name));
+    this.entries = this.entries.filter(
+      (entry) =>
+        !inventory.has('performance-pending/' + entry.name) ||
+        retained.has('performance-pending/' + entry.name),
+    );
+    if (!admission.writable) throw new Error('performance_spool_disk_budget');
     const old = this.entries.find((item) => item.name === name);
-    if (
-      bytes > PERFORMANCE_SPOOL_LIMITS.packetFileBytes ||
-      this.used() - (old?.bytes ?? 0) + bytes > PERFORMANCE_SPOOL_LIMITS.diskBytes ||
-      this.entries.reduce((bytes, item) => bytes + item.expandedBytes, 0) -
-        (old?.expandedBytes ?? 0) +
-        this.unreadable.size * PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes +
-        raw.length >
-        PERFORMANCE_SPOOL_LIMITS.expandedDiskBytes ||
-      (!old && this.entries.length + this.unreadable.size >= PERFORMANCE_SPOOL_LIMITS.files)
-    )
-      throw new Error('performance_spool_disk_budget');
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await safePath(this.directory);
     await safePath(this.directory, name).catch((error: unknown) => {
       if (!missing(error)) throw error;
     });
-    await atomicJson(join(this.directory, name), value);
+    const temporary = join(this.directory, name + '.' + randomUUID() + '.partial');
+    const file = await open(
+      temporary,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      try {
+        await file.writeFile(compressed);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      try {
+        // Atomic no-replace publication; a retry must never overwrite a sealed/pinned body.
+        await link(temporary, join(this.directory, name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await this.read(name); // Validate the fixed existing source before the idempotency check.
+        const existing = await readFile(await safePath(this.directory, name));
+        if (checksum(existing) !== checksum(compressed))
+          throw new Error('performance_immutable_part_conflict', { cause: error });
+      }
+    } finally {
+      await unlink(temporary).catch((error: unknown) => {
+        if (!missing(error)) throw error;
+      });
+    }
+    await syncDirectory(this.directory);
+    await this.register(name, records);
+    await this.retained.protectActiveSegment(
+      records[0]!.source.sessionId,
+      'performance-pending/' + name,
+    );
     const entry = {
       name,
       windowId,
       part,
       bytes,
       expandedBytes: raw.length,
-      firstTime: value.firstTime,
+      firstTime: records[0]!.source.time,
     };
     if (old) this.entries.splice(this.entries.indexOf(old), 1, entry);
     else this.entries.push(entry);
@@ -263,6 +422,13 @@ export class PerformanceSpool {
   ): Promise<void> {
     await this.initialize();
     await this.retryUnreadable();
+    const currentRun = values[0]?.source.sessionId;
+    if (currentRun) {
+      await this.retained.initialize();
+      for (const pin of this.retained.snapshot().pins)
+        if (pin.kind === 'active' && pin.pinId !== currentRun)
+          await this.retained.releasePin(pin.pinId);
+    }
     for (const windowId of new Set(values.map((value) => value.windowId))) {
       const added = values
         .filter((value) => value.windowId === windowId)
@@ -270,7 +436,7 @@ export class PerformanceSpool {
       const last = this.entries
         .filter((entry) => entry.windowId === windowId)
         .sort((a, b) => b.part - a.part)[0];
-      const pinned = last && this.pins.has(last.name);
+      const pinned = Boolean(last); // Final compressed bodies are immutable, including between appends.
       const unreadableParts = [...this.unreadable.keys()]
         .filter((name) => name.startsWith(windowId + '.'))
         .map((name) => parseInt(name.slice(37, 41), 16));
@@ -294,10 +460,10 @@ export class PerformanceSpool {
         committed(alreadyPresent.map((value) => value.id));
       }
       let newIds: string[] = [];
-      let bytes = Buffer.byteLength(JSON.stringify(records));
+      let bytes = Buffer.byteLength(JSON.stringify(records.map(performanceRecordEvent)));
       for (const value of added) {
         if (existing.has(value.id)) continue;
-        const size = Buffer.byteLength(JSON.stringify(value)) + 1;
+        const size = Buffer.byteLength(JSON.stringify(performanceRecordEvent(value))) + 1;
         if (bytes + size > PERFORMANCE_SPOOL_LIMITS.expandedPacketBytes || records.length >= 8192) {
           if (records.length && newIds.length) {
             await this.save(windowId, part, records);
@@ -318,112 +484,46 @@ export class PerformanceSpool {
       }
     }
   }
-  async oldest(): Promise<{ name: string; records: PendingPerformanceRecord[] } | null> {
-    await this.initialize();
-    await this.retryUnreadable();
-    const sorted = this.entries
-      .filter((entry) => !this.acknowledged.has(entry.name))
-      .sort((a, b) => a.firstTime.localeCompare(b.firstTime) || a.part - b.part);
-    for (const first of sorted) {
-      try {
-        return { name: first.name, records: (await this.read(first.name)).records };
-      } catch (error) {
-        await this.failed(first.name, error);
-      }
-    }
-    return null;
+  private register(name: string, records: PendingPerformanceRecord[]) {
+    return this.retained.registerSegment('performance-pending/' + name, {
+      producerRunId: records[0]!.source.sessionId,
+      firstSequence: records[0]!.source.recordSequence,
+      lastSequence: records.at(-1)!.source.recordSequence,
+      firstObservedAt: records[0]!.source.time,
+      lastObservedAt: records.at(-1)!.source.time,
+      records: records.length,
+    });
   }
-  async acknowledge(name: string, ids: string[]): Promise<void> {
-    const value = await this.read(name);
-    if (
-      value.records.length !== ids.length ||
-      value.records.some((record, index) => record.id !== ids[index])
-    )
-      throw new Error('performance_spool_ack_mismatch');
-    if (this.pins.has(name)) {
-      this.acknowledged.add(name);
-      return;
-    }
-    await this.remove(name);
-  }
-  private async remove(name: string) {
-    await safePath(this.directory, name);
-    await unlink(join(this.directory, name));
-    await syncDirectory(this.directory);
-    this.entries = this.entries.filter((entry) => entry.name !== name);
-    this.acknowledged.delete(name);
-  }
-  async pin(): Promise<() => Promise<void>> {
-    await this.initialize();
-    const names = [...this.entries.map((entry) => entry.name), ...this.unreadable.keys()];
-    for (const name of names) this.pins.set(name, (this.pins.get(name) ?? 0) + 1);
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      const failures: unknown[] = [];
-      for (const name of names) {
-        const count = (this.pins.get(name) ?? 1) - 1;
-        if (count) this.pins.set(name, count);
-        else {
-          this.pins.delete(name);
-          if (this.acknowledged.has(name)) {
-            try {
-              await this.remove(name);
-            } catch (error) {
-              this.acknowledged.delete(name);
-              failures.push(error);
-            }
-          }
-        }
-      }
-      if (failures.length) throw new AggregateError(failures, 'performance_export_release_failed');
+  incidentParticipant(kind: 'incident' | 'export' | 'delivery' = 'incident'): IncidentParticipant {
+    return {
+      producerId: 'performance',
+      prepare: async (pinId) => {
+        await this.initialize();
+        return this.retained.preparePin({
+          pinId,
+          kind,
+          names: this.retained.snapshot().segments.map((segment) => segment.name),
+        });
+      },
+      commit: (pinId) => this.retained.commitPin(pinId),
+      release: (pinId) => this.retained.releasePin(pinId),
     };
   }
   health() {
     return {
       files: this.entries.length,
-      pendingFiles: this.entries.filter((entry) => !this.acknowledged.has(entry.name)).length,
-      exportPinnedFiles: this.pins.size,
+      pendingFiles: this.entries.length,
+      exportPinnedFiles: new Set(
+        this.retained
+          .snapshot()
+          .pins.filter((pin) => pin.kind === 'export')
+          .flatMap((pin) => pin.segments.map((segment) => segment.name)),
+      ).size,
       unreadableFiles: this.unreadable.size,
       sourceErrors: [...this.unreadable].map(([name, value]) => ({ name, error: value.error })),
       bytes: this.used(),
       expandedBytes: this.entries.reduce((bytes, item) => bytes + item.expandedBytes, 0),
       limits: PERFORMANCE_SPOOL_LIMITS,
     };
-  }
-  async *export(): AsyncGenerator<{
-    name: string;
-    bytes: Buffer;
-    sourceBytes: number;
-    status?: 'unreadable';
-  }> {
-    await this.initialize();
-    for (const entry of this.entries) {
-      let value;
-      try {
-        value = await this.read(entry.name);
-      } catch (error) {
-        await this.failed(entry.name, error);
-        continue;
-      }
-      yield {
-        name: `performance-pending/${entry.windowId}.${entry.part.toString(16).padStart(4, '0')}.ndjson`,
-        sourceBytes: value.bytes,
-        bytes: Buffer.from(
-          value.records
-            .map((record) => JSON.stringify(performanceRecordEvent(record)) + '\n')
-            .join(''),
-        ),
-      };
-      await yieldIO();
-    }
-    for (const [name, value] of this.unreadable)
-      yield {
-        name: `performance-pending/${name}`,
-        bytes: Buffer.alloc(0),
-        sourceBytes: value.bytes,
-        status: 'unreadable',
-      };
   }
 }

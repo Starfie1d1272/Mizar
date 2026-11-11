@@ -47,14 +47,14 @@ const directStages: Record<string, DiagnosticFailureKind> = {
 /** Only the dedicated native producer format; raw game files are never an input. */
 export function diagnosticConsoleEvidence(value: unknown): Record<string, unknown> | null {
   const entry = object(value);
-  if (
-    entry.stage !== 'cs2_console_records' ||
-    typeof entry.detail !== 'string' ||
-    entry.detail.length > 8192
-  )
-    return null;
+  if ((entry.kind ?? entry.stage) !== 'cs2_console_records') return null;
   try {
-    const detail = object(JSON.parse(entry.detail));
+    const detail =
+      entry.schema === 'mizar-diagnostic-event/2'
+        ? object(entry.evidence)
+        : typeof entry.detail === 'string' && entry.detail.length <= 8192
+          ? object(JSON.parse(entry.detail))
+          : {};
     return detail.source === 'owned-cs2-technical-console' &&
       detail.rawFileIncluded === false &&
       typeof detail.binding === 'string' &&
@@ -76,6 +76,58 @@ export function diagnosticEnvelope(value: unknown): {
   sourceTimeUnknown: boolean;
 } {
   const event = object(value);
+  if (event.schema === 'mizar-diagnostic-event/2') {
+    const stamps = [
+      event.observedAt,
+      object(event.sourceInterval).from,
+      object(event.sourceInterval).to,
+    ];
+    const times = [
+      ...new Set(
+        stamps.map(diagnosticSourceUtc).filter((value): value is string => value !== null),
+      ),
+    ].sort();
+    if (event.producerKind === 'document') {
+      const evidence = object(event.evidence);
+      const detail = event.kind === 'task' ? object(evidence.evidence) : evidence;
+      const failureKinds = new Set<DiagnosticFailureKind>();
+      const browserFailure =
+        event.kind === 'browser_error' || event.kind === 'browser_unhandled_rejection';
+      if (!cancelled(event.outcome ?? detail.result)) {
+        if (browserFailure) failureKinds.add('browser');
+        if (
+          event.kind === 'browser_performance' &&
+          typeof evidence.anomalyCount === 'number' &&
+          evidence.anomalyCount > 0
+        )
+          failureKinds.add('performance');
+        if (
+          (event.kind === 'http_control' &&
+            typeof evidence.status === 'number' &&
+            evidence.status >= 400) ||
+          (!browserFailure &&
+            (failed(event.outcome) ||
+              event.phase === 'failure' ||
+              failed(detail.result) ||
+              errorPresent(detail.error)))
+        )
+          failureKinds.add('operation');
+      }
+      return {
+        times,
+        failureKinds: [...failureKinds].sort(),
+        sourceTimeUnknown: times.length === 0,
+      };
+    }
+    const failureKinds = new Set(
+      diagnosticEnvelope({ ...event, schema: undefined, stage: event.kind ?? event.stage })
+        .failureKinds,
+    );
+    if (failed(event.outcome) || event.phase === 'failure')
+      failureKinds.add(event.producerKind === 'host' ? 'native' : 'operation');
+    return { times, failureKinds: [...failureKinds].sort(), sourceTimeUnknown: times.length === 0 };
+  }
+
   const evidence = object(event.evidence);
   const kinds = new Set<DiagnosticFailureKind>();
   const stamps: unknown[] = [];

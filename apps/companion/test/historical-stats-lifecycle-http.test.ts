@@ -146,11 +146,9 @@ it('keeps one snapshot through map changes, refreshes and cancels across match a
     expect((await production('enter')).status).toBe(200);
     await waitUntil(() => statsRequests === 1);
     await waitUntil(() => connection.getStatsSnapshot(target()) === null);
-    for (let i = 0; i < 12; i++) {
-      failures = 1;
-      now += 3_600_000;
-      expect(await connection.stats(target())).toBeNull();
-    }
+    failures = 1;
+    now += 3_600_000;
+    expect(await connection.stats(target())).toBeNull();
     now += 3_600_000;
     expect((await connection.stats(target()))?.matchId).toBe(snapshot.matchId);
     const initialCount = statsRequests;

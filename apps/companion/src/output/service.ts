@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { BoundaryCaptureError } from './boundary-capture.js';
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
+import type { ProgramCommitResult } from '../runtime/program-runtime.js';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
@@ -16,14 +18,32 @@ import {
   type ReliableDeliveryScope,
   type BoundaryIntent,
   type BoundaryScope,
+  parseSource,
+  sourceKey,
+  type CaptureReference,
 } from './reliable-outbox.js';
 import {
   buildReliableEventV1,
   materializeBoundaryEvent,
   buildMapPlayerSnapshotV1,
   projectLiveSnapshotV1,
+  liveSnapshotBlockedReason,
+  type LiveSnapshotBlockedReason,
   transitionReliableEventsV1,
 } from './projector.js';
+
+export interface LiveSnapshotStatus {
+  readonly localPersistencePending?: true;
+  readonly snapshot: LiveSnapshotV1 | null;
+  readonly blockedReason:
+    | LiveSnapshotBlockedReason
+    | 'projection_unavailable'
+    | 'output_unavailable'
+    | 'output_quarantined'
+    | 'output_persistence_pending'
+    | 'snapshot_projection_failed'
+    | null;
+}
 
 export interface LiveSnapshotConsumer {
   send(snapshot: LiveSnapshotV1): Promise<void>;
@@ -39,15 +59,30 @@ export interface OutputServiceOptions {
   readonly exactSource?: () => ExactSource | undefined;
   readonly isActiveOnlineBinding?: (binding: MatchContextBinding) => boolean;
   readonly isExecutionOwnedBy?: (binding: MatchContextBinding) => boolean;
-  readonly executionOwnerMatchId?: (runtimeSeq: number) => string | undefined;
   readonly managedSourceId?: () => string | undefined;
   readonly onDiagnostic?: (code: string) => void;
   readonly onOutboxLoadError?: (error: unknown) => void;
+  readonly onBoundaryCaptureError?: (
+    error: unknown,
+    evidence: {
+      stage: string;
+      operationId?: string;
+      cursor?: ReliableEventV1['cursor'] | undefined;
+    },
+  ) => void;
   readonly onBusinessEvidence?: (stage: string, evidence: unknown) => void;
   readonly onRecoveryProgress?: (
     event: ReliableEventV1,
     state: 'continuity_chain_missing' | 'continuity_waiting' | 'context_reconfirming',
   ) => void;
+}
+
+/** Immutable projection evidence held only across the corresponding runtime mutation. */
+export interface OutputMutationContext {
+  readonly bundle: ProjectionBundle;
+  readonly binding: MatchContextBinding | undefined;
+  readonly source: ExactSource | null | undefined;
+  readonly authority: string | undefined;
 }
 
 /** One public-safe output boundary for local consumers and later outbound adapters. */
@@ -59,15 +94,40 @@ export class OutputService {
   private readonly onDiagnostic: ((code: string) => void) | undefined;
   private bundle: ProjectionBundle | undefined;
   private priorForMutation: ProjectionBundle | undefined;
+  private boundaryContext: OutputMutationContext | undefined;
+  private priorBoundaryContext: OutputMutationContext | undefined;
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private readonly retiringScopes = new Set<string>();
-  private quarantined = false;
+  private readonly captureCursors = new Map<string, ReliableEventV1['cursor']>();
+  private readonly captureFailures = new Set<string>();
+  private trialQuarantined = false;
+  private faultQuarantined = false;
+  private get quarantined(): boolean {
+    const recovery = this.outbox?.getBoundaryCaptureRecovery();
+    return (
+      this.trialQuarantined || this.faultQuarantined || Boolean(recovery?.pending || recovery?.lost)
+    );
+  }
   private outboxUnavailable = false;
+  private get localProjectionQuarantined(): boolean {
+    // A failed website startup keeps its recovery evidence, but no longer owns
+    // local projection availability. Trial and local faults still fence reads.
+    return this.outboxUnavailable
+      ? this.trialQuarantined || this.faultQuarantined
+      : this.quarantined;
+  }
   async setQuarantined(value: boolean): Promise<void> {
-    this.quarantined = value;
-    if (value) await this.outbox?.flushPending();
+    this.trialQuarantined = value;
+    if (value) {
+      const source = this.options.exactSource?.();
+      if (source && this.outbox?.canCapture(source))
+        void this.sealSourceCapture(source).catch(() =>
+          this.onDiagnostic?.('source_capture_seal_failed'),
+        );
+      await this.outbox?.flushPending();
+    }
   }
   private mapStartScope: string | undefined;
   private mapStartRevision = 0;
@@ -119,8 +179,11 @@ export class OutputService {
     );
   }
 
-  private boundaryAuthority(): string | undefined {
-    const scope = this.options.authorityScope?.();
+  private boundaryAuthority(source?: ExactSource): string | undefined {
+    const exact = source ?? this.options.exactSource?.();
+    const scope = this.options.exactSource
+      ? exact && sourceKey(exact)
+      : this.options.authorityScope?.();
     return scope
       ? createHash('sha256')
           .update(JSON.stringify([this.boundaryOwner, scope]))
@@ -415,17 +478,49 @@ export class OutputService {
     this.outbox = options.outbox;
     this.sink = options.sink;
     this.now = options.now ?? (() => new Date());
-    this.onDiagnostic = options.onDiagnostic;
+    this.onDiagnostic = (code) => {
+      try {
+        options.onDiagnostic?.(code);
+      } catch {
+        // Website diagnostics cannot interrupt local production or reject background work.
+      }
+    };
   }
 
-  async start(): Promise<void> {
+  async start(
+    startup: {
+      sourceStateAvailable?: boolean;
+      restoreSourceCapture?: () => Promise<void>;
+    } = {},
+  ): Promise<void> {
     try {
+      // Every process acquires the website owners in the same order. A process
+      // without the source writer must not take the queue from its owner.
+      if (startup.sourceStateAvailable === false)
+        throw new Error('rivalhub_source_state_unavailable');
       await this.outbox?.load();
+      await startup.restoreSourceCapture?.();
     } catch (error) {
       this.outboxUnavailable = true;
-      this.options.onOutboxLoadError?.(error);
+      let failure = error;
+      try {
+        // This closes only this object's database; local projection stays live.
+        await this.outbox?.close();
+      } catch (cleanupError) {
+        failure = new AggregateError([error, cleanupError], 'website_output_startup_failed');
+      }
+      try {
+        this.options.onOutboxLoadError?.(failure);
+      } catch {
+        // Optional diagnostics cannot block local production startup.
+      }
       this.onDiagnostic?.('outbox_unavailable');
       return;
+    }
+    try {
+      await this.outbox?.retryPendingCaptures(true);
+    } catch (error) {
+      this.reportBoundaryCaptureError(error);
     }
     const continuity = this.outbox?.getContinuity();
     if (
@@ -477,6 +572,88 @@ export class OutputService {
     this.binding = binding;
   }
 
+  createCaptureReference(cursor: ReliableEventV1['cursor']): CaptureReference {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    return this.outbox.createCaptureReference(cursor);
+  }
+
+  async armSourceCapture(identity: ExactSource, reference: CaptureReference): Promise<void> {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    await this.outbox.armCapture(identity, reference);
+    if (!this.captureCursors.has(sourceKey(identity)))
+      this.captureCursors.set(sourceKey(identity), reference.startCursor);
+  }
+
+  activateSourceCapture(identity: ExactSource): void {
+    const cursor = this.bundle?.program.cursor;
+    if (
+      this.outboxUnavailable ||
+      !this.outbox ||
+      !cursor ||
+      this.binding?.context.matchId !== identity.matchId ||
+      !sameSourceSession(identity, cursor)
+    )
+      throw new Error('source_capture_execution_changed');
+    const active = this.outbox.canCapture(identity);
+    this.outbox.activateCapture(identity, cursor);
+    if (!active) {
+      this.captureCursors.set(sourceKey(identity), cursor);
+      this.mapStartScope = undefined;
+      this.publishedMapStart = undefined;
+      this.pendingMapStart = undefined;
+      this.lastMapObservation = cursor;
+      // The claim may have waited across many runtime commits. Its first
+      // boundary must use the actual activation cut and this exact owner,
+      // never the pre-claim projection or a prior source's frozen context.
+      this.priorForMutation = undefined;
+      this.priorBoundaryContext = undefined;
+      this.boundaryContext = {
+        bundle: this.bundle!,
+        binding: this.binding,
+        source: { ...identity },
+        authority: this.boundaryAuthority(identity),
+      };
+    }
+  }
+
+  async restoreSourceCapture(
+    identity: ExactSource,
+    reference: CaptureReference | undefined,
+  ): Promise<void> {
+    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
+    await this.outbox.restoreCaptureReference(identity, reference);
+    if (reference && !this.captureCursors.has(sourceKey(identity)))
+      this.captureCursors.set(sourceKey(identity), reference.startCursor);
+  }
+
+  async sealSourceCapture(identity: ExactSource): Promise<boolean> {
+    try {
+      if (this.outboxUnavailable || !this.outbox) return false;
+      const cursor = this.captureCursors.get(sourceKey(identity));
+      if (!cursor) return false;
+      // sealCapture fences synchronously before this first await. Disk or
+      // diagnostic failure must never reject an unawaited runtime callback.
+      return await this.outbox.sealCapture(
+        identity,
+        cursor,
+        !this.captureFailures.has(sourceKey(identity)),
+      );
+    } catch (error) {
+      try {
+        this.options.onBoundaryCaptureError?.(error, { stage: 'source_capture_seal' });
+      } catch {
+        // Diagnostics are best effort; the durable armed interval remains uncertain.
+      }
+      this.onDiagnostic?.('source_capture_seal_failed');
+      return false;
+    }
+  }
+
+  sourceCaptureCoverage(identity: ExactSource) {
+    if (this.outboxUnavailable || !this.outbox) return { state: 'unknown' as const };
+    return this.outbox.captureCoverage(identity);
+  }
+
   private executionEligible(binding: MatchContextBinding | undefined): boolean {
     return binding !== undefined && (this.options.isExecutionOwnedBy?.(binding) ?? true);
   }
@@ -486,6 +663,13 @@ export class OutputService {
     this.bundle = bundle;
     this.lastBundleAt = this.now().getTime();
     this.binding = binding;
+    const source = this.sourceFor(binding?.context.matchId, bundle.program.cursor);
+    this.boundaryContext = {
+      bundle,
+      binding,
+      source: source ? { ...source } : source,
+      authority: this.boundaryAuthority(),
+    };
     this.updateMapStartScope(bundle, binding);
     const scope = this.snapshotScope(bundle, binding);
     if (scope !== undefined && this.playerSnapshot?.scope !== scope)
@@ -598,13 +782,68 @@ export class OutputService {
     return true;
   }
 
-  beforeRuntimeMutation(): void {
-    this.priorForMutation = this.bundle;
+  captureRuntimeMutationContext(): OutputMutationContext | undefined {
+    return this.boundaryContext;
+  }
+
+  beforeRuntimeMutation(context = this.captureRuntimeMutationContext()): void {
+    this.priorForMutation = context?.bundle ?? this.bundle;
+    this.priorBoundaryContext = context;
   }
 
   current(includeRadar = false): LiveSnapshotV1 | null {
-    if (this.bundle === undefined) return null;
-    return this.safeProject(this.bundle, this.binding, this.now().toISOString(), includeRadar);
+    return this.currentStatus(includeRadar).snapshot;
+  }
+
+  /** Read-only explanation from the publisher, never a second runtime or a recovery command. */
+  currentStatus(includeRadar = false): LiveSnapshotStatus {
+    const cursor = this.bundle?.program.cursor;
+    const localPending =
+      !this.outboxUnavailable &&
+      !this.trialQuarantined &&
+      !this.faultQuarantined &&
+      !this.outbox?.getBoundaryCaptureRecovery().lost &&
+      this.binding &&
+      cursor?.liveSessionId &&
+      this.outbox?.hasPendingEnqueues(
+        {
+          matchId: this.binding.context.matchId,
+          producerInstanceId: cursor.producerInstanceId,
+          liveSessionId: cursor.liveSessionId,
+        },
+        this.sourceFor(this.binding.context.matchId, cursor) ?? undefined,
+      )
+        ? { localPersistencePending: true as const }
+        : {};
+    const result = (
+      snapshot: LiveSnapshotV1 | null,
+      blockedReason: LiveSnapshotStatus['blockedReason'],
+    ): LiveSnapshotStatus => ({
+      ...localPending,
+      snapshot,
+      // Local projection can remain readable when the durable publisher could not start.
+      blockedReason: this.outboxUnavailable ? 'output_unavailable' : blockedReason,
+    });
+    if (this.localProjectionQuarantined)
+      return result(
+        null,
+        !this.trialQuarantined &&
+          !this.faultQuarantined &&
+          !this.outbox?.getBoundaryCaptureRecovery().lost &&
+          this.outbox?.getBoundaryCaptureRecovery().pending
+          ? 'output_persistence_pending'
+          : 'output_quarantined',
+      );
+    if (!this.bundle) return result(null, 'projection_unavailable');
+    const blockedReason = liveSnapshotBlockedReason(this.bundle, this.binding);
+    if (blockedReason) return result(null, blockedReason);
+    const snapshot = this.safeProject(
+      this.bundle,
+      this.binding,
+      this.now().toISOString(),
+      includeRadar,
+    );
+    return result(snapshot, snapshot ? null : 'snapshot_projection_failed');
   }
 
   private safeProject(
@@ -613,7 +852,7 @@ export class OutputService {
     producedAt: string,
     includeRadar: boolean,
   ): LiveSnapshotV1 | null {
-    if (this.quarantined) return null;
+    if (this.localProjectionQuarantined) return null;
     try {
       return projectLiveSnapshotV1({ bundle, binding, producedAt, includeRadar });
     } catch {
@@ -651,57 +890,83 @@ export class OutputService {
   }
 
   afterRuntimeMutation(
-    result: RuntimeReduceResult,
+    result: RuntimeReduceResult & Partial<Pick<ProgramCommitResult, 'executionBoundary'>>,
     bundle: ProjectionBundle,
     binding: MatchContextBinding | undefined,
   ): void {
     if (this.closed || result.disposition.kind !== 'accepted') return;
     const previous = this.priorForMutation ?? this.bundle;
+    const frozen = this.priorBoundaryContext ?? this.boundaryContext;
     this.priorForMutation = undefined;
+    this.priorBoundaryContext = undefined;
     const now = this.now().toISOString();
     if (this.bundle !== bundle || this.binding !== binding) this.setCurrent(bundle, binding);
 
-    if (this.quarantined || this.outboxUnavailable || binding?.origin === 'fixture') {
+    const before = result.executionBoundary?.before;
+    if (
+      this.trialQuarantined ||
+      this.faultQuarantined ||
+      this.outboxUnavailable ||
+      (before?.kind === 'owned' ? before.fixture : binding?.origin === 'fixture')
+    )
       return;
-    }
     const cursor = bundle.program.cursor;
-    if (binding && !this.executionEligible(binding)) {
-      if (
-        this.outbox &&
-        (result.disposition.reason === 'source-generation-advanced' ||
-          result.transitions.some((transition) => transition.kind === 'map_execution_changed'))
-      ) {
-        const priorScope = this.boundaryScope(
-          this.options.executionOwnerMatchId?.(cursor.runtimeSeq),
-          cursor,
-        );
-        // Current binding authority may belong to a different match than this execution.
-        let scope: BoundaryScope | undefined;
-        if (priorScope) {
-          const { authorityFingerprint, ...rest } = priorScope;
-          void authorityFingerprint;
-          scope = rest;
+    const preparationBoundary = before?.kind === 'none';
+    const eligible = !binding || this.executionEligible(binding);
+    const frozenMatches =
+      before?.kind === 'owned' &&
+      frozen?.binding?.context.matchId === before.matchId &&
+      frozen.bundle.program.match?.matchId === before.matchId &&
+      sameMapExecution(frozen.bundle.program.cursor, before.cursor) &&
+      frozen.bundle.program.cursor.programSourceGeneration ===
+        before.cursor.programSourceGeneration;
+    // A boundary with explicit owner evidence must use that owner's frozen
+    // context. If it is unavailable, retain a scoped gap rather than borrow a
+    // later binding or current source. Legacy callers keep conservative behavior.
+    const boundaryContext =
+      before === undefined
+        ? {
+            bundle,
+            binding,
+            source: this.sourceFor(binding?.context.matchId, cursor),
+            authority: this.boundaryAuthority(),
+          }
+        : frozenMatches
+          ? frozen
+          : undefined;
+    const crossesExecution =
+      result.transitions.some((transition) => transition.kind === 'map_execution_changed') ||
+      result.disposition.reason === 'source-generation-advanced';
+    const captureSource =
+      crossesExecution && before?.kind !== 'none'
+        ? boundaryContext?.source
+        : this.sourceFor(binding?.context.matchId, cursor);
+    if (this.options.exactSource) {
+      // Website capture exists only inside a durably armed interval. Local
+      // runtime/projections already advanced above and never wait for this store.
+      if (!captureSource || !this.outbox?.canCapture(captureSource)) {
+        const active = this.options.exactSource();
+        if (
+          crossesExecution &&
+          before?.kind === 'owned' &&
+          active?.matchId === before.matchId &&
+          sameSourceSession(active, before.cursor) &&
+          this.outbox?.canCapture(active)
+        ) {
+          this.faultQuarantined = true;
+          this.captureFailures.add(sourceKey(active));
+          void this.sealSourceCapture(active);
+          this.onDiagnostic?.('outbox_boundary_owner_unconfirmed');
         }
-        const key = this.boundaryScopeKey(scope);
-        this.boundaryCommits.set(key, (this.boundaryCommits.get(key) ?? 0) + 1);
-        void this.outbox
-          .captureBoundaries([], [], undefined, true, this.now(), scope)
-          .then(() => this.onDiagnostic?.('outbox_boundary_gap'))
-          .catch(() => {
-            this.quarantined = true;
-            this.onDiagnostic?.('outbox_boundary_capture_failed');
-          })
-          .finally(() => {
-            const remaining = (this.boundaryCommits.get(key) ?? 1) - 1;
-            if (remaining) this.boundaryCommits.set(key, remaining);
-            else this.boundaryCommits.delete(key);
-          });
+        return;
       }
-      return;
+      this.captureCursors.set(sourceKey(captureSource), cursor);
     }
     if (
       binding &&
       cursor.liveSessionId &&
+      !result.transitions.some((transition) => transition.kind === 'map_execution_changed') &&
+      result.disposition.reason !== 'source-generation-advanced' &&
       this.retiringScopes.has(
         JSON.stringify([binding.context.matchId, cursor.producerInstanceId, cursor.liveSessionId]),
       )
@@ -710,7 +975,7 @@ export class OutputService {
 
     const managedSourceId = this.options.managedSourceId?.();
     const continuity: DeliveryContinuity | undefined =
-      binding === undefined
+      binding === undefined || !eligible
         ? undefined
         : {
             matchId: binding.context.matchId,
@@ -724,13 +989,42 @@ export class OutputService {
       (transition) => transition.kind === 'map_execution_changed',
     );
     const generationAdvanced = result.disposition.reason === 'source-generation-advanced';
-    const hasBoundary = transitions.length > 0 || generationAdvanced;
+    const hasBoundary = !preparationBoundary && (transitions.length > 0 || generationAdvanced);
     const outputScope = this.boundaryScope(binding?.context.matchId, bundle.program.cursor);
-    if (!hasBoundary && continuity !== undefined)
+    const priorExecutionScope =
+      before && before.kind !== 'none'
+        ? this.boundaryScope(before.kind === 'owned' ? before.matchId : undefined, before.cursor)
+        : outputScope;
+    // Gaps belong to the prior execution and survive a later authority revision.
+    const { authorityFingerprint: priorAuthority, ...priorScope } = priorExecutionScope ?? {};
+    void priorAuthority;
+    const gapScope = priorExecutionScope
+      ? ({
+          ...priorScope,
+          ...(boundaryContext?.source &&
+          before?.kind === 'owned' &&
+          boundaryContext.source.matchId === before.matchId &&
+          sameSourceSession(boundaryContext.source, before.cursor)
+            ? { source: boundaryContext.source }
+            : {}),
+          ruleVersion: 2 as const,
+          reason:
+            before?.kind === 'unknown'
+              ? ('execution_owner_unknown' as const)
+              : ('boundary_capture_incomplete' as const),
+        } as BoundaryScope)
+      : outputScope;
+    if (!eligible && !hasBoundary) return;
+    if (!this.quarantined && !hasBoundary && continuity !== undefined)
       void this.outbox
         ?.updateContinuity(continuity, outputScope)
         .catch(() => this.onDiagnostic?.('outbox_continuity_write_failed'));
-    if (bundle.program.status.telemetry === 'fresh' && bundle.program.map.phase === 'gameover') {
+    if (
+      !this.quarantined &&
+      eligible &&
+      bundle.program.status.telemetry === 'fresh' &&
+      bundle.program.map.phase === 'gameover'
+    ) {
       const cursor = bundle.program.cursor;
       const map = bundle.program.map;
       void this.outbox
@@ -755,24 +1049,40 @@ export class OutputService {
           );
         })
         .catch(() => {
-          this.quarantined = true;
+          this.faultQuarantined = true;
+          if (captureSource) {
+            this.captureFailures.add(sourceKey(captureSource));
+            void this.sealSourceCapture(captureSource);
+          }
           this.onDiagnostic?.('outbox_supersede_failed');
         });
     }
-    const newMapObservation = this.newMapObservation(result, bundle);
+    const newMapObservation =
+      !this.quarantined && eligible && this.newMapObservation(result, bundle);
     let candidates: ReliableEventV1[];
     let projectionFailed = false;
     try {
-      candidates = [
-        ...transitionReliableEventsV1({
-          result,
-          bundle,
-          binding,
-        }),
-      ];
+      candidates = !eligible
+        ? []
+        : [
+            ...transitionReliableEventsV1({
+              result,
+              bundle,
+              binding,
+            }).filter(
+              (event) =>
+                !preparationBoundary ||
+                (event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed'),
+            ),
+          ];
     } catch {
+      if (captureSource) this.captureFailures.add(sourceKey(captureSource));
       this.onDiagnostic?.('event_projection_failed');
-      if (!hasBoundary) return;
+      if (!hasBoundary) {
+        this.faultQuarantined = true;
+        if (captureSource) void this.sealSourceCapture(captureSource);
+        return;
+      }
       candidates = [];
       projectionFailed = true;
     }
@@ -796,13 +1106,20 @@ export class OutputService {
         });
       const events: ReliableEventV1[] = [];
       const intents: BoundaryIntent[] = [];
-      let missing = projectionFailed;
-      for (const entry of entries) {
+      const sameSession = !before || sameSourceSession(before.cursor, cursor);
+      let missing = projectionFailed || !boundaryContext || !sameSession;
+      for (const entry of boundaryContext && sameSession ? entries : []) {
         try {
           const candidate = buildReliableEventV1({
             kind: entry.kind,
-            bundle,
-            binding,
+            bundle:
+              before?.kind === 'owned' && bundle.program.match?.matchId === before.matchId
+                ? bundle
+                : boundaryContext!.bundle,
+            binding: boundaryContext!.binding,
+            // The event is the transition's watermark but belongs to the
+            // frozen previous owner and exact source, not the new binding.
+            cursor,
             observedAt: entry.observedAt,
             source:
               entry.kind === 'map_epoch_changed' ? 'runtime-transition' : 'runtime-continuity',
@@ -817,10 +1134,11 @@ export class OutputService {
           }
           if (candidate.evidence.contextFresh) events.push(candidate);
           else {
-            const authorityFingerprint = this.boundaryAuthority();
+            const authorityFingerprint = boundaryContext!.authority;
+            const boundaryBinding = boundaryContext!.binding;
             if (
-              !binding ||
-              binding.origin !== 'online' ||
+              !boundaryBinding ||
+              boundaryBinding.origin !== 'online' ||
               !authorityFingerprint ||
               !candidate.cursor.liveSessionId
             ) {
@@ -829,7 +1147,7 @@ export class OutputService {
             }
             intents.push({
               event: candidate,
-              planFingerprint: manifestPlanFingerprint(binding.manifest),
+              planFingerprint: manifestPlanFingerprint(boundaryBinding.manifest),
               authorityFingerprint,
             });
           }
@@ -846,8 +1164,8 @@ export class OutputService {
           continuity,
           missing,
           this.now(),
-          outputScope,
-          this.sourceFor(binding?.context.matchId, cursor),
+          gapScope,
+          boundaryContext?.source ?? (this.options.exactSource ? null : undefined),
         )
         .then(() => {
           if (this.outbox?.hasBoundaryOverflow(outputScope))
@@ -855,9 +1173,10 @@ export class OutputService {
           else if (missing || this.outbox?.hasBoundaryGap(outputScope))
             this.onDiagnostic?.('outbox_boundary_gap');
         })
-        .catch(() => {
-          this.quarantined = true;
-          this.onDiagnostic?.('outbox_boundary_capture_failed');
+        .catch((error: unknown) => {
+          if (captureSource && this.outbox?.getBoundaryCaptureRecovery().lost)
+            this.captureFailures.add(sourceKey(captureSource));
+          this.reportBoundaryCaptureError(error);
         })
         .finally(() => {
           const remaining = (this.boundaryCommits.get(pendingKey) ?? 1) - 1;
@@ -868,6 +1187,7 @@ export class OutputService {
         (event) => event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed',
       );
     }
+    if (!eligible) return;
     const ended = candidates.find(
       (event): event is Extract<ReliableEventV1, { kind: 'map_ended' }> =>
         event.kind === 'map_ended',
@@ -876,8 +1196,19 @@ export class OutputService {
       ended &&
       this.playerSnapshot &&
       this.playerSnapshot.scope === this.snapshotScope(bundle, binding)
-    )
-      candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
+    ) {
+      try {
+        candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
+      } catch {
+        this.faultQuarantined = true;
+        if (captureSource) {
+          this.captureFailures.add(sourceKey(captureSource));
+          void this.sealSourceCapture(captureSource);
+        }
+        this.onDiagnostic?.('event_projection_failed');
+        return;
+      }
+    }
     const add = (
       kind: Parameters<typeof buildReliableEventV1>[0]['kind'],
       source: Parameters<typeof buildReliableEventV1>[0]['source'],
@@ -899,6 +1230,11 @@ export class OutputService {
           ...(previousSourceGeneration === undefined ? {} : { previousSourceGeneration }),
         });
       } catch {
+        if (captureSource) {
+          this.faultQuarantined = true;
+          this.captureFailures.add(sourceKey(captureSource));
+          void this.sealSourceCapture(captureSource);
+        }
         this.onDiagnostic?.('event_projection_failed');
         return;
       }
@@ -976,6 +1312,9 @@ export class OutputService {
     )
       add('lineup_mismatch', 'identity', 'lineup_differs_from_expected');
     for (const event of candidates) {
+      const eventSource = this.sourceFor(event.matchId, event.cursor);
+      if (this.options.exactSource && (!eventSource || !this.outbox?.canCapture(eventSource)))
+        continue;
       const start = event.kind === 'map_started' ? this.pendingMapStart : undefined;
       const lineup = bundle.program.players
         .filter((p) => p.lineupEvidence === 'current')
@@ -997,16 +1336,26 @@ export class OutputService {
           event.kind === 'map_started' ? retainedLineup : undefined,
           start?.recovery,
           this.boundaryScope(event.matchId, event.cursor),
-          this.sourceFor(event.matchId, event.cursor),
+          eventSource,
         )
         .then(() => {
           if (start !== undefined && start.revision === this.mapStartRevision)
             this.publishedMapStart = start;
           if (start?.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         })
-        .catch(() => {
-          if (boundary && !this.outbox?.hasPendingEnqueue(event.idempotencyKey))
-            this.quarantined = true;
+        .catch((error: unknown) => {
+          if (!this.outbox?.hasPendingEnqueue(event.idempotencyKey)) {
+            this.faultQuarantined = true;
+            if (eventSource) {
+              this.captureFailures.add(sourceKey(eventSource));
+              void this.sealSourceCapture(eventSource);
+            }
+          }
+          if (
+            error instanceof Error &&
+            error.message === 'outbox_pending_enqueue_capacity_exhausted'
+          )
+            this.reportBoundaryCaptureError(error);
           this.onDiagnostic?.('outbox_enqueue_failed');
         })
         .finally(() => {
@@ -1021,10 +1370,9 @@ export class OutputService {
     }
   }
 
-  async retry(): Promise<void> {
-    if (this.closed || this.outboxUnavailable || this.outbox === undefined || this.retryPending) {
-      return;
-    }
+  async retry(options: { localOnly?: boolean } = {}): Promise<void> {
+    if (this.retryPending) return this.retryCompletion;
+    if (this.closed || this.outboxUnavailable || this.outbox === undefined) return;
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
     this.retryPending = true;
     let finishRetry!: () => void;
@@ -1032,7 +1380,8 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
-      await this.outbox.retryPendingEnqueues();
+      await this.outbox.retryPendingCaptures();
+      if (this.outbox.getBoundaryCaptureRecovery().pending) return;
       const start = this.pendingMapStart;
       if (
         start &&
@@ -1043,7 +1392,7 @@ export class OutputService {
         if (start.recovery === this.approvedRecovery?.key) this.approvedRecovery = undefined;
         this.pendingMapStart = undefined;
       }
-      if (this.quarantined || this.binding?.origin === 'fixture') return;
+      if (options.localOnly || this.quarantined || this.binding?.origin === 'fixture') return;
       await this.outbox.expireBoundaryIntents(this.now());
       if (this.closed) return;
       await this.materializeIntents();
@@ -1151,7 +1500,8 @@ export class OutputService {
         if (this.closed) return;
         await this.recoverRejectedStart();
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof BoundaryCaptureError) this.reportBoundaryCaptureError(error);
       this.onDiagnostic?.('outbox_retry_failed');
     } finally {
       this.retryPending = false;
@@ -1160,8 +1510,40 @@ export class OutputService {
     }
   }
 
+  private reportBoundaryCaptureError(error: unknown): void {
+    // The queue owns recoverable failures. Trial and unrelated fault isolation stay independent.
+    if (!this.outbox?.getBoundaryCaptureRecovery().pending) this.faultQuarantined = true;
+    try {
+      this.options.onBoundaryCaptureError?.(
+        error,
+        error instanceof BoundaryCaptureError
+          ? {
+              stage: error.stage,
+              operationId: error.operationId,
+              cursor:
+                error.request.continuity?.cursor ??
+                error.request.events[0]?.cursor ??
+                error.request.intents[0]?.event.cursor,
+            }
+          : { stage: 'freeze' },
+      );
+    } catch {
+      /* Diagnostics are optional. */
+    }
+    this.onDiagnostic?.('outbox_boundary_capture_failed');
+  }
+
   getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
-    if (this.quarantined || this.outboxUnavailable) return 'continuity_chain_missing';
+    if (
+      this.trialQuarantined ||
+      this.faultQuarantined ||
+      this.outboxUnavailable ||
+      this.outbox?.getBoundaryCaptureRecovery().lost
+    )
+      return 'continuity_chain_missing';
+    if (this.outbox?.getBoundaryCaptureRecovery().pending) return 'continuity_waiting';
+    const active = this.options.exactSource?.();
+    if (active && !this.outbox?.canCapture(active)) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
     if (!scope) return null;
     if (this.outbox?.hasBoundaryGap(scope)) return 'continuity_chain_missing';
@@ -1192,16 +1574,22 @@ export class OutputService {
     return null;
   }
 
+  isPersistenceConfirmed(): boolean {
+    return (
+      this.outbox !== undefined &&
+      !this.outboxUnavailable &&
+      !this.quarantined &&
+      !this.outbox.hasUnconfirmedWrites() &&
+      this.getBoundaryStatus() !== 'continuity_chain_missing'
+    );
+  }
+
   isReliableAvailable(): boolean {
     return !this.outboxUnavailable;
   }
 
   getReliableRecovery() {
     return this.outbox?.getRecovery();
-  }
-
-  getReliableScopeDisposition(scope: ReliableDeliveryScope) {
-    return this.outboxUnavailable ? undefined : this.outbox?.getScopeDisposition(scope);
   }
 
   getRevokedIsolationSummary() {
@@ -1216,6 +1604,7 @@ export class OutputService {
   async archiveConfirmedSource(identity: ExactSource): Promise<void> {
     if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.archiveConfirmedSource(identity);
+    this.captureCursors.delete(sourceKey(identity));
   }
 
   async isolateRevokedSource(identity: ExactSource): Promise<void> {
@@ -1230,26 +1619,17 @@ export class OutputService {
     );
     if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
+    const exact = 'authorityRevision' in scope ? parseSource(scope) : undefined;
+    if (exact && !(await this.sealSourceCapture(exact))) return false;
+    const frozenScope: BoundaryScope = { ...scope, ...(exact ? { source: exact } : {}) };
+    // Tail settlement intentionally has no current authority or ephemeral
+    // service-owner filter. All retained intents/gaps in the exact old delivery
+    // scope must settle, including awaitingSource and previous-authority work.
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
-      this.outbox.hasBoundaryGap({
-        ...scope,
-        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
-        authorityFingerprint:
-          this.boundaryAuthority() ??
-          createHash('sha256')
-            .update(JSON.stringify([this.boundaryOwner, null]))
-            .digest('hex'),
-      }) ||
-      this.outbox.getBoundaryIntents({
-        ...scope,
-        ownerFingerprint: createHash('sha256').update(this.boundaryOwner).digest('hex'),
-        authorityFingerprint:
-          this.boundaryAuthority() ??
-          createHash('sha256')
-            .update(JSON.stringify([this.boundaryOwner, null]))
-            .digest('hex'),
-      }).length
+      this.outbox.hasPendingBoundaryCaptures(scope) ||
+      this.outbox.hasBoundaryGap(frozenScope) ||
+      this.outbox.getBoundaryIntents(frozenScope).length
     )
       return false;
     await this.outbox.flushPending();
@@ -1258,7 +1638,11 @@ export class OutputService {
     await this.retryCompletion;
     await this.outbox.flushPending();
     return (
-      !this.outbox.hasPendingEnqueues(scope) && this.outbox.getScopeDisposition(scope).pending === 0
+      !this.outbox.hasPendingEnqueues(scope, exact) &&
+      !this.outbox.hasPendingBoundaryCaptures(scope) &&
+      !this.outbox.hasBoundaryGap(frozenScope) &&
+      this.outbox.getBoundaryIntents(frozenScope).length === 0 &&
+      this.outbox.getScopeDisposition(scope, exact).pending === 0
     );
   }
 
@@ -1370,8 +1754,19 @@ export class OutputService {
     ) {
       // The sink revalidates this exact durable authority, never the current selection's claim.
       // Missing authority pauses delivery; changing selection does not cancel accepted work.
+      // Check the event's original delivery identity, not the current binding or authority.
+      const cursor = event.cursor;
+      const originalScope: BoundaryScope = {
+        matchId: event.matchId,
+        producerInstanceId: cursor.producerInstanceId,
+        ...(cursor.liveSessionId ? { liveSessionId: cursor.liveSessionId } : {}),
+        runtimeSeq: cursor.runtimeSeq,
+        programSourceGeneration: cursor.programSourceGeneration,
+        mapEpoch: cursor.mapEpoch,
+      };
       return (
         !this.quarantined &&
+        !this.outbox?.hasBoundaryGap(originalScope) &&
         (event.kind !== 'map_started' || recorded.lineupSteam64?.length === 10) &&
         !this.outbox?.hasUnconfirmedBoundary(event) &&
         !this.outbox
@@ -1526,7 +1921,9 @@ export class OutputService {
     // closed prevents a new retry, but an already running retry must settle.
     await this.retryCompletion;
     try {
-      await this.outbox?.flushForShutdown();
+      // An unavailable startup never enabled website production or delivery,
+      // and its owner was already rolled back. Keep its original diagnostics.
+      if (!this.outboxUnavailable) await this.outbox?.flushForShutdown();
     } catch (error) {
       results.push({ status: 'rejected', reason: error });
     }

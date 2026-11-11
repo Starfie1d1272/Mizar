@@ -36,7 +36,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            quality: Quality::VeryHigh,
+            quality: Quality::Medium,
             frame_rate_limit: 60,
             prefer_mulnx: false,
         }

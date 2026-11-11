@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import type { MigrationObserver } from './audio-migration.js';
@@ -45,6 +46,7 @@ export async function applyCommentarySwitch(
   commitTarget: () => Promise<void>,
 ): Promise<void> {
   if (plan.phase !== 'prepared') throw new Error('commentary_switch_recovery_required');
+  let dispatched = false;
   let changed = false;
   let expected = false;
   let seen = false;
@@ -85,11 +87,21 @@ export async function applyCommentarySwitch(
     await check();
     if (changed) throw new Error('commentary_switch_changed');
     expected = true;
-    await obs.call('SetInputSettings', {
-      inputUuid: plan.uuid,
-      inputSettings: { window: plan.to },
-      overlay: true,
-    });
+    const onDispatch = () => {
+      dispatched = true;
+    };
+    // A managed call can still reject while verifying ownership or its lease.
+    // Only the transport can distinguish that rejection from a lost write receipt.
+    if (!obs.reportsDispatch) onDispatch();
+    await obs.call(
+      'SetInputSettings',
+      {
+        inputUuid: plan.uuid,
+        inputSettings: { window: plan.to },
+        overlay: true,
+      },
+      onDispatch,
+    );
     const after = (await obs.call('GetInputSettings', { inputUuid: plan.uuid })).inputSettings;
     await check();
     if (
@@ -103,6 +115,16 @@ export async function applyCommentarySwitch(
     await commitTarget();
     if (changed) throw new Error('commentary_switch_uncertain');
     await rm(path);
+  } catch (cause) {
+    if (!dispatched) {
+      try {
+        if (isDeepStrictEqual(await readCommentarySwitch(path), { ...plan, phase: 'sent' }))
+          await saveCommentarySwitch(path, plan);
+      } catch (recovery) {
+        throw new AggregateError([cause], 'commentary_switch_recovery_failed', { cause: recovery });
+      }
+    }
+    throw cause;
   } finally {
     stop();
   }

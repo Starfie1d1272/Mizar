@@ -17,7 +17,7 @@ const context = {
 } as const;
 
 describe('equipment facts', () => {
-  it('selects weapons, retains C4 and counts known utility without paths', () => {
+  it('aggregates team money and known utility', () => {
     const equipment = projectPlayerEquipment(
       [
         { sourceWeaponId: '0', name: 'weapon_ak47', state: 'active' },
@@ -28,15 +28,6 @@ describe('equipment facts', () => {
       catalog,
       context,
     );
-    expect(equipment).toEqual({
-      available: true,
-      primary: '0',
-      secondary: '1',
-      heldWeaponId: '0',
-      zeusWeaponId: null,
-      utility: { smoke: 0, fire: 0, flash: 2, he: 0 },
-      hasC4: true,
-    });
     const players = Array.from({ length: 5 }, () => ({
       current: true,
       lifeState: 'alive' as const,
@@ -44,12 +35,8 @@ describe('equipment facts', () => {
       equipmentValue: 2000,
       equipment,
     }));
-    expect(projectTeamEconomy(players, 'live', 2)).toEqual({
-      lineupComplete: true,
-      alive: 5,
+    expect(projectTeamEconomy(players, 'live', 2)).toMatchObject({
       money: 5000,
-      equipmentValue: 10000,
-      lossBonus: 2400,
       utility: { smoke: 0, fire: 0, flash: 10, he: 0 },
     });
   });

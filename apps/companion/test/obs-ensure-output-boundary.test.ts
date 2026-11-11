@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 vi.mock('obs-websocket-js', async () => await import('obs-websocket-js/json'));
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
@@ -14,72 +14,50 @@ import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 
 it.each([
   {
-    preparedAudio: false,
-    align: false,
-    event: '',
-    label: 'active output and default audio sources',
-  },
-  {
-    preparedAudio: true,
     align: false,
     event: '',
     label: 'active output and automatic TeamSpeak probe',
   },
   {
-    preparedAudio: true,
     align: true,
     event: '',
     label: 'idle output and an existing gameplay scene',
   },
-  ...[
-    'StreamStateChanged',
-    'RecordStateChanged',
-    'ReplayBufferStateChanged',
-    'VirtualcamStateChanged',
-  ].map((event) => ({ preparedAudio: true, align: true, event, label: `${event} STARTING` })),
   {
-    preparedAudio: true,
+    align: true,
+    event: 'StreamStateChanged',
+    label: 'StreamStateChanged STARTING',
+  },
+  {
     align: true,
     event: 'StreamStateChanged',
     late: true,
     label: 'stream STARTING immediately before the scene switch',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'ReplayBufferStateChanged',
     transient: true,
     label: 'replay starting and stopping during preparation',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'CurrentProgramSceneChanged',
     label: 'external scene takeover',
   },
   {
-    preparedAudio: true,
     align: true,
     event: 'CurrentSceneCollectionChanging',
     label: 'external collection takeover',
   },
-  { preparedAudio: true, align: true, event: 'ExitStarted', label: 'OBS exit' },
+  { align: true, event: 'ExitStarted', label: 'OBS exit' },
   {
-    preparedAudio: true,
-    align: false,
-    event: '',
-    entryMode: 'streaming',
-    label: 'entry with an active stream and no scene writes',
-  },
-  {
-    preparedAudio: true,
     align: false,
     event: '',
     entryMode: 'idle',
     label: 'idle entry receives a native permit',
   },
   {
-    preparedAudio: true,
     align: false,
     event: 'StreamStateChanged',
     late: true,
@@ -87,7 +65,7 @@ it.each([
     label: 'entry output starts at the final no-write check',
   },
 ])('explicit ensure handles $label', async (scenario) => {
-  const { preparedAudio, align, event, late, transient, entryMode } = scenario;
+  const { align, event, late, transient, entryMode } = scenario;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -98,6 +76,23 @@ it.each([
   let currentScene = obsSceneName(align ? 'gameplay' : 'waiting');
   const sockets = new Set<{ send: (data: string) => void }>();
   let outputReads = 0;
+  let eventRequestIndex: number | undefined;
+  const sourceSettings = new Map<string, Record<string, unknown>>([
+    [
+      OBS_CAPTURE_INPUT,
+      {
+        capture_mode: 'window',
+        window: 'Counter-Strike 2:SDL_app:cs2.exe',
+        priority: 2,
+        capture_audio: false,
+      },
+    ],
+    ...desired.map((scene): [string, Record<string, unknown>] => [
+      scene.browserInput,
+      { url: scene.browserUrl, width: 1920, height: 1080 },
+    ]),
+  ]);
+  const transforms = new Map<string, Record<string, unknown>>();
   let waitForEvent: (eventType: string, transient: boolean) => Promise<void> = async () => {};
   await server.register(websocket);
   server.get('/', { websocket: true }, (socket) => {
@@ -116,19 +111,35 @@ it.each([
       if (packet.op !== 6) return;
       const { requestType: type, requestId, requestData = {} } = packet.d;
       requests.push(type);
+      if (typeof requestData.sceneUuid === 'string')
+        requestData.sceneName = requestData.sceneUuid.replace('scene:', '');
+      if (typeof requestData.inputUuid === 'string')
+        requestData.inputName = requestData.inputUuid.replace('input:', '');
       const scene = desired.find((item) => item.sceneName === requestData.sceneName);
       let responseData: Record<string, unknown> = {};
       switch (type) {
+        case 'GetPersistentData':
+          responseData = {
+            slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+          };
+          break;
+        case 'GetReplayBufferStatus':
+        case 'GetVirtualCamStatus':
+          responseData = { outputActive: false };
+          break;
         case 'GetStreamStatus':
         case 'GetRecordStatus':
           responseData = {
-            outputActive: type === 'GetStreamStatus' && entryMode === 'streaming',
+            outputActive: false,
             outputPaused: false,
             outputReconnecting: false,
           };
           break;
         case 'GetSceneCollectionList':
-          responseData = { currentSceneCollectionName: 'Mizar', sceneCollections: ['Mizar'] };
+          responseData = {
+            currentSceneCollectionName: 'Mizar 制播',
+            sceneCollections: ['Mizar 制播'],
+          };
           break;
         case 'GetSceneTransitionList':
           responseData = {
@@ -151,13 +162,37 @@ it.each([
         case 'GetSceneList':
           responseData = {
             currentProgramSceneName: currentScene,
-            scenes: desired.map((item) => ({ sceneName: item.sceneName })),
+            scenes: desired.map((item) => ({
+              sceneName: item.sceneName,
+              sceneUuid: `scene:${item.sceneName}`,
+            })),
           };
           break;
         case 'GetCurrentProgramScene':
           responseData = { currentProgramSceneName: currentScene };
           break;
         case 'SetSceneSceneTransitionOverride':
+          break;
+        case 'GetSourceFilterList':
+          responseData = { filters: [] };
+          break;
+        case 'SetInputSettings': {
+          const name = String(requestData.inputName);
+          const settings = requestData.inputSettings as Record<string, unknown>;
+          sourceSettings.set(
+            name,
+            requestData.overlay === false ? settings : { ...sourceSettings.get(name), ...settings },
+          );
+          break;
+        }
+        case 'SetSceneItemTransform':
+          transforms.set(
+            `${requestData.sceneName}:${requestData.sceneItemId}`,
+            requestData.sceneItemTransform as Record<string, unknown>,
+          );
+          break;
+        case 'SetSceneItemIndex':
+          // The fixture already starts with the requested capture/browser order.
           break;
         case 'SetCurrentProgramScene':
           currentScene = String(requestData.sceneName);
@@ -167,15 +202,24 @@ it.each([
             inputs: [
               ...desired.map((item) => ({
                 inputName: item.browserInput,
+                inputUuid: `input:${item.browserInput}`,
                 inputKind: 'browser_source',
               })),
-              { inputName: OBS_CAPTURE_INPUT, inputKind: 'game_capture' },
-              ...(preparedAudio
-                ? [
-                    { inputName: '桌面声音', inputKind: 'wasapi_output_capture' },
-                    { inputName: '麦克风', inputKind: 'wasapi_input_capture' },
-                  ]
-                : []),
+              {
+                inputName: OBS_CAPTURE_INPUT,
+                inputKind: 'game_capture',
+                inputUuid: `input:${OBS_CAPTURE_INPUT}`,
+              },
+              {
+                inputName: '桌面声音',
+                inputKind: 'wasapi_output_capture',
+                inputUuid: 'input:桌面声音',
+              },
+              {
+                inputName: '麦克风',
+                inputKind: 'wasapi_input_capture',
+                inputUuid: 'input:麦克风',
+              },
             ],
           };
           break;
@@ -184,16 +228,18 @@ it.each([
           break;
         case 'GetInputSettings': {
           const browser = desired.find((item) => item.browserInput === requestData.inputName);
-          responseData = browser
-            ? { inputSettings: { url: browser.browserUrl, width: 1920, height: 1080 } }
-            : {
-                inputSettings: {
-                  capture_mode: 'window',
-                  window: 'Counter-Strike 2:SDL_app:cs2.exe',
-                  priority: 2,
-                  capture_audio: false,
-                },
-              };
+          responseData = sourceSettings.has(String(requestData.inputName))
+            ? { inputSettings: sourceSettings.get(String(requestData.inputName)) }
+            : browser
+              ? { inputSettings: { url: browser.browserUrl, width: 1920, height: 1080 } }
+              : {
+                  inputSettings: {
+                    capture_mode: 'window',
+                    window: 'Counter-Strike 2:SDL_app:cs2.exe',
+                    priority: 2,
+                    capture_audio: false,
+                  },
+                };
           break;
         }
         case 'GetSceneItemList':
@@ -201,16 +247,23 @@ it.each([
             sceneItems: [
               ...(scene?.sources ?? []).map((sourceName, index) => ({
                 sourceName,
+                sourceUuid: `input:${sourceName}`,
                 sceneItemId: index + 1,
                 sceneItemIndex: index,
                 sceneItemEnabled: true,
               })),
-              ...(preparedAudio
-                ? [
-                    { sourceName: '桌面声音', sceneItemId: 100, sceneItemEnabled: true },
-                    { sourceName: '麦克风', sceneItemId: 101, sceneItemEnabled: true },
-                  ]
-                : []),
+              {
+                sourceName: '桌面声音',
+                sourceUuid: 'input:桌面声音',
+                sceneItemId: 100,
+                sceneItemEnabled: true,
+              },
+              {
+                sourceName: '麦克风',
+                sourceUuid: 'input:麦克风',
+                sceneItemId: 101,
+                sceneItemEnabled: true,
+              },
             ],
           };
           break;
@@ -218,7 +271,8 @@ it.each([
           const source = scene?.sources[Number(requestData.sceneItemId) - 1];
           responseData = {
             sceneItemTransform:
-              source === OBS_CAPTURE_INPUT
+              transforms.get(`${requestData.sceneName}:${requestData.sceneItemId}`) ??
+              (source === OBS_CAPTURE_INPUT
                 ? {
                     positionX: 0,
                     positionY: 0,
@@ -242,7 +296,7 @@ it.each([
                     cropRight: 0,
                     cropTop: 0,
                     cropBottom: 0,
-                  },
+                  }),
           };
           break;
         }
@@ -254,6 +308,12 @@ it.each([
           break;
         case 'GetInputVolume':
           responseData = { inputVolumeMul: 1 };
+          break;
+        case 'GetProfileList':
+          responseData = { currentProfileName: 'Streaming' };
+          break;
+        case 'GetProfileParameter':
+          responseData = { parameterValue: 'Simple' };
           break;
         case 'GetInputAudioTracks':
           responseData = { inputAudioTracks: { 1: true } };
@@ -305,7 +365,14 @@ it.each([
             },
           }),
         );
-      if (type === 'GetOutputList' && event && ++outputReads === (late ? 2 : 1)) {
+      if (type === 'GetOutputList') outputReads++;
+      const eventDue = late
+        ? entryMode
+          ? requests.includes('GetInputAudioTracks')
+          : requests.includes('SetSceneSceneTransitionOverride')
+        : outputReads === 1;
+      if (type === 'GetOutputList' && event && eventRequestIndex === undefined && eventDue) {
+        eventRequestIndex = requests.length;
         void waitForEvent(event, !!transient).then(respond);
       } else respond();
     });
@@ -313,6 +380,26 @@ it.each([
   await server.listen({ host: '127.0.0.1', port: 0 });
   const address = server.server.address();
   if (!address || typeof address === 'string') throw new Error('address unavailable');
+  await writeFile(
+    join(directory, 'obs.json.collection.json'),
+    JSON.stringify([
+      {
+        endpoint: `ws://127.0.0.1:${address.port}`,
+        instance: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
+        collectionIdentity: '1fd3fde9-8040-407f-b738-ddb9f019c96e',
+        creating: false,
+        roles: Object.fromEntries([
+          ...desired.flatMap((scene) => [
+            [scene.sceneName, { uuid: `scene:${scene.sceneName}`, kind: 'scene' }],
+            [scene.browserInput, { uuid: `input:${scene.browserInput}`, kind: 'browser_source' }],
+          ]),
+          [OBS_CAPTURE_INPUT, { uuid: `input:${OBS_CAPTURE_INPUT}`, kind: 'game_capture' }],
+          ['桌面声音', { uuid: 'input:桌面声音', kind: 'wasapi_output_capture' }],
+          ['麦克风', { uuid: 'input:麦克风', kind: 'wasapi_input_capture' }],
+        ]),
+      },
+    ]),
+  );
   const config = new ObsConfigStore(join(directory, 'obs.json'));
   await config.save({
     host: '127.0.0.1',
@@ -325,7 +412,7 @@ it.each([
     baseUrl,
     undefined,
     undefined,
-    preparedAudio && !align && !entryMode
+    !align && !entryMode
       ? {
           owner: new RemoteCommentary(join(directory, 'commentary.json')),
           journal: join(directory, 'commentary-probe.json'),
@@ -386,12 +473,6 @@ it.each([
         ...(entryMode ? { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' } : {}),
       },
     });
-    if (entryMode === 'streaming') {
-      expect(response.statusCode).toBe(409);
-      expect(response.json().message).toContain('直播');
-      expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
-      return;
-    }
     if (event) {
       expect(response.statusCode).toBe(409);
       if (event.endsWith('StateChanged'))
@@ -405,12 +486,16 @@ it.each([
       expect(requests.filter((type) => type === 'SetSceneSceneTransitionOverride')).toHaveLength(
         late && !entryMode ? 1 : 0,
       );
+      expect(eventRequestIndex).toBeDefined();
+      expect(
+        requests.slice(eventRequestIndex).filter((type) => /^(Set|Create|Remove|Stop)/.test(type)),
+      ).toEqual([]);
       expect(requests.some((type) => type.startsWith('Stop'))).toBe(false);
       expect(unexpected).toEqual([]);
       return;
     }
     if (entryMode === 'idle') {
-      expect(response.statusCode).toBe(200);
+      expect(response.statusCode, JSON.stringify(response.json())).toBe(200);
       const native = async (preparationId: string, token = 'a'.repeat(64)) =>
         app.inject({
           method: 'POST',
@@ -422,13 +507,19 @@ it.each([
       expect((await native(id)).statusCode).toBe(200);
       expect((await native(id, 'wrong')).statusCode).toBe(403);
       expect((await native('2a49514a-1452-4162-b296-a6a4ec2a8b67')).statusCode).toBe(409);
+      const beforeStart = requests.length;
       await waitForEvent('StreamStateChanged', false);
       expect((await native(id)).statusCode).toBe(409);
-      expect(requests.some((type) => /^(Set|Create|Remove|Stop)/.test(type))).toBe(false);
+      expect(
+        requests.slice(beforeStart).filter((type) => /^(Set|Create|Remove|Stop)/.test(type)),
+      ).toEqual([]);
+      expect(requests).toContain('SetInputSettings');
+      expect(requests.some((type) => /^(Create|Remove|Stop)/.test(type))).toBe(false);
+      expect(unexpected).toEqual([]);
       return;
     }
     if (align) {
-      expect(response.statusCode).toBe(200);
+      expect(response.statusCode, JSON.stringify(response.json())).toBe(200);
       expect(currentScene).toBe(obsSceneName('waiting'));
       expect(requests.filter((type) => type === 'SetCurrentProgramScene')).toHaveLength(1);
       expect(requests.some((type) => type.startsWith('Stop'))).toBe(false);
@@ -441,14 +532,12 @@ it.each([
       message: expect.stringContaining('Plugin video'),
     });
     expect(requests).toContain('GetOutputList');
-    if (preparedAudio) {
-      expect(requests).toContain('GetVersion');
-      // The guard rejected before the RPC was sent, so no uncertain-create
-      // journal should prevent the next explicit preparation from retrying.
-      await expect(access(join(directory, 'commentary-probe.json'))).rejects.toMatchObject({
-        code: 'ENOENT',
-      });
-    }
+    expect(requests).not.toContain('GetVersion');
+    // Active output stops preparation before audio discovery or creation,
+    // so no probe journal should block the next explicit retry.
+    await expect(access(join(directory, 'commentary-probe.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     expect(unexpected).toEqual([]);
     expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
   } finally {

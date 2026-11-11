@@ -25,7 +25,8 @@ export type ProductionDependencies = {
     | 'controlValid'
     | 'get'
     | 'setResourceActivationPending'
-  >;
+  > &
+    Partial<Pick<ProgramSceneController, 'resumeAutomatic'>>;
   obs?:
     | Pick<
         ObsAdapter,
@@ -34,17 +35,16 @@ export type ProductionDependencies = {
         | 'pauseAutomatic'
         | 'resumeAutomatic'
         | 'startCommentaryRecovery'
-        | 'hasCurrentPreparation'
         | 'startBrowserRecovery'
       >
     | undefined;
   music: () => Parameters<ObsAdapter['startCommentaryRecovery']>[0];
-  gameAudio?: Parameters<ObsAdapter['startCommentaryRecovery']>[1];
   camera: () => Pick<CameraDirector, 'beginProduction' | 'finishProduction'> | undefined;
   demo: () => Pick<DemoTestController, 'openFormalBoundary' | 'finish'> | undefined;
   observer: Pick<ObserverSettingsStore, 'endProduction'>;
   source?:
     | (Pick<RivalHubConnection, 'handoffForExit' | 'release' | 'clearStats'> & {
+        retryExitHandoffs?: () => Promise<void>;
         stats: (
           target: Parameters<RivalHubConnection['stats']>[0],
         ) => ReturnType<RivalHubConnection['stats']> | undefined;
@@ -69,7 +69,14 @@ function sourceStateUnavailable(error: unknown): boolean {
 }
 
 type ProductionAction =
-  'enter' | 'hide' | 'finish' | 'shutdown' | 'begin-exit' | 'cancel-exit' | 'invalid';
+  | 'enter'
+  | 'hide'
+  | 'finish'
+  | 'shutdown'
+  | 'begin-exit'
+  | 'cancel-exit'
+  | 'retry-handoff'
+  | 'invalid';
 type ProductionCommand = {
   action: ProductionAction;
   expectedRevision: string | null;
@@ -83,6 +90,7 @@ export function createProduction(options: ProductionDependencies) {
   let revision = randomUUID();
   let busy = false;
   let shuttingDown = false;
+  let exitIntentGeneration = 0;
   let updatePending = false;
   let trialPending = false;
   let preparationGeneration = 0;
@@ -109,7 +117,7 @@ export function createProduction(options: ProductionDependencies) {
         completed: boolean;
       }
     | undefined;
-  function startHandoff(): Promise<void> {
+  function startHandoff(retry = false): Promise<void> {
     if (!options.source?.handoffForExit) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
     if (handoffStarted) return Promise.resolve();
@@ -117,7 +125,10 @@ export function createProduction(options: ProductionDependencies) {
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
     try {
-      const pending = options.source?.handoffForExit();
+      const pending = retry
+        ? options.source.retryExitHandoffs?.()
+        : options.source.handoffForExit();
+      if (!pending) throw new Error('数据源交接重试不可用。');
       handoffPromise = pending.then(
         () => {
           if (generation === releaseGeneration) releaseHandoffState = 'recorded';
@@ -230,7 +241,10 @@ export function createProduction(options: ProductionDependencies) {
     productionViewSchema.parse(current);
     return current;
   };
-  async function change(body: ProductionCommand) {
+  async function change(
+    body: ProductionCommand,
+    onShutdownCommit?: (cancel: () => Promise<unknown>) => void,
+  ) {
     const obsOnlyRetry =
       body?.action === 'finish' && mode === 'preparation' && obsExitState === 'unconfirmed';
     const entryId = body.preparationId;
@@ -243,7 +257,7 @@ export function createProduction(options: ProductionDependencies) {
     // A lost response must not turn an already committed entry into a new entry.
     if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
       return { ok: true as const, value: view() };
-    if (body?.action === 'enter') {
+    if (body?.action === 'enter' && mode === 'preparation') {
       try {
         await options.waitForBroadcast?.();
       } catch (error) {
@@ -276,6 +290,7 @@ export function createProduction(options: ProductionDependencies) {
       options.observer.endProduction();
     }
     if (body?.expectedRevision === revision && body.action === 'begin-exit') {
+      exitIntentGeneration++;
       shuttingDown = true;
       try {
         await startHandoff();
@@ -291,7 +306,13 @@ export function createProduction(options: ProductionDependencies) {
       }
     }
     if (body?.expectedRevision === revision && body.action === 'cancel-exit') {
+      exitIntentGeneration++;
       shuttingDown = false;
+      // An older handoff may still complete, but it must not settle a later exit.
+      releaseGeneration++;
+      if (releaseHandoffState === 'pending') releaseHandoffState = 'unconfirmed';
+      handoffStarted = false;
+      handoffPromise = undefined;
       return { ok: true as const, value: view() };
     }
     if (
@@ -306,14 +327,30 @@ export function createProduction(options: ProductionDependencies) {
         failure: 'productionConflict' as const,
         message: '制作状态已变化，请刷新后重试。',
       };
+    if (body.action === 'retry-handoff') {
+      if (mode !== 'preparation' || releaseHandoffState !== 'unconfirmed')
+        return {
+          ok: false as const,
+          failure: 'productionConflict' as const,
+          message: '数据源交接状态已变化，请刷新后核对。',
+        };
+      void startHandoff(true).catch(() => {});
+      return { ok: true as const, value: view() };
+    }
     if (!['enter', 'hide', 'finish', 'shutdown'].includes(String(body?.action)))
       return {
         ok: false as const,
         failure: 'productionActionInvalid' as const,
         message: '制作操作无法识别。',
       };
+    // Ordinary return is window presentation only, not a new production session.
+    if (body.action === 'enter' && mode !== 'preparation') {
+      mode = 'live';
+      return { ok: true as const, value: view() };
+    }
     busy = true;
     const shutdown = body?.action === 'shutdown';
+    const shutdownIntent = shutdown ? ++exitIntentGeneration : null;
     if (shutdown) shuttingDown = true;
     let committed = false;
     const entering = body?.action === 'enter' && mode === 'preparation';
@@ -333,10 +370,8 @@ export function createProduction(options: ProductionDependencies) {
           handoffPromise = undefined;
           releaseGeneration++;
           options.obs?.resumeAutomatic();
-          options.obs?.startCommentaryRecovery(
-            options.music(),
-            options.gameAudio,
-            () => production.automaticAllowed() && (options.obs?.hasCurrentPreparation() ?? false),
+          options.obs?.startCommentaryRecovery(options.music(), () =>
+            production.automaticAllowed(),
           );
           options.camera()?.beginProduction();
           statsActive = true;
@@ -481,10 +516,25 @@ export function createProduction(options: ProductionDependencies) {
       committed = true;
       // Hiding the workspace while preparing changes no production state and
       // must not invalidate the preparation owner's in-flight operations.
-      if (body?.action !== 'hide' || mode !== 'preparation') revision = randomUUID();
+      if (body?.action !== 'hide') revision = randomUUID();
       if (entering) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
+        // A new production starts automatic; returning from hidden mode above
+        // preserves an operator's existing manual hold.
+        options.scenes.resumeAutomatic?.(options.scenes.get().revision);
+      }
+      if (shutdownIntent !== null && onShutdownCommit) {
+        const completedRevision = revision;
+        onShutdownCommit(() => {
+          if (busy || revision !== completedRevision || exitIntentGeneration !== shutdownIntent)
+            return Promise.resolve();
+          return dispatchChange({
+            action: 'cancel-exit',
+            expectedRevision: completedRevision,
+            preparationId: null,
+          });
+        });
       }
       return { ok: true as const, value: view() };
     } catch (error) {
@@ -518,16 +568,19 @@ export function createProduction(options: ProductionDependencies) {
               : ('productionFailure' as const);
       return { ok: false as const, failure, message };
     } finally {
-      if (shutdown && !committed) shuttingDown = false;
+      if (shutdown && !committed && shutdownIntent === exitIntentGeneration) shuttingDown = false;
       busy = false;
     }
   }
   let activeExitChange: Promise<Awaited<ReturnType<typeof change>>> | undefined;
-  async function dispatchChange(body: Parameters<typeof change>[0]) {
+  async function dispatchChange(
+    body: Parameters<typeof change>[0],
+    onShutdownCommit?: Parameters<typeof change>[1],
+  ) {
     const isExit = body?.action === 'finish' || body?.action === 'shutdown';
-    if (!isExit) return change(body);
+    if (!isExit) return change(body, onShutdownCommit);
     if (activeExitChange) {
-      if (body?.expectedRevision !== revision) return change(body);
+      if (body?.expectedRevision !== revision) return change(body, onShutdownCommit);
       const originalSession = sessionId;
       const prior = await activeExitChange;
       if (!prior.ok) return prior;
@@ -537,9 +590,9 @@ export function createProduction(options: ProductionDependencies) {
           failure: 'productionConflict' as const,
           message: '制作状态已变化，请刷新后重试。',
         };
-      return dispatchChange({ ...body, expectedRevision: revision });
+      return dispatchChange({ ...body, expectedRevision: revision }, onShutdownCommit);
     }
-    const pending = change(body);
+    const pending = change(body, onShutdownCommit);
     activeExitChange = pending;
     try {
       return await pending;
@@ -572,7 +625,12 @@ export function createProduction(options: ProductionDependencies) {
       return () => generation === sessionGeneration && mode !== 'preparation' && !shuttingDown;
     },
     canControl: () => !busy && !shuttingDown,
-    automaticAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    sessionAllowed: () => mode !== 'preparation' && !busy && !shuttingDown,
+    presentationAllowed: () =>
+      production.sessionAllowed() && !exitFrozen && !updatePending && !trialPending,
+    // Session intent only. Scene, music and audio owners validate their own
+    // current resources at the operation boundary, not a composite setup report.
+    automaticAllowed: () => production.presentationAllowed(),
     preparationValid: (expectedRevision: unknown) => {
       const generation = preparationGeneration;
       return () =>
@@ -583,6 +641,20 @@ export function createProduction(options: ProductionDependencies) {
         !updatePending &&
         !trialPending;
     },
+    canPrepareMulnx: (task?: { id: string; revision: string }) =>
+      task
+        ? mode !== 'preparation' &&
+          !busy &&
+          !shuttingDown &&
+          !exitFrozen &&
+          !updatePending &&
+          !trialPending &&
+          lastEnteredId === task.id &&
+          revision === task.revision &&
+          !preparationCancelled(task.id)
+        : mode === 'preparation',
+    // Exit restores owned launch options before finishing the production state.
+    canCleanupMulnx: () => mode === 'preparation' || (exitFrozen && shuttingDown),
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
       if (
         expectedRevision !== revision ||
@@ -668,6 +740,7 @@ export function createProduction(options: ProductionDependencies) {
         busy = false;
       }
     },
+    canStartObsOutput: () => !updatePending,
     reserveUpdate: () => {
       if (trialPending || mode !== 'preparation' || busy || shuttingDown || updatePending)
         return false;
@@ -677,8 +750,16 @@ export function createProduction(options: ProductionDependencies) {
     releaseUpdate: () => {
       updatePending = false;
     },
-    shutdown: () =>
-      dispatchChange({ action: 'shutdown', expectedRevision: revision, preparationId: null }),
+    shutdown: async () => {
+      let cancel: () => Promise<unknown> = () => Promise.resolve();
+      const result = await dispatchChange(
+        { action: 'shutdown', expectedRevision: revision, preparationId: null },
+        (rollback) => {
+          cancel = rollback;
+        },
+      );
+      return { result, cancel };
+    },
   };
   return production;
 }
@@ -749,7 +830,8 @@ export function registerProductionRoutes(
       action === 'finish' ||
       action === 'shutdown' ||
       action === 'begin-exit' ||
-      action === 'cancel-exit';
+      action === 'cancel-exit' ||
+      action === 'retry-handoff';
     // Keep conflict and cancellation precedence for malformed actions.
     const result = await production.change({
       action: validAction ? action : 'invalid',

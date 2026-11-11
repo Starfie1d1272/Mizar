@@ -27,9 +27,11 @@ export const MUSIC_LABELS = {
 export function MusicControls({
   compact = false,
   volumeDisabled = false,
+  onAddMusic,
 }: {
   compact?: boolean;
   volumeDisabled?: boolean;
+  onAddMusic?: () => void;
 }) {
   const view = useLocalRead<MusicView>('/local/v1/music', 1000);
   const [error, setError] = useState('');
@@ -57,6 +59,7 @@ export function MusicControls({
   };
   const status = view?.status;
   if (!status) return null;
+  const empty = Object.values(view.config.groups).every((group) => group.tracks.length === 0);
   const trackTitle = status.bgm?.track ?? (status.held ? '音乐已停止' : '当前无音乐');
   const nextDisabled =
     busy || status.held || !status.bgm || !['waiting', 'technical'].includes(status.bgm.group);
@@ -102,6 +105,12 @@ export function MusicControls({
     ) : null;
   const notices = (
     <>
+      {empty ? (
+        <span>
+          尚未添加音乐。
+          {onAddMusic ? <Button onClick={onAddMusic}>添加音乐</Button> : '请在下方添加曲目。'}
+        </span>
+      ) : null}
       {error ? <span role="alert">{error}</span> : null}
       {status.message ? <span role="status">{status.message}</span> : null}
       {status.stingerHeld && !status.held ? <span role="status">音效由 OBS 人工控制</span> : null}
@@ -245,8 +254,8 @@ export function MusicControls({
       <p className="music-player__hint">使用 OBS 所在机器的监听设备；桌面采集可能回灌。</p>
       {status.monitorPending ? (
         <p className="music-player__hint">
-          自动监听尚未配置：无法确认独立分路及桌面采集、嵌套路径或其他来源的音频。请在声音设置完成分路，并在
-          OBS 核对音轨；手动开启前请检查重复收音。
+          本机监听暂缓：设备关系无法确认，或当前 OBS 不支持同设备仅监听。音乐保持节目直出；请在 OBS
+          选择未被桌面声音采集的监听设备，再开启监听并录制试听。
         </p>
       ) : null}
       {status.stinger ? <span className="music-player__hint">音效：{status.stinger}</span> : null}

@@ -140,6 +140,8 @@ export interface ScheduleWindowV1 extends ScheduleWindow {
 export interface ContextEnvelope<T> {
   readonly document: T;
   readonly source: 'local' | 'rivalhub' | 'fixture' | 'cache';
+  /** Verified origin of a cached document, when known. Never grants write authority. */
+  readonly cachedFrom?: 'local' | 'rivalhub' | 'fixture';
   readonly revision: string;
   readonly freshness: 'fresh' | 'stale';
   readonly acquiredAt: string;

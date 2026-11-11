@@ -26,11 +26,11 @@ export function SeriesBindingControls() {
       <h2>确认当前图</h2>
       {view.ownership?.reason === 'previous_execution' ? (
         <StatusBanner tone="warning">
-          当前游戏执行属于上一场，不能直接改绑本场。请结束旧游戏并重新启动本场受管游戏；若使用外部游戏，请等待新的实际地图执行后再确认。
+          当前游戏属于上一场，不能直接改绑。请结束旧游戏，再从工作台启动本场；若自行启动游戏，请等到新地图开始后再确认。
         </StatusBanner>
       ) : view.ownership?.reason === 'recovery_unverified' ? (
         <StatusBanner tone="warning">
-          恢复记录缺少当前执行的归属证明。请重新启动本场受管游戏；外部游戏需在新的实际地图执行后确认当前图。
+          尚未确认当前游戏属于本场。请从工作台重新启动游戏；若自行启动，请等到新地图开始后确认当前图。
         </StatusBanner>
       ) : view.ownership?.reason === 'new_execution_unverified' ? (
         <StatusBanner tone="warning">
@@ -102,7 +102,7 @@ export function SeriesBindingControls() {
             : view.blockedReason === 'execution_owned_elsewhere'
               ? '已有执行不能改绑其他比赛。'
               : view.blockedReason === 'execution_unverified'
-                ? '等待可确认的新地图执行，或重新启动本场受管游戏。'
+                ? '等待新地图开始，或从工作台重新启动本场游戏。'
                 : view.blockedReason === 'identity_unverified'
                   ? '先核对实际游戏地图与本场名单。身份核验通过后才能确认当前图。'
                   : view.blockedReason === 'series_completed'

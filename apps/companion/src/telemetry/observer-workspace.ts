@@ -15,6 +15,8 @@ import {
 import type { ObserverSettingsStore } from './observer-settings.js';
 import { sendObserverGameCommand, observerConnectCommand } from './observer-game-control.js';
 import { MatchNameSync, matchNames } from './match-names.js';
+import { reserveObserverConnect } from './observer-connect-intent.js';
+import { diagnosticValue } from '../support/session-journal.js';
 import type { MatchContextBinding } from '../match-context/lkg-store.js';
 import observerComponent from './observer-component.json' with { type: 'json' };
 
@@ -43,8 +45,20 @@ class ObserverPreparationError extends Error {
     super(reason);
   }
 }
-type ObserverHistory = ObserverAttemptEvidence & { sessionId: string };
+type ObserverStopReason =
+  | 'paused'
+  | 'production-ended'
+  | 'connection-changed'
+  | 'disabled'
+  | 'host-invalid'
+  | 'lease-expired';
+type ObserverHistory = ObserverAttemptEvidence & {
+  sessionId: string;
+  stopReason?: ObserverStopReason;
+};
 type Owner = ReturnType<typeof startObserverProcess<'lookahead'>>;
+const HOST_LEASE_MS = 6000;
+const HOST_RECOVERY_MS = 30_000;
 
 /** The stable source facade keeps existing private consumers subscribed across attempts. */
 export class WorkspaceObserver {
@@ -60,6 +74,8 @@ export class WorkspaceObserver {
   private watchdog: ReturnType<typeof setInterval>;
   private closing = false;
   private intent = 0;
+  private stopReason: ObserverStopReason | undefined;
+  private ownerStopReason: ObserverStopReason | undefined;
   private readonly history: ObserverHistory[] = [];
   private sessionId: string | undefined;
   private evidenceListeners = new Set<(evidence: ObserverHistory) => void>();
@@ -70,7 +86,12 @@ export class WorkspaceObserver {
     };
   }
   private retain(evidence: ObserverAttemptEvidence, sessionId: string) {
-    const entry = { ...evidence, sessionId };
+    const stopReason = this.ownerStopReason ?? this.stopReason;
+    const entry = {
+      ...evidence,
+      sessionId,
+      ...(stopReason ? { stopReason } : {}),
+    };
     this.history.push(entry);
     if (this.history.length > 8) this.history.shift();
     this.evidenceListeners.forEach((listener) => {
@@ -149,8 +170,10 @@ export class WorkspaceObserver {
       },
     };
     this.watchdog = setInterval(() => {
-      if (this.owner && performance.now() - this.lease > 6000)
-        void this.stop().catch(() => console.error('observer_lease_finalization_failed'));
+      if (this.owner && !this.stopReason && performance.now() - this.lease > HOST_LEASE_MS)
+        void this.stop('lease-expired').catch(() =>
+          console.error('observer_lease_finalization_failed'),
+        );
     }, 1000);
     this.watchdog.unref();
   }
@@ -162,6 +185,7 @@ export class WorkspaceObserver {
       active: this.owner !== undefined,
       health: this.health(),
       failed: this.failed,
+      stopReason: this.stopReason ?? null,
       ...(this.terminal ? { terminal: this.terminal } : {}),
     };
   }
@@ -184,10 +208,13 @@ export class WorkspaceObserver {
     };
     return this.serialize(async () => {
       check();
+      if (this.owner) this.ownerStopReason ??= 'connection-changed';
       await this.stopCurrent();
       check();
       this.terminal = undefined;
       this.failed = false;
+      this.stopReason = undefined;
+      this.ownerStopReason = undefined;
       const sessionId = (this.sessionId = randomUUID());
       let options: Awaited<ReturnType<typeof this.launch>>;
       try {
@@ -258,8 +285,12 @@ export class WorkspaceObserver {
   pulse() {
     this.lease = performance.now();
   }
-  stop() {
+  stop(reason: ObserverStopReason = 'paused') {
     ++this.intent;
+    this.stopReason = reason;
+    // Later pause/exit intents change the view, not the cause that already
+    // initiated this process's finalization.
+    if (this.owner) this.ownerStopReason ??= reason;
     return this.serialize(() => this.stopCurrent());
   }
   private async stopCurrent() {
@@ -287,7 +318,7 @@ export class WorkspaceObserver {
   close() {
     this.closing = true;
     clearInterval(this.watchdog);
-    return this.stop();
+    return this.stop('production-ended');
   }
 }
 
@@ -400,12 +431,23 @@ export function registerWorkspaceObserver(
     executable: string;
     useMulnx: boolean;
     nativeHudToggle: boolean;
+    hudControlAvailable: boolean;
   };
   let host: Host | undefined;
   let hostLease = 0;
+  // This is a capability for the accepted Host intent, not another process owner.
+  let lease: { token: string; recoveryUsed: boolean; recovering: boolean } | undefined;
+  const acceptLease = () => {
+    hostLease = performance.now();
+    lease = { token: randomUUID(), recoveryUsed: false, recovering: false };
+    return lease.token;
+  };
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
   let observerKey = '';
   let connectedGame = '';
+  let gameCommand:
+    | { game: string; intent: string; state: 'not-sent' | 'unknown' | 'queued' | 'unavailable' }
+    | undefined;
   let seamlessGame = '';
   let hiddenGame = '';
   let appliedPolicy = '';
@@ -426,17 +468,27 @@ export function registerWorkspaceObserver(
     job: string;
     useMulnx: boolean;
     nativeHudToggle: boolean;
-  }) => JSON.stringify([value.game, value.job, value.useMulnx, value.nativeHudToggle]);
+    hudControlAvailable: boolean;
+  }) =>
+    JSON.stringify([
+      value.game,
+      value.job,
+      value.useMulnx,
+      value.nativeHudToggle,
+      value.hudControlAvailable,
+    ]);
   const policy = (value: {
     game: string;
     job: string;
     useMulnx: boolean;
     nativeHudToggle: boolean;
+    hudControlAvailable: boolean;
   }) => JSON.stringify([identity(value), value.useMulnx ? settings?.gameAutomation : null]);
   const leased = () =>
     host !== undefined &&
+    lease !== undefined &&
     (!prepared || prepared.identity === identity(host)) &&
-    performance.now() - hostLease <= 6000;
+    performance.now() - hostLease <= HOST_LEASE_MS;
   const names = new MatchNameSync(() => ({
     session: leased() && host?.useMulnx ? JSON.stringify([host.game, host.job]) : null,
     names:
@@ -459,44 +511,50 @@ export function registerWorkspaceObserver(
         connection?.earlyEndpoint,
         connection?.password,
       ]),
-      connect: JSON.stringify([
-        game,
-        connection?.programEndpoint,
-        connection?.password,
-        settings?.mapConnection?.id,
-      ]),
+      connect: JSON.stringify([value.game, settings?.mapConnection?.id]),
       hud: game,
     };
   };
   const startAssist = async (value: Host, current: () => boolean) => {
     const connection = settings?.configured();
-    if (!settings?.settings.enabled || !connection) return;
+    if (!settings?.settings.enabled || settings.receiverPaused || !connection) return;
+    const receiverRevision = settings.receiverRevision;
+    const receiving = () =>
+      current() && !settings.receiverPaused && settings.receiverRevision === receiverRevision;
     const key = keys(value).observer;
-    if (observerKey === key && observer.view().active) return;
-    await observer.stop();
+    if (observerKey === key && observer.view().active && !observer.view().stopReason) return;
+    await observer.stop('connection-changed');
     if (!current()) throw new Error('observer_configuration_changed');
-    await observer.start(
-      value.executable,
-      connection.earlyEndpoint,
-      connection.password,
-      value.job,
-      current,
-    );
+    if (!receiving()) return;
+    try {
+      await observer.start(
+        value.executable,
+        connection.earlyEndpoint,
+        connection.password,
+        value.job,
+        receiving,
+      );
+    } catch (error) {
+      if (current() && settings.receiverRevision !== receiverRevision) return;
+      throw error;
+    }
     if (!current()) {
-      await observer.stop();
+      await observer.stop('connection-changed');
       throw new Error('observer_configuration_changed');
     }
+    if (!receiving()) return;
     observerKey = key;
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'lead' || kind === 'name' || kind === 'game') return;
+    if (kind === 'lead' || kind === 'name' || kind === 'game' || kind === 'scope') return;
 
     const attempt = ++epoch;
     if (kind === 'map')
       seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';
     if (kind === 'connection' || (kind === 'map' && settings.mapConnection?.mode === 'connect'))
       host = undefined;
+    if (!host || kind === 'map') lease = undefined;
     const value = host;
     const revision = settings.revision;
     const shouldStop =
@@ -507,7 +565,13 @@ export function registerWorkspaceObserver(
       // Stops already queued before a new preparation must finish first.
       if (shouldStop) {
         observerKey = '';
-        await observer.stop();
+        await observer.stop(
+          !settings.settings.enabled
+            ? 'disabled'
+            : settings.receiverPaused
+              ? 'production-ended'
+              : 'connection-changed',
+        );
       } else if (attempt === epoch && value && leased() && canStart()) {
         await startAssist(
           value,
@@ -516,7 +580,7 @@ export function registerWorkspaceObserver(
         lastError = null;
       }
     }).catch((error: unknown) => {
-      lastError = 'observer_operation_failed';
+      if (attempt === epoch && !settings.receiverPaused) lastError = 'observer_operation_failed';
       app.log.error({ stage: 'observer_settings_apply', err: error }, '观察辅助操作需要重试');
     });
   });
@@ -526,16 +590,29 @@ export function registerWorkspaceObserver(
     unsubscribe?.();
     ++epoch;
     host = undefined;
+    lease = undefined;
     await queue;
   });
   app.get('/local/v1/observer', (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       ...observer.view(),
+      gameReady: Boolean(host && leased()),
       programCommandQueued: Boolean(host && connectedGame === keys(host).connect),
+      gameCommandState:
+        gameCommand &&
+        gameCommand.intent === settings?.mapConnection?.id &&
+        gameCommand.game === host?.game
+          ? gameCommand.state
+          : null,
       pending: pending > 0,
+      recovering: lease?.recovering ?? false,
       error: lastError,
       retryAvailable: Boolean(
-        settings?.settings.enabled && settings.configured() && canStart() && pending === 0,
+        settings?.settings.enabled &&
+        settings.mapConnection &&
+        settings.configured() &&
+        canStart() &&
+        pending === 0,
       ),
     }),
   );
@@ -543,6 +620,7 @@ export function registerWorkspaceObserver(
     z.strictObject({
       action: z.literal('prepare'),
       nativeHudToggle: z.boolean().default(false),
+      hudControlAvailable: z.boolean().default(true),
       expectedRevision: z.uuid().optional(),
       useMulnx: z.boolean().default(false),
       game: z.string().max(80),
@@ -551,6 +629,7 @@ export function registerWorkspaceObserver(
     z.strictObject({
       action: z.literal('start-configured'),
       nativeHudToggle: z.boolean().default(false),
+      hudControlAvailable: z.boolean().default(true),
       useMulnx: z.boolean().default(false),
       executable: z.string().max(2048),
       job: z.string().max(100),
@@ -565,7 +644,13 @@ export function registerWorkspaceObserver(
       endpoint: z.string().max(100),
       password: z.string().max(95),
     }),
-    z.strictObject({ action: z.enum(['stop', 'pulse']) }),
+    z.strictObject({
+      action: z.literal('stop'),
+      expectedRevision: z.uuid().optional(),
+      leaseToken: z.uuid().optional(),
+      reason: z.enum(['paused', 'production-ended', 'host-invalid']).default('paused'),
+    }),
+    z.strictObject({ action: z.literal('pulse'), leaseToken: z.uuid().optional() }),
   ]);
   app.post('/operator/runtime/observer', { bodyLimit: 4096 }, async (request, reply) => {
     const actual = Buffer.from(
@@ -586,14 +671,22 @@ export function registerWorkspaceObserver(
     const operation = { stage: 'preparation' as 'preparation' | 'game' | 'hud' | 'assist' };
     try {
       const body = parsed.data;
+      let responseLease: string | undefined;
       if (['start', 'start-configured', 'prepare'].includes(body.action) && !canStart())
-        return reply.code(409).send({ message: '请进入正式制播工作台后连接早源。' });
+        return reply.code(409).send({ message: '请先打开工作台，再连接提前提示。' });
       if (body.action === 'prepare') {
         if (body.expectedRevision && body.expectedRevision !== settings?.revision)
           return reply
             .code(409)
             .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
-        const gameControl = body.useMulnx && settings?.gameAutomation;
+        const hudControlUnavailable = Boolean(
+          body.useMulnx && !body.hudControlAvailable && settings?.gameAutomation.hideGameHud,
+        );
+        const gameControl = body.useMulnx &&
+          settings && {
+            ...settings.gameAutomation,
+            hideGameHud: body.hudControlAvailable && settings.gameAutomation.hideGameHud,
+          };
         if (
           !settings ||
           !(
@@ -605,10 +698,10 @@ export function registerWorkspaceObserver(
               (gameControl.autoConnect || (!body.nativeHudToggle && gameControl.hideGameHud)))
           )
         )
-          return { ok: true, enabled: false };
+          return { ok: true, enabled: false, hudControlUnavailable };
         const connection = settings.configured();
         if (!connection && (settings.settings.enabled || (gameControl && gameControl.autoConnect)))
-          return reply.code(409).send({ message: '请在准备中心填写本场授权的观战连接。' });
+          return reply.code(409).send({ message: '请填写赛事方提供的 GoTV 命令。' });
         const key = identity(body);
         if (
           !prepared ||
@@ -619,26 +712,37 @@ export function registerWorkspaceObserver(
           ++epoch;
         }
         const activeKeys = host ? keys(host) : null;
+        const reuse =
+          pending === 0 &&
+          host !== undefined &&
+          identity(host) === identity(body) &&
+          activeKeys !== null &&
+          appliedPolicy === policy(body) &&
+          (!settings.settings.enabled ||
+            settings.receiverPaused ||
+            (observer.view().active &&
+              !observer.view().stopReason &&
+              observerKey === activeKeys.observer)) &&
+          (!gameControl ||
+            ((!gameControl.autoConnect ||
+              settings.mapConnection?.mode === 'register-current' ||
+              (settings.mapConnection?.mode === 'seamless' && seamlessGame === activeKeys.game) ||
+              connectedGame === activeKeys.connect) &&
+              (body.nativeHudToggle || !gameControl.hideGameHud || hiddenGame === activeKeys.hud)));
+        // Even a paused/game-only reuse needs a fresh Host lease. It must not
+        // resurrect the receiver or let a pulse from before the pause renew it.
+        if (reuse) {
+          acceptLease();
+          observer.pulse();
+        }
         return {
           ok: true,
           enabled: true,
           revision: prepared.token,
+          ...(reuse ? { leaseToken: lease?.token } : {}),
+          hudControlUnavailable,
           hideGameHud: Boolean(!body.nativeHudToggle && gameControl && gameControl.hideGameHud),
-          reuse:
-            pending === 0 &&
-            host !== undefined &&
-            identity(host) === identity(body) &&
-            activeKeys !== null &&
-            appliedPolicy === policy(body) &&
-            (!settings.settings.enabled ||
-              (observer.view().active && observerKey === activeKeys.observer)) &&
-            (!gameControl ||
-              ((!gameControl.autoConnect ||
-                (settings.mapConnection?.mode === 'seamless' && seamlessGame === activeKeys.game) ||
-                connectedGame === activeKeys.connect) &&
-                (body.nativeHudToggle ||
-                  !gameControl.hideGameHud ||
-                  hiddenGame === activeKeys.hud))),
+          reuse,
           connection: connection
             ? {
                 earlyEndpoint: connection.earlyEndpoint,
@@ -650,17 +754,28 @@ export function registerWorkspaceObserver(
       if (body.action === 'start-configured') {
         if (!settings) return { ok: true, enabled: false };
         const revision = settings.revision;
+        const receiverRevision = settings.receiverRevision;
         const attempt = epoch;
         const validPreparation = () =>
           prepared?.token === body.revision &&
           prepared.identity === identity(body) &&
           prepared.settingsRevision === revision;
         const current = () =>
-          attempt === epoch && settings.revision === revision && validPreparation() && canStart();
+          attempt === epoch &&
+          settings.revision === revision &&
+          settings.receiverRevision === receiverRevision &&
+          validPreparation() &&
+          canStart();
         await serialize(async () => {
           if (!current()) throw new Error('observer_configuration_changed');
+          lease = undefined;
           const connection = settings.configured();
-          const gameControl = body.useMulnx ? settings.gameAutomation : null;
+          const gameControl = body.useMulnx
+            ? {
+                ...settings.gameAutomation,
+                hideGameHud: body.hudControlAvailable && settings.gameAutomation.hideGameHud,
+              }
+            : null;
           if (!connection && (settings.settings.enabled || gameControl?.autoConnect))
             throw new Error('observer_configuration_changed');
           const value: Host = body;
@@ -668,7 +783,7 @@ export function registerWorkspaceObserver(
           if (settings.mapConnection?.mode === 'seamless' && !seamlessGame) seamlessGame = key.game;
           const connect = Boolean(
             gameControl?.autoConnect &&
-            !(settings.mapConnection?.mode === 'seamless' && seamlessGame === key.game) &&
+            settings.mapConnection?.mode === 'connect' &&
             connectedGame !== key.connect,
           );
           const hide = Boolean(
@@ -683,16 +798,98 @@ export function registerWorkspaceObserver(
             throw new Error('observer_hud_snapshot_required');
           // An accepted game command is retained even if a later observer launch fails.
           // Retrying the private source must not reconnect the on-air game.
-          if (connect && connection) {
+          if (connect && connection && settings.mapConnection) {
             operation.stage = 'game';
-            await sendObserverGameCommand(
-              observerConnectCommand(
-                connection,
-                Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
-              ),
-            );
-            connectedGame = key.connect;
-            if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
+            const intent = settings.mapConnection.id;
+            const safeError = (error: unknown) => {
+              try {
+                return diagnosticValue(error, '', new Set(), [
+                  connection.earlyEndpoint,
+                  connection.programEndpoint,
+                  connection.earlyEndpoint.split(':')[0] ?? '',
+                  connection.programEndpoint.split(':')[0] ?? '',
+                  connection.password,
+                  observerConnectCommand(connection, false),
+                ]);
+              } catch {
+                return { message: 'diagnostic_unavailable' };
+              }
+            };
+            const logConnectError = (stage: string, code: string, error: unknown) => {
+              try {
+                app.log.warn({ stage, code, error: safeError(error) }, '游戏连接提交未确认');
+              } catch {
+                // Diagnostic failure must not change the command outcome.
+              }
+            };
+            if (gameCommand?.intent !== intent || gameCommand.game !== value.game) {
+              let reservation: 'reserved' | 'previous' | undefined;
+              try {
+                reservation = await reserveObserverConnect(
+                  settings.connectIntentDirectory(),
+                  value.game,
+                  intent,
+                );
+              } catch (error) {
+                const errorCode = (error as NodeJS.ErrnoException)?.code;
+                const code =
+                  error instanceof Error &&
+                  [
+                    'observer_connect_reservation_unavailable',
+                    'observer_connect_reservation_full',
+                  ].includes(error.message)
+                    ? error.message
+                    : ['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ENOSPC', 'EROFS', 'EIO'].includes(
+                          errorCode ?? '',
+                        )
+                      ? errorCode!
+                      : 'observer_connect_reservation_unclassified';
+                gameCommand = { game: value.game, intent, state: 'unavailable' };
+                logConnectError('observer_game_connect_reservation', code, error);
+              }
+              if (reservation) {
+                gameCommand = {
+                  game: value.game,
+                  intent,
+                  state: reservation === 'reserved' ? 'not-sent' : 'unknown',
+                };
+                if (reservation === 'reserved' && current()) {
+                  // Once submission starts, a lost response cannot justify replay.
+                  gameCommand.state = 'unknown';
+                  try {
+                    await sendObserverGameCommand(
+                      observerConnectCommand(
+                        connection,
+                        Boolean(!body.nativeHudToggle && gameControl?.hideGameHud),
+                      ),
+                      current,
+                    );
+                    gameCommand.state = 'queued';
+                    connectedGame = key.connect;
+                    if (!body.nativeHudToggle && gameControl?.hideGameHud) hiddenGame = key.hud;
+                  } catch (error) {
+                    const code =
+                      error instanceof Error &&
+                      [
+                        'observer_game_control_connect',
+                        'observer_game_control_cancelled',
+                        'observer_game_control_timeout',
+                        'observer_game_control_unavailable',
+                        'observer_game_control_closed',
+                        'observer_game_command_rejected',
+                      ].includes(error.message)
+                        ? error.message
+                        : 'observer_game_control_unclassified';
+                    if (
+                      code === 'observer_game_control_connect' ||
+                      code === 'observer_game_control_cancelled'
+                    )
+                      gameCommand.state = 'not-sent';
+                    logConnectError('observer_game_connect', code, error);
+                  }
+                }
+              }
+            }
           } else if (hide) {
             operation.stage = 'hud';
             await sendObserverGameCommand('cl_draw_only_deathnotices 1');
@@ -702,43 +899,147 @@ export function registerWorkspaceObserver(
           if (!current()) throw new Error('observer_configuration_changed');
           host = value;
           appliedPolicy = policy(value);
-          hostLease = performance.now();
           operation.stage = 'assist';
           await startAssist(value, current);
+          if (!current()) throw new Error('observer_configuration_changed');
+          // The Host can renew only after receiving this token. Startup work
+          // must not consume the lease or its one automatic recovery attempt.
+          responseLease = acceptLease();
+          observer.pulse();
           lastError = null;
         });
       } else if (body.action === 'start') {
         operation.stage = 'assist';
         const attempt = ++epoch;
+        settings?.setReceiverPaused(false);
+        const receiverRevision = settings?.receiverRevision;
+        const receiving = () =>
+          attempt === epoch &&
+          !settings?.receiverPaused &&
+          settings?.receiverRevision === receiverRevision &&
+          canStart();
         host = undefined;
+        lease = undefined;
         await serialize(async () => {
-          if (attempt !== epoch || !canStart()) throw new Error('observer_configuration_changed');
-          await observer.start(
-            body.executable,
-            body.endpoint,
-            body.password,
-            body.job,
-            () => attempt === epoch && canStart(),
-          );
+          if (!receiving()) throw new Error('observer_configuration_changed');
+          await observer.start(body.executable, body.endpoint, body.password, body.job, receiving);
+          if (!receiving()) throw new Error('observer_configuration_changed');
+          responseLease = acceptLease();
           observerKey = '';
           lastError = null;
         });
       } else if (body.action === 'stop') {
-        ++epoch;
-        host = undefined;
-        prepared = undefined;
+        if (body.leaseToken && body.leaseToken !== lease?.token)
+          return { ok: true, enabled: false };
+        if (body.expectedRevision && body.expectedRevision !== settings?.revision)
+          return reply.code(409).send({ message: '本图连接已变化，请重新打开后确认。' });
+        if (body.reason !== 'host-invalid') settings?.setReceiverPaused(true);
+        lease = undefined;
+        if (body.reason !== 'paused') {
+          host = undefined;
+          prepared = undefined;
+          ++epoch;
+        } else if (!settings) ++epoch;
+        // Cancel this receiver immediately, including a launch queued behind preparation.
+        // Game intent, Host identity and accepted game/HUD operations remain owned here.
+        const stopped = observer.stop(body.reason);
         await serialize(async () => {
-          observerKey = hiddenGame = appliedPolicy = '';
-          await observer.stop();
+          observerKey = '';
+          await stopped;
+          lastError = null;
         });
       } else {
-        if (leased()) hostLease = performance.now();
-        else host = undefined;
-        observer.pulse();
+        // An old or unscoped pulse can neither renew nor resurrect another intent.
+        if (!lease || body.leaseToken !== lease.token) return { ok: true, enabled: false };
+        responseLease = lease.token;
+        if (!canStart() || (host && prepared?.identity !== identity(host))) {
+          lease = undefined;
+          host = undefined;
+          ++epoch;
+          await observer.stop('host-invalid');
+          return { ok: true, enabled: false };
+        }
+        const age = performance.now() - hostLease;
+        // No receiving intent means there is nothing to recover or report as a
+        // receiver failure. A fresh verified Host may still renew game-only work.
+        if (settings && (!settings.settings.enabled || settings.receiverPaused)) {
+          hostLease = performance.now();
+          return { ok: true, enabled: true, leaseToken: lease.token, ...observer.view() };
+        }
+        if (age > HOST_RECOVERY_MS) {
+          lease = undefined;
+          if (observer.view().active) await observer.stop('lease-expired');
+          return { ok: true, enabled: false };
+        }
+        const expired =
+          !lease.recovering &&
+          (age > HOST_LEASE_MS || observer.view().stopReason === 'lease-expired');
+        if (expired) {
+          if (
+            !host ||
+            !settings ||
+            lease.recoveryUsed ||
+            observer.view().failed ||
+            (!observer.view().active && observer.view().stopReason !== 'lease-expired')
+          ) {
+            lease = undefined;
+            if (observer.view().active) await observer.stop('lease-expired');
+            return { ok: true, enabled: false };
+          }
+          lease.recoveryUsed = true;
+          lease.recovering = true;
+          const accepted = lease;
+          const value = host;
+          const attempt = epoch;
+          const revision = settings.revision;
+          hostLease = performance.now();
+          const stopped = observer.stop('lease-expired');
+          const current = () =>
+            lease === accepted &&
+            host === value &&
+            attempt === epoch &&
+            settings.revision === revision &&
+            leased() &&
+            canStart();
+          app.log.info(
+            { stage: 'observer_lease', reason: 'lease-expired', elapsedMs: Math.round(age) },
+            '提前提示接收正在恢复',
+          );
+          void serialize(async () => {
+            await stopped;
+            // The watchdog may already be finalizing this owner. A second,
+            // now-empty stop cannot turn its late cleanup failure into permission
+            // to launch another process.
+            if (!current() || settings.receiverPaused || observer.view().failed) return;
+            await startAssist(value, current);
+            if (current() && !settings.receiverPaused) {
+              lastError = null;
+              app.log.info(
+                { stage: 'observer_lease_recovery', result: 'started' },
+                '提前提示接收已重新启动',
+              );
+            }
+          })
+            .catch((error: unknown) => {
+              if (current() && !settings.receiverPaused) lastError = 'observer_operation_failed';
+              app.log.error(
+                { stage: 'observer_lease_recovery', err: error },
+                '提前提示接收恢复未完成',
+              );
+            })
+            .finally(() => {
+              accepted.recovering = false;
+            });
+        } else {
+          hostLease = performance.now();
+          observer.pulse();
+        }
       }
-      return { ok: true, enabled: true, ...observer.view() };
+      return { ok: true, enabled: true, leaseToken: responseLease, ...observer.view() };
     } catch (error) {
-      lastError = 'observer_operation_failed';
+      const cancelled =
+        error instanceof Error && error.message === 'observer_configuration_changed';
+      if (!cancelled) lastError = 'observer_operation_failed';
       request.log.error(
         {
           stage: 'observer_workspace',
@@ -753,7 +1054,7 @@ export function registerWorkspaceObserver(
             : operation.stage === 'hud'
               ? 'CS2 原生 HUD 设置未确认，请检查游戏画面后重试。'
               : operation.stage === 'assist'
-                ? '观察辅助未能启动，请检查辅助设置后重试；游戏连接请在游戏内核对。'
+                ? '提前提示未能启动，请检查 GoTV 后重试；游戏连接请在游戏内核对。'
                 : '观战准备未完成，请检查游戏连接和设置后重试。',
       });
     }

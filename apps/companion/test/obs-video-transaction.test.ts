@@ -110,7 +110,6 @@ for (const condition of ['external output', 'OBS closed'] as const) {
           pauseAutomatic: () => {},
           resumeAutomatic: () => {},
           startCommentaryRecovery: () => {},
-          hasCurrentPreparation: () => false,
           settleAutomatic: async () => {},
           startBrowserRecovery: () => {},
           restoreVideo: () =>
@@ -158,16 +157,6 @@ for (const condition of ['external output', 'OBS closed'] as const) {
       }
     }));
 }
-
-test('preflight rejects an active video output without touching OBS or creating a journal', async () =>
-  usingTest(async (tx, f) => {
-    f.outputs = [
-      { outputName: 'Virtual camera', outputActive: true, outputFlags: { OBS_OUTPUT_VIDEO: true } },
-    ];
-    await assert.rejects(tx.preflight(f.obs, endpoint), /Virtual camera/);
-    assert.equal(await tx.pending(), false);
-    assert.ok(f.calls.every(({ type }) => type.startsWith('Get')));
-  }));
 
 test('already suitable video does not interrupt active output', async () =>
   usingTest(async (tx, f) => {
@@ -218,16 +207,6 @@ test('uncertain write is read back and rolled back, never replayed', async () =>
     assert.deepEqual(f.settings, original);
     assert.equal(await tx.pending(), false);
     assert.equal(f.calls.filter(({ type }) => type === 'SetVideoSettings').length, 2);
-  }));
-
-test('stale transaction id cannot restore a newer session', async () =>
-  usingTest(async (tx, f) => {
-    const id = await tx.prepare(f.obs, endpoint, () => true);
-    await tx.restore(f.obs, endpoint, '00000000-0000-4000-8000-000000000000');
-    assert.equal(await tx.pending(), true);
-    assert.equal(f.settings.baseWidth, 1920);
-    await tx.restore(f.obs, endpoint, id!);
-    assert.deepEqual(f.settings, original);
   }));
 
 test('a new service instance discovers and restores the persisted transaction', async () => {

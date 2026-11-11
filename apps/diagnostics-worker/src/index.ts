@@ -12,6 +12,7 @@ import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
  * No body inflation, public object URL, runtime management token, or business-state interpretation. */
 export interface Env {
+  DIAGNOSTICS_VERSION?: { id: string };
   DIAGNOSTICS_DB: D1Database;
   DIAGNOSTICS_BUCKET: R2Bucket;
   ENROLL_LIMITER: RateLimit;
@@ -33,7 +34,6 @@ export const LIMITS = {
   expandedBytes: 4 * 1024 * 1024,
   events: 4096,
   metadataBytes: 4096,
-  bodyDays: 7,
   indexDays: 90,
   cleanupObjects: 100,
 };
@@ -43,7 +43,11 @@ const encoder = new TextEncoder();
 const json = (body: unknown, status = 200) =>
   Response.json(body, {
     status,
-    headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' },
+    headers: {
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-diagnostics-event-version': '2',
+    },
   });
 const sql = (env: Env, query: string, ...values: (string | number | null | ArrayBuffer)[]) =>
   env.DIAGNOSTICS_DB.prepare(query).bind(...values);
@@ -191,6 +195,10 @@ async function bounded(stream: ReadableStream<Uint8Array> | null, maximum: numbe
   return bytes;
 }
 interface Metadata {
+  eventSchemaVersion?: 2;
+  producerKind?: string;
+  uniqueEvents?: number;
+  aggregatedOccurrences?: number;
   schema: 'mizar-technical-diagnostics/1';
   events: number;
   expandedBytes: number;
@@ -218,6 +226,10 @@ function metadata(text: string | null): Metadata | null {
     Object.keys(value).some(
       (key) =>
         ![
+          'eventSchemaVersion',
+          'producerKind',
+          'uniqueEvents',
+          'aggregatedOccurrences',
           'schema',
           'events',
           'expandedBytes',
@@ -240,7 +252,9 @@ function metadata(text: string | null): Metadata | null {
     Number(value.expandedBytes) > LIMITS.expandedBytes ||
     !Array.isArray(value.stages) ||
     value.stages.length > 32 ||
-    value.stages.some((stage) => typeof stage !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(stage))
+    value.stages.some(
+      (stage) => typeof stage !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(stage),
+    )
   )
     return null;
   const time = (value: unknown) =>
@@ -274,7 +288,33 @@ function metadata(text: string | null): Metadata | null {
         Number(value.sourceTimeUnknownRecords) > Number(value.events)))
   )
     return null;
+  if (
+    value.eventSchemaVersion !== undefined &&
+    (value.eventSchemaVersion !== 2 ||
+      !['companion', 'host', 'document', 'legacy-unknown'].includes(String(value.producerKind)) ||
+      !Number.isSafeInteger(value.uniqueEvents) ||
+      Number(value.uniqueEvents) < 1 ||
+      Number(value.uniqueEvents) > Number(value.events) ||
+      !Number.isSafeInteger(value.aggregatedOccurrences) ||
+      Number(value.aggregatedOccurrences) < Number(value.events))
+  )
+    return null;
+  if (
+    value.eventSchemaVersion === undefined &&
+    ['producerKind', 'uniqueEvents', 'aggregatedOccurrences'].some(
+      (key) => value[key] !== undefined,
+    )
+  )
+    return null;
   return {
+    ...(value.eventSchemaVersion === 2
+      ? {
+          eventSchemaVersion: 2 as const,
+          producerKind: String(value.producerKind),
+          uniqueEvents: Number(value.uniqueEvents),
+          aggregatedOccurrences: Number(value.aggregatedOccurrences),
+        }
+      : {}),
     schema: value.schema,
     events: Number(value.events),
     expandedBytes: Number(value.expandedBytes),
@@ -398,6 +438,39 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   const bytes = await bounded(request.body, LIMITS.compressedBytes);
   if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || (await hash(bytes)) !== id)
     return json({ error: 'batch_integrity' }, 400);
+  if (index.eventSchemaVersion === 2) {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      const raw = await bounded(stream, LIMITS.expandedBytes);
+      const body = JSON.parse(new TextDecoder().decode(raw)) as {
+        schema?: string;
+        events?: Record<string, unknown>[];
+      };
+      if (
+        raw.length !== index.expandedBytes ||
+        body.schema !== 'mizar-technical-diagnostics/1' ||
+        !Array.isArray(body.events) ||
+        body.events.length !== index.events ||
+        body.events.some(
+          (event) =>
+            event.schema !== 'mizar-diagnostic-event/2' ||
+            event.producerRunId !== index.sessionId ||
+            event.producerKind !== index.producerKind ||
+            typeof event.eventId !== 'string' ||
+            !Number.isSafeInteger(event.sequence) ||
+            Number(event.sequence) < 1,
+        ) ||
+        new Set(body.events.map((event) => event.eventId)).size !== index.uniqueEvents ||
+        body.events.reduce(
+          (n, event) => n + Number((event.coverage as { occurrences?: unknown })?.occurrences ?? 1),
+          0,
+        ) !== index.aggregatedOccurrences
+      )
+        return json({ error: 'invalid_event_metadata' }, 400);
+    } catch {
+      return json({ error: 'invalid_event_body' }, 400);
+    }
+  }
   const sealed = readDiagnosticGzipPermit(bytes);
   if (
     !sealed ||
@@ -837,6 +910,7 @@ async function admin(request: Request, env: Env, path: string, now: number) {
       'SELECT COUNT(*) AS reservations,SUM(writers) AS writers FROM batches WHERE writers>0',
     ).all();
     return json({
+      deploymentVersionId: env.DIAGNOSTICS_VERSION?.id ?? null,
       accepting: env.ACCEPTING === '1',
       dailyReservations: daily,
       openWriters: storage.results[0],

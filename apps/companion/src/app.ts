@@ -39,8 +39,10 @@ import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
+import { RepeatedDiagnostic } from './support/repeated-diagnostic.js';
+import { isDocumentDiagnosticEvent } from '@mizar/protocol';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
-import { NativeSource } from './support/native-source.js';
+import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
 import { readMusicPack } from './music/archive.js';
@@ -116,7 +118,7 @@ import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
@@ -219,6 +221,7 @@ export interface CompanionAppOptions {
   readonly workspaceObserver?: WorkspaceObserver;
   readonly observerSettingsPath?: string;
   readonly diagnosticsEndpoint?: string;
+  readonly diagnosticsEndpointSource?: 'product_default' | 'environment_override';
   readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
   readonly onObservation?: ObservationSink;
@@ -394,7 +397,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
     isExecutionOwnedBy: (binding) =>
       programRuntime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
-    executionOwnerMatchId: (runtimeSeq) => programRuntime.getExecutionOwnerMatchId(runtimeSeq),
     managedSourceId: () => programRuntime.getManagedSourceId(),
     isActiveOnlineBinding: (binding) =>
       matchContextController !== null &&
@@ -411,6 +413,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       app.log.error(
         { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
         '发送队列无法打开，网站同步不可用；原始数据保留。',
+      ),
+    onBoundaryCaptureError: (error, evidence) =>
+      app.log.error(
+        {
+          event: 'outbox',
+          operation: 'boundary_capture',
+          ...evidence,
+          err: outboxLocalError(error),
+        },
+        '网站同步边界尚未确认保存，保留原请求重试；本机画面继续。',
       ),
     onBusinessEvidence: (stage, evidence) => businessJournal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
@@ -534,7 +546,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   const nativeSource =
     options.supportLogsDirectory && sessionJournal
-      ? new NativeSource(options.supportLogsDirectory, sessionJournal, (record) => {
+      ? new ProgramChatNativeInput(options.supportLogsDirectory, sessionJournal, (record) => {
           if (programChat.ingest(record)) projectionCoordinator.refresh();
         })
       : undefined;
@@ -565,6 +577,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
           taskId: browserOperationId(request.headers['x-mizar-task-id']),
           parentOperationId: browserOperationId(request.headers['x-mizar-parent-operation-id']),
+          attemptId: browserOperationId(request.headers['x-mizar-attempt-id']),
           trigger:
             request.headers['x-mizar-trigger'] === 'user'
               ? 'user'
@@ -585,11 +598,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     hud: hudConfigStore.getState().document,
     match: matchContextController?.getActiveBinding() ?? null,
   });
+  const renewalRoutes = ['/operator/runtime/observer', '/operator/runtime/camera-session'];
   const renewalRoute = (request: FastifyRequest) =>
-    request.method === 'POST' &&
-    ['/operator/runtime/observer', '/operator/runtime/camera-session'].includes(
-      request.routeOptions.url ?? '',
-    );
+    request.method === 'POST' && renewalRoutes.includes(request.routeOptions.url ?? '');
   const isRenewal = (request: FastifyRequest) =>
     renewalRoute(request) && (request.body as { action?: unknown } | null)?.action === 'pulse';
   // Body parsing happens after onRequest. Keep the original state in memory so
@@ -599,8 +610,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     {
       before: ReturnType<typeof controlState>;
       startedAt: number;
+      receivedAt: string;
       compact: boolean;
       beforeRecorded: boolean;
+      handlerStartedAt: string | null;
+      identity?: string;
     }
   >();
   const renewalContext = (state: ReturnType<typeof controlState>) =>
@@ -610,6 +624,59 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       hud: state.hud,
       match: state.match,
     });
+  const renewalObservations = new Map(
+    renewalRoutes.map((route) => [
+      route,
+      {
+        identity: '',
+        key: '',
+        repeated: new RepeatedDiagnostic((stage, evidence) => {
+          const scope = { operation: route, identity: evidence.repetitionId };
+          if (evidence.totalOccurrences === 1)
+            sessionJournal?.record('operation_result', { ...evidence, scope });
+          else {
+            // The first result retains the full control context. Later facts refer
+            // to that repetition identity, without copying it on every lease pulse.
+            const summary: Record<string, unknown> = { ...evidence, scope };
+            delete summary.before;
+            delete summary.after;
+            sessionJournal?.withSystem(() => sessionJournal.record(stage, summary));
+          }
+        }),
+      },
+    ]),
+  );
+  const clearRenewalObservations = () => {
+    for (const observation of renewalObservations.values()) {
+      observation.repeated.clear();
+      observation.identity = '';
+      observation.key = '';
+    }
+  };
+  const recordRenewalStart = (request: FastifyRequest, deferredUntilResult = false) => {
+    const renewal = renewalRequests.get(request);
+    if (!renewal || renewal.beforeRecorded) return;
+    sessionJournal?.record('operation_received', {
+      requestId: request.id,
+      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+      method: request.method,
+      route: request.routeOptions.url,
+      before: renewal.before,
+      receivedAt: renewal.receivedAt,
+      ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
+    });
+    if (renewal.handlerStartedAt)
+      sessionJournal?.record('operation_begin', {
+        requestId: request.id,
+        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+        method: request.method,
+        route: request.routeOptions.url,
+        parameters: diagnosticValue(request.body),
+        startedAt: renewal.handlerStartedAt,
+        ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
+      });
+    renewal.beforeRecorded = true;
+  };
   app.addHook('onRequest', (request, _reply, done) => {
     if (sessionJournal && isControl(request.url, request.method)) {
       const before = controlState();
@@ -617,25 +684,44 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         renewalRequests.set(request, {
           before: structuredClone(before),
           startedAt: performance.now(),
+          receivedAt: new Date().toISOString(),
           compact: false,
           beforeRecorded: false,
+          handlerStartedAt: null,
         });
-      sessionJournal?.record('operation_received', {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
-        ...(renewalRoute(request) ? { stateDeferredUntilResult: true } : { before }),
-      });
+      else
+        sessionJournal?.record('operation_received', {
+          requestId: request.id,
+          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+          method: request.method,
+          route: request.routeOptions.url,
+          before,
+        });
     }
     done();
   });
   app.addHook('preHandler', (request, _reply, done) => {
     if (isControl(request.url, request.method)) {
       const renewal = renewalRequests.get(request);
-      // Real commands on these routes still commit their before-state prior to
-      // executing a launch/stop, rather than relying on the process surviving it.
-      if (renewal && !isRenewal(request)) renewal.beforeRecorded = true;
+      if (renewal) {
+        renewal.handlerStartedAt = new Date().toISOString();
+        // Only uncorrelated system pulses are observations. User/task commands,
+        // new identities and changed control contexts keep the full start chain.
+        if (
+          isRenewal(request) &&
+          !['operation-id', 'task-id', 'parent-operation-id', 'attempt-id', 'trigger'].some(
+            (field) => request.headers[`x-mizar-${field}`] !== undefined,
+          )
+        ) {
+          renewal.identity = createHash('sha256')
+            .update(JSON.stringify([request.body, renewalContext(renewal.before)]))
+            .digest('hex');
+          if (renewalObservations.get(request.routeOptions.url!)?.identity === renewal.identity)
+            return done();
+        }
+        recordRenewalStart(request);
+        return done();
+      }
       sessionJournal?.record('operation_begin', {
         requestId: request.id,
         browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
@@ -643,7 +729,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         route: request.routeOptions.url,
         parameters: diagnosticValue(request.body),
         filename: request.headers['x-mizar-filename'],
-        ...(renewal?.beforeRecorded ? { before: renewal.before } : {}),
       });
     }
     done();
@@ -663,7 +748,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const outcome = result as { ok?: unknown; failed?: unknown } | null;
       const compact = Boolean(
         renewal &&
-        isRenewal(request) &&
+        renewal.identity &&
         reply.statusCode >= 200 &&
         reply.statusCode < 300 &&
         outcome?.ok === true &&
@@ -671,7 +756,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         renewalContext(renewal.before) === renewalContext(after),
       );
       if (renewal) renewal.compact = compact;
-      sessionJournal?.record('operation_result', {
+      const evidence = {
         requestId: request.id,
         browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
         method: request.method,
@@ -681,13 +766,43 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         ...(renewal ? { durationMs: performance.now() - renewal.startedAt } : {}),
         ...(compact
           ? { renewal: true, controlContextUnchanged: true }
-          : { ...(renewal && !renewal.beforeRecorded ? { before: renewal.before } : {}), after }),
-      });
+          : { ...(renewal && !renewal.beforeRecorded ? { before: renewal.before } : {}) }),
+        after,
+      };
+      const observation = renewalObservations.get(request.routeOptions.url ?? '');
+      if (compact && observation) {
+        const key = createHash('sha256')
+          .update(JSON.stringify([renewal!.identity, result]))
+          .digest('hex');
+        if (observation.key !== key) recordRenewalStart(request, true);
+        observation.identity = renewal!.identity!;
+        observation.key = key;
+        observation.repeated.record('runtime_renewal', key, {
+          ...evidence,
+          parameters: diagnosticValue(request.body),
+          renewalIdentity: renewal!.identity,
+        });
+      } else {
+        if (observation) {
+          observation.repeated.clear();
+          observation.identity = '';
+          observation.key = '';
+          recordRenewalStart(request, true);
+        }
+        sessionJournal.record('operation_result', evidence);
+      }
     }
     done(null, payload);
   });
   options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
-    if (stage === 'business_live' || stage === 'original_error')
+    // Pre-network guards contain only canonical business fields. Do not write
+    // the same observation under a second event ID; response evidence stays raw.
+    const reason =
+      evidence && typeof evidence === 'object' && 'reason' in evidence ? evidence.reason : null;
+    const guard =
+      stage === 'business_live' &&
+      (reason === 'source_unavailable' || reason === 'map_start_pending');
+    if ((stage === 'business_live' && (!guard || !businessJournal)) || stage === 'original_error')
       sessionJournal?.record(
         stage === 'business_live' ? 'website_live_evidence' : 'website_original_error',
         evidence,
@@ -815,6 +930,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           confirmedObserverMap = waitingObserverMap = undefined;
         }
         observerMatchId = matchId;
+        observerSettings.observeScope(JSON.stringify([matchId, musicMapKey(bundle.program)]));
         outputService.setCurrent(bundle, outputBinding);
       },
     });
@@ -942,6 +1058,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           },
           new ObsVideoTransaction(`${options.obsConfigPath}.video-transaction.json`),
           new ObsCaptureWarmup(`${options.obsConfigPath}.capture-warmup.json`),
+          options.productRuntime?.appVersion ?? 'development',
         );
   if (obsAdapter)
     app.addHook('onReady', async () => {
@@ -969,7 +1086,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
       : undefined,
   );
-  app.addHook('onReady', () => bpPresentationSettings.load());
+  app.addHook('onReady', () => bpPresentationSettings.load(app.log));
   registerBpPresentationSettings(app, bpPresentationSettings, localWebTransport.getOriginPolicy());
   const sceneController = new ProgramSceneController(
     projectionCoordinator,
@@ -1002,8 +1119,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
   obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
-  obsAdapter?.onProgramChanged(() => {
-    sceneController.holdAutomatic();
+  obsAdapter?.onProgramChanged((kind) => {
+    if (kind === 'disconnected') sceneController.interruptAutomatic();
+    else sceneController.holdAutomatic();
     production.invalidateObsExit();
   });
   if (options.steamAvatars) {
@@ -1024,14 +1142,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: sceneController,
     canControl: () => production.canControl(),
+    productionActive: () => production.presentationAllowed(),
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
     app.addHook('onListen', () => {
-      obsAdapter.startCommentaryRecovery(
-        musicDirector,
-        gameAudio,
-        () => production.automaticAllowed() && obsAdapter.hasCurrentPreparation(),
-      );
+      obsAdapter.startCommentaryRecovery(musicDirector, () => production.automaticAllowed());
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -1045,6 +1160,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {}),
       activeScene: () => sceneController.get().active,
       preparationValid: (revision) => production.preparationValid(revision),
+      canStartOutput: () => production.canStartObsOutput(),
       ...(options.productRuntime
         ? { runtimeControlToken: options.productRuntime.controlToken }
         : {}),
@@ -1103,9 +1219,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
-    managedBoundary?: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>['boundary'],
     managedSourceId?: string,
-    managedActivation = false,
+    managedOwner?: { matchId: string },
   ): boolean => {
     const processingStarted = performance.now();
     latestInput = observation.receive;
@@ -1113,7 +1228,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       const source = programRuntime.getCurrentState().programSource;
       const lastAccepted = source.lastAccepted;
       if (
-        !managedActivation &&
+        !managedOwner &&
         lastAccepted !== undefined &&
         observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
           programRuntime.getSnapshot().continuityPolicy.staleAfterMs
@@ -1126,18 +1241,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         publishRuntimeCommit(changed);
       }
       outputService.beforeRuntimeMutation();
-      const accepted = programRuntime.acceptObservation(
-        observation,
-        Boolean(
-          managedSourceId &&
-          !managedActivation &&
-          !managedSource.sourceMatchesSelection(managedSourceId),
-        ),
-      );
-      let result =
-        managedBoundary && accepted.disposition.kind === 'accepted'
-          ? { ...accepted, transitions: [...managedBoundary.transitions, ...accepted.transitions] }
-          : accepted;
+      const accepted =
+        managedOwner && managedSourceId
+          ? programRuntime.acceptManagedObservation(
+              managedOwner.matchId,
+              managedSourceId,
+              observation,
+            )
+          : programRuntime.acceptObservation(
+              observation,
+              Boolean(managedSourceId && !managedSource.sourceMatchesSelection(managedSourceId)),
+            );
+      let result = accepted;
       if (result.disposition.kind === 'ignored')
         performanceContext?.trigger('observation_ignored', {
           receive: observation.receive,
@@ -1251,7 +1366,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     scenes: sceneController,
     obs: obsAdapter,
     music: () => musicDirector,
-    gameAudio,
     camera: () => cameraDirector,
     demo: () => demoTest,
     observer: observerSettings,
@@ -1259,6 +1373,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     source: {
       handoffForExit: async () => {
         await options.rivalhubConnection?.handoffForExit();
+      },
+      retryExitHandoffs: async () => {
+        await options.rivalhubConnection?.retryExitHandoffs();
       },
       release: async () => {
         await options.rivalhubConnection?.release();
@@ -1412,14 +1529,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       await resources?.shutdown();
     });
   }
+  let updateExit: ReturnType<typeof registerUpdateRoutes> | undefined;
   if (options.updates && options.productRuntime)
-    registerUpdateRoutes(app, {
+    updateExit = registerUpdateRoutes(app, {
       manager: options.updates,
       controlToken: options.productRuntime.controlToken,
       originPolicy: localWebTransport.getOriginPolicy(),
       production,
       scenes: sceneController,
       obs: async () => obsAdapter?.status(),
+      obsEpoch: () => obsAdapter?.outputObservationEpoch(),
       mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
     });
   const guidance = new ProductionGuidanceStore();
@@ -1462,7 +1581,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const schedule = demoTest.get().active
       ? undefined
       : envelope?.source === 'local' && document?.competition
-        ? localTournamentStore?.scheduleWindow(document.competition?.competitionId)
+        ? localTournamentStore?.getAvailability().available
+          ? localTournamentStore.scheduleWindow(document.competition.competitionId)
+          : undefined
         : options.rivalhubConnection?.getSchedule();
     return presentation.get(document, schedule);
   };
@@ -1534,8 +1655,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
     });
   });
-  const director = new ProgramDirector(projectionCoordinator, sceneController, bpSession, () =>
-    production.automaticAllowed(),
+  const director = new ProgramDirector(
+    projectionCoordinator,
+    sceneController,
+    bpSession,
+    () => production.automaticAllowed(),
+    undefined,
+    undefined,
+    () => presentation.get(),
   );
   if (obsConfigStore && options.obsConfigPath) {
     const musicStore = new MusicStore(
@@ -1586,6 +1713,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
+        presentation: presentation.get(),
         production:
           production.automaticAllowed() &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
@@ -1596,7 +1724,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         const config = await obsConfigStore.read();
         return (
           (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`, {
-            owner: musicStore.state.owner,
             sources: musicStore.state.sources,
             baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
           })) ?? false
@@ -1761,7 +1888,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
         production:
-          production.automaticAllowed() &&
+          production.sessionAllowed() &&
           !waitingObserverMap &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
         mapConfirmed: !waitingObserverMap,
@@ -1831,7 +1958,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         controlToken: options.productRuntime?.controlToken,
         configure: production.configureCameraSession,
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
-        canPrepare: () => production.get().mode === 'preparation',
+        canPrepare: production.canPrepareMulnx,
+        canCleanup: production.canCleanupMulnx,
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
@@ -1905,21 +2033,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   if (options.rivalhubConnection)
     registerRivalHubConnectionRoutes(app, {
       connection: options.rivalhubConnection,
-      canClaim: () => !production.isTrialPending() && production.get().mode === 'live',
+      canClaim: () =>
+        !production.isTrialPending() &&
+        production.sessionAllowed() &&
+        production.get().mode === 'live',
       canUpdatePlan: () => !production.isTrialPending() && programRuntime.canUpdateSeriesPlan(),
       canFetchStats: () => production.statsActive(),
       controller: matchContextController,
       currentSnapshot: () => outputService.current(true),
+      currentSnapshotStatus: () => outputService.currentStatus(true),
+      retryOutputPersistence: async () => {
+        await outputService.retry({ localOnly: true });
+        return outputService.isPersistenceConfirmed();
+      },
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   const restoreFormal = async (trial = false) => {
     if (matchContextController === null) return;
-    await localTournamentStore?.load();
+    try {
+      await localTournamentStore?.load();
+    } catch (error) {
+      app.log.warn(
+        { event: 'local-tournament-unavailable', error: diagnosticValue(error) },
+        'Local tournament library could not be loaded',
+      );
+    }
     const restored = trial
       ? await matchContextController.restoreTemporaryBinding()
       : await matchContextController.restoreLatest();
-    if (localTournamentStore === null) return;
+    if (localTournamentStore === null || !localTournamentStore.getAvailability().available) return;
     const selected = localTournamentStore
       .getSnapshot()
       .matches.find(
@@ -1981,8 +2124,20 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   registerDemoTestRoutes(app, demoTest, options.productRuntime?.controlToken);
   observerEligible = () =>
-    production.automaticAllowed() && !production.isTrialPending() && !demoTest.get().active;
-  registerObserverSettings(app, observerSettings, localWebTransport.getOriginPolicy());
+    production.sessionAllowed() && !production.isTrialPending() && !demoTest.get().active;
+  registerObserverSettings(
+    app,
+    observerSettings,
+    localWebTransport.getOriginPolicy(),
+    observerEligible,
+    () => {
+      const program = projectionCoordinator.getCurrent().program;
+      return (
+        observerEligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name)
+      );
+    },
+    () => projectionCoordinator.recalibrateObserver(),
+  );
   const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
     if (kind === 'name') {
       projectionCoordinator.refresh();
@@ -2080,7 +2235,26 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   };
   app.addHook('onReady', async () => {
     outputService.setCurrent(projectionCoordinator.getCurrent(), outputBinding);
-    await outputService.start();
+    await outputService.start({
+      sourceStateAvailable: options.rivalhubConnection?.view().sourceState !== 'unavailable',
+      restoreSourceCapture: async () => {
+        await options.rivalhubConnection?.setSourceCaptureLifecycle?.({
+          createReference: (cursor) => outputService.createCaptureReference(cursor),
+          arm: (identity, reference) => outputService.armSourceCapture(identity, reference),
+          activate: (identity) => outputService.activateSourceCapture(identity),
+          restore: (identity, reference) => outputService.restoreSourceCapture(identity, reference),
+          seal: (identity) => outputService.sealSourceCapture(identity),
+          coverage: (identity) => outputService.sourceCaptureCoverage(identity),
+        });
+      },
+    });
+    if (!outputService.isReliableAvailable()) {
+      try {
+        await options.rivalhubConnection?.abortSourceCaptureStartup?.();
+      } catch (error) {
+        app.log.error({ err: error }, '网站启动所有权清理未确认，本机制作继续；修复后重启。');
+      }
+    }
     options.rivalhubConnection?.setSourceSettlement?.(
       (scope) => outputService.settleSourceForRelease(scope),
       (scope) => outputService.resumeSource(scope),
@@ -2187,8 +2361,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
-      const result = productionHttpResponse(await production.shutdown());
-      if (result.code !== 200) return reply.code(result.code).send(result.value);
+      const shutdown = await production.shutdown();
+      const result = productionHttpResponse(shutdown.result);
+      if (!shutdown.result.ok) return reply.code(result.code).send(result.value);
+      const updateBlocked = await updateExit?.beforeStop();
+      if (updateBlocked) {
+        await shutdown.cancel();
+        return reply.code(409).send({ message: updateBlocked });
+      }
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
     });
@@ -2286,28 +2466,28 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   contextTimer?.unref();
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
-  app.post('/debug/control-event', { bodyLimit: 64 * 1024 }, async (request, reply) => {
+  app.post('/debug/control-event', { bodyLimit: 32 * 1024 }, async (request, reply) => {
     if (
       !checkLocalWebOrigin(localWebTransport.getOriginPolicy(), request.headers.origin).allowed ||
       localWebTransport.getOriginPolicy().mode !== 'loopback'
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    sessionJournal?.record('browser_control', request.body);
-    const body = request.body as { operation?: string; time?: string; browserDocumentId?: string };
+    const body = request.body;
+    if (!isDocumentDiagnosticEvent(body))
+      return reply.code(400).send({ error: 'document_event_invalid' });
+    if (!sessionJournal) return reply.code(503).send({ error: 'diagnostic_writer_unavailable' });
+    await sessionJournal.recordDocumentCommitted(body);
     if (
-      body &&
-      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(
-        body.operation ?? '',
-      ) &&
-      (body.operation !== 'browser_performance' ||
-        (body as { evidence?: { anomalyCount?: number } }).evidence?.anomalyCount)
+      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(body.kind) &&
+      (body.kind !== 'browser_performance' ||
+        (body.evidence as { anomalyCount?: number } | null)?.anomalyCount)
     )
       performanceContext?.trigger('browser_anomaly', {
-        operation: body.operation,
-        observedAt: body.time,
-        browserDocumentId: body.browserDocumentId,
+        operation: body.kind,
+        observedAt: body.observedAt,
+        browserDocumentId: body.producerRunId,
         contextCapturedAt: new Date().toISOString(),
-        originalEvidence: (body as { evidence?: unknown }).evidence,
+        originalEvidence: body.evidence,
       });
     return reply.code(204).send();
   });
@@ -2316,8 +2496,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(sessionJournal ? { journal: sessionJournal } : {}),
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
+    ...(options.diagnosticsEndpointSource
+      ? { endpointSource: options.diagnosticsEndpointSource }
+      : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
-    onConsent: recordConfiguration,
+    onConsent: async () => {
+      // The delivery owner invokes this only after durable consent. Do not let
+      // a stable pre-consent group carry its old interval/count into this scope.
+      clearRenewalObservations();
+      await recordConfiguration();
+    },
+    deliveryParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.deliveryParticipant()] : []),
+      ...(performanceContext ? [performanceContext.deliveryParticipant()] : []),
+    ],
+    incidentParticipants: () => [
+      ...(sessionJournal ? [sessionJournal.incidentParticipant()] : []),
+      ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
+    ],
     onReport: () => {
       recordPerformanceWindow('problem_report');
       performanceContext?.trigger('problem_report', {
@@ -2337,29 +2533,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
     observer: () => options.workspaceObserver?.view() ?? null,
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
-    flushBusinessLog: async () => {
-      await nativeSource?.poll();
-      recordPerformanceWindow('export');
-      await performanceContext?.flush();
-      await businessJournal?.flush();
-      await sessionJournal?.flush();
+    exportParticipants: () => {
+      // Enqueue completed observations before the journal freezes its export watermark.
+      clearRenewalObservations();
+      return [
+        ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
+        ...(performanceContext ? [performanceContext.exportParticipant()] : []),
+      ];
     },
-    sessionLogHealth: () =>
-      sessionJournal
-        ? { ...sessionJournal.health(), performanceContext: performanceContext?.health() ?? null }
-        : null,
-    pendingPerformanceEvidence: () => performanceContext?.exportMemory() ?? [],
-    pendingJournalEvidence: () => sessionJournal?.pendingEvidence() ?? [],
     diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
-    retainedDiagnosticBatches: () => diagnosticDelivery.retainedBatches(),
-    beginPerformanceExport: () =>
-      performanceContext?.beginExport() ?? Promise.resolve(async () => {}),
-    ...(businessJournal ? { businessLogHealth: () => businessJournal.getHealth() } : {}),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
     hosts: () => localWebTransport.getHostDiagnostics(),
     obs: async () => obsAdapter?.status(),
+    obsAudioDiagnostics: async () => obsAdapter?.readAudioDeviceDiagnostics(),
     program: () => sceneController.get(),
     programContext: () => {
       const { operator, program } = projectionCoordinator.getCurrent();
@@ -2373,12 +2561,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
 
   if (options.gsiToken !== undefined) {
-    let pendingManagedBoundary:
-      | {
-          sourceId: string;
-          result: NonNullable<ReturnType<ProgramRuntime['activateManagedSource']>>;
-        }
-      | undefined;
     registerGsiIngress(app, {
       gsiToken: options.gsiToken,
       classifySource: (sourceId) => managedSource.classify(sourceId),
@@ -2432,30 +2614,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           (!sourceId && managedSource.unverifiedExternal())
         )
           programRuntime.markSourceUnverified();
-        if (pendingManagedBoundary && pendingManagedBoundary.sourceId !== sourceId)
-          pendingManagedBoundary = undefined;
-        const owner = managedSource.ownerForFirstObservation(sourceId);
-        if (owner && sourceId && observation.telemetry.map?.name && !pendingManagedBoundary) {
-          const activation = programRuntime.activateManagedSource(
-            owner.matchId,
-            sourceId,
-            observation,
-          );
-          if (activation) pendingManagedBoundary = { sourceId, result: activation };
-        }
-        const boundary =
-          pendingManagedBoundary && pendingManagedBoundary.sourceId === sourceId
-            ? pendingManagedBoundary.result.boundary
-            : undefined;
-        const activating = Boolean(sourceId && pendingManagedBoundary?.sourceId === sourceId);
-        if (
-          dispatchObservation(observation, undefined, boundary, sourceId, activating) &&
-          activating &&
-          sourceId
-        ) {
+        const owner = observation.telemetry.map?.name
+          ? managedSource.ownerForFirstObservation(sourceId)
+          : undefined;
+        if (dispatchObservation(observation, undefined, sourceId, owner) && owner && sourceId)
           managedSource.confirmFirstObservation(sourceId);
-          pendingManagedBoundary = undefined;
-        }
         options.onObservation?.(observation);
       },
       onGsiDiagnostics: (diagnostics) => {
@@ -2527,6 +2690,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 monotonicMs: performance.now(),
                 utc: new Date().toISOString(),
               };
+              outputService.beforeRuntimeMutation();
               const generationAdvance = programRuntime.advanceProgramSourceGeneration(at);
               if (
                 generationAdvance.disposition.kind !== 'accepted' ||
@@ -2535,7 +2699,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 await result.nextRecorder.finalize();
                 throw new Error('接收链路代际推进失败。');
               }
-              outputService.beforeRuntimeMutation();
               publishRuntimeCommit(generationAdvance);
               debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
               recorder = result.nextRecorder;
@@ -2633,6 +2796,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => projectionCoordinator.close());
     await closeStep(() => programCueCoordinator.close());
     await closeStep(() => outputService.stopDelivery());
+    await closeStep(() => options.rivalhubConnection?.flushDiagnostics?.());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
     await closeStep(async () => {
@@ -2665,6 +2829,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
     });
     await closeStep(() => unsubscribeObserverEvidence?.());
+    await closeStep(clearRenewalObservations);
     await closeStep(async () => {
       await sessionJournal?.close();
       if (sessionJournal) {

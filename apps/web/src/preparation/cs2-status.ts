@@ -12,6 +12,7 @@ export interface Cs2ConfigStatus {
   demoCameraRequestId?: string | null;
   observerHudPending?: boolean;
   spectatorWarning?: string | null;
+  /** May preserve quality/FPS, not geometry; Host rechecks identity and applied configuration. */
   canPreserve?: boolean;
   preserveSettings?: boolean;
   pending: boolean;

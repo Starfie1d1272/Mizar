@@ -10,8 +10,17 @@ namespace Mizar.WebInstaller {
   public sealed class FreshInstallResult {
     internal FreshInstallResult(string directory, PendingInstall pending) { Directory = directory; CoreInstalled = true; record = pending; }
     readonly PendingInstall record;
+    bool completed, completionStarted;
+    internal bool Completed { get { return completed; } }
     public string Directory { get; private set; }
-    public Task RollbackAsync() { return record.updateStage == null ? Nsis.RollbackFreshExclusive(Directory, record) : Nsis.RollbackUpdate(record); }
+    public Task RollbackAsync() { if(completionStarted) throw new InvalidOperationException("安装已提交，不能再回滚。"); return record.updateStage == null ? Nsis.RollbackFreshExclusive(Directory, record) : Nsis.RollbackUpdate(record); }
+    internal async Task CompleteAsync(Plan plan) {
+      if(completed) return;
+      // Completion closes cancellation/rollback before any backup is removed.
+      completionStarted=true;
+      if(record.updateStage!=null) await Nsis.FinalizeUpdate(plan,record);
+      completed=true;
+    }
     // Core installation is never the Core + default resource completion signal.
     public bool CoreInstalled { get; private set; }
     public bool ResourcesReady { get { return record.updateStage != null && record.coreResourcesReady; } }
@@ -78,9 +87,40 @@ namespace Mizar.WebInstaller {
       if ((record.target != target && target != record.target + ".incomplete-" + record.token) || !System.Text.RegularExpressions.Regex.IsMatch(record.token ?? "", "^[a-f0-9]{32}$")) throw new IOException("安装所有权记录无效。");
       string owner = Path.Combine(target, OwnershipName); Downloader.NoReparse(owner);
       if (new FileInfo(owner).Length != 32 || File.ReadAllText(owner) != record.token) throw new IOException("安装目录所有权无法确认，保留现场。");
+      AssertFreshInstance(record,target);
+    }
+    static void AssertFreshInstance(PendingInstall record, string target) {
+      // The original uninstaller removes our owner marker. Any surviving instance
+      // markers must still match before its asynchronous cleanup may touch files.
+      string owner=Path.Combine(target,OwnershipName); Downloader.NoReparse(owner);
+      if(File.Exists(owner) && (new FileInfo(owner).Length!=32 || File.ReadAllText(owner)!=record.token)) throw new IOException("安装目录已由其他事务接管，保留现场。");
+      string instance=Path.Combine(target,"installed.flag"), writer=Path.Combine(target,".mizar-update-owner");
+      Downloader.NoReparse(instance); Downloader.NoReparse(writer);
+      string expected="bootstrap-"+record.token;
+      if(File.Exists(writer) && (new FileInfo(writer).Length>64 || File.ReadAllText(writer)!=expected)) throw new IOException("目录已有其他安装实例，保留现场。");
+      if(File.Exists(instance) && (new FileInfo(instance).Length>256 || File.ReadAllText(instance)!="mizar.install.v1:"+expected)) throw new IOException("当前程序不属于这次安装实例，保留现场。");
       AssertOwnedRegistration(record.target);
     }
-    internal static bool RecoverPending(Plan plan, string target) {
+    static T WithWriter<T>(Func<T> action) {
+      // Only synchronous filesystem/identity boundaries hold this thread-owned
+      // mutex. NSIS and PowerShell acquire it themselves while the caller awaits.
+      using (var writer = new Mutex(false, @"Global\MizarUpdateWriter")) {
+        bool owned=false;
+        try {
+          try { owned=writer.WaitOne(0); } catch (AbandonedMutexException) { owned=true; }
+          if(!owned) throw new IOException("安装或恢复正在进行，请稍后重试。");
+          return action();
+        } finally { if(owned) writer.ReleaseMutex(); }
+      }
+    }
+    static void WithWriter(Action action) { WithWriter(()=>{action();return true;}); }
+    // Caller holds the common writer through validation, marker and pending cleanup.
+    static void CompleteFreshOwnership(PendingInstall record, string target) {
+      AssertOwnedTarget(record,target);
+      string marker=Path.Combine(target,".mizar-update-owner"); Downloader.NoReparse(marker);
+      if(File.Exists(marker)) File.Delete(marker);
+    }
+    internal static bool RecoverPending(Plan plan, string target, FileStream lease) {
       string path = PendingPath(); Downloader.NoReparse(path);
       if (!File.Exists(path)) return false;
       try {
@@ -93,45 +133,49 @@ namespace Mizar.WebInstaller {
               record.bootstrapSha256 != Hash(process.MainModule.FileName)) throw new IOException("记录不属于当前安装器。");
         }
         AssertAllowedTarget(target);
-        if (record.updateStage != null) return RecoverUpdate(plan,target,record);
-        if (record.target != target || ProcessStillActive(record.ownerPid, record.ownerStarted)) throw new IOException("旧安装操作仍活跃或目标不同。");
-        if ((new [] {"writing", "complete", "quarantined", "rollback-writing", "rollback-cleanup"}.Contains(record.stage) && (record.writerPid <= 0 || record.writerStarted <= 0)) || (record.stage == "launching" || record.stage == "rollback" || record.stage == "rollback-launching") || (record.writerPid > 0 && ProcessStillActive(record.writerPid, record.writerStarted))) throw new IOException("无法证明旧写入已结束。");
-        if (!new [] {"prepared", "writing", "complete", "quarantined", "rollback-writing", "rollback-cleanup"}.Contains(record.stage)) throw new IOException("安装阶段无效。");
-        if (record.stage == "rollback-cleanup" && !Directory.Exists(target) && !File.Exists(target)) {
-          AssertOwnedRegistration(target); AssertOwnedShortcuts(target);
-          using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
-            if (key != null) throw new IOException("回滚登记仍存在。");
-          File.Delete(path); return false;
-        }
-        if (record.stage == "prepared" && !Directory.Exists(target) && !File.Exists(target)) {
-          File.Delete(path); return false; // Owner stopped before reserving a destination; no writer was launched.
-        }
-        string retained = target + ".incomplete-" + record.token;
-        if (record.stage == "quarantined") {
-          if (Directory.Exists(target) && !Directory.Exists(retained)) {
-            AssertOwnedTarget(record, target); Directory.Move(target, retained);
+        if (record.updateStage != null) return RecoverUpdate(plan,target,record,lease);
+        return WithWriter(()=> {
+          if (record.target != target || ProcessStillActive(record.ownerPid, record.ownerStarted)) throw new IOException("旧安装操作仍活跃或目标不同。");
+          if ((new [] {"writing", "complete", "quarantined", "rollback-writing", "rollback-cleanup"}.Contains(record.stage) && (record.writerPid <= 0 || record.writerStarted <= 0)) || (record.stage == "launching" || record.stage == "rollback" || record.stage == "rollback-launching") || (record.writerPid > 0 && ProcessStillActive(record.writerPid, record.writerStarted))) throw new IOException("无法证明旧写入已结束。");
+          if (!new [] {"prepared", "writing", "complete", "quarantined", "rollback-writing", "rollback-cleanup"}.Contains(record.stage)) throw new IOException("安装阶段无效。");
+          if (record.stage == "rollback-cleanup" && !Directory.Exists(target) && !File.Exists(target)) {
+            AssertOwnedRegistration(target); AssertOwnedShortcuts(target);
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
+              if (key != null) throw new IOException("回滚登记仍存在。");
+            File.Delete(path); return false;
           }
-          AssertOwnedTarget(record, retained); // adjusted target checked below by paired token
-          if (Directory.Exists(target) || File.Exists(target)) throw new IOException("修复目标已有未知文件。");
-        } else {
-          AssertOwnedTarget(record, target);
-          if (record.stage == "prepared") {
-            if (Directory.GetFileSystemEntries(target).Length != 1) throw new IOException("未开始事务中出现未知文件。");
-            File.Delete(Path.Combine(target, OwnershipName)); Directory.Delete(target); File.Delete(path); return false;
+          if (record.stage == "prepared" && !Directory.Exists(target) && !File.Exists(target)) {
+            File.Delete(path); return false; // Owner stopped before reserving a destination; no writer was launched.
           }
-          try {
-            if (record.stage.StartsWith("rollback-", StringComparison.Ordinal)) throw new IOException("继续修复已中断的回滚。");
-            VerifiedRuntime(plan, target, false);
+          string retained = target + ".incomplete-" + record.token;
+          if (record.stage == "quarantined") {
+            if (Directory.Exists(target) && !Directory.Exists(retained)) {
+              AssertOwnedTarget(record, target); Directory.Move(target, retained);
+            }
+            AssertOwnedTarget(record, retained); // adjusted target checked below by paired token
+            if (Directory.Exists(target) || File.Exists(target)) throw new IOException("修复目标已有未知文件。");
+          } else {
+            AssertOwnedTarget(record, target);
+            if (record.stage == "prepared") {
+              if (Directory.GetFileSystemEntries(target).Length != 1) throw new IOException("未开始事务中出现未知文件。");
+              File.Delete(Path.Combine(target, OwnershipName)); Directory.Delete(target); File.Delete(path); return false;
+            }
+            try {
+              if (record.stage.StartsWith("rollback-", StringComparison.Ordinal)) throw new IOException("继续修复已中断的回滚。");
+              VerifiedRuntime(plan, target, false);
+            } catch (IOException) {
+              // Preserve every byte, including unknown files. Repair uses a fresh
+              // destination; no recursive delete and no unknown uninstaller execution.
+              if (Directory.Exists(retained) || File.Exists(retained)) throw new IOException("保留目录已存在。");
+              record.stage="quarantined"; SavePending(record, false);
+              Directory.Move(target, retained);
+              return false;
+            }
+            CompleteFreshOwnership(record,target);
             File.Delete(path); return true;
-          } catch (IOException) {
-            // Preserve every byte, including unknown files. Repair uses a fresh
-            // destination; no recursive delete and no unknown uninstaller execution.
-            if (Directory.Exists(retained) || File.Exists(retained)) throw new IOException("保留目录已存在。");
-            record.stage="quarantined"; SavePending(record, false);
-            Directory.Move(target, retained);
           }
-        }
-        return false;
+          return false;
+        });
       } catch (Exception error) {
         throw new InstallerRecoveryRequired(target, "不能安全恢复该记录；现场保持原样。" + error.Message,error);
       }
@@ -258,33 +302,38 @@ namespace Mizar.WebInstaller {
       Downloader.NoReparse(leasePath);
       using (var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
         string pending = PendingPath(); Downloader.NoReparse(pending);
-        AssertOwnedTarget(record, target);
-        record.stage = "rollback";
-        using (var process = Process.GetCurrentProcess()) { record.ownerPid=process.Id; record.ownerStarted=process.StartTime.ToUniversalTime().Ticks; }
-        SavePending(record, true);
+        WithWriter(()=> {
+          AssertOwnedTarget(record, target);
+          record.stage = "rollback";
+          using (var process = Process.GetCurrentProcess()) { record.ownerPid=process.Id; record.ownerStarted=process.StartTime.ToUniversalTime().Ticks; }
+          SavePending(record, true);
+        });
         bool finished = false;
         try {
-          await RollbackOwnedFresh(target, TimeSpan.FromMinutes(10), record);
+          await RollbackOwnedFresh(target, TimeSpan.FromMinutes(10), lease, record);
           finished = true;
         } finally { if (finished) File.Delete(pending); }
       }
     }
-    internal static async Task RollbackOwnedFresh(string target, TimeSpan deadline, PendingInstall record = null) {
-      target = Path.GetFullPath(target); Downloader.NoReparse(target); AssertOwnedRegistration(target); AssertOwnedShortcuts(target);
-      string uninstaller = Path.Combine(target, "Uninstall.exe"); Downloader.NoReparse(uninstaller);
-      if (!File.Exists(uninstaller)) {
-        if (!Directory.Exists(target)) return;
-        throw new InstallerRecoveryRequired(target, "未生成原卸载器，保留未完成安装供修复。");
-      }
+    internal static async Task RollbackOwnedFresh(string target, TimeSpan deadline, FileStream lease, PendingInstall record = null) {
+      target = Path.GetFullPath(target); Downloader.NoReparse(target);
+      if (record == null) record = Serializer().Deserialize<PendingInstall>(File.ReadAllText(PendingPath()));
+      string uninstaller = Path.Combine(target, "Uninstall.exe");
+      if(WithWriter(()=> {
+        Downloader.NoReparse(uninstaller); AssertOwnedRegistration(target); AssertOwnedShortcuts(target);
+        if(!Directory.Exists(target) && !File.Exists(target)) return true;
+        AssertOwnedTarget(record,target);
+        if(!File.Exists(uninstaller)) throw new InstallerRecoveryRequired(target, "未生成原卸载器，保留未完成安装供修复。");
+        return false;
+      })) return;
       // This is the existing uninstaller generated by the authenticated NSIS into
       // the newly owned directory. Keep it locked against replacement while running.
       byte[] originalDigest;
       using (var locked = new FileStream(uninstaller, FileMode.Open, FileAccess.Read, FileShare.Read)) {
         using (var hash = System.Security.Cryptography.SHA256.Create()) originalDigest = hash.ComputeHash(locked);
-        if (record == null) record = Serializer().Deserialize<PendingInstall>(File.ReadAllText(PendingPath()));
         record.stage="rollback-launching"; SavePending(record, false);
         using (var child = Process.Start(new ProcessStartInfo {
-          FileName = uninstaller, Arguments = "/S _?=" + target,
+          FileName = uninstaller, Arguments = "/S /MIZAROWNER=bootstrap-" + record.token + " /MIZARLEASE=" + lease.SafeFileHandle.DangerousGetHandle().ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture) + " _?=" + target,
           UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = target,
         })) {
           record.writerPid=child.Id; record.writerStarted=child.StartTime.ToUniversalTime().Ticks; record.stage="rollback-writing"; SavePending(record, false);
@@ -297,15 +346,18 @@ namespace Mizar.WebInstaller {
       // image (or its security scanner). Keep the pending marker and exclusive
       // installation lease until the same original file can be safely removed.
       var cleanupClock = Stopwatch.StartNew();
-      while (File.Exists(uninstaller)) {
+      for (;;) {
         Exception blocked = null;
         try {
-          Downloader.NoReparse(uninstaller); AssertOwnedRegistration(target);
-          using (var file = new FileStream(uninstaller, FileMode.Open, FileAccess.Read, FileShare.Read))
-          using (var hash = System.Security.Cryptography.SHA256.Create())
-            if (!hash.ComputeHash(file).SequenceEqual(originalDigest))
-              throw new InstallerRecoveryRequired(target, "原卸载文件已变化；保留现场以便修复。");
-          File.Delete(uninstaller);
+          WithWriter(()=> {
+            Downloader.NoReparse(uninstaller); AssertFreshInstance(record,target);
+            if(!File.Exists(uninstaller)) return;
+            using (var file = new FileStream(uninstaller, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var hash = System.Security.Cryptography.SHA256.Create())
+              if (!hash.ComputeHash(file).SequenceEqual(originalDigest))
+                throw new InstallerRecoveryRequired(target, "原卸载文件已变化；保留现场以便修复。");
+            File.Delete(uninstaller);
+          });
         } catch (IOException error) { blocked = error; }
           catch (UnauthorizedAccessException error) { blocked = error; }
         if (blocked == null) break;
@@ -315,19 +367,22 @@ namespace Mizar.WebInstaller {
           throw new InstallerRecoveryRequired(target, "系统尚未允许清理原卸载文件；保留现场以便修复。",blocked);
         await Task.Delay(100).ConfigureAwait(false);
       }
-      string owner = Path.Combine(target, OwnershipName);
-      if (File.Exists(owner)) {
-        AssertOwnedTarget(record, target);
-        if (Directory.GetFileSystemEntries(target).Length != 1) throw new InstallerRecoveryRequired(target, "仍有文件残留；保留所有权供重开修复。");
-        File.Delete(owner);
-      }
-      if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length == 0) Directory.Delete(target);
-      AssertOwnedRegistration(target);
-      using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
-        if (key != null) throw new InstallerRecoveryRequired(target, "安装登记未清理。");
-      // No recursive delete: NSIS alone owns payload removal; user assets remain outside.
-      if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length != 0)
-        throw new InstallerRecoveryRequired(target, "仍有文件残留，保留现场供修复。");
+      WithWriter(()=> {
+        AssertFreshInstance(record,target);
+        string owner = Path.Combine(target, OwnershipName);
+        if (File.Exists(owner)) {
+          AssertOwnedTarget(record, target);
+          if (Directory.GetFileSystemEntries(target).Length != 1) throw new InstallerRecoveryRequired(target, "仍有文件残留；保留所有权供重开修复。");
+          File.Delete(owner);
+        }
+        if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length == 0) Directory.Delete(target);
+        AssertOwnedRegistration(target);
+        using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar"))
+          if (key != null) throw new InstallerRecoveryRequired(target, "安装登记未清理。");
+        // No recursive delete: NSIS alone owns payload removal; user assets remain outside.
+        if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length != 0)
+          throw new InstallerRecoveryRequired(target, "仍有文件残留，保留现场供修复。");
+      });
     }
     // Data identity only: the fixed authenticated NSIS plan owns this Core digest.
     // Sigstore/catalog authorization remains exclusively in the installed shared SDK.
@@ -377,7 +432,8 @@ namespace Mizar.WebInstaller {
     }
     static string NativeScript() { using(var input=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("update-install.ps1")) {if(input==null) throw new IOException("缺少更新恢复入口。");using(var bytes=new MemoryStream()) {input.CopyTo(bytes);return new System.Text.UTF8Encoding(false,true).GetString(bytes.ToArray());}} }
     static string NativeScriptHash() {using(var hash=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(new System.Text.UTF8Encoding(false).GetBytes(NativeScript()))).Replace("-","").ToLowerInvariant();}
-    static async Task<string> Native(string script,string arguments,PendingInstall record=null,IProgress<string> progress=null,CancellationToken token=default(CancellationToken)) {
+    static async Task<string> Native(string script,string arguments,FileStream lease=null,PendingInstall record=null,IProgress<string> progress=null,CancellationToken token=default(CancellationToken)) {
+      if(lease!=null) arguments+=" -BootstrapLease "+lease.SafeFileHandle.DangerousGetHandle().ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
       var start=new ProcessStartInfo {FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" "+arguments+" -NoStatusWindow",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
       start.EnvironmentVariables.Remove("PSModulePath");
       using(var scriptLock=new FileStream(script,FileMode.Open,FileAccess.Read,FileShare.Read)) {
@@ -395,14 +451,15 @@ namespace Mizar.WebInstaller {
       }
     }
     internal static InstallerActionRequired NativeFailure(string arguments,string diagnostic,Exception cause) {
+      if(diagnostic.Contains("update_handoff_")) return new InstallerActionRequired("旧安装恢复入口尚未安全交接。请保留恢复资料，正常退出旧工具和轻量安装器后，使用正式完整安装包。",false,cause);
       if(diagnostic.Contains("resource_path_unsafe")) return new InstallerActionRequired("素材目录安全检查未通过。请从正常桌面环境重新打开安装器；原程序和现场已保留。",false,cause);
       if(diagnostic.Contains("update_resources_incomplete")) return new InstallerActionRequired("素材准备未完成。请查看或导出诊断，核对网络、缓存目录权限与剩余空间；也可使用正式完整离线包。",true,cause);
       if(diagnostic.Contains("update_process_remaining") || diagnostic.Contains("update_service_remaining") || diagnostic.Contains("update_host_exit_timeout")) return new InstallerActionRequired("Mizar 或原更新进程仍在运行。请正常退出后重新打开安装器。",true,cause);
       if(diagnostic.Contains("update_installer_corrupt")) return new InstallerActionRequired("安装文件验证未通过。请重新下载官方轻量安装器后重试。",false,cause);
       if(diagnostic.Contains("update_payload_") || diagnostic.Contains("update_reparse_point") || diagnostic.Contains("update_registration_snapshot_invalid")) return new InstallerActionRequired("原安装文件或恢复记录未通过验证。请保留安装目录并使用原恢复入口；需要协助时导出诊断。",false,cause);
       if(diagnostic.Contains("update_installer_cancelled")) return new InstallerActionRequired("安装程序已取消或失败。请导出诊断确认原因后重试。",true,cause);
-      string phase=arguments.Contains("-Mode Prepare") ? "更新准备" : arguments.Contains("-Mode Install") ? "更新安装" : "安装恢复";
-      return new InstallerActionRequired(phase+"未完成。请查看或导出诊断后处理；原程序与现场已保留。",false,cause);
+      string phase=arguments.Contains("-Mode Prepare") ? "更新准备" : arguments.Contains("-Mode Install") ? "更新安装" : arguments.Contains("-Mode Finalize") ? "安装清理" : "安装恢复";
+      return new InstallerActionRequired(phase+"未完成。请查看或导出诊断后处理；"+(arguments.Contains("-Mode Finalize") ? "安装状态须重新核对，剩余恢复资料已保留。" : "原程序与现场已保留。"),false,cause);
     }
     static void AssertUpdate(PendingInstall record) {
       string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","updates");
@@ -411,7 +468,7 @@ namespace Mizar.WebInstaller {
       if(Convert.ToString(binding["bundleRoot"])!=record.target || Convert.ToString(binding["stateRoot"])!=Path.GetDirectoryName(root)) throw new InstallerRecoveryRequired(record.target,"恢复计划目标不一致，保留现场。");
       if(Path.GetDirectoryName(record.updateStage)!=root || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(record.updateStage),"^install-[a-f0-9]{32}$") || Hash(Path.Combine(record.updateStage,"plan.json"))!=record.updatePlanSha256 || Hash(Path.Combine(record.updateStage,"update-install.ps1"))!=record.updateScriptSha256 || record.updateScriptSha256!=NativeScriptHash()) throw new InstallerRecoveryRequired(record.target,"更新恢复记录不完整，保留现场。");
     }
-    static bool RecoverUpdate(Plan plan,string target,PendingInstall record) {
+    static bool RecoverUpdate(Plan plan,string target,PendingInstall record,FileStream lease) {
       if(record.target!=target || ProcessStillActive(record.ownerPid,record.ownerStarted)) throw new InstallerRecoveryRequired(target,"前一次更新尚未确认结束，请关闭旧安装器后再试。");
       AssertUpdate(record);
       if(record.stage=="update-prepared" && record.writerPid==0 && record.writerStarted==0) {
@@ -425,7 +482,7 @@ namespace Mizar.WebInstaller {
       if(record.writerPid<=0 || ProcessStillActive(record.writerPid,record.writerStarted)) throw new InstallerRecoveryRequired(target,"更新启动或写入状态无法确认；请保留现场并导出诊断。");
       using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
       SavePending(record,false);
-      Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",record).GetAwaiter().GetResult();
+      Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",lease,record).GetAwaiter().GetResult();
       File.Delete(PendingPath()); return false;
     }
     internal static async Task RollbackUpdate(PendingInstall record) {
@@ -433,15 +490,26 @@ namespace Mizar.WebInstaller {
       using(var lease=new FileStream(leasePath,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
         if(File.Exists(PendingPath())) throw new InstallerRecoveryRequired(record.target,"其他安装操作尚未结束，保留现场。");
         using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
-        record.stage="update-rollback";SavePending(record,true);await RollbackUpdateOwned(record);
+        record.stage="update-rollback";SavePending(record,true);await RollbackUpdateOwned(record,lease);
       }
     }
-    static async Task RollbackUpdateOwned(PendingInstall record) {
+    static async Task RollbackUpdateOwned(PendingInstall record,FileStream lease) {
       AssertUpdate(record);
-      await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Rollback -StageRoot \""+record.updateStage+"\"",record);
+      await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Rollback -StageRoot \""+record.updateStage+"\"",lease,record);
       if(File.Exists(PendingPath())) File.Delete(PendingPath());
     }
-    static async Task<FreshInstallResult> UpdateInstalled(Plan plan,string installer,string target,IProgress<string> progress,CancellationToken token) {
+    internal static async Task FinalizeUpdate(Plan plan,PendingInstall record) {
+      string leasePath=Path.Combine(Path.GetDirectoryName(PendingPath()),"fresh-install.lock");Downloader.NoReparse(leasePath);
+      using(var lease=new FileStream(leasePath,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
+        if(File.Exists(PendingPath()) || record.planSha256!=PlanHash(plan) || record.writerPid<=0 || ProcessStillActive(record.writerPid,record.writerStarted)) throw new InstallerRecoveryRequired(record.target,"安装清理条件无法确认，保留恢复资料。");
+        AssertUpdate(record);
+        using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
+        record.stage="update-finalizing";SavePending(record,true);
+        await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Finalize -StageRoot \""+record.updateStage+"\"",lease,record);
+        File.Delete(PendingPath());
+      }
+    }
+    static async Task<FreshInstallResult> UpdateInstalled(Plan plan,string installer,string target,IProgress<string> progress,CancellationToken token,FileStream lease) {
       AssertOwnedRegistration(target);AssertOwnedShortcuts(target);
       if(Process.GetProcessesByName("Mizar").Length!=0) throw new InstallerActionRequired("请正常退出 Mizar 后重试更新。",true);
       string artifactPath=Path.Combine(target,"resources","metadata","artifact.json");Downloader.NoReparse(artifactPath);
@@ -471,15 +539,15 @@ namespace Mizar.WebInstaller {
         if(progress!=null) progress.Report("installing-core");
         using(var stopped=Process.Start(new ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
           int pid=stopped.Id;stopped.WaitForExit();
-          await Native(script,"-Mode Install -StageRoot \""+record.updateStage+"\" -HostProcessId "+pid+" -NoLaunch -KeepBackup",record,progress,token);
+          await Native(script,"-Mode Install -StageRoot \""+record.updateStage+"\" -HostProcessId "+pid+" -NoLaunch -KeepBackup",lease,record,progress,token);
         }
         VerifiedRuntime(plan,target,false);record.coreResourcesReady=core;
-        if(token.IsCancellationRequested) {await RollbackUpdateOwned(record);token.ThrowIfCancellationRequested();}
+        if(token.IsCancellationRequested) {await RollbackUpdateOwned(record,lease);token.ThrowIfCancellationRequested();}
         File.Delete(PendingPath());return new FreshInstallResult(target,record);
       } catch(Exception original) {failure=original;}
       // The installed .NET Framework compiler is C# 5: recovery awaits belong outside catch.
       if(File.Exists(PendingPath()) && record.writerPid>0 && !ProcessStillActive(record.writerPid,record.writerStarted)) {
-        try {await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",record);File.Delete(PendingPath());}
+        try {await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",lease,record);File.Delete(PendingPath());}
         catch(Exception recovery) {throw new InstallerRecoveryRequired(target,"更新及自动恢复未完成。请保留现场，关闭旧安装器后重新打开以恢复。",new AggregateException(failure,recovery));}
       }
       System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
@@ -560,22 +628,25 @@ namespace Mizar.WebInstaller {
       string leaseDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar", "bootstrap-cache");
       Downloader.NoReparse(leaseDirectory); Directory.CreateDirectory(leaseDirectory);
       string leasePath = Path.Combine(leaseDirectory, "fresh-install.lock"); Downloader.NoReparse(leasePath);
-      // File leases survive async continuations without thread-owned Mutex semantics.
+      // File leases survive async continuations. NSIS duplicates this real handle
+      // into its process so interrupted parents cannot reopen the legacy-Prepare gap.
       using (var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
           bool hadPending = File.Exists(PendingPath());
-          if (RecoverPending(plan, destination)) {
+          if (RecoverPending(plan, destination, lease)) {
             var recovered = NewPending(plan, destination, installer);
             recovered.token=File.ReadAllText(Path.Combine(destination, OwnershipName));
             return new FreshInstallResult(destination, recovered);
           }
-          if(Directory.Exists(destination) && Directory.GetFileSystemEntries(destination).Length==1 && File.Exists(Path.Combine(destination,OwnershipName))) {
-            string marker=Path.Combine(destination,OwnershipName);Downloader.NoReparse(marker);
-            AssertOwnedRegistration(destination);AssertOwnedShortcuts(destination);
-            if(Process.GetProcessesByName("Mizar").Length!=0 || new FileInfo(marker).Length!=32 || !System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(marker),"^[a-f0-9]{32}$")) throw new InstallerActionRequired("安装位置有无法确认的残留，请先备份该目录后重试。");
-            Directory.Move(destination,destination+".retained-"+Guid.NewGuid().ToString("N"));
-          }
-          if(Directory.Exists(destination) && Directory.GetFileSystemEntries(destination).Length==0 && String.Equals(destination,selectedDestination,StringComparison.OrdinalIgnoreCase)) Directory.Delete(destination,false);
-          if(Directory.Exists(destination)) return await UpdateInstalled(plan,installer,destination,progress,token);
+          WithWriter(()=> {
+            if(Directory.Exists(destination) && Directory.GetFileSystemEntries(destination).Length==1 && File.Exists(Path.Combine(destination,OwnershipName))) {
+              string marker=Path.Combine(destination,OwnershipName);Downloader.NoReparse(marker);
+              AssertOwnedRegistration(destination);AssertOwnedShortcuts(destination);
+              if(Process.GetProcessesByName("Mizar").Length!=0 || new FileInfo(marker).Length!=32 || !System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(marker),"^[a-f0-9]{32}$")) throw new InstallerActionRequired("安装位置有无法确认的残留，请先备份该目录后重试。");
+              Directory.Move(destination,destination+".retained-"+Guid.NewGuid().ToString("N"));
+            }
+            if(Directory.Exists(destination) && Directory.GetFileSystemEntries(destination).Length==0 && String.Equals(destination,selectedDestination,StringComparison.OrdinalIgnoreCase)) Directory.Delete(destination,false);
+          });
+          if(Directory.Exists(destination)) return await UpdateInstalled(plan,installer,destination,progress,token,lease);
           ValidateDestination(destination, hadPending);
           using (var locked = new FileStream(installer, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true)) {
             if (!await Downloader.MatchesStream(locked, plan, token)) throw new IOException("安装文件已变化。");
@@ -584,19 +655,22 @@ namespace Mizar.WebInstaller {
             // A crash or timeout must not release the right to launch a second NSIS.
             // This marker is cleared only after the writer and required cleanup stop.
             var record = NewPending(plan, destination, installer);
-            SavePending(record, !File.Exists(pending));
-            string reservation=destination + ".preparing-" + record.token;
-            Directory.CreateDirectory(reservation);
-            using (var ownership = new FileStream(Path.Combine(reservation, OwnershipName), FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-              byte[] value = System.Text.Encoding.ASCII.GetBytes(record.token); ownership.Write(value, 0, value.Length); ownership.Flush(true);
-            }
-            Directory.Move(reservation, destination); // Atomic refusal if an unknown destination appeared.
+            WithWriter(()=> {
+              ValidateDestination(destination, hadPending);
+              SavePending(record, !File.Exists(pending));
+              string reservation=destination + ".preparing-" + record.token;
+              Directory.CreateDirectory(reservation);
+              using (var ownership = new FileStream(Path.Combine(reservation, OwnershipName), FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                byte[] value = System.Text.Encoding.ASCII.GetBytes(record.token); ownership.Write(value, 0, value.Length); ownership.Flush(true);
+              }
+              Directory.Move(reservation, destination); // Atomic refusal if an unknown destination appeared.
+            });
             bool finished = false;
             try {
             int code;
             record.stage="launching"; SavePending(record, false);
             using (var child = Process.Start(new ProcessStartInfo {
-              FileName = installer, Arguments = "/S /MIZARUPDATE /D=" + destination,
+              FileName = installer, Arguments = "/S /MIZARUPDATE /MIZAROWNER=bootstrap-" + record.token + " /MIZARLEASE=" + lease.SafeFileHandle.DangerousGetHandle().ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture) + " /D=" + destination,
               UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(installer),
             })) {
               record.writerPid=child.Id; record.writerStarted=child.StartTime.ToUniversalTime().Ticks; record.stage="writing"; SavePending(record, false);
@@ -605,7 +679,7 @@ namespace Mizar.WebInstaller {
               catch (TimeoutException error) { throw new InstallerRecoveryRequired(destination, error.Message,error); }
             }
             if (code != 0 || token.IsCancellationRequested) {
-              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
+              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10), lease);
               finished = true;
               token.ThrowIfCancellationRequested(); throw new IOException("核心安装未完成，原卸载器已清理本次安装。");
             }
@@ -621,10 +695,11 @@ namespace Mizar.WebInstaller {
               VerifiedRuntime(plan, destination, false);
             } catch (Exception error) { validationFailure = error; }
             if (validationFailure != null) {
-              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10));
+              await RollbackOwnedFresh(destination, deadline ?? TimeSpan.FromMinutes(10), lease);
               finished = true;
               throw validationFailure;
             }
+            WithWriter(()=> { CompleteFreshOwnership(record,destination); File.Delete(pending); });
             finished = true;
             return new FreshInstallResult(destination, record);
             } finally { if (finished) File.Delete(pending); }

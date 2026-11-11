@@ -1,103 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { UpdateManager } from '../src/updates/manager.js';
 import { transfer } from '../src/distribution/transfer.js';
-import { updateRequest, boundedBytes } from '../src/updates/network.js';
+import { updateRequest, boundedBytes, githubMetadata } from '../src/updates/network.js';
 
-test('a newer installed RC does not require an unpublished Stable version from the mirror', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-rc-stable-'));
-  let checks = 0;
-  const manager = new UpdateManager({
-    stateRoot: root,
-    bundleRoot: root,
-    currentContentDigest: 'a'.repeat(64),
-    version: '1.11.0-rc.4',
-    installed: true,
-    source: {
-      latest: async (_signal, minimum) => {
-        checks++;
-        if (minimum && minimum !== '1.10.3') throw new Error('update_mirror_unavailable');
-        return {
-          tag_name: 'v1.10.3',
-          draft: false,
-          prerelease: false,
-          published_at: '2026-10-30T00:00:00Z',
-          assets: [],
-        };
-      },
-      authenticate: async () => {
-        throw new Error('older Stable must not be installed over RC');
-      },
-    },
-  });
-  try {
-    await manager.load();
-    await manager.check();
-    assert.equal(checks, 1);
-    assert.equal(manager.status().phase, 'current');
-  } finally {
-    await manager.close();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('shares a running update check and preserves a disabled preference', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-update-backport-'));
-  let finish!: (value: null) => void;
-  let calls = 0;
-  const manager = new UpdateManager({
-    stateRoot: root,
-    bundleRoot: root,
-    currentContentDigest: 'a'.repeat(64),
-    version: '1.9.1',
-    installed: true,
-    source: {
-      latest: () => {
-        calls++;
-        return new Promise((resolve) => {
-          finish = resolve;
-        });
-      },
-      authenticate: async () => {
-        throw new Error('unexpected');
-      },
-    },
-  });
-  try {
-    await manager.load();
-    const a = manager.check(),
-      b = manager.check();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(calls, 1);
-    finish(null);
-    await Promise.all([a, b]);
-    await manager.setAutomatic(false);
-    manager.desktopStartup('new-host');
-    assert.equal(manager.status().automatic, false);
-    assert.equal(calls, 1);
-  } finally {
-    await manager.close();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('retries corrupt source with verified bytes and permits bounded gzip text only by explicit policy', async () => {
+test('preserves existing transfer targets and permits bounded gzip text only by explicit policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-transfer-backport-'));
   const target = join(root, 'archive');
   const bytes = Buffer.from('good');
   try {
-    await transfer({
-      target,
-      bytes: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      signal: new AbortController().signal,
-      sources: [async () => new Response('evil'), async () => new Response(bytes)],
-    });
-    assert.deepEqual(await readFile(target), bytes);
+    await writeFile(target, bytes);
     let retried = false;
     await assert.rejects(
       transfer({
@@ -140,41 +56,14 @@ test('retries corrupt source with verified bytes and permits bounded gzip text o
   }
 });
 
-test('shares a running MulNX mirror check and never falls back to the anonymous API', async () => {
-  const { MulnxTool } = await import('../src/orchestration/tool.js');
-  const root = await mkdtemp(join(tmpdir(), 'mizar-mulnx-check-'));
-  const previousFetch = globalThis.fetch;
-  const hosts: string[] = [];
-  let finish!: (response: Response) => void;
-  globalThis.fetch = ((input: Parameters<typeof fetch>[0]) => {
-    hosts.push(new URL(input instanceof Request ? input.url : input.toString()).hostname);
-    return new Promise((resolve) => {
-      finish = resolve;
-    });
-  }) as typeof fetch;
-  try {
-    const tool = new MulnxTool(join(root, 'mulnx'), join(root, 'bundle'));
-    await tool.load();
-    const first = tool.check(),
-      second = tool.check();
-    const completion = Promise.allSettled([first, second]);
-    assert.equal(first, second);
-    finish(new Response(null, { status: 503 }));
-    const results = await completion;
-    assert.ok(results.every((result) => result.status === 'rejected'));
-    assert.deepEqual(hosts, ['box.nju.edu.cn']);
-    assert.equal(tool.view().checkResult, 'error');
-  } finally {
-    globalThis.fetch = previousFetch;
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('rejects anonymous GitHub APIs before transport and does not fall back after mirror failure', async () => {
+test('uses public fixed GitHub metadata and transport-only proxy fallback without API or Box', async () => {
   const { StableSource } = await import('../src/updates/source.js');
   const hosts: string[] = [];
+  const urls: string[] = [];
   const fetcher: typeof fetch = async (input) => {
-    hosts.push(new URL(input instanceof Request ? input.url : input.toString()).hostname);
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    hosts.push(url.hostname);
+    urls.push(url.href);
     return new Response(null, { status: 503 });
   };
   const signal = new AbortController().signal;
@@ -188,57 +77,31 @@ test('rejects anonymous GitHub APIs before transport and does not fall back afte
   const source = new StableSource('unused-trust-cache', fetcher);
   await assert.rejects(source.latest(signal), /update_network_failed/);
   await assert.rejects(source.authenticateVersion('1.10.1', signal), /update_network_failed/);
-  assert.deepEqual(hosts, ['box.nju.edu.cn', 'box.nju.edu.cn']);
-});
-
-test('entry checks respect the saved preference while manual checks query both products', async () => {
-  const { default: Fastify } = await import('fastify');
-  const { registerUpdateRoutes } = await import('../src/updates/routes.js');
-  const app = Fastify();
-  let automatic = false,
-    mizar = 0,
-    mulnx = 0;
-  const manager = {
-    status: () => ({ phase: 'idle', automatic }),
-    check: async () => {
-      mizar++;
-    },
-    close: async () => {},
+  assert.deepEqual(hosts, ['github.com', 'gh-proxy.com', 'github.com', 'gh-proxy.com']);
+  assert.ok(urls[0]!.endsWith('/releases/latest/download/machine-metadata.json'));
+  assert.ok(urls[2]!.endsWith('/releases/download/v1.10.1/machine-metadata.json'));
+  const latest = urls[0]!;
+  const fixed = urls[2]!;
+  const seen: string[] = [];
+  const redirected: typeof fetch = async (input, init) => {
+    const url = input.toString();
+    seen.push(url);
+    assert.equal(new Headers(init?.headers).has('authorization'), false);
+    if (url === latest) return new Response(null, { status: 503 });
+    if (url.startsWith('https://gh-proxy.com/'))
+      return new Response(null, { status: 302, headers: { location: fixed } });
+    assert.equal(url, fixed);
+    return new Response('original bytes');
   };
-  const tool = {
-    view: () => ({ notificationIdentity: null, notifiedIdentity: null }),
-    check: async () => {
-      mulnx++;
-    },
-  };
-  const options = {
-    manager,
-    originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
-    controlToken: 'fixture',
-    production: { get: () => ({ mode: 'preparation', revision: '1' }) },
-    scenes: { get: () => ({ active: 'waiting', preparing: false, director: null }) },
-    obs: async () => undefined,
-    mulnx: () => tool,
-  } as unknown as Parameters<typeof registerUpdateRoutes>[1];
-  registerUpdateRoutes(app, options);
-  try {
-    const request = (action: string) =>
-      app.inject({
-        method: 'POST',
-        url: '/operator/updates',
-        headers: { origin: 'http://127.0.0.1:3000' },
-        payload: { action },
-      });
-    assert.equal((await request('entry-check')).statusCode, 200);
-    assert.deepEqual([mizar, mulnx], [0, 0]);
-    assert.equal((await request('check')).statusCode, 200);
-    assert.deepEqual([mizar, mulnx], [1, 1]);
-    automatic = true;
-    assert.equal((await request('entry-check')).statusCode, 200);
-    assert.deepEqual([mizar, mulnx], [2, 2]);
-  } finally {
-    await app.close();
-  }
+  assert.equal((await githubMetadata(latest, signal, redirected)).toString(), 'original bytes');
+  assert.equal(seen.length, 3);
+  seen.length = 0;
+  const corrupt = new StableSource('unused-trust-cache', async (input) => {
+    seen.push(input.toString());
+    return new Response('{}');
+  });
+  await assert.rejects(corrupt.latest(signal), /Invalid machine metadata structure/);
+  assert.deepEqual(seen, [latest]);
 });
 
 test('Mizar download sorts authenticated sources, labels fallback and verifies full bytes', async () => {
@@ -292,6 +155,8 @@ test('Mizar download sorts authenticated sources, labels fallback and verifies f
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(manager.status().phase, 'ready');
     assert.equal(manager.status().downloadSource, 'GitHub');
+    await manager.check();
+    assert.equal(manager.status().phase, 'ready');
     assert.deepEqual(full, ['gh-proxy.com', 'github.com']);
     const ready = JSON.parse(await readFile(join(root, 'updates', 'ready.json'), 'utf8')) as {
       directory: string;

@@ -120,7 +120,7 @@ export function createCstvLiveSession<R extends CstvLiveSessionOptions['role']>(
       started = true;
       try {
         const result = await parserSession.start();
-        if (result.status !== 'ready' && result.status === 'cancelled') {
+        if (result.status === 'cancelled') {
           reportDiagnostic({ code: 'session-cancelled', status: result.status });
         }
         return result;
@@ -157,7 +157,3 @@ export function createCstvLiveSession<R extends CstvLiveSessionOptions['role']>(
 
   return liveSession;
 }
-
-export type CstvLiveSessionWithDiagnostics = CstvLiveSession & {
-  readonly diagnostics: () => CstvDiagnosticBatch;
-};

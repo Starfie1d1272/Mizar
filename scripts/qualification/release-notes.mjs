@@ -8,8 +8,7 @@ const versionPattern =
 
 // Deliberately bounded authoring format, rather than a general Markdown renderer.
 // The same parsed release feeds GitHub Markdown and the signed plain-text notes.
-export function releaseSection(changelog, version) {
-  if (!versionPattern.test(version)) throw new Error('更新日志版本无效');
+export function releaseSections(changelog) {
   const sections = new Map();
   let current;
   for (const line of changelog.replace(/\r\n?/g, '\n').split('\n')) {
@@ -22,10 +21,17 @@ export function releaseSection(changelog, version) {
       sections.set(current, []);
     } else if (current) sections.get(current).push(line);
   }
-  const markdown = sections
-    .get(version)
-    ?.join('\n')
-    .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
+  return new Map(
+    [...sections].map(([version, lines]) => [
+      version,
+      lines.join('\n').replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, ''),
+    ]),
+  );
+}
+
+export function releaseSection(changelog, version) {
+  if (!versionPattern.test(version)) throw new Error('更新日志版本无效');
+  const markdown = releaseSections(changelog).get(version);
   if (!markdown?.trim()) throw new Error(`更新日志缺少 ${version} 的正文`);
   const blocks = parseReleaseMarkdown(markdown);
   return {
@@ -100,13 +106,12 @@ export function githubReleaseNotes(notes, { sourceSha, qualificationRunId }) {
     throw new Error('发布说明构建身份无效');
   const repo = 'https://github.com/Starfie1d1272/Mizar';
   const tag = `v${notes.version}`;
-  const box = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads';
   const stable = /^\d+\.\d+\.\d+$/.test(notes.version);
   const download = `${repo}/releases/download/${tag}/Mizar-${tag}-Windows-x64`;
   const downloads = stable
-    ? `**Windows 安装器**：[Box 国内优先](${box}) · [GitHub 兜底](${download}-WebInstaller.exe)\n\n` +
+    ? `**Windows 安装器**：[GitHub 下载](${download}-WebInstaller.exe)\n\n` +
       `**完整离线 ZIP**：[GitHub 下载](${download}.zip)\n\n` +
-      `Box 同步可能稍晚，请以版本号为准。`
+      `轻量安装器自动下载所需文件；无法联网安装时可选择完整离线 ZIP。`
     : `**完整 Windows 安装器**：[GitHub 下载](${download}-Setup.exe)\n\n` +
       `**完整离线 ZIP**：[GitHub 下载](${download}.zip)\n\n` +
       `预发布版本需手动下载安装；稳定更新器和轻量安装器不提供预发布渠道。`;

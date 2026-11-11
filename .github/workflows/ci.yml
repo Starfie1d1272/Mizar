@@ -25,6 +25,7 @@ jobs:
           install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: node scripts/ci/tests.mjs product
       - run: pnpm typecheck
       - name: Start built service, open main page and stop
         env:
@@ -41,11 +42,13 @@ jobs:
           runtime: node@24
           install: false
       - run: pnpm install --frozen-lockfile
+      - run: pnpm release-notes:check
+      - run: pnpm architecture:check
       - run: pnpm format:check
       - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
       - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
       - run: pnpm exec eslint . --max-warnings=0
-      - run: node --test scripts/qualification/box-sync.test.mjs scripts/qualification/box-lanes.test.mjs scripts/qualification/build-timings.test.mjs scripts/qualification/build-downloads.test.mjs scripts/qualification/release-timings.test.mjs scripts/qualification/release-identity.test.mjs scripts/qualification/release-assets.test.mjs scripts/qualification/box-phase-contract.test.mjs scripts/qualification/box-phases.test.mjs scripts/qualification/bounded-gh.test.mjs scripts/qualification/upload-release-assets.test.mjs
+      - run: node scripts/ci/tests.mjs scripts
   native:
     name: native build / Windows
     runs-on: windows-2025
@@ -54,6 +57,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          # checkout uses blob:none for sparse checkout; keep full trees for the diff below.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitattributes
+            /.gitignore
+            /.cargo/
+            /rust-toolchain
+            /rust-toolchain.toml
+            /.github/actions/cargo-cache/
+            /.github/actions/save-cargo-cache/
+            /scripts/ci/cargo-cache-key.mjs
+            /scripts/web-installer/Bootstrap.cs
+            /scripts/web-installer/Nsis.cs
+            /apps/desktop/src-tauri/
+            /apps/web/src/workspace/desktop-commands.generated.ts
+            /apps/companion/src/match-context/lifecycle-contract.json
+            /scripts/qualification/bundle/gsi-discovery.ps1
+            /config/mizar_observer.cfg
       - name: Select native build
         id: select
         shell: bash
@@ -61,6 +82,7 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           native=true
+          installer=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
             if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri apps/web/src/workspace/desktop-commands.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
@@ -69,8 +91,27 @@ jobs:
               if [ "$result" -ne 1 ]; then echo "Cannot determine native changes" >&2; exit "$result"; fi
             fi
           fi
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- scripts/web-installer/Bootstrap.cs scripts/web-installer/Nsis.cs scripts/web-installer/build.ps1 .github/workflows/ci.yml; then
+              installer=false
+            else
+              result=$?
+              if [ "$result" -ne 1 ]; then echo "Cannot determine installer changes" >&2; exit "$result"; fi
+            fi
+          fi
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "Native build required: $native"
+      - name: Compile WebInstaller C# sources
+        if: steps.select.outputs.installer == 'true'
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+          $bootstrap = (Resolve-Path -LiteralPath 'scripts/web-installer/Bootstrap.cs').Path
+          $nsis = (Resolve-Path -LiteralPath 'scripts/web-installer/Nsis.cs').Path
+          $output = Join-Path $env:RUNNER_TEMP 'Mizar-WebInstaller-compile.exe'
+          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$output" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $bootstrap $nsis
+          if ($LASTEXITCODE -ne 0) { throw 'WebInstaller C# compilation failed' }
       - uses: ./.github/actions/cargo-cache
         id: cargo-cache
         if: steps.select.outputs.native == 'true'

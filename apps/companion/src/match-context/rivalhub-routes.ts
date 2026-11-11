@@ -12,6 +12,7 @@ import {
   type RivalHubConnection,
 } from './rivalhub-connection.js';
 import { isStandaloneLocalMatch } from './lkg-store.js';
+import type { LiveSnapshotStatus } from '../output/service.js';
 
 export function registerRivalHubConnectionRoutes(
   app: FastifyInstance,
@@ -22,6 +23,8 @@ export function registerRivalHubConnectionRoutes(
     canFetchStats?: () => boolean;
     controller: MatchContextController | null;
     currentSnapshot: () => LiveSnapshotV1 | null;
+    currentSnapshotStatus?: () => LiveSnapshotStatus;
+    retryOutputPersistence?: () => Promise<boolean>;
     setContextRecoveryHandler?: (
       handler: (event: ReliableEventV1, authority: string) => Promise<boolean>,
     ) => void;
@@ -146,6 +149,7 @@ export function registerRivalHubConnectionRoutes(
     return refreshing;
   };
   const timer = setInterval(() => {
+    maintainAutomaticSource();
     const statsBinding = linkedBinding();
     if (
       options.canFetchStats?.() &&
@@ -169,28 +173,218 @@ export function registerRivalHubConnectionRoutes(
     clearInterval(timer);
     options.connection.clearStats();
   });
-  const observedLineupReady = () => {
-    const snapshot = options.currentSnapshot();
-    return (
-      snapshot?.matchId === linkedBinding()?.context.matchId &&
-      (snapshot?.capability.identity === 'matched' ||
-        (snapshot?.capability.identity === 'degraded' &&
-          snapshot.capability.lineupMismatchOnly === true)) &&
-      snapshot.capability.telemetryFresh &&
-      snapshot.capability.contextFresh &&
-      Boolean(snapshot?.cursor.liveSessionId) &&
-      new Set(
-        snapshot?.players
-          .filter(
-            (player) =>
-              player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
-          )
-          .map((player) => player.sourcePlayerId),
-      ).size === 10
+  const currentSnapshotStatus = (): LiveSnapshotStatus =>
+    options.currentSnapshotStatus?.() ?? {
+      snapshot: options.currentSnapshot(),
+      blockedReason: null,
+    };
+  const snapshotBlock = (status: LiveSnapshotStatus) => {
+    const block = (
+      code: string,
+      message: string,
+      action:
+        | 'connection'
+        | 'match'
+        | 'roster'
+        | 'refresh'
+        | 'diagnostics'
+        | 'production'
+        | 'output-retry',
+    ) => ({ code, message, action });
+    if (status.blockedReason === 'output_unavailable')
+      return block(
+        'output_unavailable',
+        '网站同步记录无法读取。请保留原数据并导出诊断，修复后重启 Mizar。',
+        'diagnostics',
+      );
+    if (status.localPersistencePending || status.blockedReason === 'output_persistence_pending')
+      return block(
+        'output_persistence_pending',
+        '网站同步记录尚未确认，正在自动重试。本机画面不受影响；请保持 Mizar 运行，持续失败请导出诊断核对。',
+        'output-retry',
+      );
+    const snapshot = status.snapshot;
+    if (!snapshot) {
+      switch (status.blockedReason) {
+        case 'telemetry_unavailable':
+          return block(status.blockedReason, '尚未收到当前游戏数据。', 'connection');
+        case 'telemetry_stale':
+          return block(
+            status.blockedReason,
+            '当前游戏数据已中断，网站同步正在等待新数据。',
+            'connection',
+          );
+        case 'binding_missing':
+        case 'competition_missing':
+          return block(status.blockedReason, '当前没有可同步的网站比赛。', 'match');
+        case 'binding_stale':
+        case 'context_stale':
+          return block(status.blockedReason, '当前比赛资料已过期，请刷新后继续。', 'refresh');
+        case 'identity_mismatch':
+          return block(
+            status.blockedReason,
+            '游戏身份与本场比赛不符，请核对队伍与名单。',
+            'roster',
+          );
+        case 'snapshot_match_mismatch':
+          return block(
+            status.blockedReason,
+            '当前游戏数据尚未归属本场比赛，请核对比赛绑定。',
+            'match',
+          );
+        case 'output_quarantined':
+          return block(
+            status.blockedReason,
+            '实时发布已被安全隔离，请查看诊断后处理。',
+            'diagnostics',
+          );
+        case 'snapshot_projection_failed':
+          return block(status.blockedReason, '实时数据生成失败，请导出诊断。', 'diagnostics');
+        default:
+          return block(
+            status.blockedReason ?? 'snapshot_unavailable',
+            '尚无可发布的实时数据，请查看诊断。',
+            'diagnostics',
+          );
+      }
+    }
+    if (snapshot.matchId !== linkedBinding()?.context.matchId)
+      return block(
+        'snapshot_match_mismatch',
+        '当前游戏数据尚未归属本场比赛，请核对比赛绑定。',
+        'match',
+      );
+    if (!snapshot.capability.telemetryFresh)
+      return block('telemetry_stale', '当前游戏数据已中断，网站同步正在等待新数据。', 'connection');
+    if (!snapshot.capability.contextFresh)
+      return block('context_stale', '当前比赛资料已过期，请刷新后继续。', 'refresh');
+    if (
+      snapshot.capability.identity !== 'matched' &&
+      !(
+        snapshot.capability.identity === 'degraded' &&
+        snapshot.capability.lineupMismatchOnly === true
+      )
+    )
+      return block('identity_unconfirmed', '游戏身份尚未与本场确认，请核对队伍与名单。', 'roster');
+    if (!snapshot.cursor.liveSessionId)
+      return block('session_unavailable', '当前游戏会话尚未确认，请检查游戏连接。', 'connection');
+    const players = snapshot.players.filter((player) => player.lineupEvidence === 'current');
+    if (
+      players.length !== 10 ||
+      players.some((player) => !/^\d{17}$/.test(player.sourcePlayerId)) ||
+      new Set(players.map((player) => player.sourcePlayerId)).size !== 10
+    )
+      return block(
+        'lineup_incomplete',
+        '尚未收到完整的当前十人名单，请检查观战连接与名单。',
+        'roster',
+      );
+    return null;
+  };
+  const observedLineupReady = () => snapshotBlock(currentSnapshotStatus()) === null;
+  const sourceStatus = () => {
+    const status = currentSnapshotStatus();
+    // Local persistence repair does not require website authorization or publishing readiness.
+    const localRecovery =
+      status.localPersistencePending || status.blockedReason === 'output_persistence_pending';
+    const unavailable = status.blockedReason === 'output_unavailable';
+    const binding =
+      localRecovery || unavailable ? options.controller?.getActiveBinding() : linkedBinding();
+    const view = options.connection.view();
+    const blocked =
+      unavailable || (localRecovery && binding)
+        ? snapshotBlock(status)
+        : !view.paired
+          ? { code: 'not_paired', message: '尚未连接网站。', action: 'authorization' }
+          : view.sourceState === 'unavailable'
+            ? {
+                code: 'source_state_unavailable',
+                message: '本机来源记录不可用，请查看诊断后处理。',
+                action: 'diagnostics',
+              }
+            : !binding
+              ? {
+                  code: 'binding_missing',
+                  message: '请先选择并确认加载网站比赛。',
+                  action: 'match',
+                }
+              : binding.origin !== 'online'
+                ? {
+                    code: 'online_context_unconfirmed',
+                    message: '当前资料尚未与网站一致，请核对并确认网站版本。',
+                    action: 'match',
+                  }
+                : options.canClaim && !options.canClaim()
+                  ? {
+                      code: 'production_inactive',
+                      message: '进入现场后可开启本场网站同步。',
+                      action: 'production',
+                    }
+                  : snapshotBlock(status);
+    return { ...status, binding, blocked };
+  };
+  const rejectSource = (state: ReturnType<typeof sourceStatus>, operation: string) => {
+    app.log.info(
+      {
+        event: 'rivalhub_live',
+        stage: operation,
+        result: 'blocked',
+        diagnostic: {
+          reason: state.blocked?.code,
+          outputBlockedReason: state.blockedReason,
+          matchId: state.binding?.context.matchId ?? null,
+          snapshotMatchId: state.snapshot?.matchId ?? null,
+        },
+      },
+      'Website sync command blocked by current prerequisites',
+    );
+    return { error: state.blocked?.code, message: state.blocked?.message };
+  };
+  const targetMatches = (body: unknown, binding: ReturnType<typeof linkedBinding>) => {
+    const target = body as { matchId?: unknown; contextRevision?: unknown } | null;
+    return Boolean(
+      binding &&
+      target?.matchId === binding.context.matchId &&
+      target.contextRevision === binding.manifest.revision,
+    );
+  };
+  const sourceStillCurrent = (state: ReturnType<typeof sourceStatus>) => () => {
+    const next = sourceStatus();
+    const before = state.snapshot;
+    const after = next.snapshot;
+    return Boolean(
+      !next.blocked &&
+      before &&
+      after &&
+      next.binding?.manifest.revision === state.binding?.manifest.revision &&
+      next.binding?.context.matchId === state.binding?.context.matchId &&
+      after.matchId === before.matchId &&
+      after.cursor.producerInstanceId === before.cursor.producerInstanceId &&
+      after.cursor.liveSessionId === before.cursor.liveSessionId &&
+      after.cursor.programSourceGeneration === before.cursor.programSourceGeneration &&
+      after.cursor.mapEpoch === before.cursor.mapEpoch,
     );
   };
   const syncExpected = () => Boolean(linkedBinding() && (!options.canClaim || options.canClaim()));
   let sourceCommand: Promise<unknown> | null = null;
+  // Background maintenance owns the default behavior, never a UI status read.
+  const maintainAutomaticSource = () => {
+    if (sourceCommand) return;
+    const state = sourceStatus();
+    if (state.blocked || !state.binding || !state.snapshot) return;
+    sourceCommand = options.connection
+      .claimAutomatically(
+        state.snapshot,
+        state.binding.manifest.revision,
+        sourceStillCurrent(state),
+      )
+      .catch((error: unknown) => {
+        app.log.error({ err: error }, 'Automatic RivalHub source claim unconfirmed');
+      })
+      .finally(() => {
+        sourceCommand = null;
+      });
+  };
   options.setContextRecoveryHandler?.(async (event, authority) => {
     const sameExecution = () => {
       const snapshot = options.currentSnapshot();
@@ -252,7 +446,8 @@ export function registerRivalHubConnectionRoutes(
   });
   let lastSyncEvidence = '';
   app.get('/local/v1/rivalhub-connection', (_request, reply) => {
-    const snapshot = options.currentSnapshot();
+    const state = sourceStatus();
+    const snapshot = state.snapshot;
     const expected = syncExpected();
     const syncHealth = options.connection.syncHealth(
       snapshot,
@@ -264,12 +459,18 @@ export function registerRivalHubConnectionRoutes(
       syncHealth,
       linkedMatchId: linkedBinding()?.context.matchId ?? null,
       snapshotAvailable: snapshot !== null,
+      outputBlockedReason: state.blockedReason,
+      sourceBlockedCode: state.blocked?.code ?? null,
+      snapshotMatchId: snapshot?.matchId ?? null,
+      identity: snapshot?.capability.identity ?? null,
+      telemetryFresh: snapshot?.capability.telemetryFresh ?? null,
+      contextFresh: snapshot?.capability.contextFresh ?? null,
       phase: snapshot?.map.phase ?? null,
       mapId: snapshot?.map.mapId ?? null,
       liveSessionId: snapshot?.cursor.liveSessionId ?? null,
       canonicalTeams: snapshot?.capability.canonicalTeams ?? null,
       lineupComplete: snapshot?.capability.lineupComplete ?? null,
-      observedLineupReady: observedLineupReady(),
+      observedLineupReady: snapshotBlock(state) === null,
       receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
     };
     const signature = JSON.stringify(evidence);
@@ -284,29 +485,20 @@ export function registerRivalHubConnectionRoutes(
           ? options.connection.view().sourceCleanup
           : null,
       syncHealth,
-      activeMatchId: linkedBinding()?.context.matchId ?? null,
+      activeMatchId: state.binding?.context.matchId ?? null,
+      activeMatchTitle: state.binding
+        ? `${state.binding.context.entrants.a.name} 对阵 ${state.binding.context.entrants.b.name}`
+        : null,
+      contextRevision: state.binding?.manifest.revision ?? null,
       activeDeviceName:
         options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
           ? options.connection.view().activeDeviceName
           : null,
-      sourceReady: Boolean(
-        options.connection.view().sourceState === 'ready' &&
-        linkedBinding()?.origin === 'online' &&
-        (!options.canClaim || options.canClaim()) &&
-        observedLineupReady(),
-      ),
-      sourceBlockedReason:
-        options.connection.view().sourceState === 'unavailable'
-          ? '来源状态不可用，请保留原文件并恢复后重启。'
-          : !linkedBinding()
-            ? '请先选择并确认加载赛事比赛。'
-            : linkedBinding()?.origin !== 'online'
-              ? '本地 BP 尚未与网站一致，请刷新资料并确认加载网站版本后恢复推送。'
-              : options.canClaim && !options.canClaim()
-                ? '进入现场后可以成为本场数据源。'
-                : !observedLineupReady()
-                  ? '等待当前比赛的十人首发数据；就绪后自动认领，也可手动重试。'
-                  : null,
+      sourceReady: state.blocked === null,
+      sourceCommandPending: sourceCommand !== null,
+      sourceBlockedCode: state.blocked?.code ?? null,
+      sourceBlockedAction: state.blocked?.action ?? null,
+      sourceBlockedReason: state.blocked?.message ?? null,
       lastRefreshAt,
       refreshError,
       websiteUrl: linkedBinding()?.manifest.match.competition?.slug
@@ -429,29 +621,58 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(400).send({ message: '比赛资料无法使用。' });
     }
   });
-  app.post('/operator/rivalhub/source/claim', { bodyLimit: 128 }, async (request, reply) => {
+  app.post('/operator/rivalhub/output/retry', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    if (options.connection.view().sourceState === 'unavailable')
-      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
-    if (options.canClaim && !options.canClaim())
-      return reply.code(409).send({ message: '请先进入现场。' });
     const binding = options.controller?.getActiveBinding();
-    const snapshot = options.currentSnapshot();
+    if (!binding || !targetMatches(request.body, binding))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
+    if (!options.retryOutputPersistence)
+      return reply.code(503).send({ message: '本机发送记录恢复暂不可用，请查看诊断。' });
+    const unavailable = snapshotBlock(currentSnapshotStatus());
+    if (unavailable?.code === 'output_unavailable')
+      return reply.code(503).send({ error: unavailable.code, message: unavailable.message });
+    const confirmed = await options.retryOutputPersistence();
+    const current = options.controller?.getActiveBinding();
+    if (!current || !targetMatches(request.body, current))
+      return reply.code(409).send({ message: '比赛已变化，请核对当前本场的同步状态。' });
+    const status = currentSnapshotStatus();
     if (
-      !binding ||
-      binding.origin !== 'online' ||
-      !snapshot ||
-      snapshot.matchId !== binding.context.matchId ||
-      !observedLineupReady()
+      !confirmed ||
+      status.blockedReason === 'output_unavailable' ||
+      status.blockedReason === 'output_persistence_pending' ||
+      status.blockedReason === 'output_quarantined'
     )
-      return reply.code(409).send({ message: '请先在工作区加载赛事比赛。' });
+      return reply.code(409).send({
+        message:
+          status.blockedReason === 'output_persistence_pending'
+            ? '原同步记录仍未确认。请保持 Mizar 运行，修复诊断中报告的问题后重试，不要删除原数据。'
+            : '连续性记录仍无法确认，请保留原数据并导出诊断核对。',
+      });
+    return { ok: true, message: '本机同步记录已核对，网站同步仍需等待当前数据和网站接收确认。' };
+  });
+  app.post('/operator/rivalhub/source/claim', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const state = sourceStatus();
+    const { binding, snapshot } = state;
+    if (state.blocked || !binding || !snapshot)
+      return reply
+        .code(
+          ['source_state_unavailable', 'output_unavailable'].includes(state.blocked?.code ?? '')
+            ? 503
+            : 409,
+        )
+        .send(rejectSource(state, 'claim'));
+    if (!targetMatches(request.body, binding))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
     if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
       sourceCommand = options.connection.claim(
         snapshot,
         binding.manifest.revision,
         (request.body as { takeover?: boolean } | null)?.takeover === true,
+        sourceStillCurrent(state),
       );
       return await sourceCommand;
     } catch (error) {
@@ -463,16 +684,53 @@ export function registerRivalHubConnectionRoutes(
       sourceCommand = null;
     }
   });
-  app.post('/operator/rivalhub/source/retry', { bodyLimit: 64 }, async (request, reply) => {
+  app.post('/operator/rivalhub/source/resume', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    if (options.connection.view().sourceState === 'unavailable')
-      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+    const state = sourceStatus();
+    const { binding, snapshot } = state;
+    if (state.blocked || !binding || !snapshot)
+      return reply
+        .code(
+          ['source_state_unavailable', 'output_unavailable'].includes(state.blocked?.code ?? '')
+            ? 503
+            : 409,
+        )
+        .send(rejectSource(state, 'resume'));
+    const body = request.body as { matchId?: unknown; contextRevision?: unknown } | null;
+    if (
+      body?.matchId !== binding.context.matchId ||
+      body.contextRevision !== binding.manifest.revision
+    )
+      return reply.code(409).send({ message: '比赛或制作状态已变化，请核对本场后恢复网站同步。' });
+    if (sourceCommand) return reply.code(409).send({ message: '网站同步操作正在进行，请稍候。' });
+    const current = sourceStillCurrent(state);
+    try {
+      sourceCommand = options.connection.resumeSync(snapshot, binding.manifest.revision, current);
+      return await sourceCommand;
+    } catch (error) {
+      request.log.error({ err: error }, 'Website sync recovery unconfirmed');
+      return reply
+        .code(409)
+        .send({ message: error instanceof Error ? error.message : '网站同步恢复尚未确认。' });
+    } finally {
+      sourceCommand = null;
+    }
+  });
+  app.post('/operator/rivalhub/source/retry', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    const state = sourceStatus();
+    const { snapshot, binding } = state;
+    if (state.blocked || !binding || !snapshot)
+      return reply
+        .code(
+          ['source_state_unavailable', 'output_unavailable'].includes(state.blocked?.code ?? '')
+            ? 503
+            : 409,
+        )
+        .send(rejectSource(state, 'retry'));
     const view = options.connection.view();
-    const snapshot = options.currentSnapshot();
-    const binding = linkedBinding();
-    if (binding?.origin !== 'online' || snapshot?.matchId !== binding.context.matchId)
-      return reply.code(409).send({ message: '请刷新比赛资料并确认加载网站版本后重试。' });
     if (
       !syncExpected() ||
       !snapshot ||
@@ -481,12 +739,17 @@ export function registerRivalHubConnectionRoutes(
       view.activeSourceMatchId !== snapshot.matchId
     )
       return reply.code(409).send({ message: '请先明确认领本场数据源。' });
+    if (!targetMatches(request.body, binding))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
     if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     if (!options.connection.hasCurrentStart(snapshot)) {
-      if (!observedLineupReady())
-        return reply.code(409).send({ message: '请刷新比赛资料并等待当前十人首发后重试。' });
       try {
-        sourceCommand = options.connection.claim(snapshot, binding.manifest.revision, false);
+        sourceCommand = options.connection.claim(
+          snapshot,
+          binding.manifest.revision,
+          false,
+          sourceStillCurrent(state),
+        );
         await sourceCommand;
       } catch (error) {
         return reply
@@ -499,11 +762,64 @@ export function registerRivalHubConnectionRoutes(
     options.connection.retryLive();
     return { ok: true, message: '已请求重试；等待当前比赛的新数据确认网站接收。' };
   });
-  app.post('/operator/rivalhub/source/release', { bodyLimit: 64 }, async (request, reply) => {
+  app.post(
+    '/operator/rivalhub/source/retry-handoff',
+    { bodyLimit: 1024 },
+    async (request, reply) => {
+      if (!allowed(request.headers.origin))
+        return reply.code(403).send({ message: '本机页面来源无效。' });
+      if (options.connection.view().sourceState === 'unavailable')
+        return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+      if (!options.connection.view().sourceCleanup?.handoffPending)
+        return reply.code(409).send({ message: '数据源交接状态已变化，请重新检查。' });
+      if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+      try {
+        sourceCommand = options.connection.retryExitHandoffs();
+        await sourceCommand;
+        return { pending: true, message: '本地交接已记录，正在核对网站数据源释放。' };
+      } catch (error) {
+        request.log.error({ err: error }, 'RivalHub handoff retry failed');
+        return reply.code(502).send({ message: '数据源交接仍未确认，请稍后再试。' });
+      } finally {
+        sourceCommand = null;
+      }
+    },
+  );
+  app.post('/operator/rivalhub/source/retry-stop', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
     if (options.connection.view().sourceState === 'unavailable')
       return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+    const binding = linkedBinding();
+    if (!binding || !targetMatches(request.body, binding))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
+    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+    const target = {
+      matchId: binding.context.matchId,
+      contextRevision: binding.manifest.revision,
+    };
+    try {
+      sourceCommand = options.connection.retryStoppedSource(target.matchId, () =>
+        targetMatches(target, linkedBinding()),
+      );
+      await sourceCommand;
+      return { message: '原数据源停止交接已完成，请核对网站同步状态。' };
+    } catch (error) {
+      request.log.error({ err: error }, 'RivalHub stopped source retry failed');
+      if (error instanceof Error && error.message === 'rivalhub_stopped_source_changed')
+        return reply.code(409).send({ message: '原数据源已变化，请重新检查网站同步状态。' });
+      return reply.code(502).send({ message: '原数据源停止交接仍未确认，请稍后重试。' });
+    } finally {
+      sourceCommand = null;
+    }
+  });
+  app.post('/operator/rivalhub/source/release', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (options.connection.view().sourceState === 'unavailable')
+      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
+    if (!targetMatches(request.body, linkedBinding()))
+      return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
     if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
     try {
       options.connection.stopSync(linkedBinding()?.context.matchId ?? null);

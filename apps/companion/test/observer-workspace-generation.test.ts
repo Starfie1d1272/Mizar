@@ -49,6 +49,7 @@ it('maps embedded clock generations after replacing a real source manager', asyn
     const second = await assertClock();
     expect(second.generation).toBeGreaterThan(first.generation);
     expect(second.clockExecution).toBe(0);
+    await observer.stop('paused');
   } finally {
     await observer.close();
     await rm(root, { recursive: true, force: true });

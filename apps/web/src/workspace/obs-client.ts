@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ObsOutputCommand, ObsOutputsStatus, ObsCaptureDiagnostic } from '@mizar/protocol/obs';
+import type {
+  ObsOutputCommand,
+  ObsOutputPhase,
+  ObsOutputsStatus,
+  ObsCaptureDiagnostic,
+  ObsConnectionFacts,
+} from '@mizar/protocol/obs';
 import { desktopInvoke } from './client';
 
 export interface ObsStatus {
+  readonly facts?: ObsConnectionFacts;
   readonly readiness?: { readonly ready: boolean; readonly reason: string };
   readonly captureDiagnostic?: ObsCaptureDiagnostic | null;
   readonly connectionFailure?: 'authentication' | 'refused' | 'timeout' | 'unknown';
@@ -29,11 +36,27 @@ export interface ObsStatus {
   };
   readonly port: number;
   readonly sceneAligned: boolean | null;
-  readonly streaming: boolean;
-  readonly recording: boolean;
+  readonly streaming: boolean | null;
+  readonly streamPhase?: ObsOutputPhase;
+  readonly recording: boolean | null;
   readonly passwordConfigured: boolean;
   readonly video: null | { canvas: string; output: string; fps: number };
   readonly findings: readonly { code: string; message: string }[];
+}
+
+export function obsStreamLabel(status: ObsStatus | null): string {
+  if (status?.connection !== 'connected') return '待确认';
+  return (
+    {
+      idle: '未开始',
+      starting: '连接中',
+      active: '直播中',
+      stopping: '停止中',
+      reconnecting: '重连中',
+      unknown: '待确认',
+      paused: '待确认',
+    } as const
+  )[status.streamPhase ?? 'unknown'];
 }
 
 export function useObsStatus(): ObsStatus | null {
@@ -81,7 +104,7 @@ export function useObsStatus(): ObsStatus | null {
   return value;
 }
 
-type ObsAction = 'open' | 'check' | 'ensure' | 'repair' | 'configure' | 'audio-setup';
+type ObsAction = 'open' | 'check' | 'capture-recover' | 'ensure' | 'repair' | 'configure';
 let opening: Promise<unknown> | null = null;
 export function obsCommand(
   action: ObsAction,
@@ -108,9 +131,9 @@ async function performObsCommand(
     signal: AbortSignal.any([
       ...(signal ? [signal] : []),
       AbortSignal.timeout(
-        action === 'ensure'
+        action === 'ensure' || action === 'capture-recover'
           ? 40_000
-          : ['repair', 'check', 'audio-setup'].includes(action)
+          : ['repair', 'check'].includes(action)
             ? 15_000
             : 6000,
       ),
@@ -121,6 +144,7 @@ async function performObsCommand(
     executablePath?: string;
     captureDiagnostic?: ObsCaptureDiagnostic;
     findings?: ObsStatus['findings'];
+    outputs?: ObsOutputsStatus;
   } | null;
   if (!response.ok) throw new Error(value?.message ?? 'OBS 操作未完成，请检查连接与配置。');
   if (value?.findings)
@@ -178,11 +202,13 @@ export function beginObsConfiguration() {
   const ready = (async () => {
     const { documentGeneration } = await readObsConfigurationContext();
     const executablePath = await obsConfigurationTarget();
-    return desktopInvoke<boolean>('begin_obs_configuration', {
+    const result = await desktopInvoke<boolean>('begin_obs_configuration', {
       executablePath,
       sessionId,
       documentGeneration,
     });
+    window.dispatchEvent(new Event('mizar:obs-configuration-changed'));
+    return result;
   })();
   let finished: Promise<ObsConfigurationResult> | null = null;
   return {
@@ -196,9 +222,20 @@ export function beginObsConfiguration() {
   };
 }
 
+export class ObsOutputCommandError extends Error {
+  constructor(
+    message: string,
+    readonly observed: boolean,
+  ) {
+    super(message);
+  }
+}
+
 export function useObsOutputs() {
   const [outputs, setOutputs] = useState<ObsOutputsStatus | null>(null);
   const [pending, setPending] = useState<ObsOutputCommand | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   const revision = useRef(0);
   const inFlight = useRef(false);
   useEffect(() => {
@@ -213,7 +250,10 @@ export function useObsOutputs() {
         });
         if (!response.ok) throw new Error('OBS unavailable');
         const value = (await response.json()) as ObsOutputsStatus;
-        if (active && requestRevision === revision.current) setOutputs(value);
+        if (active && requestRevision === revision.current) {
+          setOutputs(value);
+          if (value.preparation !== 'cleanup_pending') setRecoveryError('');
+        }
       } catch {
         if (active && requestRevision === revision.current) setOutputs(null);
       } finally {
@@ -239,12 +279,19 @@ export function useObsOutputs() {
         signal: AbortSignal.timeout(25_000),
       });
       const result = (await response.json()) as { outputs?: ObsOutputsStatus; message?: string };
+      if (result.outputs) {
+        revision.current++;
+        setOutputs(result.outputs);
+      }
       if (!response.ok || !result.outputs)
-        throw new Error(result.message ?? 'OBS 操作未完成，请核对当前状态。');
-      revision.current++;
-      setOutputs(result.outputs);
+        throw new ObsOutputCommandError(
+          result.message ?? 'OBS 操作未完成，请核对当前状态。',
+          result.outputs?.[command.output].result?.message === result.message &&
+            result.outputs?.[command.output].phase !== 'active',
+        );
     } catch (error) {
       revision.current++;
+      if (error instanceof ObsOutputCommandError) throw error;
       setOutputs(null);
       throw new Error(
         error instanceof Error && error.name !== 'TimeoutError'
@@ -257,5 +304,40 @@ export function useObsOutputs() {
       setPending(null);
     }
   }
-  return { outputs, pending, execute };
+  async function recoverCapture() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    revision.current++;
+    setRecovering(true);
+    setRecoveryError('');
+    try {
+      const response = await fetch('/local/v1/production', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      const production = (await response.json().catch(() => null)) as {
+        revision?: unknown;
+      } | null;
+      if (!response.ok || typeof production?.revision !== 'string')
+        throw new Error('制作状态未确认，请重新检查。');
+      const result = (await obsCommand('capture-recover', {
+        expectedRevision: production.revision,
+      })) as { outputs?: ObsOutputsStatus } | null;
+      if (!result?.outputs) throw new Error('画面检查结果尚未确认，请等待 OBS 状态更新。');
+      revision.current++;
+      setOutputs(result.outputs);
+    } catch (error) {
+      revision.current++;
+      setOutputs(null);
+      setRecoveryError(
+        error instanceof Error && error.name === 'Error'
+          ? error.message
+          : '画面检查结果尚未确认，请等待 OBS 状态更新。',
+      );
+    } finally {
+      inFlight.current = false;
+      setRecovering(false);
+    }
+  }
+  return { outputs, pending, recovering, recoveryError, execute, recoverCapture };
 }

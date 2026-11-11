@@ -1,9 +1,6 @@
-import { setImmediate as yieldIO } from 'node:timers/promises';
-import { diagnosticValue } from '../support/session-journal.js';
-import { encodeLogVolumes, type ArchivedLogFile } from '../support/archive.js';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import { lstat, open, opendir } from 'node:fs/promises';
+import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import {
@@ -14,6 +11,7 @@ import {
 } from './desired-state.js';
 import { readObsNativeProcesses, type ObsNativeProcess } from './native-process.js';
 import { redactDiagnosticText } from '../updates/diagnostics.js';
+import { audioDeviceSelector, audioSourceRole, audioSourceUuid } from './audio-evidence.js';
 
 export const OBS_NATIVE_LIMITS = {
   collectionMs: 7000,
@@ -113,7 +111,10 @@ function ini(text: string): Record<string, Record<string, string>> {
 function configInt(v: string | undefined) {
   return v && /^\d{1,7}$/.test(v) ? number(Number(v)) : null;
 }
-export function projectObsSavedCollection(value: unknown) {
+export function projectObsSavedCollection(
+  value: unknown,
+  nameReference: (name: string) => string | null = () => null,
+) {
   const data = obj(value),
     sources = [...list(data.sources), ...list(data.groups)];
   const programName =
@@ -182,6 +183,27 @@ export function projectObsSavedCollection(value: unknown) {
     programSceneKnown: programName !== null,
     previewScene: sceneId(data.current_scene),
     captureSources: captures,
+    audioSources: sources
+      .filter((source) =>
+        ['wasapi_input_capture', 'wasapi_output_capture'].includes(String(source.id)),
+      )
+      .slice(0, OBS_NATIVE_LIMITS.captures)
+      .map((source) => ({
+        uuid: audioSourceUuid(source.uuid),
+        role: audioSourceRole(source.name),
+        sourceNameRef: typeof source.name === 'string' ? nameReference(source.name) : null,
+        kind: source.id,
+        selector: audioDeviceSelector(obj(source.settings).device_id),
+        explicitUseDeviceTiming: bool(obj(source.settings).use_device_timing),
+        effectiveUseDeviceTiming: null,
+        liveIdentity: 'not_proven',
+      })),
+    audioSourcesLimited:
+      (Array.isArray(data.sources) && data.sources.length > 256) ||
+      (Array.isArray(data.groups) && data.groups.length > 256) ||
+      sources.filter((source) =>
+        ['wasapi_input_capture', 'wasapi_output_capture'].includes(String(source.id)),
+      ).length > OBS_NATIVE_LIMITS.captures,
     traversalLimited: visited >= 64,
     frameHealth: 'unverified',
     hookProcessIdentity: 'not_proven',
@@ -192,7 +214,17 @@ export interface ObsNativeLogEvent {
   readonly localTime: string;
   readonly occurredAt?: string | null;
   readonly operation?: string | null;
-  readonly category: 'hook' | 'renderer' | 'window_capture';
+  readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio';
+  readonly audioLagMs?: number;
+  readonly audioBufferMs?: number;
+  /** References are local to one evidence collection, and prove name equality only. */
+  readonly audioSourceNameRef?: string | null;
+  readonly audioDeviceNameRef?: string | null;
+  readonly audioSampleRateHz?: number | null;
+  readonly audioDefaultDirection?: 'input' | 'output';
+  readonly audioIdentity?: 'historical_name_only';
+  readonly audioSource?:
+    'microphone' | 'desktop' | 'game' | 'commentary' | 'music' | 'effect' | 'other';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
   readonly source: 'mizar_capture' | 'other_capture' | null;
   readonly target: 'cs2.exe' | 'other' | null;
@@ -212,6 +244,11 @@ export interface ObsNativeLogEvent {
     | 'hook_event_open_failed'
     | 'capture_failure'
     | 'renderer_failure'
+    | 'audio_buffer_limit'
+    | 'audio_lag_restart'
+    | 'audio_device_start_failed'
+    | 'audio_window_unavailable'
+    | 'audio_timestamp_error'
     | null;
   readonly code: number | null;
   readonly codeHex: string | null;
@@ -278,9 +315,91 @@ const CAPTURE_FAILURE_OPERATIONS = [
   ['init_capture_data failed', 'capture_data_initialize', 'capture_failure'],
 ] as const;
 
-export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
+export function projectObsNativeLogLine(
+  line: string,
+  nameReference: (name: string) => string | null = () => null,
+): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
+  // This is an optional scheduling privilege, not a renderer initialization failure.
+  if (/^D3D11 GPU priority setup failed \(not admin\?\)$/i.test(stamp[2]!)) return null;
+  const lag =
+    /^Source (.+) audio is lagging \(over by (\d+(?:\.\d+)?) ms\) at max audio buffering\. Restarting source audio\.$/i.exec(
+      stamp[2]!,
+    );
+  const device = /^WASAPI: Device '(.*)' failed to start \(source: (.+)\)$/i.exec(stamp[2]!);
+  const initialized = /^WASAPI: Device '(.*)' \[(\d+) Hz\] initialized \(source: (.+)\)$/i.exec(
+    stamp[2]!,
+  );
+  const invalidated = /^Device '(.*)' invalidated\.\s+Retrying \(source: (.+)\)$/i.exec(stamp[2]!);
+  const buffer =
+    /^adding \d+ milliseconds of audio buffering, total audio buffering is now (\d+) milliseconds \(source: (.+)\)$/i.exec(
+      stamp[2]!,
+    );
+  const defaultChanged = /^WASAPI: Default (input|output) device changed$/i.exec(stamp[2]!);
+  const audioReason = lag
+    ? 'audio_lag_restart'
+    : device
+      ? 'audio_device_start_failed'
+      : /^Max audio buffering reached!$/i.test(stamp[2]!)
+        ? 'audio_buffer_limit'
+        : /^\[WASAPISource::(?:ProcessCaptureData\] window disappeared|TryInitialize\]:\[\[VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK\]\] Failed to find window)$/i.test(
+              stamp[2]!,
+            )
+          ? 'audio_window_unavailable'
+          : /^\[WASAPISource::ProcessCaptureData\] Timestamp error!$/i.test(stamp[2]!)
+            ? 'audio_timestamp_error'
+            : null;
+  const audioOperation =
+    audioReason ??
+    (initialized
+      ? 'audio_device_initialized'
+      : invalidated
+        ? 'audio_device_retry'
+        : buffer
+          ? 'audio_buffer_increased'
+          : defaultChanged
+            ? 'audio_default_device_changed'
+            : null);
+  if (audioOperation) {
+    const lagMs = lag ? Number(lag[2]) : undefined;
+    const bufferMs = buffer ? number(Number(buffer[1])) : null;
+    const source = lag?.[1] ?? device?.[2] ?? initialized?.[3] ?? invalidated?.[2] ?? buffer?.[2];
+    const deviceName = device?.[1] ?? initialized?.[1] ?? invalidated?.[1];
+    const sampleRate = initialized ? number(Number(initialized[2])) : null;
+    return {
+      localTime: stamp[1]!,
+      category: 'audio',
+      outcome: audioReason
+        ? 'failure'
+        : initialized
+          ? 'success'
+          : invalidated
+            ? 'retry'
+            : 'attempt',
+      source: null,
+      target: null,
+      operation: audioOperation,
+      reason: audioReason,
+      message: audioOperation,
+      code: null,
+      codeHex: null,
+      hookVersions: null,
+      audioIdentity: 'historical_name_only',
+      ...(source
+        ? { audioSource: audioSourceRole(source), audioSourceNameRef: nameReference(source) }
+        : {}),
+      ...(deviceName ? { audioDeviceNameRef: nameReference(deviceName) } : {}),
+      ...(initialized
+        ? { audioSampleRateHz: sampleRate !== null && sampleRate > 0 ? sampleRate : null }
+        : {}),
+      ...(defaultChanged
+        ? { audioDefaultDirection: defaultChanged[1]!.toLowerCase() as 'input' | 'output' }
+        : {}),
+      ...(bufferMs !== null ? { audioBufferMs: bufferMs } : {}),
+      ...(lagMs !== undefined && Number.isFinite(lagMs) ? { audioLagMs: lagMs } : {}),
+    };
+  }
   const capture = /^\[(game-capture|window-capture): '(.*)'\]\s+(.*)$/.exec(stamp[2]!);
   const text = capture?.[3] ?? stamp[2]!;
   const hook = capture?.[1] === 'game-capture';
@@ -478,7 +597,11 @@ interface RootEvidence {
   directoryTruncated: boolean;
   fileStatus: Record<string, 'read' | 'missing' | 'failed' | 'not_selected'>;
 }
-export interface RelatedObsLogFile extends ArchivedLogFile {
+export interface RelatedObsLogFile {
+  name: string;
+  status: string;
+  sourceBytes: number;
+  readBytes: number;
   format: 'obs-log-text/1';
   root: number;
   slot: number;
@@ -489,6 +612,7 @@ export interface RelatedObsLogFile extends ArchivedLogFile {
   sourceSnapshot: 'bytes_at_open; later appends are outside this export';
 }
 export interface ObsNativeEvidence {
+  observedAt?: string;
   collectionStatus: 'available' | 'unsupported' | 'timeout' | 'failed';
   processStatus: 'available' | 'failed' | 'unavailable';
   processes: Omit<ObsNativeProcess, 'executablePath'>[];
@@ -533,6 +657,13 @@ export interface ObsNativeOptions {
   readonly readProcesses?: () => Promise<readonly ObsNativeProcess[]>;
   readonly budgetMs?: number;
   readonly includeRelatedLogs?: boolean;
+  /** Trusted local exporter takes ownership of an already validated fixed OBS log handle. */
+  readonly retainRelatedLog?: (source: {
+    name: string;
+    handle: FileHandle;
+    bytes: number;
+    secrets: readonly string[];
+  }) => Promise<void>;
 }
 
 /** Fixed local OBS roots only. No browser paths, network, settings mutations or arbitrary profile export. */
@@ -540,6 +671,7 @@ export async function collectObsNativeEvidence(
   options: ObsNativeOptions = {},
 ): Promise<ObsNativeEvidence> {
   const evidence: ObsNativeEvidence = {
+    observedAt: new Date((options.now ?? Date.now)()).toISOString(),
     collectionStatus: 'available',
     processStatus: 'unavailable',
     processes: [],
@@ -552,6 +684,17 @@ export async function collectObsNativeEvidence(
   if ((options.platform ?? process.platform) !== 'win32')
     return { ...evidence, collectionStatus: 'unsupported' };
   const now = options.now ?? Date.now;
+  // Opaque references are never reused across exports, nor treated as source/endpoint identity.
+  // No raw name or stable digest of a possible credential enters this projection.
+  const names = new Map<string, string>();
+  const nameReference = (name: string) => {
+    if (!name || name.length > 2048 || redactDiagnosticText(name) !== name) return null;
+    if (names.has(name)) return names.get(name)!;
+    if (names.size >= 512) return null;
+    const ref = `name_${names.size + 1}`;
+    names.set(name, ref);
+    return ref;
+  };
   let cancelled = false;
   const check = () => {
     if (cancelled) throw new Error('obs_native_deadline');
@@ -715,35 +858,6 @@ export async function collectObsNativeEvidence(
       return null;
     }
   }
-  async function redactRelatedText(text: string, secrets: readonly string[]) {
-    const parts: string[] = [];
-    let start = 0,
-      sinceYield = 0;
-    while (start < text.length) {
-      const newline = text.indexOf('\n', start);
-      const end = newline < 0 ? text.length : newline + 1;
-      const line = text.slice(start, end);
-      parts.push(
-        diagnosticValue(
-          line.replace(
-            /(stream[ _-]?key["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
-            '$1[redacted]',
-          ),
-          '',
-          new Set(),
-          secrets,
-        ) as string,
-      );
-      sinceYield += end - start;
-      start = end;
-      if (sinceYield >= 65536) {
-        await yieldIO();
-        check();
-        sinceYield = 0;
-      }
-    }
-    return parts.join('');
-  }
   async function collect() {
     let relatedLogBytes = 0;
     let processes: readonly ObsNativeProcess[] = [];
@@ -824,7 +938,7 @@ export async function collectObsNativeEvidence(
       let saved: ReturnType<typeof projectObsSavedCollection> | null = null;
       if (collection) {
         try {
-          saved = projectObsSavedCollection(JSON.parse(collection.text));
+          saved = projectObsSavedCollection(JSON.parse(collection.text), nameReference);
         } catch {
           result.fileStatus.collection = 'failed';
           error(
@@ -835,6 +949,9 @@ export async function collectObsNativeEvidence(
       }
       result.config = {
         source: 'persisted_files_not_live',
+        observedAt: new Date(now()).toISOString(),
+        collectionModifiedAt: collection ? new Date(collection.mtime).toISOString() : null,
+        mixSampleRateHz: configInt(profileIni.Audio?.SampleRate),
         globalRead: !!global,
         userRead: !!user,
         profileRead: !!profile,
@@ -1029,6 +1146,13 @@ export async function collectObsNativeEvidence(
               chronologyKnown = false;
             return chronologyKnown ? clockDate.toISOString() : null;
           };
+          const relatedSources = [
+            OBS_CAPTURE_INPUT,
+            'Mizar · CS2 Game Capture',
+            ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
+            ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
+          ];
+          let relatedMarker = false;
           const scan = await read(
             root,
             ['logs', name],
@@ -1036,8 +1160,11 @@ export async function collectObsNativeEvidence(
             false,
             true,
             (line) => {
+              relatedMarker ||= relatedSources.some(
+                (source) => line.includes(`: '${source}']`) || line.includes(`: "${source}"]`),
+              );
               const occurredAt = lineDate(line);
-              const parsed = projectObsNativeLogLine(line);
+              const parsed = projectObsNativeLogLine(line, nameReference);
               const event = parsed ? { ...parsed, occurredAt } : null;
               if (!event) {
                 log.omittedLines++;
@@ -1045,7 +1172,7 @@ export async function collectObsNativeEvidence(
               }
               eventCount++;
               if (event.outcome === 'failure') {
-                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}`;
+                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}${event.audioSource ? `:${event.audioSource}` : ''}${event.audioSourceNameRef ? `:${event.audioSourceNameRef}` : ''}`;
                 if (Object.keys(log.failureCounts!).length < 64 || key in log.failureCounts!)
                   log.failureCounts![key] = (log.failureCounts![key] ?? 0) + 1;
                 failures.delete(key);
@@ -1117,7 +1244,6 @@ export async function collectObsNativeEvidence(
               status: 'not_collected',
               sourceBytes: tail.size,
               readBytes: 0,
-              volumes: [],
               format: 'obs-log-text/1',
               root: evidence.roots.length - 1,
               slot,
@@ -1139,49 +1265,46 @@ export async function collectObsNativeEvidence(
               relatedLogBytes + tail.size > OBS_NATIVE_LIMITS.relatedLogTotalBytes
             ) {
               file.status = 'source_exceeds_budget';
-            } else {
-              try {
-                const full = await read(
-                  root,
-                  ['logs', name],
-                  Math.min(
-                    OBS_NATIVE_LIMITS.relatedLogBytes,
-                    OBS_NATIVE_LIMITS.relatedLogTotalBytes - relatedLogBytes,
-                  ),
-                );
-                relatedLogBytes += full.size;
-                file.sourceBytes = full.size;
-                // A fixed Mizar capture marker ties this OBS session to the product.
-                // Saved global configuration or another software's capture is insufficient.
-                const sources = [
-                  OBS_CAPTURE_INPUT,
-                  'Mizar · CS2 Game Capture',
-                  ...PROGRAM_SCENES.map((scene) => obsBrowserInputName(scene.id)),
-                  ...PROGRAM_SCENES.map((scene) => `Mizar · ${scene.id} · Program`),
-                ];
-                const related = sources.some(
-                  (source) =>
-                    full.text.includes(`: '${source}']`) || full.text.includes(`: "${source}"]`),
-                );
-                if (!related) file.status = 'mizar_association_not_established';
-                else {
+            } else if (options.retainRelatedLog) {
+              if (!relatedMarker) file.status = 'mizar_association_not_established';
+              else {
+                let handle: FileHandle | undefined;
+                try {
+                  const path = join(root, 'logs', name);
+                  const chain = await guardedPath(path);
+                  const before = chain.at(-1)!.stat;
+                  handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+                  const actual = await handle.stat();
+                  await unchanged(chain);
+                  if (
+                    !actual.isFile() ||
+                    actual.nlink !== 1 ||
+                    actual.ino !== before.ino ||
+                    actual.dev !== before.dev ||
+                    actual.size > OBS_NATIVE_LIMITS.relatedLogBytes ||
+                    relatedLogBytes + actual.size > OBS_NATIVE_LIMITS.relatedLogTotalBytes
+                  )
+                    throw new Error('related_log_snapshot_changed');
+                  await options.retainRelatedLog({
+                    name: `root-${evidence.roots.length - 1}-${slot}`,
+                    handle,
+                    bytes: actual.size,
+                    secrets: logSecrets,
+                  });
+                  handle = undefined;
+                  relatedLogBytes += actual.size;
+                  file.sourceBytes = actual.size;
+                  file.readBytes = actual.size;
                   file.association = 'mizar_source_marker';
-                  const redacted = await redactRelatedText(full.text, logSecrets);
-                  Object.assign(file, await encodeLogVolumes(Buffer.from(redacted)));
-                  file.readBytes = full.readBytes ?? full.size;
-                  file.status =
-                    file.readBytes !== full.size
-                      ? 'incomplete_read'
-                      : redacted.endsWith('\n')
-                        ? 'read'
-                        : 'incomplete_last_line';
-                  check();
+                  file.status = 'snapshot_handle_retained';
+                } catch (error) {
+                  file.status = 'unreadable';
+                  evidence.errors.push(failure('related_log_open', error));
+                } finally {
+                  await handle?.close();
                 }
-              } catch (e) {
-                file.status = obj(e).code === 'ETOOBIG' ? 'source_exceeds_budget' : 'unreadable';
-                error('related_log_read', e);
               }
-            }
+            } else file.status = 'snapshot_export_unavailable';
           }
           result.logs.push(log);
         }

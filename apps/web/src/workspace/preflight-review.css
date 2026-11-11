@@ -1,43 +1,3 @@
-.preflight-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--mizar-layout-compact);
-}
-.preflight-intro {
-  color: var(--mizar-fg-muted);
-}
-.preflight-check {
-  padding-block: var(--mizar-layout-compact);
-  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
-}
-.preflight-check h3 {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--mizar-layout-compact);
-  margin: 0 0 var(--mizar-layout-compact);
-}
-.preflight-check h3 small {
-  color: var(--mizar-fg-muted);
-  font-weight: normal;
-}
-.preflight-check[data-attention='true'] h3 small {
-  color: var(--mizar-status-warning);
-}
-.preflight-check p {
-  margin-block: var(--mizar-layout-compact);
-}
-.preflight-check label {
-  display: flex;
-  gap: var(--mizar-layout-compact);
-  margin-block: var(--mizar-layout-compact);
-  align-items: start;
-}
-.preflight-check input {
-  flex-shrink: 0;
-}
-.preflight-check details {
-  margin-top: var(--mizar-layout-compact);
-}
 .preflight-rosters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
@@ -47,11 +7,6 @@
   padding-left: var(--mizar-layout-padding);
   overflow-wrap: anywhere;
 }
-.preflight-next {
-  padding: var(--mizar-layout-compact);
-  background: var(--mizar-bg-surface);
-}
-
 .mizar-dialog.workspace-review-dialog {
   position: fixed;
   inset: 0;
@@ -70,11 +25,6 @@
   padding: var(--mizar-layout-padding);
 }
 
-.preflight-check > small {
-  display: block;
-  margin-top: var(--mizar-layout-compact);
-  color: var(--mizar-fg-muted);
-}
 .workspace-review-native {
   position: fixed;
   inset: 0;

@@ -1,6 +1,6 @@
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 
-export const OBS_COLLECTION = 'Mizar';
+export const OBS_COLLECTION = 'Mizar 制播';
 export const OBS_CAPTURE_INPUT = '游戏画面';
 export const OBS_WIDTH = 1920;
 export const OBS_HEIGHT = 1080;

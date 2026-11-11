@@ -1,3 +1,4 @@
+import { audioDeviceCommandSchema } from './audio-device-settings.js';
 import { preparationCancelled } from '../program-scenes/preparation-cancellation.js';
 import { z } from 'zod';
 import { timingSafeEqual } from 'node:crypto';
@@ -20,9 +21,15 @@ import {
   isLoopbackBindHost,
   type LocalWebOriginPolicy,
 } from '../local-web/origin-policy.js';
-import { ObsAdapter, obsFailureKind, obsErrorEvidence } from './adapter.js';
+import {
+  ObsAdapter,
+  obsFailureKind,
+  obsErrorEvidence,
+  obsAudioModeFailureEvidence,
+} from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { ObsVideoError } from './video-transaction.js';
+import type { ObsRpc } from './reconcile.js';
 import { ObsCaptureWarmupError } from './capture-warmup.js';
 import { obsSceneName } from './desired-state.js';
 import { obsFindingReadiness } from './prepare-readiness.js';
@@ -36,9 +43,11 @@ const outputMessages: Record<ObsOutputError['code'], string> = {
   obs_output_failed: 'OBS 操作未完成，请检查 OBS 配置与版本，再查看诊断。',
   obs_output_unconfirmed: '操作结果尚未确认，请等待 OBS 重新连接后核对，勿重复操作。',
 };
+const commentaryRecoveryMessage =
+  '上次解说来源切换结果未确认，Mizar 暂不能更改解说选择。请在 OBS 核对音源和电平、录制试听，并保存诊断包排查。';
 function outputFailure(error: ObsOutputError) {
   const code = Object.hasOwn(outputMessages, error.code) ? error.code : 'obs_output_failed';
-  return { error: code, message: outputMessages[code] };
+  return { error: code, message: error.message || outputMessages[code] };
 }
 
 export function registerObsRoutes(
@@ -49,6 +58,7 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly preparationValid: (revision: unknown) => () => boolean;
+    readonly canStartOutput?: () => boolean;
     readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
     readonly musicDirector?: () => MusicDirector | undefined;
@@ -138,6 +148,40 @@ export function registerObsRoutes(
         .send({ error: 'audio_policy_unavailable', message: '控制权未恢复，请稍后核对。' });
     }
   });
+  app.post('/operator/obs/commentary-prepare', { bodyLimit: 2048 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return { ok: true, findings: await options.adapter.prepareCommentaryAudio() };
+    } catch (error) {
+      request.log.error(
+        {
+          event: 'obs',
+          stage: 'commentary_prepare',
+          diagnostic: {
+            error: obsErrorEvidence(
+              error,
+              (await options.configStore.read().catch(() => undefined))?.password,
+            ),
+          },
+        },
+        'OBS commentary preparation failed',
+      );
+      return reply.code(409).send({
+        error: 'commentary_prepare_unavailable',
+        message:
+          error instanceof Error && error.message === 'audio_video_requires_full_preparation'
+            ? '音频绑定包含画面来源或已失效，请在 OBS 核对，或停止输出后使用完整场景准备。'
+            : error instanceof Error && error.message === 'audio_bindings_required'
+              ? '旧配置尚未登记音频分路，请在声音设置中手动绑定游戏、解说和麦克风来源。'
+              : error instanceof ObsVideoError && error.code === 'video_output_active'
+                ? 'OBS 视频输出正在运行，请停止对应输出后重试。'
+                : error instanceof ObsVideoError && error.code === 'outputs_unknown'
+                  ? '无法确认 OBS 输出状态，请检查连接后重试。'
+                  : '解说音频准备未确认，请检查 OBS 来源和诊断后重试。',
+      });
+    }
+  });
   app.get('/local/v1/obs/remote-commentary', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
@@ -156,8 +200,17 @@ export function registerObsRoutes(
     if (!result.success) return reply.code(400).send({ error: 'commentary_invalid' });
     try {
       return await options.adapter.setCommentaryMode(result.data.mode, result.data.revision);
-    } catch {
-      return reply.code(409).send({ error: 'commentary_changed' });
+    } catch (error) {
+      return reply.code(409).send({
+        error: 'commentary_changed',
+        message:
+          error instanceof Error &&
+          error.message === 'commentary_binding_change_requires_independent'
+            ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
+            : error instanceof Error && error.message === 'commentary_switch_recovery_required'
+              ? commentaryRecoveryMessage
+              : '设置未确认，请核对后重试。',
+      });
     }
   });
   app.post(
@@ -189,8 +242,17 @@ export function registerObsRoutes(
           parsed.data.selectionId,
           parsed.data.revision,
         );
-      } catch {
-        return reply.code(409).send({ error: 'commentary_changed' });
+      } catch (error) {
+        return reply.code(409).send({
+          error: 'commentary_changed',
+          message:
+            error instanceof Error &&
+            error.message === 'commentary_binding_change_requires_independent'
+              ? '已有解说来源与此选择不一致，请先在 OBS 核对；桌面声音保持不变。'
+              : error instanceof Error && error.message === 'commentary_switch_recovery_required'
+                ? commentaryRecoveryMessage
+                : '设置未确认，请重新读取应用并核对。',
+        });
       }
     },
   );
@@ -208,6 +270,7 @@ export function registerObsRoutes(
           .strict(),
         z.object({ revision: z.string().uuid(), mode: z.literal('independent') }).strict(),
         z.object({ revision: z.string().uuid(), mode: z.literal('cancel') }).strict(),
+        z.object({ revision: z.string().uuid(), mode: z.literal('recover') }).strict(),
       ])
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'audio_mode_invalid' });
@@ -219,17 +282,33 @@ export function registerObsRoutes(
       const music = options.musicDirector?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
-        command.mode === 'independent'
-          ? options.adapter.requestIndependentMode(command.revision, music)
-          : options.adapter.switchAudioMode(
-              command.revision,
-              'desktop',
-              command.selectionId,
-              music,
-            ),
+        command.mode === 'recover'
+          ? options.adapter.recoverAudioMode(music, undefined, command.revision).then(() => ({}))
+          : command.mode === 'independent'
+            ? options.adapter.requestIndependentMode(command.revision, music)
+            : options.adapter.switchAudioMode(
+                command.revision,
+                'desktop',
+                command.selectionId,
+                music,
+              ),
       );
       return { ok: true, ...result };
     } catch (error) {
+      try {
+        // Request summaries are separate from detailed connection evidence and
+        // contain only safe classifications, including for pre-connection failures.
+        request.log.error(
+          {
+            event: 'obs',
+            stage: 'audio_mode_request',
+            diagnostic: { mode: parsed.data.mode, summary: obsAudioModeFailureEvidence(error) },
+          },
+          'OBS audio mode request failed',
+        );
+      } catch {
+        // Diagnostic failures must not replace the operation's result.
+      }
       return reply.code(409).send({
         error:
           error instanceof Error && error.message === 'audio_desktop_choice_required'
@@ -237,7 +316,7 @@ export function registerObsRoutes(
             : 'audio_mode_unavailable',
         message:
           error instanceof Error && error.message === 'audio_desktop_choice_required'
-            ? '检测到多个桌面播放设备，请选择要采集的设备。'
+            ? '检测到多个 OBS 桌面音频来源，请选择来源并在 OBS 核对其播放设备。'
             : error instanceof Error && error.message === 'audio_commentary_unavailable'
               ? '解说来源尚未就绪，桌面混音仍可用。'
               : error instanceof Error &&
@@ -249,7 +328,63 @@ export function registerObsRoutes(
                   : error instanceof Error &&
                       error.message.startsWith('audio_global_path_unresolved:')
                     ? `OBS 全局音频来源“${error.message.slice('audio_global_path_unresolved:'.length)}”与目标重复，请在 OBS 停用该来源后重试。`
-                    : '切换未确认，请检查 OBS 音频后重试。',
+                    : parsed.data.mode === 'recover'
+                      ? '音频恢复尚未确认。请核对 OBS 连接和当前场景集合后重试；原恢复记录已保留。'
+                      : '切换结果未确认，请立即在 OBS 核对直播电平和当前音源；如无声，请手动恢复可用来源，勿反复切换。',
+      });
+    }
+  });
+  app.post('/operator/obs/audio-meter', { bodyLimit: 1024 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return await options.adapter.sampleAudioMeters(
+        () => !request.raw.aborted && !reply.raw.destroyed,
+      );
+    } catch {
+      return reply.code(409).send({
+        error: 'audio_meter_unavailable',
+        message: '电平检查未完成。请核对 OBS 连接与专用集合后重新检查。',
+      });
+    }
+  });
+  app.get('/local/v1/obs/audio-devices', async (request, reply) => {
+    if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.adapter.readAudioDevices());
+    } catch {
+      return reply.code(409).send({
+        error: 'audio_devices_unavailable',
+        message: '设备设置未确认，请重新读取后核对。',
+      });
+    }
+  });
+  app.post('/operator/obs/audio-device', { bodyLimit: 4096 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const parsed = audioDeviceCommandSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'audio_device_invalid' });
+    try {
+      await options.adapter.setAudioDevice(parsed.data);
+      return { ok: true };
+    } catch (error) {
+      const code =
+        error instanceof ObsVideoError ? error.code : error instanceof Error ? error.message : '';
+      const messages: Record<string, string> = {
+        audio_device_monitor_conflict:
+          '新设备会改变当前监听回采路径。请先在 OBS 中核对相关音源的监听与节目输出，再更换设备。',
+        audio_device_monitor_unknown: '无法确认当前监听回采路径，请在 OBS 中核对后重试。',
+        audio_mode_pending: '请先完成或恢复当前音频切换，再更换设备。',
+        audio_devices_changed: '设备或音频配置已变化，请重新读取设备后选择。',
+        audio_devices_prepare_required: '固定音源身份未确认，请先修复场景与音频，再重新读取设备。',
+        video_output_active: 'OBS 正在输出，请停止直播与录像后再更换设备。',
+      };
+      const known = Object.hasOwn(messages, code);
+      return reply.code(409).send({
+        error: known ? code : 'audio_device_unconfirmed',
+        message: known ? messages[code] : '设备设置未确认，请重新读取后核对。',
       });
     }
   });
@@ -271,10 +406,13 @@ export function registerObsRoutes(
     try {
       await options.adapter.bindAudio(parsed.data);
       return { ok: true };
-    } catch {
+    } catch (error) {
       return reply.code(409).send({
         error: 'audio_binding_changed',
-        message: '绑定结果未确认，请刷新 OBS 来源后核对。',
+        message:
+          error instanceof Error && error.message === 'commentary_switch_recovery_required'
+            ? commentaryRecoveryMessage
+            : '绑定结果未确认，请刷新 OBS 来源后核对。',
       });
     }
   });
@@ -287,10 +425,27 @@ export function registerObsRoutes(
     const parsed = obsOutputCommandSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: 'obs_output_invalid', message: 'OBS 操作格式有误。' });
+    if (parsed.data.action === 'start' && options.canStartOutput?.() === false)
+      return reply.code(409).send({
+        error: 'obs_output_busy',
+        message: '更新正在退出，请等待更新完成或取消后开始 OBS 输出。',
+      });
     try {
-      return { ok: true, outputs: await options.adapter.outputCommand(parsed.data) };
+      return {
+        ok: true,
+        outputs: await options.adapter.outputCommand(
+          parsed.data,
+          () =>
+            !request.raw.aborted &&
+            !reply.raw.destroyed &&
+            (parsed.data.action !== 'start' || options.canStartOutput?.() !== false),
+        ),
+      };
     } catch (error) {
-      if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
+      if (error instanceof ObsOutputError)
+        return reply
+          .code(409)
+          .send({ ...outputFailure(error), outputs: await options.adapter.outputStatus() });
       return reply
         .code(409)
         .send({ error: 'obs_output_failed', message: 'OBS 操作未完成，请重新核对状态。' });
@@ -303,7 +458,15 @@ export function registerObsRoutes(
   );
   app.get('/local/v1/obs', async (_request, reply) => {
     const diagnostic = allowedRead(_request) ? captureDiagnostic() : Promise.resolve(null);
-    const status = await options.adapter.status();
+    const status = await options.adapter.status().catch((error: unknown) => {
+      if (!(error instanceof ObsVideoError) || error.code !== 'obs_observation_changed')
+        throw error;
+      return null;
+    });
+    if (!status)
+      return reply
+        .code(409)
+        .send({ error: 'obs_observation_changed', message: 'OBS 状态已变化，请重新检查。' });
     return reply.header('cache-control', 'no-store').send({
       ...status,
       readiness: obsReadiness(status, options.activeScene()),
@@ -322,7 +485,7 @@ export function registerObsRoutes(
       .object({
         expectedRevision: z.unknown(),
         since: z.number().finite(),
-        transactionId: z.string().uuid(),
+        transactionId: z.string().uuid().nullable(),
       })
       .strict()
       .safeParse(request.body);
@@ -331,11 +494,18 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'capture_check_invalid' });
     const valid = options.preparationValid(body.data.expectedRevision);
     if (!valid()) return reply.code(409).send({ error: 'preparation_changed' });
-    if (!(await options.adapter.captureWarmupMatches(body.data.transactionId, body.data.since)))
+    if (
+      body.data.transactionId !== null &&
+      !(await options.adapter.captureWarmupMatches(body.data.transactionId, body.data.since))
+    )
       return reply
         .code(409)
-        .send({ error: 'capture_warmup_changed', message: 'OBS 临时采集已失效，请重试。' });
-    const diagnostic = await captureDiagnostic(true, body.data.since);
+        .send({ error: 'capture_warmup_changed', message: 'OBS 游戏画面检查已中断，请重新检查。' });
+    // A read-only recheck has no new warmup boundary: retain current-session failures.
+    const diagnostic = await captureDiagnostic(
+      true,
+      body.data.transactionId === null ? 0 : body.data.since,
+    );
     try {
       const status = await options.adapter.captureInitialization(
         diagnostic,
@@ -382,17 +552,15 @@ export function registerObsRoutes(
         }
         const parsed = z.string().uuid().safeParse(body?.preparationId);
         if (!parsed.success) return reply.code(400).send({ error: 'capture_warmup_invalid' });
-        if (!valid() || !connected())
+        const current = () => valid() && connected() && !preparationCancelled(parsed.data);
+        if (!current())
           return reply
             .code(409)
             .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
-        const result = await options.adapter.beginCaptureWarmup(
-          parsed.data,
-          () => valid() && connected(),
-        );
-        id = result.transactionId;
-        if (!valid() || !connected()) {
-          await options.adapter.releaseCaptureWarmup(id);
+        const result = await options.adapter.beginCaptureWarmup(parsed.data, current);
+        if ('transactionId' in result && result.transactionId) id = result.transactionId;
+        if (!current()) {
+          if (id) await options.adapter.releaseCaptureWarmup(id);
           return reply
             .code(409)
             .send({ error: 'preparation_changed', message: '制作状态已变化，请重试。' });
@@ -420,7 +588,7 @@ export function registerObsRoutes(
         );
         return reply.code(409).send({
           error: 'capture_warmup_failed',
-          message: 'OBS 临时采集未确认，请检查状态后重试。',
+          message: 'OBS 游戏画面检查未完成，请重新检查；仍失败时导出诊断。',
         });
       }
     });
@@ -514,6 +682,7 @@ export function registerObsRoutes(
   }
   for (const action of [
     'check',
+    'capture-recover',
     'ensure',
     'audio-setup',
     'repair',
@@ -524,7 +693,7 @@ export function registerObsRoutes(
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
-        if (action === 'ensure' || action === 'repair' || action === 'check') {
+        if (['ensure', 'repair', 'check', 'capture-recover'].includes(action)) {
           request.log.info(
             { event: 'obs', stage: 'obs_preparation_start', action },
             'OBS preparation started',
@@ -545,16 +714,30 @@ export function registerObsRoutes(
           const connected = () => !request.raw.aborted && !reply.raw.destroyed;
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
+          const prepareMusic = options.musicDirector
+            ? async (current: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => {
+                await options
+                  .musicDirector?.()
+                  ?.prepare(() => current() && valid() && connected(), guard);
+              }
+            : undefined;
           const findings =
             action === 'ensure'
               ? await options.adapter.ensure(
                   options.activeScene,
                   () => valid() && connected(),
                   entryId?.success ? { id: entryId.data, valid } : undefined,
+                  prepareMusic,
                 )
               : action === 'repair'
-                ? await options.adapter.repair(options.activeScene, () => valid() && connected())
-                : await options.adapter.check();
+                ? await options.adapter.repair(
+                    options.activeScene,
+                    () => valid() && connected(),
+                    prepareMusic,
+                  )
+                : action === 'capture-recover'
+                  ? await options.adapter.recoverCaptureWarmup(() => valid() && connected())
+                  : await options.adapter.check();
           request.log.info(
             {
               event: 'obs',
@@ -573,11 +756,16 @@ export function registerObsRoutes(
             if (!valid() || !connected())
               return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
           }
+          const outputs =
+            action === 'capture-recover' ? await options.adapter.outputStatus() : undefined;
+          if (action === 'capture-recover' && (!valid() || !connected()))
+            return reply.code(409).send({ message: '制作状态已变化，请重新检查。' });
           return {
             ok: true,
             findings,
             ...readiness,
             captureDiagnostic: diagnostic,
+            ...(outputs ? { outputs } : {}),
           };
         }
         if (action === 'audio-setup') {
@@ -593,7 +781,7 @@ export function registerObsRoutes(
         }
       } catch (error: unknown) {
         if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
-        if (error instanceof ObsVideoError)
+        if (error instanceof ObsVideoError || error instanceof ObsCaptureWarmupError)
           return reply.code(409).send({ error: error.code, message: error.message });
         if (error instanceof ObsActionError)
           return reply.code(409).send({

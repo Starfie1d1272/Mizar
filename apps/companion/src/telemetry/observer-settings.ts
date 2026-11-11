@@ -16,19 +16,27 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
+type SettingsChange = 'scope' | 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
-  mapConnection: { id: string; mode: 'connect' | 'seamless'; nextMap: boolean } | undefined;
+  mapConnection:
+    { id: string; mode: 'connect' | 'seamless' | 'register-current'; nextMap: boolean } | undefined;
+  private scope: string | undefined;
+  private connectionRequestedAt: number | null = null;
   waitingForMap = false;
+  receiverPaused = false;
+  receiverRevision = 0;
   revision = randomUUID();
   private listeners = new Set<(kind: SettingsChange) => void>();
   private writing = Promise.resolve();
   constructor(private readonly path?: string) {}
+  connectIntentDirectory(): string | undefined {
+    return this.path ? `${this.path}.connect-intents` : undefined;
+  }
   async load() {
     if (!this.path) return;
     try {
@@ -53,13 +61,16 @@ export class ObserverSettingsStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
-  view() {
+  view(isObserving = false) {
     return {
       settings: this.settings,
+      connectionRequestedAt: this.connectionRequestedAt,
       gameAutomation: this.gameAutomation,
       revision: this.revision,
       mapConnection: this.mapConnection ?? null,
       waitingForMap: this.waitingForMap,
+      receiverPaused: this.receiverPaused,
+      suggestedConnectionMode: isObserving ? 'register-current' : 'connect',
       connection: this.connection
         ? {
             earlyEndpoint: this.connection.earlyEndpoint,
@@ -87,6 +98,7 @@ export class ObserverSettingsStore {
             : undefined;
 
       this.settings = value;
+      if (kind === 'enabled' && value.enabled) this.setReceiverPaused(false);
       if (nameChanged) this.changed('name');
       if (kind) this.changed(kind);
     });
@@ -108,16 +120,18 @@ export class ObserverSettingsStore {
     const connection = observerConnectionSchema.parse(value);
     if (JSON.stringify(this.connection) === JSON.stringify(connection)) return;
     this.connection = connection;
+    this.setReceiverPaused(false);
     this.mapConnection = undefined;
     this.waitingForMap = false;
     this.changed('connection');
   }
   setMapConnection(
     id: string,
-    mode: 'connect' | 'seamless',
+    mode: 'connect' | 'seamless' | 'register-current',
     value?: ObserverConnection,
     nextMap = false,
   ) {
+    if (mode === 'register-current' && nextMap) throw new Error('map_intent_conflict');
     const connection = value ? observerConnectionSchema.parse(value) : this.connection;
     if (!connection) throw new Error('connection_required');
     if (this.mapConnection?.id === id) {
@@ -132,21 +146,42 @@ export class ObserverSettingsStore {
     if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
       throw new Error('seamless_connection_changed');
     this.connection = connection;
+    this.setReceiverPaused(false);
+    this.connectionRequestedAt = Date.now();
     this.mapConnection = { id, mode, nextMap: nextMap || mode === 'seamless' };
     this.changed('map');
+  }
+  /** Scope changes invalidate drafts; migration never issues another game connect. */
+  observeScope(scope: string) {
+    if (scope === this.scope) return;
+    const previous = this.scope;
+    this.scope = scope;
+    if (previous === undefined) return;
+    if (this.mapConnection?.nextMap) this.mapConnection = { ...this.mapConnection, nextMap: false };
+    this.waitingForMap = false;
+    this.changed('scope');
   }
   clearConnection() {
     if (!this.connection) return;
     this.connection = undefined;
+    this.connectionRequestedAt = null;
     this.mapConnection = undefined;
     this.waitingForMap = false;
+    this.setReceiverPaused(false);
     this.changed('connection');
   }
   endProduction() {
     if (!this.mapConnection && !this.waitingForMap) return;
     this.mapConnection = undefined;
     this.waitingForMap = false;
+    this.setReceiverPaused(true);
     this.changed('connection');
+  }
+  /** Receiver control does not invalidate a pending or accepted game connection. */
+  setReceiverPaused(paused: boolean) {
+    if (this.receiverPaused === paused) return;
+    this.receiverPaused = paused;
+    this.receiverRevision++;
   }
   subscribe(listener: (kind: SettingsChange) => void) {
     this.listeners.add(listener);
@@ -166,12 +201,23 @@ export function registerObserverSettings(
   app: FastifyInstance,
   store: ObserverSettingsStore,
   policy: LocalWebOriginPolicy,
+  canRegisterCurrent: () => boolean = () => true,
+  isObserving: () => boolean = () => false,
+  recalibrateObserver: () => boolean = () => false,
 ) {
+  let calibrationRevision = randomUUID();
+  const view = () => ({ ...store.view(isObserving()), calibrationRevision });
   app.get('/local/v1/observer-assist', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(store.view()),
+    reply.header('cache-control', 'no-store').send(view()),
   );
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
+    z.strictObject({
+      action: z.literal('recalibrate'),
+      calibrationRevision: z.uuid(),
+      id: z.uuid(),
+      expectedRevision: z.uuid(),
+    }),
     z.strictObject({
       action: z.literal('connection'),
       connection: observerConnectionSchema,
@@ -180,13 +226,18 @@ export function registerObserverSettings(
     z.strictObject({
       action: z.literal('map-connection'),
       id: z.uuid(),
-      mode: z.enum(['connect', 'seamless']),
+      mode: z.enum(['connect', 'seamless', 'register-current']),
       nextMap: z.boolean().default(false),
       connection: observerConnectionSchema.optional(),
       expectedRevision: z.uuid(),
     }),
     z.strictObject({ action: z.literal('configure-game'), settings: gameAutomationSettingsSchema }),
     z.strictObject({ action: z.literal('copy-connection'), expectedRevision: z.uuid() }),
+    z.strictObject({
+      action: z.literal('resume-receiver'),
+      id: z.uuid(),
+      expectedRevision: z.uuid(),
+    }),
   ]);
   app.post('/operator/observer-assist', { bodyLimit: 4096 }, async (request, reply) => {
     if (policy.mode !== 'loopback' || !checkLocalWebOrigin(policy, request.headers.origin).allowed)
@@ -194,6 +245,23 @@ export function registerObserverSettings(
     const parsed = schema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ message: '请核对时间设置、GOTV 地址和密码格式。' });
+    if (parsed.data.action === 'recalibrate') {
+      if (
+        parsed.data.calibrationRevision !== calibrationRevision ||
+        parsed.data.expectedRevision !== store.revision ||
+        parsed.data.id !== store.mapConnection?.id ||
+        !canRegisterCurrent() ||
+        !store.settings.enabled ||
+        store.receiverPaused ||
+        store.waitingForMap ||
+        !recalibrateObserver()
+      )
+        return reply
+          .code(409)
+          .send({ message: '当前无法重新校准，请确认本图连接和提前提示接收状态。' });
+      calibrationRevision = randomUUID();
+      return reply.header('cache-control', 'no-store').send(view());
+    }
     if (parsed.data.action === 'copy-connection') {
       const connection = store.configured();
       if (parsed.data.expectedRevision !== store.revision || !connection)
@@ -202,7 +270,15 @@ export function registerObserverSettings(
         .header('cache-control', 'no-store')
         .send({ command: formatObserverConnection(connection) });
     }
-    if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
+    if (parsed.data.action === 'resume-receiver') {
+      if (
+        parsed.data.expectedRevision !== store.revision ||
+        parsed.data.id !== store.mapConnection?.id ||
+        !canRegisterCurrent()
+      )
+        return reply.code(409).send({ message: '本图连接已变化，请重新打开后确认。' });
+      store.setReceiverPaused(false);
+    } else if (parsed.data.action === 'configure') await store.configure(parsed.data.settings);
     else if (parsed.data.action === 'configure-game')
       await store.configureGame(parsed.data.settings);
     else {
@@ -211,6 +287,8 @@ export function registerObserverSettings(
           .code(409)
           .send({ message: '本场连接或比赛已变化，请重新打开本场连接后确认。' });
       if (parsed.data.action === 'map-connection') {
+        if (parsed.data.mode === 'register-current' && !canRegisterCurrent())
+          return reply.code(409).send({ message: '请在当前制作工作台登记观战连接。' });
         try {
           store.setMapConnection(
             parsed.data.id,
@@ -218,6 +296,8 @@ export function registerObserverSettings(
             parsed.data.connection,
             parsed.data.nextMap,
           );
+          if (parsed.data.mode === 'register-current' && !store.settings.enabled)
+            await store.configure({ ...store.settings, enabled: true });
         } catch (error) {
           if (error instanceof Error && error.message === 'map_intent_conflict')
             return reply.code(409).send({ message: '本图连接意图已变化，请重新确认。' });
@@ -225,6 +305,6 @@ export function registerObserverSettings(
         }
       } else store.setConnection(parsed.data.connection);
     }
-    return store.view();
+    return store.view(isObserving());
   });
 }

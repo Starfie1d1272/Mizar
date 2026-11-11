@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
-import { ensureObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
+import { OBS_COLLECTION } from '../src/obs/desired-state.js';
+import { checkObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
 import {
   createProduction,
   registerProductionRoutes,
@@ -10,7 +11,7 @@ import {
 } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
-test('passive OBS preparation never takes another collection, including while output is active', async () => {
+test('OBS inspection never takes another collection', async () => {
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: (type) => {
@@ -18,26 +19,15 @@ test('passive OBS preparation never takes another collection, including while ou
       if (type === 'GetSceneCollectionList')
         return Promise.resolve({
           currentSceneCollectionName: 'Personal',
-          sceneCollections: ['Personal', 'Mizar'],
-        });
-      if (type === 'GetOutputList')
-        return Promise.resolve({
-          outputs: [
-            {
-              outputName: 'Virtual camera',
-              outputActive: true,
-              outputFlags: { OBS_OUTPUT_VIDEO: true },
-            },
-          ],
+          sceneCollections: ['Personal', OBS_COLLECTION],
         });
       throw new Error(`Unexpected OBS request: ${type}`);
     },
   };
   assert.equal(
-    (await ensureObsConfiguration(obs, 'http://127.0.0.1:3000'))[0]?.code,
+    (await checkObsConfiguration(obs, 'http://127.0.0.1:3000'))[0]?.code,
     'collection_inactive',
   );
-  await assert.rejects(ensureObsConfiguration(obs, 'http://127.0.0.1:3000', () => 'waiting', true));
   assert.ok(calls.every((type) => type.startsWith('Get')));
 });
 
@@ -66,7 +56,6 @@ test('browser recovery is granted after entering and revoked on exit intent', as
       pauseAutomatic: () => {},
       resumeAutomatic: () => {},
       startCommentaryRecovery: () => {},
-      hasCurrentPreparation: () => false,
       settleAutomatic: async () => {},
       restoreVideo: async () => {},
       startBrowserRecovery: (sessionValid: () => boolean) => {

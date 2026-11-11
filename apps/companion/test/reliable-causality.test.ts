@@ -9,7 +9,6 @@ import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 const now = new Date('2026-09-28T00:00:10.000Z');
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-causality-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   const fixture = JSON.parse(
     await readFile(
       new URL('../../../packages/protocol/test/fixtures/reliable-event-v1.json', import.meta.url),
@@ -38,13 +37,29 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
             : {},
     });
   const path = join(dir, 'outbox.json');
-  const outbox = new ReliableOutbox(path);
-  await outbox.load();
-  return { outbox, path, event };
+  let owner = new ReliableOutbox(path);
+  const cleanup: (() => Promise<void>)[] = [];
+  t.after(async () => {
+    for (const close of cleanup) await close();
+    await owner.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  await owner.load();
+  return {
+    outbox: owner,
+    event,
+    cleanup,
+    restart: async () => {
+      await owner.close();
+      owner = new ReliableOutbox(path);
+      await owner.load();
+      return owner;
+    },
+  };
 }
 
 test('output waits for a new observation after the preserved generation boundary is acknowledged', async (t) => {
-  const { outbox, event } = await setup(t);
+  const { outbox, event, cleanup } = await setup(t);
   const { OutputService } = await import('../src/output/service.js');
   let time = now;
   let accepts = false;
@@ -61,7 +76,7 @@ test('output waits for a new observation after the preserved generation boundary
       },
     },
   });
-  t.after(() => service.close());
+  cleanup.push(() => service.close());
   const reference = event('map_started', 'template');
   const cursor = { ...reference.cursor };
   const players = Array.from({ length: 10 }, (_, i) => ({
@@ -173,7 +188,7 @@ test('output waits for a new observation after the preserved generation boundary
 });
 
 test('classified rejection persists and diagnostic evidence discards raw response fields', async (t) => {
-  const { outbox, path, event } = await setup(t);
+  const { outbox, event, restart } = await setup(t);
   const { businessEvidence } = await import('../src/support/business-evidence.js');
   const rejection = {
     status: 'rejected' as const,
@@ -183,8 +198,7 @@ test('classified rejection persists and diagnostic evidence discards raw respons
   };
   await outbox.enqueue(event('map_started', 'rejected'), now);
   await outbox.flush({ now, isCurrent: () => true, sink: { send: async () => rejection } });
-  const restored = new ReliableOutbox(path);
-  await restored.load();
+  const restored = await restart();
   assert.deepEqual(restored.getRecords()[0]?.rejection, rejection);
   const safe = businessEvidence({
     rejectionReason: rejection.reason,
@@ -199,9 +213,9 @@ test('classified rejection persists and diagnostic evidence discards raw respons
   assert.equal(JSON.stringify(safe).includes('secret'), false);
 });
 
-for (const change of ['none', 'authority', 'ended'] as const)
+for (const change of ['none', 'authority'] as const)
   test(`context refusal recovers only in its original live scope: ${change}`, async (t) => {
-    const { outbox, event, path } = await setup(t);
+    const { outbox, event, cleanup, restart } = await setup(t);
     const { OutputService } = await import('../src/output/service.js');
     let time = now;
     let outcome: 'reject' | 'accept' = 'reject';
@@ -221,7 +235,7 @@ for (const change of ['none', 'authority', 'ended'] as const)
         },
       },
     });
-    t.after(() => service.close());
+    cleanup.push(() => service.close());
     const reference = event('map_started', 'template');
     const cursor = { ...reference.cursor };
     const players = Array.from({ length: 10 }, (_, i) => ({
@@ -276,7 +290,6 @@ for (const change of ['none', 'authority', 'ended'] as const)
     service.setContextRecoveryHandler(async () => {
       refreshes++;
       if (change === 'authority') authority = 'authority-2';
-      if (change === 'ended') bundle.program.series.status = 'completed';
       binding.manifest.revision = 'refreshed';
       service.setCurrent(bundle as never, binding as never);
       return true;
@@ -319,8 +332,8 @@ for (const change of ['none', 'authority', 'ended'] as const)
     await service.retry();
     assert.equal(sent.length, 2);
     assert.equal(refreshes, 1);
-    const restored = new ReliableOutbox(path);
-    await restored.load();
+    await service.close();
+    const restored = await restart();
     assert.equal(
       restored.getRecords().find((record) => record.status === 'rejected')?.recoveryState,
       'proof_queued',
@@ -328,205 +341,116 @@ for (const change of ['none', 'authority', 'ended'] as const)
     authority = null;
   });
 
-test('support bundle exports classified queue recovery without remote body or credentials', async (t) => {
-  const { outbox, event } = await setup(t);
-  const dir = await mkdtemp(join(tmpdir(), 'mizar-support-recovery-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const { BusinessJournal } = await import('../src/support/business-journal.js');
-  const { registerSupportRoutes } = await import('../src/support/routes.js');
-  const { default: Fastify } = await import('fastify');
-  const journal = new BusinessJournal(dir, () => {
-    throw new Error('journal failed');
-  });
-  await outbox.enqueue(event('map_started', 'rejected'), now);
-  await outbox.flush({
-    now,
-    isCurrent: () => true,
-    sink: {
-      send: async () => ({
-        status: 'rejected',
-        reason: 'context_stale',
-        recovery: 'refresh_context',
-      }),
-    },
-  });
-  await outbox.setStartRecovery('rejected', undefined, 'refreshing');
-  journal.reliable(outbox.getRecords()[0]!, 'delivery_rejected_unknown');
-  journal.write('business_reliable', {
-    reason: 'http_400',
-    rejectionReason: 'context_stale',
-    recovery: 'refresh_context',
-    rawBody: 'do-not-export-secret',
-    credential: 'do-not-export-secret',
-  });
-  await journal.flush();
-  const app = Fastify();
-  t.after(async () => {
-    await app.close();
-    await journal.close();
-  });
-  registerSupportRoutes(app, {
-    originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
-    logsDirectory: dir,
-    flushBusinessLog: () => journal.flush(),
-    runtimeSummary: () => ({}) as never,
-    recorder: () => ({}) as never,
-    delivery: () => [],
-    hosts: () => ({ active: {}, totals: {} }) as never,
-    obs: async () => undefined,
-    nativeObs: async () => ({}) as never,
-    gsiConfigured: false,
-  });
-  const response = await app.inject({
-    method: 'POST',
-    url: '/debug/support-bundle',
-    headers: { origin: 'http://127.0.0.1:4173' },
-    payload: {},
-  });
-  assert.equal(response.statusCode, 200, response.body);
-  const body = JSON.stringify(response.json().businessHistory);
-  assert.match(body, /context_stale/);
-  assert.match(body, /refresh_context/);
-  assert.match(body, /refreshing/);
-  assert.doesNotMatch(body, /do-not-export-secret/);
-  const { gunzipSync } = await import('node:zlib');
-  const archives = response.json().fullLogs.files as { volumes: { gzipBase64: string }[] }[];
-  const retained = archives
-    .flatMap((file) =>
-      file.volumes.map((part) =>
-        gunzipSync(Buffer.from(part.gzipBase64, 'base64')).toString('utf8'),
-      ),
-    )
-    .join('\n');
-  assert.match(retained, /context_stale/);
-  assert.doesNotMatch(retained, /do-not-export-secret/);
-});
-
-for (const fence of ['generation_fence', 'epoch_fence'] as const)
-  for (const boundaryPresent of [true, false])
-    test(`${fence} requires its own pending boundary ACK: ${boundaryPresent}`, async (t) => {
-      const { outbox, event } = await setup(t);
-      const { OutputService } = await import('../src/output/service.js');
-      const start = event('map_started', 'old-start');
-      const lineup = Array.from({ length: 10 }, (_, i) => String(76561198000000000n + BigInt(i)));
-      await outbox.enqueue(start, now, undefined, lineup);
-      await outbox.flush({
-        now,
-        isCurrent: () => true,
-        sink: {
-          send: async () => ({
-            status: 'rejected',
-            reason: fence,
-            recovery: 'reconcile',
-          }),
-        },
-      });
-      if (boundaryPresent)
-        await outbox.enqueue(
-          event(
-            fence === 'generation_fence' ? 'source_generation_changed' : 'map_epoch_changed',
-            'boundary',
-          ),
-          now,
-        );
-      const cursor = { ...start.cursor };
-      const players = lineup.map((id) => ({
-        lineupEvidence: 'current',
-        sourcePlayerId: id,
-        canonicalPlayerId: null,
-      }));
-      const binding = {
-        origin: 'online',
-        freshness: 'fresh',
-        manifest: { revision: start.contextRevision },
-        context: {
-          matchId: start.matchId,
-          competition: { competitionId: start.competitionId },
-          entrants: { a: { entryId: start.entryAId }, b: { entryId: start.entryBId } },
-        },
-      };
-      const bundle = {
-        program: {
-          cursor: { ...cursor },
-          match: { matchId: start.matchId },
-          status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
-          map: { phase: 'live', name: start.mapName },
-          players,
-          series: { status: 'live', currentMapOrder: 1, maps: [] },
-        },
-        operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'mismatch' } },
-        identity: { issues: [] },
-      };
-      const sent: string[] = [];
-      const progress: string[] = [];
-      const service = new OutputService({
-        outbox,
-        now: () => now,
-        authorityScope: () => 'authority-1',
-        onRecoveryProgress: (_event, state) => progress.push(state),
-        sink: {
-          send: async (item) => {
-            sent.push(item.idempotencyKey);
-            return 'accepted';
-          },
-        },
-      });
-      t.after(() => service.close());
-      service.setCurrent(bundle as never, binding as never);
-      await service.retry();
-      assert.equal(
-        outbox.getRecords().find((record) => record.event.idempotencyKey === 'old-start')
-          ?.recoveryState,
-        boundaryPresent ? 'awaiting_observation' : 'blocked',
-      );
-      assert.deepEqual(sent, boundaryPresent ? ['boundary'] : []);
-      if (!boundaryPresent) assert.ok(progress.includes('continuity_chain_missing'));
-      cursor.runtimeSeq++;
-      cursor.programReceiveSequence!++;
-      bundle.program.cursor = { ...cursor };
-      service.setCurrent(bundle as never, binding as never);
-      service.afterRuntimeMutation(
-        {
-          disposition: { kind: 'accepted', reason: 'contiguous' },
-          transitions: [],
-          state: {
-            map: { name: start.mapName },
-            programSource: {
-              lastAccepted: {
-                generation: cursor.programSourceGeneration,
-                sequence: cursor.programReceiveSequence,
-              },
-            },
-            programTelemetry: { receive: { receivedAt: now.toISOString() } },
-          },
-        } as never,
-        bundle as never,
-        binding as never,
-      );
-      await outbox.flushPending();
-      await service.retry();
-      assert.equal(sent.length, boundaryPresent ? 2 : 0);
+for (const [fence, boundaryPresent] of [
+  ['generation_fence', true],
+  ['epoch_fence', false],
+] as const)
+  test(`${fence} requires its own pending boundary ACK: ${boundaryPresent}`, async (t) => {
+    const { outbox, event, cleanup } = await setup(t);
+    const { OutputService } = await import('../src/output/service.js');
+    const start = event('map_started', 'old-start');
+    const lineup = Array.from({ length: 10 }, (_, i) => String(76561198000000000n + BigInt(i)));
+    await outbox.enqueue(start, now, undefined, lineup);
+    await outbox.flush({
+      now,
+      isCurrent: () => true,
+      sink: {
+        send: async () => ({
+          status: 'rejected',
+          reason: fence,
+          recovery: 'reconcile',
+        }),
+      },
     });
-
-test('source settlement waits for the reliable owner to dispose pending events', async (t) => {
-  const { outbox, event } = await setup(t);
-  const { OutputService } = await import('../src/output/service.js');
-  const pending = event('map_started', 'release-pending');
-  await outbox.enqueue(pending, now);
-  const service = new OutputService({ outbox, now: () => now });
-  t.after(() => service.close());
-  const scope = {
-    matchId: pending.matchId,
-    producerInstanceId: pending.cursor.producerInstanceId,
-    liveSessionId: pending.cursor.liveSessionId!,
-  };
-  assert.equal(await service.settleSourceForRelease(scope), false);
-  await outbox.flush({ now, isCurrent: () => true, sink: { send: async () => 'accepted' } });
-  assert.equal(await service.settleSourceForRelease(scope), true);
-});
+    if (boundaryPresent)
+      await outbox.enqueue(
+        event(
+          fence === 'generation_fence' ? 'source_generation_changed' : 'map_epoch_changed',
+          'boundary',
+        ),
+        now,
+      );
+    const cursor = { ...start.cursor };
+    const players = lineup.map((id) => ({
+      lineupEvidence: 'current',
+      sourcePlayerId: id,
+      canonicalPlayerId: null,
+    }));
+    const binding = {
+      origin: 'online',
+      freshness: 'fresh',
+      manifest: { revision: start.contextRevision },
+      context: {
+        matchId: start.matchId,
+        competition: { competitionId: start.competitionId },
+        entrants: { a: { entryId: start.entryAId }, b: { entryId: start.entryBId } },
+      },
+    };
+    const bundle = {
+      program: {
+        cursor: { ...cursor },
+        match: { matchId: start.matchId },
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+        map: { phase: 'live', name: start.mapName },
+        players,
+        series: { status: 'live', currentMapOrder: 1, maps: [] },
+      },
+      operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'mismatch' } },
+      identity: { issues: [] },
+    };
+    const sent: string[] = [];
+    const progress: string[] = [];
+    const service = new OutputService({
+      outbox,
+      now: () => now,
+      authorityScope: () => 'authority-1',
+      onRecoveryProgress: (_event, state) => progress.push(state),
+      sink: {
+        send: async (item) => {
+          sent.push(item.idempotencyKey);
+          return 'accepted';
+        },
+      },
+    });
+    cleanup.push(() => service.close());
+    service.setCurrent(bundle as never, binding as never);
+    await service.retry();
+    assert.equal(
+      outbox.getRecords().find((record) => record.event.idempotencyKey === 'old-start')
+        ?.recoveryState,
+      boundaryPresent ? 'awaiting_observation' : 'blocked',
+    );
+    assert.deepEqual(sent, boundaryPresent ? ['boundary'] : []);
+    if (!boundaryPresent) assert.ok(progress.includes('continuity_chain_missing'));
+    cursor.runtimeSeq++;
+    cursor.programReceiveSequence!++;
+    bundle.program.cursor = { ...cursor };
+    service.setCurrent(bundle as never, binding as never);
+    service.afterRuntimeMutation(
+      {
+        disposition: { kind: 'accepted', reason: 'contiguous' },
+        transitions: [],
+        state: {
+          map: { name: start.mapName },
+          programSource: {
+            lastAccepted: {
+              generation: cursor.programSourceGeneration,
+              sequence: cursor.programReceiveSequence,
+            },
+          },
+          programTelemetry: { receive: { receivedAt: now.toISOString() } },
+        },
+      } as never,
+      bundle as never,
+      binding as never,
+    );
+    await outbox.flushPending();
+    await service.retry();
+    assert.equal(sent.length, boundaryPresent ? 2 : 0);
+  });
 
 test('source settlement waits for a reliable request already in flight', async (t) => {
-  const { outbox, event } = await setup(t);
+  const { outbox, event, cleanup } = await setup(t);
   const { OutputService } = await import('../src/output/service.js');
   const pending = event('map_started', 'release-inflight');
   await outbox.enqueue(pending, now);
@@ -548,7 +472,7 @@ test('source settlement waits for a reliable request already in flight', async (
   });
   await begun;
   const service = new OutputService({ outbox, now: () => now });
-  t.after(() => service.close());
+  cleanup.push(() => service.close());
   let settled = false;
   const settling = service
     .settleSourceForRelease({

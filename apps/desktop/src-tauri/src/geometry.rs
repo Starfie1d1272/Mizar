@@ -51,12 +51,6 @@ pub fn workspace_layout(work: Rect) -> Layout {
     }
 }
 
-pub fn overlap(a: Rect, b: Rect) -> i64 {
-    let width = (a.right().min(b.right()) - a.x.max(b.x)).max(0) as i64;
-    let height = (a.bottom().min(b.bottom()) - a.y.max(b.y)).max(0) as i64;
-    width * height
-}
-
 /// CS2's non-client borders extend beyond its aligned client viewport.
 pub fn avoid_game_frame(mut layout: Layout, outer: Rect) -> Layout {
     let bottom = layout.dock.bottom();

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import type { ObsRpc } from './reconcile.js';
+import type { ObsRpc, ObsSceneItemRef } from './reconcile.js';
 
 const ref = z
   .object({
@@ -121,6 +121,43 @@ export class AudioMigration {
   async pending(): Promise<Journal | null> {
     return this.readJournal(this.path);
   }
+  /** Expose shared field duties and source lifetimes; visual repair never settles them. */
+  async visualResponsibilities(
+    endpoint: string,
+    collection: string,
+    completedPath: string,
+  ): Promise<{
+    pending: boolean;
+    items: ObsSceneItemRef[];
+    captureAudio: string[];
+    sourceUuids: string[];
+  }> {
+    const pending = await this.pending();
+    const completed = await this.readJournal(completedPath);
+    const current = (journal: Journal | null) =>
+      journal?.endpoint === endpoint && journal.collection === collection;
+    const items: ObsSceneItemRef[] = [];
+    const captureAudio: string[] = [];
+    const sourceUuids = new Set<string>();
+    for (const journal of [pending, completed]) {
+      if (!journal || !current(journal)) continue;
+      for (const entry of journal.fields) {
+        if (entry.phase === 'restored') continue;
+        if ('sourceUuid' in entry) {
+          sourceUuids.add(entry.sourceUuid);
+          if (!entry.group) {
+            const { sceneName, sceneItemId, sourceUuid } = entry;
+            items.push({ sceneName, sceneItemId, sourceUuid });
+          }
+        } else {
+          sourceUuids.add(entry.inputUuid);
+          if ('inputKind' in entry) captureAudio.push(entry.inputUuid);
+        }
+      }
+    }
+    return { pending: current(pending), items, captureAudio, sourceUuids: [...sourceUuids] };
+  }
+
   private async readJournal(path: string): Promise<Journal | null> {
     try {
       return journalSchema.parse(JSON.parse(await readFile(path, 'utf8')));
@@ -202,6 +239,17 @@ export class AudioMigration {
         throw new Error('audio_migration_backup_conflict', { cause: error });
     }
   }
+  /** Discard only a mode journal whose writes have not been dispatched. */
+  async discardUnsentMode(modeId: string): Promise<void> {
+    const journal = await this.pending();
+    if (!journal) return;
+    if (
+      journal.modeId !== modeId ||
+      journal.fields.some((entry) => entry.phase !== 'prepared' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_write_uncertain');
+    await rm(this.path);
+  }
   async clearMode(modeId: string): Promise<void> {
     const journal = await this.pending();
     if (!journal) return;
@@ -213,6 +261,83 @@ export class AudioMigration {
     if (!journal) return;
     if (modeId && journal.modeId !== modeId) return;
     await rm(completedPath);
+  }
+  /** Rebind only completed restoration duties to a verified replacement role.
+   * The routing owner commits its new UUIDs after this durable write, so retries
+   * still retain the old-to-new identity evidence if persistence is interrupted.
+   */
+  async rebindCompletedInputs(
+    obs: ObsRpc,
+    path: string,
+    endpoint: string,
+    collection: string,
+    replacements: { before: string; after: string; kind: string }[],
+  ): Promise<void> {
+    const completed = await this.readJournal(path);
+    if (!completed) return;
+    if (
+      completed.endpoint !== endpoint ||
+      completed.collection !== collection ||
+      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_identity_changed');
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
+      throw new Error('audio_migration_identity_changed');
+    const inputs = (await obs.call('GetInputList')).inputs as {
+      inputUuid: string;
+      inputKind: string;
+    }[];
+    const fields: Field[] = [];
+    for (const entry of completed.fields) {
+      const replacement =
+        'kind' in entry ? replacements.find((item) => item.before === entry.inputUuid) : undefined;
+      if (!replacement) {
+        fields.push(entry);
+        continue;
+      }
+      if (
+        inputs.some((input) => input.inputUuid === replacement.before) ||
+        !inputs.some(
+          (input) => input.inputUuid === replacement.after && input.inputKind === replacement.kind,
+        )
+      )
+        throw new Error('audio_migration_identity_changed');
+      const current = (await obs.call('GetInputAudioMonitorType', { inputUuid: replacement.after }))
+        .monitorType;
+      // A newly recreated source can already be at the original value. That
+      // restoration duty is fulfilled; do not overwrite a differing user value.
+      if (current === entry.before) continue;
+      if (current !== entry.applied) throw new Error('audio_migration_external_change');
+      fields.push({ ...entry, inputUuid: replacement.after });
+    }
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
+      throw new Error('audio_migration_identity_changed');
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify({ ...completed, fields })}\n`, { mode: 0o600 });
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
+  /** Rebuilding our exclusive graph retires scene-item identities, not monitor preferences. */
+  async forgetCompletedSceneItems(path: string, endpoint: string, collection: string) {
+    const completed = await this.readJournal(path);
+    if (!completed) return;
+    if (
+      completed.endpoint !== endpoint ||
+      completed.collection !== collection ||
+      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+    )
+      throw new Error('audio_migration_identity_changed');
+    const next = { ...completed, fields: completed.fields.filter((entry) => 'kind' in entry) };
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
   }
   async completedEnabledItems(path: string) {
     const completed = await this.readJournal(path);
