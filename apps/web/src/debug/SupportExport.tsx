@@ -165,7 +165,7 @@ export function SupportExport() {
         deliveryJob = job;
         setProgress({ exportId: job.exportId, phase: 'saving' });
         if (desktop) {
-          const saved = await desktopInvoke<boolean>('save_support_bundle', {
+          const saved = await desktopInvoke('save_support_bundle', {
             exportId: job.exportId,
           });
           setResult({

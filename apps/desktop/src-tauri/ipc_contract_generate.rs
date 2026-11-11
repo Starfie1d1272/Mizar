@@ -1,4 +1,4 @@
-use crate::ipc_lifecycle_contract::ipc_lifecycle;
+use crate::ipc_contract::desktop_ipc;
 use std::fmt::Write;
 
 fn camel(field: &str) -> String {
@@ -27,6 +27,27 @@ macro_rules! schema {
     (u32) => {
         "z.uint32()"
     };
+    (u64) => {
+        "z.number().int().nonnegative()"
+    };
+    (u16) => {
+        "z.number().int().min(0).max(65535)"
+    };
+    (f64) => {
+        "z.number()"
+    };
+    (JsonObject) => {
+        "z.record(z.string(), z.unknown())"
+    };
+    (JsonValue) => {
+        "z.unknown()"
+    };
+    (Array($inner:ident)) => {
+        concat!("z.array(", schema!($inner), ")")
+    };
+    (OptionalNullable($inner:ident)) => {
+        concat!(schema!($inner), ".nullish()")
+    };
     (Unit) => {
         "unit"
     };
@@ -41,15 +62,15 @@ macro_rules! schema {
     };
 }
 
-pub fn frontend_lifecycle() -> String {
+pub fn frontend_contract() -> String {
     let mut output = String::from(
-        "// Generated from desktop/src-tauri/ipc_lifecycle_contract.rs. Do not edit.\n\
+        "// Generated from desktop/src-tauri/ipc_contract.rs. Do not edit.\n\
          import { z } from 'zod';\n\n\
          const unit = z.null().transform(() => undefined);\n",
     );
-    let mut commands = String::from("\nexport const desktopLifecycle = {\n");
+    let mut commands = String::from("\nexport const desktopIpc = {\n");
     macro_rules! object {
-        ($name:ident { $($field:ident: $kind:ident $(($inner:ident))?),* $(,)? }) => {{
+        ($name:ident { $($(#[$attribute:meta])* $field:ident: $kind:ident $(($inner:ident))?),* $(,)? }) => {{
             writeln!(output, "const {} = z.object({{", stringify!($name)).unwrap();
             $(writeln!(output, "  {}: {},", camel(stringify!($field)), schema!($kind $(($inner))?)).unwrap();)*
             output.push_str("});\n");
@@ -122,7 +143,7 @@ pub fn frontend_lifecycle() -> String {
             }
         }};
     }
-    ipc_lifecycle!(object, string_enum, number_enum, literal, union, command);
+    desktop_ipc!(object, string_enum, number_enum, literal, union, command);
     commands.push_str("};\n");
     output.push_str(&commands);
     output

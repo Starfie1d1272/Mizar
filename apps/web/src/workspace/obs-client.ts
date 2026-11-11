@@ -1,3 +1,4 @@
+import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 import { useEffect, useRef, useState } from 'react';
 import type {
   ObsOutputCommand,
@@ -155,7 +156,7 @@ async function performObsCommand(
     );
   if (nativeOpen) {
     if (!value?.executablePath) throw new Error('未找到 OBS，请在设置中选择 obs64.exe。');
-    const alreadyRunning = await desktopInvoke<boolean>('launch_obs', {
+    const alreadyRunning = await desktopInvoke('launch_obs', {
       executablePath: value.executablePath,
     });
     return { ...value, alreadyRunning };
@@ -163,10 +164,7 @@ async function performObsCommand(
   return value;
 }
 
-export interface ObsConfigurationResult {
-  reason: string;
-  message: string;
-}
+export type ObsConfigurationResult = DesktopResult<'finish_obs_configuration'>;
 
 let configurationTarget: Promise<string> | null = null;
 function obsConfigurationTarget() {
@@ -188,11 +186,7 @@ function obsConfigurationTarget() {
 }
 
 export async function readObsConfigurationContext() {
-  const value = await desktopInvoke<{ documentGeneration: string; message: string }>(
-    'read_obs_configuration_context',
-  );
-  if (!value || typeof value.documentGeneration !== 'string' || typeof value.message !== 'string')
-    throw new Error('OBS 配置状态未能确认。');
+  const value = await desktopInvoke('read_obs_configuration_context');
   return value;
 }
 
@@ -202,7 +196,7 @@ export function beginObsConfiguration() {
   const ready = (async () => {
     const { documentGeneration } = await readObsConfigurationContext();
     const executablePath = await obsConfigurationTarget();
-    const result = await desktopInvoke<boolean>('begin_obs_configuration', {
+    const result = await desktopInvoke('begin_obs_configuration', {
       executablePath,
       sessionId,
       documentGeneration,
@@ -214,9 +208,7 @@ export function beginObsConfiguration() {
   return {
     ready,
     finish: () => {
-      finished ??= ready.then(() =>
-        desktopInvoke<ObsConfigurationResult>('finish_obs_configuration', { sessionId }),
-      );
+      finished ??= ready.then(() => desktopInvoke('finish_obs_configuration', { sessionId }));
       return finished;
     },
   };

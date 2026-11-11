@@ -171,7 +171,7 @@ impl Group {
 #[cfg(windows)]
 mod native {
     use super::*;
-    use crate::managed_cs2::WorkspaceProcess;
+    use crate::cs2_process::WorkspaceProcess;
 
     #[link(name = "user32")]
     extern "system" {

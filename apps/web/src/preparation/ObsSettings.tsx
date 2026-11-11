@@ -106,7 +106,7 @@ export function ObsSettings() {
             ? '等待 OBS 响应超时。请确认 OBS 能正常操作，再重新检查连接。'
             : '正在确认 OBS 连接。请确认 OBS 已打开，并启用 WebSocket 服务器。';
   async function selectExecutable() {
-    const path = await desktopInvoke<string | null>('select_obs_executable');
+    const path = await desktopInvoke('select_obs_executable');
     if (path) await obsCommand('configure', { executablePath: path });
   }
   const outputActive = Boolean(connected && (obs.streaming === true || obs.recording === true));
@@ -138,7 +138,7 @@ export function ObsSettings() {
         disabled={busy || preparing}
         onClick={() =>
           void action(async () => {
-            const path = await desktopInvoke<string | null>('select_obs_executable');
+            const path = await desktopInvoke('select_obs_executable');
             if (path) await obsCommand('configure', { executablePath: path });
           })
         }

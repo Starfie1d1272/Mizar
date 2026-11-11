@@ -12,9 +12,36 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static OPERATION: Mutex<()> = Mutex::new(());
 static LEASE: Mutex<Option<HostLease>> = Mutex::new(None);
 
+/// Only the identity and capabilities needed by an accepted observer lease.
+#[derive(Clone, Eq, PartialEq)]
+struct SessionScope {
+    pid: Option<u32>,
+    created: Option<u64>,
+    preparation_id: Option<String>,
+    executable: String,
+    mulnx_launch: bool,
+    native_hud_toggle: bool,
+    spectator_cfg: bool,
+    hud_recovery_warning: Option<String>,
+}
+impl From<&crate::cs2_session_record::SessionRecord> for SessionScope {
+    fn from(record: &crate::cs2_session_record::SessionRecord) -> Self {
+        Self {
+            pid: record.pid(),
+            created: record.created(),
+            preparation_id: record.preparation_id.clone(),
+            executable: record.executable.clone(),
+            mulnx_launch: record.mulnx_launch,
+            native_hud_toggle: record.native_hud_toggle,
+            spectator_cfg: record.spectator_cfg,
+            hud_recovery_warning: record.hud_recovery_warning.clone(),
+        }
+    }
+}
+
 struct HostLease {
-    game: managed_cs2::WorkspaceProcess,
-    context: serde_json::Value,
+    game: crate::cs2_process::WorkspaceProcess,
+    context: SessionScope,
     ticket: u64,
     token: String,
     confirmed: Instant,
@@ -22,8 +49,8 @@ struct HostLease {
 }
 
 fn accept_lease(
-    game: &managed_cs2::WorkspaceProcess,
-    context: &serde_json::Value,
+    game: &crate::cs2_process::WorkspaceProcess,
+    context: &SessionScope,
     ticket: u64,
     response: &serde_json::Value,
 ) -> Result<(), String> {
@@ -115,8 +142,8 @@ pub fn finish_locked(log: &DesktopLog) -> Result<(), String> {
 fn verify_session(
     app: &tauri::AppHandle,
     ticket: u64,
-    context: &serde_json::Value,
-    game: &managed_cs2::WorkspaceProcess,
+    context: &SessionScope,
+    game: &crate::cs2_process::WorkspaceProcess,
     require_visible: bool,
 ) -> Result<(), String> {
     app.state::<production_exit::ExitGate>()
@@ -136,19 +163,8 @@ fn verify_session(
     let current = store
         .load()?
         .ok_or("游戏会话已变化，请重新连接观察辅助。")?;
-    let process = managed_cs2::verified_session_process(&current, &log)?;
-    if [
-        "pid",
-        "created",
-        "preparationId",
-        "executable",
-        "mulnxLaunch",
-        "nativeHudToggle",
-        "spectatorCfg",
-        "hudRecoveryWarning",
-    ]
-    .iter()
-    .any(|key| current[*key] != context[*key])
+    let process = crate::cs2_process::verified_process(current.process_identity().as_ref(), &log)?;
+    if SessionScope::from(&current) != *context
         || !process.is_some_and(|process| {
             process.pid == game.pid && process.created == game.created && process.is_running()
         })
@@ -221,7 +237,6 @@ pub fn pulse(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
 pub async fn observer_command(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -300,7 +315,7 @@ pub async fn observer_command(
             if action == "preflight" {
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
                 let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
-                let native = cs2.console_source()?.is_some_and(|(context, _)| context["nativeHudToggle"] == true && context["spectatorCfg"] == true);
+                let native = cs2.console_source()?.is_some_and(|(context, _)| context.native_hud_toggle && context.spectator_cfg);
                 let prefer_mulnx = !native && cs2.status()?.prefer_mulnx;
                 drop(cs2);
                 if !native { crate::observer_hud::preflight(&log, prefer_mulnx)?; }
@@ -318,25 +333,26 @@ pub async fn observer_command(
             let cs2 = managed.lock().map_err(|_| "请等待游戏操作完成后重试。")?;
             let (context, game) = cs2.console_source()?.ok_or("请先从工作台启动或接入 CS2。")?;
             if !game.is_running() { return Err("请先启动 CS2，再连接观察辅助。".into()); }
-            let executable = context["executable"].as_str().ok_or("请确认 CS2 安装位置。")?;
+            let executable = context.executable.as_str();
             let control_game = if action == "start-configured" { crate::mulnx_launch::observer_control_snapshot(&cs2, &log) } else { None };
             drop(cs2);
             let use_mulnx = control_game.is_some_and(|game| crate::mulnx_launch::observer_gateway_available(&game, &log));
-            let verify = || verify_session(&app, ticket, &context, &game, true);
+            let scope = SessionScope::from(&context);
+            let verify = || verify_session(&app, ticket, &scope, &game, true);
             verify()?;
             if action == "start-configured" {
                 let job = observer_job::name(&log.session_id);
                 automation = Some(use_mulnx);
                 let game_key = format!("{}-{}", game.pid, game.created);
-                let native_hud_toggle = context["nativeHudToggle"] == true && context["spectatorCfg"] == true;
+                let native_hud_toggle = context.native_hud_toggle && context.spectator_cfg;
                 // This is a per-intent capability, not a second settings source.
                 // A missing original/readback disables only automatic HUD changes.
-                let mut hud_available = context["consoleDiagnosticsWarning"].is_null() && context["hudRecoveryWarning"].is_null();
+                let mut hud_available = context.console_diagnostics_warning.is_null() && context.hud_recovery_warning.is_none();
                 let mut intent = serde_json::json!({"action":"prepare","game":game_key,"job":job,"useMulnx":use_mulnx,"nativeHudToggle":native_hud_toggle,"hudControlAvailable":hud_available});
                 if let Some(revision) = expected_revision { intent["expectedRevision"] = revision.into(); }
                 let mut preparation = request(&log, intent.clone())?;
                 if preparation["hudControlUnavailable"] == true {
-                    hud_warning = Some(if context["hudRecoveryWarning"].is_null() {
+                    hud_warning = Some(if context.hud_recovery_warning.is_none() {
                         "本次控制台记录不可用，已跳过自动隐藏游戏原生 HUD；游戏、本机 HUD 和连接仍可使用。"
                     } else {
                         "上次 HUD 恢复记录不可用，已保留并跳过本次自动隐藏游戏原生 HUD；游戏、本机 HUD 和连接仍可使用。"
@@ -367,7 +383,7 @@ pub async fn observer_command(
                 }
                 if preparation["enabled"] != true { stop_inner(&log, false)?; return Ok(()); }
                 if preparation["reuse"] == true {
-                    accept_lease(&game, &context, ticket, &preparation)?;
+                    accept_lease(&game, &scope, ticket, &preparation)?;
                     ACTIVE.store(true, Ordering::Release);
                     return Ok(());
                 }
@@ -390,7 +406,7 @@ pub async fn observer_command(
                     stop_inner(&log, false)?;
                     return Err(error);
                 }
-                accept_lease(&game, &context, ticket, &response)?;
+                accept_lease(&game, &scope, ticket, &response)?;
                 return Ok(());
             }
             let endpoint = endpoint.ok_or("请填写授权的 GOTV 地址。")?;
@@ -404,7 +420,7 @@ pub async fn observer_command(
                 stop_inner(&log, false)?;
                 return Err(error);
             }
-            accept_lease(&game, &context, ticket, &response)?;
+            accept_lease(&game, &scope, ticket, &response)?;
             Ok(())
         })();
         log.event("observer_workspace", if result.is_ok() { "success" } else { "failure" }, result.as_ref().err().map(String::as_str));

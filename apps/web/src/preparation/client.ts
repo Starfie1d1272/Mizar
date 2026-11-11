@@ -170,11 +170,7 @@ export async function checkObsBeforeLaunch(
 ) {
   // Installation is checkable before launch; fresh telemetry is not.
   if (window.__TAURI_INTERNALS__) {
-    const gsi = await desktopInvoke<{ installed: boolean; conflict: boolean }>(
-      'gsi_status',
-      undefined,
-      task,
-    );
+    const gsi = await desktopInvoke('gsi_status', undefined, task);
     if (!gsi.installed || gsi.conflict) {
       window.location.assign('/settings?tab=gsi&prepare=1');
       return false;

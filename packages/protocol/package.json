@@ -86,9 +86,9 @@
       "types": "./dist/orchestration.d.ts",
       "import": "./dist/orchestration.js"
     },
-    "./desktop-lifecycle": {
-      "types": "./dist/desktop-lifecycle.d.ts",
-      "import": "./dist/desktop-lifecycle.js"
+    "./desktop-ipc": {
+      "types": "./dist/desktop-ipc.d.ts",
+      "import": "./dist/desktop-ipc.js"
     },
     "./diagnostics-upload": {
       "types": "./dist/diagnostics-upload.d.ts",

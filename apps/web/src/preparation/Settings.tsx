@@ -1,3 +1,4 @@
+import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 import { ObserverSettingsPanel, GameAutomationSettingsPanel } from './ObserverSettings';
 import { ObsSettings } from './ObsSettings';
 import { CameraSettings } from '../orchestration/CameraSettings';
@@ -47,24 +48,8 @@ export function Settings({ tab }: { tab: string }) {
   const gameData = readiness?.find((item) => item.id === 'game-data');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [gsi, setGsi] = useState<{
-    detected: boolean;
-    installed: boolean;
-    conflict: boolean;
-    fileConflict: boolean;
-    endpointConflict: boolean;
-    cfgPath: string | null;
-    readFailed: boolean;
-    candidateCount: number;
-    issues: readonly { code: string; message: string }[];
-    conflictFiles: readonly string[];
-    lastOperation: { code: string; stage: string } | null;
-  } | null>(null);
-  const [cs2, setCs2] = useState<{
-    found: boolean;
-    managed: boolean;
-    message?: string | null;
-  } | null>(null);
+  const [gsi, setGsi] = useState<DesktopResult<'gsi_status'> | null>(null);
+  const [cs2, setCs2] = useState<DesktopResult<'cs2_host_status'> | null>(null);
   const [gsiPhase, setGsiPhase] = useState<ReadPhase>(
     window.__TAURI_INTERNALS__ ? 'checking' : 'unknown',
   );
@@ -83,9 +68,8 @@ export function Settings({ tab }: { tab: string }) {
     if (!window.__TAURI_INTERNALS__) return null;
     const request = ++statusRequest.current;
     const [nextGsi] = await Promise.all([
-      desktopInvoke<NonNullable<typeof gsi>>('gsi_status')
+      desktopInvoke('gsi_status')
         .then((next) => {
-          if (!next || typeof next.installed !== 'boolean') throw new Error('Invalid GSI status');
           if (request !== statusRequest.current) return null;
           setGsi(next);
           setGsiPhase('ready');
@@ -98,9 +82,8 @@ export function Settings({ tab }: { tab: string }) {
           }
           return null;
         }),
-      desktopInvoke<NonNullable<typeof cs2>>('cs2_host_status')
+      desktopInvoke('cs2_host_status')
         .then((next) => {
-          if (!next || typeof next.found !== 'boolean') throw new Error('Invalid CS2 status');
           if (request !== statusRequest.current) return;
           setCs2(next);
           setCs2Phase('ready');
@@ -362,7 +345,7 @@ export function Settings({ tab }: { tab: string }) {
                       disabled={busy}
                       onClick={() =>
                         void action(async () => {
-                          const selected = await desktopInvoke<boolean>('select_cs2_installation', {
+                          const selected = await desktopInvoke('select_cs2_installation', {
                             executable: false,
                           });
                           if (selected) {
@@ -380,7 +363,7 @@ export function Settings({ tab }: { tab: string }) {
                       disabled={busy}
                       onClick={() =>
                         void action(async () => {
-                          const selected = await desktopInvoke<boolean>('select_cs2_installation', {
+                          const selected = await desktopInvoke('select_cs2_installation', {
                             executable: true,
                           });
                           if (selected) {

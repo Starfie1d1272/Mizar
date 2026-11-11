@@ -1,3 +1,4 @@
+import { desktopTransport } from '../workspace/desktop-transport';
 import type { DocumentHandoffCoverage } from '@mizar/protocol';
 
 let controlDeliveryFailures = 0;
@@ -19,8 +20,7 @@ function handoffHost(): Promise<void> {
     events.push(event);
     bytes += length;
   }
-  hostSending = window
-    .__TAURI_INTERNALS__!.invoke<{ eventIds: string[] }>('persist_diagnostic_events', { events })
+  hostSending = desktopTransport('persist_diagnostic_events', { events })
     .then((receipt) => {
       const ids = new Set(receipt.eventIds);
       for (let i = hostQueue.length - 1; i >= 0; i--)

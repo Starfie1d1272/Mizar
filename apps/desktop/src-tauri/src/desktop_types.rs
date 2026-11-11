@@ -1,18 +1,22 @@
-use crate::ipc_lifecycle_contract::ipc_lifecycle;
+use crate::ipc_contract::desktop_ipc;
+pub(crate) type JsonObject = std::collections::BTreeMap<String, serde_json::Value>;
+pub(crate) type JsonValue = serde_json::Value;
 
 macro_rules! native_type {
     (Nullable($inner:ident)) => { Option<$inner> };
     (Optional($inner:ident)) => { Option<$inner> };
+    (OptionalNullable($inner:ident)) => { Option<$inner> };
+    (Array($inner:ident)) => { Vec<$inner> };
     (Unit) => { () };
     ($name:ident) => { $name };
 }
 
 macro_rules! object {
-    ($name:ident { $($field:ident: $kind:ident $(($inner:ident))?),* $(,)? }) => {
-        #[derive(Clone, serde::Serialize)]
+    ($name:ident { $($(#[$attribute:meta])* $field:ident: $kind:ident $(($inner:ident))?),* $(,)? }) => {
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct $name {
-            $(pub $field: native_type!($kind $(($inner))?),)*
+            $($(#[$attribute])* pub $field: native_type!($kind $(($inner))?),)*
         }
     };
 }
@@ -40,15 +44,24 @@ macro_rules! number_enum {
     ($name:ident($number:ty) { $($variant:ident = $value:literal),+ $(,)? }) => {
         #[derive(Clone, Copy)]
         pub enum $name { $($variant,)+ }
+        impl $name {
+            pub const fn value(self) -> $number { match self { $(Self::$variant => $value,)+ } }
+        }
         impl TryFrom<$number> for $name {
             type Error = ();
             fn try_from(value: $number) -> Result<Self, ()> {
                 match value { $($value => Ok(Self::$variant),)+ _ => Err(()) }
             }
         }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let value = <$number as serde::Deserialize>::deserialize(deserializer)?;
+                Self::try_from(value).map_err(|_| serde::de::Error::custom("unsupported numeric option"))
+            }
+        }
         impl serde::Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                let value: $number = match self { $(Self::$variant => $value,)+ };
+                let value = self.value();
                 serde::Serialize::serialize(&value, serializer)
             }
         }
@@ -59,6 +72,16 @@ macro_rules! literal {
     ($name:ident, $kind:ty, $value:literal) => {
         #[derive(Clone, Copy)]
         pub struct $name;
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let value = <$kind as serde::Deserialize>::deserialize(deserializer)?;
+                if value == $value {
+                    Ok(Self)
+                } else {
+                    Err(serde::de::Error::custom("unexpected literal"))
+                }
+            }
+        }
         impl serde::Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 let value: $kind = $value;
@@ -70,42 +93,21 @@ macro_rules! literal {
 
 macro_rules! union {
     ($name:ident { $($variant:ident($kind:ident)),+ $(,)? }) => {
-        #[derive(serde::Serialize)]
+        #[derive(serde::Serialize, serde::Deserialize)]
         #[serde(untagged)]
         pub enum $name { $($variant($kind),)+ }
     };
 }
 
-macro_rules! native_handler {
-    (sync $name:ident($($arg:ident: $kind:ty),* $(,)?) -> $result:ty = $handler:path) => {
-        #[tauri::command]
-        pub(crate) fn $name($($arg: $kind),*) -> Result<$result, String> {
-            $handler($($arg),*)
-        }
-    };
-    (async $name:ident($($arg:ident: $kind:ty),* $(,)?) -> $result:ty = $handler:path) => {
-        #[tauri::command]
-        pub(crate) async fn $name($($arg: $kind),*) -> Result<$result, String> {
-            $handler($($arg),*).await
-        }
-    };
+macro_rules! ignore_command {
+    ($($tokens:tt)*) => {};
 }
-
-macro_rules! command {
-    ($execution:ident $name:ident $windows:ident
-        ($($context:ident: $context_type:ty),* $(,)?) $mode:ident
-        [$($arg:ident: $kind:ident $(($inner:ident))?),* $(,)?]
-        ($($diagnostic:ident: $diagnostic_type:ty),* $(,)?)
-        -> $result:ident $(($result_inner:ident))? = $handler:path
-    ) => {
-        native_handler!(
-            $execution $name(
-                $($context: $context_type,)*
-                $($arg: native_type!($kind $(($inner))?),)*
-                $($diagnostic: $diagnostic_type,)*
-            ) -> native_type!($result $(($result_inner))?) = $handler
-        );
-    };
-}
-
-ipc_lifecycle!(object, string_enum, number_enum, literal, union, command);
+desktop_ipc!(
+    object,
+    string_enum,
+    number_enum,
+    literal,
+    union,
+    ignore_command
+);
+pub(crate) use native_type;

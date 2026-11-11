@@ -1,5 +1,5 @@
 //! A lock-free operation label shared by all desktop windows.
-use crate::desktop_lifecycle::Cs2ActivityPhase;
+use crate::desktop_types::Cs2ActivityPhase;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Default)]

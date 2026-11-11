@@ -69,7 +69,7 @@ export function pinHostEvidence(signal: AbortSignal): Promise<ExportHostPin> {
   const release = () => {
     if (releaseStarted) return;
     releaseStarted = true;
-    void desktopInvoke<{ pinId: string; state: string }>('diagnostic_pin', {
+    void desktopInvoke('diagnostic_pin', {
       action: 'release',
       pinId,
       kind: 'export',
@@ -118,10 +118,11 @@ export function pinHostEvidence(signal: AbortSignal): Promise<ExportHostPin> {
         await desktopInvoke('diagnostic_pin', { action: 'prepare', pinId, kind: 'export' });
         if (abandoned) return;
         phase = 'commit';
-        const receipt = await desktopInvoke<{ pinId: string; state: string; kind: string }>(
-          'diagnostic_pin',
-          { action: 'commit', pinId, kind: 'export' },
-        );
+        const receipt = await desktopInvoke('diagnostic_pin', {
+          action: 'commit',
+          pinId,
+          kind: 'export',
+        });
         if (abandoned) return;
         if (receipt?.pinId !== pinId || receipt.state !== 'committed' || receipt.kind !== 'export')
           throw new Error('host_pin_commit_unconfirmed');

@@ -563,24 +563,6 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Full-key mode does not own the spectator convar; only use it when the
-/// archived value already selects slot bindings and no mirror conflicts.
-pub(crate) fn full_mode_convar_compatible(files: &[Value], video: &Path) -> Result<(), String> {
-    check_archive(video)?;
-    let original = files
-        .first()
-        .filter(|record| record["kind"] == "convars")
-        .and_then(|record| record["original"].as_str())
-        .ok_or("观战设置无法确认，使用基础观战模式。")?;
-    let token = value(original).map_err(|error| {
-        format!("cs2_machine_convars.vcfg / 观战设置无法确认，使用基础观战模式：{error}")
-    })?;
-    if boolean(&token.value)? {
-        return Err("当前数字键观战设置需要单独接管，使用基础观战模式。".into());
-    }
-    Ok(())
-}
-
 /// Preserve FPS/video values; startup CFGs only receive a temporary final exec.
 pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Value, String> {
     let original = (|| {

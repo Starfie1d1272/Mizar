@@ -128,7 +128,7 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
                   disabled={busy}
                   onClick={() => {
                     if (window.__TAURI_INTERNALS__)
-                      void action(() => desktopInvoke<void>('open_music_downloads'));
+                      void action(() => desktopInvoke('open_music_downloads'));
                     else
                       window.open(
                         'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Music',

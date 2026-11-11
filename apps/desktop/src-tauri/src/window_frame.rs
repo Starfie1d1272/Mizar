@@ -44,7 +44,7 @@ pub fn square_window(hwnd: isize) {
 
 pub struct GameFrame {
     hwnd: isize,
-    process: crate::managed_cs2::WorkspaceProcess,
+    process: crate::cs2_process::WorkspaceProcess,
     style: i32,
     original: WindowRect,
     corner: Option<u32>,
@@ -52,7 +52,7 @@ pub struct GameFrame {
     retired: bool,
 }
 impl GameFrame {
-    pub fn capture(hwnd: isize, process: crate::managed_cs2::WorkspaceProcess) -> Option<Self> {
+    pub fn capture(hwnd: isize, process: crate::cs2_process::WorkspaceProcess) -> Option<Self> {
         let style = unsafe { GetWindowLongW(hwnd, -16) };
         let mut original = WindowRect::default();
         let measured = unsafe { GetWindowRect(hwnd, &mut original) } != 0;

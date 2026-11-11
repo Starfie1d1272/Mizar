@@ -1,10 +1,10 @@
+import { desktopTransport } from './desktop-transport';
 import type { DesktopCommand } from './desktop-commands.generated';
 import {
-  desktopLifecycleContract,
-  type DesktopLifecycleCommand,
-  type LifecycleArgs,
-  type LifecycleResult,
-} from '@mizar/protocol/desktop-lifecycle';
+  type DesktopIpcCommand,
+  type DesktopArgs,
+  type DesktopResult,
+} from '@mizar/protocol/desktop-ipc';
 import { browserErrorEvidence, controlEvidence, nativeSnapshot } from '../debug/control-journal';
 import type { ControlTask } from '../debug/control-task';
 import { useEffect, useState } from 'react';
@@ -61,39 +61,25 @@ export async function selectProgramScene(
   }
 }
 
-interface TauriInternals {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
-}
-
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: TauriInternals;
-    __MIZAR_OVERLAY_GENERATION__?: number;
-    __MIZAR_OVERLAY_DOCUMENT__?: number;
-  }
-}
-
 /** The Host retains this outcome; UI commands must not copy it into local state. */
 export class HostWindowControlError extends Error {}
 
 // Check the schema keys against the Rust-generated command registry.
 type RegisteredCommand<C extends DesktopCommand> = C;
-type LifecycleCommand = RegisteredCommand<DesktopLifecycleCommand>;
+type IpcCommand = RegisteredCommand<DesktopIpcCommand>;
+// A newly registered native command must also have a payload contract.
+type ContractCommand<C extends DesktopIpcCommand> = C;
+type CompleteCommand = ContractCommand<DesktopCommand>;
 
-export function desktopInvoke<C extends LifecycleCommand>(
+export function desktopInvoke<C extends IpcCommand>(
   command: C,
-  ...input: undefined extends LifecycleArgs<NoInfer<C>>
-    ? [args?: LifecycleArgs<NoInfer<C>>, task?: ControlTask]
-    : [args: LifecycleArgs<NoInfer<C>>, task?: ControlTask]
-): Promise<LifecycleResult<C>>;
-export function desktopInvoke<T>(
-  command: Exclude<DesktopCommand, DesktopLifecycleCommand>,
-  args?: Record<string, unknown>,
-  task?: ControlTask,
-): Promise<T>;
+  ...input: undefined extends DesktopArgs<NoInfer<C>>
+    ? [args?: DesktopArgs<NoInfer<C>>, task?: ControlTask]
+    : [args: DesktopArgs<NoInfer<C>>, task?: ControlTask]
+): Promise<DesktopResult<C>>;
 export async function desktopInvoke(
-  command: DesktopCommand,
-  args?: Record<string, unknown>,
+  command: CompleteCommand,
+  args?: DesktopArgs<DesktopIpcCommand>,
   task?: ControlTask,
 ): Promise<unknown> {
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
@@ -111,11 +97,7 @@ export async function desktopInvoke(
       args,
     });
   try {
-    const contract = desktopLifecycleContract(command);
-    const parsedArgs = contract ? contract.args.safeParse(args) : undefined;
-    if (parsedArgs && !parsedArgs.success) throw new Error('桌面操作参数无效。');
-    const result = await window.__TAURI_INTERNALS__.invoke<unknown>(command, {
-      ...(parsedArgs ? parsedArgs.data : args),
+    const result = await desktopTransport(command, args, {
       diagnosticOperationId: operationId,
       ...(task
         ? {
@@ -125,10 +107,6 @@ export async function desktopInvoke(
           }
         : {}),
     });
-    const parsedResult = contract?.result.safeParse(result);
-    if (parsedResult && !parsedResult.success) {
-      throw new Error('桌面操作结果未确认，请核对当前状态。', { cause: parsedResult.error });
-    }
     if (observe)
       controlEvidence(command, 'result', {
         taskId: task?.taskId ?? null,
@@ -141,7 +119,7 @@ export async function desktopInvoke(
       nativeSnapshot(command, result);
       if (task) task.event('native_snapshot', { command, operationId, result });
     }
-    return parsedResult ? parsedResult.data : result;
+    return result;
   } catch (error) {
     if (!observe && task)
       task.event('native_snapshot_failure', {

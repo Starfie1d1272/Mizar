@@ -228,7 +228,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
             disabled={busy || !desktop}
             onClick={() =>
               void run(async () => {
-                const next = await desktopInvoke<SelectedDemo | null>('select_demo_file');
+                const next = await desktopInvoke('select_demo_file');
                 if (next !== null) setSelected(next);
               })
             }

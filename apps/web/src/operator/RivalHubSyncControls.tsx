@@ -52,8 +52,9 @@ export function RivalHubSyncControls() {
           onClick={(event) => {
             if (!window.__TAURI_INTERNALS__) return;
             event.preventDefault();
+            const url = event.currentTarget.href;
             void run(async () => {
-              await desktopInvoke('open_rivalhub_workbench', { url: connection.websiteUrl });
+              await desktopInvoke('open_rivalhub_workbench', { url });
               return '已打开网站本场工作台；返回 Mizar 后可刷新比赛资料。';
             });
           }}

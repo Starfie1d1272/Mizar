@@ -36,7 +36,7 @@ Windows 窗口、缩放、游戏与 OBS 交互必须另做实机验证，浏览�
 - `build` 产生本包 `dist`。`typecheck` 使用 `--noEmit`，其公开依赖通过显式 `^build` 先准备，不能借类型检查副作用构建。
 - `build:packages` 从清单展开共享包依赖，供 lint、测试和浏览器验收使用。
 - 定向构建必须包含依赖闭包 `...` 与 `--fail-if-no-match`。Radar 独立消费者检查发行声明，而非只检查源代码。
-- 架构门禁检查循环、未声明导入、路径映射、references、不安全定向构建及实际任务图与清单的一致性。
+- 架构门禁检查循环、未声明导入、路径映射、references、不安全定向构建及实际任务图与清单的一致性。桌面原始 IPC 仅允许统一传输入口调用，参数与结果由 Rust 契约生成；新增命令必须同步窗口权限和生成文件。
 
 ```sh
 pnpm -r run --dry-run --json build
@@ -106,7 +106,7 @@ pnpm architecture:check
 
 ## 桌面 IPC 与可靠输出
 
-修改[桌面 IPC 声明](../../apps/desktop/src-tauri/ipc_lifecycle_contract.rs)后，从 `apps/desktop/src-tauri` 编译并运行 `ipc_generate.rs`，命令为 `rustc --edition=2021 ipc_generate.rs -o <临时可执行文件路径>`。Windows 构建核对生成的命令名和生命周期校验。
+修改[桌面 IPC 声明](../../apps/desktop/src-tauri/ipc_contract.rs)后，从 `apps/desktop/src-tauri` 编译并运行 `ipc_generate.rs`，命令为 `rustc --edition=2021 ipc_generate.rs -o <临时可执行文件路径>`。Windows 构建核对生成的命令名及全部参数与结果校验。
 
 `runtime_performance_window` 分别记录 Outbox worker 的快照准备、SQLite 写事务以及 Companion 主线程的事件循环延迟。主线程诊断使用 20 ms 采样间隔，实际制作机的接收间隔以现场诊断为准。
 
