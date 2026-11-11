@@ -438,7 +438,7 @@ pub fn restore_keys(
     hud: Option<&Value>,
 ) -> Result<(), String> {
     let current = read_keys(video)?;
-    binding_entries(&current)?;
+    binding_entries(&current).map_err(|error| format!("{KEYS_NAME} / 恢复前核验结构：{error}"))?;
     let mut restored = current.clone();
     let mut errors = Vec::new();
     if let Some(bindings) = bindings {
@@ -475,8 +475,11 @@ pub fn restore_with_applied(
     current: &str,
     applied: bool,
 ) -> Result<String, String> {
-    let before = value(original).map_err(|_| "原观战字段备份无法核实。")?;
-    let now = value(current).map_err(|_| "当前观战字段缺失、重复或值异常，原值备份仍保留。")?;
+    let before = value(original)
+        .map_err(|error| format!("cs2_machine_convars.vcfg / 原观战字段备份无法核实：{error}"))?;
+    let now = value(current).map_err(|error| {
+        format!("cs2_machine_convars.vcfg / 当前观战字段异常，原值备份仍保留：{error}")
+    })?;
     if boolean(&now.value)? != boolean(&before.value)? && boolean(&now.value)? != applied {
         return Err("观战字段已被外部修改，未覆盖外部修改；原值备份仍保留。".into());
     }
@@ -548,7 +551,7 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
             if entry.path() != machine
                 && text.to_ascii_lowercase().contains(KEY)
                 && field(&text, &["config", "convars", KEY])
-                    .map_err(|_| "观战配置镜像字段无法可靠解析。")?
+                    .map_err(|error| format!("观战配置镜像 / 字段无法可靠解析：{error}"))?
                     .is_some()
             {
                 return Err(
@@ -569,7 +572,9 @@ pub(crate) fn full_mode_convar_compatible(files: &[Value], video: &Path) -> Resu
         .filter(|record| record["kind"] == "convars")
         .and_then(|record| record["original"].as_str())
         .ok_or("观战设置无法确认，使用基础观战模式。")?;
-    let token = value(original).map_err(|_| "观战设置无法确认，使用基础观战模式。")?;
+    let token = value(original).map_err(|error| {
+        format!("cs2_machine_convars.vcfg / 观战设置无法确认，使用基础观战模式：{error}")
+    })?;
     if boolean(&token.value)? {
         return Err("当前数字键观战设置需要单独接管，使用基础观战模式。".into());
     }
@@ -680,7 +685,7 @@ fn prepare_original(
 ) -> Result<Value, String> {
     let keys = read_keys(video).map_err(|error| format!("{KEYS_NAME} / 读取键位：{error}"))?;
     // A malformed shared file is never permission to patch either field.
-    binding_entries(&keys)?;
+    binding_entries(&keys).map_err(|error| format!("{KEYS_NAME} / 核验结构：{error}"))?;
     let numbers = (|| {
         check_archive(video)?;
         let original = original?;
