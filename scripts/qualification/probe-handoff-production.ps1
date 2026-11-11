@@ -22,7 +22,7 @@ function Get-ItemProperty { [CmdletBinding()]param([string]$LiteralPath) return 
 function Remove-ItemProperty { [CmdletBinding()]param([string]$Path,[string]$Name) $script:registry[$Path].Remove($Name) }
 function Assert($value,[string]$message) { if (!$value) { throw $message } }
 function Reject([scriptblock]$operation,[string]$code) {
-  $message=''; try { & $operation | Out-Null } catch { $message=$_.Exception.GetBaseException().Message }
+  $message=''; try { & $operation | Out-Null } catch { $message=$_.Exception.ToString() }
   Assert ($message.Contains($code)) ('Expected '+$code+', got '+$message)
 }
 function Hash([string]$path) { return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }

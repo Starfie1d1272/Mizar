@@ -11,6 +11,7 @@ class WriterLockProbe {
   static readonly string Root = Path.Combine(Path.GetTempPath(), "Mizar-WebInstaller-Qualification", "writer-lock-" + Guid.NewGuid().ToString("N"));
   static Plan plan;
   static int passed;
+  static bool ownsPending;
   static void Check(bool ok, string label) { if(!ok) throw new Exception(label); passed++; Console.WriteLine("PASS " + label); }
   static void Reject(Action action, string label) { try { action(); } catch(IOException) { Check(true,label); return; } throw new Exception("Expected refusal: "+label); }
   static void ClearPending() { if(File.Exists(PendingPath)) File.Delete(PendingPath); }
@@ -42,6 +43,7 @@ class WriterLockProbe {
     try {
       if(File.Exists(PendingPath)) throw new Exception("Runner already has an installation transaction");
       using(var reg=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) if(reg!=null)throw new Exception("Runner already has Mizar");
+      ownsPending=true;
       Directory.CreateDirectory(Path.GetDirectoryName(PendingPath));
       plan=new Plan {schemaVersion=1,version="1.0.0",name="Mizar-v1.0.0-Windows-x64-Setup.exe",bytes=1,sha256=new string('a',64),kind="nsis-setup",gitSha=new string('b',40),contentDigest=new string('c',64),allowExecute=true,urls=new[]{"https://github.com/Starfie1d1272/Mizar/releases/download/v1.0.0/Mizar-v1.0.0-Windows-x64-Setup.exe"}};
       string target=Path.Combine(Root,"prepared"); Record(target,"prepared");
@@ -102,7 +104,7 @@ class WriterLockProbe {
       Check(!Directory.Exists(target),"original rollback removes only its empty target");
       ClearPending(); Console.WriteLine("PASS total="+passed);return 0;
     } catch(Exception error) {Console.Error.WriteLine(error);return 1;}
-    finally {ClearPending();if(Directory.Exists(Root))Directory.Delete(Root,true);}
+    finally {if(ownsPending)ClearPending();if(Directory.Exists(Root))Directory.Delete(Root,true);}
   }
   static int UninstallStub(string[] args) {
     int index=Array.FindIndex(args,value=>value.StartsWith("_?=",StringComparison.Ordinal));
