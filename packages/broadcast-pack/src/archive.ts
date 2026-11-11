@@ -1,6 +1,6 @@
 import { crc32, inflateRaw } from 'node:zlib';
 import { promisify } from 'node:util';
-import { PACK_LIMITS, parseManifest, verifyFiles } from './index.js';
+import { PACK_LIMITS, parseManifest, verifyFiles } from './manifest.js';
 
 const inflate = promisify(inflateRaw);
 function requireArchive(ok: unknown): asserts ok {

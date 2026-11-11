@@ -11,7 +11,7 @@ import {
 } from '@mizar/hud-config';
 import { MUSIC_GROUPS, musicGroupSchema, musicTrackSchema } from '@mizar/protocol/music';
 import { cameraMapSchema, orchestrationPresetSchema } from '@mizar/protocol/orchestration';
-import { boundModules, type BroadcastConfigDocument } from './index.js';
+import { boundModules, type BroadcastConfigDocument } from './model.js';
 
 const id = z.string().uuid();
 const revision = z.string().min(1).max(200);
@@ -288,7 +288,7 @@ const displayConfigSchema = z.strictObject({
 /** Validate the complete public display projection before switching renderers. */
 export function parseBroadcastDisplayConfig(
   input: unknown,
-): import('./index.js').BroadcastDisplayConfig {
+): import('./model.js').BroadcastDisplayConfig {
   return displayConfigSchema.parse(input);
 }
 
@@ -320,10 +320,10 @@ export function parseBroadcastConfigDocument(input: unknown): BroadcastConfigDoc
   return parsed;
 }
 
-export function parseModuleRecord(input: unknown): import('./index.js').ModuleRecord {
-  return module.parse(input) as import('./index.js').ModuleRecord;
+export function parseModuleRecord(input: unknown): import('./model.js').ModuleRecord {
+  return module.parse(input) as import('./model.js').ModuleRecord;
 }
 
-export function parseBroadcastPreset(input: unknown): import('./index.js').BroadcastPreset {
+export function parseBroadcastPreset(input: unknown): import('./model.js').BroadcastPreset {
   return preset.parse(input);
 }
