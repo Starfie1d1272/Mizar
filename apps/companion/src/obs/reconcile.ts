@@ -34,6 +34,12 @@ export interface ObsRpc {
   withMutationGuard?(guard: () => void): ObsRpc;
   /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
   ownershipScope?(): Promise<string>;
+  /** Read socket generations, not proof of a native process or historical log identity. */
+  observationContext?(): {
+    connectionId: string;
+    collectionGeneration: number;
+    inputGeneration: number;
+  };
   managedInputIdentity?(name: string): Promise<{ uuid: string; kind: string } | null>;
   observeManagedResources?(): Promise<boolean>;
   prepareManagedCollection?(allowChange: boolean, writer: ObsRpc): Promise<void>;

@@ -131,6 +131,7 @@ type TransportFailure = {
   phase: 'enrollment' | 'permit' | 'upload' | 'withdrawal';
   status: number | null;
   reason: string;
+  attemptId?: string;
 };
 interface State {
   version: 1;
@@ -185,6 +186,7 @@ const stateSchema = z
         phase: z.enum(['enrollment', 'permit', 'upload', 'withdrawal']),
         status: z.number().int().min(400).max(599).nullable(),
         reason: z.enum(transportReasons),
+        attemptId: z.uuid().optional(),
       })
       .nullable()
       .default(null),
@@ -683,6 +685,7 @@ export class DiagnosticDelivery {
   private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
   private transportPhase: 'enrollment' | 'permit' | 'upload' | 'withdrawal' | null = null;
+  private transportAttempt: { attemptId: string; started: number } | null = null;
   private readonly endpoint: string | undefined;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -704,6 +707,7 @@ export class DiagnosticDelivery {
     private readonly journal: SessionJournal,
     private readonly options: {
       endpoint?: string;
+      endpointSource?: 'product_default' | 'environment_override';
       fetch?: typeof fetch;
       now?: () => number;
       allowTestEndpoint?: boolean;
@@ -1566,8 +1570,39 @@ export class DiagnosticDelivery {
           : 'withdrawal';
     let request: Promise<Response> | undefined;
     await this.transaction(async () => {
+      this.transportPhase = null;
+      this.transportAttempt = null;
       if (init.signal?.aborted) throw new Error('transport_aborted');
       this.transportPhase = phase;
+      this.transportAttempt = { attemptId: randomUUID(), started: performance.now() };
+      const endpoint = new URL(this.endpoint!);
+      // Do not journal successful permit/upload attempts: their own delivery
+      // would otherwise generate the next batch even without new activity.
+      if (phase === 'enrollment')
+        this.journal.record('diagnostic_transport_attempt', {
+          phase,
+          attemptId: this.transportAttempt.attemptId,
+          request: {
+            method: init.method,
+            endpoint: {
+              protocol: endpoint.protocol,
+              hostname: endpoint.hostname,
+              port: endpoint.port,
+            },
+            endpointSource: this.options.endpointSource ?? 'provided',
+            nodeVersion: process.versions.node,
+            fetchImplementation: this.options.fetch ? 'provided' : 'node',
+            proxyConfigured: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'].some(
+              (key) => Boolean(process.env[key]),
+            ),
+            envProxyRequested:
+              process.env.NODE_USE_ENV_PROXY === '1' ||
+              process.execArgv.includes('--use-env-proxy') ||
+              /(?:^|\s)--use-env-proxy(?:\s|$)/.test(process.env.NODE_OPTIONS ?? ''),
+            noProxyConfigured: Boolean(process.env.NO_PROXY || process.env.no_proxy),
+            route: 'unverified',
+          },
+        });
       request = this.fetcher(input, init);
       // Attach a rejection handler immediately while the timestamp is committed.
       void request.catch(() => undefined);
@@ -1581,7 +1616,27 @@ export class DiagnosticDelivery {
         throw error;
       }
     });
-    const response = await request!;
+    let response: Response;
+    try {
+      response = await request!;
+    } catch (error) {
+      if (phase === 'enrollment')
+        this.journal.record('diagnostic_transport_request_failed', {
+          phase,
+          ...this.transportTiming(),
+          reason: transportFailureReason(error),
+          aborted: init.signal?.aborted ?? false,
+        });
+      throw error;
+    }
+    if (phase === 'enrollment')
+      this.journal.record('diagnostic_transport_response', {
+        phase,
+        ...this.transportTiming(),
+        status: response.status,
+        result: 'response_received_not_acknowledged',
+        aborted: init.signal?.aborted ?? false,
+      });
     if (response.status === 429 || response.status === 503) {
       const header = response.headers.get('retry-after');
       const delay =
@@ -1597,6 +1652,14 @@ export class DiagnosticDelivery {
       else this.state.serverRetryAt = retryAt;
     }
     return response;
+  }
+  private transportTiming() {
+    return this.transportAttempt
+      ? {
+          attemptId: this.transportAttempt.attemptId,
+          elapsedMs: Math.max(0, performance.now() - this.transportAttempt.started),
+        }
+      : {};
   }
   private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
@@ -2006,7 +2069,15 @@ export class DiagnosticDelivery {
         }
       });
     } catch (error) {
-      if (cancellation.aborted) return;
+      if (cancellation.aborted) {
+        if (this.transportAttempt)
+          this.journal.record('diagnostic_transport_interrupted', {
+            phase: this.transportPhase,
+            ...this.transportTiming(),
+            reason: 'withdrawal_cancelled',
+          });
+        return;
+      }
       await this.transaction(async () => {
         const retained = this.state.withdrawals.find(
           (value) => value.installationId === item.installationId,
@@ -2027,6 +2098,7 @@ export class DiagnosticDelivery {
         this.journal.record('diagnostic_withdrawal_failure', {
           installationId: retained.installationId,
           phase: this.transportPhase,
+          ...this.transportTiming(),
           error: diagnosticValue(error, '', new Set(), [
             retained.enrollmentSecret,
             retained.token ?? '',
@@ -2039,12 +2111,14 @@ export class DiagnosticDelivery {
   }
   private async send(): Promise<void> {
     this.transportPhase = null;
+    this.transportAttempt = null;
     const epoch = this.epoch;
     const abort = new AbortController();
     this.abort = abort;
     try {
       await this.syncWithdrawal(abort.signal);
       this.transportPhase = null;
+      this.transportAttempt = null;
       if (
         !this.consentActive() ||
         this.requestedPause ||
@@ -2261,7 +2335,15 @@ export class DiagnosticDelivery {
         // ACK is durable. Cleanup separately verifies retained canonical coverage; it never creates another body.
       });
     } catch (error) {
-      if (epoch !== this.epoch || this.requestedPause) return;
+      if (epoch !== this.epoch || this.requestedPause) {
+        if (this.transportAttempt)
+          this.journal.record('diagnostic_transport_interrupted', {
+            phase: this.transportPhase,
+            ...this.transportTiming(),
+            reason: this.requestedPause ? 'paused' : 'consent_changed',
+          });
+        return;
+      }
       await this.transaction(async () => {
         this.state.failures++;
         this.state.consecutiveFailures++;
@@ -2274,6 +2356,7 @@ export class DiagnosticDelivery {
                   ? detail.status
                   : null,
               reason: transportFailureReason(error),
+              ...(this.transportAttempt ? { attemptId: this.transportAttempt.attemptId } : {}),
             }
           : null;
         this.state.nextAttemptAt = Math.max(
@@ -2283,6 +2366,7 @@ export class DiagnosticDelivery {
         this.error = error instanceof Error ? error.message : 'delivery_failed';
         this.journal.record('diagnostic_transport_failure', {
           transportFailure: this.state.transportFailure,
+          ...this.transportTiming(),
           error: diagnosticValue(error, '', new Set(), [
             this.state.credentials?.enrollmentSecret ?? '',
             this.state.credentials?.token ?? '',

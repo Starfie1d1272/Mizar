@@ -12,6 +12,8 @@ import {
 } from '../local-web/origin-policy.js';
 import type { LocalWebHostDiagnostics } from '../local-web/websocket-transport.js';
 import type { ObsStatus } from '../obs/adapter.js';
+import type { readAudioDeviceDiagnostics } from '../obs/audio-device-settings.js';
+import { audioDiagnosticReadFailure } from '../obs/audio-evidence.js';
 import { PROGRAM_SCENES, type ProgramSceneState } from '@mizar/protocol/program-scenes';
 import { obsSceneName } from '../obs/desired-state.js';
 import type { DebugEvidenceStore } from '../runtime/debug-state.js';
@@ -200,6 +202,9 @@ export function registerSupportRoutes(
     readonly delivery: () => readonly LatestWinsConsumerHealth[];
     readonly hosts: () => LocalWebHostDiagnostics;
     readonly obs: () => Promise<ObsStatus | undefined>;
+    readonly obsAudioDiagnostics?: () => Promise<
+      Awaited<ReturnType<typeof readAudioDeviceDiagnostics>> | undefined
+    >;
     readonly program?: () => ProgramSceneState;
     readonly programContext?: () => {
       contextFreshness: string;
@@ -213,6 +218,7 @@ export function registerSupportRoutes(
     desktop: Record<string, unknown>,
     nativeSummary: unknown,
     obs: ObsStatus | undefined,
+    obsAudio: unknown,
   ) {
     const program = options.program?.();
     const context = options.programContext?.();
@@ -223,6 +229,7 @@ export function registerSupportRoutes(
     const hosts = options.hosts();
     return {
       asOf: new Date().toISOString(),
+      obsAudio,
       ...{
         diagnosticDelivery: (() => {
           const status = options.diagnosticDelivery?.();
@@ -550,6 +557,12 @@ export function registerSupportRoutes(
                 record(body.desktop),
                 null,
                 await options.obs().catch(() => undefined),
+                (await options
+                  .obsAudioDiagnostics?.()
+                  .then((value) => value ?? { status: 'not_configured' })
+                  .catch(audioDiagnosticReadFailure)) ?? {
+                  status: 'not_configured',
+                },
               ),
               artifact: {
                 gitSha: digest(options.artifact?.gitSha, 40),

@@ -221,6 +221,7 @@ export interface CompanionAppOptions {
   readonly workspaceObserver?: WorkspaceObserver;
   readonly observerSettingsPath?: string;
   readonly diagnosticsEndpoint?: string;
+  readonly diagnosticsEndpointSource?: 'product_default' | 'environment_override';
   readonly diagnosticsFetch?: typeof fetch;
   readonly onAcceptedRaw?: AcceptedRawSink;
   readonly onObservation?: ObservationSink;
@@ -2496,6 +2497,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(sessionJournal ? { journal: sessionJournal } : {}),
     originPolicy: localWebTransport.getOriginPolicy(),
     ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
+    ...(options.diagnosticsEndpointSource
+      ? { endpointSource: options.diagnosticsEndpointSource }
+      : {}),
     ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
     onConsent: async () => {
       // The delivery owner invokes this only after durable consent. Do not let
@@ -2544,6 +2548,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
     hosts: () => localWebTransport.getHostDiagnostics(),
     obs: async () => obsAdapter?.status(),
+    obsAudioDiagnostics: async () => obsAdapter?.readAudioDeviceDiagnostics(),
     program: () => sceneController.get(),
     programContext: () => {
       const { operator, program } = projectionCoordinator.getCurrent();

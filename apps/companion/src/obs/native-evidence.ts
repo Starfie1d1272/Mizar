@@ -11,6 +11,7 @@ import {
 } from './desired-state.js';
 import { readObsNativeProcesses, type ObsNativeProcess } from './native-process.js';
 import { redactDiagnosticText } from '../updates/diagnostics.js';
+import { audioDeviceSelector, audioSourceRole, audioSourceUuid } from './audio-evidence.js';
 
 export const OBS_NATIVE_LIMITS = {
   collectionMs: 7000,
@@ -110,7 +111,10 @@ function ini(text: string): Record<string, Record<string, string>> {
 function configInt(v: string | undefined) {
   return v && /^\d{1,7}$/.test(v) ? number(Number(v)) : null;
 }
-export function projectObsSavedCollection(value: unknown) {
+export function projectObsSavedCollection(
+  value: unknown,
+  nameReference: (name: string) => string | null = () => null,
+) {
   const data = obj(value),
     sources = [...list(data.sources), ...list(data.groups)];
   const programName =
@@ -179,6 +183,27 @@ export function projectObsSavedCollection(value: unknown) {
     programSceneKnown: programName !== null,
     previewScene: sceneId(data.current_scene),
     captureSources: captures,
+    audioSources: sources
+      .filter((source) =>
+        ['wasapi_input_capture', 'wasapi_output_capture'].includes(String(source.id)),
+      )
+      .slice(0, OBS_NATIVE_LIMITS.captures)
+      .map((source) => ({
+        uuid: audioSourceUuid(source.uuid),
+        role: audioSourceRole(source.name),
+        sourceNameRef: typeof source.name === 'string' ? nameReference(source.name) : null,
+        kind: source.id,
+        selector: audioDeviceSelector(obj(source.settings).device_id),
+        explicitUseDeviceTiming: bool(obj(source.settings).use_device_timing),
+        effectiveUseDeviceTiming: null,
+        liveIdentity: 'not_proven',
+      })),
+    audioSourcesLimited:
+      (Array.isArray(data.sources) && data.sources.length > 256) ||
+      (Array.isArray(data.groups) && data.groups.length > 256) ||
+      sources.filter((source) =>
+        ['wasapi_input_capture', 'wasapi_output_capture'].includes(String(source.id)),
+      ).length > OBS_NATIVE_LIMITS.captures,
     traversalLimited: visited >= 64,
     frameHealth: 'unverified',
     hookProcessIdentity: 'not_proven',
@@ -192,6 +217,12 @@ export interface ObsNativeLogEvent {
   readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio';
   readonly audioLagMs?: number;
   readonly audioBufferMs?: number;
+  /** References are local to one evidence collection, and prove name equality only. */
+  readonly audioSourceNameRef?: string | null;
+  readonly audioDeviceNameRef?: string | null;
+  readonly audioSampleRateHz?: number | null;
+  readonly audioDefaultDirection?: 'input' | 'output';
+  readonly audioIdentity?: 'historical_name_only';
   readonly audioSource?:
     'microphone' | 'desktop' | 'game' | 'commentary' | 'music' | 'effect' | 'other';
   readonly outcome: 'attempt' | 'success' | 'stopped' | 'failure' | 'retry';
@@ -284,7 +315,10 @@ const CAPTURE_FAILURE_OPERATIONS = [
   ['init_capture_data failed', 'capture_data_initialize', 'capture_failure'],
 ] as const;
 
-export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null {
+export function projectObsNativeLogLine(
+  line: string,
+  nameReference: (name: string) => string | null = () => null,
+): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
   // This is an optional scheduling privilege, not a renderer initialization failure.
@@ -293,16 +327,16 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
     /^Source (.+) audio is lagging \(over by (\d+(?:\.\d+)?) ms\) at max audio buffering\. Restarting source audio\.$/i.exec(
       stamp[2]!,
     );
-  const device = /^WASAPI: Device '.*' failed to start \(source: (.+)\)$/i.exec(stamp[2]!);
-  const initialized = /^WASAPI: Device '.*' \[\d+ Hz\] initialized \(source: (.+)\)$/i.exec(
+  const device = /^WASAPI: Device '(.*)' failed to start \(source: (.+)\)$/i.exec(stamp[2]!);
+  const initialized = /^WASAPI: Device '(.*)' \[(\d+) Hz\] initialized \(source: (.+)\)$/i.exec(
     stamp[2]!,
   );
-  const invalidated = /^Device '.*' invalidated\.\s+Retrying \(source: (.+)\)$/i.exec(stamp[2]!);
+  const invalidated = /^Device '(.*)' invalidated\.\s+Retrying \(source: (.+)\)$/i.exec(stamp[2]!);
   const buffer =
     /^adding \d+ milliseconds of audio buffering, total audio buffering is now (\d+) milliseconds \(source: (.+)\)$/i.exec(
       stamp[2]!,
     );
-  const defaultChanged = /^WASAPI: Default (input|output) device changed$/i.test(stamp[2]!);
+  const defaultChanged = /^WASAPI: Default (input|output) device changed$/i.exec(stamp[2]!);
   const audioReason = lag
     ? 'audio_lag_restart'
     : device
@@ -330,15 +364,9 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
   if (audioOperation) {
     const lagMs = lag ? Number(lag[2]) : undefined;
     const bufferMs = buffer ? number(Number(buffer[1])) : null;
-    const source = lag?.[1] ?? device?.[1] ?? initialized?.[1] ?? invalidated?.[1] ?? buffer?.[2];
-    const roles: Record<string, NonNullable<ObsNativeLogEvent['audioSource']>> = {
-      麦克风: 'microphone',
-      桌面声音: 'desktop',
-      游戏声音: 'game',
-      其他解说: 'commentary',
-      音乐: 'music',
-      音效: 'effect',
-    };
+    const source = lag?.[1] ?? device?.[2] ?? initialized?.[3] ?? invalidated?.[2] ?? buffer?.[2];
+    const deviceName = device?.[1] ?? initialized?.[1] ?? invalidated?.[1];
+    const sampleRate = initialized ? number(Number(initialized[2])) : null;
     return {
       localTime: stamp[1]!,
       category: 'audio',
@@ -357,7 +385,17 @@ export function projectObsNativeLogLine(line: string): ObsNativeLogEvent | null 
       code: null,
       codeHex: null,
       hookVersions: null,
-      ...(source ? { audioSource: Object.hasOwn(roles, source) ? roles[source]! : 'other' } : {}),
+      audioIdentity: 'historical_name_only',
+      ...(source
+        ? { audioSource: audioSourceRole(source), audioSourceNameRef: nameReference(source) }
+        : {}),
+      ...(deviceName ? { audioDeviceNameRef: nameReference(deviceName) } : {}),
+      ...(initialized
+        ? { audioSampleRateHz: sampleRate !== null && sampleRate > 0 ? sampleRate : null }
+        : {}),
+      ...(defaultChanged
+        ? { audioDefaultDirection: defaultChanged[1]!.toLowerCase() as 'input' | 'output' }
+        : {}),
       ...(bufferMs !== null ? { audioBufferMs: bufferMs } : {}),
       ...(lagMs !== undefined && Number.isFinite(lagMs) ? { audioLagMs: lagMs } : {}),
     };
@@ -574,6 +612,7 @@ export interface RelatedObsLogFile {
   sourceSnapshot: 'bytes_at_open; later appends are outside this export';
 }
 export interface ObsNativeEvidence {
+  observedAt?: string;
   collectionStatus: 'available' | 'unsupported' | 'timeout' | 'failed';
   processStatus: 'available' | 'failed' | 'unavailable';
   processes: Omit<ObsNativeProcess, 'executablePath'>[];
@@ -632,6 +671,7 @@ export async function collectObsNativeEvidence(
   options: ObsNativeOptions = {},
 ): Promise<ObsNativeEvidence> {
   const evidence: ObsNativeEvidence = {
+    observedAt: new Date((options.now ?? Date.now)()).toISOString(),
     collectionStatus: 'available',
     processStatus: 'unavailable',
     processes: [],
@@ -644,6 +684,17 @@ export async function collectObsNativeEvidence(
   if ((options.platform ?? process.platform) !== 'win32')
     return { ...evidence, collectionStatus: 'unsupported' };
   const now = options.now ?? Date.now;
+  // Opaque references are never reused across exports, nor treated as source/endpoint identity.
+  // No raw name or stable digest of a possible credential enters this projection.
+  const names = new Map<string, string>();
+  const nameReference = (name: string) => {
+    if (!name || name.length > 2048 || redactDiagnosticText(name) !== name) return null;
+    if (names.has(name)) return names.get(name)!;
+    if (names.size >= 512) return null;
+    const ref = `name_${names.size + 1}`;
+    names.set(name, ref);
+    return ref;
+  };
   let cancelled = false;
   const check = () => {
     if (cancelled) throw new Error('obs_native_deadline');
@@ -887,7 +938,7 @@ export async function collectObsNativeEvidence(
       let saved: ReturnType<typeof projectObsSavedCollection> | null = null;
       if (collection) {
         try {
-          saved = projectObsSavedCollection(JSON.parse(collection.text));
+          saved = projectObsSavedCollection(JSON.parse(collection.text), nameReference);
         } catch {
           result.fileStatus.collection = 'failed';
           error(
@@ -898,6 +949,9 @@ export async function collectObsNativeEvidence(
       }
       result.config = {
         source: 'persisted_files_not_live',
+        observedAt: new Date(now()).toISOString(),
+        collectionModifiedAt: collection ? new Date(collection.mtime).toISOString() : null,
+        mixSampleRateHz: configInt(profileIni.Audio?.SampleRate),
         globalRead: !!global,
         userRead: !!user,
         profileRead: !!profile,
@@ -1110,7 +1164,7 @@ export async function collectObsNativeEvidence(
                 (source) => line.includes(`: '${source}']`) || line.includes(`: "${source}"]`),
               );
               const occurredAt = lineDate(line);
-              const parsed = projectObsNativeLogLine(line);
+              const parsed = projectObsNativeLogLine(line, nameReference);
               const event = parsed ? { ...parsed, occurredAt } : null;
               if (!event) {
                 log.omittedLines++;
@@ -1118,7 +1172,7 @@ export async function collectObsNativeEvidence(
               }
               eventCount++;
               if (event.outcome === 'failure') {
-                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}${event.audioSource ? `:${event.audioSource}` : ''}`;
+                const key = `${event.reason}:${event.code}:${event.source}:${event.target}${event.operation ? `:${event.operation}` : ''}${event.audioSource ? `:${event.audioSource}` : ''}${event.audioSourceNameRef ? `:${event.audioSourceNameRef}` : ''}`;
                 if (Object.keys(log.failureCounts!).length < 64 || key in log.failureCounts!)
                   log.failureCounts![key] = (log.failureCounts![key] ?? 0) + 1;
                 failures.delete(key);
