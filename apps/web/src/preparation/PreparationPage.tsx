@@ -3,7 +3,6 @@ import { MatchBpSection } from './MatchBpSection';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import { hudStyleReference } from './hud-style-reference';
 import { EventMatchWorkspace } from './EventMatchWorkspace';
-import { HudPresetDirectory } from './HudPresetDirectory';
 import { BpPresentationSettingsPanel } from './BpPresentationSettings';
 import './production.css';
 import { AutomaticPreparation, usePreparationStatus } from './AutomaticPreparation';
@@ -14,7 +13,7 @@ import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { MatchDocumentView, type MatchSection } from './MatchDocumentView';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { OperatorShell } from '../operator/OperatorShell';
 import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
@@ -71,6 +70,12 @@ function TeamBadge({ name, logoUrl }: { readonly name: string; readonly logoUrl:
     </span>
   );
 }
+
+const HudPresetDirectory = lazy(() =>
+  import('./HudPresetDirectory').then(({ HudPresetDirectory }) => ({
+    default: HudPresetDirectory,
+  })),
+);
 
 export function PreparationPage() {
   const path = window.location.pathname === '/operator' ? '/' : window.location.pathname;
@@ -825,7 +830,9 @@ export function PreparationPage() {
         ) : path === '/picture' ? (
           tab === 'hud' ? (
             <>
-              <HudPresetDirectory action={action} />
+              <Suspense fallback={<StatusBanner tone="info">正在加载画面预览…</StatusBanner>}>
+                <HudPresetDirectory action={action} />
+              </Suspense>
               <BpPresentationSettingsPanel />
             </>
           ) : (

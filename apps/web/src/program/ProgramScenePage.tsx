@@ -12,10 +12,10 @@ import {
   type ProgramPresentation,
   type ProgramSceneId,
 } from '@mizar/protocol/program-scenes';
+import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { useHudConfigClient } from '../realtime/hud-config-client';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
-import { presentationPreview, programPreviewSnapshot } from './presentation-preview';
 import { ProgramView, StatsInsertView } from '@mizar/hud-view';
 import { useStatsRotation } from './useStatsRotation';
 
@@ -62,7 +62,35 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
   const preview = params.get('preview') === '1';
   const liveData = usePresentation(preview);
-  const data = preview ? presentationPreview(sceneId, params.get('variant')) : liveData;
+  const variant = params.get('variant');
+  const [sample, setSample] = useState<{
+    sceneId: ProgramSceneId;
+    variant: string | null;
+    data: ProgramPresentation;
+    snapshot: ProgramSnapshot;
+  } | null>(null);
+  useEffect(() => {
+    if (!preview) return;
+    let active = true;
+    void import('./presentation-preview')
+      .then((loaded) => {
+        if (active)
+          setSample({
+            sceneId,
+            variant,
+            data: loaded.presentationPreview(sceneId, variant),
+            snapshot: loaded.programPreviewSnapshot('gameplay', variant),
+          });
+      })
+      .catch((error: unknown) => {
+        if (active) console.error('Mizar 节目预览样例加载失败', error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [preview, sceneId, variant]);
+  const selectedSample = sample?.sceneId === sceneId && sample.variant === variant ? sample : null;
+  const data = preview ? (selectedSample?.data ?? null) : liveData;
   const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
   const display = useBroadcastDisplayConfig(!preview, sceneId);
@@ -73,9 +101,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
     !preview && display.current?.hud.renderer === 'native' ? display.current.hud : null;
   const client = useLocalChannelClient('program');
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
-  const snapshot = preview
-    ? programPreviewSnapshot('gameplay', params.get('variant'))
-    : connection.current;
+  const snapshot = preview ? (selectedSample?.snapshot ?? null) : connection.current;
   const clock = snapshot?.payload.clock?.phase;
   const matchId = data?.match?.matchId ?? null;
   const observedMatch = connection.current?.payload.match?.matchId;
@@ -96,7 +122,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   // pre-match cards use the selected presentation, but never a conflicting match.
   const sameMatch =
     !connection.current || observedMatch === matchId || (waiting && observedMatch == null);
-  if (!preview && display.current === null) return null;
+  if (preview ? data === null : display.current === null) return null;
   const sceneStyle = display.current
     ? (pulseTokenStyle(display.current.program) ?? undefined)
     : undefined;

@@ -1,7 +1,7 @@
 import { installPerformanceJournal } from './debug/performance-journal';
 import { installControlJournal } from './debug/control-journal';
 import '@mizar/design-tokens/tokens.css';
-import { StrictMode } from 'react';
+import { StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import '@fontsource/inter/400.css';
@@ -24,6 +24,8 @@ installPerformanceJournal();
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <Suspense fallback={null}>
+      <App />
+    </Suspense>
   </StrictMode>,
 );

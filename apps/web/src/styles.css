@@ -21,73 +21,11 @@ body,
   min-height: 100%;
 }
 
-.shell {
-  background: var(--mizar-bg-canvas);
-  box-sizing: border-box;
-  display: grid;
-  gap: 2rem;
-  margin: 0 auto;
-  max-width: 58rem;
-  min-height: calc(100dvh - 56px);
-  padding: 12vh 2rem;
-}
-
-.shell__header {
-  align-self: end;
-}
-
-.shell__eyebrow {
-  color: var(--mizar-fg-muted);
-  font-size: 0.8rem;
-  letter-spacing: 0.12em;
-  margin: 0 0 1rem;
-  text-transform: uppercase;
-}
-
 h1 {
   font-size: clamp(2.5rem, 8vw, 5rem);
   letter-spacing: -0.05em;
   line-height: 0.95;
   margin: 0;
-}
-
-.shell__header > p:not(.shell__eyebrow) {
-  color: var(--mizar-fg-secondary);
-  font-size: 1.1rem;
-  line-height: 1.6;
-  max-width: 38rem;
-}
-
-.shell__nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.shell__nav a {
-  border: 1px solid var(--mizar-border-default);
-  border-radius: var(--mizar-shape-control);
-  color: var(--mizar-fg-primary);
-  padding: 0.65rem 1rem;
-  text-decoration: none;
-}
-
-.shell__nav a[aria-current='page'] {
-  background: var(--mizar-fg-primary);
-  color: var(--mizar-bg-canvas);
-}
-
-.shell__nav a:focus-visible {
-  outline: 3px solid var(--mizar-focus-ring);
-  outline-offset: 3px;
-}
-
-.shell__note {
-  border-left: 2px solid var(--mizar-border-strong);
-  color: var(--mizar-fg-muted);
-  line-height: 1.6;
-  margin: 0;
-  padding-left: 1rem;
 }
 
 .operator-shell {
