@@ -2345,11 +2345,11 @@ impl ManagedCs2 {
             .parent()
             .ok_or("Steam 目录不可用。")?;
         let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024 * 1024)?;
-        let nickname =
-            crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])?
-                .map(|v| v.value)
-                .filter(|v| !v.trim().is_empty())
-                .ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
+        let nickname = crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])
+            .map_err(|error| format!("loginusers.vdf / 读取账号昵称：{error}"))?
+            .map(|v| v.value)
+            .filter(|v| !v.trim().is_empty())
+            .ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
         let avatar =
             backup_avatar(&steam_root.join(format!("config/avatarcache/{account_id}.png")));
         let mut frame = None;
