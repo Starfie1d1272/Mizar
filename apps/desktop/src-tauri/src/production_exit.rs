@@ -1,9 +1,9 @@
 //! Host exit and managed CS2 cleanup preserve Companion production safety boundaries.
+use crate::desktop_lifecycle::{WorkspaceExitStage, WorkspaceExitStatus};
 use crate::{
     cs2_activity, demo_test, managed_cs2, observer_workspace, startup_log::DesktopLog,
     workspace_presentation,
 };
-use crate::desktop_lifecycle::{WorkspaceExitStage, WorkspaceExitStatus};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

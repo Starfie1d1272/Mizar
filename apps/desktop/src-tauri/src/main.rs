@@ -13,12 +13,15 @@ mod cs2_spectator;
 mod cs2_video;
 mod demo_host;
 mod demo_test;
+mod desktop_lifecycle;
 mod desktop_worker;
 mod entry_intent;
 mod geometry;
 mod gsi_host;
 mod host_runtime;
 mod host_state;
+#[path = "../ipc_lifecycle_contract.rs"]
+mod ipc_lifecycle_contract;
 mod lifecycle_contract;
 mod managed_cs2;
 mod mulnx_launch;
@@ -33,9 +36,6 @@ mod preparation_evidence;
 mod preparation_gate;
 mod preparation_task;
 mod production_exit;
-mod desktop_lifecycle;
-#[path = "../ipc_lifecycle_contract.rs"]
-mod ipc_lifecycle_contract;
 mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;
 mod spectator_snapshot;

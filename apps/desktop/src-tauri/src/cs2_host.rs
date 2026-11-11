@@ -1,9 +1,9 @@
 //! Host-side managed game and camera operations shared by preparation and IPC.
+use crate::desktop_lifecycle::{BackupAction, BackupSelection, Busy, Cs2BusyStatus, Cs2Status};
 use crate::{
     cs2_activity, cs2_console, cs2_preferences, managed_cs2, mulnx_launch, observer_hud,
     preparation_gate, production_exit, startup_log::DesktopLog, updates, workspace_presentation,
 };
-use crate::desktop_lifecycle::{BackupAction, BackupSelection, Busy, Cs2BusyStatus, Cs2Status};
 use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
@@ -487,8 +487,7 @@ pub(crate) async fn set_preferences(
                         "CS2 配置状态不可用。",
                     )
                 })?;
-                preferences.prefer_mulnx =
-                    prefer_mulnx.unwrap_or(cs2.status()?.prefer_mulnx);
+                preferences.prefer_mulnx = prefer_mulnx.unwrap_or(cs2.status()?.prefer_mulnx);
                 cs2.preferences(preferences)
             }
         })
