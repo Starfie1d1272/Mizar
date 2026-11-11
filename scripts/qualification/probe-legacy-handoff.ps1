@@ -92,3 +92,31 @@ exit 17
   if ($allExited) { Remove-Item -LiteralPath $root -Recurse -Force }
   else { Write-Warning 'A bounded fixture did not exit; retained its isolated directory. No process was killed.' }
 }
+
+# Named mutex owner inspection is a read-only NT query; verify the ABI before
+# depending on it for a controlled parent/child writer handoff.
+Add-Type -TypeDefinition @'
+using System;
+using System.Threading;
+using System.Runtime.InteropServices;
+public static class HandoffMutexProbe {
+  [StructLayout(LayoutKind.Sequential)] struct Owner { public IntPtr Process, Thread; }
+  [DllImport("ntdll.dll")] static extern int NtQueryMutant(IntPtr handle, int kind, out Owner owner, int size, out int returned);
+  public static int OwnerPid(string name) {
+    using(var mutex = Mutex.OpenExisting(name)) {
+      Owner owner; int returned;
+      int result=NtQueryMutant(mutex.SafeWaitHandle.DangerousGetHandle(),1,out owner,Marshal.SizeOf(typeof(Owner)),out returned);
+      if(result!=0 || returned!=Marshal.SizeOf(typeof(Owner))) throw new InvalidOperationException("NtQueryMutant status="+result+" size="+returned);
+      return owner.Process.ToInt32();
+    }
+  }
+}
+'@
+$name = 'Local\Mizar-Handoff-Probe-' + [guid]::NewGuid().ToString('N')
+$mutex = [Threading.Mutex]::new($true, $name)
+try {
+  Assert ([HandoffMutexProbe]::OwnerPid($name) -eq $PID) 'NT mutex owner did not match the actual holding process.'
+  $mutex.ReleaseMutex()
+  Assert ([HandoffMutexProbe]::OwnerPid($name) -eq 0) 'Unowned mutex still reported an owner.'
+  Write-Output 'PASS named mutex reports actual holding process and becomes unowned after release'
+} finally { $mutex.Dispose() }
