@@ -38,7 +38,8 @@ export interface StaticHostOptions {
   readonly qualificationMode?: boolean;
   readonly readResource?: (
     path: string,
-    range?: string,
+    range: string | undefined,
+    signal: AbortSignal,
   ) => Promise<Awaited<ReturnType<ResourceStore['read']>> | undefined>;
 }
 
@@ -114,10 +115,14 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
     const filename = pathFromRequest(request);
     if (filename.length === 0) return reply.callNotFound();
     if (options.readResource) {
+      const disconnected = new AbortController();
+      const cancelRead = () => disconnected.abort();
+      reply.raw.once('close', cancelRead);
       try {
         const resource = await options.readResource(
           decodeURIComponent(filename),
           request.method === 'GET' ? request.headers.range : undefined,
+          disconnected.signal,
         );
         if (resource) {
           reply
@@ -137,6 +142,7 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
           return reply.send(resource.bytes);
         }
       } catch (error) {
+        if (disconnected.signal.aborted) return reply;
         const code = error instanceof ResourceStoreError ? error.code : 'resource_read_failed';
         if (error instanceof ResourceStoreError && error.totalBytes !== undefined)
           reply.header('content-range', `bytes */${error.totalBytes}`);
@@ -145,6 +151,8 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
             code === 'resource_range_invalid' ? 416 : code === 'resource_file_unknown' ? 404 : 409,
           )
           .send({ error: code });
+      } finally {
+        reply.raw.off('close', cancelRead);
       }
     }
     if (extname(filename) === '' && request.headers.accept?.includes('text/html')) {

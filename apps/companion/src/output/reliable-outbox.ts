@@ -596,7 +596,16 @@ export class ReliableOutbox {
     private readonly filePath: string,
     private readonly onRecovery?: (report: OutboxRecovery | undefined, error: unknown) => void,
     private readonly onEvidence?: (record: ReliableOutboxRecord, reason: string) => void,
+    private readonly onWorkerFailure?: (error: Error) => void,
   ) {}
+
+  getWorkerFailure() {
+    return this.database?.failureReason;
+  }
+
+  getCaptureCapacity() {
+    return this.available ? this.repository().request('captureCapacity') : undefined;
+  }
 
   getRecovery(): OutboxRecovery | undefined {
     return this.recovery;
@@ -605,15 +614,16 @@ export class ReliableOutbox {
   /** One-time JSON import lives in the repository; normal operation never writes legacy files. */
   load(): Promise<void> {
     return this.queue.run(async () => {
+      if (this.database?.failed) throw new Error('outbox_worker_restart_required');
       if (this.database) return;
-      const database = new OutboxWorkerClient(this.filePath);
+      const database = new OutboxWorkerClient(this.filePath, this.onWorkerFailure);
       this.database = database;
       let loaded: LoadedOutbox;
       try {
         loaded = await this.restoreSnapshot();
       } catch (error) {
         this.database = undefined;
-        await database.close();
+        await database.close().catch(() => undefined);
         throw error;
       }
       this.boundaryCaptureLost = loaded.lost;

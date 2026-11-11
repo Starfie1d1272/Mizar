@@ -220,6 +220,7 @@ export class LocalWebSocketTransport {
   private readonly heartbeatIntervalMs: number;
   private readonly connectionId: () => string;
   private readonly connections = new Map<string, Connection>();
+  private readonly encoded = new WeakMap<LocalWebMessage, { text: string; bytes: number }>();
   private readonly totals = {
     connected: 0,
     disconnected: 0,
@@ -454,8 +455,13 @@ export class LocalWebSocketTransport {
       throw new Error('local WebSocket bufferedAmount exceeded limit');
     }
 
-    const serialized = JSON.stringify(snapshot);
-    const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+    let encoded = this.encoded.get(snapshot);
+    if (!encoded) {
+      const text = JSON.stringify(snapshot);
+      encoded = { text, bytes: Buffer.byteLength(text, 'utf8') };
+      this.encoded.set(snapshot, encoded);
+    }
+    const { text: serialized, bytes: serializedBytes } = encoded;
     if (serializedBytes > MAX_LOCAL_SNAPSHOT_BYTES) {
       this.countTransportDiagnostic('snapshot_oversize');
       report(this.onDiagnostic, this.logger, {

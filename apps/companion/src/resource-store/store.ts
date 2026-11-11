@@ -606,7 +606,7 @@ export class ResourceStore {
 
   private async activate(
     packId: string,
-    signal = idleSignal(),
+    signal: AbortSignal = idleSignal(),
     rollback = false,
   ): Promise<boolean> {
     const entry = this.entry(packId);
@@ -718,6 +718,7 @@ export class ResourceStore {
     packId: string,
     relative: string,
     range?: string,
+    signal: AbortSignal = idleSignal(),
   ): Promise<{
     bytes: Buffer;
     contentType: string;
@@ -730,7 +731,7 @@ export class ResourceStore {
     if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
     const active = entry.active;
     if (!active) throw new ResourceStoreError('resource_not_ready');
-    return this.readCandidate(packId, active, relative, range);
+    return this.readCandidate(packId, active, relative, range, signal);
   }
 
   /** Resolve an authenticated manifest identity, never a moving active pointer. */
@@ -780,7 +781,9 @@ export class ResourceStore {
     active: CachedPack,
     relative: string,
     range?: string,
+    signal: AbortSignal = idleSignal(),
   ) {
+    signal.throwIfAborted();
     const entry = this.entry(packId);
     const file = active.descriptor.files.find((candidate) => candidate.path === relative);
     if (!file) throw new ResourceStoreError('resource_file_unknown');
@@ -814,7 +817,7 @@ export class ResourceStore {
     this.readingBytes += readBytes;
     try {
       const result = Buffer.alloc(readBytes);
-      await verifiedRead(this.content(packId, active.id), file, idleSignal(), (chunk, offset) => {
+      await verifiedRead(this.content(packId, active.id), file, signal, (chunk, offset) => {
         const from = Math.max(start, offset),
           to = Math.min(end + 1, offset + chunk.length);
         if (to > from) chunk.copy(result, from - start, from - offset, to - offset);
@@ -828,7 +831,7 @@ export class ResourceStore {
         partial: range !== undefined,
       };
     } catch (error) {
-      if (entry.active?.id === active.id) this.failed(entry, error);
+      if (!signal.aborted && entry.active?.id === active.id) this.failed(entry, error);
       throw error;
     } finally {
       this.readers--;

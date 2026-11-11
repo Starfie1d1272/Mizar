@@ -89,6 +89,7 @@ import { toMatchDocumentV1 } from '@mizar/rivalhub';
 import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
 import { OutputService, type OutputServiceOptions } from './output/service.js';
 import { outboxLocalError, ReliableOutbox } from './output/reliable-outbox.js';
+import { closeWebsiteOutput } from './output/shutdown.js';
 import type { OnlineManifestConfig } from './match-context/http-source.js';
 import { registerOnlineManifestRoutes } from './match-context/online-routes.js';
 import {
@@ -328,6 +329,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             }
           },
           (record, reason) => businessJournal?.reliable(record, reason),
+          (error) => {
+            app.log.error(
+              { event: 'outbox', stage: 'worker', err: outboxLocalError(error) },
+              '网站发送队列已停止，重启后将按原提交和回执核对。',
+            );
+            recordRuntimeDiagnostic('output-outbox_worker_restart_required', 'projection', false);
+          },
         );
   const outputService: OutputService = new OutputService({
     ...(outbox ? { outbox } : {}),
@@ -840,10 +848,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerStaticHost(app, {
     ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
     qualificationMode: options.qualificationMode ?? false,
-    readResource: async (path, range) => {
+    readResource: async (path, range, signal) => {
       if (!resources || !isOfficialWebResource(path) || !resources.getStatus(PACK_ID).activeVersion)
         return undefined;
-      return resources.read(PACK_ID, path, range);
+      return resources.read(PACK_ID, path, range, signal);
     },
   });
   const hudConfigStore =
@@ -2099,9 +2107,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           .send({ error: 'live_snapshot_unavailable' })
       : reply.header('cache-control', 'no-store').send(current);
   });
-  app.get('/local/v1/reliable-output-status', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send({
+  app.get('/local/v1/reliable-output-status', async (_request, reply) => {
+    const capacity = await outbox?.getCaptureCapacity()?.catch(() => undefined);
+    return reply.header('cache-control', 'no-store').send({
       available: outputService.isReliableAvailable(),
+      workerFailure: outbox?.getWorkerFailure() ?? null,
+      capacity: capacity ?? null,
       recovery: outputService.getReliableRecovery() ?? null,
       revokedIsolation: outputService.getRevokedIsolationSummary() ?? null,
       records: !outputService.isReliableAvailable()
@@ -2113,8 +2124,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             attempts: record.attempts,
             updatedAt: record.updatedAt,
           })),
-    }),
-  );
+    });
+  });
   const qualificationMode = options.qualificationMode ?? false;
 
   app.get('/health', () => {
@@ -2658,29 +2669,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     await closeStep(() => diagnosticDelivery.close());
 
-    // A remote release can remain pending. A local writer cannot outlive its receipt.
-    if (options.rivalhubConnection?.shutdownSource) {
-      const remote = new AbortController();
-      const timeout = new Error('数据源远端收尾超时');
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          options.rivalhubConnection.shutdownSource(remote.signal),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => {
-              remote.abort(timeout);
-              reject(timeout);
-            }, 9000);
-          }),
-        ]);
-      } catch (error) {
-        app.log.warn({ err: error }, '远端数据源收尾待重试');
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-    await closeStep(() => options.rivalhubConnection?.closeSourceState?.());
-    await closeStep(() => outputService.close());
+    await closeStep(() =>
+      closeWebsiteOutput(options.rivalhubConnection, outputService, (error) =>
+        app.log.warn({ err: error }, '远端数据源收尾待重试'),
+      ),
+    );
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
     if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
       const stateRoot = process.env.MIZAR_STATE_ROOT;

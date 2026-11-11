@@ -67,6 +67,7 @@ export function checkArchitecture(options = {}) {
   checkCstvParserImportOwnership(records, report);
   checkProgramProjectionImportOwnership(records, repository, report);
   checkWorkspaceCycles(workspaces, report);
+  checkSourceCycles(records, repository, report);
   checkBuildSystem(repository, workspaces, report);
   checkDesign(repository, records, report);
 
@@ -964,6 +965,42 @@ function checkWorkspaceCycles(workspaces, report) {
     graph.set(info.name, [...dependencies].sort());
   }
 
+  findCycles(graph, (cycle) => {
+    const firstWorkspace = workspaces.get(cycle[0]);
+    report({
+      ruleId: 'ARCH_WORKSPACE_CYCLE',
+      file: firstWorkspace?.manifestPath ?? `${cycle[0]}/package.json`,
+      target: [...cycle, cycle[0]].join(' -> '),
+      message:
+        'All workspace dependencies must form an acyclic graph; split the ownership boundary instead of adding a runtime cycle.',
+    });
+  });
+}
+
+function checkSourceCycles(records, repository, report) {
+  const graph = new Map();
+  for (const record of records.values()) {
+    if (record.kind !== 'production') continue;
+    const local = new Set();
+    for (const edge of record.allEdges) {
+      if (!edge.runtime) continue;
+      const path = resolveRelativeModule(record.path, edge.specifier, repository);
+      const target = records.get(path);
+      if (target?.kind === 'production' && target.owner === record.owner) local.add(path);
+    }
+    graph.set(record.path, [...local].sort());
+  }
+  findCycles(graph, (cycle) =>
+    report({
+      ruleId: 'ARCH_RUNTIME_MODULE_CYCLE',
+      file: cycle[0],
+      target: [...cycle, cycle[0]].join(' -> '),
+      message: 'Production modules in one workspace must not import each other at runtime.',
+    }),
+  );
+}
+
+function findCycles(graph, onCycle) {
   const states = new Map();
   const stack = [];
   const reportedCycles = new Set();
@@ -980,21 +1017,11 @@ function checkWorkspaceCycles(workspaces, report) {
       }
       if (state !== 'visiting') continue;
 
-      const cycleStart = stack.indexOf(dependency);
-      const cycle = stack.slice(cycleStart);
-      const canonical = canonicalCycle(cycle);
-      const key = canonical.join('->');
-      if (!reportedCycles.has(key)) {
-        reportedCycles.add(key);
-        const firstWorkspace = workspaces.get(canonical[0]);
-        report({
-          ruleId: 'ARCH_WORKSPACE_CYCLE',
-          file: firstWorkspace?.manifestPath ?? `${canonical[0]}/package.json`,
-          target: [...canonical, canonical[0]].join(' -> '),
-          message:
-            'All workspace dependencies must form an acyclic graph; split the ownership boundary instead of adding a runtime cycle.',
-        });
-      }
+      const cycle = canonicalCycle(stack.slice(stack.indexOf(dependency)));
+      const key = cycle.join('->');
+      if (reportedCycles.has(key)) continue;
+      reportedCycles.add(key);
+      onCycle(cycle);
     }
 
     stack.pop();

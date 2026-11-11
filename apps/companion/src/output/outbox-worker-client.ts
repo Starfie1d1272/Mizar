@@ -3,17 +3,29 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { OutboxOperations, OutboxReply, OutboxRequest } from './outbox-worker.js';
 
+const LOAD_DEADLINE_MS = 30_000;
+const REPLY_DEADLINE_MS = 12_000;
+
 export class OutboxWorkerClient {
   private readonly worker: Worker;
   private readonly pending = new Map<
     number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
   private nextId = 0;
   private failure: Error | undefined;
+  private termination: Promise<number> | undefined;
+  private closed = false;
   private timing = { count: 0, totalMs: 0, maxMs: 0 };
 
-  constructor(filePath: string) {
+  constructor(
+    filePath: string,
+    private readonly onFailure?: (error: Error) => void,
+  ) {
     const entry = import.meta.url.endsWith('.ts')
       ? new URL(
           'data:text/javascript,' +
@@ -27,6 +39,7 @@ export class OutboxWorkerClient {
       const request = this.pending.get(reply.id);
       if (!request) return;
       this.pending.delete(reply.id);
+      clearTimeout(request.timer);
       this.timing.count += reply.timing.count;
       this.timing.totalMs += reply.timing.totalMs;
       this.timing.maxMs = Math.max(this.timing.maxMs, reply.timing.maxMs);
@@ -50,6 +63,15 @@ export class OutboxWorkerClient {
     return this.failure !== undefined;
   }
 
+  get failureReason(): string | undefined {
+    if (!this.failure) return undefined;
+    return /^outbox_worker_(?:reply_timeout:[A-Za-z]+|reply_invalid|exited:[0-9]+)$/.test(
+      this.failure.message,
+    )
+      ? this.failure.message
+      : 'outbox_worker_failed';
+  }
+
   takeTransactionTiming() {
     const timing = this.timing;
     this.timing = { count: 0, totalMs: 0, maxMs: 0 };
@@ -61,13 +83,19 @@ export class OutboxWorkerClient {
     ...args: Parameters<OutboxOperations[K]>
   ): Promise<ReturnType<OutboxOperations[K]>> {
     if (this.failure) return Promise.reject(this.failure);
+    if (this.closed) return Promise.reject(new Error('outbox_worker_closed'));
     const id = ++this.nextId;
     this.worker.ref();
     return new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(
+        () => this.fail(new Error(`outbox_worker_reply_timeout:${operation}`)),
+        operation === 'load' ? LOAD_DEADLINE_MS : REPLY_DEADLINE_MS,
+      );
+      this.pending.set(id, { resolve, reject, timer });
       try {
         this.worker.postMessage({ id, operation, args } as OutboxRequest);
       } catch (error) {
+        clearTimeout(timer);
         this.pending.delete(id);
         if (this.pending.size === 0) this.worker.unref();
         reject(error);
@@ -76,17 +104,33 @@ export class OutboxWorkerClient {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
     try {
-      if (!this.failed) await this.request('close');
+      await this.request('close');
+      this.closed = true;
     } finally {
-      await this.worker.terminate();
+      const stopped = this.stopWorker();
+      if (!this.failed) await stopped;
     }
   }
 
+  private stopWorker(): Promise<number> {
+    this.termination ??= this.worker.terminate();
+    // The caller records a failed or timed-out write even when termination also fails.
+    void this.termination.catch(() => undefined);
+    return this.termination;
+  }
+
   private fail(error: Error): void {
-    this.failure ??= error;
-    for (const request of this.pending.values()) request.reject(this.failure);
+    if (this.failure || this.closed) return;
+    this.failure = error;
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
     this.pending.clear();
     this.worker.unref();
+    void this.stopWorker();
+    this.onFailure?.(error);
   }
 }
