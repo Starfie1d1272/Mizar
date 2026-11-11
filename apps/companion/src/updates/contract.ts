@@ -4,7 +4,6 @@ export const UPDATE_REPOSITORY = 'Starfie1d1272/Mizar';
 export const UPDATE_WORKFLOW = `https://github.com/${UPDATE_REPOSITORY}/.github/workflows/release-qualification.yml@refs/heads/main`;
 export const PUBLICATION_WORKFLOW = `https://github.com/${UPDATE_REPOSITORY}/.github/workflows/release-promotion.yml@refs/heads/main`;
 export const RELEASES_URL = `https://github.com/${UPDATE_REPOSITORY}/releases`;
-export const MIRROR_SHARE = '91dec4c27e5d47f38fcf';
 // Public distribution credential: the Mizar library contains public releases only,
 // and the server grants this dedicated token read permission (r). It is not a signing key.
 export const BOX_READ_TOKEN = 'b88f62e59ca365d27ccb48f55dfef3a78965341f';
