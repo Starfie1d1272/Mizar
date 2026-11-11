@@ -1,11 +1,14 @@
 import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
+import { randomUUID } from 'node:crypto';
 import type { ObsConfig } from './config.js';
+import type { ObsRpc } from './reconcile.js';
 
 type ConnectionConfig = Pick<ObsConfig, 'host' | 'port' | 'password'>;
 interface ObservationSession {
   readonly client: OBSWebSocket;
   readonly config: ConnectionConfig;
   readonly current: () => boolean;
+  readonly context: NonNullable<ObsRpc['observationContext']>;
   ready: Promise<unknown>;
 }
 
@@ -26,10 +29,30 @@ export class ObsObservationConnection {
       return previous;
     this.reset();
     const client = new OBSWebSocket();
+    const connectionId = randomUUID();
+    let collectionGeneration = 0;
+    let inputGeneration = 0;
+    for (const event of [
+      'CurrentSceneCollectionChanging',
+      'CurrentSceneCollectionChanged',
+    ] as const)
+      client.on(event, () => {
+        collectionGeneration++;
+      });
+    for (const event of [
+      'InputCreated',
+      'InputRemoved',
+      'InputNameChanged',
+      'InputSettingsChanged',
+    ] as const)
+      client.on(event, () => {
+        inputGeneration++;
+      });
     const session: ObservationSession = {
       client,
       config,
       current: () => this.session === session && !this.closed,
+      context: () => ({ connectionId, collectionGeneration, inputGeneration }),
       ready: Promise.resolve(),
     };
     this.session = session;

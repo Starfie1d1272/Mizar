@@ -2,6 +2,7 @@ import { AudioMeter } from './audio-meter.js';
 import { ObsObservationConnection } from './observation-connection.js';
 import {
   readAudioDevices,
+  readAudioDeviceDiagnostics,
   setAudioDevice,
   type AudioDeviceCommand,
 } from './audio-device-settings.js';
@@ -882,6 +883,7 @@ export class ObsAdapter {
         stage = 'obs_request';
         const rpc: ObsRpc = {
           reportsDispatch: true,
+          ...(borrowed ? { observationContext: borrowed.context } : {}),
           onTransitionVideoEnded: (listener) => {
             const onEnded = (event: { transitionName: string }) => listener(event.transitionName);
             client.on('SceneTransitionVideoEnded', onEnded);
@@ -1332,6 +1334,9 @@ export class ObsAdapter {
         12000,
       ),
     );
+  }
+  readAudioDeviceDiagnostics() {
+    return this.observe(() => this.withReadObs(readAudioDeviceDiagnostics, 12000));
   }
   setAudioDevice(command: AudioDeviceCommand) {
     const generation = this.recoveryGeneration;
