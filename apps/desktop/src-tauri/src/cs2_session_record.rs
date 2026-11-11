@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GsiSource {
     pub ticket: String,
@@ -45,7 +45,7 @@ pub(crate) enum LaunchPhase {
     Cancelled,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionRecord {
     version: u32,
@@ -129,7 +129,6 @@ impl SessionRecord {
         {
             return Err("CS2 恢复记录字段无效，原备份仍保留。".into());
         }
-        SessionIdentity::read(&value).map_err(|_| "CS2 会话身份记录无效。")?;
         if value["version"] == 3
             && [
                 "original",
@@ -146,6 +145,9 @@ impl SessionRecord {
         let record: Self =
             serde_json::from_value(value).map_err(|_| "CS2 恢复记录字段无效，原备份仍保留。")?;
         record.validate()?;
+        record
+            .session_identity()
+            .map_err(|_| "CS2 会话身份记录无效。")?;
         Ok(record)
     }
 
@@ -166,6 +168,40 @@ impl SessionRecord {
             return Err("CS2 恢复记录不完整，原备份仍保留。".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn session_identity(&self) -> Result<Option<SessionIdentity>, &'static str> {
+        SessionIdentity::read_fields(
+            self.recovery.get("sessionId"),
+            self.recovery.get("configIdentity"),
+        )
+    }
+
+    pub(crate) fn allows_snapshot_update(&self, next: &Self) -> bool {
+        if (self.mulnx_launch && !next.mulnx_launch)
+            || (self.launch_attempted && self.mulnx_launch != next.mulnx_launch)
+            || (self.launch_attempted && !next.launch_attempted)
+            || (self.launch_cancelled == Some(true) && next.launch_cancelled != Some(true))
+            || self
+                .launch_time
+                .is_some_and(|time| next.launch_time != Some(time))
+            || self.pid.is_some_and(|pid| next.pid != Some(pid))
+            || self.created.is_some_and(|time| next.created != Some(time))
+        {
+            return false;
+        }
+        // Recovery payloads and unknown extensions remain owned by the original session.
+        let mut expected = self.clone();
+        expected.mulnx_launch = next.mulnx_launch;
+        expected.launch_attempted = next.launch_attempted;
+        expected.launch_cancelled = next.launch_cancelled;
+        expected.launch_time = next.launch_time;
+        expected.pid = next.pid;
+        expected.created = next.created;
+        if next.console_diagnostics.is_null() {
+            expected.console_diagnostics = Value::Null;
+        }
+        expected == *next
     }
 
     pub(crate) fn value(&self) -> Value {
@@ -245,5 +281,65 @@ impl SessionRecord {
         } else {
             self.launch_attempted = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionRecord;
+    use serde_json::json;
+
+    #[test]
+    fn previous_session_versions_retain_their_owned_recovery_payload() {
+        for version in 1..=4 {
+            let mut fixture = json!({
+                "version": version,
+                "video": "video.cfg",
+                "executable": "cs2.exe",
+                "futureRecovery": {"opaque": "retain"}
+            });
+            if version <= 2 {
+                fixture["original"] = json!("old");
+                fixture["applied"] = json!("new");
+                fixture["owned"] = json!({"setting": "value"});
+            }
+            if version == 2 {
+                fixture["frameRateFiles"] = json!([]);
+                fixture["frameRateLimit"] = json!(60);
+            }
+            if version == 3 {
+                fixture["preserveSettings"] = json!(true);
+            }
+            let record = SessionRecord::from_value(fixture).unwrap();
+            assert_eq!(record.version(), version);
+            assert_eq!(
+                record.value()["futureRecovery"],
+                json!({"opaque": "retain"})
+            );
+        }
+    }
+
+    #[test]
+    fn full_snapshot_allows_launch_progress_and_preserves_its_recovery_owner() {
+        let original = SessionRecord::from_value(json!({
+            "version": 4,
+            "video": "video.cfg",
+            "executable": "cs2.exe",
+            "fullSnapshot": true,
+            "futureRecovery": {"opaque": "retain"},
+            "consoleDiagnostics": {"original": true}
+        }))
+        .unwrap();
+        let mut submitted = original.clone();
+        submitted.submit(100).unwrap();
+        assert!(original.allows_snapshot_update(&submitted));
+
+        let mut bound = submitted.clone();
+        bound.bind(123, 101).unwrap();
+        bound.console_diagnostics = serde_json::Value::Null;
+        assert!(submitted.allows_snapshot_update(&bound));
+        assert!(!bound.allows_snapshot_update(&submitted));
+        bound.recovery.insert("futureRecovery".into(), json!(false));
+        assert!(!submitted.allows_snapshot_update(&bound));
     }
 }

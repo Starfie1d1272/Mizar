@@ -161,8 +161,33 @@ const PinSegment = z.object({
   bytes: z.number().int().nonnegative(),
   sha256: z.string(),
 });
+const PinMemoryEvidence = z.object({
+  included: z.boolean(),
+  events: z.number().int().nonnegative().nullable(),
+  bytes: z.number().int().nonnegative().nullable(),
+  reason: z.string(),
+});
+const PinLossReasons = z.object({
+  overflow: z.number().int().nonnegative(),
+  contended: z.number().int().nonnegative(),
+  writeFailed: z.number().int().nonnegative(),
+});
+const PinLossTotals = z.object({
+  reason: z.string(),
+  count: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  firstObservedAt: z.string().nullable(),
+  lastObservedAt: z.string().nullable(),
+});
+const PinSourceState = z.object({
+  asOf: z.string(),
+  memoryOnly: PinMemoryEvidence,
+  unreportedLoss: PinLossReasons,
+  lossTotals: PinLossTotals,
+  postCutoffSegments: z.array(z.string()),
+});
 const PinActive = z.object({
-  sourceState: z.record(z.string(), z.unknown()),
+  sourceState: PinSourceState,
   schema: z.string(),
   pinId: z.string(),
   producerKind: z.string(),

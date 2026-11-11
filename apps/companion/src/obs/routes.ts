@@ -383,9 +383,17 @@ export function registerObsRoutes(
         video_output_active: 'OBS 正在输出，请停止直播与录像后再更换设备。',
       };
       const known = Object.hasOwn(messages, code);
+      const detail = error as { stage?: unknown; inputKind?: unknown } | null;
+      const inputKind =
+        detail?.stage === 'GetInputAudioMonitorType' &&
+        typeof detail.inputKind === 'string' &&
+        /^[a-z0-9_-]{1,64}$/i.test(detail.inputKind)
+          ? detail.inputKind
+          : null;
+      const message = known ? messages[code] : '设备设置未确认，请重新读取后核对。';
       return reply.code(409).send({
         error: known ? code : 'audio_device_unconfirmed',
-        message: known ? messages[code] : '设备设置未确认，请重新读取后核对。',
+        message: inputKind ? `${message}监听探测音源类型：${inputKind}。` : message,
       });
     }
   });

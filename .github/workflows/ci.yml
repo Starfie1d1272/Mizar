@@ -83,7 +83,6 @@ jobs:
             /scripts/web-installer/Bootstrap.cs
             /scripts/web-installer/Nsis.cs
             /apps/desktop/src-tauri/
-            /apps/web/src/workspace/desktop-commands.generated.ts
             /packages/protocol/src/desktop-ipc.generated.ts
             /apps/companion/src/match-context/lifecycle-contract.json
             /scripts/qualification/bundle/gsi-discovery.ps1
@@ -97,7 +96,7 @@ jobs:
           native=true
           installer=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri apps/web/src/workspace/desktop-commands.generated.ts packages/protocol/src/desktop-ipc.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri packages/protocol/src/desktop-ipc.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
             else
               result=$?

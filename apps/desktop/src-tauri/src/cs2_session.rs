@@ -487,9 +487,14 @@ impl SessionStore {
         self.root.join("pending.json")
     }
     pub fn load(&self) -> Result<Option<SessionRecord>, String> {
-        match fs::read(self.journal_path()) {
-            Ok(bytes) => {
-                if bytes.len() > 4 * 1024 * 1024 {
+        match fs::File::open(self.journal_path()) {
+            Ok(file) => {
+                const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+                let mut bytes = Vec::new();
+                file.take(MAX_JOURNAL_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| io_error("无法读取 CS2 恢复记录。", &error))?;
+                if bytes.len() > MAX_JOURNAL_BYTES {
                     return Err("CS2 恢复记录过大，请检查原配置备份。".into());
                 }
                 let value: Value = serde_json::from_slice(&bytes)
@@ -506,86 +511,35 @@ impl SessionStore {
     }
     fn save_locked(&self, _guard: &StoreGuard, record: &SessionRecord) -> Result<(), String> {
         record.validate()?;
-        let value = &record.value();
-        // Ordinary sessions may continue without taking over keys, but cannot
-        // adopt a pending full snapshot or arm the ten-key owner.
-        let previous = self.load()?.map(|record| record.value());
+        let previous = self.load()?;
         let full_pending = self.full_spectator_pending();
-        if previous
-            .as_ref()
-            .is_some_and(|core| core["fullSnapshot"] == true)
-            && value["fullSnapshot"] != true
+        // Ordinary sessions may continue, but cannot take over a pending full snapshot.
+        if (previous.as_ref().is_some_and(|core| core.full_snapshot) && !record.full_snapshot)
+            || (record.full_snapshot && !full_pending)
+            || (full_pending && record.spectator_cfg)
         {
             return Err("snapshot_pending".into());
         }
-        if value["fullSnapshot"] == true && !full_pending {
-            return Err("snapshot_pending".into());
-        }
-        if full_pending {
-            if value["spectatorCfg"] == true {
+        if record.full_snapshot {
+            let previous = previous.ok_or("snapshot_pending")?;
+            let session = record
+                .session_identity()
+                .map_err(str::to_string)?
+                .ok_or("snapshot_pending")?;
+            if !previous.full_snapshot
+                || previous
+                    .session_identity()
+                    .map_err(str::to_string)?
+                    .as_ref()
+                    != Some(&session)
+                || crate::spectator_snapshot::linked_session(&self.root)?.as_ref() != Some(&session)
+                || crate::spectator_snapshot::has_terminal(&self.root)?
+                || !previous.allows_snapshot_update(record)
+            {
                 return Err("snapshot_pending".into());
             }
-            if value["fullSnapshot"] == true {
-                let previous = previous.ok_or("snapshot_pending")?;
-                let session = crate::cs2_config_identity::SessionIdentity::read(value)
-                    .map_err(str::to_string)?
-                    .ok_or("snapshot_pending")?;
-                if previous["fullSnapshot"] != true
-                    || crate::cs2_config_identity::SessionIdentity::read(&previous)
-                        .map_err(str::to_string)?
-                        .as_ref()
-                        != Some(&session)
-                    || crate::spectator_snapshot::linked_session(&self.root)?.as_ref()
-                        != Some(&session)
-                    || crate::spectator_snapshot::has_terminal(&self.root)?
-                {
-                    return Err("snapshot_pending".into());
-                }
-                let mut old = previous.clone();
-                let mut next = value.clone();
-                if value["consoleDiagnostics"].is_null() {
-                    old.as_object_mut()
-                        .ok_or("snapshot_invalid")?
-                        .remove("consoleDiagnostics");
-                    next.as_object_mut()
-                        .ok_or("snapshot_invalid")?
-                        .remove("consoleDiagnostics");
-                }
-                for key in [
-                    "launchAttempted",
-                    "launchTime",
-                    "launchCancelled",
-                    "pid",
-                    "created",
-                    "mulnxLaunch",
-                ] {
-                    old.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
-                    next.as_object_mut().ok_or("snapshot_invalid")?.remove(key);
-                }
-                if old != next
-                    || !value["launchAttempted"].is_boolean()
-                    || (!value["launchCancelled"].is_null()
-                        && !value["launchCancelled"].is_boolean())
-                    || (!value["launchTime"].is_null() && value["launchTime"].as_u64().is_none())
-                    || (!value["pid"].is_null() && value["pid"].as_u64().is_none())
-                    || (!value["created"].is_null() && value["created"].as_u64().is_none())
-                    || (!value["mulnxLaunch"].is_null() && value["mulnxLaunch"] != true)
-                    || (previous["mulnxLaunch"] == true && value["mulnxLaunch"] != true)
-                    || (previous["launchAttempted"] == true
-                        && previous["mulnxLaunch"] != value["mulnxLaunch"])
-                    || value["pid"].is_null() != value["created"].is_null()
-                    || (previous["launchAttempted"] == true && value["launchAttempted"] != true)
-                    || (previous["launchCancelled"] == true && value["launchCancelled"] != true)
-                    || (!previous["launchTime"].is_null()
-                        && previous["launchTime"] != value["launchTime"])
-                    || (!previous["pid"].is_null() && previous["pid"] != value["pid"])
-                    || (!previous["created"].is_null() && previous["created"] != value["created"])
-                {
-                    return Err("snapshot_pending".into());
-                }
-            }
         }
-        let bytes = serde_json::to_vec_pretty(value).map_err(|_| "CS2 恢复记录无法保存。")?;
+        let bytes = serde_json::to_vec_pretty(record).map_err(|_| "CS2 恢复记录无法保存。")?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("CS2 恢复记录过大，未修改游戏设置。".into());
         }
