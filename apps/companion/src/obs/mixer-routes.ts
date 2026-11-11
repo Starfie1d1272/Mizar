@@ -5,14 +5,14 @@ import {
   type MixerStatus,
 } from '@mizar/protocol/mixer';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
-import type { MusicDirector } from '../music/director.js';
+import type { MusicMixerControl } from '../music/device.js';
 import type { ObsAdapter } from './adapter.js';
 import type { GameAudioController } from './audio-policy-controller.js';
 
 export function registerMixerRoutes(
   app: FastifyInstance,
   adapter: ObsAdapter,
-  director: MusicDirector,
+  director: MusicMixerControl,
   game: GameAudioController | undefined,
   policy: LocalWebOriginPolicy,
 ) {
@@ -37,16 +37,8 @@ export function registerMixerRoutes(
       control: 'unknown',
     });
     const obs = await adapter.mixerRead().catch(() => null);
-    const music = director.get();
-    const state = director.store.state;
-    const desktopIncludesMusic = Boolean(
-      obs?.routing.desktop &&
-      state.monitorPreference &&
-      (['bgm', 'stinger'] as const).some(
-        (layer) =>
-          state.desktopMonitorOriginal[layer]?.applied === 'OBS_MONITORING_TYPE_MONITOR_ONLY',
-      ),
-    );
+    const music = director.mixerStatus();
+    const desktopIncludesMusic = obs?.routing.desktop && music.desktopIncludesMusic;
     const result: MixerStatus = {
       revision: obs?.revision ?? 'unavailable',
       channels: {
@@ -56,18 +48,7 @@ export function registerMixerRoutes(
         },
         remoteCommentary: obs?.channels.remoteCommentary ?? unknown('远端解说'),
         microphone: obs?.channels.microphone ?? unknown('麦克风'),
-        music: {
-          name: '音乐',
-          volume: director.store.ready ? state.master : null,
-          muted: director.store.ready ? state.muted : null,
-          control: !director.store.ready
-            ? 'unknown'
-            : music.held
-              ? 'held'
-              : music.connection === 'unavailable'
-                ? 'unknown'
-                : 'available',
-        },
+        music: music.channel,
       },
     };
     return reply.header('cache-control', 'no-store').send(result);

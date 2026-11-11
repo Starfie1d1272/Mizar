@@ -8,6 +8,14 @@ const nullableId = id.nullable();
 const utc = z.iso.datetime({ offset: true });
 const number = z.number().finite().nullable();
 const nonNegativeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+export const sourceCleanupStatusSchema = z.object({
+  sourceCleanup: z.object({
+    pending: nonNegativeInteger,
+    blocked: nonNegativeInteger,
+    claimIntent: z.boolean(),
+    handoffPending: nonNegativeInteger,
+  }),
+});
 const count = nonNegativeInteger.nullable();
 const health = z.number().int().min(0).max(100).nullable();
 const economy = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();

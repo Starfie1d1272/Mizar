@@ -1,3 +1,4 @@
+import type { ProductionExitEvidence } from '@mizar/protocol/program-scenes';
 import {
   cancellationResponseSchema,
   lifecycleErrors,
@@ -11,6 +12,7 @@ import type { ProgramSceneController } from './controller.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 import type { ObsAdapter } from '../obs/adapter.js';
+import type { MusicAudioRecovery } from '../music/device.js';
 import type { CameraDirector } from '../orchestration/director.js';
 import type { ObserverSettingsStore } from '../telemetry/observer-settings.js';
 import type { DemoTestController } from '../demo-test/controller.js';
@@ -38,7 +40,7 @@ export type ProductionDependencies = {
         | 'startBrowserRecovery'
       >
     | undefined;
-  music: () => Parameters<ObsAdapter['startCommentaryRecovery']>[0];
+  music: () => MusicAudioRecovery | undefined;
   camera: () => Pick<CameraDirector, 'beginProduction' | 'finishProduction'> | undefined;
   demo: () => Pick<DemoTestController, 'openFormalBoundary' | 'finish'> | undefined;
   observer: Pick<ObserverSettingsStore, 'endProduction'>;
@@ -97,12 +99,11 @@ export function createProduction(options: ProductionDependencies) {
   let sessionGeneration = 0;
   let sessionId = randomUUID();
   let lastEnteredId: string | null = null;
-  let releaseHandoffState: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed' = 'idle';
+  let releaseHandoffState: ProductionExitEvidence['releaseHandoffState'] = 'idle';
   let releaseGeneration = 0;
   let handoffStarted = false;
   let handoffPromise: Promise<void> | undefined;
-  let obsExitState: 'idle' | 'pending' | 'confirmed' | 'unconfirmed' = options.obsExit
-    .previousUnconfirmed
+  let obsExitState: ProductionExitEvidence['obsExitState'] = options.obsExit.previousUnconfirmed
     ? 'unconfirmed'
     : 'idle';
   let obsExitGeneration = 0;

@@ -1,7 +1,6 @@
 import { musicFailure } from './failure.js';
 import type { MusicPreviewRequest, MusicPreviewStatus } from '@mizar/protocol/music';
-import type { ObsRpc } from '../obs/reconcile.js';
-import { findMusicInput, verifyMusicPlayback } from './obs-provider.js';
+import type { MusicDevice } from './device.js';
 import { PreviewMonitor, type PreviewMonitorTarget } from './preview-monitor.js';
 import type { MusicStore } from './store.js';
 
@@ -44,7 +43,7 @@ export class MusicPreview {
     return this.uuid === uuid || this.monitor.owns(uuid);
   }
   /** Recover only after the media borrow ends; false freezes this field, not other controls. */
-  async recoverMonitor(obs: ObsRpc, valid: () => boolean): Promise<boolean> {
+  async recoverMonitor(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
     if (this.uuid) return false;
     const restored = await this.monitor.restore(obs, valid);
     if (!restored && valid() && this.status?.phase === 'stopped')
@@ -67,12 +66,17 @@ export class MusicPreview {
     );
   }
   /** Register before dispatch. A lost reply retains both possible owned values. */
-  async prepareMixer(obs: ObsRpc, uuid: string, volume?: number, muted?: boolean): Promise<void> {
+  async prepareMixer(
+    obs: MusicDevice,
+    uuid: string,
+    volume?: number,
+    muted?: boolean,
+  ): Promise<void> {
     if (this.uuid !== uuid) return;
     if (this.pendingVolume || this.pendingMute) {
       const [gain, mute] = await Promise.all([
-        obs.call('GetInputVolume', { inputUuid: uuid }),
-        obs.call('GetInputMute', { inputUuid: uuid }),
+        obs.volume({ inputUuid: uuid }),
+        obs.mute({ inputUuid: uuid }),
       ]);
       if (!this.observeMixer(gain.inputVolumeMul, mute.inputMuted))
         throw new Error('music_preview_mixer_changed');
@@ -246,7 +250,7 @@ export class MusicPreview {
     };
   }
   async reconcile(
-    obs: ObsRpc,
+    obs: MusicDevice,
     epoch: number,
     valid: () => boolean,
     safe: boolean,
@@ -266,15 +270,15 @@ export class MusicPreview {
     if (this.stopping) {
       const revision = this.revision;
       const current = () => valid() && this.stopping && this.revision === revision;
-      const name = await findMusicInput(obs, this.store, 'stinger', current);
+      const name = await obs.findInput(this.store, 'stinger', current);
       if (!current()) return;
       if (name && this.store.state.sources.stinger === this.uuid) {
         const args = { inputUuid: this.uuid };
         const [settings, before, mute, volume] = await Promise.all([
-          obs.call('GetInputSettings', args),
-          obs.call('GetMediaInputStatus', args),
-          obs.call('GetInputMute', args),
-          obs.call('GetInputVolume', args),
+          obs.inputSettings(args),
+          obs.mediaStatus(args),
+          obs.mute(args),
+          obs.volume(args),
         ]);
         if (!current()) return;
         const mixerOwned = this.observeMixer(volume.inputVolumeMul, mute.inputMuted);
@@ -301,9 +305,9 @@ export class MusicPreview {
         const stopAlreadySent = this.stopSent;
         if (!stopAlreadySent) {
           stopExpected(this.uuid!);
-          await obs.call('TriggerMediaInputAction', {
+          await obs.controlMedia({
             inputUuid: this.uuid,
-            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+            mediaAction: 'STOP',
           });
           if (!current()) return;
           this.stopSent = true;
@@ -315,16 +319,16 @@ export class MusicPreview {
             'OBS_MEDIA_STATE_ERROR',
             'OBS_MEDIA_STATE_NONE',
           ].includes(String(state));
-        let media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+        let media = await obs.mediaStatus({ inputUuid: this.uuid });
         if (!current()) return;
         if (!stopped(media.mediaState) && stopAlreadySent) {
           stopExpected(this.uuid!);
-          await obs.call('TriggerMediaInputAction', {
+          await obs.controlMedia({
             inputUuid: this.uuid,
-            mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+            mediaAction: 'STOP',
           });
           if (!current()) return;
-          media = await obs.call('GetMediaInputStatus', { inputUuid: this.uuid });
+          media = await obs.mediaStatus({ inputUuid: this.uuid });
           if (!current()) return;
         }
         if (!stopped(media.mediaState)) return;
@@ -350,10 +354,9 @@ export class MusicPreview {
       !this.stopping &&
       this.now() < this.lease &&
       this.now() < this.deadline;
-    const call = (type: string, data?: Record<string, unknown>) => {
+    const device = obs.checkCalls(() => {
       if (!current()) throw new Error('music_cancelled');
-      return obs.call(type, data);
-    };
+    });
     const r = this.request;
     if (!this.uuid) {
       await this.recoverMonitor(obs, current);
@@ -361,11 +364,11 @@ export class MusicPreview {
       // Both owned layers must be idle. Never mix an audition with formal music or take control
       // of a paused/muted source; the operator can use the existing Stop music command first.
       for (const layer of ['bgm', 'stinger'] as const) {
-        const name = await findMusicInput(obs, this.store, layer, current);
+        const name = await obs.findInput(this.store, layer, current);
         if (!name) continue;
         const args = { inputUuid: this.store.state.sources[layer] };
-        const media = await call('GetMediaInputStatus', args);
-        const mute = await call('GetInputMute', args);
+        const media = await device.mediaStatus(args);
+        const mute = await device.mute(args);
         if (
           active(media.mediaState) ||
           media.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
@@ -385,9 +388,7 @@ export class MusicPreview {
       }
       let quiet = false;
       try {
-        const stream = await call('GetStreamStatus');
-        const record = await call('GetRecordStatus');
-        quiet = stream.outputActive === false && record.outputActive === false;
+        quiet = await device.outputsStopped();
       } catch {
         /* Unknown output status requires explicit confirmation too. */
       }
@@ -402,17 +403,17 @@ export class MusicPreview {
         this.deadline = this.lease;
         return;
       }
-      const name = await findMusicInput(obs, this.store, 'stinger', current);
+      const name = await obs.findInput(this.store, 'stinger', current);
       if (!current()) return;
       if (!name) {
         this.fail('source_missing', 'OBS 音效来源尚未准备，请先准备音乐来源再试听。');
         return;
       }
-      await verifyMusicPlayback(obs, this.store, 'stinger', current);
+      await obs.verifyPlayback(this.store, 'stinger', current);
       if (!current()) return;
       const uuid = this.store.state.sources.stinger!;
-      const media = await call('GetMediaInputStatus', { inputUuid: uuid });
-      const mute = await call('GetInputMute', { inputUuid: uuid });
+      const media = await device.mediaStatus({ inputUuid: uuid });
+      const mute = await device.mute({ inputUuid: uuid });
       if (
         active(media.mediaState) ||
         media.mediaState === 'OBS_MEDIA_STATE_PAUSED' ||
@@ -424,7 +425,7 @@ export class MusicPreview {
         );
         return;
       }
-      const gain = await call('GetInputVolume', { inputUuid: uuid });
+      const gain = await device.volume({ inputUuid: uuid });
       if (typeof gain.inputVolumeMul !== 'number' || !Number.isFinite(gain.inputVolumeMul))
         throw new Error('music_preview_mixer_unconfirmed');
       // Register cleanup before the first write, including uncertain RPC outcomes.
@@ -441,9 +442,9 @@ export class MusicPreview {
       await this.monitor.borrow(obs, uuid, current);
       // Remain silent until OBS confirms playback and the segment seek.
       await this.prepareMixer(obs, uuid, 0);
-      await call('SetInputVolume', { inputUuid: uuid, inputVolumeMul: 0 });
+      await device.setVolume({ inputUuid: uuid, inputVolumeMul: 0 });
       this.confirmMixer(uuid, 0);
-      await call('SetInputSettings', {
+      await device.setInputSettings({
         inputUuid: uuid,
         overlay: true,
         inputSettings: {
@@ -454,18 +455,18 @@ export class MusicPreview {
           close_when_inactive: false,
         },
       });
-      await call('TriggerMediaInputAction', {
+      await device.controlMedia({
         inputUuid: uuid,
-        mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+        mediaAction: 'RESTART',
       });
       this.status = { ...this.status!, phase: 'requested', message: '正在等待 OBS 播放…' };
       return;
     }
     const args = { inputUuid: this.uuid };
-    const media = await call('GetMediaInputStatus', args);
-    const mute = await call('GetInputMute', args);
-    const volume = await call('GetInputVolume', args);
-    const settings = await call('GetInputSettings', args);
+    const media = await device.mediaStatus(args);
+    const mute = await device.mute(args);
+    const volume = await device.volume(args);
+    const settings = await device.inputSettings(args);
     if (!current()) return;
     const mixerOwned = this.observeMixer(volume.inputVolumeMul, mute.inputMuted);
     if (
@@ -516,8 +517,7 @@ export class MusicPreview {
         return;
       }
       this.fadeAt = this.now();
-      if (r.track.startMs)
-        await call('SetMediaInputCursor', { ...args, mediaCursor: r.track.startMs });
+      if (r.track.startMs) await device.setMediaCursor({ ...args, mediaCursor: r.track.startMs });
       this.status = {
         ...this.status!,
         phase: 'playing',
@@ -554,7 +554,7 @@ export class MusicPreview {
     );
     const target = this.mixerVolume(this.uuid!)!;
     await this.prepareMixer(obs, this.uuid!, target);
-    await call('SetInputVolume', { ...args, inputVolumeMul: target });
+    await device.setVolume({ ...args, inputVolumeMul: target });
     this.confirmMixer(this.uuid!, target);
   }
   private fail(reason: string, message: string) {

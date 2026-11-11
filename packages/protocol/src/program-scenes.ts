@@ -3,6 +3,12 @@ import { playerStatisticsSchema } from './statistics.js';
 import { programPayloadSchema } from './program.js';
 import { projectionCursorSchema } from './shared.js';
 
+export const productionExitEvidenceSchema = z.object({
+  obsExitState: z.enum(['idle', 'pending', 'confirmed', 'unconfirmed']),
+  releaseHandoffState: z.enum(['idle', 'pending', 'recorded', 'confirmed', 'unconfirmed']),
+});
+export type ProductionExitEvidence = z.infer<typeof productionExitEvidenceSchema>;
+
 /** One ordered registry shared by the operator, Program hosts and OBS reconciliation. */
 export const PROGRAM_SCENES = [
   { id: 'waiting', title: '赛前等待', path: '/program/waiting', mode: 'full_screen_graphic' },

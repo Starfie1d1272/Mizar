@@ -1,10 +1,9 @@
-import type { ObsRpc } from '../obs/reconcile.js';
-import { findMusicInput } from './obs-provider.js';
+import type { MusicDevice } from './device.js';
 import type { MusicState, MusicStore } from './store.js';
 
 type Lease = MusicState['previewMonitorLeases'][number];
 type Monitor = Lease['before'];
-export type PreviewMonitorTarget = (obs: ObsRpc) => Promise<Lease['applied'] | null>;
+export type PreviewMonitorTarget = (obs: MusicDevice) => Promise<Lease['applied'] | null>;
 const isMonitor = (value: unknown): value is Monitor =>
   value === 'OBS_MONITORING_TYPE_NONE' ||
   value === 'OBS_MONITORING_TYPE_MONITOR_ONLY' ||
@@ -55,9 +54,9 @@ export class PreviewMonitor {
     this.store.previewEvent(`music_preview_monitor_${stage}`, { error });
   }
   /** An OBS mode readback is not evidence of sound at the listening device. */
-  async observe(obs: ObsRpc, uuid: string, valid: () => boolean): Promise<boolean | null> {
+  async observe(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<boolean | null> {
     try {
-      const mode = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType;
+      const mode = (await obs.monitorMode({ inputUuid: uuid })).monitorType;
       if (!valid() || !isMonitor(mode)) return null;
       const lease = this.current();
       if (lease?.uuid === uuid && this.identity(lease) && mode !== lease.applied)
@@ -69,7 +68,7 @@ export class PreviewMonitor {
     }
   }
   /** Only our borrowed field needs continuous device/recapture verification. */
-  async safe(obs: ObsRpc, uuid: string, valid: () => boolean): Promise<boolean> {
+  async safe(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<boolean> {
     const lease = this.current();
     if (!lease || lease.uuid !== uuid) return true;
     try {
@@ -79,12 +78,12 @@ export class PreviewMonitor {
       return false;
     }
   }
-  async borrow(obs: ObsRpc, uuid: string, valid: () => boolean): Promise<void> {
+  async borrow(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<void> {
     try {
       if (this.current()) return;
       const scope = this.store.state.sourceScopes.stinger;
       if (!scope || this.store.state.sources.stinger !== uuid || !valid()) return;
-      const before = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType;
+      const before = (await obs.monitorMode({ inputUuid: uuid })).monitorType;
       // Existing enabled monitoring belongs to its owner, not to an audition.
       if (!valid() || before !== 'OBS_MONITORING_TYPE_NONE') return;
       // The audio owner proves device/recapture safety; this owner never changes tracks.
@@ -94,8 +93,8 @@ export class PreviewMonitor {
       const current = () => valid() && this.identity(lease);
       if (
         !current() ||
-        (await obs.ownershipScope?.()) !== scope ||
-        (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType !== before ||
+        (await obs.ownershipScope()) !== scope ||
+        (await obs.monitorMode({ inputUuid: uuid })).monitorType !== before ||
         !current()
       )
         return;
@@ -107,7 +106,7 @@ export class PreviewMonitor {
         if (!current() || !same(this.current(), lease)) throw new Error('music_cancelled');
       };
       guard();
-      const latest = (await obs.call('GetInputAudioMonitorType', { inputUuid: uuid })).monitorType;
+      const latest = (await obs.monitorMode({ inputUuid: uuid })).monitorType;
       guard();
       if (!isMonitor(latest)) return;
       if (latest !== before) {
@@ -119,23 +118,22 @@ export class PreviewMonitor {
         return;
       }
       guard();
-      const writer = obs.withMutationGuard?.(guard) ?? obs;
-      await writer.call('SetInputAudioMonitorType', { inputUuid: uuid, monitorType: applied });
+      const writer = obs.guardWrites(guard);
+      await writer.setMonitorMode({ inputUuid: uuid, monitorType: applied });
       await this.observe(obs, uuid, current);
     } catch (error) {
       // Never replay an uncertain borrow. Media stop remains independent of this field.
       this.failure('borrow', error);
     }
   }
-  async restore(obs: ObsRpc, valid: () => boolean): Promise<boolean> {
+  async restore(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
     const lease = this.current();
     if (!lease) return true;
     try {
       if (!valid() || !this.identity(lease)) return false;
-      const name = await findMusicInput(obs, this.store, 'stinger', valid);
-      if (!name || !valid() || (await obs.ownershipScope?.()) !== lease.scope) return false;
-      const mode = (await obs.call('GetInputAudioMonitorType', { inputUuid: lease.uuid }))
-        .monitorType;
+      const name = await obs.findInput(this.store, 'stinger', valid);
+      if (!name || !valid() || (await obs.ownershipScope()) !== lease.scope) return false;
+      const mode = (await obs.monitorMode({ inputUuid: lease.uuid })).monitorType;
       if (!valid() || !this.identity(lease) || !isMonitor(mode)) return false;
       if (mode !== lease.applied) {
         // Already restored, never applied, or externally edited: preserve the observed field.
@@ -145,7 +143,7 @@ export class PreviewMonitor {
       // A lost restore reply freezes only this monitor field, never playback/visual preparation.
       if (lease.phase === 'restoring') return false;
       // A restart can leave media playing with no in-memory audition. Never take its monitor.
-      const media = await obs.call('GetMediaInputStatus', { inputUuid: lease.uuid });
+      const media = await obs.mediaStatus({ inputUuid: lease.uuid });
       if (!valid() || !this.identity(lease) || !stopped(media.mediaState)) return false;
       const restoring: Lease = { ...lease, phase: 'restoring' };
       await this.store.update((state) => {
@@ -163,8 +161,8 @@ export class PreviewMonitor {
         guard();
         // Persistence can wait behind another music update. Recheck before the actual write.
         const [latest, playback] = await Promise.all([
-          obs.call('GetInputAudioMonitorType', { inputUuid: lease.uuid }),
-          obs.call('GetMediaInputStatus', { inputUuid: lease.uuid }),
+          obs.monitorMode({ inputUuid: lease.uuid }),
+          obs.mediaStatus({ inputUuid: lease.uuid }),
         ]);
         guard();
         if (!isMonitor(latest.monitorType)) throw new Error('music_monitor_unconfirmed');
@@ -174,13 +172,11 @@ export class PreviewMonitor {
         }
         if (!stopped(playback.mediaState)) throw new Error('music_preview_monitor_busy');
         dispatched = !obs.reportsDispatch;
-        await (obs.withMutationGuard?.(guard) ?? obs).call(
-          'SetInputAudioMonitorType',
-          { inputUuid: lease.uuid, monitorType: lease.before },
-          () => {
+        await obs
+          .guardWrites(guard)
+          .setMonitorMode({ inputUuid: lease.uuid, monitorType: lease.before }, () => {
             dispatched = true;
-          },
-        );
+          });
       } catch (error) {
         if (!dispatched)
           await this.store.update((state) => {
@@ -190,8 +186,7 @@ export class PreviewMonitor {
         throw error;
       }
       if (!valid()) return false;
-      const read = (await obs.call('GetInputAudioMonitorType', { inputUuid: lease.uuid }))
-        .monitorType;
+      const read = (await obs.monitorMode({ inputUuid: lease.uuid })).monitorType;
       if (!valid() || !isMonitor(read) || read === lease.applied) return false;
       await this.clear(restoring, valid, read !== lease.before);
       return !this.current();

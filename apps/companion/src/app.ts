@@ -1,5 +1,5 @@
-import { lstat, readFile } from 'node:fs/promises';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { replaceDurableJson } from './match-context/durable-json.js';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
@@ -7,7 +7,11 @@ import {
   registerBroadcastAssetRoutes,
   registerMusicPackRoutes,
 } from './broadcast-config/music-pack-routes.js';
-import { createProductionBroadcastDependencies } from './broadcast-config/production.js';
+import {
+  createProductionBroadcastDependencies,
+  loadLegacyMusic,
+  withOfficialBroadcastResources,
+} from './broadcast-config/production.js';
 import {
   createBroadcastRuntime,
   type BroadcastRuntimeDependencies,
@@ -15,10 +19,7 @@ import {
 import { createBroadcastResolver } from './broadcast-config/resolver.js';
 import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
 import type { ResourceRef } from '@mizar/broadcast-config';
-import {
-  registerBroadcastMigrationStatus,
-  type BroadcastMigrationStatus,
-} from './broadcast-config/migration-status.js';
+import { registerBroadcastMigrationStatus } from './broadcast-config/migration-status.js';
 import {
   BpPresentationSettings,
   registerBpPresentationSettings,
@@ -45,10 +46,9 @@ import { PerformanceWindow, selectedGsiContext } from './support/performance-win
 import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
 import { MusicStore } from './music/store.js';
-import { readMusicPack } from './music/archive.js';
 import { MusicDirector } from './music/director.js';
-import { musicMapKey } from './music/cues.js';
-import { ObsMusicProvider } from './music/obs-provider.js';
+import { createObserverAssistScope } from './telemetry/observer-assist-scope.js';
+import { ObsMusicProvider } from './obs/music-device.js';
 import { registerMusicRoutes } from './music/routes.js';
 import {
   DemoTestController,
@@ -107,19 +107,19 @@ import { getBpDemoProjection } from './bp/demo-projection.js';
 import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
 import { ObsAdapter, obsErrorEvidence } from './obs/adapter.js';
+import { createObsExitStatus } from './obs/exit-status.js';
 import { ObsConfigStore } from './obs/config.js';
 import { ObsVideoTransaction } from './obs/video-transaction.js';
 import { ObsCaptureWarmup } from './obs/capture-warmup.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
-import { desktopMonitorRelationship } from './obs/audio-monitor-device.js';
 import type { ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { performance } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
@@ -127,6 +127,7 @@ import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-stat
 import { registerSupportRoutes } from './support/routes.js';
 import { BusinessJournal } from './support/business-journal.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
+import { createObservationCommit } from './runtime/observation-commit.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
@@ -278,7 +279,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const formalMutations = new Set<string>();
   let resources: ResourceStore | undefined;
   let broadcastConfig = options.broadcastConfig;
-  let getBroadcastReferences: (() => ResourceRef[]) | undefined;
+  let broadcastRuntime: ReturnType<typeof createBroadcastRuntime> | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -300,36 +301,36 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const deliveryConsumers = options.deliveryConsumers ?? [];
   let outputBinding = options.matchContextBinding;
   let businessJournal: BusinessJournal | undefined;
+  const outbox =
+    options.reliableOutboxPath === undefined
+      ? undefined
+      : new ReliableOutbox(
+          options.reliableOutboxPath,
+          (recovery, error) => {
+            // Raw cause stays in the local log; support export applies its existing redaction.
+            const evidence = {
+              event: 'outbox',
+              stage: 'outbox_load',
+              err: outboxLocalError(error),
+              recovery: recovery ?? null,
+              result:
+                recovery === undefined
+                  ? 'failure'
+                  : recovery.code === 'outbox_recovered'
+                    ? 'success'
+                    : 'unconfirmed',
+            };
+            if (recovery === undefined)
+              app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
+            else {
+              app.log.warn(evidence, recovery.message);
+              recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
+            }
+          },
+          (record, reason) => businessJournal?.reliable(record, reason),
+        );
   const outputService: OutputService = new OutputService({
-    ...(options.reliableOutboxPath === undefined
-      ? {}
-      : {
-          outbox: new ReliableOutbox(
-            options.reliableOutboxPath,
-            (recovery, error) => {
-              // Raw cause stays in the local log; support export applies its existing redaction.
-              const evidence = {
-                event: 'outbox',
-                stage: 'outbox_load',
-                err: outboxLocalError(error),
-                recovery: recovery ?? null,
-                result:
-                  recovery === undefined
-                    ? 'failure'
-                    : recovery.code === 'outbox_recovered'
-                      ? 'success'
-                      : 'unconfirmed',
-              };
-              if (recovery === undefined)
-                app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
-              else {
-                app.log.warn(evidence, recovery.message);
-                recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
-              }
-            },
-            (record, reason) => businessJournal?.reliable(record, reason),
-          ),
-        }),
+    ...(outbox ? { outbox } : {}),
     ...(options.rivalhubConnection !== undefined
       ? {
           authorityScope: () => options.rivalhubConnection!.reliableAuthorityScope(),
@@ -534,6 +535,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const programChat = new ProgramChat();
   const observerSettings = new ObserverSettingsStore(options.observerSettingsPath);
   let observerEligible = () => false;
+  const observerAssist = createObserverAssistScope(observerSettings, () => observerEligible());
   app.addHook('onReady', async () => {
     try {
       await observerSettings.load();
@@ -870,9 +872,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       degradeRuntime ? `Companion ${source} 路径已降级` : `Companion ${source} 路径记录可恢复诊断`,
     );
   };
-  let observerMatchId: string | null | undefined;
-  let confirmedObserverMap: string | undefined;
-  let waitingObserverMap: string | undefined;
   let observerDiagnosticKey = '';
   let observerDiagnosticLoggedAt = -Infinity;
   programRuntime.bindContext(
@@ -882,10 +881,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   const projectionCoordinator =
     options.projectionCoordinator ??
     createProjectionCoordinator({
-      observerSettings: () => ({
-        ...observerSettings.settings,
-        enabled: observerSettings.settings.enabled && observerEligible() && !waitingObserverMap,
-      }),
+      observerSettings: observerAssist.projectionSettings,
       programChat: (cursor, fresh) => programChat.view(cursor, fresh),
       ...(options.steamAvatars ? { avatars: options.steamAvatars } : {}),
       programRuntime,
@@ -914,23 +910,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       onDiagnostic: ({ code }) =>
         recordRuntimeDiagnostic(code, 'projection', projectionDiagnosticDegradesRuntime(code)),
       onProjection: (bundle) => {
-        if (
-          waitingObserverMap &&
-          bundle.program.map.name &&
-          musicMapKey(bundle.program) !== waitingObserverMap
-        ) {
-          waitingObserverMap = undefined;
-          confirmedObserverMap = musicMapKey(bundle.program);
-          observerSettings.waitingForMap = false;
-          projectionCoordinator.resetObserverAssist();
-        }
-        const matchId = bundle.program.match?.matchId ?? null;
-        if (observerMatchId !== undefined && observerMatchId !== matchId) {
-          observerSettings.clearConnection();
-          confirmedObserverMap = waitingObserverMap = undefined;
-        }
-        observerMatchId = matchId;
-        observerSettings.observeScope(JSON.stringify([matchId, musicMapKey(bundle.program)]));
+        observerAssist.observe(bundle.program, () => projectionCoordinator.resetObserverAssist());
         outputService.setCurrent(bundle, outputBinding);
       },
     });
@@ -971,30 +951,22 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     },
   });
   registerLocalWebSocketTransport(app, localWebTransport);
-  let broadcastMigrationStatus: BroadcastMigrationStatus = {
-    state: 'pending',
-    reason: 'owner_unavailable',
-  };
-  let getBroadcastMigrationStatus = () => broadcastMigrationStatus;
-  registerBroadcastMigrationStatus(app, localWebTransport.getOriginPolicy(), () =>
-    getBroadcastMigrationStatus(),
+  registerBroadcastMigrationStatus(
+    app,
+    localWebTransport.getOriginPolicy(),
+    () => broadcastRuntime?.status ?? { state: 'pending', reason: 'owner_unavailable' },
   );
   if (!options.obsConfigPath)
     app.get('/local/v1/broadcast-display-config', (_request, reply) =>
       reply.code(503).send({ error: 'broadcast_config_unavailable' }),
     );
-  let waitForBroadcast: (() => Promise<void>) | undefined;
-  let flushBroadcastReceipts: (() => Promise<void>) | undefined;
-  let getExportBroadcastDocument:
-    (() => import('@mizar/broadcast-config').BroadcastConfigDocument) | undefined;
-  let isExportBroadcastReady = () => false;
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
-    getBroadcastDocument: () => getExportBroadcastDocument?.(),
+    getBroadcastDocument: () => broadcastRuntime?.appliedDocument(),
     webRoot: options.webRoot ?? defaultWebRoot(),
     waitForBroadcast: async () => {
-      await waitForBroadcast?.();
-      if (options.obsConfigPath && !isExportBroadcastReady())
+      await broadcastRuntime?.waitForApply();
+      if (options.obsConfigPath && !broadcastRuntime?.ready)
         throw new Error('broadcast_config_unavailable');
     },
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1076,6 +1048,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
     });
   let musicDirector: MusicDirector | undefined;
+  let musicProvider: ObsMusicProvider | undefined;
   let cameraDirector: CameraDirector | undefined;
   let catalogTool: MulnxTool | undefined;
   let catalogToolLoaded = false;
@@ -1154,7 +1127,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       configStore: obsConfigStore,
       adapter: obsAdapter,
       ...(gameAudio ? { gameAudio } : {}),
-      musicDirector: () => musicDirector,
+      musicAudio: () => musicDirector,
+      prepareMusic: async (valid, guard) => {
+        if (musicProvider)
+          await musicDirector?.prepare(valid, (run) => musicProvider!.session(run, guard));
+      },
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
         : {}),
@@ -1216,6 +1193,17 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     programCueCoordinator.afterRuntimeMutation(result);
     return bundle;
   };
+  const commitObservation = createObservationCommit({
+    runtime: programRuntime,
+    beforeMutation: () => outputService.beforeRuntimeMutation(),
+    publish: publishRuntimeCommit,
+    sourceMatchesSelection: (sourceId) => managedSource.sourceMatchesSelection(sourceId),
+    onIgnored: (observation, disposition) =>
+      performanceContext?.trigger('observation_ignored', {
+        receive: observation.receive,
+        disposition,
+      }),
+  });
   const dispatchObservation = (
     observation: TelemetryObservation,
     sampleStageBinding?: { mapOrder: number },
@@ -1225,52 +1213,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const processingStarted = performance.now();
     latestInput = observation.receive;
     try {
-      const source = programRuntime.getCurrentState().programSource;
-      const lastAccepted = source.lastAccepted;
-      if (
-        !managedOwner &&
-        lastAccepted !== undefined &&
-        observation.receive.receivedMonotonicMs - lastAccepted.receivedMonotonicMs >
-          programRuntime.getSnapshot().continuityPolicy.staleAfterMs
-      ) {
-        outputService.beforeRuntimeMutation();
-        const changed = programRuntime.advanceProgramSourceGeneration({
-          monotonicMs: observation.receive.receivedMonotonicMs,
-          utc: observation.receive.receivedAt,
-        });
-        publishRuntimeCommit(changed);
-      }
-      outputService.beforeRuntimeMutation();
-      const accepted =
-        managedOwner && managedSourceId
-          ? programRuntime.acceptManagedObservation(
-              managedOwner.matchId,
-              managedSourceId,
-              observation,
-            )
-          : programRuntime.acceptObservation(
-              observation,
-              Boolean(managedSourceId && !managedSource.sourceMatchesSelection(managedSourceId)),
-            );
-      let result = accepted;
-      if (result.disposition.kind === 'ignored')
-        performanceContext?.trigger('observation_ignored', {
-          receive: observation.receive,
-          disposition: result.disposition,
-        });
-      if (sampleStageBinding) {
-        const command = programRuntime.executeOperatorCommand({
-          kind: 'bind-current-map-execution-to-series-map',
-          mapOrder: sampleStageBinding.mapOrder,
-          reason: `Rivals 示例第 ${sampleStageBinding.mapOrder} 图执行绑定`,
-        });
-        result = { ...result, snapshot: command.snapshot };
-      }
-      publishRuntimeCommit(result);
+      const accepted = commitObservation(
+        observation,
+        sampleStageBinding,
+        managedSourceId,
+        managedOwner,
+      );
       debugEvidenceStore.recordNormalizedObservation(observation);
       debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
       demoTest?.observationAccepted();
-      return accepted.disposition.kind === 'accepted';
+      return accepted;
     } catch (error) {
       sessionJournal?.record('observation_failure', { error, receive: observation.receive });
       performanceContext?.trigger('observation_failure', {
@@ -1343,25 +1295,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : reply.header('cache-control', 'no-store').send(envelope);
     });
   }
-  const obsExitPath = options.obsConfigPath
-    ? `${options.obsConfigPath}.exit-status.json`
-    : undefined;
-  let previousObsExitUnconfirmed = false;
-  if (obsExitPath) {
-    try {
-      previousObsExitUnconfirmed = true;
-      if (statSync(obsExitPath).size <= 4096) {
-        const saved: unknown = JSON.parse(readFileSync(obsExitPath, 'utf8'));
-        previousObsExitUnconfirmed =
-          typeof saved !== 'object' ||
-          saved === null ||
-          (saved as { state?: unknown }).state !== 'confirmed';
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') previousObsExitUnconfirmed = false;
-    }
-  }
-  let obsExitWrites = Promise.resolve();
   const production = createProduction({
     scenes: sceneController,
     obs: obsAdapter,
@@ -1383,27 +1316,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       stats: (target) => options.rivalhubConnection?.stats(target),
       clearStats: () => options.rivalhubConnection?.clearStats(),
     },
-    waitForBroadcast: () => waitForBroadcast?.() ?? Promise.resolve(),
-    obsExit: {
-      previousUnconfirmed: previousObsExitUnconfirmed,
-      wait: async () => {
-        while (true) {
-          const pending = obsExitWrites;
-          await pending;
-          if (pending === obsExitWrites) return;
-        }
-      },
-      record: async (state, valid) => {
-        if (!obsExitPath) return;
-        const pending = obsExitWrites.then(async () => {
-          await replaceDurableJson(obsExitPath, { state }, valid ? { canCommit: valid } : {});
-        });
-        obsExitWrites = pending.catch((error: unknown) => {
-          app.log.warn({ err: error }, 'OBS exit status not saved');
-        });
-        return pending;
-      },
-    },
+    waitForBroadcast: () => broadcastRuntime?.waitForApply() ?? Promise.resolve(),
+    obsExit: createObsExitStatus(options.obsConfigPath, (error) => {
+      app.log.warn({ err: error }, 'OBS exit status not saved');
+    }),
     warn: (details, message) => app.log.warn(details, message),
     error: (details, message) => app.log.error(details, message),
   });
@@ -1496,14 +1412,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                   run: <T>(operation: () => Promise<T>) =>
                     broadcastConfig!.references.run(operation),
                   isReferenced: (ref: ResourceRef) => {
-                    if (!getBroadcastReferences) throw new Error('broadcast_config_unavailable');
+                    if (!broadcastRuntime) throw new Error('broadcast_config_unavailable');
                     return Promise.resolve(
-                      getBroadcastReferences().some(
-                        (used) =>
-                          used.id === ref.id &&
-                          used.version === ref.version &&
-                          used.digest === ref.digest,
-                      ),
+                      broadcastRuntime
+                        .referencedResources()
+                        .some(
+                          (used) =>
+                            used.id === ref.id &&
+                            used.version === ref.version &&
+                            used.digest === ref.digest,
+                        ),
                     );
                   },
                 },
@@ -1672,44 +1590,31 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
     app.addHook('onReady', async () => {
       try {
-        const missing = async (path: string) =>
-          lstat(path).then(
-            () => false,
-            (error: NodeJS.ErrnoException) => {
-              if (error.code === 'ENOENT') return true;
-              throw error;
-            },
-          );
-        if (broadcastConfig && !(await missing(broadcastConfig.path))) return;
-        const fresh =
-          options.builtinMusicPack &&
-          broadcastConfig &&
-          (await missing(join(musicStore.directory, 'state.json'))) &&
-          (await missing(broadcastConfig.path));
-        let initialPack: Buffer | undefined;
-        if (fresh) {
-          try {
-            initialPack = await readFile(options.builtinMusicPack!);
-            await readMusicPack(initialPack);
-          } catch (error) {
-            initialPack = undefined;
-            app.log.error({ stage: 'music_builtin', err: error }, '内置音乐不可用');
-          }
-        }
-        await musicStore.load(initialPack);
+        await loadLegacyMusic(
+          musicStore,
+          broadcastConfig!.path,
+          options.builtinMusicPack,
+          (error) => app.log.error({ stage: 'music_builtin', err: error }, '内置音乐不可用'),
+        );
       } catch (error) {
         app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
         musicStore.failure = true;
         musicStore.ready = false;
       }
     });
+    musicProvider = new ObsMusicProvider(
+      obsConfigStore,
+      (stage, evidence) => sessionJournal?.record(stage, evidence),
+      () => musicDirector?.noteMonitorSettingsChanged(),
+      {
+        routing: obsAudioRouting,
+        sources: () => musicStore.state.sources,
+        baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+      },
+    );
     musicDirector = new MusicDirector(
       musicStore,
-      new ObsMusicProvider(
-        obsConfigStore,
-        (stage, evidence) => sessionJournal?.record(stage, evidence),
-        () => musicDirector?.noteMonitorSettingsChanged(),
-      ),
+      musicProvider,
       () => ({
         program: projectionCoordinator.getCurrent().program,
         active: sceneController.get().active,
@@ -1720,29 +1625,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }),
       Date.now,
       Math.random,
-      async (obs) => {
-        const config = await obsConfigStore.read();
-        return (
-          (await obsAudioRouting?.musicMonitorSafe(obs, `ws://${config.host}:${config.port}`, {
-            sources: musicStore.state.sources,
-            baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
-          })) ?? false
-        );
-      },
-      async (obs) => {
-        if (await obsAudioRouting?.modePending()) throw new Error('audio_mode_pending');
-        const binding = await obsAudioRouting?.desktopBinding();
-        if (!binding) return 'independent';
-        const config = await obsConfigStore.read();
-        if (
-          binding.endpoint !== `ws://${config.host}:${config.port}` ||
-          (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !==
-            binding.collection
-        )
-          throw new Error('audio_binding_changed');
-        const relation = await desktopMonitorRelationship(obs, binding.inputUuid);
-        return relation;
-      },
       () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
     );
     registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
@@ -1789,94 +1671,53 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       musicPacks,
       cameraResolver,
     );
-    const broadcastRuntime = broadcastConfig
-      ? createBroadcastRuntime({
-          hud: hudConfigStore,
-          music: musicStore,
-          camera: cameraStore,
-          builtinMusicPack: options.builtinMusicPack,
-          dependencies: {
-            ...broadcastConfig,
-            hudPath: broadcastConfig.hudPath ?? options.hudConfigPath,
-            isDeleting: async (ref) => {
-              if (ref.id !== PACK_ID) return broadcastConfig!.isDeleting(ref);
-              if (!resources) throw new Error('resource_store_unavailable');
-              return resources.isDeleting(ref);
-            },
-            resolve: {
-              scene: (value) => broadcastConfig!.resolve.scene(value),
-              camera: (value) => broadcastConfig!.resolve.camera(value),
-              hud: (value) => broadcastConfig!.resolve.hud(value),
-              ...(broadcastConfig.resolve.image
-                ? { image: (value) => broadcastConfig!.resolve.image!(value) }
-                : {}),
-              asset: async (ref) => {
-                if (ref.resource.id !== PACK_ID) return broadcastConfig!.resolve.asset(ref);
-                if (!resources) throw new Error('resource_store_unavailable');
-                await resources.readExact(ref.resource, ref.fileId);
-              },
-            },
-            verifyActive: async (active) => {
-              await broadcastConfig!.verifyActive(active);
-              for (const ref of active.lock.resources) {
-                if (ref.id !== PACK_ID) continue;
-                if (!resources) throw new Error('resource_store_unavailable');
-                await resources.verifyExact(ref);
-              }
-            },
-          },
-          withApplyGuard: (operation) => production.configureBroadcast(operation),
-          canApplyCamera: () => cameraDirector?.canChangeConfiguration() ?? true,
-          diagnostic: (error) =>
-            app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
-        })
-      : undefined;
-    if (broadcastRuntime) {
-      getExportBroadcastDocument = () => {
-        const document = broadcastRuntime.store.snapshot;
-        document.active = broadcastRuntime.store.appliedDisplay;
-        return document;
-      };
-      waitForBroadcast = () => broadcastRuntime.waitForApply();
-      flushBroadcastReceipts = () => broadcastRuntime.flushConsumerReceipts();
-      isExportBroadcastReady = () => broadcastRuntime.ready;
-      getBroadcastReferences = () => {
-        if (!broadcastRuntime.ready) throw new Error('broadcast_config_unavailable');
-        return broadcastRuntime.store.referencedResources();
-      };
-      getBroadcastMigrationStatus = () => broadcastRuntime.status;
-      if (supportsMusicPacks)
-        registerMusicPackRoutes(
-          app,
-          broadcastRuntime.store,
-          musicStore,
-          musicPacks,
-          localWebTransport.getOriginPolicy(),
-          () => broadcastRuntime.ready,
-          async (module, source) => {
-            const resolver = createBroadcastResolver({
-              ...broadcastConfig!.resolve,
-              asset: (ref) =>
-                ref.resource.id === source.id &&
-                ref.resource.version === source.version &&
-                ref.resource.digest === source.digest
-                  ? Promise.resolve()
-                  : broadcastConfig!.resolve.asset(ref),
-            });
-            await resolver.resolveModule(module);
-          },
-        );
-      registerBroadcastConfigRoutes(
+    const runtime = createBroadcastRuntime({
+      hud: hudConfigStore,
+      music: musicStore,
+      camera: cameraStore,
+      builtinMusicPack: options.builtinMusicPack,
+      dependencies: withOfficialBroadcastResources(
+        broadcastConfig,
+        () => resources,
+        options.hudConfigPath,
+      ),
+      withApplyGuard: (operation) => production.configureBroadcast(operation),
+      canApplyCamera: () => cameraDirector?.canChangeConfiguration() ?? true,
+      diagnostic: (error) =>
+        app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
+    });
+    broadcastRuntime = runtime;
+    if (supportsMusicPacks)
+      registerMusicPackRoutes(
         app,
-        broadcastRuntime.store,
+        runtime.store,
+        musicStore,
+        musicPacks,
         localWebTransport.getOriginPolicy(),
-        () => broadcastRuntime.ready,
-        () => broadcastRuntime.restoreLegacyCamera(),
-        (module) => broadcastRuntime.moduleAvailability(module),
-        () => broadcastRuntime.displayAvailable,
-        () => broadcastRuntime.builtinMusicAvailable,
+        () => runtime.ready,
+        async (module, source) => {
+          const resolver = createBroadcastResolver({
+            ...broadcastConfig!.resolve,
+            asset: (ref) =>
+              ref.resource.id === source.id &&
+              ref.resource.version === source.version &&
+              ref.resource.digest === source.digest
+                ? Promise.resolve()
+                : broadcastConfig!.resolve.asset(ref),
+          });
+          await resolver.resolveModule(module);
+        },
       );
-    }
+    registerBroadcastConfigRoutes(
+      app,
+      runtime.store,
+      localWebTransport.getOriginPolicy(),
+      () => runtime.ready,
+      () => runtime.restoreLegacyCamera(),
+      (module) => runtime.moduleAvailability(module),
+      () => runtime.displayAvailable,
+      () => runtime.builtinMusicAvailable,
+    );
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
     mulnxClock = new MulnxProgramClock(mulnxProvider);
@@ -1889,9 +1730,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         active: sceneController.get().active,
         production:
           production.sessionAllowed() &&
-          !waitingObserverMap &&
+          observerAssist.mapConfirmed &&
           projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        mapConfirmed: !waitingObserverMap,
+        mapConfirmed: observerAssist.mapConfirmed,
         demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
       }),
       cameraEvidence,
@@ -1901,7 +1742,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       options.productRuntime !== undefined,
       (map, pack) => {
         if (!cameraStore.hasPersistence) return Promise.resolve(true);
-        return broadcastRuntime?.verifyCameraPack(map, pack) ?? Promise.resolve(false);
+        return runtime.verifyCameraPack(map, pack);
       },
     );
     app.addHook('onReady', async () => {
@@ -1934,21 +1775,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
               '运镜预设加载失败',
             ),
           );
-      if (musicStore.ready && !musicStore.failure && cameraStore.ready && hudConfigStore.isLoaded) {
-        const hasCameraSources =
-          cameraStore.preset.maps.length > 0 ||
-          cameraStore.presets.some((item) => item.preset.maps.length > 0);
-        broadcastMigrationStatus = {
-          state: 'pending',
-          reason: hasCameraSources ? 'camera_identity_unavailable' : 'facades_pending',
-        };
-      }
     });
-    if (broadcastRuntime)
-      app.addHook('onReady', async () => {
-        await broadcastRuntime.initialize();
-        broadcastMigrationStatus = broadcastRuntime.status;
-      });
+    app.addHook('onReady', () => runtime.initialize());
     registerOrchestrationRoutes(
       app,
       cameraDirector,
@@ -1963,7 +1791,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         withSelection: production.withResourceActivation,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
-          return (await broadcastRuntime?.reconcileCameraSelection()) ?? false;
+          return runtime.reconcileCameraSelection();
         },
       },
       mulnxTool,
@@ -2130,34 +1958,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     observerSettings,
     localWebTransport.getOriginPolicy(),
     observerEligible,
-    () => {
-      const program = projectionCoordinator.getCurrent().program;
-      return (
-        observerEligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name)
-      );
-    },
+    () => observerAssist.canRecalibrate(projectionCoordinator.getCurrent().program),
     () => projectionCoordinator.recalibrateObserver(),
   );
-  const observerSettingsUnsubscribe = observerSettings.subscribe((kind) => {
-    if (kind === 'name') {
-      projectionCoordinator.refresh();
-    } else if (kind === 'map') {
-      const program = projectionCoordinator.getCurrent().program;
-      const currentMap = program.map.name ? musicMapKey(program) : undefined;
-      waitingObserverMap =
-        observerSettings.mapConnection?.nextMap &&
-        currentMap &&
-        (currentMap === confirmedObserverMap || program.map.phase === 'gameover')
-          ? currentMap
-          : undefined;
-      confirmedObserverMap = currentMap;
-      observerSettings.waitingForMap = Boolean(waitingObserverMap);
-      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。');
-      projectionCoordinator.resetObserverAssist();
-    } else if (kind !== 'game') {
-      if (kind === 'connection') confirmedObserverMap = waitingObserverMap = undefined;
-      projectionCoordinator.refreshAssist();
-    }
+  const observerSettingsUnsubscribe = observerAssist.subscribe({
+    program: () => projectionCoordinator.getCurrent().program,
+    refresh: () => projectionCoordinator.refresh(),
+    refreshAssist: () => projectionCoordinator.refreshAssist(),
+    resetAssist: () => projectionCoordinator.resetObserverAssist(),
+    mapConnectionChanged: () =>
+      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。'),
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();
@@ -2386,6 +2196,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     }),
   );
 
+  const eventLoopDelay = sessionJournal ? monitorEventLoopDelay({ resolution: 20 }) : undefined;
+  eventLoopDelay?.enable();
   const recordPerformanceWindow = (reason: string) => {
     if (!sessionJournal) return;
     const now = performance.now();
@@ -2399,6 +2211,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         subscribers: publisher.getHealth?.() ?? null,
       };
     });
+    const eventLoop =
+      eventLoopDelay && eventLoopDelay.count
+        ? { p99Ms: eventLoopDelay.percentile(99) / 1e6, maxMs: eventLoopDelay.max / 1e6 }
+        : null;
+    eventLoopDelay?.reset();
     sessionJournal.record('runtime_performance_window', {
       reason,
       windowMs: now - performanceWindowStart,
@@ -2417,6 +2234,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         scope:
           'synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery',
       },
+      eventLoop,
+      outbox: outbox?.takePersistenceTiming() ?? null,
       slowProcessing: {
         count: slowProcessingCount,
         omittedSamples: Math.max(0, slowProcessingCount - slowProcessing.length),
@@ -2755,6 +2574,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     clearInterval(contextTimer);
     clearInterval(directorTimer);
     await closeStep(() => recordPerformanceWindow('close'));
+    eventLoopDelay?.disable();
     await closeStep(() => presentationUnsubscribe());
     await closeStep(() => objectiveReferenceUnsubscribe?.());
     await closeStep(() => cameraDirector?.close());
@@ -2804,7 +2624,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       if (hudConfigStore.getState().persistenceError)
         throw new Error('hud_config_close_unconfirmed');
     });
-    await closeStep(() => flushBroadcastReceipts?.());
+    await closeStep(() => broadcastRuntime?.flushConsumerReceipts());
     await closeStep(async () => {
       const recorder = currentRecorder();
       await recorder.finalize();

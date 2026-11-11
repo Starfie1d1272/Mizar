@@ -1,27 +1,28 @@
 import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { diagnosticValue } from '../support/session-journal.js';
-import { randomUUID, createHash } from 'node:crypto';
-import { SourceLoadError } from './source-error.js';
-import { RivalHubLibrary } from './rivalhub-library.js';
-import { readFile, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
-import type { MatchContext, ScheduleWindowV1 } from '@mizar/core/match-context';
 import {
-  toScheduleWindowV1,
-  validateBroadcastScheduleWindow,
-  validateBroadcastManifest,
-} from '@mizar/rivalhub';
-import { createOnlineManifestSource, readOnlineManifestResponse } from './http-source.js';
-import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broadcast-stats';
-import { redactDiagnosticText, diagnosticNetworkCode } from '../updates/diagnostics.js';
+  RivalHubAuthorization,
+  OFFICIAL_RIVALHUB_URL,
+  type Installation,
+} from './rivalhub-authorization.js';
+import { RivalHubReadClient, type StatsTarget } from './rivalhub-read-client.js';
+import {
+  liveErrorEvidence,
+  liveTimeout,
+  requestFailureReason,
+  requestFailureCode,
+  rootNetworkCode,
+  type LiveErrorEvidence,
+} from './rivalhub-http-errors.js';
 import {
   RELIABLE_SEND_TIMEOUT_MS,
   parseReliableRejection,
   type ReliableDeliveryResult,
-} from '../output/reliable-outbox.js';
+} from '../output/reliable-delivery.js';
 import { SerialCommitQueue } from './serial-commit.js';
-import { replaceDurableJson } from './durable-json.js';
 import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
@@ -29,6 +30,14 @@ import {
   type ClaimIntent,
   type SourceScope,
 } from './rivalhub-source-state.js';
+
+export { OFFICIAL_RIVALHUB_URL } from './rivalhub-authorization.js';
+export { statsTarget, type StatsTarget } from './rivalhub-read-client.js';
+
+type LiveFailure = {
+  stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
+  error: LiveErrorEvidence;
+};
 
 // Read only a small, time-limited classified rejection. Never retain raw body text.
 async function readReliableBody(response: Response): Promise<unknown> {
@@ -62,15 +71,6 @@ async function readReliableBody(response: Response): Promise<unknown> {
   }
 }
 
-type Installation = {
-  baseUrl: string;
-  credential: string;
-  installationId: string;
-  competitionId: string;
-  displayName: string;
-  authorizedUser?: { userId: string; displayName: string } | undefined;
-};
-
 export interface SourceCaptureLifecycle {
   createReference(cursor: ReliableEventV1['cursor']): CaptureReference;
   arm(identity: ExactSource, reference: CaptureReference): Promise<void>;
@@ -80,42 +80,6 @@ export interface SourceCaptureLifecycle {
   coverage(identity: ExactSource): { state: 'armed' | 'sealed' | 'unknown' };
 }
 
-export type StatsTarget = {
-  matchId: string;
-  competitionId: string;
-  entrantIds: readonly [string, string];
-};
-
-/** Bind the cache to the currently active match identity, independent of side order. */
-export function statsTarget(
-  context: Pick<MatchContext, 'matchId' | 'competition' | 'entrants'>,
-): StatsTarget | null {
-  const competitionId = context.competition?.competitionId;
-  const entrantIds = [context.entrants.a.entryId, context.entrants.b.entryId] as const;
-  if (!competitionId || !entrantIds[0] || !entrantIds[1] || entrantIds[0] === entrantIds[1])
-    return null;
-  return { matchId: context.matchId, competitionId, entrantIds };
-}
-
-const statsTargetKey = (target: StatsTarget) =>
-  JSON.stringify([target.matchId, target.competitionId, ...[...target.entrantIds].sort()]);
-type PendingPairing = {
-  pairingId: string;
-  pollToken: string;
-  expiresAt: string;
-};
-export const OFFICIAL_RIVALHUB_URL = 'https://match.starfie1d.top';
-const CONTROL_TIMEOUT_MS = 15_000;
-const STATS_RETRY_MS = 30_000;
-
-function statsRetryDelay(header: string | null): number {
-  if (!header) return STATS_RETRY_MS;
-  const value = header.trim();
-  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
-  if (delay === Infinity) return Number.MAX_VALUE;
-  return Number.isFinite(delay) && delay >= 0 ? Math.max(STATS_RETRY_MS, delay) : STATS_RETRY_MS;
-}
-type PairingStatus = 'idle' | 'pending' | 'expired' | 'authorized';
 type Source = ExactSource & {
   acknowledgedExecution?: string;
   mapStartAttempt?: symbol;
@@ -143,81 +107,6 @@ function definitiveClaimRejection(response: Response, body: unknown): boolean {
   );
 }
 
-type LiveErrorEvidence = { name: string; code?: string | number; cause?: LiveErrorEvidence };
-type LiveFailure = {
-  stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
-  error: LiveErrorEvidence;
-};
-
-function liveErrorIdentifier(value: unknown): string | undefined {
-  if (
-    typeof value !== 'string' ||
-    value.length > 64 ||
-    !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(value)
-  )
-    return undefined;
-  return redactDiagnosticText(value) === value ? value : undefined;
-}
-
-// Do not retain messages/stacks: fetch and JSON errors can contain URLs, tokens or response bytes.
-function liveErrorEvidence(error: unknown, depth = 0): LiveErrorEvidence {
-  if (!(error instanceof Error)) return { name: 'UnknownError' };
-  const name = liveErrorIdentifier(error.name) ?? 'UnknownError';
-  const rawCode = 'code' in error ? error.code : undefined;
-  const code =
-    typeof rawCode === 'number' && Number.isSafeInteger(rawCode) && Math.abs(rawCode) <= 2147483647
-      ? rawCode
-      : liveErrorIdentifier(rawCode);
-  return {
-    name,
-    ...(code === undefined ? {} : { code }),
-    ...(depth < 2 && error.cause !== undefined
-      ? { cause: liveErrorEvidence(error.cause, depth + 1) }
-      : {}),
-  };
-}
-function liveTimeout(error: LiveErrorEvidence): boolean {
-  return (
-    error.name === 'TimeoutError' ||
-    [
-      'ETIMEDOUT',
-      'UND_ERR_CONNECT_TIMEOUT',
-      'UND_ERR_HEADERS_TIMEOUT',
-      'UND_ERR_BODY_TIMEOUT',
-    ].includes(String(error.code ?? '')) ||
-    (error.cause !== undefined && liveTimeout(error.cause))
-  );
-}
-
-function requestFailureReason(error: unknown): string {
-  if (error instanceof RivalHubResponseError)
-    return error.code === 'RIVALHUB_INVALID_JSON' ? 'invalid_response' : 'response_read_failed';
-  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_TIMEOUT')
-    return 'timeout';
-  if (error instanceof Error && 'code' in error && error.code === 'RIVALHUB_NETWORK_FAILED')
-    return 'network_failed';
-  const evidence = liveErrorEvidence(error);
-  if (liveTimeout(evidence)) return 'timeout';
-  if (evidence.name === 'SyntaxError') return 'invalid_response';
-  const network = (e: LiveErrorEvidence): boolean =>
-    e.name === 'TypeError' || (e.cause !== undefined && network(e.cause));
-  return network(evidence) ? 'network_failed' : 'unknown';
-}
-function rootNetworkCode(evidence: LiveErrorEvidence): string | undefined {
-  return (
-    (evidence.cause ? rootNetworkCode(evidence.cause) : undefined) ??
-    diagnosticNetworkCode(evidence.code)
-  );
-}
-
-function requestFailureCode(error: unknown): string | undefined {
-  if (error instanceof Error && 'rootCauseCode' in error) {
-    const code = diagnosticNetworkCode(error.rootCauseCode);
-    if (code) return code;
-  }
-  return rootNetworkCode(liveErrorEvidence(error));
-}
-
 function executionKey(cursor: LiveSnapshotV1['cursor']): string {
   return JSON.stringify([
     cursor.producerInstanceId,
@@ -225,87 +114,6 @@ function executionKey(cursor: LiveSnapshotV1['cursor']): string {
     cursor.programSourceGeneration,
     cursor.mapEpoch,
   ]);
-}
-
-class RivalHubResponseError extends Error {
-  readonly code: 'RIVALHUB_INVALID_JSON' | 'RIVALHUB_RESPONSE_READ_FAILED';
-  constructor(kind: 'parse' | 'read') {
-    super(
-      kind === 'parse'
-        ? 'RivalHub 返回的数据无法解析，请稍后重试。'
-        : 'RivalHub 响应读取失败，请稍后重试。',
-    );
-    this.name = 'RivalHubResponseError';
-    this.code = kind === 'parse' ? 'RIVALHUB_INVALID_JSON' : 'RIVALHUB_RESPONSE_READ_FAILED';
-  }
-}
-function networkError(error: unknown): Error {
-  if (error instanceof RivalHubResponseError) return error;
-  const project = (raw: LiveErrorEvidence): LiveErrorEvidence => {
-    const code = diagnosticNetworkCode(raw.code);
-    return {
-      name: ['Error', 'TypeError', 'AbortError', 'TimeoutError', 'SyntaxError'].includes(raw.name)
-        ? raw.name
-        : 'UnknownError',
-      ...(code ? { code } : {}),
-      ...(raw.cause ? { cause: project(raw.cause) } : {}),
-    };
-  };
-  const evidence = project(liveErrorEvidence(error));
-  const rootCauseCode = requestFailureCode(error);
-  const timeout =
-    liveTimeout(evidence) ||
-    (rootCauseCode !== undefined && liveTimeout({ name: 'UnknownError', code: rootCauseCode }));
-  const network = evidence.name === 'TypeError' || rootCauseCode !== undefined;
-  return Object.assign(
-    new Error(
-      timeout
-        ? '连接 RivalHub 超时，请检查网络后重试。'
-        : network
-          ? '连接 RivalHub 失败，请检查网络后重试。'
-          : 'RivalHub 请求未完成，请稍后重试。',
-      { cause: evidence },
-    ),
-    {
-      name: 'RivalHubRequestError',
-      ...(rootCauseCode ? { rootCauseCode } : {}),
-      code: timeout
-        ? 'RIVALHUB_TIMEOUT'
-        : network
-          ? 'RIVALHUB_NETWORK_FAILED'
-          : 'RIVALHUB_REQUEST_FAILED',
-    },
-  );
-}
-
-function normalizeBaseUrl(value: string): string {
-  const url = new URL(value);
-  if (
-    url.username ||
-    url.password ||
-    url.hash ||
-    url.search ||
-    url.pathname !== '/' ||
-    (url.protocol !== 'https:' &&
-      !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
-  )
-    throw new Error('请输入 RivalHub 的 HTTPS 网站地址。');
-  return url.origin;
-}
-
-function authorizedUser(input: unknown): Installation['authorizedUser'] {
-  if (!input || typeof input !== 'object') return undefined;
-  const { userId, displayName } = input as Record<string, unknown>;
-  if (
-    typeof userId !== 'string' ||
-    !userId.trim() ||
-    userId.length > 128 ||
-    typeof displayName !== 'string' ||
-    !displayName.trim() ||
-    displayName.length > 256
-  )
-    return undefined;
-  return { userId: userId.trim(), displayName: displayName.trim() };
 }
 
 /** Companion-owned scoped installation. Never exposed to the browser. */
@@ -325,11 +133,7 @@ export class RivalHubConnection {
     try {
       this.businessHandler?.('original_error', {
         operation,
-        error: diagnosticValue(error, '', new Set(), [
-          this.installation?.credential ?? '',
-          this.authorizedPairing?.credential ?? '',
-          this.pendingPairing?.pollToken ?? '',
-        ]),
+        error: diagnosticValue(error, '', new Set(), this.authorization.redactionValues()),
       });
     } catch {
       /* Diagnostic observers cannot change transport or authorization. */
@@ -385,185 +189,6 @@ export class RivalHubConnection {
       /* Diagnostics cannot affect authorization or delivery. */
     }
   }
-  private scheduleGeneration = 0;
-  private scheduleWarning: string | null = null;
-  private scheduleCache: {
-    competitionId: string;
-    value: ScheduleWindowV1;
-    acquiredAt: number;
-  } | null = null;
-  getSchedule(): ScheduleWindowV1 | null {
-    return this.installation &&
-      this.scheduleCache?.competitionId === this.installation.competitionId &&
-      this.monotonicNow() - this.scheduleCache.acquiredAt < 60_000
-      ? this.scheduleCache.value
-      : null;
-  }
-  private invalidateReadScope() {
-    this.clearStats();
-    this.statsAuthorizationBlocked = null;
-    this.scheduleCache = null;
-    this.scheduleWarning = null;
-    this.browsingLibrary = null;
-    this.manifestScope?.abort.abort();
-    this.manifestScope = null;
-  }
-  private statsAuthorizationBlocked: Installation | null = null;
-  private statsScope: {
-    installation: Installation;
-    targetKey: string;
-    value: BroadcastStats | null;
-    etag: string | null;
-    pending: Promise<BroadcastStats | null> | null;
-    generation: number;
-    fetchedAt: string | null;
-    retryAt: number;
-    blocked: 'authorization' | null;
-    abort: AbortController;
-  } | null = null;
-
-  /** Called at production entry and maintenance ticks, never by a local reader. */
-  async stats(target: StatsTarget | null, refresh = false): Promise<BroadcastStats | null> {
-    const installation = this.installation;
-    if (
-      !installation ||
-      !target ||
-      target.competitionId !== installation.competitionId ||
-      !/^[A-Za-z0-9_-]{1,128}$/.test(target.matchId) ||
-      !target.entrantIds[0] ||
-      !target.entrantIds[1] ||
-      target.entrantIds[0] === target.entrantIds[1]
-    ) {
-      this.clearStats();
-      return null;
-    }
-    const { matchId } = target;
-    const entrantIds = [...target.entrantIds] as [string, string];
-    const targetKey = statsTargetKey(target);
-    if (this.statsScope?.installation !== installation || this.statsScope.targetKey !== targetKey) {
-      this.clearStats();
-      this.statsScope = {
-        installation,
-        targetKey,
-        value: null,
-        etag: null,
-        pending: null,
-        generation: 0,
-        fetchedAt: null,
-        retryAt: 0,
-        blocked: this.statsAuthorizationBlocked === installation ? 'authorization' : null,
-        abort: new AbortController(),
-      };
-    }
-    const scope = this.statsScope;
-    if (scope.pending) return scope.pending;
-    if (scope.blocked === 'authorization') return null;
-    if (!refresh && scope.value) return scope.value;
-    if (this.monotonicNow() < scope.retryAt) return refresh ? null : scope.value;
-    if (refresh) scope.blocked = null;
-    const generation = ++scope.generation;
-    const current = () =>
-      this.statsScope === scope &&
-      this.installation === installation &&
-      scope.generation === generation &&
-      !scope.abort.signal.aborted;
-    const retry = (header: string | null = null) => {
-      if (current()) scope.retryAt = this.monotonicNow() + statsRetryDelay(header);
-    };
-    const invalid = () => retry();
-    const pending = (async () => {
-      try {
-        const response = await this.request(`stats?matchId=${encodeURIComponent(matchId)}`, {
-          headers: scope.etag ? { 'if-none-match': scope.etag } : {},
-          signal: AbortSignal.any([scope.abort.signal, AbortSignal.timeout(CONTROL_TIMEOUT_MS)]),
-        });
-        if (!current()) return null;
-        if (response.status === 304 && scope.value) {
-          scope.fetchedAt = new Date().toISOString();
-          scope.retryAt = 0;
-          scope.blocked = null;
-          return scope.value;
-        }
-        if (response.status === 401 || response.status === 403) {
-          scope.value = null;
-          scope.etag = null;
-          scope.fetchedAt = null;
-          scope.blocked = 'authorization';
-          this.statsAuthorizationBlocked = installation;
-          return null;
-        }
-        if (!response.ok) {
-          if ([408, 429, 500, 502, 503, 504].includes(response.status))
-            retry(response.headers.get('retry-after'));
-          else invalid();
-          return null;
-        }
-        const parsed = broadcastStatsSchema.safeParse(await readOnlineManifestResponse(response));
-        if (!current()) return null;
-        if (
-          !parsed.success ||
-          parsed.data.matchId !== matchId ||
-          parsed.data.competitionId !== installation.competitionId ||
-          parsed.data.entrants.length !== 2 ||
-          !entrantIds.every((id) => parsed.data.entrants.some((entry) => entry.entryId === id))
-        ) {
-          invalid();
-          return null;
-        }
-        scope.value = parsed.data;
-        scope.etag = response.headers.get('etag');
-        scope.fetchedAt = new Date().toISOString();
-        scope.retryAt = 0;
-        scope.blocked = null;
-        return scope.value;
-      } catch (error) {
-        if (!current()) return null;
-        if (error instanceof SourceLoadError && error.code === 'invalid_response') invalid();
-        else retry();
-        return null;
-      }
-    })().finally(() => {
-      if (scope.pending === pending) scope.pending = null;
-    });
-    scope.pending = pending;
-    return pending;
-  }
-  clearStats(): void {
-    this.statsScope?.abort.abort();
-    this.statsScope = null;
-  }
-  statsFetchedAt(target: StatsTarget | null): string | null {
-    return this.statsScope?.installation === this.installation &&
-      target &&
-      this.statsScope.targetKey === statsTargetKey(target)
-      ? this.statsScope.fetchedAt
-      : null;
-  }
-  /** Read the current snapshot without waiting for or starting a website request. */
-  getStatsSnapshot(target: StatsTarget | null): BroadcastStats | null {
-    const scope = this.statsScope;
-    return scope &&
-      target &&
-      scope.installation === this.installation &&
-      scope.targetKey === statsTargetKey(target)
-      ? scope.value
-      : null;
-  }
-  async getStats(target: StatsTarget | null): Promise<BroadcastStats | null> {
-    const scope = this.statsScope;
-    if (
-      !scope ||
-      !target ||
-      scope.installation !== this.installation ||
-      scope.targetKey !== statsTargetKey(target)
-    )
-      return null;
-    return scope.value ?? (scope.pending ? await scope.pending : null);
-  }
-  private installation: Installation | null = null;
-  private pendingPairing: PendingPairing | null = null;
-  private authorizedPairing: Installation | null = null;
-  private pairingPoll: Promise<PairingStatus> | null = null;
   private source: Source | null = null;
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
@@ -782,13 +407,80 @@ export class RivalHubConnection {
     return this.source && this.installation ? this.exactSource(this.source) : undefined;
   }
 
+  private readonly authorization: RivalHubAuthorization;
+  private readonly readClient: RivalHubReadClient;
+
+  private get installation() {
+    return this.authorization.installation;
+  }
+
   constructor(
-    private readonly path: string,
+    path: string,
     private readonly fetchImpl: typeof fetch = fetch,
-    private readonly baseUrl = OFFICIAL_RIVALHUB_URL,
+    baseUrl = OFFICIAL_RIVALHUB_URL,
     private readonly monotonicNow = () => performance.now(),
   ) {
     this.sourceState = new RivalHubSourceState(join(dirname(path), 'rivalhub-source-state.json'));
+    this.authorization = new RivalHubAuthorization(
+      path,
+      fetchImpl,
+      baseUrl,
+      (operation) => this.sourceCommands.run(operation),
+      () => this.releaseLocked(),
+      () => {
+        this.source = null;
+        this.readClient.invalidate();
+      },
+      (operation, error) => this.onDiagnostic(operation, error),
+      (operation, error) => this.originalError(operation, error),
+    );
+    this.readClient = new RivalHubReadClient(
+      path,
+      fetchImpl,
+      () => this.installation,
+      (operation, init) => this.authorization.request(operation, init),
+      (response) => this.authorization.readJson(response),
+      monotonicNow,
+      (installation, viewer) => this.authorization.rememberViewer(installation, viewer),
+    );
+  }
+
+  startPairing() {
+    return this.authorization.startPairing();
+  }
+  pollPairing() {
+    return this.authorization.pollPairing();
+  }
+
+  getSchedule() {
+    return this.readClient.getSchedule();
+  }
+  schedule(from: string, to: string) {
+    return this.readClient.schedule(from, to);
+  }
+  library() {
+    return this.readClient.library();
+  }
+  libraryDetail(matchId: string, fresh = true) {
+    return this.readClient.libraryDetail(matchId, fresh);
+  }
+  matchSource(matchId: string, fresh = true) {
+    return this.readClient.matchSource(matchId, fresh);
+  }
+  stats(target: StatsTarget | null, refresh = false) {
+    return this.readClient.stats(target, refresh);
+  }
+  clearStats() {
+    this.readClient.clearStats();
+  }
+  statsFetchedAt(target: StatsTarget | null) {
+    return this.readClient.statsFetchedAt(target);
+  }
+  getStatsSnapshot(target: StatsTarget | null) {
+    return this.readClient.getStatsSnapshot(target);
+  }
+  getStats(target: StatsTarget | null) {
+    return this.readClient.getStats(target);
   }
 
   private sourceStateAvailable = false;
@@ -861,57 +553,7 @@ export class RivalHubConnection {
         this.onDiagnostic('source_state_startup_cleanup', cleanupError);
       }
     }
-    let stage = 'connection_read';
-    try {
-      const raw = await readFile(this.path, 'utf8');
-      stage = 'connection_parse';
-      let parsed: Installation;
-      try {
-        parsed = JSON.parse(raw) as Installation;
-      } catch (error) {
-        // SyntaxError can quote the credential file before its key is known.
-        if (error instanceof SyntaxError) {
-          error.message = error.message.replace(/"[\s\S]*"/g, '"[redacted credential excerpt]"');
-          if (error.stack)
-            error.stack = error.stack.replace(/"[^\n]*"/g, '"[redacted credential excerpt]"');
-        }
-        throw error;
-      }
-      stage = 'connection_validate';
-      if (
-        !parsed ||
-        typeof parsed.credential !== 'string' ||
-        typeof parsed.installationId !== 'string' ||
-        typeof parsed.competitionId !== 'string'
-      )
-        throw new Error('RivalHub connection setting has an invalid format');
-      let baseUrl: string;
-      try {
-        baseUrl = normalizeBaseUrl(parsed.baseUrl);
-      } catch {
-        // A malformed URL exception may echo credential-bearing input.
-        throw new Error('RivalHub connection setting has an invalid base URL');
-      }
-      const blocked = this.statsAuthorizationBlocked;
-      const sameBlockedInstallation =
-        blocked !== null &&
-        blocked.baseUrl === baseUrl &&
-        blocked.installationId === parsed.installationId &&
-        blocked.competitionId === parsed.competitionId &&
-        blocked.credential === parsed.credential;
-      this.invalidateReadScope();
-      this.installation = {
-        ...parsed,
-        baseUrl,
-        authorizedUser: authorizedUser(parsed.authorizedUser),
-      };
-      if (sameBlockedInstallation) this.statsAuthorizationBlocked = this.installation;
-    } catch (error) {
-      if (stage === 'connection_read' && (error as NodeJS.ErrnoException)?.code === 'ENOENT')
-        return;
-      this.onDiagnostic(stage, error);
-      this.originalError(stage, error);
-    }
+    await this.authorization.load((installation) => this.readClient.invalidate(installation));
   }
 
   view() {
@@ -920,11 +562,11 @@ export class RivalHubConnection {
       competitionId: this.installation?.competitionId ?? null,
       displayName: this.installation?.displayName ?? null,
       authorizedUser: this.installation?.authorizedUser ?? null,
-      scheduleWarning: this.scheduleWarning,
+      scheduleWarning: this.readClient.scheduleWarning,
       activeSourceMatchId: this.source?.matchId ?? null,
       activeDeviceName: this.activeDeviceName,
       activeDeviceMatchId: this.activeDeviceMatchId,
-      pairing: this.pendingPairing === null ? 'idle' : 'pending',
+      pairing: this.authorization.pairing,
       stoppedMatchId: this.stoppedMatchId,
       sourceState: this.sourceStateAvailable ? 'ready' : 'unavailable',
       sourceCleanup: { ...this.cleanupSummary, handoffPending: this.exitHandoffs.size },
@@ -1183,7 +825,7 @@ export class RivalHubConnection {
       producerInstanceId: intent.scope.producerInstanceId,
       liveSessionId: intent.scope.liveSessionId,
     });
-    const response = await this.request(`source-status?${query}`, {
+    const response = await this.authorization.request(`source-status?${query}`, {
       signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
     });
     if (!response.ok) return;
@@ -1390,7 +1032,7 @@ export class RivalHubConnection {
           authorityRevision: String(identity.authorityRevision),
         });
         try {
-          const response = await this.request(`source-status?${query}`, {
+          const response = await this.authorization.request(`source-status?${query}`, {
             signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
           });
           if (!response.ok) continue;
@@ -1436,7 +1078,7 @@ export class RivalHubConnection {
       });
       try {
         this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
-        const response = await this.request('release', {
+        const response = await this.authorization.request('release', {
           method: 'POST',
           signal: AbortSignal.timeout(Math.max(1, Math.min(4000, deadline - Date.now()))),
           headers: {
@@ -1595,7 +1237,7 @@ export class RivalHubConnection {
       } catch {
         // active source release is best-effort
       }
-      const response = await this.request('disconnect', {
+      const response = await this.authorization.request('disconnect', {
         method: 'POST',
       });
       const result = response.ok ? await readReliableBody(response) : undefined;
@@ -1612,363 +1254,11 @@ export class RivalHubConnection {
       await this.isolateRevokedSources(revoked);
       await this.updateCleanupSummary();
     }
-    await unlink(this.path).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
+    await this.authorization.forget(() => {
+      this.readClient.invalidate();
+      this.source = null;
+      this.activeDeviceName = null;
     });
-    this.installation = null;
-    this.invalidateReadScope();
-    this.scheduleCache = null;
-    this.source = null;
-    this.activeDeviceName = null;
-    this.pendingPairing = null;
-    this.authorizedPairing = null;
-  }
-
-  private async persist(installation: Installation): Promise<void> {
-    await replaceDurableJson(this.path, installation);
-  }
-
-  private async request(operation: string, init: RequestInit = {}): Promise<Response> {
-    if (!this.installation) throw new Error('请先连接 RivalHub。');
-    try {
-      const response = await this.fetchImpl(`${this.installation.baseUrl}/api/mizar/${operation}`, {
-        ...init,
-        redirect: 'manual',
-        headers: { authorization: `Bearer ${this.installation.credential}`, ...init.headers },
-        signal:
-          init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
-      });
-      if (!response.ok && response.status !== 304) {
-        if (operation !== 'reliable' && operation !== 'claim') await response.body?.cancel();
-        this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
-      }
-      return response;
-    } catch (error) {
-      this.originalError(operation, error);
-      const safe = networkError(error);
-      this.onDiagnostic(operation, safe);
-      throw safe;
-    }
-  }
-
-  private async readJson(response: Response): Promise<unknown> {
-    try {
-      return await response.json();
-    } catch (error) {
-      // Keep the credential-redacted original in private local evidence; the browser
-      // and transport classifier retain their existing safe public projection.
-      this.originalError('response_json', error);
-      throw new RivalHubResponseError(error instanceof SyntaxError ? 'parse' : 'read');
-    }
-  }
-
-  async startPairing(): Promise<{ authorizeUrl: string; expiresAt: string }> {
-    return this.sourceCommands.run(() => this.startPairingLocked());
-  }
-
-  private async startPairingLocked(): Promise<{ authorizeUrl: string; expiresAt: string }> {
-    const baseUrl = normalizeBaseUrl(this.baseUrl);
-    const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/start`, {
-      method: 'POST',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-    }).catch((error: unknown) => {
-      this.originalError('pairing', error);
-      throw networkError(error);
-    });
-    if (!response.ok) throw new Error('无法发起授权，请稍后重试。');
-    const value = (await this.readJson(response)) as {
-      pairingId?: unknown;
-      pollToken?: unknown;
-      authorizeUrl?: unknown;
-      expiresAt?: unknown;
-    };
-    if (
-      typeof value.pairingId !== 'string' ||
-      !/^[a-f0-9-]{36}$/i.test(value.pairingId) ||
-      typeof value.pollToken !== 'string' ||
-      !/^[a-f0-9]{64}$/i.test(value.pollToken) ||
-      typeof value.authorizeUrl !== 'string' ||
-      typeof value.expiresAt !== 'string' ||
-      !Number.isFinite(Date.parse(value.expiresAt)) ||
-      Date.parse(value.expiresAt) <= Date.now()
-    )
-      throw new Error('授权请求格式无效。');
-    const authorizeUrl = new URL(value.authorizeUrl);
-    if (
-      authorizeUrl.origin !== baseUrl ||
-      authorizeUrl.username ||
-      authorizeUrl.password ||
-      authorizeUrl.hash ||
-      authorizeUrl.pathname !== '/integrations/mizar/connect' ||
-      authorizeUrl.searchParams.get('pairingId') !== value.pairingId
-    )
-      throw new Error('授权页面地址无效。');
-    this.pendingPairing = {
-      pairingId: value.pairingId,
-      pollToken: value.pollToken,
-      expiresAt: value.expiresAt,
-    };
-    this.authorizedPairing = null;
-    return { authorizeUrl: authorizeUrl.toString(), expiresAt: value.expiresAt };
-  }
-
-  pollPairing(): Promise<PairingStatus> {
-    if (!this.pairingPoll)
-      this.pairingPoll = this.sourceCommands
-        .run(() => this.pollPairingOnce())
-        .finally(() => {
-          this.pairingPoll = null;
-        });
-    return this.pairingPoll;
-  }
-
-  private async pollPairingOnce(): Promise<PairingStatus> {
-    if (this.authorizedPairing) return this.commitPairing(this.authorizedPairing);
-    const pending = this.pendingPairing;
-    if (pending === null) return 'idle';
-    if (Date.parse(pending.expiresAt) <= Date.now()) {
-      this.pendingPairing = null;
-      return 'expired';
-    }
-    const baseUrl = normalizeBaseUrl(this.baseUrl);
-    const response = await this.fetchImpl(`${baseUrl}/api/mizar/pairing/poll`, {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pairingId: pending.pairingId, pollToken: pending.pollToken }),
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-    }).catch((error: unknown) => {
-      this.originalError('pairing', error);
-      throw networkError(error);
-    });
-    if (!response.ok) throw new Error('授权状态暂时无法获取。');
-    const value = (await this.readJson(response)) as {
-      status?: unknown;
-      credential?: unknown;
-      installationId?: unknown;
-      competitionId?: unknown;
-      displayName?: unknown;
-      authorizedUser?: unknown;
-    };
-    if (value.status === 'pending') return 'pending';
-    if (value.status === 'expired') {
-      this.pendingPairing = null;
-      return 'expired';
-    }
-    if (
-      value.status !== 'authorized' ||
-      typeof value.credential !== 'string' ||
-      !/^rh_mizar_[0-9a-f-]{36}_[0-9a-f]{64}$/i.test(value.credential) ||
-      typeof value.installationId !== 'string' ||
-      typeof value.competitionId !== 'string'
-    )
-      throw new Error('授权结果格式无效。');
-
-    const rawDisplayName = typeof value.displayName === 'string' ? value.displayName.trim() : '';
-    const displayName = rawDisplayName.length > 0 ? rawDisplayName : '赛事管理员';
-
-    this.authorizedPairing = {
-      baseUrl,
-      credential: value.credential,
-      installationId: value.installationId,
-      competitionId: value.competitionId,
-      displayName,
-      authorizedUser: authorizedUser(value.authorizedUser),
-    };
-    return this.commitPairing(this.authorizedPairing);
-  }
-
-  private async commitPairing(installation: Installation): Promise<PairingStatus> {
-    await this.releaseLocked();
-    await this.persist(installation);
-    this.source = null;
-    this.invalidateReadScope();
-    this.installation = installation;
-    this.authorizedPairing = null;
-    this.pendingPairing = null;
-    return 'authorized';
-  }
-
-  async schedule(from: string, to: string) {
-    const generation = ++this.scheduleGeneration;
-    const installation = this.installation;
-    const response = await this.request(
-      `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-    );
-    if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
-    const result = validateBroadcastScheduleWindow(await this.readJson(response));
-    if (!result.ok) throw new Error('赛事赛程格式不兼容。');
-    if (
-      this.installation &&
-      result.value.competition.competitionId === this.installation.competitionId &&
-      installation === this.installation &&
-      generation === this.scheduleGeneration
-    ) {
-      // The operator list keeps all provider rows. The internal adjacent-schedule
-      // schema has a separate 256-row contract; never serve an older cache as fresh.
-      this.scheduleCache = null;
-      this.scheduleWarning = null;
-      if (result.value.matches.length > 256) {
-        this.scheduleWarning = '赛事超过 256 场，完整列表仍可浏览和载入；相邻比赛推荐暂不可用。';
-      } else {
-        // Schema or identity failures propagate instead of being mistaken for a size limit.
-        this.scheduleCache = {
-          competitionId: installation.competitionId,
-          value: toScheduleWindowV1(result.value),
-          acquiredAt: this.monotonicNow(),
-        };
-      }
-      await this.sourceCommands.run(async () => {
-        if (this.installation !== installation) return;
-        const user = authorizedUser(result.value.viewer);
-        await this.persist({ ...installation, authorizedUser: user });
-        installation.authorizedUser = user;
-      });
-    }
-    return result.value;
-  }
-
-  private browsingLibrary: { installation: Installation; value: RivalHubLibrary } | null = null;
-  private libraryScopeId = randomUUID();
-  private libraryForCurrentScope() {
-    const installation = this.installation;
-    if (!installation) throw new Error('请先连接 RivalHub。');
-    if (this.browsingLibrary?.installation !== installation) {
-      this.libraryScopeId = randomUUID();
-      this.scheduleWarning = null;
-      this.scheduleCache = null;
-      const scope = createHash('sha256')
-        .update(
-          JSON.stringify([
-            installation.baseUrl,
-            installation.competitionId,
-            installation.installationId,
-          ]),
-        )
-        .digest('hex');
-      const current = () => {
-        if (this.installation !== installation) throw new Error('赛事连接已变化。');
-      };
-      this.browsingLibrary = {
-        installation,
-        value: new RivalHubLibrary(
-          `${this.path}.${scope}.library.json`,
-          installation.competitionId,
-          async (from, to) => {
-            current();
-            const result = await this.schedule(from, to);
-            current();
-            return result;
-          },
-          (matchId, fresh) => {
-            current();
-            return this.matchSource(matchId, fresh).load();
-          },
-        ),
-      };
-    }
-    return this.browsingLibrary.value;
-  }
-
-  async library() {
-    const installation = this.installation;
-    const result = await this.libraryForCurrentScope().view();
-    if (this.installation !== installation) throw new Error('赛事连接已变化。');
-    return {
-      ...result,
-      library: {
-        ...result.library,
-        scopeId: this.libraryScopeId,
-        scheduleWarning: this.scheduleWarning,
-      },
-    };
-  }
-
-  async libraryDetail(matchId: string, fresh = true) {
-    const installation = this.installation;
-    const result = await this.libraryForCurrentScope().detail(matchId, fresh);
-    if (this.installation !== installation) throw new Error('赛事连接已变化。');
-    return result;
-  }
-
-  private manifestScope: {
-    installation: Installation;
-    pending: Map<string, Promise<unknown>>;
-    retryState: { notBefore: number };
-    abort: AbortController;
-    recent: Map<string, { value: unknown; at: number }>;
-  } | null = null;
-
-  matchSource(matchId: string, fresh = true) {
-    const installation = this.installation;
-    if (!installation) throw new Error('请先连接 RivalHub。');
-    if (this.manifestScope?.installation !== installation)
-      this.manifestScope = {
-        installation,
-        pending: new Map(),
-        retryState: { notBefore: 0 },
-        abort: new AbortController(),
-        recent: new Map(),
-      };
-    const scope = this.manifestScope;
-    const source = createOnlineManifestSource(matchId, {
-      urlTemplate: `${installation.baseUrl}/api/mizar/match?matchId={matchId}`,
-      readToken: installation.credential,
-      fetchImpl: this.fetchImpl,
-      retryState: scope.retryState,
-      signal: scope.abort.signal,
-      isCurrent: () => this.installation === installation,
-    });
-    return {
-      kind: source.kind,
-      load: async () => {
-        if (this.installation !== installation)
-          throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
-        let pending = scope.pending.get(matchId);
-        const recent = scope.recent.get(matchId);
-        // Only overlapping automatic ticks may reuse a just-validated online entity.
-        // Explicit browsing, refresh and activation always read fresh (or join an in-flight read).
-        if (
-          !pending &&
-          !fresh &&
-          recent &&
-          Date.now() >= recent.at &&
-          Date.now() - recent.at < 1000
-        )
-          return structuredClone(recent.value);
-        if (!pending) {
-          if (scope.pending.size >= 3)
-            throw new SourceLoadError('比赛资料正在读取，请稍后重试。', undefined, 'unavailable');
-          pending = source
-            .load()
-            .then((input) => {
-              if (this.installation !== installation)
-                throw new SourceLoadError('赛事连接已变化。', undefined, 'authorization');
-              const valid = validateBroadcastManifest(input);
-              if (!valid.ok)
-                throw new SourceLoadError('比赛资料格式无效。', undefined, 'invalid_manifest');
-              if (
-                valid.value.match.matchId !== matchId ||
-                valid.value.match.competition?.competitionId !== installation.competitionId
-              )
-                throw new SourceLoadError('比赛资料不匹配。', undefined, 'match_mismatch');
-              scope.recent.delete(matchId);
-              scope.recent.set(matchId, { value: valid.value, at: Date.now() });
-              while (scope.recent.size > 2) scope.recent.delete(scope.recent.keys().next().value!);
-              return valid.value;
-            })
-            .catch((error: unknown) => {
-              scope.recent.delete(matchId);
-              throw error;
-            })
-            .finally(() => scope.pending.delete(matchId));
-          scope.pending.set(matchId, pending);
-        }
-        // Consumers own their entity; never share a one-shot Response or a mutable document.
-        return structuredClone(await pending);
-      },
-    };
   }
 
   async claim(
@@ -2184,7 +1474,7 @@ export class RivalHubConnection {
         await this.updateCleanupSummary();
         throw new Error('比赛已变化，请重新确认网站同步。');
       }
-      const response = await this.request('claim', {
+      const response = await this.authorization.request('claim', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -2223,7 +1513,7 @@ export class RivalHubConnection {
                 : `http_${response.status}`;
         throw new Error('当前比赛无法成为数据源，请检查同步状态后重试。');
       }
-      const result = (await this.readJson(response)) as {
+      const result = (await this.authorization.readJson(response)) as {
         claimed: boolean;
         authorityRevision: number;
         activeDeviceName?: string;
@@ -2461,7 +1751,7 @@ export class RivalHubConnection {
     try {
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({ reason: 'request_started', sentAt: new Date().toISOString() });
-      const response = await this.request(operation, {
+      const response = await this.authorization.request(operation, {
         ...(signal ? { signal } : {}),
         method: 'POST',
         headers: {

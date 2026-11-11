@@ -62,6 +62,7 @@ export function checkArchitecture(options = {}) {
 
   const records = loadSourceRecords(repository, workspaces);
   checkImportEdges(records, repository, workspaces, report);
+  checkDomainImportOwnership(records, repository, report);
   checkCstvParserImportOwnership(records, report);
   checkProgramProjectionImportOwnership(records, repository, report);
   checkWorkspaceCycles(workspaces, report);
@@ -629,6 +630,64 @@ function checkImportEdges(records, repository, workspaces, report) {
           target: target.name,
           message:
             'Production runtime code may not import testkit; keep capture consumption, replay, simulation, and fault-injection infrastructure in dev-only tests and tooling. Production capture recorder belongs to the Companion telemetry runtime.',
+        });
+      }
+    }
+  }
+}
+
+function checkDomainImportOwnership(records, repository, report) {
+  const companion = 'apps/companion/src/';
+  for (const record of records.values()) {
+    if (record.kind !== 'production') continue;
+    const owner = record.path;
+    for (const edge of record.allEdges) {
+      const target = resolveRelativeModule(owner, edge.specifier, repository);
+      let message;
+      if (
+        owner.startsWith(companion + 'music/') &&
+        target?.startsWith(companion + 'obs/') &&
+        (edge.runtime || basename(target) !== 'audio-monitor-contract.ts')
+      ) {
+        message = 'Music uses the music device port; raw OBS operations belong to the OBS adapter.';
+      } else if (
+        owner.startsWith(companion + 'obs/') &&
+        target?.startsWith(companion + 'music/') &&
+        !['device.ts', 'store.ts'].includes(basename(target))
+      ) {
+        message = 'OBS uses music device and audio mode contracts; cue policy belongs to music.';
+      } else if (
+        owner === companion + 'match-context/rivalhub-read-client.ts' &&
+        (target?.startsWith(companion + 'output/') ||
+          /\/rivalhub-(?:connection|source-state)\.ts$/.test(target ?? ''))
+      ) {
+        message =
+          'RivalHub reads use the installation scope and cannot depend on source ownership or outbox internals.';
+      } else if (
+        owner === companion + 'match-context/rivalhub-connection.ts' &&
+        target?.startsWith(companion + 'output/') &&
+        target !== companion + 'output/reliable-delivery.ts' &&
+        (target !== companion + 'output/capture-interval.ts' || edge.runtime)
+      ) {
+        message = 'RivalHub source control uses the reliable delivery and capture contracts.';
+      } else if (
+        ['packages/broadcast-config/src/', 'packages/broadcast-pack/src/'].some(
+          (prefix) =>
+            owner.startsWith(prefix) &&
+            owner !== prefix + 'index.ts' &&
+            (target === prefix + 'index.ts' || edge.specifier === record.owner.name),
+        ) ||
+        (owner === companion + 'updates/core.ts' && target === companion + 'updates/source.ts')
+      ) {
+        message =
+          'Internal implementations share leaf modules and keep public entry points out of the dependency chain.';
+      }
+      if (message) {
+        report({
+          ruleId: 'ARCH_DOMAIN_BOUNDARY',
+          file: owner,
+          target: edge.specifier,
+          message,
         });
       }
     }

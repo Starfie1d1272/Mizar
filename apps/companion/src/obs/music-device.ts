@@ -1,13 +1,106 @@
-import { assertNoVideoOutput } from '../obs/video-transaction.js';
+import { assertNoVideoOutput } from './video-transaction.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { OBSWebSocket } from 'obs-websocket-js/json';
-import type { ObsConfigStore } from '../obs/config.js';
-import type { ObsRpc } from '../obs/reconcile.js';
-import { OBS_COLLECTION, obsDesiredScenes } from '../obs/desired-state.js';
-import { looping, type MusicStore, type MusicState } from './store.js';
+import type { ObsConfigStore } from './config.js';
+import type { ObsRpc } from './reconcile.js';
+import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { looping, type MusicState } from '../music/store.js';
 
-export type MusicLayer = 'bgm' | 'stinger';
-export class ObsMusicProvider {
+import type {
+  MusicDevice,
+  MusicDeviceProvider,
+  MusicLayer,
+  MusicSourceSetup,
+} from '../music/device.js';
+import type { ObsAudioRouting } from './audio-routing.js';
+import { desktopMonitorRelationship } from './audio-monitor-device.js';
+
+type MonitorAccess = {
+  readonly routing: ObsAudioRouting | undefined;
+  sources(): MusicState['sources'];
+  baseUrl: string;
+};
+type MonitorSession = MonitorAccess & { isCurrent(): Promise<boolean> };
+
+export function createMusicDevice(
+  obs: ObsRpc,
+  endpoint?: string,
+  access?: MonitorSession,
+): MusicDevice {
+  return {
+    mediaStatus: (input) => obs.call('GetMediaInputStatus', input),
+    volume: (input) => obs.call('GetInputVolume', input),
+    mute: (input) => obs.call('GetInputMute', input),
+    monitorMode: (input) => obs.call('GetInputAudioMonitorType', input),
+    inputSettings: (input) => obs.call('GetInputSettings', input),
+    listInputs: () => obs.call('GetInputList'),
+    setVolume: (input) => obs.call('SetInputVolume', input),
+    setMute: (input) => obs.call('SetInputMute', input),
+    setMonitorMode: (input, onDispatch) => obs.call('SetInputAudioMonitorType', input, onDispatch),
+    setMediaCursor: (input) => obs.call('SetMediaInputCursor', input),
+    setInputSettings: (input) => obs.call('SetInputSettings', input),
+    controlMedia: ({ inputUuid, mediaAction }) =>
+      obs.call('TriggerMediaInputAction', {
+        inputUuid,
+        mediaAction: `OBS_WEBSOCKET_MEDIA_INPUT_ACTION_${mediaAction}`,
+      }),
+    reportsDispatch: Boolean(obs.reportsDispatch),
+    guardWrites: (guard) =>
+      createMusicDevice(obs.withMutationGuard?.(guard) ?? obs, endpoint, access),
+    checkCalls: (guard, checkAfter) =>
+      createMusicDevice(
+        {
+          ...obs,
+          call: (...args) => {
+            guard();
+            const result = obs.call(...args);
+            return checkAfter
+              ? result.then((value) => {
+                  guard();
+                  return value;
+                })
+              : result;
+          },
+        },
+        endpoint,
+        access,
+      ),
+    ownershipScope: async () => obs.ownershipScope?.(),
+    ...(obs.managedInputIdentity
+      ? { managedInputIdentity: (name: string) => obs.managedInputIdentity!(name) }
+      : {}),
+    findInput: (store, layer, valid) => findMusicInput(obs, store, layer, valid),
+    verifyPlayback: (store, layer, valid) => verifyMusicPlayback(obs, store, layer, valid),
+    prepareResources: (store, layer, valid) => prepareMusicResources(obs, store, layer, valid),
+    async outputsStopped() {
+      const stream = await obs.call('GetStreamStatus');
+      const record = await obs.call('GetRecordStatus');
+      return stream.outputActive === false && record.outputActive === false;
+    },
+    async monitorSafe() {
+      if (!endpoint || !access?.routing || !(await access.isCurrent())) return false;
+      return access.routing.musicMonitorSafe(obs, endpoint, {
+        sources: access.sources(),
+        baseUrl: access.baseUrl,
+      });
+    },
+    async monitorRelationship() {
+      if (await access?.routing?.modePending()) throw new Error('audio_mode_pending');
+      const binding = await access?.routing?.desktopBinding();
+      if (!binding) return 'independent';
+      if (
+        !access ||
+        !(await access.isCurrent()) ||
+        binding.endpoint !== endpoint ||
+        (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== binding.collection
+      )
+        throw new Error('audio_binding_changed');
+      return desktopMonitorRelationship(obs, binding.inputUuid);
+    },
+  };
+}
+
+export class ObsMusicProvider implements MusicDeviceProvider {
   private client: OBSWebSocket | null = null;
   private signature = '';
   private connected = false;
@@ -18,6 +111,7 @@ export class ObsMusicProvider {
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
     private readonly onMonitorSettingsChanged: () => void = () => {},
+    private readonly monitorAccess?: MonitorAccess,
   ) {}
   get isConnected(): boolean {
     return this.connected;
@@ -29,7 +123,10 @@ export class ObsMusicProvider {
       /* Diagnostics cannot change playback or connection ownership. */
     }
   }
-  async session<T>(run: (rpc: ObsRpc, epoch: number) => Promise<T>): Promise<T> {
+  async session<T>(
+    run: (device: MusicDevice, epoch: number) => Promise<T>,
+    prepare: (rpc: ObsRpc) => ObsRpc = (rpc) => rpc,
+  ): Promise<T> {
     if (!this.connected && Date.now() < this.retryAt) throw new Error('music_obs_unavailable');
     const config = await this.config.read();
     const signature = JSON.stringify([config.host, config.port, config.password]);
@@ -116,15 +213,33 @@ export class ObsMusicProvider {
         }
       },
     };
+    const endpoint = `ws://${config.host}:${config.port}`;
+    const connection = await this.config.managedResources.bind(
+      rpc,
+      endpoint,
+      'http://127.0.0.1:3000',
+    );
+    const access = this.monitorAccess;
     return run(
-      await this.config.managedResources.bind(
-        rpc,
-        `ws://${config.host}:${config.port}`,
-        'http://127.0.0.1:3000',
+      createMusicDevice(
+        prepare(connection),
+        endpoint,
+        access && {
+          ...access,
+          isCurrent: async () => {
+            const current = await this.config.read();
+            return (
+              this.connected &&
+              this.client === client &&
+              JSON.stringify([current.host, current.port, current.password]) === signature
+            );
+          },
+        },
       ),
       this.epoch,
     );
   }
+
   async close() {
     this.connected = false;
     const client = this.client;
@@ -220,7 +335,7 @@ const sameItem = (a: Initialization, b: Initialization) =>
 
 async function createMusicResource(
   obs: ObsRpc,
-  store: MusicStore,
+  store: MusicSourceSetup,
   intent: Initialization,
   type: 'CreateInput' | 'CreateSceneItem',
   data: Record<string, unknown>,
@@ -250,7 +365,7 @@ async function createMusicResource(
 /** Resume only a persisted unfinished item, never infer ownership from an existing layout. */
 async function initializeMusicItem(
   obs: ObsRpc,
-  store: MusicStore,
+  store: MusicSourceSetup,
   pending: Initialization,
   scope: string | undefined,
   valid: () => boolean,
@@ -376,9 +491,9 @@ async function initializeMusicItem(
 }
 
 /** Read only: UUID and collection identity never imply permission to repair resources. */
-export async function findMusicInput(
+async function findMusicInput(
   obs: ObsRpc,
-  store: MusicStore,
+  store: Pick<MusicSourceSetup, 'state'>,
   layer: MusicLayer,
   valid: () => boolean,
 ): Promise<string | null> {
@@ -404,9 +519,9 @@ export async function findMusicInput(
 }
 
 /** An unfinished item in another scene does not own the current source's controls. */
-export async function verifyMusicPlayback(
+async function verifyMusicPlayback(
   obs: ObsRpc,
-  store: MusicStore,
+  store: Pick<MusicSourceSetup, 'state'>,
   layer: MusicLayer,
   valid: () => boolean,
 ): Promise<void> {
@@ -451,9 +566,9 @@ export async function verifyMusicPlayback(
 }
 
 /** Explicit preparation only: create, rename, attach and resume owned initialization. */
-export async function prepareMusicResources(
+async function prepareMusicResources(
   obs: ObsRpc,
-  store: MusicStore,
+  store: MusicSourceSetup,
   layer: MusicLayer,
   valid: () => boolean,
 ): Promise<void> {

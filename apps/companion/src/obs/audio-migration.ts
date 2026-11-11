@@ -1,3 +1,4 @@
+import { monitorMode, monitorRef, type AudioMonitorChange } from './audio-monitor-contract.js';
 import { randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -31,26 +32,12 @@ const inputField = inputRef
     externalChanged: z.boolean(),
   })
   .strict();
-const monitorMode = z.enum([
-  'OBS_MONITORING_TYPE_NONE',
-  'OBS_MONITORING_TYPE_MONITOR_ONLY',
-  'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-]);
-const monitorRef = z
-  .object({
-    kind: z.literal('monitor'),
-    inputUuid: z.string().min(1),
-    before: monitorMode,
-    applied: monitorMode,
-  })
-  .strict();
 const monitorField = monitorRef
   .extend({
     phase: z.enum(['prepared', 'sent', 'confirmed', 'uncertain', 'restored']),
     externalChanged: z.boolean(),
   })
   .strict();
-export type AudioMonitorChange = z.infer<typeof monitorRef>;
 type Value = boolean | z.infer<typeof monitorMode>;
 function active(value: Value): boolean {
   return (

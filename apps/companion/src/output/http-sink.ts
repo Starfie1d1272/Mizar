@@ -1,6 +1,6 @@
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 
-import type { ReliableDeliveryResult, ReliableEventSink } from './reliable-outbox.js';
+import type { ReliableDeliveryResult, ReliableEventSink } from './reliable-delivery.js';
 import type { LiveSnapshotConsumer } from './service.js';
 
 export interface HttpOutputConfig {

@@ -9,6 +9,7 @@ export type SceneExecutionScope = Scope<'scene-execution'>;
 export type SceneRequestScope = Scope<'scene-request'>;
 export type SceneResultScope = Scope<'scene-result'>;
 export type MusicMapScope = Scope<'music-map'>;
+export type ObserverMapScope = Scope<'observer-map'>;
 export type MusicOpeningScope = Scope<'music-opening'>;
 export type CameraExecutionScope = Scope<'camera-execution'>;
 export type CameraControlScope = Scope<'camera-control'>;
@@ -72,14 +73,23 @@ export function sceneResultScope(p: ProgramProjection): SceneResultScope {
   return `${sceneMatchScope(p)}:${p.cursor.liveSessionId}:${p.cursor.mapEpoch}` as SceneResultScope;
 }
 
-/** Music cues intentionally survive producer and connection changes within the same map. */
-export function musicMapScope(p: ProgramProjection): MusicMapScope {
+function mapScopeKey(p: ProgramProjection): string {
   return JSON.stringify([
     ...matchParticipants(p),
     p.series?.currentMapOrder,
     p.map.name,
     p.cursor.mapEpoch,
-  ]) as MusicMapScope;
+  ]);
+}
+
+/** Music cues intentionally survive producer and connection changes within the same map. */
+export function musicMapScope(p: ProgramProjection): MusicMapScope {
+  return mapScopeKey(p) as MusicMapScope;
+}
+
+/** Map confirmation follows the observed map execution across receiver reconnects. */
+export function observerMapScope(p: ProgramProjection): ObserverMapScope {
+  return mapScopeKey(p) as ObserverMapScope;
 }
 
 // One-shot opening requests additionally expire when the program source generation changes.

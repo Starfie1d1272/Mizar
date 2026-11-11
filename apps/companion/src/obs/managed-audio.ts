@@ -1,9 +1,6 @@
+import type { AudioMonitorChange } from './audio-monitor-contract.js';
 import { assertManagedGlobalAudioSilent } from './audio.js';
-import {
-  AudioMigration,
-  type AudioMonitorChange,
-  type MigrationObserver,
-} from './audio-migration.js';
+import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';

@@ -1,3 +1,4 @@
+import { musicOriginals, type MonitorOriginals } from './audio-monitor-contract.js';
 import { randomUUID } from 'node:crypto';
 import {
   audioCollectionTransferSchema,
@@ -19,26 +20,6 @@ import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
 import { assertManagedGlobalAudioSilent } from './audio.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
-const musicOriginal = z
-  .object({
-    uuid: z.string().min(1),
-    mode: z.enum([
-      'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-      'OBS_MONITORING_TYPE_MONITOR_ONLY',
-      'OBS_MONITORING_TYPE_NONE',
-    ]),
-    applied: z
-      .enum([
-        'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
-        'OBS_MONITORING_TYPE_MONITOR_ONLY',
-        'OBS_MONITORING_TYPE_NONE',
-      ])
-      .optional(),
-  })
-  .strict()
-  .nullable();
-const musicOriginals = z.object({ bgm: musicOriginal, stinger: musicOriginal }).strict();
-export type MonitorOriginals = z.infer<typeof musicOriginals>;
 const modeTransition = z
   .object({
     id: z.string().uuid(),
