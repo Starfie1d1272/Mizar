@@ -98,11 +98,22 @@ pnpm lint
 pnpm architecture:check
 ```
 
-`quality` 运行脚本组，`build` 完成生产构建后运行产品组。Rust 内联测试不由此入口发现；Windows 常规作业执行 build/clippy，不能记为原生测试通过。安装器源码或构建流程改变时，同一 Windows 作业使用正式 .NET Framework 编译器和引用编译 C#，不运行安装器。
+`quality` 运行脚本组，并独立编译运行播出窗口替换的 Rust 逻辑测试；`build` 完成生产构建后运行产品组。Windows 常规作业执行 build/clippy，涉及准备、取消或恢复的变更另按受影响模块定向执行已有 Rust 测试，例如 `cargo test --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml preparation_evidence`。安装器源码或构建流程改变时，同一 Windows 作业使用正式 .NET Framework 编译器和引用编译 C#，不运行安装器。
 
 `ci-gate` 要求所选作业成功，并检查从运行创建到门禁的 180 秒预算；排队/执行不保证到期瞬间被终止。缓存键、稀疏检出和调度细节由[工作流](../../.github/workflows/)维护，达标必须看真实整轮结果。
 
 **常规 CI 不运行真实安装、同版更新、取消或回滚生命周期。** `verify-update-recovery.mjs` 是显式 Windows 受控验证，不在常规 CI 中。编译、脚本桩和门禁成功均不能代替安装验收或实机音画。
+
+## 可靠输出性能
+
+`runtime_performance_window` 分别记录 Outbox 快照准备、SQLite 写事务及本进程事件循环延迟。诊断使用 20 ms 采样间隔，观察到的延迟包含其他主线程工作；结合写事务及 GSI 接收间隔判断原因。
+
+```sh
+pnpm --filter @mizar/companion... --fail-if-no-match run build
+node apps/companion/bench/outbox.mjs
+```
+
+基准使用临时 SQLite 和接近容量上限的合成记录，分别测量本机磁盘和人为停顿的提交，并重开数据库核对记录。人为停顿用于定位同步阻塞；实际制作机的磁盘耗时和接收延迟以现场诊断为准。
 
 ## 样例、重放与来源
 

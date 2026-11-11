@@ -1,3 +1,4 @@
+import type { PreparationStatus } from '@mizar/protocol/desktop-lifecycle';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import { useLocalRead } from './client';
 import { useEffect, useState } from 'react';
@@ -7,12 +8,6 @@ import { StatusBanner } from '../ui';
 
 /** Read the existing Host task, never retain a second completion message. */
 export function usePreparationStatus() {
-  type PreparationStatus = {
-    running: boolean;
-    cancelled: boolean;
-    entered: boolean;
-    message: string;
-  };
   const [status, setStatus] = useState<PreparationStatus | null>(null);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -20,7 +15,7 @@ export function usePreparationStatus() {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const value = await desktopInvoke<PreparationStatus | null>('preparation_status');
+        const value = await desktopInvoke('preparation_status');
         if (active) setStatus(value);
       } catch {
         if (active) setStatus(null);

@@ -97,6 +97,5 @@ pub fn frontend_commands() -> String {
         let suffix = if index + 1 == COMMANDS.len() { ";" } else { "" };
         result.push_str(&format!("  | '{name}'{suffix}\n"));
     }
-    result.push_str("\nexport function invokeDesktopCommand<T>(\n  invoke: (command: string, args?: Record<string, unknown>) => Promise<T>,\n  command: DesktopCommand,\n  args?: Record<string, unknown>,\n): Promise<T> {\n  return invoke(command, args);\n}\n");
     result
 }

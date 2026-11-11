@@ -1,4 +1,10 @@
-import { invokeDesktopCommand, type DesktopCommand } from './desktop-commands.generated';
+import type { DesktopCommand } from './desktop-commands.generated';
+import {
+  desktopLifecycleContract,
+  type DesktopLifecycleCommand,
+  type LifecycleArgs,
+  type LifecycleResult,
+} from '@mizar/protocol/desktop-lifecycle';
 import { browserErrorEvidence, controlEvidence, nativeSnapshot } from '../debug/control-journal';
 import type { ControlTask } from '../debug/control-task';
 import { useEffect, useState } from 'react';
@@ -70,11 +76,26 @@ declare global {
 /** The Host retains this outcome; UI commands must not copy it into local state. */
 export class HostWindowControlError extends Error {}
 
-export async function desktopInvoke<T>(
+// Check the schema keys against the Rust-generated command registry.
+type RegisteredCommand<C extends DesktopCommand> = C;
+type LifecycleCommand = RegisteredCommand<DesktopLifecycleCommand>;
+
+export function desktopInvoke<C extends LifecycleCommand>(
+  command: C,
+  ...input: undefined extends LifecycleArgs<NoInfer<C>>
+    ? [args?: LifecycleArgs<NoInfer<C>>, task?: ControlTask]
+    : [args: LifecycleArgs<NoInfer<C>>, task?: ControlTask]
+): Promise<LifecycleResult<C>>;
+export function desktopInvoke<T>(
+  command: Exclude<DesktopCommand, DesktopLifecycleCommand>,
+  args?: Record<string, unknown>,
+  task?: ControlTask,
+): Promise<T>;
+export async function desktopInvoke(
   command: DesktopCommand,
   args?: Record<string, unknown>,
   task?: ControlTask,
-): Promise<T> {
+): Promise<unknown> {
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
   const operationId = crypto.randomUUID();
   const observe =
@@ -90,21 +111,24 @@ export async function desktopInvoke<T>(
       args,
     });
   try {
-    const result = await invokeDesktopCommand<T>(
-      (name, payload) => window.__TAURI_INTERNALS__!.invoke<T>(name, payload),
-      command,
-      {
-        ...args,
-        diagnosticOperationId: operationId,
-        ...(task
-          ? {
-              diagnosticTaskId: task.taskId,
-              diagnosticParentOperationId: task.operationId,
-              diagnosticTrigger: task.trigger,
-            }
-          : {}),
-      },
-    );
+    const contract = desktopLifecycleContract(command);
+    const parsedArgs = contract ? contract.args.safeParse(args) : undefined;
+    if (parsedArgs && !parsedArgs.success) throw new Error('桌面操作参数无效。');
+    const result = await window.__TAURI_INTERNALS__.invoke<unknown>(command, {
+      ...(parsedArgs ? parsedArgs.data : args),
+      diagnosticOperationId: operationId,
+      ...(task
+        ? {
+            diagnosticTaskId: task.taskId,
+            diagnosticParentOperationId: task.operationId,
+            diagnosticTrigger: task.trigger,
+          }
+        : {}),
+    });
+    const parsedResult = contract?.result.safeParse(result);
+    if (parsedResult && !parsedResult.success) {
+      throw new Error('桌面操作结果未确认，请核对当前状态。', { cause: parsedResult.error });
+    }
     if (observe)
       controlEvidence(command, 'result', {
         taskId: task?.taskId ?? null,
@@ -117,7 +141,7 @@ export async function desktopInvoke<T>(
       nativeSnapshot(command, result);
       if (task) task.event('native_snapshot', { command, operationId, result });
     }
-    return result;
+    return parsedResult ? parsedResult.data : result;
   } catch (error) {
     if (!observe && task)
       task.event('native_snapshot_failure', {

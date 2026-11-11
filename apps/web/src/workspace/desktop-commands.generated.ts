@@ -66,11 +66,3 @@ export type DesktopCommand =
   | 'ensure_gsi'
   | 'select_cs2_installation'
   | 'open_cs2_config_directory';
-
-export function invokeDesktopCommand<T>(
-  invoke: (command: string, args?: Record<string, unknown>) => Promise<T>,
-  command: DesktopCommand,
-  args?: Record<string, unknown>,
-): Promise<T> {
-  return invoke(command, args);
-}

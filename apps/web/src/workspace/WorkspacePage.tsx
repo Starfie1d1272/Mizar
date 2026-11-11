@@ -59,7 +59,6 @@ import {
   useCs2Status,
   useWorkspaceExitStatus,
   workspaceExitLabel,
-  type WorkspaceExitStatus,
 } from '../preparation/cs2-status';
 import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
 import './workspace.css';
@@ -498,7 +497,7 @@ function WorkspaceDockContent() {
       if (error instanceof HostWindowControlError) return;
       const detail = error instanceof Error ? error.message : '操作未完成。';
       const shared = reportsExit
-        ? await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status').catch(() => null)
+        ? await desktopInvoke('workspace_exit_status').catch(() => null)
         : null;
       // Host owns exit errors. Do not leave a second, stale copy after recovery.
       if (shared?.message !== detail) setErrorMessage(detail);
