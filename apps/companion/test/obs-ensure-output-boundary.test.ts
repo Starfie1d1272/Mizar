@@ -64,8 +64,43 @@ it.each([
     entryMode: 'idle',
     label: 'entry output starts at the final no-write check',
   },
+  ...[
+    { audioStall: 1, label: 'audio preparation timeout preserves verified entry' },
+    { audioStall: 3, label: 'final audio timeout preserves verified entry' },
+    { audioStall: 1, cancelAudio: true, label: 'cancelled stalled audio cannot grant entry' },
+    {
+      audioStall: 3,
+      unsafeVisual: true,
+      label: 'audio timeout cannot hide changed visual identity',
+    },
+  ].map((scenario) => ({ align: false, event: '', entryMode: 'idle', ...scenario })),
 ])('explicit ensure handles $label', async (scenario) => {
-  const { align, event, late, transient, entryMode } = scenario;
+  const { align, event, entryMode } = scenario;
+  const late = 'late' in scenario && scenario.late;
+  const transient = 'transient' in scenario && scenario.transient;
+  const audioStall = 'audioStall' in scenario ? scenario.audioStall : undefined;
+  const cancelAudio = 'cancelAudio' in scenario && scenario.cancelAudio;
+  const unsafeVisual = 'unsafeVisual' in scenario && scenario.unsafeVisual;
+  let audioReads = 0;
+  let releaseAudio: (() => void) | undefined;
+  let audioReleased = false;
+  let longDeadlines = 0;
+  const realTimeout = globalThis.setTimeout;
+  // Keep visual deadlines unchanged. Shorten only the independent audio phase
+  // and ordinary RPC deadlines so a genuinely unanswered socket is affordable.
+  const timer = audioStall
+    ? vi
+        .spyOn(globalThis, 'setTimeout')
+        .mockImplementation(((callback, ms, ...args) =>
+          realTimeout(
+            callback,
+            (ms === 30_000 && String(callback).includes('OBS 操作超时') && ++longDeadlines === 2) ||
+              ms === 4000
+              ? 1000
+              : ms,
+            ...args,
+          )) as typeof setTimeout)
+    : undefined;
   const directory = await mkdtemp(join(tmpdir(), 'mizar-ensure-output-'));
   const server = Fastify();
   const app = Fastify();
@@ -202,7 +237,10 @@ it.each([
             inputs: [
               ...desired.map((item) => ({
                 inputName: item.browserInput,
-                inputUuid: `input:${item.browserInput}`,
+                inputUuid:
+                  unsafeVisual && releaseAudio
+                    ? `replaced:${item.browserInput}`
+                    : `input:${item.browserInput}`,
                 inputKind: 'browser_source',
               })),
               {
@@ -365,6 +403,14 @@ it.each([
             },
           }),
         );
+      if (type === 'GetInputAudioTracks') {
+        audioReads++;
+        if (audioReads === audioStall && !audioReleased) {
+          releaseAudio = respond;
+          if (cancelAudio) void waitForEvent('CurrentProgramSceneChanged', false);
+          return;
+        }
+      }
       if (type === 'GetOutputList') outputReads++;
       const eventDue = late
         ? entryMode
@@ -473,6 +519,40 @@ it.each([
         ...(entryMode ? { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' } : {}),
       },
     });
+    if (audioStall) {
+      expect(releaseAudio).toBeDefined();
+      expect(response.statusCode, JSON.stringify(response.json())).toBe(
+        cancelAudio || unsafeVisual ? 409 : 200,
+      );
+      const beforeLate = requests.length;
+      audioReleased = true;
+      releaseAudio!();
+      await new Promise((resolve) => realTimeout(resolve, 30));
+      expect(
+        requests.slice(beforeLate).filter((type) => /^(Set|Create|Remove|Stop)/.test(type)),
+      ).toEqual([]);
+      if (cancelAudio || unsafeVisual) {
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: '/operator/runtime/obs-entry-permit',
+              headers: { 'x-runtime-token': 'a'.repeat(64) },
+              payload: { preparationId: '19ba601e-84c3-4adc-b6f5-ab29bf92ca49' },
+            })
+          ).statusCode,
+        ).toBe(409);
+        expect(unexpected).toEqual([]);
+        return;
+      }
+      expect(response.json().findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: audioStall === 1 ? 'audio_prepare_failed' : 'audio_check_failed',
+          }),
+        ]),
+      );
+    }
     if (event) {
       expect(response.statusCode).toBe(409);
       if (event.endsWith('StateChanged'))
@@ -541,6 +621,7 @@ it.each([
     expect(unexpected).toEqual([]);
     expect(requests.filter((type) => /^(Set|Create|Remove|Stop)/.test(type))).toEqual([]);
   } finally {
+    timer?.mockRestore();
     await adapter.close();
     await app.close();
     await server.close();
