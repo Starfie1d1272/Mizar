@@ -154,6 +154,33 @@ function Run-Update([string]$helper) {
   return $stage
 }
 try {
+  # No candidates is not permission to race an old bootstrap's unfinished Prepare.
+  $fence=[IO.File]::Open((Handoff-LeasePath),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  try {
+    $p=Start-Process $installer -ArgumentList @('/S',('/MIZARSTATE="'+$state+'"'),('/D='+$target)) -PassThru
+    Assert ($p.WaitForExit(30000)) 'Busy-lease setup exceeded bounded wait'
+    Assert ($p.ExitCode -ne 0 -and !(Test-Path -LiteralPath (Join-Path $target 'installed.flag'))) 'Zero-candidate Setup bypassed active bootstrap lease';$p.Dispose()
+  } finally {$fence.Dispose()}
+  Write-Output 'PASS actual independent NSIS refuses active bootstrap lease with zero candidates before marker publication'
+  # Exercise actual bootstrap-owned Setup/uninstall with a real inherited file
+  # object; pending is fixture-owned and parent identity is this process instance.
+  $token='b'*32;$pending=Join-Path (Split-Path -Parent (Handoff-LeasePath)) 'fresh-install.pending'
+  Assert (!(Test-Path -LiteralPath $pending)) 'Unexpected pending before bootstrap fixture'
+  $fence=[IO.File]::Open((Handoff-LeasePath),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  try {
+    $me=[Diagnostics.Process]::GetCurrentProcess()
+    Json $pending @{schemaVersion='mizar.bootstrap-pending.v1';target=$target;token=$token;ownerPid=$PID;ownerStarted=$me.StartTime.ToUniversalTime().Ticks;bootstrapSha256=(Hash $me.MainModule.FileName);installer=$installer;stage='installing'}
+    Put (Join-Path $target '.mizar-bootstrap-owner') $token
+    $handle=$fence.SafeFileHandle.DangerousGetHandle().ToInt64()
+    $p=Start-Process $installer -ArgumentList @('/S','/MIZARUPDATE',('/MIZAROWNER=bootstrap-'+$token),('/MIZARLEASE='+$handle),('/MIZARSTATE="'+$state+'"'),('/D='+$target)) -PassThru
+    Assert ($p.WaitForExit(60000)) 'Bootstrap NSIS fixture timed out';Assert ($p.ExitCode -eq 0) ('Bootstrap NSIS failed '+$p.ExitCode);$p.Dispose()
+    $flag=Get-Content (Join-Path $target 'installed.flag') -Raw
+    $p=Start-Process (Join-Path $target 'Uninstall.exe') -ArgumentList @('/S',('/MIZAROWNER=bootstrap-'+('c'*32)),('/MIZARLEASE='+$handle),('_?='+$target)) -PassThru
+    Assert ($p.WaitForExit(30000)) 'Wrong-owner uninstall timed out';Assert ($p.ExitCode -ne 0 -and (Get-Content (Join-Path $target 'installed.flag') -Raw) -eq $flag) 'Wrong bootstrap token removed successor';$p.Dispose()
+    $p=Start-Process (Join-Path $target 'Uninstall.exe') -ArgumentList @('/S',('/MIZAROWNER=bootstrap-'+$token),('/MIZARLEASE='+$handle),('_?='+$target)) -PassThru
+    Assert ($p.WaitForExit(30000)) 'Bootstrap rollback timed out';Assert ($p.ExitCode -eq 0 -and !(Test-Path -LiteralPath (Join-Path $target 'installed.flag'))) 'Correct bootstrap rollback failed';$p.Dispose()
+  } finally {$fence.Dispose();Remove-Item -LiteralPath $pending -Force}
+  Write-Output 'PASS actual bootstrap-owned NSIS + inherited lease + rollback; wrong instance token preserves successor'
   Run-Setup
   $flag1=Get-Content (Join-Path $target 'installed.flag') -Raw
   Run-Setup

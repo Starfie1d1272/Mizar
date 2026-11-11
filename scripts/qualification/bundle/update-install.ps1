@@ -1117,8 +1117,8 @@ try {
   $script:handoffHandles = [Collections.Generic.List[IDisposable]]::new()
   try {
     $parent = if ($BootstrapLease -ne 0) { Handoff-BootstrapParent (Handoff-Process $PID) (Handoff-Path $plan.bundleRoot) (Handoff-Path $StageRoot) }
-    $script:bootstrapLease = Open-HandoffLease $parent $BootstrapLease
-    if ($Mode -eq 'Install') { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:bootstrapLease }) }
+    $script:handoffLeaseStream = Open-HandoffLease $parent $BootstrapLease
+    if ($Mode -eq 'Install') { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:handoffLeaseStream }) }
   } finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
 # Reject stale recovery before any registration/result write or automatic rollback.
 $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
@@ -1205,7 +1205,7 @@ try {
     }
   }
   Invoke-UpdatePhase 'nsis-install' {
-    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/MIZAROWNER=' + (Split-Path -Leaf $StageRoot)), ('/MIZARSTATE="' + $plan.stateRoot + '"'), ('/MIZARLEASE=' + $script:bootstrapLease.SafeFileHandle.DangerousGetHandle().ToInt64()), ('/D=' + $plan.bundleRoot)) -PassThru
+    $installer = Start-Process -FilePath (Join-Path $StageRoot 'Installer.exe') -ArgumentList @('/S', '/MIZARUPDATE', ('/MIZAROWNER=' + (Split-Path -Leaf $StageRoot)), ('/MIZARSTATE="' + $plan.stateRoot + '"'), ('/MIZARLEASE=' + $script:handoffLeaseStream.SafeFileHandle.DangerousGetHandle().ToInt64()), ('/D=' + $plan.bundleRoot)) -PassThru
     $installer.WaitForExit()
     if ($installer.ExitCode -ne 0) { throw 'update_installer_cancelled' }
   }
@@ -1278,7 +1278,7 @@ try {
   if ($null -ne $script:programGate) { $script:programGate.Dispose(); $script:programGate = $null }
   if ($null -ne $desktop) { $desktop.Dispose() }
   if ($null -ne $active) { $active.Dispose() }
-  if ($script:bootstrapLease) { $script:bootstrapLease.Dispose(); $script:bootstrapLease = $null }
+  if ($script:handoffLeaseStream) { $script:handoffLeaseStream.Dispose(); $script:handoffLeaseStream = $null }
   if ($writerOwned) { $writer.ReleaseMutex() }
   $writer.Dispose()
 }
