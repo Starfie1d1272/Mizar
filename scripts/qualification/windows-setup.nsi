@@ -7,6 +7,10 @@ Var ControlledUpdate
 Var InstallationOwner
 Var ExternalOwner
 Var UpdateWriter
+Var HandoffStateRoot
+Var HandoffParentReceipt
+Var HandoffProcessId
+Var HandoffBootstrapOwner
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -70,8 +74,19 @@ SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
 
 Function .onInit
   SetShellVarContext current
+  StrCpy $UpdateWriter "0"
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
+  ReadRegStr $HandoffStateRoot HKCU "Software\Mizar" "StateRoot"
+  ReadEnvStr $1 "MIZAR_STATE_ROOT"
+  StrCmp $1 "" +2
+  StrCpy $HandoffStateRoot $1
+  ClearErrors
+  ${GetOptions} $0 "/MIZARSTATE=" $1
+  IfErrors +2
+  StrCpy $HandoffStateRoot $1
+  StrCmp $HandoffStateRoot "" 0 +2
+  StrCpy $HandoffStateRoot "$LOCALAPPDATA\Mizar"
   ClearErrors
   ${GetOptions} $0 "/MIZARUPDATE" $1
   IfErrors +2 0
@@ -157,6 +172,32 @@ FunctionEnd
 
 Section "-Mizar" SecMain
   SectionIn RO
+  ; The directory page has now selected the real target. No marker or payload
+  ; is changed until all known old execution paths have been safely retired.
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=update-handoff.ps1 "bundle/update-install.ps1"
+  System::Call 'kernel32::GetCurrentProcessId() i.r0'
+  StrCpy $HandoffProcessId $0
+  StrCmp $UpdateWriter "0" 0 handoff_writer_ready
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ProbeWriter -NoStatusWindow'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" handoff_writer_ready
+  StrCmp $0 "10" 0 handoff_failed
+  !insertmacro AcquireUpdateWriter
+  handoff_writer_ready:
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner" -ExpectedBootstrap "$InstallationOwner" -NoStatusWindow'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" 0 handoff_failed
+  StrCpy $HandoffStateRoot $1
+  Goto handoff_ready
+  handoff_failed:
+  DetailPrint "$1"
+  SetErrorLevel 1
+  Abort "旧安装或恢复责任尚未交接。请关闭旧更新窗口和轻量安装器，保留恢复资料后重试完整安装包；不要运行旧恢复脚本覆盖当前程序。"
+  handoff_ready:
   ; Each install claims its own instance before any previous payload is removed.
   ; An interrupted later Setup must retire an old updater's directory marker too.
   CreateDirectory "$INSTDIR"
@@ -190,7 +231,7 @@ Section "-Mizar" SecMain
   keep_bootstrap_owner:
   ; The previous uninstaller only removes its own recorded payload. User data is separate.
   IfFileExists "$INSTDIR\Uninstall.exe" 0 install
-  ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE _?=$INSTDIR' $0
+  ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE "/MIZARHANDOFF=$PLUGINSDIR\handoff.json" "/MIZARSTATE=$HandoffStateRoot" _?=$INSTDIR' $0
   StrCmp $0 "0" install
   Abort "旧版本卸载未完成，请正常退出应用后重试。"
   install:
@@ -217,6 +258,7 @@ Section "-Mizar" SecMain
   CreateShortcut "$SMPROGRAMS\Mizar\Mizar.lnk" "$INSTDIR\Mizar.exe"
   CreateShortcut "$SMPROGRAMS\Mizar\卸载 Mizar.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Mizar" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Mizar" "StateRoot" "$HandoffStateRoot"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "DisplayName" "Mizar"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
@@ -235,13 +277,29 @@ SectionEnd
 
 Function un.onInit
   SetShellVarContext current
+  StrCpy $UpdateWriter "0"
+  ReadRegStr $HandoffStateRoot HKCU "Software\Mizar" "StateRoot"
+  ReadEnvStr $1 "MIZAR_STATE_ROOT"
+  StrCmp $1 "" +2
+  StrCpy $HandoffStateRoot $1
+  StrCmp $HandoffStateRoot "" 0 +2
+  StrCpy $HandoffStateRoot "$LOCALAPPDATA\Mizar"
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/MIZARSTATE=" $1
+  IfErrors +2
+  StrCpy $HandoffStateRoot $1
+  ClearErrors
+  ${GetOptions} $0 "/MIZARHANDOFF=" $HandoffParentReceipt
+  ClearErrors
+  ${GetOptions} $0 "/MIZAROWNER=" $HandoffBootstrapOwner
   ClearErrors
   ${GetOptions} $0 "/MIZARUPDATE" $1
   IfErrors +2 0
   StrCpy $ControlledUpdate "1"
-  StrCmp $ControlledUpdate "1" writer_ready
+  ; Only a receipt tied to the actual Setup parent may borrow its writer.
+  StrCmp $HandoffParentReceipt "" 0 writer_ready
   !insertmacro AcquireUpdateWriter
   writer_ready:
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name Mizar -ErrorAction SilentlyContinue) { exit 1 }"'
@@ -254,6 +312,19 @@ Function un.onInit
   done:
 FunctionEnd
 Section "Uninstall"
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=update-handoff.ps1 "bundle/update-install.ps1"
+  System::Call 'kernel32::GetCurrentProcessId() i.r0'
+  StrCpy $HandoffProcessId $0
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ParentReceiptPath "$HandoffParentReceipt" -ExpectedBootstrap "$HandoffBootstrapOwner" -NoStatusWindow'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" uninstall_handoff_ready
+  DetailPrint "$1"
+  SetErrorLevel 1
+  Abort "旧恢复责任尚未交接，卸载已停止。请关闭旧更新窗口和安装器，保留恢复资料后重试。"
+  uninstall_handoff_ready:
   !include "${REMOVE_FILES}"
   StrCmp $ControlledUpdate "1" preserve_instance_owner
   Delete "$INSTDIR\.mizar-update-owner"

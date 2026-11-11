@@ -7,12 +7,27 @@ permissions:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: scripts/qualification/probe-legacy-handoff.ps1
+          sparse-checkout: |
+            /scripts/qualification/
+            /scripts/web-installer/
+            /.agent-tmp/
+            /apps/desktop/src-tauri/icons/icon.ico
           sparse-checkout-cone-mode: false
       - name: Probe Windows 5.1 process and file handoff primitives
         shell: powershell
         run: ./scripts/qualification/probe-legacy-handoff.ps1
+      - name: Verify bootstrap writer exclusion
+        shell: powershell
+        run: ./.agent-tmp/verify-writer.ps1
+      - name: Prepare pinned NSIS compiler
+        shell: powershell
+        run: |
+          choco install nsis --version=3.11 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned NSIS installation failed' }
+      - name: Exercise production handoff and actual NSIS entry points
+        shell: powershell
+        run: ./scripts/qualification/probe-handoff-production.ps1
