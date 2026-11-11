@@ -6,6 +6,8 @@
 
 有意升级时先运行 `pnpm outdated -r --format json` 检查最新稳定版，再同步修改 catalog 与各包的精确版本声明；同一依赖的发布年龄例外也保持一致。运行 `pnpm install --no-frozen-lockfile`，由 pnpm 生成并提交完整锁文件，再执行相关类型检查、测试和构建。pnpm 12 的锁文件包含包管理器 bootstrap 和项目依赖两个 YAML document；不要手工删段、排序或在命令退出时恢复旧锁文件。升级包管理器引起的一次格式转换应与升级一起提交。
 
+生产目标为 Node 24，`@types/node` 使用同一主版本。
+
 验证安装稳定性：保存锁文件 SHA-256，连续执行冻结安装与日常 `pnpm exec` / `pnpm run`，确认哈希不变。需要新增、移除或升级依赖时重新生成锁文件；冻结安装不承担版本更新。
 
 工作区编译顺序由项目清单与 pnpm 原生任务图推导，跨包前置依赖统一在清单声明；规则见[开发验证](development-validation.md#工作区构建图)。

@@ -1,10 +1,10 @@
 name: CI
 on:
   pull_request:
-    branches: [main, 1.11.0]
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main, 1.11.0]
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -19,6 +19,12 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/screenshots/
       - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
@@ -37,6 +43,12 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/screenshots/
       - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
@@ -147,6 +159,18 @@ jobs:
           created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
           elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
           echo "CI created to gate: ${elapsed}s"
+          {
+            echo "CI attempt ${GITHUB_RUN_ATTEMPT}, created to gate: ${elapsed}s"
+            if jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"); then
+              jq -r --arg created "$created" '
+                .jobs[] | select(.name != "ci-gate") |
+                "- \(.name): \(.conclusion // .status), runner wait \((.started_at | fromdateiso8601) - ($created | fromdateiso8601))s, run \((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))s" +
+                ([.steps[] | select(.conclusion == "failure") | .name] | if length > 0 then ", failed: " + join(", ") else "" end)
+              ' <<< "$jobs" || echo "Job timing unavailable."
+            else
+              echo "Job timing unavailable."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ "$elapsed" -lt 0 ]; then
             echo "Runner and GitHub timestamps are inconsistent; cannot verify CI budget" >&2
             exit 1

@@ -63,7 +63,12 @@ export async function readObsNativeProcesses(): Promise<readonly ObsNativeProces
         if (error instanceof Error)
           reject(
             Object.assign(new Error(stderr.trim().split('\n')[0] || error.message.split('\n')[0]), {
-              code: error.killed ? 'ETIMEDOUT' : error.code,
+              code:
+                'killed' in error && error.killed
+                  ? 'ETIMEDOUT'
+                  : 'code' in error
+                    ? error.code
+                    : undefined,
             }),
           );
         else if (error) reject(new Error('obs_native_process_query_failed'));
