@@ -368,10 +368,6 @@ export class ProgramRuntime {
     return this.state;
   }
 
-  getLastDisposition(): RuntimeDisposition | undefined {
-    return this.lastDisposition;
-  }
-
   /**
    * Advances SeriesProgress using the context and side proof resolved by this
    * runtime's fact commit.
@@ -594,10 +590,6 @@ export class ProgramRuntime {
           map.roundHistory.rounds.length === 0,
       )
     );
-  }
-
-  getSeriesProgress(): SeriesProgress | null {
-    return this.seriesProgress ?? null;
   }
 
   getExecutionOwnership(matchId: string): {

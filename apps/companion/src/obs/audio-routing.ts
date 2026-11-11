@@ -51,7 +51,6 @@ const modeTransition = z
     musicAfter: musicOriginals,
   })
   .strict();
-export type ModeTransition = z.infer<typeof modeTransition>;
 const stateSchema = z
   .object({
     revision: z.string().uuid(),

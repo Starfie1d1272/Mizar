@@ -710,13 +710,10 @@ export class OutboxRepository {
   bySource(source: ExactSource) {
     return this.history('source_key', sourceKey(source));
   }
-  byScope(scope: string) {
-    return this.history('scope', scope);
-  }
   byKey(key: string) {
     return this.history('item_key', key);
   }
-  private history(column: 'source_key' | 'scope' | 'item_key', value: string) {
+  private history(column: 'source_key' | 'item_key', value: string) {
     const rows = this.db
       .prepare(`SELECT disposition, kind, payload FROM history WHERE ${column} = ?`)
       .all(value) as { disposition: string; kind: string; payload: string }[];

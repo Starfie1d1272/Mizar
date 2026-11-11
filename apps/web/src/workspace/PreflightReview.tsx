@@ -3,15 +3,13 @@ import type { OperatorPayload } from '@mizar/protocol/operator';
 import type { ProgramPayload, ProgramSnapshot } from '@mizar/protocol/program';
 import { Button } from '../ui';
 import { ReviewDialog, isReviewWindow } from './ReviewDialog';
-import { currentRosterEvidence, type LiveRosterConnection } from './live-roster-model';
-import type { SyncHealth } from './sync-health';
+import { currentRosterEvidence } from './live-roster-model';
 import './preflight-review.css';
 
 type Props = {
   operator: OperatorPayload | null;
   program: ProgramPayload | null;
   cursor: ProgramSnapshot['cursor'] | null;
-  connection: (LiveRosterConnection & { syncHealth?: SyncHealth }) | null;
   onOpen: (path: string) => Promise<void>;
 };
 /** Optional read-only detail, never a completion gate or an automatic focused window. */

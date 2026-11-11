@@ -30,8 +30,11 @@ export interface ObsRpc {
   readonly reportsDispatch?: true;
   /** Original identity key after a registered OBS instance proves a changed connection address. */
   readonly identityEndpoint?: string;
-  /** Compose synchronous lease checks at the final mutation dispatch, after identity reads. */
-  withMutationGuard?(guard: () => void): ObsRpc;
+  /** Compose lease checks and an optional dispatch queue after all identity reads. */
+  withMutationGuard?(
+    guard: () => void,
+    dispatch?: (send: () => Promise<Record<string, unknown>>) => Promise<Record<string, unknown>>,
+  ): ObsRpc;
   /** Global OBS instance plus locally registered UUID graph; never a profile identity. */
   ownershipScope?(): Promise<string>;
   /** Read socket generations, not proof of a native process or historical log identity. */
@@ -192,10 +195,6 @@ function collectionNames(value: unknown): string[] {
     : [];
 }
 
-function ownedScene(name: string): boolean {
-  return obsDesiredScenes('http://127.0.0.1').some((scene) => scene.sceneName === name);
-}
-
 /** Reload only exact Mizar program URLs, without changing scenes or user settings. */
 export async function refreshObsBrowserSources(
   obs: ObsRpc,
@@ -316,6 +315,193 @@ export function guardedPreparationWrites(obs: ObsRpc): ObsRpc {
   };
 }
 
+/** The visual contract is identical for a preparation report and a single scene Take. */
+async function checkSceneVisual(
+  obs: ObsRpc,
+  scene: ReturnType<typeof obsDesiredScenes>[number],
+  scenes: Record<string, unknown>,
+  inputs: Record<string, unknown>,
+  conflicts: ReadonlySet<string> = new Set(),
+  hiddenHud: { sceneUuid: string; inputUuid: string; itemId: number } | null = null,
+): Promise<ObsFinding[]> {
+  const findings: ObsFinding[] = [];
+  const sceneNames = names(scenes.scenes, 'sceneName');
+  const inputKinds = new Map(
+    objects(inputs.inputs).map((item) => [String(item.inputName), String(item.inputKind)]),
+  );
+  if (
+    scene.composition === 'gameplay_overlay' &&
+    inputKinds.has(OBS_CAPTURE_INPUT) &&
+    inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture'
+  )
+    findings.push({ code: 'source_kind_conflict', message: 'Mizar 游戏采集来源名称冲突。' });
+  if (
+    scene.composition === 'gameplay_overlay' &&
+    inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture' &&
+    !conflicts.has(OBS_CAPTURE_INPUT)
+  ) {
+    const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
+    const settings = capture.inputSettings as Record<string, unknown> | undefined;
+    const currentWindow = await cs2CaptureWindow(obs);
+    if (
+      settings?.capture_mode !== 'window' ||
+      !isCs2Window(settings.window) ||
+      (currentWindow.source === 'enumerated' && settings.window !== currentWindow.window) ||
+      settings.priority !== 2
+    )
+      findings.push({
+        code: 'capture_drift',
+        message: 'Mizar 游戏采集目标已失效，请停止输出后修复场景。',
+      });
+  }
+  if (!sceneNames.includes(scene.sceneName)) {
+    findings.push({
+      code: 'scene_missing',
+      scene: scene.sceneName,
+      message: `${scene.sceneName} 场景缺失。`,
+    });
+    return findings;
+  }
+  const identity = await obs.managedInputIdentity?.(scene.sceneName);
+  if (
+    conflicts.has(scene.sceneName) ||
+    (obs.managedInputIdentity &&
+      (!identity ||
+        !objects(scenes.scenes).some(
+          (item) => item.sceneName === scene.sceneName && item.sceneUuid === identity.uuid,
+        )))
+  ) {
+    findings.push({
+      code: 'source_identity_conflict',
+      scene: scene.sceneName,
+      message: `${scene.sceneName} 的场景身份冲突，已保留相关来源，请先恢复音频责任或核对来源。`,
+    });
+    return findings;
+  }
+  const items = objects(
+    (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+  );
+  for (const item of items.filter(
+    (item) => ['音乐', '音效'].includes(String(item.sourceName)) && item.sceneItemEnabled !== false,
+  )) {
+    const identity = await obs.managedInputIdentity?.(String(item.sourceName));
+    const transform = (
+      await obs.call('GetSceneItemTransform', {
+        sceneName: scene.sceneName,
+        sceneItemId: item.sceneItemId,
+      })
+    ).sceneItemTransform as Record<string, unknown> | undefined;
+    if (
+      !identity ||
+      identity.uuid !== item.sourceUuid ||
+      identity.kind !== 'ffmpeg_source' ||
+      transform?.boundsType !== 'OBS_BOUNDS_NONE' ||
+      transform.scaleX !== 0 ||
+      transform.scaleY !== 0
+    )
+      findings.push({
+        code: 'scene_music_layout_unconfirmed',
+        scene: scene.sceneName,
+        message: '目标场景的音乐纯音频布局未确认，请核对该场景。',
+      });
+  }
+  for (const source of scene.sources) {
+    if (conflicts.has(source)) {
+      findings.push({
+        code: 'source_identity_conflict',
+        scene: scene.sceneName,
+        message: `${scene.sceneName} 的「${source}」身份冲突，已保留相关来源，请先恢复音频责任或核对来源。`,
+      });
+      continue;
+    }
+    const matches = items.filter((item) => item.sourceName === source);
+    const identity = await obs.managedInputIdentity?.(source);
+    if (
+      matches.length !== 1 ||
+      (obs.managedInputIdentity && (!identity || matches[0]?.sourceUuid !== identity.uuid)) ||
+      !objects(inputs.inputs).some(
+        (item) =>
+          item.inputName === source &&
+          item.inputUuid === matches[0]?.sourceUuid &&
+          item.inputKind === (source === OBS_CAPTURE_INPUT ? 'game_capture' : 'browser_source'),
+      )
+    )
+      findings.push({
+        code: 'source_missing',
+        scene: scene.sceneName,
+        message: `${scene.sceneName} 缺少制播来源。`,
+      });
+    else if (
+      matches[0]?.sceneItemEnabled !== true &&
+      !(
+        hiddenHud &&
+        scene.id === 'gameplay' &&
+        source === scene.browserInput &&
+        objects(scenes.scenes).some(
+          (item) => item.sceneName === scene.sceneName && item.sceneUuid === hiddenHud.sceneUuid,
+        ) &&
+        objects(inputs.inputs).some(
+          (item) => item.inputName === source && item.inputUuid === hiddenHud.inputUuid,
+        ) &&
+        items.find((item) => item.sourceName === source)?.sceneItemId === hiddenHud.itemId
+      )
+    )
+      findings.push({
+        code: 'source_disabled',
+        scene: scene.sceneName,
+        message: `${scene.sceneName} 的制播来源已关闭。`,
+      });
+  }
+  if (scene.composition === 'gameplay_overlay') {
+    const capture = items.find((item) => item.sourceName === OBS_CAPTURE_INPUT);
+    const browser = items.find((item) => item.sourceName === scene.browserInput);
+    if (capture && browser && !(Number(browser.sceneItemIndex) > Number(capture.sceneItemIndex)))
+      findings.push({
+        code: 'order_drift',
+        scene: scene.sceneName,
+        message: `${scene.sceneName} 图层顺序需要修复。`,
+      });
+  }
+  for (const [source, expected] of sceneTransforms(scene)) {
+    const item = items.find((candidate) => candidate.sourceName === source);
+    if (!item || typeof item.sceneItemId !== 'number') continue;
+    const measured = await obs.call('GetSceneItemTransform', {
+      sceneName: scene.sceneName,
+      sceneItemId: item.sceneItemId,
+    });
+    const transform = measured.sceneItemTransform as Record<string, unknown> | undefined;
+    if (!transformMatches(transform, expected))
+      findings.push({
+        code: 'transform_drift',
+        scene: scene.sceneName,
+        message: `${scene.sceneName} 的来源位置或尺寸需要修复。`,
+      });
+  }
+  if (!inputKinds.has(scene.browserInput) || conflicts.has(scene.browserInput)) return findings;
+  if (inputKinds.get(scene.browserInput) !== 'browser_source') {
+    findings.push({
+      code: 'source_kind_conflict',
+      scene: scene.sceneName,
+      message: `${scene.sceneName} 来源名称与用户来源冲突。`,
+    });
+    return findings;
+  }
+  const actual = await obs.call('GetInputSettings', { inputName: scene.browserInput });
+  const settings = actual.inputSettings as Record<string, unknown> | undefined;
+  if (
+    settings?.url !== scene.browserUrl ||
+    settings.width !== OBS_WIDTH ||
+    settings.height !== OBS_HEIGHT
+  )
+    findings.push({
+      code: 'url_drift',
+      scene: scene.sceneName,
+      message: `${scene.sceneName} 浏览器源地址或画布尺寸需要修复。`,
+    });
+
+  return findings;
+}
+
 export async function checkObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
@@ -368,169 +554,24 @@ export async function checkObsConfiguration(
       message: 'OBS 画布、输出分辨率或帧率与 1920×1080 / 60fps 不一致；请手动检查视频设置。',
     });
   const scenes = await obs.call('GetSceneList');
-  const sceneNames = names(scenes.scenes, 'sceneName');
   const inputs = await obs.call('GetInputList');
-  const inputKinds = new Map(
-    objects(inputs.inputs).map((item) => [String(item.inputName), String(item.inputKind)]),
-  );
   const conflicts = new Set((await obs.managedResourceConflicts?.()) ?? []);
-  if (inputKinds.has(OBS_CAPTURE_INPUT) && inputKinds.get(OBS_CAPTURE_INPUT) !== 'game_capture')
-    findings.push({ code: 'source_kind_conflict', message: 'Mizar 游戏采集来源名称冲突。' });
-  if (inputKinds.get(OBS_CAPTURE_INPUT) === 'game_capture' && !conflicts.has(OBS_CAPTURE_INPUT)) {
-    const capture = await obs.call('GetInputSettings', { inputName: OBS_CAPTURE_INPUT });
-    const settings = capture.inputSettings as Record<string, unknown> | undefined;
-    const currentWindow = await cs2CaptureWindow(obs);
-    if (
-      settings?.capture_mode !== 'window' ||
-      !isCs2Window(settings.window) ||
-      (currentWindow.source === 'enumerated' && settings.window !== currentWindow.window) ||
-      settings.priority !== 2
-    )
-      findings.push({
-        code: 'capture_drift',
-        message: 'Mizar 游戏采集目标已失效，请停止输出后修复场景。',
-      });
-  }
-  for (const scene of desired) {
-    if (!sceneNames.includes(scene.sceneName)) {
-      findings.push({
-        code: 'scene_missing',
-        scene: scene.sceneName,
-        message: `${scene.sceneName} 场景缺失。`,
-      });
-      continue;
-    }
-    if (conflicts.has(scene.sceneName)) {
-      findings.push({
-        code: 'source_identity_conflict',
-        scene: scene.sceneName,
-        message: `${scene.sceneName} 的场景身份冲突，已保留相关来源，请先恢复音频责任或核对来源。`,
-      });
-      continue;
-    }
-    const items = objects(
-      (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-    );
-    const itemNames = names(items, 'sourceName');
-    for (const source of scene.sources) {
-      if (conflicts.has(source)) {
-        findings.push({
-          code: 'source_identity_conflict',
-          scene: scene.sceneName,
-          message: `${scene.sceneName} 的「${source}」身份冲突，已保留相关来源，请先恢复音频责任或核对来源。`,
-        });
-        continue;
-      }
-      if (!itemNames.includes(source))
-        findings.push({
-          code: 'source_missing',
-          scene: scene.sceneName,
-          message: `${scene.sceneName} 缺少制播来源。`,
-        });
-      else if (
-        items.find((item) => item.sourceName === source)?.sceneItemEnabled === false &&
-        !(
-          hiddenHud &&
-          scene.id === 'gameplay' &&
-          source === scene.browserInput &&
-          objects(scenes.scenes).some(
-            (item) => item.sceneName === scene.sceneName && item.sceneUuid === hiddenHud.sceneUuid,
-          ) &&
-          objects(inputs.inputs).some(
-            (item) => item.inputName === source && item.inputUuid === hiddenHud.inputUuid,
-          ) &&
-          items.find((item) => item.sourceName === source)?.sceneItemId === hiddenHud.itemId
-        )
-      )
-        findings.push({
-          code: 'source_disabled',
-          scene: scene.sceneName,
-          message: `${scene.sceneName} 的制播来源已关闭。`,
-        });
-    }
-    if (scene.composition === 'gameplay_overlay') {
-      const capture = items.find((item) => item.sourceName === OBS_CAPTURE_INPUT);
-      const browser = items.find((item) => item.sourceName === scene.browserInput);
-      if (capture && browser && Number(browser.sceneItemIndex) < Number(capture.sceneItemIndex))
-        findings.push({
-          code: 'order_drift',
-          scene: scene.sceneName,
-          message: `${scene.sceneName} 图层顺序需要修复。`,
-        });
-    }
-    for (const [source, expected] of sceneTransforms(scene)) {
-      const item = items.find((candidate) => candidate.sourceName === source);
-      if (!item || typeof item.sceneItemId !== 'number') continue;
-      const measured = await obs.call('GetSceneItemTransform', {
-        sceneName: scene.sceneName,
-        sceneItemId: item.sceneItemId,
-      });
-      const transform = measured.sceneItemTransform as Record<string, unknown> | undefined;
-      if (!transformMatches(transform, expected))
-        findings.push({
-          code: 'transform_drift',
-          scene: scene.sceneName,
-          message: `${scene.sceneName} 的来源位置或尺寸需要修复。`,
-        });
-    }
-    if (!inputKinds.has(scene.browserInput) || conflicts.has(scene.browserInput)) continue;
-    if (inputKinds.get(scene.browserInput) !== 'browser_source') {
-      findings.push({
-        code: 'source_kind_conflict',
-        scene: scene.sceneName,
-        message: `${scene.sceneName} 来源名称与用户来源冲突。`,
-      });
-      continue;
-    }
-    const actual = await obs.call('GetInputSettings', { inputName: scene.browserInput });
-    const settings = actual.inputSettings as Record<string, unknown> | undefined;
-    if (
-      settings?.url !== scene.browserUrl ||
-      settings.width !== OBS_WIDTH ||
-      settings.height !== OBS_HEIGHT
-    )
-      findings.push({
-        code: 'url_drift',
-        scene: scene.sceneName,
-        message: `${scene.sceneName} 浏览器源地址或画布尺寸需要修复。`,
-      });
-  }
+  for (const scene of desired)
+    findings.push(...(await checkSceneVisual(obs, scene, scenes, inputs, conflicts, hiddenHud)));
   return findings;
 }
 
 export async function repairObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
-  options: {
-    readonly allowCollectionChange?: boolean;
-    readonly force?: boolean;
-    readonly protection?: ObsVisualProtection;
-  } = {},
+  protection: ObsVisualProtection = {},
 ): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
-  const before = await checkObsConfiguration(obs, baseUrl);
-  if (
-    options.allowCollectionChange === false &&
-    before.some((finding) => ['collection_missing', 'collection_inactive'].includes(finding.code))
-  )
-    return before;
-  if (
-    !options.force &&
-    !before.some((finding) => !['video_settings', 'transition_missing'].includes(finding.code))
-  )
-    return before;
   await assertNoVideoOutput(obs);
   obs = guardedPreparationWrites(obs);
-  const collections = await obs.call('GetSceneCollectionList');
-  const exists = collectionNames(collections.sceneCollections).includes(OBS_COLLECTION);
-  if (
-    options.allowCollectionChange === false &&
-    (!exists || collections.currentSceneCollectionName !== OBS_COLLECTION)
-  )
+  if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('OBS 场景集合已改变，请在 OBS 中选择「Mizar 制播」后重新检查。');
-  if (!obs.prepareManagedCollection) throw new Error('OBS 专用集合管理不可用。');
-  await obs.prepareManagedCollection(options.allowCollectionChange !== false, obs);
-  const blocked = new Set((await obs.normalizeManagedResources?.(obs, options.protection)) ?? []);
+  const blocked = new Set((await obs.normalizeManagedResources?.(obs, protection)) ?? []);
   const scenes = await obs.call('GetSceneList');
   const sceneNames = new Set(names(scenes.scenes, 'sceneName'));
   const inputs = await obs.call('GetInputList');
@@ -632,7 +673,7 @@ export async function repairObsConfiguration(
       if (!item) continue;
       if (
         item.sceneItemEnabled === false &&
-        !options.protection?.items?.some(
+        !protection?.items?.some(
           (ref) =>
             ref.sceneName === scene.sceneName &&
             ref.sceneItemId === item.sceneItemId &&
@@ -657,13 +698,14 @@ export async function repairObsConfiguration(
         });
     }
   }
-  await obs.pruneManagedResources?.(obs, options.protection);
+  await obs.pruneManagedResources?.(obs, protection);
   return checkObsConfiguration(obs, baseUrl);
 }
 
 export async function switchObsScene(
   obs: ObsRpc,
-  sceneId: Parameters<typeof import('./desired-state.js').obsSceneName>[0],
+  sceneId: ProgramSceneId,
+  baseUrl: string,
   options: ObsSceneSwitchOptions = { transition: { kind: 'cut', durationMs: 0 } },
 ) {
   const assertCurrent = () => {
@@ -671,59 +713,14 @@ export async function switchObsScene(
     if (options.valid && !options.valid()) throw new Error('场景切换请求已失效。');
   };
   assertCurrent();
-  const name = desiredSceneName(sceneId);
+  const name = obsSceneName(sceneId);
   const collections = await obs.call('GetSceneCollectionList');
   if (collections.currentSceneCollectionName !== OBS_COLLECTION)
     throw new Error('请先检查并修复 「Mizar 制播」场景集合。');
   const sceneList = await obs.call('GetSceneList');
-  const scenes = names(sceneList.scenes, 'sceneName');
-  if (!scenes.includes(name)) throw new Error('目标 OBS 场景尚未就绪，请先检查配置。');
-  if (obs.managedInputIdentity) {
-    const identity = await obs.managedInputIdentity(name);
-    if (
-      !identity ||
-      !objects(sceneList.scenes).some(
-        (scene) => scene.sceneName === name && scene.sceneUuid === identity.uuid,
-      )
-    )
-      throw new ObsVideoError('scene_target_unavailable', '目标场景的身份未确认，请核对该场景。');
-  }
-  // A target owns only its actual visual dependencies, not whole-collection readiness.
-  const items = objects((await obs.call('GetSceneItemList', { sceneName: name })).sceneItems);
-  const desired = obsDesiredScenes('http://127.0.0.1').find((scene) => scene.id === sceneId)!;
-  for (const source of desired.sources) {
-    const matches = items.filter((item) => item.sourceName === source);
-    const identity = await obs.managedInputIdentity?.(source);
-    if (
-      matches.length !== 1 ||
-      matches[0]?.sceneItemEnabled !== true ||
-      (obs.managedInputIdentity && (!identity || matches[0]?.sourceUuid !== identity.uuid))
-    )
-      throw new ObsVideoError(
-        'scene_target_unavailable',
-        '目标场景的画面来源未确认，请核对该场景。',
-      );
-  }
-  for (const item of items.filter(
-    (item) => ['音乐', '音效'].includes(String(item.sourceName)) && item.sceneItemEnabled !== false,
-  )) {
-    const identity = await obs.managedInputIdentity?.(String(item.sourceName));
-    const transform = (
-      await obs.call('GetSceneItemTransform', { sceneName: name, sceneItemId: item.sceneItemId })
-    ).sceneItemTransform as Record<string, unknown> | undefined;
-    if (
-      !identity ||
-      identity.uuid !== item.sourceUuid ||
-      identity.kind !== 'ffmpeg_source' ||
-      transform?.boundsType !== 'OBS_BOUNDS_NONE' ||
-      transform.scaleX !== 0 ||
-      transform.scaleY !== 0
-    )
-      throw new ObsVideoError(
-        'scene_music_layout_unconfirmed',
-        '目标场景的音乐纯音频布局未确认，请核对该场景。',
-      );
-  }
+  const desired = obsDesiredScenes(baseUrl).find((scene) => scene.id === sceneId)!;
+  const findings = await checkSceneVisual(obs, desired, sceneList, await obs.call('GetInputList'));
+  if (findings.length) throw new ObsVideoError('scene_target_unavailable', findings[0]!.message);
   // OBS emits no transition event when the requested scene is already on air.
   if (sceneList.currentProgramSceneName === name) {
     const progress = await obs.call('GetCurrentSceneTransitionCursor');
@@ -784,14 +781,15 @@ export async function switchObsScene(
 /** Align the explicit preparation target only while its original scene and lease remain valid. */
 export async function alignPreparationScene(
   obs: ObsRpc,
-  activeScene: () => Parameters<typeof import('./desired-state.js').obsSceneName>[0],
+  activeScene: () => ProgramSceneId,
+  baseUrl: string,
   valid: () => boolean,
 ): Promise<void> {
   const target = activeScene();
   const initial = (await obs.call('GetCurrentProgramScene')).currentProgramSceneName;
   if (typeof initial !== 'string') throw new Error('OBS 当前场景状态未确认。');
   if (!valid() || activeScene() !== target) throw new Error('OBS 准备请求已失效，请重试。');
-  if (initial === desiredSceneName(target)) return;
+  if (initial === obsSceneName(target)) return;
   const stable: ObsRpc = guardedPreparationWrites({
     ...obs,
     call: async (type, data, onDispatch) => {
@@ -803,57 +801,8 @@ export async function alignPreparationScene(
       return obs.call(type, data, onDispatch);
     },
   });
-  await switchObsScene(stable, target, { transition: { kind: 'cut', durationMs: 0 }, valid });
-}
-
-function desiredSceneName(id: Parameters<typeof import('./desired-state.js').obsSceneName>[0]) {
-  const scene = obsDesiredScenes('http://127.0.0.1:3000').find((item) => item.id === id);
-  if (!scene || !ownedScene(scene.sceneName)) throw new Error('未知 OBS 场景。');
-  return scene.sceneName;
-}
-
-/** Restore owned scenes only in the active Mizar collection; never take over another collection. */
-export async function ensureObsConfiguration(
-  obs: ObsRpc,
-  baseUrl: string,
-  activeScene: () => ProgramSceneId = () => 'waiting',
-  allowCollectionChange = false,
-  protection: ObsVisualProtection = {},
-): Promise<ObsFinding[]> {
-  const findings = await checkObsConfiguration(obs, baseUrl);
-  const collectionChanged = findings.some((finding) =>
-    ['collection_missing', 'collection_inactive'].includes(finding.code),
-  );
-  if (allowCollectionChange) {
-    // Explicit preparation owns the complete template, including manual edits
-    // that do not affect the lightweight runtime readiness checks.
-    const repaired = await repairObsConfiguration(obs, baseUrl, { force: true, protection });
-    if (
-      collectionChanged &&
-      !repaired.some((item) =>
-        ['scene_missing', 'source_kind_conflict', 'transition_missing'].includes(item.code),
-      )
-    ) {
-      await assertNoVideoOutput(obs);
-      await switchObsScene(guardedPreparationWrites(obs), activeScene());
-    }
-    return repaired;
-  }
-  if (collectionChanged) return findings;
-  const repairable = new Set([
-    'managed_collection_drift',
-    'source_kind_conflict',
-    'source_identity_conflict',
-    'resource_identity_missing',
-    'scene_missing',
-    'source_missing',
-    'url_drift',
-    'capture_drift',
-    'transform_drift',
-    'order_drift',
-    'source_disabled',
-  ]);
-  if (findings.some((finding) => repairable.has(finding.code)))
-    return repairObsConfiguration(obs, baseUrl, { allowCollectionChange: false, protection });
-  return findings;
+  await switchObsScene(stable, target, baseUrl, {
+    transition: { kind: 'cut', durationMs: 0 },
+    valid,
+  });
 }

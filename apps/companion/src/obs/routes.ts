@@ -29,6 +29,7 @@ import {
 } from './adapter.js';
 import { ObsConfigStore, validateObsConfig } from './config.js';
 import { ObsVideoError } from './video-transaction.js';
+import type { ObsRpc } from './reconcile.js';
 import { ObsCaptureWarmupError } from './capture-warmup.js';
 import { obsSceneName } from './desired-state.js';
 import { obsFindingReadiness } from './prepare-readiness.js';
@@ -714,8 +715,10 @@ export function registerObsRoutes(
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
           const prepareMusic = options.musicDirector
-            ? async () => {
-                await options.musicDirector?.()?.prepare(() => valid() && connected());
+            ? async (current: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => {
+                await options
+                  .musicDirector?.()
+                  ?.prepare(() => current() && valid() && connected(), guard);
               }
             : undefined;
           const findings =

@@ -165,11 +165,6 @@ function launchOptionsValue(source: string): string {
     throw new Error('mulnx_launcher_config_unsupported');
   return value;
 }
-export function consoleLaunchOptions(source: string): string {
-  const value = launchOptionsValue(source);
-  const options = /(?:^|\s)-condebug(?:\s|$)/i.test(value) ? value : `${value} -condebug`.trim();
-  return source.replace(/^launchOptions\s*:.*$/m, `launchOptions: ${JSON.stringify(options)}`);
-}
 /** Remove only the bundled first-Demo POV trigger; leave all other commands intact. */
 export function firstDemoOptions(source: string): string {
   return source.replace(

@@ -82,7 +82,7 @@ import {
 import {
   ObsExitSafetyError,
   checkObsConfiguration,
-  ensureObsConfiguration,
+  repairObsConfiguration,
   alignPreparationScene,
   guardedPreparationWrites,
   prepareCaptureWindow,
@@ -212,6 +212,7 @@ export class ObsAdapter {
     this.bpDisconnect = callback;
   }
   private configurationPending = false;
+  private preparationController: AbortController | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private findings: ObsFinding[] = [
     { code: 'configuration_unchecked', message: '请检查 OBS 场景配置。' },
@@ -337,6 +338,8 @@ export class ObsAdapter {
         if (!valid())
           throw new ObsOutputError('obs_output_stale', '输出请求已取消，未发送到 OBS。');
         if (command.action === 'start') {
+          if (this.configurationPending)
+            throw new ObsOutputError('obs_output_busy', 'OBS 正在准备配置，请等待状态确认。');
           const preparation = await this.preparationStatus();
           if (preparation)
             throw new ObsOutputError(
@@ -357,13 +360,13 @@ export class ObsAdapter {
     return command.action === 'stop' ? run() : this.serial(run);
   }
 
-  private configurationMutation<T>(run: () => Promise<T>): Promise<T> {
+  private configurationMutation<T>(run: () => Promise<T>, serialize = true): Promise<T> {
     if (this.configurationPending || this.outputs.busy)
       return Promise.reject(
         new ObsOutputError('obs_output_busy', 'OBS 正在处理操作，请等待状态确认。'),
       );
     this.configurationPending = true;
-    return this.serial(run).finally(() => {
+    return (serialize ? this.serial(run) : run()).finally(() => {
       this.configurationPending = false;
     });
   }
@@ -2614,11 +2617,14 @@ export class ObsAdapter {
     activeScene: () => ProgramSceneId = () => 'waiting',
     valid: () => boolean = () => false,
     entry?: { id: string; valid: () => boolean },
-    prepareMusic?: () => Promise<void>,
+    prepareMusic?: (valid: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => Promise<void>,
   ): Promise<readonly ObsFinding[]> {
     const generation = this.programGeneration;
-    const current = () => valid() && generation === this.programGeneration;
+    const controller = new AbortController();
+    const current = () =>
+      !controller.signal.aborted && valid() && generation === this.programGeneration;
     return this.configurationMutation(async () => {
+      this.preparationController = controller;
       if (entry) this.entryPermit = undefined;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       await this.outputs.read();
@@ -2641,22 +2647,38 @@ export class ObsAdapter {
       };
       if (entry) await this.withObs(confirmOutput);
       const preparationObs = (connection: ObsRpc): ObsRpc => {
-        const assertPreparationOutput = () => {
+        const assertPreparation = () => {
+          if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
           try {
             checkOutput();
           } catch (error) {
             throw new ObsPreparationWriteBlocked(error);
           }
         };
-        const obs = guardedObs(
-          connection.withMutationGuard?.(assertPreparationOutput) ?? connection,
-          current,
-        );
+        // Managed resources put this lock at transport dispatch, after identity
+        // reads. A stalled read cannot occupy the scene-control queue.
+        if (connection.withMutationGuard)
+          return guardedObs(
+            connection.withMutationGuard(assertPreparation, (send) => this.serial(send)),
+            current,
+          );
+        // Raw recovery sockets have no managed-resource preflight to exclude.
         return {
-          ...obs,
+          ...connection,
+          withMutationGuard: (guard) =>
+            preparationObs({
+              ...connection,
+              call: (type, data, onDispatch) => {
+                if (/^(Create|Set|Remove|Press|Trigger)/.test(type)) guard();
+                return connection.call(type, data, onDispatch);
+              },
+            }),
           call: (type, data, onDispatch) => {
-            if (/^(Create|Set|Remove)/.test(type)) assertPreparationOutput();
-            return obs.call(type, data, onDispatch);
+            const send = () => {
+              assertPreparation();
+              return connection.call(type, data, onDispatch);
+            };
+            return /^(Create|Set|Remove|Press|Trigger)/.test(type) ? this.serial(send) : send();
           },
         };
       };
@@ -2669,25 +2691,29 @@ export class ObsAdapter {
           message: '场景已准备，音频准备未确认，请在声音设置和 OBS 中核对。',
         });
       };
+      let audioBlocked: ObsFinding | undefined;
+      try {
+        if (this.audioRouting && this.commentary)
+          await this.withObs(
+            (obs, endpoint) =>
+              captureAudioCollectionTransfer(
+                preparationObs(obs),
+                this.audioRouting!,
+                endpoint,
+                this.commentary!.journal,
+              ),
+            TIMEOUT_MS,
+          );
+        if (await this.audioRouting?.modePending())
+          audioBlocked = {
+            code: 'audio_mode_pending',
+            message: '音频切换尚未完成，请在声音设置中恢复。',
+          };
+      } catch (error) {
+        audioBlocked = audioFailure(error, 'obs_audio_transfer');
+      }
       const prepared = await this.withObs(async (connection, endpoint, recovery) => {
         const obs = preparationObs(connection);
-        let audioBlocked: ObsFinding | undefined;
-        try {
-          if (this.audioRouting && this.commentary)
-            await captureAudioCollectionTransfer(
-              obs,
-              this.audioRouting,
-              endpoint,
-              this.commentary.journal,
-            );
-          if (await this.audioRouting?.modePending())
-            audioBlocked = {
-              code: 'audio_mode_pending',
-              message: '音频切换尚未完成，请在声音设置中恢复。',
-            };
-        } catch (error) {
-          audioBlocked = audioFailure(error, 'obs_audio_transfer');
-        }
         // Select and prove the visual collection first. Unrelated old collections
         // keep their recovery evidence but do not own this graph.
         await obs.prepareManagedCollection?.(true, guardedPreparationWrites(obs));
@@ -2752,13 +2778,7 @@ export class ObsAdapter {
           }
         }
         const visualProtection = { items: protectedItems, sourceUuids: [...protectedSourceUuids] };
-        const visual = await ensureObsConfiguration(
-          obs,
-          this.browserBaseUrl,
-          activeScene,
-          true,
-          visualProtection,
-        );
+        const visual = await repairObsConfiguration(obs, this.browserBaseUrl, visualProtection);
         if (
           visual.some((item) =>
             [
@@ -2775,7 +2795,6 @@ export class ObsAdapter {
             obs,
             (uuid) => !audioResponsibilityUnknown && !protectedCaptureAudio.has(uuid),
           );
-        await alignPreparationScene(obs, activeScene, current);
         if (audioBlocked)
           return { findings: [...visual, audioBlocked], ready: true, audioReady: false };
         let audio: ObsFinding[];
@@ -3070,7 +3089,7 @@ export class ObsAdapter {
       if (prepared.ready && prepareMusic) {
         checkOutput();
         try {
-          await prepareMusic();
+          await prepareMusic(current, preparationObs);
           delete this.audioPreparationWarnings.music;
         } catch (error) {
           if (!current() || error instanceof ObsPreparationWriteBlocked) throw error;
@@ -3082,6 +3101,10 @@ export class ObsAdapter {
         }
         checkOutput();
       }
+      if (prepared.ready)
+        await this.withObs((obs) =>
+          alignPreparationScene(preparationObs(obs), activeScene, this.browserBaseUrl, current),
+        );
       // Owned writes may advance configuration freshness. Recheck their final result
       // rather than attaching a new generation to the earlier visual snapshot.
       const configurationEpoch = this.outputs.preparationConfigurationEpoch();
@@ -3116,6 +3139,8 @@ export class ObsAdapter {
           };
       }
       return this.findings;
+    }, false).finally(() => {
+      if (this.preparationController === controller) this.preparationController = undefined;
     });
   }
   verifyEntryPermit(id: string): Promise<void> {
@@ -3149,7 +3174,7 @@ export class ObsAdapter {
   repair(
     activeScene: () => ProgramSceneId,
     valid: () => boolean = () => false,
-    prepareMusic?: () => Promise<void>,
+    prepareMusic?: (valid: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => Promise<void>,
   ): Promise<readonly ObsFinding[]> {
     return this.ensure(activeScene, valid, undefined, prepareMusic);
   }
@@ -3332,9 +3357,15 @@ export class ObsAdapter {
     });
   }
   switchScene(id: ProgramSceneId, options?: ObsSceneSwitchOptions): Promise<void> {
-    return this.serial(() => this.withObs((obs) => switchObsScene(obs, id, options)));
+    // A new Take supersedes preparation. It waits only for already-dispatched
+    // conflicting writes, never for unrelated audio reads or their deadlines.
+    this.preparationController?.abort();
+    return this.serial(() =>
+      this.withObs((obs) => switchObsScene(obs, id, this.browserBaseUrl, options)),
+    );
   }
   switchToWaitingForExit(options: ObsSceneSwitchOptions): Promise<void> {
+    this.preparationController?.abort();
     return this.serial(async () => {
       try {
         await this.withObs(async (obs) => {
@@ -3351,7 +3382,7 @@ export class ObsAdapter {
             )
           )
             return;
-          await switchObsScene(obs, 'waiting', options);
+          await switchObsScene(obs, 'waiting', this.browserBaseUrl, options);
         });
       } catch (error) {
         // A fresh native absence proof also covers a previously used OBS that

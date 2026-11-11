@@ -906,39 +906,6 @@ impl ManagedCs2 {
         steam.validate(&self.log)?;
         Ok((executable, video, steam.account))
     }
-    pub(crate) fn prepare_observer_for_mulnx(
-        &mut self,
-        expected_executable: &Path,
-    ) -> Result<bool, String> {
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2 再启动观战配置。".into());
-        }
-        crate::observer_hud::restore(&self.log)?;
-        let (executable, video, steam) = discover(&self.log)?;
-        steam.validate(&self.log)?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
-            return Err("游戏安装位置已变化，未加载观战配置。".into());
-        }
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2 再启动观战配置。".into());
-        }
-        self.store
-            .prepare_mulnx_observer(&video, &executable, steam.account)
-    }
-    pub(crate) fn validate_prepared_mulnx_observer(
-        &self,
-        expected_executable: &Path,
-    ) -> Result<(), String> {
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2，再启动观战配置。".into());
-        }
-        let (executable, video, account) = self.recovery_identity()?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
-            return Err("游戏安装位置已变化。".into());
-        }
-        self.store
-            .validate_unsubmitted_mulnx_observer(&video, &executable, account)
-    }
     pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
         self.store.mark_mulnx_options_clean()
     }
@@ -947,9 +914,6 @@ impl ManagedCs2 {
             return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
         }
         self.store.cancel_unsubmitted_mulnx_observer()
-    }
-    pub(crate) fn prepared_native_hud(&self) -> Result<bool, String> {
-        Ok(self.store.spectator_hud_identity()?.is_some())
     }
     pub(crate) fn mulnx_observer_receipt_matches(
         &self,
@@ -964,24 +928,6 @@ impl ManagedCs2 {
             .store
             .mulnx_observer_matches(pid, created, executable)?
             .is_some())
-    }
-    pub(crate) fn bind_observer_mulnx_process(
-        &self,
-        pid: u32,
-        created: u64,
-        executable: &Path,
-    ) -> Result<(), String> {
-        if cs2_pids(&self.log)? != vec![pid] {
-            return Err("游戏实例不唯一，观战备份仍保留。".into());
-        }
-        let process = open(pid, &self.log)?.ok_or("游戏已退出，观战备份仍保留。")?;
-        let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created
-            || !same_executable(&actual_executable, &executable.to_string_lossy())
-        {
-            return Err("游戏身份已变化，观战备份仍保留。".into());
-        }
-        self.store.bind_mulnx_observer(pid, created, executable)
     }
     /// Never poll/recover here: merely showing a startup error must not write files.
     pub fn startup_recovery_status(&self) -> Result<StartupRecoveryStatus, String> {

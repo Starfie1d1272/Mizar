@@ -188,9 +188,6 @@ export function checkDesign(repository, records, report) {
     const layer = record.path.includes('/ui/') ? 'ui' : 'patterns';
     for (const edge of record.allEdges) {
       const target = posix.normalize(posix.join(posix.dirname(record.path), edge.specifier));
-      const allowedFixture =
-        isCatalog(record.path) &&
-        target === 'apps/web/src/program/fixtures/rivals-bp-records.generated.js';
       const allowedExternal =
         ['react', 'react-dom', '@mizar/design-tokens', '@mizar/design-tokens/tokens.css'].includes(
           edge.specifier,
@@ -201,7 +198,7 @@ export function checkDesign(repository, records, report) {
         edge.specifier.startsWith('.') &&
         (target.startsWith('apps/web/src/ui/') ||
           (layer === 'patterns' && target.startsWith('apps/web/src/patterns/')));
-      if (!allowedFixture && !allowedExternal && !allowedLocal)
+      if (!allowedExternal && !allowedLocal)
         report({
           ruleId: 'ARCH_DESIGN_DEPENDENCY',
           file: record.path,
