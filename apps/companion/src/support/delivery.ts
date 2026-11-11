@@ -4,6 +4,8 @@ import { diagnosticSegmentNames } from './segments.js';
 import { technicalProjection, sourceCoversProjection } from './technical-projection.js';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
+  DIAGNOSTIC_RECEIVER_STAGES,
+  type DiagnosticReceiverStage,
   DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
   diagnosticInstallationId,
   diagnosticInstallationCreatedAt,
@@ -61,6 +63,10 @@ const transportReasons = [
   'payload_clock_future',
   'payload_creation_time_missing',
   'permit_budget',
+  'registration_budget',
+  'installation_capacity',
+  'capacity_or_concurrent_reservation',
+  'index_allocation_budget',
   'rate_limited',
   'connection_timeout',
   'connection_failed',
@@ -131,6 +137,7 @@ type TransportFailure = {
   phase: 'enrollment' | 'permit' | 'upload' | 'withdrawal';
   status: number | null;
   reason: string;
+  receiverStage?: DiagnosticReceiverStage;
   attemptId?: string;
 };
 interface State {
@@ -186,6 +193,7 @@ const stateSchema = z
         phase: z.enum(['enrollment', 'permit', 'upload', 'withdrawal']),
         status: z.number().int().min(400).max(599).nullable(),
         reason: z.enum(transportReasons),
+        receiverStage: z.enum(DIAGNOSTIC_RECEIVER_STAGES).optional(),
         attemptId: z.uuid().optional(),
       })
       .nullable()
@@ -616,13 +624,17 @@ export async function decodeDiagnosticBatch(bytes: Buffer) {
   return value;
 }
 function transportReceiptError(operation: string, status: number, receipt: unknown) {
-  const code =
-    receipt && typeof receipt === 'object' ? (receipt as { error?: unknown }).error : undefined;
+  const detail =
+    receipt && typeof receipt === 'object'
+      ? (receipt as { error?: unknown; stage?: unknown })
+      : null;
+  const code = detail?.error;
+  const receiverStage = DIAGNOSTIC_RECEIVER_STAGES.find((stage) => stage === detail?.stage);
   const reason =
     typeof code === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(code) ? code : 'receipt_invalid';
   return Object.assign(
     new Error(`${operation}_unconfirmed_${status}`, { cause: new Error(reason) }),
-    { status, reason },
+    { status, reason, receiverStage },
   );
 }
 function batchMetadata(sessionId: string, events: unknown[]) {
@@ -2347,7 +2359,7 @@ export class DiagnosticDelivery {
       await this.transaction(async () => {
         this.state.failures++;
         this.state.consecutiveFailures++;
-        const detail = error as { status?: unknown; reason?: unknown };
+        const detail = error as { status?: unknown; receiverStage?: DiagnosticReceiverStage };
         this.state.transportFailure = this.transportPhase
           ? {
               phase: this.transportPhase,
@@ -2356,6 +2368,7 @@ export class DiagnosticDelivery {
                   ? detail.status
                   : null,
               reason: transportFailureReason(error),
+              ...(detail?.receiverStage ? { receiverStage: detail.receiverStage } : {}),
               ...(this.transportAttempt ? { attemptId: this.transportAttempt.attemptId } : {}),
             }
           : null;

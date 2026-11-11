@@ -12,6 +12,21 @@ export interface DiagnosticUploadPermit {
   expiresAt: number;
   signature: string;
 }
+// Stable, redacted receiver stages that may be retained in a local support report.
+export const DIAGNOSTIC_RECEIVER_STAGES = [
+  'edge_limit',
+  'enrollment',
+  'authentication',
+  'withdrawal',
+  'permit',
+  'upload_preflight',
+  'upload_reservation',
+  'upload_object',
+  'upload_index',
+  'upload_cleanup',
+] as const;
+export type DiagnosticReceiverStage = (typeof DIAGNOSTIC_RECEIVER_STAGES)[number];
+
 export const DIAGNOSTIC_PERMIT_BYTES = 1024;
 export const DIAGNOSTIC_BODY_LIFETIME_MS = 7 * 86400_000;
 export const DIAGNOSTIC_AUTOMATIC_LIFETIME_MS = 90 * 86400_000;
