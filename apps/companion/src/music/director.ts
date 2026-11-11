@@ -1345,6 +1345,10 @@ export class MusicDirector {
       this.appliedVolumes.get(layer) ??
       (saved ? this.effectiveVolume(saved.group, saved.track) : null);
     return (
+      // A registered source or a monitor receipt is not an active formal playback grant.
+      (active &&
+        (!saved || saved.finished) &&
+        this.expectedStops.get(layer) !== this.store.state.sources[layer]) ||
       (muted === true && !this.store.state.muted) ||
       Boolean(layer === 'bgm' && this.manual?.paused && state === 'OBS_MEDIA_STATE_PLAYING') ||
       (state === 'OBS_MEDIA_STATE_PAUSED' && !(layer === 'bgm' && this.manual?.paused)) ||
@@ -1886,6 +1890,7 @@ export class MusicDirector {
     return fade.stop && progress < 1;
   }
   async close() {
+    const previewOwned = this.preview.busy;
     this.preview.cancel('shutdown');
     this.commandRevision++;
     this.closed = true;
@@ -1915,8 +1920,7 @@ export class MusicDirector {
           },
         };
         // The audition owner checks external edits, confirms STOP, then restores its lease.
-        // A persisted lease alone grants no right to stop media after a restart.
-        const previewOwned = this.preview.busy;
+        // Clearing or yielding a persisted lease cannot grant formal media control.
         do {
           await this.reconcilePreview(obs, epoch, current);
           if (this.preview.busy) await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1924,9 +1928,12 @@ export class MusicDirector {
         guard();
         if (this.isExternalHold()) return;
         for (const layer of ['bgm', 'stinger'] as const) {
+          const playback = this.store.state[layer];
           if (
-            layer === 'stinger' &&
-            (previewOwned || this.isStingerHeld() || this.preview.recoveryPending)
+            !playback ||
+            playback.finished ||
+            playback.suspended ||
+            (layer === 'stinger' && (previewOwned || this.isStingerHeld()))
           )
             continue;
           const name = await findMusicInput(obs, this.store, layer, current);
@@ -1952,6 +1959,7 @@ export class MusicDirector {
             localWriteFailure = error;
             throw error;
           }
+          if (layer === 'stinger') await this.preview.recoverMonitor(obs, current);
         }
       });
     };
