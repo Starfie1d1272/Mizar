@@ -45,6 +45,7 @@ const serviceExit = new Promise((resolveExit) =>
 );
 let browser;
 let browserExit;
+let browserLogs = '';
 let socket;
 let failure;
 try {
@@ -71,8 +72,9 @@ try {
     ],
     { stdio: ['ignore', 'ignore', 'pipe'], detached: true },
   );
-  browserExit = new Promise((resolveExit) => browser.once('exit', resolveExit));
-  let browserLogs = '';
+  browserExit = new Promise((resolveExit) =>
+    browser.once('exit', (code, signal) => resolveExit({ code, signal })),
+  );
   browser.stderr.on('data', (data) => {
     browserLogs = (browserLogs + data).slice(-16_384);
   });
@@ -98,14 +100,44 @@ try {
     if (Date.now() >= deadline) throw new Error(`Chromium startup timed out: ${browserLogs}`);
     if (!debuggerAddress) await delay(100);
   }
-  socket = new globalThis.WebSocket(debuggerAddress);
-  await bounded(
-    new Promise((resolveOpen, reject) => {
-      socket.addEventListener('open', resolveOpen, { once: true });
-      socket.addEventListener('error', reject, { once: true });
-    }),
-    'Chrome connection',
-  );
+  const resources = await globalThis.fetch(`${url}/resources`, {
+    method: 'HEAD',
+    headers: { accept: 'text/html' },
+    signal: globalThis.AbortSignal.timeout(2000),
+  });
+  if (!resources.ok)
+    throw new Error(`The production resource library returned HTTP ${resources.status}`);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    socket = new globalThis.WebSocket(debuggerAddress);
+    try {
+      await bounded(
+        Promise.race([
+          browserExit.then((exit) => {
+            throw new Error(`Chromium exited during CDP startup: ${JSON.stringify(exit)}`);
+          }),
+          new Promise((resolveOpen, reject) => {
+            socket.addEventListener('open', resolveOpen, { once: true });
+            socket.addEventListener('error', reject, { once: true });
+          }),
+        ]),
+        'Chrome connection',
+        Math.max(1, Math.min(5000, deadline - Date.now())),
+      );
+      break;
+    } catch (error) {
+      socket.close();
+      if (
+        attempt === 2 ||
+        Date.now() >= deadline ||
+        browser.exitCode !== null ||
+        browser.signalCode !== null
+      )
+        throw new Error(`Chrome connection failed after ${attempt} attempt(s): ${browserLogs}`, {
+          cause: error,
+        });
+      await delay(100);
+    }
+  }
   let nextId = 0;
   const pending = new Map();
   const errors = [];
@@ -150,7 +182,8 @@ try {
   }
   await delay(500);
   if (errors.length) throw new Error(`Main page error: ${errors.join('; ')}`);
-  console.log('Production Companion ready; main page rendered without uncaught errors.');
+  if (browser.exitCode !== null || browser.signalCode !== null)
+    throw new Error(`Chromium exited before controlled shutdown: ${browserLogs}`);
 } catch (error) {
   failure = error;
 } finally {
@@ -159,7 +192,9 @@ try {
       socket.send(JSON.stringify({ id: 2147483647, method: 'Browser.close' }));
     } else browser.kill('SIGTERM');
     try {
-      await bounded(browserExit, 'Chromium exit');
+      const exit = await bounded(browserExit, 'Chromium exit');
+      if (exit.code !== 0 || exit.signal)
+        failure ??= new Error(`Chromium exit failed: ${JSON.stringify(exit)} ${browserLogs}`);
     } catch (error) {
       failure ??= error;
       try {
@@ -171,6 +206,8 @@ try {
         failure ??= exitError;
       });
     }
+  } else if (browser) {
+    failure ??= new Error(`Chromium exited before controlled shutdown: ${browserLogs}`);
   }
   socket?.close();
   if (service.exitCode === null) service.kill('SIGTERM');
@@ -200,3 +237,6 @@ try {
 }
 
 if (failure) throw failure;
+console.log(
+  'Production Companion ready; main page and resource entry verified, Chromium and Companion exited cleanly.',
+);

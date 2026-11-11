@@ -2,7 +2,7 @@ import eslint from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
-const typeCheckedConfigs = tseslint.configs.recommended.map((config) => ({
+const recommendedTypeScriptConfigs = tseslint.configs.recommended.map((config) => ({
   ...config,
   files: ['**/*.{ts,tsx,mts,cts}'],
 }));
@@ -12,7 +12,7 @@ export default tseslint.config(
     ignores: ['**/.agent-tmp/**', '**/.tmp/**', '**/dist/**', '**/node_modules/**'],
   },
   eslint.configs.recommended,
-  ...typeCheckedConfigs,
+  ...recommendedTypeScriptConfigs,
   {
     files: [
       'apps/web/**/*.{ts,tsx}',
