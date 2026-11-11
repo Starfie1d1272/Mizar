@@ -110,7 +110,7 @@ $compiler=Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
 $nsisProbe=Join-Path $root 'fixture.nsi'
 $nsisText=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'windows-setup.nsi'))
 $nsisText=$nsisText.Replace('  DetailPrint "$1"', ('  DetailPrint "$1"'+"`r`n"+'  FileOpen $2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $2 "$0: $1$\r$\n"'+"`r`n"+'  FileClose $2'))
-$nsisText=[regex]::Replace($nsisText, '(?m)^  Abort(.*)$', ('  FileOpen $2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $2 "abort $0: $1$\r$\n"'+"`r`n"+'  FileClose $2'+"`r`n"+'  Abort$1'))
+$nsisText=[regex]::Replace($nsisText, '(?m)^  Abort(.*)$', ('  FileOpen $$2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $$2 "abort $$0: $$1$$\r$$\n"'+"`r`n"+'  FileClose $$2'+"`r`n"+'  Abort$1'))
 Put $nsisProbe $nsisText
 & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$payload" "/DOUTPUT=$installer" /DVERSION=1.2.0 "/DICON=$PSScriptRoot/../../apps/desktop/src-tauri/icons/icon.ico" "/DREMOVE_FILES=$remove" $nsisProbe
 Assert ($LASTEXITCODE -eq 0) 'NSIS compilation failed'
