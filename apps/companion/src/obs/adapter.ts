@@ -997,6 +997,7 @@ export class ObsAdapter {
     obs: ObsRpc,
     endpoint: string,
     visual?: ObsFinding[],
+    includeAudio = true,
   ): Promise<ObsFinding[]> {
     const inputGeneration = this.outputs.preparationInputsGeneration();
     this.outputs.observePreparationInputs((await obs.call('GetInputList')).inputs, inputGeneration);
@@ -1021,6 +1022,18 @@ export class ObsAdapter {
       )
     )
       return findings;
+    return includeAudio ? [...findings, ...(await this.audioFindings(obs, endpoint))] : findings;
+  }
+
+  private audioCheckFailure(error: unknown): ObsFinding[] {
+    this.diagnostic('obs_audio_check', obsErrorEvidence(error));
+    return [
+      ...Object.values(this.audioPreparationWarnings),
+      { code: 'audio_check_failed', message: 'OBS 音频检查未完成，请在声音设置和 OBS 中核对。' },
+    ];
+  }
+
+  private async audioFindings(obs: ObsRpc, endpoint: string): Promise<ObsFinding[]> {
     try {
       const audio = [...(await checkObsAudio(obs)), ...(await this.bindingFindings(obs, endpoint))];
       if (await this.audioRouting?.modePending())
@@ -1036,14 +1049,9 @@ export class ObsAdapter {
         delete warnings.routing;
       for (const warning of Object.values(warnings))
         if (warning && !audio.some((item) => item.code === warning.code)) audio.push(warning);
-      return [...findings, ...audio];
+      return audio;
     } catch (error) {
-      this.diagnostic('obs_audio_check', obsErrorEvidence(error));
-      return [
-        ...findings,
-        ...Object.values(this.audioPreparationWarnings),
-        { code: 'audio_check_failed', message: 'OBS 音频检查未完成，请在声音设置和 OBS 中核对。' },
-      ];
+      return this.audioCheckFailure(error);
     }
   }
 
@@ -2704,7 +2712,7 @@ export class ObsAdapter {
       } catch (error) {
         audioBlocked = audioFailure(error, 'obs_audio_transfer');
       }
-      const prepared = await this.withObs(async (connection, endpoint, recovery) => {
+      const visualPreparation = await this.withObs(async (connection, endpoint, recovery) => {
         const obs = preparationObs(connection);
         // Select and prove the visual collection first. Unrelated old collections
         // keep their recovery evidence but do not own this graph.
@@ -2781,116 +2789,124 @@ export class ObsAdapter {
             ].includes(item.code),
           )
         )
-          return { findings: visual, ready: false, audioReady: false };
+          return { findings: visual, ready: false, visualProtection };
         if (entry)
           await prepareCaptureAudio(
             obs,
             (uuid) => !audioResponsibilityUnknown && !protectedCaptureAudio.has(uuid),
           );
-        if (audioBlocked)
-          return { findings: [...visual, audioBlocked], ready: true, audioReady: false };
-        let audio: ObsFinding[];
-        let audioReady = true;
-        try {
-          const audioObs = guardedPreparationWrites(obs);
-          await obs.reconcileManagedAudioResources?.(audioObs, visualProtection);
-          if (this.audioRouting) {
-            await applyAudioCollectionTransfer(
-              audioObs,
-              this.audioRouting,
-              endpoint,
-              obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
-              async (bindings) => {
-                if (!this.commentary) return;
-                const preference = await this.commentary.owner.get();
-                if (preference.preference.mode !== 'existingInput') return;
-                const selected = preference.preference.binding;
-                const next = bindings.remoteCommentary;
-                if (!next) throw new Error('audio_collection_transfer_commentary_missing');
-                if (
-                  selected.endpoint === endpoint &&
-                  selected.collection === OBS_COLLECTION &&
-                  selected.inputUuid === next.inputUuid
-                )
-                  return;
-                const previous = (await this.audioRouting!.collectionTransferState()).bindings
-                  .remoteCommentary;
-                if (
-                  !previous ||
-                  selected.collection !== previous.collection ||
-                  selected.endpoint !== previous.endpoint ||
-                  selected.inputUuid !== previous.inputUuid
-                )
-                  throw new Error('audio_collection_transfer_commentary_changed');
-                await this.commentary.owner.set(
-                  {
-                    mode: 'existingInput',
-                    binding: { endpoint, collection: OBS_COLLECTION, inputUuid: next.inputUuid },
-                  },
-                  preference.revision,
-                );
-              },
-            ).catch((error: unknown) => {
-              throw audioCollectionTransferError(error);
-            });
-          }
-          if (this.audioRouting && (await this.audioRouting.hasNoEstablishedMode()))
-            await setupObsAudio(audioObs, this.browserBaseUrl);
-          else await ensureManagedAudioSources(audioObs, this.browserBaseUrl);
-          if (this.audioRouting && !(await this.audioRouting.modePending())) {
-            const previous = await this.audioRouting.commentaryBinding();
-            await this.audioRouting.refreshManagedBindings(
-              audioObs,
-              endpoint,
-              async (replacements) => {
-                if (!this.commentary) return;
-                await new AudioMigration(
-                  `${this.commentary.journal}.migration`,
-                ).rebindCompletedInputs(
-                  audioObs,
-                  `${this.commentary.journal}.dedicated-mode`,
-                  endpoint,
-                  OBS_COLLECTION,
-                  replacements,
-                );
-              },
-            );
-            const next = await this.audioRouting.commentaryBinding();
-            if (
-              this.commentary &&
-              previous.binding &&
-              next.binding &&
-              previous.binding.inputUuid !== next.binding.inputUuid
-            ) {
-              const preference = await this.commentary.owner.get();
-              if (
-                preference.preference.mode === 'existingInput' &&
-                preference.preference.binding.endpoint === endpoint &&
-                preference.preference.binding.collection === OBS_COLLECTION &&
-                preference.preference.binding.inputUuid === previous.binding.inputUuid
-              )
-                await this.commentary.owner.set(
-                  {
-                    mode: 'existingInput',
-                    binding: {
-                      endpoint,
-                      collection: OBS_COLLECTION,
-                      inputUuid: next.binding.inputUuid,
-                    },
-                  },
-                  preference.revision,
-                );
-            }
-            await this.audioRouting.establishDefaultDesktop(audioObs, endpoint);
-          }
-          audio = await checkObsAudio(obs);
-          audio.push(...(await this.bindingFindings(obs, endpoint)));
-        } catch (error) {
-          audioReady = false;
-          audio = [audioFailure(error, 'obs_audio_prepare')];
-        }
-        return { findings: [...visual, ...audio], ready: true, audioReady };
+        return { findings: visual, ready: true, visualProtection };
       }, 30_000);
+      // Audio owns a separate connection and deadline. Its timeout retires that
+      // socket before we settle the warning; it cannot spend the visual budget.
+      const prepared = { ...visualPreparation, audioReady: false };
+      if (prepared.ready && audioBlocked) prepared.findings.push(audioBlocked);
+      if (prepared.ready && !audioBlocked) {
+        try {
+          const audio = await this.withObs(async (connection, endpoint) => {
+            const obs = preparationObs(connection);
+            const visualProtection = prepared.visualProtection;
+            const audioObs = guardedPreparationWrites(obs);
+            await obs.reconcileManagedAudioResources?.(audioObs, visualProtection);
+            if (this.audioRouting) {
+              await applyAudioCollectionTransfer(
+                audioObs,
+                this.audioRouting,
+                endpoint,
+                obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
+                async (bindings) => {
+                  if (!this.commentary) return;
+                  const preference = await this.commentary.owner.get();
+                  if (preference.preference.mode !== 'existingInput') return;
+                  const selected = preference.preference.binding;
+                  const next = bindings.remoteCommentary;
+                  if (!next) throw new Error('audio_collection_transfer_commentary_missing');
+                  if (
+                    selected.endpoint === endpoint &&
+                    selected.collection === OBS_COLLECTION &&
+                    selected.inputUuid === next.inputUuid
+                  )
+                    return;
+                  const previous = (await this.audioRouting!.collectionTransferState()).bindings
+                    .remoteCommentary;
+                  if (
+                    !previous ||
+                    selected.collection !== previous.collection ||
+                    selected.endpoint !== previous.endpoint ||
+                    selected.inputUuid !== previous.inputUuid
+                  )
+                    throw new Error('audio_collection_transfer_commentary_changed');
+                  await this.commentary.owner.set(
+                    {
+                      mode: 'existingInput',
+                      binding: { endpoint, collection: OBS_COLLECTION, inputUuid: next.inputUuid },
+                    },
+                    preference.revision,
+                  );
+                },
+              ).catch((error: unknown) => {
+                throw audioCollectionTransferError(error);
+              });
+            }
+            if (this.audioRouting && (await this.audioRouting.hasNoEstablishedMode()))
+              await setupObsAudio(audioObs, this.browserBaseUrl);
+            else await ensureManagedAudioSources(audioObs, this.browserBaseUrl);
+            if (this.audioRouting && !(await this.audioRouting.modePending())) {
+              const previous = await this.audioRouting.commentaryBinding();
+              await this.audioRouting.refreshManagedBindings(
+                audioObs,
+                endpoint,
+                async (replacements) => {
+                  if (!this.commentary) return;
+                  await new AudioMigration(
+                    `${this.commentary.journal}.migration`,
+                  ).rebindCompletedInputs(
+                    audioObs,
+                    `${this.commentary.journal}.dedicated-mode`,
+                    endpoint,
+                    OBS_COLLECTION,
+                    replacements,
+                  );
+                },
+              );
+              const next = await this.audioRouting.commentaryBinding();
+              if (
+                this.commentary &&
+                previous.binding &&
+                next.binding &&
+                previous.binding.inputUuid !== next.binding.inputUuid
+              ) {
+                const preference = await this.commentary.owner.get();
+                if (
+                  preference.preference.mode === 'existingInput' &&
+                  preference.preference.binding.endpoint === endpoint &&
+                  preference.preference.binding.collection === OBS_COLLECTION &&
+                  preference.preference.binding.inputUuid === previous.binding.inputUuid
+                )
+                  await this.commentary.owner.set(
+                    {
+                      mode: 'existingInput',
+                      binding: {
+                        endpoint,
+                        collection: OBS_COLLECTION,
+                        inputUuid: next.binding.inputUuid,
+                      },
+                    },
+                    preference.revision,
+                  );
+              }
+              await this.audioRouting.establishDefaultDesktop(audioObs, endpoint);
+            }
+            const audio = await checkObsAudio(obs);
+            audio.push(...(await this.bindingFindings(obs, endpoint)));
+            return audio;
+          }, 30_000);
+          prepared.findings.push(...audio);
+          prepared.audioReady = true;
+        } catch (error) {
+          prepared.findings.push(audioFailure(error, 'obs_audio_prepare'));
+        }
+      }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       this.findings = prepared.findings;
       if (prepared.ready && prepared.audioReady) delete this.audioPreparationWarnings.setup;
@@ -3097,12 +3113,23 @@ export class ObsAdapter {
         await this.withObs((obs) =>
           alignPreparationScene(preparationObs(obs), activeScene, this.browserBaseUrl, current),
         );
+      // Observe audio on its own deadline before the final visual snapshot.
+      // A late/failed audio read is a warning, never a visual entry veto. Shared
+      // identity, enabled state and layout still belong to the final check below.
+      let audioFindings: ObsFinding[];
+      try {
+        audioFindings = await this.withObs((obs, endpoint) => this.audioFindings(obs, endpoint));
+      } catch (error) {
+        if (!current()) throw error;
+        checkOutput();
+        audioFindings = this.audioCheckFailure(error);
+      }
       // Owned writes may advance configuration freshness. Recheck their final result
       // rather than attaching a new generation to the earlier visual snapshot.
       const configurationEpoch = this.outputs.preparationConfigurationEpoch();
       this.entryPermit = undefined;
       const findings = await this.withObs(
-        (obs, endpoint) => this.configurationFindings(obs, endpoint),
+        (obs, endpoint) => this.configurationFindings(obs, endpoint, undefined, false),
         12_000,
         undefined,
         false,
@@ -3110,6 +3137,7 @@ export class ObsAdapter {
         false,
         true,
       );
+      findings.push(...audioFindings);
       this.findings = findings;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       if (entry) {

@@ -345,6 +345,24 @@ async fn restore_video(
     }
     Ok(())
 }
+// Explicit OBS preparation composes independent visual/audio deadlines. The
+// native transport must outlive their settlement, not reintroduce one shared
+// 40s veto. Known RPC phases total 198s: 30s visual + 30s setup, two
+// 49s audio configuration/cleanup phases, 12s final visual check, and seven
+// 4s reads/checks. The remaining 42s covers music preparation, native evidence
+// and local/transport overhead. This is not a bound on arbitrary local stalls.
+// Other requests keep their existing budget; cancellation still shuts
+// down OBS_REQUEST immediately. This is a hard transport cap, not extra OBS
+// write authority or permission to accept unverified preparation.
+const OBS_ENSURE_REQUEST_SECONDS: u64 = 240;
+fn controlled_request_timeout(path: &str) -> Duration {
+    Duration::from_secs(if path == "/operator/obs/ensure" {
+        OBS_ENSURE_REQUEST_SECONDS
+    } else {
+        40
+    })
+}
+
 async fn controlled_post(
     app: &tauri::AppHandle,
     id: &str,
@@ -360,7 +378,7 @@ async fn controlled_post(
             "POST",
             path,
             &body,
-            Instant::now() + Duration::from_secs(40),
+            Instant::now() + controlled_request_timeout(path),
             None,
             |stream| {
                 let mut active = OBS_REQUEST.lock().map_err(|_| "准备状态不可用。")?;
@@ -1544,4 +1562,25 @@ pub(crate) async fn enter(
     .and_then(|result| result);
     intent_app.state::<EntryIntent>().finish(&intent_id);
     result
+}
+
+#[cfg(test)]
+mod request_budget_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_obs_preparation_gets_the_composed_budget() {
+        assert_eq!(
+            controlled_request_timeout("/operator/obs/ensure"),
+            Duration::from_secs(240)
+        );
+        assert_eq!(
+            controlled_request_timeout("/operator/production"),
+            Duration::from_secs(40)
+        );
+        assert_eq!(
+            controlled_request_timeout("/operator/obs/video-restore"),
+            Duration::from_secs(40)
+        );
+    }
 }
