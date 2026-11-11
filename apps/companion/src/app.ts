@@ -166,6 +166,7 @@ import {
   type GsiSequenceSource,
   type ObservationSink,
 } from './telemetry/gsi-ingress.js';
+import { registerLocalWebAccess } from './local-web/access-policy.js';
 import { defaultWebRoot, registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
 import { registerHudConfigRoutes } from './hud-config/controller.js';
@@ -599,8 +600,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
     else done();
   });
-  const isControl = (url: string, method: string) =>
-    method !== 'GET' && /^(?:\/operator\/|\/runtime\/)/.test(url);
+  const isControl = (request: FastifyRequest) =>
+    request.method !== 'GET' &&
+    /^(?:\/operator\/|\/runtime\/)/.test(request.routeOptions.url ?? '');
   const controlState = () => ({
     production: production.get(),
     program: sceneController.get(),
@@ -688,7 +690,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     renewal.beforeRecorded = true;
   };
   app.addHook('onRequest', (request, _reply, done) => {
-    if (sessionJournal && isControl(request.url, request.method)) {
+    if (sessionJournal && isControl(request)) {
       const before = controlState();
       if (renewalRoute(request))
         renewalRequests.set(request, {
@@ -711,7 +713,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     done();
   });
   app.addHook('preHandler', (request, _reply, done) => {
-    if (isControl(request.url, request.method)) {
+    if (isControl(request)) {
       const renewal = renewalRequests.get(request);
       if (renewal) {
         renewal.handlerStartedAt = new Date().toISOString();
@@ -744,7 +746,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     done();
   });
   app.addHook('onSend', (request, reply, payload, done) => {
-    if (sessionJournal && isControl(request.url, request.method)) {
+    if (sessionJournal && isControl(request)) {
       let result: unknown = payload;
       if (typeof payload === 'string') {
         try {
@@ -823,7 +825,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     if (
       reply.statusCode >= 400 ||
       (request.method !== 'GET' &&
-        request.url.startsWith('/operator/') &&
+        request.routeOptions.url?.startsWith('/operator/') &&
         !renewalRequests.get(request)?.compact)
     )
       request.log.info(
@@ -958,6 +960,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       );
     },
   });
+  registerLocalWebAccess(app, localWebTransport.getOriginPolicy());
   registerLocalWebSocketTransport(app, localWebTransport);
   registerBroadcastMigrationStatus(
     app,
@@ -1987,9 +1990,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings,
       () => matchContextController?.getActiveBinding() ?? undefined,
     );
-  app.addHook('onRequest', async (request, reply) => {
+  app.addHook('preParsing', async (request, reply) => {
     if (['GET', 'HEAD'].includes(request.method)) return;
-    const path = request.url.split('?')[0];
+    const path = request.routeOptions.url;
     if (!path?.startsWith('/operator/')) return;
     if (!production.isTrialPending() && demoTest?.get().active !== true) {
       if (!path.startsWith('/operator/runtime/')) formalMutations.add(request.id);
@@ -2017,13 +2020,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   app.addHook('preHandler', async (request, reply) => {
     if (
       (production.isTrialPending() || demoTest.get().active) &&
-      request.url.split('?')[0] === '/operator/orchestration' &&
+      request.routeOptions.url === '/operator/orchestration' &&
       !demoTest.canUseCamera((request.body as { action?: unknown } | null)?.action)
     )
       return reply
         .code(409)
         .send({ error: 'demo_camera_manual_only', message: '请在 Demo 试播中手动试播运镜。' });
-    if (demoTest?.get().active !== true || request.url.split('?')[0] !== '/operator/program-scene')
+    if (demoTest?.get().active !== true || request.routeOptions.url !== '/operator/program-scene')
       return;
     const body = request.body as { sceneId?: unknown } | null;
     if (body?.sceneId === 'waiting') return;

@@ -12,6 +12,7 @@ import {
 } from '@mizar/protocol/local-pages';
 import { ResourceStoreError } from '../resource-store/contract.js';
 import type { ResourceStore } from '../resource-store/store.js';
+import { localRequestPath } from './access-policy.js';
 
 const SURFACE_ROUTES = [
   ...PROGRAM_SCENES.map((scene) => scene.path),
@@ -110,8 +111,7 @@ export function registerStaticHost(app: FastifyInstance, options: StaticHostOpti
   });
 
   app.get('/*', async (request, reply) => {
-    const pathname = request.url.split('?', 1)[0] ?? '/';
-    if (shouldLeaveForApi(pathname)) return reply.callNotFound();
+    if (shouldLeaveForApi(localRequestPath(request))) return reply.callNotFound();
     const filename = pathFromRequest(request);
     if (filename.length === 0) return reply.callNotFound();
     if (options.readResource) {

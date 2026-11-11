@@ -88,7 +88,7 @@ export function registerDiagnosticDelivery(
       }
     })();
   });
-  app.addHook('onRequest', async (request, reply) => {
+  app.addHook('preParsing', async (request, reply) => {
     if (
       ![
         '/local/v1/diagnostics/delivery',
@@ -96,7 +96,7 @@ export function registerDiagnosticDelivery(
         '/operator/diagnostics/report',
         '/operator/diagnostics/report/confirm',
         '/operator/diagnostics/pause',
-      ].includes(request.url.split('?')[0]!)
+      ].includes(request.routeOptions.url ?? '')
     )
       return;
     if (

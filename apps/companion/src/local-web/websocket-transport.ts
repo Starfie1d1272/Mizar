@@ -18,12 +18,11 @@ import {
 import {
   checkLocalWebOrigin,
   createLocalWebOriginPolicy,
-  isLoopbackHostHeader,
   type LocalWebOriginPolicy,
   type LocalWebOriginPolicyOptions,
 } from './origin-policy.js';
 
-import { LOCAL_CHANNEL_VISIBILITY, localRouteVisibility } from './access-policy.js';
+import { LOCAL_CHANNEL_VISIBILITY } from './access-policy.js';
 
 const OPEN_STATE = 1;
 const READ_ONLY_CLOSE_CODE = 1008;
@@ -566,12 +565,6 @@ export function registerLocalWebSocketTransport(
   transport: LocalWebSocketTransport,
 ): void {
   const policy = transport.getOriginPolicy();
-  app.addHook('onRequest', async (request, reply) => {
-    const path = request.url.split('?', 1)[0] ?? '';
-    if (localRouteVisibility(path) === 'public') return;
-    if (policy.mode === 'lan' || !isLoopbackHostHeader(request.headers.host))
-      return reply.code(403).send({ error: 'private_surface_loopback_only' });
-  });
   app.get('/local/protocol', async (_request, reply) =>
     reply.header('cache-control', 'no-store').send({
       subprotocol: LOCAL_PROTOCOL_SUBPROTOCOL,
@@ -593,11 +586,7 @@ export function registerLocalWebSocketTransport(
   });
 
   app.register((instance, _options, done) => {
-    instance.addHook('onRequest', async (request, reply) => {
-      const pathname = request.url.split('?', 1)[0] ?? '';
-      if (!Object.values(LOCAL_WEB_ROUTES).some((route) => route === pathname)) {
-        return;
-      }
+    instance.addHook('preParsing', async (request, reply) => {
       if (request.headers.upgrade?.toLowerCase() !== 'websocket') return;
 
       const protocols = requestedProtocols(request.headers['sec-websocket-protocol']);

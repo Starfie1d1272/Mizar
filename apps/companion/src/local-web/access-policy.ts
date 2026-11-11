@@ -1,4 +1,6 @@
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { PRIVATE_PAGE_PATHS } from '@mizar/protocol/local-pages';
+import { isLoopbackHostHeader, type LocalWebOriginPolicy } from './origin-policy.js';
 import { LOCAL_WEB_ROUTES, type LocalWebChannel } from './transport-constants.js';
 
 /** Public program-time output is separate from private production and early information. */
@@ -24,20 +26,36 @@ const publicReads = new Set<string>([
   '/local/v1/bp-presentation',
 ]);
 
-export function localRouteVisibility(path: string): 'public' | 'operator' | 'host-runtime' {
-  if (path.startsWith('/operator/runtime/') || path.startsWith('/runtime/')) return 'host-runtime';
+function isPrivateLocalPath(path: string): boolean {
   if (
     publicReads.has(path) ||
     path.startsWith('/local/v1/steam-avatar/') ||
     path.startsWith('/local/v1/local-assets/')
   )
-    return 'public';
-  if (
-    path.startsWith('/local/') ||
+    return false;
+  return (
     path === '/health' ||
+    path.startsWith('/local/') ||
+    path.startsWith('/runtime/') ||
     PRIVATE_PAGE_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
-  )
-    return 'operator';
-  // Public static program assets and authenticated GSI retain their existing handlers.
-  return 'public';
+  );
+}
+
+/** Match the router's path, including its decoded catch-all parameter. */
+export function localRequestPath(request: FastifyRequest): string {
+  const route = request.routeOptions.url;
+  return route === '/*' ? `/${(request.params as { '*': string })['*']}` : (route ?? '');
+}
+
+export function registerLocalWebAccess(app: FastifyInstance, policy: LocalWebOriginPolicy): void {
+  // WebSocket upgrade bookkeeping runs in onRequest; check access before parsing a body.
+  app.addHook('preParsing', async (request, reply) => {
+    if (!isPrivateLocalPath(localRequestPath(request))) return;
+    // Absolute-form requests carry their own authority (RFC 9112 §3.2.2).
+    const authority = request.url.startsWith('/')
+      ? request.headers.host
+      : /^https?:\/\/([^/?#]+)/i.exec(request.url)?.[1];
+    if (policy.mode === 'lan' || !isLoopbackHostHeader(authority))
+      return reply.code(403).send({ error: 'private_surface_loopback_only' });
+  });
 }
