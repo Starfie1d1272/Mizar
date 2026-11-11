@@ -230,6 +230,11 @@ export class MusicDirector {
   get(): MusicStatus {
     return {
       ...this.status,
+      message:
+        this.status.message ??
+        (!this.preview.busy && this.preview.recoveryPending
+          ? '上次试听的本机监听恢复未确认，请在 OBS 核对音效来源的播放和监听设置。'
+          : null),
       held: this.isHeld(),
       stingerHeld: Boolean(this.isStingerHeld()),
       intent: this.isHeld() ? 'held' : this.manual ? 'manual' : 'automatic',
@@ -274,6 +279,24 @@ export class MusicDirector {
     } finally {
       this.inFlight = false;
     }
+  }
+  private async stopMedia(obs: ObsRpc, layer: MusicLayer, uuid: string, valid: () => boolean) {
+    if (!valid()) throw new Error('music_cancelled');
+    this.expectedStops.set(layer, uuid);
+    await obs.call('TriggerMediaInputAction', {
+      inputUuid: uuid,
+      mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+    });
+    if (!valid()) throw new Error('music_cancelled');
+    const read = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
+    if (!valid()) throw new Error('music_cancelled');
+    if (
+      !['OBS_MEDIA_STATE_STOPPED', 'OBS_MEDIA_STATE_ENDED', 'OBS_MEDIA_STATE_NONE'].includes(
+        String(read.mediaState),
+      )
+    )
+      throw new Error('music_stop_unconfirmed');
+    if (layer === 'stinger') this.preview.confirmStopped(uuid);
   }
   async setMixer(volume?: number, muted?: boolean): Promise<boolean> {
     if (this.closed || !this.store.ready || this.store.failure)
@@ -395,22 +418,9 @@ export class MusicDirector {
     } else if (!this.isHeld()) this.nextRequested = true;
     if (!current()) return;
     if (action === 'stop') {
-      await this.immediateControl(current, async (obs, layer, uuid) => {
-        this.expectedStops.set(layer, uuid);
-        await obs.call('TriggerMediaInputAction', {
-          inputUuid: uuid,
-          mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
-        });
-        if (!current()) throw new Error('music_cancelled');
-        const read = await obs.call('GetMediaInputStatus', { inputUuid: uuid });
-        if (
-          !['OBS_MEDIA_STATE_STOPPED', 'OBS_MEDIA_STATE_ENDED', 'OBS_MEDIA_STATE_NONE'].includes(
-            String(read.mediaState),
-          )
-        )
-          throw new Error('music_stop_unconfirmed');
-        if (layer === 'stinger') this.preview.confirmStopped(uuid);
-      });
+      await this.immediateControl(current, (obs, layer, uuid) =>
+        this.stopMedia(obs, layer, uuid, current),
+      );
       if (current()) this.status.playback = 'stopped';
     } else await this.tick();
     if (!current()) return;
@@ -822,14 +832,7 @@ export class MusicDirector {
       }
       if (this.preview.busy) {
         this.preview.cancel('audio_mode');
-        await this.preview.reconcile(
-          obs,
-          this.epoch,
-          current,
-          false,
-          (uuid) => this.expectedStops.set('stinger', uuid),
-          () => this.holdForPreviewControl(current),
-        );
+        await this.reconcilePreview(obs, this.epoch, current);
       }
       await this.preview.recoverMonitor(obs, current);
       const changes: AudioMonitorChange[] = [];
@@ -966,14 +969,7 @@ export class MusicDirector {
       });
       if (!current()) return;
       await this.provider.session(async (obs) => {
-        await this.preview.reconcile(
-          obs,
-          this.epoch,
-          current,
-          false,
-          (uuid) => this.expectedStops.set('stinger', uuid),
-          () => this.holdForPreviewControl(current),
-        );
+        await this.reconcilePreview(obs, this.epoch, current);
         const monitorRecovered = await this.preview.recoverMonitor(obs, current);
         let pending = false;
         let found = false;
@@ -1075,6 +1071,16 @@ export class MusicDirector {
         tracks.length
     ]!;
   }
+  private reconcilePreview(obs: ObsRpc, epoch: number, valid: () => boolean, safe = false) {
+    return this.preview.reconcile(
+      obs,
+      epoch,
+      valid,
+      safe,
+      (uuid) => this.expectedStops.set('stinger', uuid),
+      () => this.holdForPreviewControl(valid),
+    );
+  }
   async tick(): Promise<void> {
     if (this.closed) return;
     // Route recovery defers automatic playback, never an already-started audition's stop.
@@ -1082,7 +1088,8 @@ export class MusicDirector {
       (await this.audioModePending().catch(() => true)) &&
       !this.manual &&
       !(this.isHeld() && !this.isExternalHold());
-    if (automaticDeferred && !this.preview.busy) return;
+    if (this.closed) return;
+    if (automaticDeferred && !this.preview.busy && !this.preview.recoveryPending) return;
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');
     if (this.store.failure && !this.preview.busy) {
       this.status.failure = 'load_failed';
@@ -1130,14 +1137,12 @@ export class MusicDirector {
     try {
       if (automaticDeferred || this.store.failure || !this.store.ready) {
         await this.provider.session(async (obs, epoch) => {
-          await this.preview.reconcile(
-            obs,
-            epoch,
-            valid,
-            false,
-            (uuid) => this.expectedStops.set('stinger', uuid),
-            () => this.holdForPreviewControl(valid),
-          );
+          await this.reconcilePreview(obs, epoch, valid);
+          if (valid()) {
+            this.status.connection = 'connected';
+            this.status.failure = null;
+            this.status.message = null;
+          }
         });
         return;
       }
@@ -1220,14 +1225,7 @@ export class MusicDirector {
           (p.map.phase !== 'live' ||
             Boolean(musicCue(this.truth(), this.store.state.pause?.id ?? null))) &&
           (p.map.phase === null || (musicSafe(p) && p.status.telemetry === 'fresh'));
-        await this.preview.reconcile(
-          obs,
-          epoch,
-          valid,
-          previewSafe,
-          (uuid) => this.expectedStops.set('stinger', uuid),
-          () => this.holdForPreviewControl(valid),
-        );
+        await this.reconcilePreview(obs, epoch, valid, previewSafe);
         const monitorRecheck = reconnect || this.monitorSettingsChanged;
         this.monitorSettingsChanged = false;
         await this.configureDefaultMonitor(obs, valid, monitorRecheck);
@@ -1892,49 +1890,89 @@ export class MusicDirector {
     this.commandRevision++;
     this.closed = true;
     this.invalidate();
-    // Wait only for the bounded active RPC, then stop owned sources without changing manual hold.
-    while (this.inFlight) await new Promise((resolve) => setTimeout(resolve, 10));
     this.operationFailures.clear();
+    const deadline = Date.now() + 4000;
+    let closing = true;
+    const current = () => closing && Date.now() < deadline;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let localWriteFailure: unknown;
-    let localWriteFailed = false;
-    if (!this.isExternalHold() && Object.values(this.store.state.sources).some(Boolean))
-      await this.provider
-        .session(async (obs) => {
-          for (const layer of ['bgm', 'stinger'] as const) {
-            if (layer === 'stinger' && this.isStingerHeld()) continue;
-            const name = await findMusicInput(obs, this.store, layer, () => true);
-            if (name) {
-              const media = await obs.call('GetMediaInputStatus', {
-                inputUuid: this.store.state.sources[layer]!,
-              });
-              await obs.call('TriggerMediaInputAction', {
-                inputUuid: this.store.state.sources[layer]!,
-                mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
-              });
-              try {
-                await this.store.update((s) => {
-                  const saved = s[layer];
-                  if (saved)
-                    s[layer] = {
-                      ...saved,
-                      suspended: true,
-                      finished: saved.finished || layer === 'stinger',
-                      cursorMs: saved.suspended
-                        ? saved.cursorMs
-                        : Math.max(0, Number(media.mediaCursor) || 0),
-                    };
-                });
-              } catch (error) {
-                localWriteFailed = true;
-                localWriteFailure = error;
-                throw error;
-              }
-            }
+    const cleanup = async () => {
+      while (this.inFlight && current()) await new Promise((resolve) => setTimeout(resolve, 10));
+      if (!current()) throw new Error('music_close_timeout');
+      if (!Object.values(this.store.state.sources).some(Boolean)) return;
+      await this.provider.session(async (rpc, epoch) => {
+        const guard = () => {
+          if (!current()) throw new Error('music_close_timeout');
+        };
+        const writer = rpc.withMutationGuard?.(guard) ?? rpc;
+        const obs: ObsRpc = {
+          ...writer,
+          call: async (...args) => {
+            guard();
+            const result = await writer.call(...args);
+            guard();
+            return result;
+          },
+        };
+        // The audition owner checks external edits, confirms STOP, then restores its lease.
+        // A persisted lease alone grants no right to stop media after a restart.
+        const previewOwned = this.preview.busy;
+        do {
+          await this.reconcilePreview(obs, epoch, current);
+          if (this.preview.busy) await new Promise((resolve) => setTimeout(resolve, 50));
+        } while (this.preview.busy && current());
+        guard();
+        if (this.isExternalHold()) return;
+        for (const layer of ['bgm', 'stinger'] as const) {
+          if (
+            layer === 'stinger' &&
+            (previewOwned || this.isStingerHeld() || this.preview.recoveryPending)
+          )
+            continue;
+          const name = await findMusicInput(obs, this.store, layer, current);
+          if (!name) continue;
+          const inputUuid = this.store.state.sources[layer]!;
+          const media = await obs.call('GetMediaInputStatus', { inputUuid });
+          await this.stopMedia(obs, layer, inputUuid, current);
+          try {
+            await this.store.update((s) => {
+              guard();
+              const saved = s[layer];
+              if (saved)
+                s[layer] = {
+                  ...saved,
+                  suspended: true,
+                  finished: saved.finished || layer === 'stinger',
+                  cursorMs: saved.suspended
+                    ? saved.cursorMs
+                    : Math.max(0, Number(media.mediaCursor) || 0),
+                };
+            });
+          } catch (error) {
+            localWriteFailure = error;
+            throw error;
           }
-        })
-        .catch(() => undefined);
-    await this.provider.close();
-    if (localWriteFailed)
+        }
+      });
+    };
+    try {
+      await Promise.race([
+        cleanup(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('music_close_timeout')), 4000);
+        }),
+      ]);
+      this.store.previewEvent('music_close', {
+        result: this.preview.busy || this.preview.recoveryPending ? 'unconfirmed' : 'success',
+      });
+    } catch (error) {
+      this.store.previewEvent('music_close', { result: 'unconfirmed', error });
+    } finally {
+      closing = false;
+      if (timer) clearTimeout(timer);
+      await this.provider.close();
+    }
+    if (localWriteFailure)
       throw new Error('music_local_close_unconfirmed', { cause: localWriteFailure });
   }
 }

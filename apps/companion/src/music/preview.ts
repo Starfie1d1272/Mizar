@@ -54,6 +54,9 @@ export class MusicPreview {
   get busy() {
     return Boolean(this.request || this.uuid);
   }
+  get recoveryPending() {
+    return this.store.state.previewMonitorLeases.length > 0;
+  }
   /** Share the borrowed source's current gain with the normal mixer owner. */
   mixerVolume(uuid: string): number | null {
     if (this.uuid !== uuid || !this.request) return null;
@@ -528,7 +531,7 @@ export class MusicPreview {
         monitor === true
           ? 'OBS 已确认媒体播放和本机监听开启，最多 15 秒。'
           : monitor === false
-            ? 'OBS 媒体正在播放，本机监听未开启；请核对监听设备与音路。'
+            ? 'OBS 媒体正在播放，本机监听未开启；请为监听和桌面采集选择明确设备，监听设备不能被桌面采集。'
             : 'OBS 媒体正在播放，本机监听状态未确认；请在 OBS 核对。',
     };
     const cursor =
