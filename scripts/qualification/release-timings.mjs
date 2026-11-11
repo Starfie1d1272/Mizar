@@ -63,6 +63,7 @@ export function releaseTimingReport({
   tag,
   sourceSha,
   publishedAt,
+  updateReadyAt,
   recovery,
   build,
   boxOutcome,
@@ -84,8 +85,10 @@ export function releaseTimingReport({
         box.event !== 'workflow_run'))
   )
     throw new Error('Release timing source differs');
-  elapsed(qualification.updated_at, promotion.created_at);
+  const waitForPromotionMs = elapsed(qualification.updated_at, promotion.created_at);
   elapsed(publishedAt, box ? promotion.updated_at : finishedAt);
+  const publishedToUpdateReadyMs = updateReadyAt ? elapsed(publishedAt, updateReadyAt) : undefined;
+  if (updateReadyAt) elapsed(updateReadyAt, box ? promotion.updated_at : finishedAt);
   if (box) {
     elapsed(promotion.updated_at, box.created_at);
     elapsed(box.created_at, finishedAt);
@@ -105,6 +108,9 @@ export function releaseTimingReport({
     sourceSha,
     recovery,
     publishedAt,
+    updateReadyAt,
+    publishedToUpdateReadyMs,
+    waitForPromotionMs,
     ...(measurementUnavailable ? { measurementUnavailable: true } : {}),
     triggerToPublicationMs,
     freshGitHubPublicWithin600Seconds:
@@ -183,6 +189,9 @@ async function recordReport(report, path) {
         (report.triggerToPublicationMs === undefined
           ? ''
           : `Qualification trigger → GitHub public timestamp: ${(report.triggerToPublicationMs / 1000).toFixed(1)}s; `) +
+        (report.publishedToUpdateReadyMs === undefined
+          ? ''
+          : `GitHub public → verified update available: ${(report.publishedToUpdateReadyMs / 1000).toFixed(1)}s; `) +
         (report.triggerToBoxMs === undefined
           ? 'Promotion checkpoint'
           : `Qualification trigger → Box checkpoint: ${(report.triggerToBoxMs / 1000).toFixed(1)}s; initial queues Q/P/B: ${[report.qualification, report.promotion, report.box].map((r) => (r.initialQueueMs === null ? 'unknown' : (r.initialQueueMs / 1000).toFixed(1) + 's')).join('/')}`) +
@@ -229,6 +238,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         sourceSha: process.env.SOURCE_SHA,
         finishedAt: finishedAt,
         publishedAt: release.published_at,
+        updateReadyAt: finishedAt,
         recovery:
           process.env.RELEASE_RECOVERY === 'true' ||
           process.env.RELEASE_ALREADY_PUBLISHED === 'true' ||
@@ -288,6 +298,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             tag: record.tag,
             sourceSha: record.sourceSha,
             publishedAt: record.publishedAt,
+            updateReadyAt: record.updateReadyAt,
             recovery: record.recovery || current.run_attempt !== 1,
             build: record.build,
             boxOutcome: process.env.BOX_OUTCOME,

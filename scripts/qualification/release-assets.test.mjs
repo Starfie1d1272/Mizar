@@ -9,7 +9,13 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { promisify } from 'node:util';
 import { setImmediate } from 'node:timers/promises';
-import { publishDraftAssets, reconcileAssets, stageDraftAssets } from './release-assets.mjs';
+import {
+  markLatest,
+  publishDraftAssets,
+  readPublishedRelease,
+  reconcileAssets,
+  stageDraftAssets,
+} from './release-assets.mjs';
 
 const sha = 'a'.repeat(40);
 const tag = 'v1.10.1';
@@ -273,4 +279,52 @@ test('failed final draft readback waits for active reads and never publishes', a
   await assert.rejects(publication, /readback failed/);
   assert.equal(started, startedBeforeSettlement);
   assert.deepEqual(box.actions, []);
+});
+
+test('known release readback retries transient 404 and rejects a conflicting ID immediately', async () => {
+  const expected = { tag, gitSha: sha };
+  const release = { id: 81, tag_name: tag, draft: false, prerelease: false, published_at: 'now' };
+  let reads = 0;
+  const api = ([path]) => {
+    if (path.includes('/releases/tags/')) {
+      if (++reads < 2) throw missingTag();
+      return Buffer.from(JSON.stringify(release));
+    }
+    return Buffer.from(JSON.stringify({ object: { type: 'commit', sha } }));
+  };
+  assert.equal(
+    (await readPublishedRelease('81', expected, undefined, api, async () => {})).release.id,
+    81,
+  );
+  await assert.rejects(
+    readPublishedRelease('82', expected, undefined, api, async () => {}),
+    /ID differs/,
+  );
+  assert.equal(reads, 3);
+});
+
+test('Latest advances after machine metadata exists and historical recovery cannot downgrade it', async () => {
+  let latest = { id: 80, tag_name: 'v1.10.0' };
+  const release = {
+    id: 81,
+    tag_name: tag,
+    draft: false,
+    prerelease: false,
+    published_at: 'now',
+    assets: [{ name: 'machine-metadata.json' }],
+  };
+  const writes = [];
+  const api = (args) => {
+    if (args[0] === '--method') {
+      writes.push(args);
+      latest = { id: 81, tag_name: tag };
+    }
+    return Buffer.from(JSON.stringify(latest));
+  };
+  await assert.rejects(markLatest({ ...release, assets: [] }, api), /update metadata/);
+  assert.equal(writes.length, 0);
+  await markLatest(release, api);
+  await markLatest({ ...release, id: 80, tag_name: 'v1.10.0' }, api);
+  assert.equal(writes.length, 1);
+  assert.ok(writes[0].includes('make_latest=true'));
 });

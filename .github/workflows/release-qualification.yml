@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact version tag; successful qualification automatically publishes and syncs
+        description: Exact version tag; stable publication requires a separate Promotion run
         required: true
         type: string
       release_kind:
-        description: Standard or hotfix; both publish the same compatible signed assets
+        description: Standard or hotfix; both build the same compatible signed assets
         type: choice
         required: true
         default: standard
@@ -80,6 +80,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Validate requested publication tag
         shell: pwsh
         env:
@@ -106,12 +107,16 @@ jobs:
         with:
           profile: release
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Restore committed lockfile after Windows install
+      - name: Install dependencies and verify the frozen lockfile
         shell: pwsh
-        run: git checkout -- pnpm-lock.yaml
+        run: |
+          $before = (Get-FileHash pnpm-lock.yaml -Algorithm SHA256).Hash
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen installation failed' }
+          if ((Get-FileHash pnpm-lock.yaml -Algorithm SHA256).Hash -ne $before) { throw 'Frozen install changed pnpm-lock.yaml' }
+          git diff --exit-code -- pnpm-lock.yaml
+          if ($LASTEXITCODE -ne 0) { throw 'Checked-out lockfile differs from the qualification source' }
+          "Node: $(node --version), Rust: $(rustc --version), pnpm: $(pnpm --version)" >> $env:GITHUB_STEP_SUMMARY
 
       - name: Build exact-SHA Windows qualification bundle
         env:
