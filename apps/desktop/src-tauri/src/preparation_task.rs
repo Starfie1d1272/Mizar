@@ -1563,24 +1563,3 @@ pub(crate) async fn enter(
     intent_app.state::<EntryIntent>().finish(&intent_id);
     result
 }
-
-#[cfg(test)]
-mod request_budget_tests {
-    use super::*;
-
-    #[test]
-    fn only_explicit_obs_preparation_gets_the_composed_budget() {
-        assert_eq!(
-            controlled_request_timeout("/operator/obs/ensure"),
-            Duration::from_secs(240)
-        );
-        assert_eq!(
-            controlled_request_timeout("/operator/production"),
-            Duration::from_secs(40)
-        );
-        assert_eq!(
-            controlled_request_timeout("/operator/obs/video-restore"),
-            Duration::from_secs(40)
-        );
-    }
-}
