@@ -86,6 +86,12 @@ try {
   $completedLease=[IO.File]::Open((Join-Path (Split-Path -Parent $pending) 'fresh-install.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   try { Reject { Invoke-LegacyHandoff $target $state } 'update_handoff_bootstrap_active' } finally { $completedLease.Dispose() }
   Write-Output 'PASS production retirement + repeat: original plan/journal/helper/backup preserved, same-location successor unchanged, pending/cmd/RunOnce retired'
+  $unrelated=Join-Path $root 'unrelated';[IO.Directory]::CreateDirectory($unrelated)|Out-Null
+  Put (Join-Path $unrelated 'other.ps1') 'Start-Sleep -Seconds 4'
+  $junction=Join-Path $root 'unrelated-junction';New-Item -ItemType Junction -Path $junction -Target $unrelated|Out-Null
+  $otherProcess=Start-Process powershell.exe -ArgumentList ('-NoProfile -NonInteractive -File "'+(Join-Path $junction 'other.ps1')+'"') -PassThru -WindowStyle Hidden
+  try{Invoke-LegacyHandoff $target $state|Out-Null}finally{$otherProcess.WaitForExit();$otherProcess.Dispose()}
+  Write-Output 'PASS unrelated PowerShell script through a junction does not block handoff or get hashed'
   # Resume the exact crash boundary after rename, before refusal publication.
   $interrupted=Stage '2';Move-Item (Join-Path $interrupted 'update-install.ps1') (Join-Path $interrupted 'update-install.ps1.retired')
   Invoke-LegacyHandoff $target $state|Out-Null

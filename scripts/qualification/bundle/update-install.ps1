@@ -553,8 +553,15 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
       # Its standard script path still identifies the loaded legacy source.
       $arguments = @(Handoff-Arguments $snapshot)
       foreach ($argument in $arguments) {
-        if ($argument -notmatch '(?i)\.ps1$' -or ![IO.Path]::IsPathRooted($argument) -or !(Test-Path -LiteralPath $argument -PathType Leaf)) { continue }
-        if (!(Test-LegacyHelperHash ([MizarUpdateFiles]::Hash($argument)))) { continue }
+        if ($argument -notmatch '(?i)[\\/]update-install\.ps1$' -or ![IO.Path]::IsPathRooted($argument)) { continue }
+        $sourcePath = [MizarUpdateFiles]::LongPath($argument)
+        $knownRoot = $false
+        foreach ($root in $roots) {
+          if ($sourcePath.StartsWith((Join-Path $root 'updates') + '\', [StringComparison]::OrdinalIgnoreCase)) { $knownRoot = $true; break }
+        }
+        if (!$knownRoot -or !(Test-Path -LiteralPath $sourcePath -PathType Leaf)) { continue }
+        if ((Get-Item -LiteralPath $sourcePath).Length -gt 131072) { throw 'update_handoff_source_unknown' }
+        if (!(Test-LegacyHelperHash ([MizarUpdateFiles]::Hash($sourcePath)))) { continue }
         $runningStage = Handoff-Argument $arguments '-StageRoot'
         if ($currentStage -and $runningStage -and (Handoff-Path $runningStage) -eq $currentStage) { continue }
         $active = Handoff-Process $snapshot.ProcessId
