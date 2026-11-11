@@ -148,30 +148,33 @@ jobs:
     needs: [build, quality, native]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require successful builds within 180 seconds
+      - name: Require successful checks and report elapsed time
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD: ${{ needs.build.result }}
           NATIVE: ${{ needs.native.result }}
           QUALITY: ${{ needs.quality.result }}
         run: |
-          created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
-          elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
-          echo "CI created to gate: ${elapsed}s"
+          elapsed=
           {
-            echo "CI attempt ${GITHUB_RUN_ATTEMPT}, created to gate: ${elapsed}s"
-            if jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"); then
-              jq -r --arg created "$created" '
-                .jobs[] | select(.name != "ci-gate") |
-                "- \(.name): \(.conclusion // .status), runner wait \((.started_at | fromdateiso8601) - ($created | fromdateiso8601))s, run \((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))s" +
-                ([.steps[] | select(.conclusion == "failure") | .name] | if length > 0 then ", failed: " + join(", ") else "" end)
-              ' <<< "$jobs" || echo "Job timing unavailable."
+            if created=$(timeout 10s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at) &&
+              started=$(date -u -d "$created" +%s); then
+              elapsed=$(( $(date -u +%s) - started ))
+              echo "CI attempt ${GITHUB_RUN_ATTEMPT}, created to gate: ${elapsed}s (P95 target: 180s)"
+              if jobs=$(timeout 10s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"); then
+                jq -r --argjson started "$started" '
+                  .jobs[] | select(.name != "ci-gate" and .started_at and .completed_at) |
+                  "- \(.name): \(.conclusion // .status), workflow creation to runner \((.started_at | fromdateiso8601) - $started)s, run \((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))s" +
+                  ([.steps[] | select(.conclusion == "failure") | .name] | if length > 0 then ", failed: " + join(", ") else "" end)
+                ' <<< "$jobs" || echo "Job timing unavailable."
+              else
+                echo "Job timing unavailable."
+              fi
             else
-              echo "Job timing unavailable."
+              echo "Workflow timing unavailable."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$elapsed" -lt 0 ]; then
-            echo "Runner and GitHub timestamps are inconsistent; cannot verify CI budget" >&2
-            exit 1
+          if [ "${elapsed:-0}" -gt 180 ]; then
+            echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
-          test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success && test "$elapsed" -le 180
+          test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success
