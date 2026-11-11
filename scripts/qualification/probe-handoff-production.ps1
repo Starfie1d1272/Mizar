@@ -77,7 +77,7 @@ try {
   try { Reject { Invoke-LegacyHandoff $target $state } 'update_handoff_bootstrap_active' } finally { $lease.Dispose() }
   Assert (!(Test-Path -LiteralPath (Join-Path $blocked 'update-install.ps1.retired'))) 'Busy bootstrap still retired a helper'
   $fake=Join-Path $root 'active.ps1';Put $fake 'param([string]$StageRoot) Start-Sleep -Seconds 6'
-  $active=Start-Process powershell.exe -ArgumentList ('-NoProfile -NonInteractive -File "'+$fake+'" -StageRoot "'+$blocked+'"') -PassThru -WindowStyle Hidden
+  $active=Start-Process powershell.exe -ArgumentList ('-NoProfile -NonInteractive -File "'+$fake+'" -StageR "'+$blocked+'"') -PassThru -WindowStyle Hidden
   try { Reject { Invoke-LegacyHandoff $target $state } 'update_handoff_process_active' } finally { $active.WaitForExit();$active.Dispose() }
   Assert (!(Test-Path -LiteralPath (Join-Path $blocked 'update-install.ps1.retired'))) 'Live helper still retired'
   Invoke-LegacyHandoff $target $state|Out-Null

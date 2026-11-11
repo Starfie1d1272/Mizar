@@ -482,11 +482,11 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
         if ($owner.ReturnValue -ne 0 -or $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { throw 'update_handoff_process_unknown' }
         continue
       }
-      $arguments = @(Handoff-Arguments $snapshot)
-      $activeStage = Handoff-Argument $arguments '-StageRoot'
-      if (!$activeStage) { continue }
-      $activeStage = Handoff-Path $activeStage
-      if ($candidates.stage -contains $activeStage) {
+      # Script parameters accept abbreviations and colon syntax. Retirement is
+      # conservative: any mention of a candidate's path is enough to refuse;
+      # only parent authorization uses the stricter canonical argument parser.
+      foreach ($candidate in $candidates) {
+        if ($snapshot.CommandLine.IndexOf($candidate.stage, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
         # Hold the actual process instance, not just its potentially reusable PID.
         $active = Handoff-Process $snapshot.ProcessId
         if (!$active.process.HasExited) { throw 'update_handoff_process_active' }

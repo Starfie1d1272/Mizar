@@ -177,6 +177,8 @@ Section "-Mizar" SecMain
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=update-handoff.ps1 "${PAYLOAD}\resources\scripts\update-install.ps1"
+  ; Do not let the native NSIS System.dll shadow the .NET compiler reference.
+  SetOutPath "$TEMP"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   StrCmp $UpdateWriter "0" 0 handoff_writer_ready
@@ -322,6 +324,8 @@ Section "Uninstall"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=update-handoff.ps1 "${PAYLOAD}\resources\scripts\update-install.ps1"
+  ; Do not let the native NSIS System.dll shadow the .NET compiler reference.
+  SetOutPath "$TEMP"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   StrCpy $2 ""
