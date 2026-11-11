@@ -69,6 +69,12 @@ public static class MizarUpdateFiles {
       return owner.Process.ToInt32();
     }
   }
+  [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] static extern uint GetLongPathNameW(string path, System.Text.StringBuilder result, uint capacity);
+  public static string LongPath(string path) {
+    var expanded=new System.Text.StringBuilder(32768);
+    uint length=GetLongPathNameW(path,expanded,(uint)expanded.Capacity);
+    return length>0 && length<expanded.Capacity ? expanded.ToString() : path;
+  }
   public static string[] Arguments(string command) {
     int count; IntPtr memory=CommandLineToArgvW(command,out count);
     if(memory==IntPtr.Zero) throw new IOException("update_handoff_arguments_invalid");
@@ -286,7 +292,12 @@ function Read-HandoffJson([string]$path, [switch]$SharedSnapshot) {
     try { return $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
   } finally { $file.Dispose() }
 }
-function Handoff-Path([string]$path) { Assert-PlainPath $path; return [IO.Path]::GetFullPath($path).TrimEnd('\') }
+function Handoff-Path([string]$path) {
+  Assert-PlainPath $path
+  $full = [IO.Path]::GetFullPath($path)
+  if ($full -eq [IO.Path]::GetPathRoot($full)) { throw 'update_handoff_root_directory_forbidden' }
+  return $full.TrimEnd('\')
+}
 function Test-LegacyHelperHash([string]$hash) {
   # Exact LF source and CRLF checkout bytes from v1.11.1–1.11.4. No text heuristics.
   return $hash -in @('04165df6360fdfeaf5fa5713d9d52801377746a8e70aa28c546fa95f94aa8465', 'e2805c1bb5465013baf1f03d992b584c5eee2518ffa50eb81a6e32e0b1c32cbe', 'e029b456edf6f1e95addd3c7a967f7f2f1450a285a462c3e03baa28d6443cd5e', '4c377e218825d3cfc99569a6ea558b3f7096b56159ec18ab72bc4a1c67c92d5f')
@@ -328,6 +339,7 @@ function Handoff-Plan([string]$directory, [string]$target, [string]$state) {
 }
 function Handoff-UpdateParent($caller, [string]$target) {
   $parent = Handoff-Process $caller.snapshot.ParentProcessId
+  if ($parent.started -gt $caller.started) { throw 'update_handoff_parent_unknown' }
   $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
   if ((Handoff-Path $parent.snapshot.ExecutablePath) -ne (Handoff-Path $powershell)) { throw 'update_handoff_parent_unknown' }
   $arguments = @(Handoff-Arguments $parent.snapshot)
@@ -351,9 +363,11 @@ function Handoff-Caller([string]$target, [int]$processId, [string]$parentReceipt
   $self = Handoff-Process $PID
   if ($self.snapshot.ParentProcessId -ne $processId) { throw 'update_handoff_caller_unknown' }
   $caller = Handoff-Process $processId
+  if ($caller.started -gt $self.started) { throw 'update_handoff_caller_unknown' }
   if ($parentReceipt) {
     $receipt = Read-HandoffJson $parentReceipt
     $setup = Handoff-Process $caller.snapshot.ParentProcessId
+    if ($setup.started -gt $caller.started) { throw 'update_handoff_caller_unknown' }
     if ($receipt.schema -ne 'mizar.handoff.v1' -or $receipt.callerPid -ne $setup.process.Id -or $receipt.callerStarted -ne $setup.started -or
       (Handoff-Path $receipt.target) -ne $target -or $receipt.callerSha256 -ne [MizarUpdateFiles]::Hash($setup.snapshot.ExecutablePath) -or
       !$receipt.installationOwner -or (Get-Content -LiteralPath (Join-Path $target '.mizar-update-owner') -Raw) -ne $receipt.installationOwner) { throw 'update_handoff_caller_unknown' }
@@ -485,8 +499,19 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
       # Script parameters accept abbreviations and colon syntax. Retirement is
       # conservative: any mention of a candidate's path is enough to refuse;
       # only parent authorization uses the stricter canonical argument parser.
+      $paths = @()
+      foreach ($argument in @(Handoff-Arguments $snapshot)) {
+        if ($argument -match '^-[^:]+:(.+)$') { $argument = $Matches[1] }
+        if ([IO.Path]::IsPathRooted($argument)) { $paths += [MizarUpdateFiles]::LongPath($argument).TrimEnd('\') }
+      }
       foreach ($candidate in $candidates) {
-        if ($snapshot.CommandLine.IndexOf($candidate.stage, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        $mentioned = $snapshot.CommandLine.IndexOf($candidate.stage, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        if (!$mentioned) {
+          foreach ($path in $paths) {
+            if ($path -eq $candidate.stage -or $path.StartsWith($candidate.stage + '\', [StringComparison]::OrdinalIgnoreCase)) { $mentioned = $true; break }
+          }
+        }
+        if (!$mentioned) { continue }
         # Hold the actual process instance, not just its potentially reusable PID.
         $active = Handoff-Process $snapshot.ProcessId
         if (!$active.process.HasExited) { throw 'update_handoff_process_active' }
