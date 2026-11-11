@@ -510,6 +510,23 @@ export class OutboxRepository {
     });
   }
 
+  captureCapacity() {
+    return Object.fromEntries(
+      (
+        [
+          ['intervals', 'capture_intervals', MAX_CAPTURE_INTERVALS],
+          ['unknownSources', 'capture_unknown', MAX_CAPTURE_UNKNOWN_SOURCES],
+          ['receipts', 'capture_receipts', MAX_CAPTURE_RECEIPTS],
+        ] as const
+      ).map(([key, table, limit]) => {
+        const { n: used } = this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {
+          n: number;
+        };
+        return [key, { used, limit, nearLimit: used >= limit * 0.9 }];
+      }),
+    );
+  }
+
   captureIndex() {
     const intervals = (
       this.db.prepare('SELECT payload FROM capture_intervals').all() as { payload: string }[]

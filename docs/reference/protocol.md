@@ -127,7 +127,7 @@ RivalHub 另有业务确认：
 - 可靠拒收只接纳约定的原因/恢复动作/合法请求 ID，未知正文不回显。`context_stale` 仅在原范围和名单仍匹配时合并刷新，兼容激活后等待新遥测；`reconcile` 不授权抬升游标或重放事件。
 - 超时传递取消，迟到或已被新操作取代的回执不得修改新授权。网络重试有界、按原因退避，日志保留安全阶段与原因码，不逐帧保存网址、凭据或远端正文。
 
-速率、超时、拒收分类和容量以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output/)为准。`GET /local/v1/reliable-output-status` 返回有限本机诊断，不返回事件正文。
+速率、超时、拒收分类和容量以[连接适配器](../../apps/companion/src/match-context/rivalhub-connection.ts)及[输出实现](../../apps/companion/src/output/)为准。`GET /local/v1/reliable-output-status` 返回本机诊断、worker 失败阶段和存储容量（达到九成时标记接近上限），不返回事件正文。worker 无回执或退出后暂停网站投递，正常退出并重启后从原账本和提交回执恢复。
 
 ### 仅名单差异的在线展示例外
 

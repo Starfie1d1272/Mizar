@@ -110,7 +110,10 @@ export class OutputService {
       this.trialQuarantined || this.faultQuarantined || Boolean(recovery?.pending || recovery?.lost)
     );
   }
-  private outboxUnavailable = false;
+  private outboxStartupUnavailable = false;
+  private get outboxUnavailable(): boolean {
+    return this.outboxStartupUnavailable || this.outbox?.getWorkerFailure() !== undefined;
+  }
   private get localProjectionQuarantined(): boolean {
     // A failed website startup keeps its recovery evidence, but no longer owns
     // local projection availability. Trial and local faults still fence reads.
@@ -511,7 +514,7 @@ export class OutputService {
       await this.outbox?.load();
       await startup.restoreSourceCapture?.();
     } catch (error) {
-      this.outboxUnavailable = true;
+      this.outboxStartupUnavailable = true;
       let failure = error;
       try {
         // This closes only this object's database; local projection stays live.
@@ -1401,7 +1404,7 @@ export class OutputService {
 
   async retry(options: { localOnly?: boolean } = {}): Promise<void> {
     if (this.retryPending) return this.retryCompletion;
-    if (this.closed || this.outboxUnavailable || this.outbox === undefined) return;
+    if (this.closed || this.outboxUnavailable || !this.outbox?.available) return;
     if (this.bundle !== undefined) this.updateMapStartScope(this.bundle, this.binding);
     this.retryPending = true;
     let finishRetry!: () => void;

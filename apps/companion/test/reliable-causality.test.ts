@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseReliableEventV1, type ReliableEventV1 } from '@mizar/protocol/output';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { OutboxWorkerClient } from '../src/output/outbox-worker-client.js';
 
 const now = new Date('2026-09-28T00:00:10.000Z');
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
@@ -489,4 +490,23 @@ test('source settlement waits for a reliable request already in flight', async (
   acknowledge();
   await sending;
   assert.equal(await settling, true);
+});
+
+test('missing worker reply fails the active owner and later operations report the same uncertainty', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-worker-deadline-'));
+  const failures: string[] = [];
+  const client = new OutboxWorkerClient(join(directory, 'outbox.json'), (error) => {
+    failures.push(error.message);
+  });
+  t.after(async () => {
+    await client.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = client.request('load');
+  const check = assert.rejects(pending, /outbox_worker_reply_timeout:load/);
+  t.mock.timers.tick(30_000);
+  await check;
+  await assert.rejects(client.request('captureCapacity'), /outbox_worker_reply_timeout:load/);
+  assert.deepEqual(failures, ['outbox_worker_reply_timeout:load']);
 });

@@ -17,6 +17,7 @@ function operations(repository: OutboxRepository) {
       revoked: repository.revokedSummary(),
     }),
     readHistory,
+    captureCapacity: repository.captureCapacity.bind(repository),
     forDelivery: repository.forDelivery.bind(repository),
     sourceFences: (scopes: readonly string[]) =>
       scopes.map((scope) => ({
