@@ -92,7 +92,8 @@ Remove-Item -LiteralPath $target -Recurse -Force
 $payload=Join-Path $root 'payload'
 $files=@{'Mizar.exe'='inert fixture';'resources/runtime/node.exe'='inert node';'resources/app/dist/server.js'='fixture';'resources/web/dist/index.html'='fixture'}
 $records=@{};foreach($name in $files.Keys){Put (Join-Path $payload $name) $files[$name];$records[$name]=Hash (Join-Path $payload $name)}
-$names=[string[]]@($files.Keys);[Array]::Sort($names,[StringComparer]::Ordinal);$identity='';foreach($name in $names){$identity+=$name+[char]0+$records[$name]+"`n"}
+$scriptName='resources/scripts/update-install.ps1';[IO.Directory]::CreateDirectory((Join-Path $payload 'resources/scripts'))|Out-Null;Copy-Item -LiteralPath $source -Destination (Join-Path $payload $scriptName);$records[$scriptName]=Hash (Join-Path $payload $scriptName)
+$names=[string[]]@($records.Keys);[Array]::Sort($names,[StringComparer]::Ordinal);$identity='';foreach($name in $names){$identity+=$name+[char]0+$records[$name]+"`n"}
 $sha=[Security.Cryptography.SHA256]::Create();$digest=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity))).Replace('-','').ToLowerInvariant();$sha.Dispose()
 Json (Join-Path $payload 'resources/metadata/artifact.json') @{repository='Starfie1d1272/Mizar';appVersion='1.2.0';gitSha=('a'*40);artifactSha256=$digest}
 $records['resources/metadata/artifact.json']=Hash (Join-Path $payload 'resources/metadata/artifact.json')

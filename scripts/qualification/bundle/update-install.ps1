@@ -391,6 +391,11 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
   $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   [void]$roots.Add($state)
   [void]$roots.Add((Join-Path $env:LOCALAPPDATA 'Mizar'))
+  $installKey = 'HKCU:\Software\Mizar'
+  if (Test-Path -LiteralPath $installKey) {
+    $registered = Get-ItemProperty -LiteralPath $installKey
+    if ($registered.InstallDir -and $registered.StateRoot -and (Handoff-Path $registered.InstallDir) -eq $target) { [void]$roots.Add((Handoff-Path $registered.StateRoot)) }
+  }
   $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
   $entry = if (Test-Path -LiteralPath $runKey) { (Get-ItemProperty -LiteralPath $runKey).'!MizarUpdateRecovery' }
   # An old custom root can be discovered from its exact existing recovery entry.
@@ -402,6 +407,8 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
   $refusal = "throw 'update_legacy_retired: use the current installer; original recovery files are preserved.'`r`n"
   $candidates = @()
   foreach ($root in $roots) {
+    $root = Handoff-Path $root
+    if ($root -eq $target -or $root.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
     $updates = Join-Path (Handoff-Path $root) 'updates'
     if (!(Test-Path -LiteralPath $updates)) { continue }
     foreach ($directory in (Get-ChildItem -LiteralPath $updates -Directory -Force)) {

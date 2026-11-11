@@ -176,7 +176,7 @@ Section "-Mizar" SecMain
   ; is changed until all known old execution paths have been safely retired.
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File /oname=update-handoff.ps1 "bundle/update-install.ps1"
+  File /oname=update-handoff.ps1 "${PAYLOAD}\resources\scripts\update-install.ps1"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   StrCmp $UpdateWriter "0" 0 handoff_writer_ready
@@ -318,7 +318,7 @@ FunctionEnd
 Section "Uninstall"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File /oname=update-handoff.ps1 "bundle/update-install.ps1"
+  File /oname=update-handoff.ps1 "${PAYLOAD}\resources\scripts\update-install.ps1"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ParentReceiptPath "$HandoffParentReceipt" -ExpectedBootstrap "$HandoffBootstrapOwner" -NoStatusWindow'
