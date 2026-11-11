@@ -106,12 +106,17 @@ Put $remove ($lines -join "`r`n")
 $download=Join-Path $state 'updates\download-fixture';[IO.Directory]::CreateDirectory($download)|Out-Null
 $installer=Join-Path $download 'Mizar-v1.2.0-Windows-x64-Setup.exe'
 $compiler=Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
-& $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$payload" "/DOUTPUT=$installer" /DVERSION=1.2.0 "/DICON=$PSScriptRoot/../../apps/desktop/src-tauri/icons/icon.ico" "/DREMOVE_FILES=$remove" (Join-Path $PSScriptRoot 'windows-setup.nsi')
+# Log NSIS-captured errors outside the payload; diagnostics do not change decisions.
+$nsisProbe=Join-Path $root 'fixture.nsi'
+$nsisText=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'windows-setup.nsi'))
+$nsisText=$nsisText.Replace('  DetailPrint "$1"', ('  DetailPrint "$1"'+"`r`n"+'  FileOpen $2 "'+(Join-Path $root 'nsis-error.log')+'" a'+"`r`n"+'  FileWrite $2 "$0: $1$\r$\n"'+"`r`n"+'  FileClose $2'))
+Put $nsisProbe $nsisText
+& $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$payload" "/DOUTPUT=$installer" /DVERSION=1.2.0 "/DICON=$PSScriptRoot/../../apps/desktop/src-tauri/icons/icon.ico" "/DREMOVE_FILES=$remove" $nsisProbe
 Assert ($LASTEXITCODE -eq 0) 'NSIS compilation failed'
 function Run-Setup {
   $p=Start-Process $installer -ArgumentList @('/S',('"/MIZARSTATE='+$state+'"'),('/D='+$target)) -PassThru
   Assert ($p.WaitForExit(60000)) 'NSIS fixture exceeded its bounded wait; do not kill it'
-  if($p.ExitCode -ne 0) { $log=Join-Path $state 'updates/handoff-last.log'; if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log|Write-Output} }
+  if($p.ExitCode -ne 0) { $native=Join-Path $root 'nsis-error.log'; if(Test-Path -LiteralPath $native){Get-Content -LiteralPath $native|Write-Output}; $log=Join-Path $state 'updates/handoff-last.log'; if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log|Write-Output} }
   Assert ($p.ExitCode -eq 0) ('NSIS fixture failed '+$p.ExitCode);$p.Dispose()
 }
 function Run-Update([string]$helper) {

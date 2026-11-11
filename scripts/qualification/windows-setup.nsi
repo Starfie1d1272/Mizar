@@ -191,7 +191,10 @@ Section "-Mizar" SecMain
   StrCpy $1 $InstallationOwner 10
   StrCmp $1 "bootstrap-" 0 +2
   StrCpy $HandoffBootstrapOwner $InstallationOwner
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner" -ExpectedBootstrap "$HandoffBootstrapOwner" -NoStatusWindow'
+  StrCpy $2 ""
+  StrCmp $HandoffBootstrapOwner "" +2
+  StrCpy $2 ' -ExpectedBootstrap "$HandoffBootstrapOwner"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 handoff_failed
@@ -321,7 +324,12 @@ Section "Uninstall"
   File /oname=update-handoff.ps1 "${PAYLOAD}\resources\scripts\update-install.ps1"
   System::Call 'kernel32::GetCurrentProcessId() i.r0'
   StrCpy $HandoffProcessId $0
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ParentReceiptPath "$HandoffParentReceipt" -ExpectedBootstrap "$HandoffBootstrapOwner" -NoStatusWindow'
+  StrCpy $2 ""
+  StrCmp $HandoffParentReceipt "" +2
+  StrCpy $2 ' -ParentReceiptPath "$HandoffParentReceipt"'
+  StrCmp $HandoffBootstrapOwner "" +2
+  StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" uninstall_handoff_ready
