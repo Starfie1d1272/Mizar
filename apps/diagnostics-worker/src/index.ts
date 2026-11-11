@@ -6,11 +6,12 @@ import {
   diagnosticAutomaticTimeReason,
   diagnosticPermitClaims,
   readDiagnosticGzipPermit,
+  type DiagnosticReceiverStage,
   type DiagnosticUploadPermit,
 } from '@mizar/protocol/diagnostics-upload';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
- * No body inflation, public object URL, runtime management token, or business-state interpretation. */
+ * Only authorized new event/2 batches need bounded inflation to verify their index. */
 export interface Env {
   DIAGNOSTICS_VERSION?: { id: string };
   DIAGNOSTICS_DB: D1Database;
@@ -49,6 +50,11 @@ const json = (body: unknown, status = 200) =>
       'x-diagnostics-event-version': '2',
     },
   });
+type SetReceiverStage = (stage: DiagnosticReceiverStage) => void;
+function capacityDenied(stage: DiagnosticReceiverStage, error: string, status: 429 | 503) {
+  console.warn({ event: 'diagnostics_capacity_denied', stage, error, status });
+  return json({ error, stage }, status);
+}
 const sql = (env: Env, query: string, ...values: (string | number | null | ArrayBuffer)[]) =>
   env.DIAGNOSTICS_DB.prepare(query).bind(...values);
 const binaryId = (value: string) =>
@@ -396,7 +402,8 @@ async function enroll(request: Request, env: Env, now: number) {
       : json({ installationId: id, revoked: true, deletion: 'complete', closed: true });
   }
   if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
-  if (!(await withinDatabaseBudget(env))) return json({ error: 'index_allocation_budget' }, 503);
+  if (!(await withinDatabaseBudget(env)))
+    return capacityDenied('enrollment', 'index_allocation_budget', 503);
   const day = Math.floor(now / DAY);
   await sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day).run();
   const result = await env.DIAGNOSTICS_DB.batch([
@@ -421,10 +428,17 @@ async function enroll(request: Request, env: Env, now: number) {
       proof,
     ),
   ]);
-  if (!result[0]?.meta.changes) return json({ error: 'registration_budget' }, 429);
+  if (!result[0]?.meta.changes) return capacityDenied('enrollment', 'registration_budget', 429);
   return json(await issued(env, id, now));
 }
-async function upload(request: Request, env: Env, id: string, installation: string, now: number) {
+async function upload(
+  request: Request,
+  env: Env,
+  id: string,
+  installation: string,
+  now: number,
+  setStage: SetReceiverStage,
+) {
   if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
   const index = metadata(request.headers.get('x-diagnostics-index'));
   if (
@@ -438,6 +452,54 @@ async function upload(request: Request, env: Env, id: string, installation: stri
   const bytes = await bounded(request.body, LIMITS.compressedBytes);
   if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || (await hash(bytes)) !== id)
     return json({ error: 'batch_integrity' }, 400);
+  const sealed = readDiagnosticGzipPermit(bytes);
+  if (
+    !sealed ||
+    sealed.permit.installationId !== installation ||
+    sealed.permit.issuedAt > now ||
+    !equal(
+      sealed.permit.signature,
+      base64(await mac(env.INGEST_SIGNING_KEY, diagnosticPermitClaims(sealed.permit))),
+    ) ||
+    (await hash(sealed.payload)) !== sealed.permit.payloadSha256
+  )
+    return json({ error: 'invalid_batch_permit' }, 400);
+  if (sealed.permit.expiresAt <= now) return json({ error: 'batch_retention_expired' }, 410);
+  const preflight = await env.DIAGNOSTICS_DB.batch<unknown>([
+    permitStatement(env, sealed.permit.payloadSha256),
+    sql(env, 'SELECT revoked_at FROM installations WHERE id=?', installation),
+    batchStatement(env, installation, id),
+  ]);
+  const active = preflight[1]?.results[0] as { revoked_at: number | null } | undefined;
+  if (!active || active.revoked_at !== null) return json({ error: 'installation_revoked' }, 410);
+  const firstPermit = preflight[0]?.results[0] as PermitRow | undefined;
+  if (
+    !firstPermit ||
+    firstPermit.installation_hex !== installation.replaceAll('-', '') ||
+    firstPermit.installation_created_at !== sealed.permit.installationCreatedAt ||
+    firstPermit.consent_revision !== sealed.permit.consentRevision ||
+    firstPermit.issued_at !== sealed.permit.issuedAt ||
+    firstPermit.payload_created_at !== sealed.permit.payloadCreatedAt
+  )
+    return json({ error: 'invalid_batch_permit' }, 400);
+  if (firstPermit.wire_hex && firstPermit.wire_hex !== id)
+    return json({ error: 'payload_encoding_conflict' }, 409);
+  if (
+    bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
+    !budget(env.INSTALLATION_DAILY_BATCHES)
+  )
+    return capacityDenied('upload_preflight', 'installation_capacity', 429);
+  const existing = preflight[2]?.results[0] as BatchRow | undefined;
+  if (existing && existing.expires_at <= now)
+    return json({ error: 'batch_retention_expired' }, 410);
+  const canonicalIndex = JSON.stringify(index);
+  if (existing && JSON.stringify(metadata(existing.metadata)) !== canonicalIndex)
+    return json({ error: 'batch_metadata_conflict' }, 409);
+  if (existing?.state === 'ready') return accepted(id);
+  if (!(preflight[2]!.meta.size_after < budget(env.DATABASE_BYTES)))
+    return capacityDenied('upload_preflight', 'index_allocation_budget', 503);
+  if (existing && (existing.state === 'deleting' || existing.writers >= 8))
+    return json({ error: 'batch_pending' }, 409);
   if (index.eventSchemaVersion === 2) {
     try {
       const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
@@ -471,46 +533,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       return json({ error: 'invalid_event_body' }, 400);
     }
   }
-  const sealed = readDiagnosticGzipPermit(bytes);
-  if (
-    !sealed ||
-    sealed.permit.installationId !== installation ||
-    sealed.permit.issuedAt > now ||
-    !equal(
-      sealed.permit.signature,
-      base64(await mac(env.INGEST_SIGNING_KEY, diagnosticPermitClaims(sealed.permit))),
-    ) ||
-    (await hash(sealed.payload)) !== sealed.permit.payloadSha256
-  )
-    return json({ error: 'invalid_batch_permit' }, 400);
-  if (sealed.permit.expiresAt <= now) return json({ error: 'batch_retention_expired' }, 410);
-  const preflight = await env.DIAGNOSTICS_DB.batch<unknown>([
-    permitStatement(env, sealed.permit.payloadSha256),
-    batchStatement(env, installation, id),
-  ]);
-  const firstPermit = preflight[0]?.results[0] as PermitRow | undefined;
-  if (
-    !firstPermit ||
-    firstPermit.installation_hex !== installation.replaceAll('-', '') ||
-    firstPermit.installation_created_at !== sealed.permit.installationCreatedAt ||
-    firstPermit.consent_revision !== sealed.permit.consentRevision ||
-    firstPermit.issued_at !== sealed.permit.issuedAt ||
-    firstPermit.payload_created_at !== sealed.permit.payloadCreatedAt
-  )
-    return json({ error: 'invalid_batch_permit' }, 400);
-  if (firstPermit.wire_hex && firstPermit.wire_hex !== id)
-    return json({ error: 'payload_encoding_conflict' }, 409);
-  if (
-    bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
-    !budget(env.INSTALLATION_DAILY_BATCHES)
-  )
-    return json({ error: 'installation_capacity' }, 429);
-  const existing = preflight[1]?.results[0] as BatchRow | undefined;
-  if (existing && existing.expires_at <= now)
-    return json({ error: 'batch_retention_expired' }, 410);
-  if (existing?.state === 'ready') return accepted(id);
-  if (!(preflight[1]!.meta.size_after < budget(env.DATABASE_BYTES)))
-    return json({ error: 'index_allocation_budget' }, 503);
+  setStage('upload_reservation');
   const boundPermit = await sql(
     env,
     `UPDATE upload_permits SET wire_sha256=? WHERE payload_sha256=? AND wire_sha256 IS NULL
@@ -524,8 +547,6 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     boundPermit?.wire_hex ?? (await permitRow(env, sealed.permit.payloadSha256))?.wire_hex;
   if (wireHex !== id) return json({ error: 'payload_encoding_conflict' }, 409);
 
-  if (existing && (existing.state === 'deleting' || existing.writers >= 8))
-    return json({ error: 'batch_pending' }, 409);
   const owner = crypto.randomUUID();
   const day = Math.floor(now / DAY);
   const objectKey = `v1/${installation}/${day}/${id}.gz`;
@@ -547,7 +568,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       bytes.length,
       now,
       sealed.permit.expiresAt,
-      JSON.stringify(index),
+      canonicalIndex,
       installation,
       day,
       bytes.length,
@@ -592,24 +613,30 @@ async function upload(request: Request, env: Env, id: string, installation: stri
       env,
       `UPDATE batches SET owner=?,state='pending',writers=writers+1
       WHERE installation_id=? AND id=? AND owner!=? AND state IN ('failed','pending')
-      AND writers<8 AND expires_at>? AND EXISTS(
+      AND writers<8 AND expires_at>? AND metadata=? AND EXISTS(
         SELECT 1 FROM installations WHERE id=? AND revoked_at IS NULL)`,
       owner,
       installation,
       id,
       owner,
       now,
+      existing?.metadata ?? canonicalIndex,
       installation,
     ),
     batchStatement(env, installation, id),
   ]);
-  if (!reserved[1]?.meta.changes && !reserved[4]?.meta.changes)
-    return json({ error: 'capacity_or_concurrent_reservation' }, 429);
+  if (!reserved[1]?.meta.changes && !reserved[4]?.meta.changes) {
+    const concurrent = reserved[5]?.results[0] as BatchRow | undefined;
+    if (concurrent && JSON.stringify(metadata(concurrent.metadata)) !== canonicalIndex)
+      return json({ error: 'batch_metadata_conflict' }, 409);
+    return capacityDenied('upload_reservation', 'capacity_or_concurrent_reservation', 429);
+  }
   let row: BatchRow | null = null;
   try {
     row = (reserved[5]?.results[0] as BatchRow | undefined) ?? null;
     if (!row || row.owner !== owner) return json({ error: 'reservation_unconfirmed' }, 503);
     // Never overwrite an acknowledged/retried object and reset its original retention clock.
+    setStage('upload_object');
     const created = await env.DIAGNOSTICS_BUCKET.put(row.object_key, bytes, {
       onlyIf: { etagDoesNotMatch: '*' },
       httpMetadata: { contentType: 'application/gzip' },
@@ -620,12 +647,14 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     const object = created ?? (await env.DIAGNOSTICS_BUCKET.head(row.object_key));
     if (!object || object.size !== bytes.length || object.customMetadata?.sha256 !== id)
       throw new Error('existing_object_integrity');
+    setStage('upload_index');
     const revoked = await sql(
       env,
       'SELECT revoked_at FROM installations WHERE id=?',
       installation,
     ).first<{ revoked_at: number | null }>();
     if (!revoked || revoked.revoked_at !== null || row.expires_at <= Date.now()) {
+      setStage('upload_cleanup');
       await env.DIAGNOSTICS_BUCKET.delete(row.object_key);
       await sql(
         env,
@@ -682,6 +711,7 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     if (committed && committed.owner !== owner)
       return json({ error: 'concurrent_owner_pending' }, 409);
     if (committed?.state !== 'ready') {
+      setStage('upload_cleanup');
       await env.DIAGNOSTICS_BUCKET.delete(row.object_key);
       await sql(
         env,
@@ -707,26 +737,32 @@ async function upload(request: Request, env: Env, id: string, installation: stri
     // Every owner stops issuing object writes before closing its durable count.
     // A crashed owner remains explicitly uncertain; a retry can restore delivery
     // without pretending the earlier writer ceased to exist.
-    const closed = await env.DIAGNOSTICS_DB.batch<unknown>([
-      sql(
-        env,
-        'UPDATE batches SET writers=writers-1 WHERE installation_id=? AND id=? AND writers>0',
-        installation,
-        id,
-      ),
-      sql(env, 'SELECT revoked_at FROM installations WHERE id=?', installation),
-    ]);
-    const identity = closed[1]?.results[0] as { revoked_at: number | null } | undefined;
-    if (!identity || identity.revoked_at !== null) {
-      const stored = row ?? (await batchRow(env, installation, id));
-      if (stored) await env.DIAGNOSTICS_BUCKET.delete(stored.object_key);
-      await sql(
-        env,
-        'DELETE FROM batches WHERE installation_id=? AND id=? AND writers=0',
-        installation,
-        id,
-      ).run();
-    }
+    const closeWriter = async () => {
+      const closed = await env.DIAGNOSTICS_DB.batch<unknown>([
+        sql(
+          env,
+          'UPDATE batches SET writers=writers-1 WHERE installation_id=? AND id=? AND writers>0',
+          installation,
+          id,
+        ),
+        sql(env, 'SELECT revoked_at FROM installations WHERE id=?', installation),
+      ]);
+      const identity = closed[1]?.results[0] as { revoked_at: number | null } | undefined;
+      if (!identity || identity.revoked_at !== null) {
+        const stored = row ?? (await batchRow(env, installation, id));
+        if (stored) await env.DIAGNOSTICS_BUCKET.delete(stored.object_key);
+        await sql(
+          env,
+          'DELETE FROM batches WHERE installation_id=? AND id=? AND writers=0',
+          installation,
+          id,
+        ).run();
+      }
+    };
+    await closeWriter().catch((error: unknown) => {
+      setStage('upload_cleanup');
+      throw error;
+    });
   }
 }
 async function withdraw(env: Env, installation: string) {
@@ -892,7 +928,11 @@ export async function cleanup(env: Env, now = Date.now()) {
     SELECT payload_sha256 FROM upload_permits WHERE retire_at<=? ORDER BY retire_at LIMIT 100)`,
     now,
   ).run();
-  return { visited: results.length, unresolvedWriters: unresolved.results.length };
+  return {
+    visited: results.length,
+    unresolvedWriters: unresolved.results.length,
+    reachedCleanupBatchLimit: finished.length === LIMITS.cleanupObjects,
+  };
 }
 async function admin(request: Request, env: Env, path: string, now: number) {
   const authorization = request.headers.get('authorization') ?? '';
@@ -909,8 +949,28 @@ async function admin(request: Request, env: Env, path: string, now: number) {
       env,
       'SELECT COUNT(*) AS reservations,SUM(writers) AS writers FROM batches WHERE writers>0',
     ).all();
+    const pressure = await env.DIAGNOSTICS_DB.batch<{ queued: number }>([
+      sql(
+        env,
+        'SELECT COUNT(*) AS queued FROM (SELECT 1 FROM batches WHERE writers=0 AND expires_at<=? LIMIT ?)',
+        now,
+        LIMITS.cleanupObjects + 1,
+      ),
+      sql(
+        env,
+        `SELECT COUNT(*) AS queued FROM (
+          SELECT 1 FROM installations i INDEXED BY installations_revoked CROSS JOIN batches b
+          ON b.installation_id=i.id WHERE i.revoked_at IS NOT NULL AND b.writers=0 LIMIT ?)`,
+        LIMITS.cleanupObjects + 1,
+      ),
+    ]);
     return json({
       deploymentVersionId: env.DIAGNOSTICS_VERSION?.id ?? null,
+      cleanupPressure: {
+        expired: pressure[0]?.results[0]?.queued ?? null,
+        revoked: pressure[1]?.results[0]?.queued ?? null,
+        countCap: LIMITS.cleanupObjects + 1,
+      },
       accepting: env.ACCEPTING === '1',
       dailyReservations: daily,
       openWriters: storage.results[0],
@@ -1096,18 +1156,27 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
   }
   const ip = request.headers.get('cf-connecting-ip');
   if (!ip) return json({ error: 'missing_edge_identity' }, 403);
-  const ipKey = base64(await mac(env.IP_HASH_KEY, `${Math.floor(now / DAY)}:${ip}`));
-  const limiter = path === '/v1/diagnostics/enroll' ? env.ENROLL_LIMITER : env.UPLOAD_LIMITER;
-  if (!(await limiter.limit({ key: ipKey })).success) return json({ error: 'rate_limited' }, 429);
+  let stage: DiagnosticReceiverStage = 'edge_limit';
   try {
-    if (path === '/v1/diagnostics/enroll' && request.method === 'POST')
+    const ipKey = base64(await mac(env.IP_HASH_KEY, `${Math.floor(now / DAY)}:${ip}`));
+    const limiter = path === '/v1/diagnostics/enroll' ? env.ENROLL_LIMITER : env.UPLOAD_LIMITER;
+    if (!(await limiter.limit({ key: ipKey })).success)
+      return json({ error: 'rate_limited', stage }, 429);
+    if (path === '/v1/diagnostics/enroll' && request.method === 'POST') {
+      stage = 'enrollment';
       return await enroll(request, env, now);
+    }
+    stage = 'authentication';
     const deleting = path === '/v1/diagnostics/installation' && request.method === 'DELETE';
     const installation = await authenticate(request, env, now, deleting);
     if (!installation) return json({ error: 'unauthorized' }, 401);
-    if (deleting) return await withdraw(env, installation);
+    if (deleting) {
+      stage = 'withdrawal';
+      return await withdraw(env, installation);
+    }
     const permitMatch = /^\/v1\/diagnostics\/permits\/([a-f0-9]{64})$/.exec(path);
     if (permitMatch && request.method === 'POST') {
+      stage = 'permit';
       if (env.ACCEPTING !== '1') return json({ error: 'intake_paused' }, 503);
       const owner = await sql(
         env,
@@ -1122,9 +1191,9 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
       let first = await permitRow(env, payload);
       if (!first) {
         if (!budget(env.DAILY_BATCHES) || !budget(env.INSTALLATION_DAILY_BATCHES))
-          return json({ error: 'permit_budget' }, 429);
+          return capacityDenied('permit', 'permit_budget', 429);
         if (!(await withinDatabaseBudget(env)))
-          return json({ error: 'index_allocation_budget' }, 503);
+          return capacityDenied('permit', 'index_allocation_budget', 503);
         const day = Math.floor(now / DAY);
         await sql(env, 'INSERT OR IGNORE INTO daily(day) VALUES(?)', day).run();
         // D1 batch is transactional. changes() carries each successful insert
@@ -1163,7 +1232,7 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
           ),
         ]);
         if (!reservation[0]?.meta.changes && !(await permitRow(env, payload)))
-          return json({ error: 'permit_budget' }, 429);
+          return capacityDenied('permit', 'permit_budget', 429);
         first = await permitRow(env, payload);
       }
       if (
@@ -1192,8 +1261,12 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
       });
     }
     const match = /^\/v1\/diagnostics\/batches\/([a-f0-9]{64})$/.exec(path);
-    if (match && request.method === 'PUT')
-      return await upload(request, env, match[1]!, installation, now);
+    if (match && request.method === 'PUT') {
+      stage = 'upload_preflight';
+      return await upload(request, env, match[1]!, installation, now, (value) => {
+        stage = value;
+      });
+    }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
     if (error instanceof SyntaxError) return json({ error: 'invalid_json' }, 400);
@@ -1203,7 +1276,8 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
     )
       return json({ error: error.message }, error.message === 'body_too_large' ? 413 : 400);
     // Never log request bodies, authorization, paths, or raw SQL/remote exceptions.
-    return json({ error: 'storage_unconfirmed' }, 503);
+    console.warn({ event: 'diagnostics_storage_unconfirmed', stage });
+    return json({ error: 'storage_unconfirmed', stage }, 503);
   }
 }
 export default {
@@ -1211,6 +1285,13 @@ export default {
     return handle(request, env);
   },
   async scheduled(_event: ScheduledController, env: Env) {
-    await cleanup(env);
+    try {
+      const result = await cleanup(env);
+      if (result.reachedCleanupBatchLimit || result.unresolvedWriters)
+        console.warn({ event: 'diagnostics_cleanup_pressure', ...result });
+    } catch {
+      console.error({ event: 'diagnostics_cleanup_unconfirmed' });
+      throw new Error('diagnostics_cleanup_unconfirmed');
+    }
   },
 } satisfies ExportedHandler<Env>;
