@@ -15,7 +15,7 @@ import type { LocalTournamentStore } from './local-tournament-store.js';
 import type { LocalBo3BpRules } from '@mizar/protocol/bp';
 
 import { SerialCommitQueue } from './serial-commit.js';
-import { sameManifestPlan } from './manifest-plan.js';
+import { isPlayedMap, sameManifestPlan } from './manifest-plan.js';
 import { SourceLoadError, sourceErrorEvidence, type SourceFailureCode } from './source-error.js';
 import {
   type ContextFreshness,
@@ -90,10 +90,6 @@ function controllerIssue(
   details: Omit<MatchContextControllerIssue, 'code' | 'message'> = {},
 ): MatchContextControllerIssue {
   return { code, message, ...details };
-}
-
-function isPlayedMap(map: BroadcastManifest['maps'][number]): boolean {
-  return map.scoreA !== null || map.scoreB !== null || map.completedAt !== null;
 }
 
 function preservesLocalMatchIdentity(
@@ -243,6 +239,12 @@ export class MatchContextController {
     return {
       document,
       source: binding.origin === 'online' ? 'rivalhub' : binding.origin,
+      ...(binding.origin === 'cache' && binding.cachedFrom !== undefined
+        ? {
+            cachedFrom:
+              binding.cachedFrom === 'online' ? ('rivalhub' as const) : binding.cachedFrom,
+          }
+        : {}),
       revision: binding.manifest.revision,
       freshness: binding.freshness,
       acquiredAt: binding.storedAt ?? this.activeAcquiredAt,
@@ -378,18 +380,20 @@ export class MatchContextController {
     input: Parameters<LocalTournamentStore['saveEvent']>[0],
   ): Promise<void> {
     this.requireFormal();
-    const generation = this.activeSelectionGeneration;
-    const revision = this.getActiveRevision();
-    const active = this.activeBinding;
-    const affected =
-      active?.origin === 'local' &&
-      active.localAuthoringMode === 'standalone' &&
-      active.context.competition?.competitionId === input.eventId;
-    const canCommit = () =>
-      !this.temporary &&
-      generation === this.activeSelectionGeneration &&
-      revision === this.getActiveRevision();
     await this.commitQueue.run(async () => {
+      this.requireFormal();
+      // A preceding selection may have changed which local match this event affects.
+      const generation = this.activeSelectionGeneration;
+      const revision = this.getActiveRevision();
+      const active = this.activeBinding;
+      const affected =
+        active?.origin === 'local' &&
+        active.localAuthoringMode === 'standalone' &&
+        active.context.competition?.competitionId === input.eventId;
+      const canCommit = () =>
+        !this.temporary &&
+        generation === this.activeSelectionGeneration &&
+        revision === this.getActiveRevision();
       if (affected && !canCommit()) throw new Error('local_context_conflict');
       try {
         await store.saveEvent(input, affected ? canCommit : undefined);

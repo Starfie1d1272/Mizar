@@ -1,6 +1,6 @@
 import type { GsiAdaptResult } from '@mizar/telemetry-gsi';
 
-import type { CaptureFrameV1, VerifiedCapture } from '../capture/types.js';
+import type { CaptureFrameV1 } from '../capture/types.js';
 
 export type ReplayMode =
   { readonly kind: 'step' } | { readonly kind: 'paced'; readonly speed: number };
@@ -55,5 +55,3 @@ export interface ReplaySourceGenerationBoundary {
 }
 
 export type ReplayEvent = ReplayedGsiFrame | ReplaySourceGenerationBoundary;
-
-export type CaptureForReplay = VerifiedCapture;

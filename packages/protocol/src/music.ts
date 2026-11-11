@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const MUSIC_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
+export const MUSIC_TRACK_MAX_BYTES = 32 * 1024 * 1024;
+
 /** Private loopback production configuration; never part of Match / Program output. */
 export const MUSIC_GROUPS = [
   'waiting',

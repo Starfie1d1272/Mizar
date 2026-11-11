@@ -906,39 +906,6 @@ impl ManagedCs2 {
         steam.validate(&self.log)?;
         Ok((executable, video, steam.account))
     }
-    pub(crate) fn prepare_observer_for_mulnx(
-        &mut self,
-        expected_executable: &Path,
-    ) -> Result<bool, String> {
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2 再启动观战配置。".into());
-        }
-        crate::observer_hud::restore(&self.log)?;
-        let (executable, video, steam) = discover(&self.log)?;
-        steam.validate(&self.log)?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
-            return Err("游戏安装位置已变化，未加载观战配置。".into());
-        }
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2 再启动观战配置。".into());
-        }
-        self.store
-            .prepare_mulnx_observer(&video, &executable, steam.account)
-    }
-    pub(crate) fn validate_prepared_mulnx_observer(
-        &self,
-        expected_executable: &Path,
-    ) -> Result<(), String> {
-        if any_cs2_running(&self.log)? {
-            return Err("请先退出 CS2，再启动观战配置。".into());
-        }
-        let (executable, video, account) = self.recovery_identity()?;
-        if !same_executable(&executable, &expected_executable.to_string_lossy()) {
-            return Err("游戏安装位置已变化。".into());
-        }
-        self.store
-            .validate_unsubmitted_mulnx_observer(&video, &executable, account)
-    }
     pub(crate) fn mark_observer_mulnx_options_clean(&self) -> Result<(), String> {
         self.store.mark_mulnx_options_clean()
     }
@@ -947,9 +914,6 @@ impl ManagedCs2 {
             return Err("请先退出 CS2 和 MulNX 启动器，再恢复观战备份。".into());
         }
         self.store.cancel_unsubmitted_mulnx_observer()
-    }
-    pub(crate) fn prepared_native_hud(&self) -> Result<bool, String> {
-        Ok(self.store.spectator_hud_identity()?.is_some())
     }
     pub(crate) fn mulnx_observer_receipt_matches(
         &self,
@@ -964,24 +928,6 @@ impl ManagedCs2 {
             .store
             .mulnx_observer_matches(pid, created, executable)?
             .is_some())
-    }
-    pub(crate) fn bind_observer_mulnx_process(
-        &self,
-        pid: u32,
-        created: u64,
-        executable: &Path,
-    ) -> Result<(), String> {
-        if cs2_pids(&self.log)? != vec![pid] {
-            return Err("游戏实例不唯一，观战备份仍保留。".into());
-        }
-        let process = open(pid, &self.log)?.ok_or("游戏已退出，观战备份仍保留。")?;
-        let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created
-            || !same_executable(&actual_executable, &executable.to_string_lossy())
-        {
-            return Err("游戏身份已变化，观战备份仍保留。".into());
-        }
-        self.store.bind_mulnx_observer(pid, created, executable)
     }
     /// Never poll/recover here: merely showing a startup error must not write files.
     pub fn startup_recovery_status(&self) -> Result<StartupRecoveryStatus, String> {
@@ -1140,10 +1086,12 @@ impl ManagedCs2 {
                 );
             }
             self.confirm_game_stopped()?;
-            self.restore_backup(false)?;
+            self.restore_backup_for_start()?;
         }
-        self.confirm_game_stopped()?;
-        if self.startup_recovery_status()?.pending {
+        // Old per-session Demo files are not referenced by a new launch. Keep
+        // their cleanup visible without treating it as unresolved game state.
+        self.check_preserved_start()?;
+        if crate::demo_test::requires_recovery(&self.log, None) {
             return Err("原游戏配置仍待恢复，请重试。".into());
         }
         Ok(false)
@@ -1267,6 +1215,19 @@ impl ManagedCs2 {
             json!({"qualityPreset": preferences.quality.name(), "preferMulnx":preferences.prefer_mulnx, "frameRateLimit":preferences.frame_rate_limit, "nativeHudToggle": running && pending.as_ref().is_some_and(|v| v["nativeHudToggle"] == true && v["spectatorCfg"] == true), "spectatorRecoveryPending": (self.store.spectator_pending() || self.store.full_spectator_pending()) && pending.is_none(), "demoCleanupPending": self.store.playback_cleanup_pending() && pending.is_none(), "demoCameraRequestId": pending.as_ref().filter(|v| v["mulnxLaunch"] == true).and_then(|v| v["demoTestRequestId"].as_str()), "spectatorWarning":self.store.spectator_warning().or_else(|| pending.as_ref().and_then(|value| value["spectatorWarning"].as_str()).map(str::to_string)), "canPreserve": pending.is_none() && self.check_preserved_start().is_ok(), "preserveSettings": pending.as_ref().is_some_and(|v| v["preserveSettings"] == true), "pending":pending.is_some(), "preparationId":pending.as_ref().and_then(|v| v["preparationId"].as_str()), "mulnxLaunchResumable":mulnx_launch_resumable, "cameraLeaseReady":self.camera.lock().is_ok_and(|state| state.as_ref().is_some_and(|camera| !camera.invalidated && camera.process.is_running() && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid]))), "running":running, "message":self.message, "busy":false, "phase": if mulnx_uncertain || pending.as_ref().is_some_and(crate::cs2_session::unconfirmed_launch) {"uncertain"} else if running {"running"} else if pending.is_some() {"pending"} else {"idle"}}),
         )
     }
+    /// Preparation may reuse only this owner's live process and installed source proof.
+    pub(crate) fn preparation_status(&self, id: &str) -> Result<Value, String> {
+        let mut value = self.status()?;
+        let journal = self.store.load()?;
+        if value["running"] == true && value["preparationId"] == id {
+            let journal = journal.as_ref().ok_or("受管游戏记录不可用。")?;
+            self.store.verify_gsi_source(journal)?;
+        }
+        // Pending/unknown launches and external games are not proof of an ended attempt.
+        value["restartAllowed"] = json!(journal.is_none() && !any_cs2_running(&self.log)?);
+        Ok(value)
+    }
+
     pub fn preferences(
         &mut self,
         preferences: crate::cs2_preferences::Preferences,
@@ -2027,13 +1988,13 @@ impl ManagedCs2 {
                     if self.store.spectator_hud_identity()?.as_deref() != Some(identity) {
                         return Err("HUD 键身份记录不一致。".into());
                     }
-                    crate::cs2_spectator::install_hud(&executable, identity)
-                } else {
-                    crate::cs2_spectator::install(&executable)
                 }
+                Ok::<(), String>(())
             })() {
-                journal["spectatorCfg"] = json!(false);
-                journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
+                let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
+                journal["spectatorWarning"] = json!(warning);
+                self.store.save(&journal)?;
+                return Err(warning);
             }
         }
         if !preserve {
@@ -2204,9 +2165,11 @@ impl ManagedCs2 {
                         command.args(["+exec", cfg]);
                     }
                     Err(error) => {
-                        journal["spectatorCfg"] = json!(false);
-                        journal["spectatorWarning"] = json!(format!("观战 CFG 未加载：{error}"));
+                        let warning = format!("观战 CFG 核验失败，未提交启动：{error}");
+                        journal["spectatorWarning"] = json!(warning);
+                        self.store.save(&journal)?;
                         self.log.event("cs2_spectator_cfg", "failure", Some(&json!({"stage":"prepared", "file":crate::cs2_spectator::CFG_NAME, "runtime":"unverified", "reason":journal["spectatorWarning"]}).to_string()));
+                        return Err(warning);
                     }
                 }
             }
@@ -2354,7 +2317,6 @@ impl ManagedCs2 {
     fn require_backup_idle(&self) -> Result<(), String> {
         if self.store.load()?.is_some()
             || self.store.spectator_pending()
-            || self.store.playback_cleanup_pending()
             || crate::demo_test::requires_recovery(&self.log, None)
         {
             return Err("请先结束工作台并完成上次配置恢复。".into());
@@ -2383,11 +2345,11 @@ impl ManagedCs2 {
             .parent()
             .ok_or("Steam 目录不可用。")?;
         let users = backup_text(&steam_root.join("config/loginusers.vdf"), 1024 * 1024)?;
-        let nickname =
-            crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])?
-                .map(|v| v.value)
-                .filter(|v| !v.trim().is_empty())
-                .ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
+        let nickname = crate::cs2_frame_rate::field(&users, &["users", &account_id, "PersonaName"])
+            .map_err(|error| format!("loginusers.vdf / 读取账号昵称：{error}"))?
+            .map(|v| v.value)
+            .filter(|v| !v.trim().is_empty())
+            .ok_or("当前 Steam 昵称无法读取，请重新登录 Steam 后再试。")?;
         let avatar =
             backup_avatar(&steam_root.join(format!("config/avatarcache/{account_id}.png")));
         let mut frame = None;
@@ -2479,6 +2441,16 @@ impl ManagedCs2 {
         Ok(())
     }
     pub fn restore_backup(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
+        self.restore_backup_inner(confirm_steam_cancelled, true)
+    }
+    fn restore_backup_for_start(&mut self) -> Result<(), String> {
+        self.restore_backup_inner(false, false)
+    }
+    fn restore_backup_inner(
+        &mut self,
+        confirm_steam_cancelled: bool,
+        require_playback_cleanup: bool,
+    ) -> Result<(), String> {
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
             if self.store.load()?.is_none() && self.store.spectator_pending() {
                 if self.store.mulnx_observer_unconfirmed()? {
@@ -2572,12 +2544,36 @@ impl ManagedCs2 {
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再清理试播文件。".into());
                 }
-                self.store.restore_playback_cleanup().map_err(|error| {
-                    self.log
-                        .event("demo_playback_cleanup", "failure", Some(&error));
-                    error
-                })?;
-                self.message = Some("原设置已恢复，试播文件已清理。".into());
+                match self.store.restore_playback_cleanup() {
+                    Ok(()) => self.message = Some("原设置已恢复，试播文件已清理。".into()),
+                    Err(error) => {
+                        self.log
+                            .event("demo_playback_cleanup", "failure", Some(&error));
+                        if require_playback_cleanup {
+                            return Err(error);
+                        }
+                        // Core/spectator recovery, pending Steam/MulNX requests,
+                        // and Demo data isolation still gate a normal start.
+                        self.check_preserved_start()?;
+                        if crate::demo_test::requires_recovery(&self.log, None) {
+                            return Err(error);
+                        }
+                        self.log.event(
+                            "demo_playback_cleanup",
+                            "retained",
+                            Some(
+                                &json!({
+                                    "reason":error,"gameLaunchContinues":true,
+                                    "files":"unchanged; cleanup can be retried after game exit"
+                                })
+                                .to_string(),
+                            ),
+                        );
+                        self.message = Some(
+                            "原设置已恢复；旧试播文件仍保留，可稍后重试清理，不影响新启动。".into(),
+                        );
+                    }
+                }
             }
             Ok(())
         });
@@ -2627,10 +2623,7 @@ impl ManagedCs2 {
         let unknown_trial = Value::Null;
         let trial_state = trial_status.as_ref().unwrap_or(&unknown_trial);
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
-            if self.store.load()?.is_some()
-                || self.store.spectator_pending()
-                || self.store.playback_cleanup_pending()
-            {
+            if self.store.load()?.is_some() || self.store.spectator_pending() {
                 return Err("请先完成受管游戏的配置恢复。".into());
             }
             // Read-only migration of an old external Demo marker. No new external

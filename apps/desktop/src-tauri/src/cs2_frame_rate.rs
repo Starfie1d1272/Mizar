@@ -18,6 +18,37 @@ pub(crate) struct Token {
     pub(crate) quoted: bool,
 }
 
+impl Token {
+    fn scalar(&self) -> bool {
+        self.quoted || !matches!(self.value.as_str(), "{" | "}")
+    }
+
+    fn key(&self) -> bool {
+        self.scalar()
+            && !self.value.eq_ignore_ascii_case("#include")
+            && !self.value.eq_ignore_ascii_case("#base")
+    }
+}
+
+// Positions are zero-based UTF-8 byte offsets. Never include token contents.
+fn parse_error(reason: &str, offset: usize) -> String {
+    format!("{reason}（字节位置 {offset}）。")
+}
+
+fn field_error(error: String, target: &[&str]) -> String {
+    // Targets can contain Steam account IDs. Only report known field names.
+    let name = match target.last().copied() {
+        Some("LaunchOptions") => "LaunchOptions",
+        Some("PersonaName") => "PersonaName",
+        Some("spec_usenumberkeys_nobinds") => "spec_usenumberkeys_nobinds",
+        Some("convars") => "convars",
+        Some("bindings") => "bindings",
+        Some("analogbindings") => "analogbindings",
+        _ => "目标字段",
+    };
+    format!("{name}：{error}")
+}
+
 pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
     let bytes = text.as_bytes();
     let mut i = if text.starts_with('\u{feff}') { 3 } else { 0 };
@@ -51,7 +82,7 @@ pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
                 i += 1;
             }
             if i == bytes.len() {
-                return Err("CS2 启动配置的引号不完整。".into());
+                return Err(parse_error("CS2 启动配置的引号不完整", start));
             }
             let value = text[content..i].replace("\\\"", "\"").replace("\\\\", "\\");
             i += 1;
@@ -84,7 +115,29 @@ pub(crate) fn lex(text: &str, commands: bool) -> Result<Vec<Token>, String> {
                 quoted: false,
             });
         } else {
-            return Err("CS2 或 Steam 配置格式不支持。".into());
+            // KeyValues permits unquoted keys and values. Keep their exact byte
+            // ranges for restoration; directives and conditionals still require
+            // evaluation we cannot safely perform and must not become scalars.
+            let start = i;
+            while i < bytes.len()
+                && !bytes[i].is_ascii_whitespace()
+                && ![b'{', b'}', b'"'].contains(&bytes[i])
+                && !bytes[i..].starts_with(b"//")
+            {
+                if bytes[i].is_ascii_control()
+                    || [b'#', b'[', b']'].contains(&bytes[i])
+                    || bytes[i..].starts_with(b"/*")
+                {
+                    return Err(format!("CS2 或 Steam 配置格式不支持（字节位置 {i}）。"));
+                }
+                i += 1;
+            }
+            result.push(Token {
+                value: text[start..i].to_string(),
+                start,
+                end: i,
+                quoted: false,
+            });
         }
     }
     Ok(result)
@@ -100,27 +153,29 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
         nested: bool,
     ) -> Result<(), String> {
         if path.len() > 32 {
-            return Err("启动配置嵌套过深。".into());
+            return Err(parse_error("启动配置嵌套过深", tokens[*i - 1].start));
         }
         while *i < tokens.len() {
             let key = &tokens[*i];
             if !key.quoted && key.value == "}" {
                 if !nested {
-                    return Err("启动配置结构无效。".into());
+                    return Err(parse_error("启动配置结构无效", key.start));
                 }
                 *i += 1;
                 return Ok(());
             }
-            if !key.quoted {
-                return Err("启动配置字段无效。".into());
+            if !key.key() {
+                return Err(parse_error("启动配置字段无效", key.start));
             }
             path.push(key.value.clone());
             *i += 1;
-            let value = tokens.get(*i).ok_or("启动配置不完整。")?;
+            let value = tokens
+                .get(*i)
+                .ok_or_else(|| parse_error("启动配置不完整", key.end))?;
             *i += 1;
             if !value.quoted && value.value == "{" {
                 walk(tokens, i, path, target, found, true)?;
-            } else if value.quoted {
+            } else if value.scalar() {
                 if path.len() == target.len()
                     && path
                         .iter()
@@ -128,23 +183,27 @@ pub(crate) fn field(text: &str, target: &[&str]) -> Result<Option<Token>, String
                         .all(|(a, b)| a.eq_ignore_ascii_case(b))
                 {
                     if found.replace(value.clone()).is_some() {
-                        return Err("启动配置包含重复字段。".into());
+                        return Err(parse_error("启动配置包含重复字段", key.start));
                     }
                 }
             } else {
-                return Err("启动配置值无效。".into());
+                return Err(parse_error("启动配置值无效", value.start));
             }
             path.pop();
         }
         if nested {
-            Err("启动配置缺少结束括号。".into())
+            Err(parse_error(
+                "启动配置缺少结束括号",
+                tokens.last().map_or(0, |token| token.end),
+            ))
         } else {
             Ok(())
         }
     }
-    let tokens = lex(text, false)?;
+    let tokens = lex(text, false).map_err(|error| field_error(error, target))?;
     let mut found = None;
-    walk(&tokens, &mut 0, &mut Vec::new(), target, &mut found, false)?;
+    walk(&tokens, &mut 0, &mut Vec::new(), target, &mut found, false)
+        .map_err(|error| field_error(error, target))?;
     Ok(found)
 }
 
@@ -168,7 +227,7 @@ pub(crate) fn scalar_section_with_end(
         nested: bool,
     ) -> Result<(), String> {
         if path.len() > 32 {
-            return Err("启动配置嵌套过深。".into());
+            return Err(parse_error("启动配置嵌套过深", tokens[*i - 1].start));
         }
         let selected = path.len() == target.len()
             && path
@@ -179,45 +238,51 @@ pub(crate) fn scalar_section_with_end(
         while let Some(key) = tokens.get(*i) {
             if !key.quoted && key.value == "}" {
                 if !nested {
-                    return Err("启动配置结构无效。".into());
+                    return Err(parse_error("启动配置结构无效", key.start));
                 }
                 if selected && result.replace((entries, key.start)).is_some() {
-                    return Err("启动配置包含重复配置段。".into());
+                    return Err(parse_error("启动配置包含重复配置段", key.start));
                 }
                 *i += 1;
                 return Ok(());
             }
-            if !key.quoted {
-                return Err("启动配置字段无效。".into());
+            if !key.key() {
+                return Err(parse_error("启动配置字段无效", key.start));
             }
             *i += 1;
-            let value = tokens.get(*i).ok_or("启动配置不完整。")?;
+            let value = tokens
+                .get(*i)
+                .ok_or_else(|| parse_error("启动配置不完整", key.end))?;
             *i += 1;
             if !value.quoted && value.value == "{" {
                 if selected {
-                    return Err("按键绑定不是可恢复的命令值。".into());
+                    return Err(parse_error("按键绑定不是可恢复的命令值", value.start));
                 }
                 path.push(key.value.clone());
                 walk(tokens, i, path, target, result, true)?;
                 path.pop();
-            } else if value.quoted {
+            } else if value.scalar() {
                 if selected {
                     entries.push((key.clone(), value.clone()));
                 }
             } else {
-                return Err("启动配置值无效。".into());
+                return Err(parse_error("启动配置值无效", value.start));
             }
         }
         if nested {
-            Err("启动配置缺少结束括号。".into())
+            Err(parse_error(
+                "启动配置缺少结束括号",
+                tokens.last().map_or(0, |token| token.end),
+            ))
         } else {
             Ok(())
         }
     }
-    let tokens = lex(text, false)?;
+    let tokens = lex(text, false).map_err(|error| field_error(error, target))?;
     let mut result = None;
-    walk(&tokens, &mut 0, &mut Vec::new(), target, &mut result, false)?;
-    result.ok_or("按键绑定配置段缺失。".into())
+    walk(&tokens, &mut 0, &mut Vec::new(), target, &mut result, false)
+        .map_err(|error| field_error(error, target))?;
+    result.ok_or_else(|| field_error(parse_error("配置段缺失", text.len()), target))
 }
 
 // Validate the game's scalar without normalizing the saved token. Target choices
@@ -234,7 +299,8 @@ fn fps_number(value: &str) -> Result<f64, String> {
 }
 
 fn fps_fields(text: &str) -> Result<Vec<Token>, String> {
-    let tokens: Vec<_> = scalar_section(text, &["config", "convars"])?
+    let tokens: Vec<_> = scalar_section(text, &["config", "convars"])
+        .map_err(|error| format!("cs2_machine_convars.vcfg / fps_max：{error}"))?
         .into_iter()
         .filter(|(key, _)| key.value.eq_ignore_ascii_case("fps_max"))
         .map(|(_, value)| value)
@@ -245,7 +311,7 @@ fn fps_fields(text: &str) -> Result<Vec<Token>, String> {
     let number = fps_number(&first.value)?;
     for token in &tokens {
         if fps_number(&token.value)? != number {
-            return Err("cs2_machine_convars.vcfg / fps_max：冲突重复，未修改配置；请选择备份恢复或保持原设置继续。".into());
+            return Err(parse_error("cs2_machine_convars.vcfg / fps_max：冲突重复，未修改配置；请选择备份恢复或保持原设置继续", token.start));
         }
     }
     Ok(tokens)
@@ -265,7 +331,8 @@ fn patch_convars(text: &str, limit: u16) -> Result<String, String> {
 /// Explicit import restores only fps_max and retains its decimal spelling.
 pub fn compatible_restore(backup: &str, current: &str) -> Result<String, String> {
     let before = fps_field(backup)?;
-    let entries = scalar_section(current, &["config", "convars"])?;
+    let entries = scalar_section(current, &["config", "convars"])
+        .map_err(|error| format!("cs2_machine_convars.vcfg / 当前 fps_max：{error}"))?;
     let mut edits = Vec::new();
     let mut found = false;
     for (key, value) in entries {
@@ -296,7 +363,7 @@ struct ConfigScript {
     commands: BTreeSet<String>,
 }
 fn patch_script(text: &str, limit: Option<u16>) -> Result<ConfigScript, String> {
-    let tokens = lex(text, true)?;
+    let tokens = lex(text, true).map_err(|error| format!("启动 CFG / 解析命令：{error}"))?;
     let mut edits = Vec::new();
     let mut includes = Vec::new();
     let mut aliases = BTreeSet::new();
@@ -505,8 +572,12 @@ fn prepare_scripts(
                 "730",
                 "LaunchOptions",
             ],
-        )? {
-            let tokens = lex(&options.value, true)?;
+        )
+        .map_err(|error| format!("localconfig.vdf / 读取启动项：{error}"))?
+        {
+            // This offset belongs to the decoded field, not the original VDF.
+            let tokens = lex(&options.value, true)
+                .map_err(|error| format!("localconfig.vdf / LaunchOptions 解码后字段：{error}"))?;
             for (index, token) in tokens.iter().enumerate() {
                 if let Some(command) = token.value.strip_prefix('+') {
                     commands.insert(command.to_ascii_lowercase());

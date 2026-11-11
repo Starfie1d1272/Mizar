@@ -165,7 +165,9 @@ it('refreshes an existing owned browser source on enter without granting scene/a
   const r = await rig();
   r.adapter.startBrowserRecovery();
   await r.adapter.settleAutomatic();
-  expect(r.adapter.hasCurrentPreparation()).toBe(false);
+  await expect(r.adapter.verifyEntryPermit('unprepared')).rejects.toMatchObject({
+    code: 'preparation_output_changed',
+  });
   expect(
     r.calls
       .filter((call) => call.type === 'PressInputPropertiesButton')

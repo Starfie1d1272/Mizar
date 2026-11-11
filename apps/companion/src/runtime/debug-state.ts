@@ -409,10 +409,6 @@ export class DebugEvidenceStore {
       deliveryHealth: options.deliveryHealth.map((health) => ({ ...health })),
     };
   }
-
-  toResponse(options: DebugRuntimeResponseOptions): DebugRuntimeResponse {
-    return this.getResponse(options);
-  }
 }
 
 export { redactDebugValue };

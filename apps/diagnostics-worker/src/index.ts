@@ -34,7 +34,6 @@ export const LIMITS = {
   expandedBytes: 4 * 1024 * 1024,
   events: 4096,
   metadataBytes: 4096,
-  bodyDays: 7,
   indexDays: 90,
   cleanupObjects: 100,
 };

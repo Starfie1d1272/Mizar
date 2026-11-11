@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { link, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
 import { assertNoVideoOutput } from './video-transaction.js';
@@ -11,6 +12,7 @@ const journalSchema = z
     id: z.string().uuid(),
     preparationId: z.string().uuid(),
     endpoint: z.string().min(1),
+    collection: z.enum(['Mizar', OBS_COLLECTION]).optional(),
     sceneUuid: z.string().min(1),
     sourceUuid: z.string().min(1),
     itemId: z.number().int().nonnegative().nullable(),
@@ -68,17 +70,14 @@ const stableTransform = (value: unknown): Record<string, unknown> | null => {
       .sort(([a], [b]) => a.localeCompare(b)),
   );
 };
-async function identity(
-  obs: ObsRpc,
-  requireCurrentScene = true,
-): Promise<{ sceneUuid: string; sourceUuid: string }> {
+async function identity(obs: ObsRpc): Promise<{ sceneUuid: string; sourceUuid: string }> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     throw lost();
   const scenes = await obs.call('GetSceneList');
   const waiting = obsSceneName('waiting');
   const current = objects(scenes.scenes).filter((scene) => scene.sceneName === waiting);
   if (
-    (requireCurrentScene && scenes.currentProgramSceneName !== waiting) ||
+    scenes.currentProgramSceneName !== waiting ||
     current.length !== 1 ||
     typeof current[0]?.sceneUuid !== 'string'
   )
@@ -88,6 +87,32 @@ async function identity(
   );
   if (inputs.length !== 1 || typeof inputs[0]?.inputUuid !== 'string') throw lost();
   return { sceneUuid: current[0].sceneUuid as string, sourceUuid: inputs[0].inputUuid as string };
+}
+async function recoveryIdentity(obs: ObsRpc, journal: Journal): Promise<boolean> {
+  const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
+  if (
+    !['Mizar', OBS_COLLECTION].includes(String(collection)) ||
+    (journal.collection && collection !== journal.collection)
+  )
+    return false;
+  const scenes = (await obs.call('GetSceneList')).scenes;
+  const inputs = (await obs.call('GetInputList')).inputs;
+  if (
+    !Array.isArray(scenes) ||
+    !Array.isArray(inputs) ||
+    objects(scenes).length !== scenes.length ||
+    objects(inputs).length !== inputs.length ||
+    objects(scenes).some((scene) => typeof scene.sceneUuid !== 'string') ||
+    objects(inputs).some(
+      (input) => typeof input.inputUuid !== 'string' || typeof input.inputKind !== 'string',
+    )
+  )
+    throw lost();
+  const source = objects(inputs).find((input) => input.inputUuid === journal.sourceUuid);
+  if (source && source.inputKind !== 'game_capture') throw lost();
+  if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
+    throw lost();
+  return objects(scenes).some((scene) => scene.sceneUuid === journal.sceneUuid) && !!source;
 }
 async function audioDisabled(obs: ObsRpc, sourceUuid: string): Promise<void> {
   const actual = (await obs.call('GetInputSettings', { inputUuid: sourceUuid })).inputSettings;
@@ -134,6 +159,21 @@ export class ObsCaptureWarmup {
       await rm(temp, { force: true });
     }
   }
+  private async archive(journal: Journal, disposition = 'completed'): Promise<void> {
+    const archived = `${this.path}.${disposition}-${journal.id}.json`;
+    if (!isDeepStrictEqual(await this.read(), journal)) throw lost();
+    try {
+      await link(this.path, archived);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+    }
+    if (
+      !isDeepStrictEqual(JSON.parse(await readFile(archived, 'utf8')), journal) ||
+      !isDeepStrictEqual(await this.read(), journal)
+    )
+      throw lost();
+    await rm(this.path);
+  }
   async valid(id: string): Promise<boolean> {
     const journal = await this.read();
     return (
@@ -143,13 +183,51 @@ export class ObsCaptureWarmup {
       journal.phase === 'enabled'
     );
   }
+  /** Detached records retain recovery duties when a new collection starts its own warmup. */
+  private async detached(): Promise<ObsCaptureWarmup[]> {
+    const files = await readdir(dirname(this.path)).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === 'ENOENT') return [];
+      throw cause;
+    });
+    const prefix = `${basename(this.path)}.detached-`;
+    return files
+      .filter(
+        (name) =>
+          name.startsWith(prefix) &&
+          name.endsWith('.json') &&
+          z.string().uuid().safeParse(name.slice(prefix.length, -5)).success,
+      )
+      .map((name) => new ObsCaptureWarmup(join(dirname(this.path), name)));
+  }
   async status(): Promise<'checking' | 'cleanup_pending' | null> {
     const journal = await this.read();
-    if (!journal) return null;
-    return this.active?.id === journal.id && this.active.valid() ? 'checking' : 'cleanup_pending';
+    if (journal && this.active?.id === journal.id && this.active.valid()) return 'checking';
+    return journal || (await this.detached()).length ? 'cleanup_pending' : null;
+  }
+  /** Only the exact current collection graph can still contain this temporary item. */
+  async affectsCurrentCollection(obs: ObsRpc, endpoint: string): Promise<boolean> {
+    for (const owner of [this, ...(await this.detached())]) {
+      const journal = await owner.read();
+      if (journal && journal.endpoint === endpoint && (await recoveryIdentity(obs, journal)))
+        return true;
+    }
+    return false;
+  }
+  async recoverCurrentCollection(
+    obs: ObsRpc,
+    endpoint: string,
+    lease: () => boolean,
+  ): Promise<void> {
+    for (const owner of [this, ...(await this.detached())]) {
+      const journal = await owner.read();
+      if (journal && journal.endpoint === endpoint && (await recoveryIdentity(obs, journal)))
+        await owner.recoverBeforePreparation(obs, endpoint, lease);
+    }
   }
   async pending(id: string): Promise<boolean> {
-    return (await this.read())?.id === id;
+    for (const owner of [this, ...(await this.detached())])
+      if ((await owner.read())?.id === id) return true;
+    return false;
   }
   async matches(id: string, since: number): Promise<boolean> {
     return this.active?.id === id && this.active.startedAt === since && (await this.pending(id));
@@ -182,19 +260,19 @@ export class ObsCaptureWarmup {
     );
   }
   /** Settle the previous warmup before changing its shared capture source. */
-  async recoverBeforePreparation(
+  private async recoverBeforePreparation(
     obs: ObsRpc,
     endpoint: string,
     lease: () => boolean,
   ): Promise<void> {
     if (!lease()) throw lost();
     const previous = await this.read();
-    if (previous) {
-      if (this.active?.id === previous.id && this.active.valid())
-        throw error('capture_warmup_busy', '正在检查 OBS 游戏画面，请等待检查完成。');
-      this.active = undefined;
-      await this.release(obs, endpoint, previous.id, lease);
-    }
+    if (!previous) return;
+    if (this.active?.id === previous.id && this.active.valid())
+      throw error('capture_warmup_busy', '正在检查 OBS 游戏画面，请等待检查完成。');
+    this.active = undefined;
+    if (endpoint !== previous.endpoint) throw lost();
+    await this.release(obs, endpoint, previous.id, lease);
   }
   async begin(
     obs: ObsRpc,
@@ -204,9 +282,15 @@ export class ObsCaptureWarmup {
     lease: () => boolean,
   ): Promise<{ transactionId: string; startedAt: number }> {
     if (!valid() || !lease()) throw lost();
-    await this.recoverBeforePreparation(obs, endpoint, lease);
+    await this.recoverCurrentCollection(obs, endpoint, lease);
     await assertNoVideoOutput(obs);
     const original = await identity(obs);
+    const detached = await this.read();
+    if (detached) {
+      if (!lease() || (await this.affectsCurrentCollection(obs, endpoint))) throw lost();
+      // Keep unresolved evidence for its original collection; it owns no item here.
+      await this.archive(detached, 'detached');
+    }
     await audioDisabled(obs, original.sourceUuid);
     if (!valid() || !lease()) throw lost();
     const before = objects(
@@ -225,6 +309,7 @@ export class ObsCaptureWarmup {
       id: randomUUID(),
       preparationId,
       endpoint,
+      collection: OBS_COLLECTION,
       ...original,
       itemId: null,
       baselineIds: before.map((item) => item.sceneItemId as number),
@@ -356,15 +441,17 @@ export class ObsCaptureWarmup {
   }
   async release(obs: ObsRpc, endpoint: string, id: string, lease: () => boolean): Promise<void> {
     const journal = await this.read();
-    if (!journal || journal.id !== id) return;
+    if (!journal || journal.id !== id) {
+      for (const owner of await this.detached())
+        if ((await owner.read())?.id === id) await owner.release(obs, endpoint, id, lease);
+      return;
+    }
     if (this.active?.id === id && this.active.valid()) lease = this.active.valid;
     this.active = undefined;
     if (!lease() || endpoint !== journal.endpoint) throw lost();
     await assertNoVideoOutput(obs);
     // Reclaim the item we own without requiring its scene to remain on air.
-    const latest = await identity(obs, false);
-    if (latest.sceneUuid !== journal.sceneUuid || latest.sourceUuid !== journal.sourceUuid)
-      throw lost();
+    if (!(await recoveryIdentity(obs, journal))) throw lost();
     const items = objects(
       (await obs.call('GetSceneItemList', { sceneUuid: journal.sceneUuid })).sceneItems,
     );

@@ -13,6 +13,7 @@ import type { BroadcastManifest, BroadcastSide } from '@mizar/rivalhub';
 import { canonicalizeCs2MapName } from '@mizar/core/map-name';
 import type { MatchContextBinding } from '../match-context/index.js';
 import { isLocalBinding, localAuthoringMode } from '../match-context/lkg-store.js';
+import { isPlayedMap } from '../match-context/manifest-plan.js';
 
 export type LocalBpDraftResult =
   | { readonly ok: true; readonly manifest: BroadcastManifest }
@@ -161,7 +162,8 @@ export function createLocalBpManifest(
     baseManifest !== undefined &&
     !editableStandalone &&
     (draft.competitionName.trim() !== (baseManifest.match.competition?.name ?? '').trim() ||
-      draft.stage.trim() !== (baseManifest.match.stage ?? '').trim() ||
+      draft.stage.trim() !==
+        (baseManifest.match.stageLabel ?? baseManifest.match.stage ?? '').trim() ||
       draft.format !== baseManifest.match.format ||
       draft.entrants.a.name.trim() !== baseManifest.entrants.a.name.trim() ||
       draft.entrants.b.name.trim() !== baseManifest.entrants.b.name.trim() ||
@@ -296,11 +298,16 @@ export function createLocalBpManifest(
     };
   });
   const maps: BroadcastManifest['maps'][number][] = [];
+  if (
+    baseManifest?.maps.some(
+      (map) =>
+        isPlayedMap(map) && !plannedMaps.some((planned) => planned.mapOrder === map.mapOrder),
+    )
+  )
+    return invalid('bp_played_map_conflict', '已有比分或完成记录的地图不能通过本地 BP 移除。');
   for (const planned of plannedMaps) {
     const existing = baseManifest?.maps.find((map) => map.mapOrder === planned.mapOrder);
-    const played =
-      existing !== undefined &&
-      (existing.scoreA !== null || existing.scoreB !== null || existing.completedAt !== null);
+    const played = existing !== undefined && isPlayedMap(existing);
     if (played) {
       if (
         existing.mapName !== planned.mapName ||
@@ -340,7 +347,8 @@ export function createLocalBpManifest(
                       : localSlug(competitionName),
                 },
           format: draft.format,
-          stage,
+          stage: baseManifest.match.stageKey === undefined ? stage : baseManifest.match.stage,
+          stageLabel: stage,
         }
       : baseManifest.match;
     const entrants = editableStandalone
@@ -488,7 +496,7 @@ export function bpAuthoringDraftFromBinding(
       : (sideChoices.get(deciderName)?.side ?? null);
   return {
     competitionName: manifest.match.competition?.name ?? '',
-    stage: manifest.match.stage ?? '',
+    stage: manifest.match.stageLabel ?? manifest.match.stage ?? '',
     format: manifest.match.format,
     entrants: {
       a: { name: manifest.entrants.a.name, logoUrl: manifest.entrants.a.logoUrl },
@@ -509,6 +517,3 @@ export function localBpDraftFromBinding(
 ): LocalBpDraft | null {
   return isLocalBinding(binding) ? bpAuthoringDraftFromBinding(binding, eventRules) : null;
 }
-
-export const localBpMapOptions = LOCAL_BP_MAP_CATALOG;
-export const defaultLocalBpMapPool = DEFAULT_LOCAL_BP_MAP_POOL;

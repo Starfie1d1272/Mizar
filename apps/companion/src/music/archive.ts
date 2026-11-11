@@ -2,13 +2,18 @@ import { crc32, inflateRaw } from 'node:zlib';
 import { promisify } from 'node:util';
 const inflate = promisify(inflateRaw);
 import { z } from 'zod';
-import { musicGroupSchema, MUSIC_GROUPS } from '@mizar/protocol/music';
+import {
+  musicGroupSchema,
+  MUSIC_GROUPS,
+  MUSIC_TRACK_MAX_BYTES,
+  MUSIC_ARCHIVE_MAX_BYTES as MUSIC_MAX_BYTES,
+} from '@mizar/protocol/music';
+export { MUSIC_MAX_BYTES };
 
-export const MUSIC_MAX_BYTES = 128 * 1024 * 1024;
 export const AUDIO_EXTENSION = /\.(wav|mp3|ogg|flac|m4a)$/i;
 export function audioBytes(name: string, bytes: Buffer): boolean {
   const ext = name.split('.').at(-1)?.toLowerCase();
-  if (!bytes.length || bytes.length > 32 * 1024 * 1024) return false;
+  if (!bytes.length || bytes.length > MUSIC_TRACK_MAX_BYTES) return false;
   if (ext === 'wav')
     return bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WAVE';
   if (ext === 'flac') return bytes.toString('ascii', 0, 4) === 'fLaC';
@@ -132,7 +137,7 @@ export async function readMusicPack(zip: Buffer) {
     total += size;
     requireZip(
       (isDirectory ? size === 0 : size > 0) &&
-        size <= (name === 'music.json' ? 128 * 1024 : 32 * 1024 * 1024) &&
+        size <= (name === 'music.json' ? 128 * 1024 : MUSIC_TRACK_MAX_BYTES) &&
         total <= MUSIC_MAX_BYTES &&
         size <= Math.max(1024 * 1024, compressed * 100),
     );

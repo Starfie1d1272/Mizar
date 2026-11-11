@@ -16,6 +16,7 @@ export function registerDiagnosticDelivery(
     journal?: SessionJournal;
     originPolicy: LocalWebOriginPolicy;
     endpoint?: string;
+    endpointSource?: 'product_default' | 'environment_override';
     fetch?: typeof fetch;
     onConsent?: () => Promise<void>;
     incidentParticipants?: () => IncidentParticipant[];
@@ -71,6 +72,7 @@ export function registerDiagnosticDelivery(
       try {
         delivery = new DiagnosticDelivery(directory, journal, {
           ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+          ...(options.endpointSource ? { endpointSource: options.endpointSource } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
           ...(options.onConsent ? { onConsent: options.onConsent } : {}),
           participants: options.deliveryParticipants ?? (() => [journal.deliveryParticipant()]),

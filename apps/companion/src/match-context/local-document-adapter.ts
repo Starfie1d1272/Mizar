@@ -45,6 +45,7 @@ export function localDocumentBindingManifest(input: unknown): BroadcastManifest 
       scoreB: document.scoreB,
       resultDisposition: document.resultDisposition ?? null,
       isForfeit: document.isForfeit,
+      isTest: document.isTest ?? false,
     },
     entrants: { a: entrant(document.entrants.a), b: entrant(document.entrants.b) },
     maps: document.maps.map((map) => ({ ...map, teamAStartSide: toWireSide(map.teamAStartSide) })),

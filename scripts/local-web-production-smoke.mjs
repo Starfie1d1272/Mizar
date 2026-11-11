@@ -69,9 +69,13 @@ try {
       `--user-data-dir=${join(temporary, 'browser')}`,
       'about:blank',
     ],
-    { stdio: 'ignore', detached: true },
+    { stdio: ['ignore', 'ignore', 'pipe'], detached: true },
   );
   browserExit = new Promise((resolveExit) => browser.once('exit', resolveExit));
+  let browserLogs = '';
+  browser.stderr.on('data', (data) => {
+    browserLogs = (browserLogs + data).slice(-16_384);
+  });
   let browserError;
   browser.once('error', (error) => {
     browserError = error;
@@ -79,7 +83,10 @@ try {
   let debuggerAddress;
   while (!debuggerAddress) {
     if (browserError) throw browserError;
-    if (browser.exitCode !== null) throw new Error('Chromium exited before startup');
+    if (browser.exitCode !== null || browser.signalCode !== null)
+      throw new Error(
+        `Chromium exited before startup (code=${browser.exitCode}, signal=${browser.signalCode}): ${browserLogs}`,
+      );
     debuggerAddress = await readFile(join(temporary, 'browser', 'DevToolsActivePort'), 'utf8')
       .then((content) => {
         const [port, path] = content.trim().split('\n');
@@ -88,7 +95,7 @@ try {
           : null;
       })
       .catch(() => null);
-    if (Date.now() >= deadline) throw new Error('Chromium startup timed out');
+    if (Date.now() >= deadline) throw new Error(`Chromium startup timed out: ${browserLogs}`);
     if (!debuggerAddress) await delay(100);
   }
   socket = new globalThis.WebSocket(debuggerAddress);

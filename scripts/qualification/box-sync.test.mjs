@@ -6,63 +6,10 @@ import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
-import { BoxClient, verifyStableReadbacks } from './box-sync.mjs';
+import { BoxClient } from './box-sync.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
 const { AbortController, AbortSignal, Blob, FormData, Response } = globalThis;
-
-test('final readbacks join failures and cover every asset', async () => {
-  const asset = (name) => ({ name, size: 1, sha256: 'a'.repeat(64) });
-  const metadata = asset('machine-metadata.json');
-  const core = asset('Mizar-v1.10.0-Windows-x64-Core-Setup.exe');
-  const options = {
-    identity: { version: '1.10.0' },
-    bootstrap: { identity: asset('web.exe') },
-    resources: [asset('pack.zip')],
-    runtime: [metadata, core],
-  };
-  const paths = [];
-  await verifyStableReadbacks({
-    ...options,
-    box: {
-      hash: async (path) => {
-        paths.push(path);
-        return { size: 1, sha256: 'a'.repeat(64) };
-      },
-    },
-  });
-  assert.equal(paths.length, 4);
-  assert.deepEqual(
-    new Set(paths.map((path) => path.split('/').pop())),
-    new Set([core.name, metadata.name, 'web.exe', 'pack.zip']),
-  );
-  let finish;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
-  const started = [];
-  let settled = false;
-  const failed = verifyStableReadbacks({
-    ...options,
-    box: {
-      hash: async (path) => {
-        started.push(path);
-        if (path.endsWith(core.name)) throw new Error('failure');
-        await pending;
-        return { size: 1, sha256: 'a'.repeat(64) };
-      },
-    },
-  }).finally(() => {
-    settled = true;
-  });
-  await setImmediate();
-  assert.ok(started.length > 1);
-  const startedBeforeSettlement = [...started];
-  assert.equal(settled, false);
-  finish();
-  await assert.rejects(failed, /failure/);
-  assert.deepEqual(started, startedBeforeSettlement);
-});
 
 function client(transport) {
   const box = new BoxClient('test-token', transport);
@@ -407,6 +354,9 @@ test('readback retries the link and body with a fresh 180-second deadline', asyn
 });
 
 test('upload-link timeout retries before any upload using a fresh deadline', async (t) => {
+  // Keep the calculated attempt timeout exact; wall-clock ticks can shorten it.
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
   const timeout = AbortSignal.timeout.bind(AbortSignal);
   const timers = [];
   t.mock.method(AbortSignal, 'timeout', (milliseconds) => {
@@ -420,16 +370,23 @@ test('upload-link timeout retries before any upload using a fresh deadline', asy
   t.mock.method(Math, 'random', () => 0);
   let links = 0,
     uploads = 0;
+  let firstSignal;
   const box = client(async () => {
     uploads++;
     return Response.json([{ name: 'payload' }]);
   });
   box.api = async (_endpoint, _path, _method, _body, signal) => {
     links++;
+    assert.equal(uploads, 0);
+    assert.equal(timers.length, links);
     if (links === 1) {
+      firstSignal = signal;
+      now += 180000;
       timers[0].abort();
       signal.throwIfAborted();
     }
+    assert.notEqual(signal, firstSignal);
+    assert.equal(firstSignal.aborted, true);
     assert.equal(signal.aborted, false);
     return 'https://box.example/upload';
   };

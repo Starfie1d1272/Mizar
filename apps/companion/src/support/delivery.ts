@@ -43,6 +43,16 @@ export const DELIVERY_LIMITS = {
   pollMs: 5000,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
+const retryDelay = (failures: number) =>
+  Math.ceil(
+    Math.min(
+      15 * 60_000,
+      Math.max(
+        30_000,
+        30_000 * 2 ** Math.min(failures - 1, 10) * (0.8 + (randomBytes(1)[0]! / 255) * 0.4),
+      ),
+    ),
+  );
 const transportReasons = [
   'receiver_upgrade_required',
   'receipt_invalid',
@@ -87,6 +97,11 @@ interface Credentials {
   token?: string;
   expiresAt?: number;
 }
+interface Withdrawal extends Credentials {
+  nextAttemptAt?: number;
+  consecutiveFailures?: number;
+  serverRetryAt?: number;
+}
 interface Batch {
   id: string;
   bytes: number;
@@ -116,6 +131,7 @@ type TransportFailure = {
   phase: 'enrollment' | 'permit' | 'upload' | 'withdrawal';
   status: number | null;
   reason: string;
+  attemptId?: string;
 };
 interface State {
   version: 1;
@@ -128,7 +144,7 @@ interface State {
   lastConfirmedAt: string | null;
   transportFailure: TransportFailure | null;
   credentials: Credentials | null;
-  withdrawals: Credentials[];
+  withdrawals: Withdrawal[];
   retiredIdentities: Credentials[];
   sessions: Record<string, { from: number; queued: number }>;
   queue: Batch[];
@@ -170,11 +186,20 @@ const stateSchema = z
         phase: z.enum(['enrollment', 'permit', 'upload', 'withdrawal']),
         status: z.number().int().min(400).max(599).nullable(),
         reason: z.enum(transportReasons),
+        attemptId: z.uuid().optional(),
       })
       .nullable()
       .default(null),
     credentials: credentialsSchema.nullable(),
-    withdrawals: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones),
+    withdrawals: z
+      .array(
+        credentialsSchema.extend({
+          nextAttemptAt: counter.optional(),
+          consecutiveFailures: counter.optional(),
+          serverRetryAt: counter.optional(),
+        }),
+      )
+      .max(DELIVERY_LIMITS.tombstones),
     retiredIdentities: z.array(credentialsSchema).max(DELIVERY_LIMITS.tombstones).default([]),
     sessions: z.record(
       z.string().regex(/^(?:performance:)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i),
@@ -198,6 +223,7 @@ const stateSchema = z
               'automatic_window_expired',
               'payload_clock_future',
               'payload_creation_time_missing',
+              'sealed_batch_conflict',
             ])
             .optional(),
           sealed: z.boolean().optional(),
@@ -347,6 +373,7 @@ async function secureRead(directory: string, name: string, maximum: number) {
   try {
     const stat = await file.stat();
     if (
+      !stat.isFile() ||
       stat.ino !== before.ino ||
       stat.dev !== before.dev ||
       stat.nlink !== 1 ||
@@ -354,6 +381,57 @@ async function secureRead(directory: string, name: string, maximum: number) {
     )
       throw new Error('diagnostics_file_changed');
     return await file.readFile();
+  } finally {
+    await file.close();
+  }
+}
+async function recoverSealedBatch(directory: string, name: string, expected: Buffer) {
+  const path = await safePath(directory, name);
+  const before = await lstat(path);
+  const file = await open(
+    path,
+    constants.O_RDWR | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const stat = await file.stat();
+    if (
+      !stat.isFile() ||
+      stat.ino !== before.ino ||
+      stat.dev !== before.dev ||
+      stat.nlink !== 1 ||
+      stat.size > DELIVERY_LIMITS.compressedBytes
+    )
+      throw new Error('diagnostics_file_changed');
+    const actual = await file.readFile();
+    if (actual.length !== stat.size || (await file.stat()).size !== stat.size)
+      throw new Error('diagnostics_file_changed');
+    if (actual.length > expected.length || !expected.subarray(0, actual.length).equals(actual))
+      throw new Error('sealed_batch_conflict');
+    // A write interrupted before fsync can leave an empty file or exact prefix.
+    // The same verified handle appends only the missing suffix; existing bytes
+    // are never truncated or replaced, including when this repair is interrupted.
+    if (actual.length < expected.length) await file.writeFile(expected.subarray(actual.length));
+    await file.sync();
+    const verified = Buffer.alloc(expected.length);
+    let offset = 0;
+    while (offset < verified.length) {
+      const { bytesRead } = await file.read(verified, offset, verified.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    const final = await file.stat();
+    if (offset !== expected.length || final.size !== expected.length || !verified.equals(expected))
+      throw new Error('sealed_batch_conflict');
+    const current = await lstat(path);
+    if (
+      final.nlink !== 1 ||
+      !current.isFile() ||
+      current.ino !== stat.ino ||
+      current.dev !== stat.dev ||
+      current.nlink !== 1 ||
+      current.size !== expected.length
+    )
+      throw new Error('diagnostics_file_changed');
   } finally {
     await file.close();
   }
@@ -607,6 +685,7 @@ export class DiagnosticDelivery {
   private readonly fences = new Map<string, Promise<void>>();
   private error: string | null = null;
   private transportPhase: 'enrollment' | 'permit' | 'upload' | 'withdrawal' | null = null;
+  private transportAttempt: { attemptId: string; started: number } | null = null;
   private readonly endpoint: string | undefined;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -628,6 +707,7 @@ export class DiagnosticDelivery {
     private readonly journal: SessionJournal,
     private readonly options: {
       endpoint?: string;
+      endpointSource?: 'product_default' | 'environment_override';
       fetch?: typeof fetch;
       now?: () => number;
       allowTestEndpoint?: boolean;
@@ -659,6 +739,33 @@ export class DiagnosticDelivery {
       }
     }
     await this.isolateRetiredQueue();
+    if (this.state.transportFailure?.phase === 'withdrawal') {
+      // Older manifests assigned deletion failures to the upload's retry slot.
+      // Preserve that deadline on its old identity, not on a later consent.
+      const withdrawal = this.state.withdrawals[0];
+      if (withdrawal) {
+        withdrawal.nextAttemptAt = Math.ceil(
+          Math.max(
+            withdrawal.nextAttemptAt ?? 0,
+            this.state.nextAttemptAt,
+            this.state.serverRetryAt,
+          ),
+        );
+        withdrawal.serverRetryAt = Math.max(
+          withdrawal.serverRetryAt ?? 0,
+          this.state.serverRetryAt,
+        );
+        withdrawal.consecutiveFailures = Math.max(
+          withdrawal.consecutiveFailures ?? 0,
+          this.state.consecutiveFailures,
+        );
+      }
+      this.state.transportFailure = null;
+      this.state.nextAttemptAt = 0;
+      this.state.serverRetryAt = 0;
+      this.state.consecutiveFailures = 0;
+      await this.save();
+    }
     const entries = await readdir(this.queueDirectory, { withFileTypes: true });
     for (const entry of entries)
       if (/^consent-(?:policy-)?revoked-[a-f0-9-]{36}\.flag$/.test(entry.name)) {
@@ -1453,7 +1560,7 @@ export class DiagnosticDelivery {
     }
     return true;
   }
-  private async transportFetch(input: string, init: RequestInit) {
+  private async transportFetch(input: string, init: RequestInit, withdrawal?: Withdrawal) {
     const phase = input.includes('/enroll')
       ? 'enrollment'
       : input.includes('/permits/')
@@ -1463,8 +1570,39 @@ export class DiagnosticDelivery {
           : 'withdrawal';
     let request: Promise<Response> | undefined;
     await this.transaction(async () => {
+      this.transportPhase = null;
+      this.transportAttempt = null;
       if (init.signal?.aborted) throw new Error('transport_aborted');
       this.transportPhase = phase;
+      this.transportAttempt = { attemptId: randomUUID(), started: performance.now() };
+      const endpoint = new URL(this.endpoint!);
+      // Do not journal successful permit/upload attempts: their own delivery
+      // would otherwise generate the next batch even without new activity.
+      if (phase === 'enrollment')
+        this.journal.record('diagnostic_transport_attempt', {
+          phase,
+          attemptId: this.transportAttempt.attemptId,
+          request: {
+            method: init.method,
+            endpoint: {
+              protocol: endpoint.protocol,
+              hostname: endpoint.hostname,
+              port: endpoint.port,
+            },
+            endpointSource: this.options.endpointSource ?? 'provided',
+            nodeVersion: process.versions.node,
+            fetchImplementation: this.options.fetch ? 'provided' : 'node',
+            proxyConfigured: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'].some(
+              (key) => Boolean(process.env[key]),
+            ),
+            envProxyRequested:
+              process.env.NODE_USE_ENV_PROXY === '1' ||
+              process.execArgv.includes('--use-env-proxy') ||
+              /(?:^|\s)--use-env-proxy(?:\s|$)/.test(process.env.NODE_OPTIONS ?? ''),
+            noProxyConfigured: Boolean(process.env.NO_PROXY || process.env.no_proxy),
+            route: 'unverified',
+          },
+        });
       request = this.fetcher(input, init);
       // Attach a rejection handler immediately while the timestamp is committed.
       void request.catch(() => undefined);
@@ -1478,7 +1616,27 @@ export class DiagnosticDelivery {
         throw error;
       }
     });
-    const response = await request!;
+    let response: Response;
+    try {
+      response = await request!;
+    } catch (error) {
+      if (phase === 'enrollment')
+        this.journal.record('diagnostic_transport_request_failed', {
+          phase,
+          ...this.transportTiming(),
+          reason: transportFailureReason(error),
+          aborted: init.signal?.aborted ?? false,
+        });
+      throw error;
+    }
+    if (phase === 'enrollment')
+      this.journal.record('diagnostic_transport_response', {
+        phase,
+        ...this.transportTiming(),
+        status: response.status,
+        result: 'response_received_not_acknowledged',
+        aborted: init.signal?.aborted ?? false,
+      });
     if (response.status === 429 || response.status === 503) {
       const header = response.headers.get('retry-after');
       const delay =
@@ -1487,29 +1645,43 @@ export class DiagnosticDelivery {
           : header
             ? Date.parse(header)
             : NaN;
-      this.state.serverRetryAt = Number.isFinite(delay)
+      const retryAt = Number.isFinite(delay)
         ? Math.max(this.now() + 30_000, delay)
         : this.now() + 15 * 60_000;
+      if (withdrawal) withdrawal.serverRetryAt = retryAt;
+      else this.state.serverRetryAt = retryAt;
     }
     return response;
+  }
+  private transportTiming() {
+    return this.transportAttempt
+      ? {
+          attemptId: this.transportAttempt.attemptId,
+          elapsedMs: Math.max(0, performance.now() - this.transportAttempt.started),
+        }
+      : {};
   }
   private async credentials(value: Credentials, signal: AbortSignal, deletion = false) {
     if (value.token && (value.expiresAt ?? 0) > this.now() + 60_000) return value.token;
     value.enrollmentAttempted = true;
     await this.transaction(() => this.save());
     if (signal.aborted) throw new Error('enrollment_aborted');
-    const response = await this.transportFetch(`${this.endpoint}/v1/diagnostics/enroll`, {
-      method: 'POST',
-      redirect: 'error',
-      signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        consent: CONSENT,
-        enrollmentId: value.installationId,
-        enrollmentSecret: value.enrollmentSecret,
-        deletion,
-      }),
-    });
+    const response = await this.transportFetch(
+      `${this.endpoint}/v1/diagnostics/enroll`,
+      {
+        method: 'POST',
+        redirect: 'error',
+        signal,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          consent: CONSENT,
+          enrollmentId: value.installationId,
+          enrollmentSecret: value.enrollmentSecret,
+          deletion,
+        }),
+      },
+      deletion ? value : undefined,
+    );
     const responseData = await responseJson(response, signal);
     if (!response.ok) throw transportReceiptError('enrollment', response.status, responseData);
     const closed = responseData as {
@@ -1842,77 +2014,120 @@ export class DiagnosticDelivery {
       // records arriving during gzip/fsync into an immediate tiny extra batch.
       // recover() already persists its own recovered prefix when needed.
     });
-    if (!this.endpoint || this.closed || this.now() < this.state.nextAttemptAt) return;
+    if (!this.endpoint || this.closed) return;
     this.sending ??= this.send().finally(() => {
       this.sending = undefined;
     });
     await this.sending;
     await this.collectAcknowledged();
   }
+  private async syncWithdrawal(cancellation: AbortSignal) {
+    // One due identity per pump. A stalled old deletion has its own durable
+    // backoff and cannot consume the new consent's request timeout or retry slot.
+    const item = this.state.withdrawals.find((value) => (value.nextAttemptAt ?? 0) <= this.now());
+    if (!item) return;
+    const signal = AbortSignal.any([cancellation, AbortSignal.timeout(15_000)]);
+    try {
+      const bearer = await this.credentials(item, signal, true);
+      if (bearer !== null) {
+        const response = await this.transportFetch(
+          `${this.endpoint}/v1/diagnostics/installation`,
+          {
+            method: 'DELETE',
+            redirect: 'error',
+            signal,
+            headers: { authorization: `Bearer ${bearer}` },
+          },
+          item,
+        );
+        if (!response.ok) {
+          void response.body?.cancel().catch(() => undefined);
+          throw transportReceiptError('withdrawal', response.status, null);
+        }
+        const ack = (await responseJson(response, signal)) as {
+          installationId: string;
+          revoked: boolean;
+          deletion: string;
+        };
+        if (
+          ack.installationId !== item.installationId ||
+          ack.revoked !== true ||
+          ack.deletion !== 'complete'
+        )
+          throw new Error('withdrawal_pending');
+      }
+      await this.transaction(async () => {
+        const previous = structuredClone(this.state);
+        this.state.withdrawals = this.state.withdrawals.filter(
+          (value) => value.installationId !== item.installationId,
+        );
+        try {
+          await this.save();
+        } catch (error) {
+          this.state = previous;
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (cancellation.aborted) {
+        if (this.transportAttempt)
+          this.journal.record('diagnostic_transport_interrupted', {
+            phase: this.transportPhase,
+            ...this.transportTiming(),
+            reason: 'withdrawal_cancelled',
+          });
+        return;
+      }
+      await this.transaction(async () => {
+        const retained = this.state.withdrawals.find(
+          (value) => value.installationId === item.installationId,
+        );
+        if (!retained) return;
+        const previous = structuredClone(this.state);
+        retained.consecutiveFailures = (retained.consecutiveFailures ?? 0) + 1;
+        retained.nextAttemptAt = Math.max(
+          retained.serverRetryAt ?? 0,
+          this.now() + retryDelay(retained.consecutiveFailures),
+        );
+        try {
+          await this.save();
+        } catch (failure) {
+          this.state = previous;
+          throw failure;
+        }
+        this.journal.record('diagnostic_withdrawal_failure', {
+          installationId: retained.installationId,
+          phase: this.transportPhase,
+          ...this.transportTiming(),
+          error: diagnosticValue(error, '', new Set(), [
+            retained.enrollmentSecret,
+            retained.token ?? '',
+          ]),
+          nextAttemptAt: retained.nextAttemptAt,
+          deletion: 'pending; no complete deletion acknowledgment',
+        });
+      });
+    }
+  }
   private async send(): Promise<void> {
     this.transportPhase = null;
+    this.transportAttempt = null;
     const epoch = this.epoch;
-    this.abort = new AbortController();
-    const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(15_000)]);
+    const abort = new AbortController();
+    this.abort = abort;
     try {
-      for (const item of [...this.state.withdrawals]) {
-        const bearer = await this.credentials(item, signal, true);
-        if (bearer !== null) {
-          const response = await this.transportFetch(
-            `${this.endpoint}/v1/diagnostics/installation`,
-            {
-              method: 'DELETE',
-              redirect: 'error',
-              signal,
-              headers: { authorization: `Bearer ${bearer}` },
-            },
-          );
-          if (!response.ok) {
-            void response.body?.cancel().catch(() => undefined);
-            throw transportReceiptError('withdrawal', response.status, null);
-          }
-          const ack = (await responseJson(response, signal)) as {
-            installationId: string;
-            revoked: boolean;
-            deletion: string;
-          };
-          if (
-            ack.installationId !== item.installationId ||
-            ack.revoked !== true ||
-            ack.deletion !== 'complete'
-          )
-            throw new Error('withdrawal_pending');
-        }
-        await this.transaction(async () => {
-          const previous = structuredClone(this.state);
-          this.state.withdrawals = previous.withdrawals.filter(
-            (v) => v.installationId !== item.installationId,
-          );
-          const recovered =
-            this.state.withdrawals.length === 0 &&
-            (['withdrawal', 'enrollment'].includes(this.state.transportFailure?.phase ?? '') ||
-              this.error === 'withdrawal_pending');
-          if (recovered) {
-            this.state.transportFailure = null;
-            this.state.consecutiveFailures = 0;
-            this.state.nextAttemptAt = 0;
-          }
-          try {
-            await this.save();
-          } catch (error) {
-            this.state = previous;
-            throw error;
-          }
-          if (recovered) this.error = null;
-        });
-      }
+      await this.syncWithdrawal(abort.signal);
+      this.transportPhase = null;
+      this.transportAttempt = null;
       if (
         !this.consentActive() ||
         this.requestedPause ||
         !this.state.credentials ||
-        epoch !== this.epoch
+        epoch !== this.epoch ||
+        this.now() < this.state.nextAttemptAt
       )
         return;
+      const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)]);
       const identity = this.state.credentials;
       const bearer = await this.credentials(identity, signal);
       if (bearer === null) throw new Error('unexpected_closed_enrollment');
@@ -2006,40 +2221,58 @@ export class DiagnosticDelivery {
         const sealed = Buffer.from(sealDiagnosticGzip(bytes, permit));
         const oldBatch = batch;
         const newBatch = { ...batch, id: checksum(sealed), bytes: sealed.length, sealed: true };
-        await this.transaction(async () => {
-          if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
-          const name = `${newBatch.id}.gz`;
-          await safePath(this.queueDirectory, name).catch((error) => {
-            if (!missing(error)) throw error;
+        try {
+          await this.transaction(async () => {
+            if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
+            const name = `${newBatch.id}.gz`;
+            await safePath(this.queueDirectory, name).catch((error) => {
+              if (!missing(error)) throw error;
+            });
+            let file: Awaited<ReturnType<typeof open>> | undefined;
+            try {
+              file = await open(
+                join(this.queueDirectory, name),
+                constants.O_CREAT |
+                  constants.O_EXCL |
+                  constants.O_WRONLY |
+                  (constants.O_NOFOLLOW ?? 0),
+                0o600,
+              );
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+              await recoverSealedBatch(this.queueDirectory, name, sealed);
+            }
+            try {
+              if (file) {
+                await file.writeFile(sealed);
+                await file.sync();
+              }
+            } catch (error) {
+              await file?.close();
+              await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+              throw error;
+            } finally {
+              await file?.close();
+            }
+            const previous = this.state.queue;
+            this.state.queue = previous.map((item) => (item.id === oldBatch.id ? newBatch : item));
+            try {
+              await this.save();
+            } catch (error) {
+              this.state.queue = previous;
+              // An adopted orphan was already durable before this attempt.
+              if (file) await unlink(join(this.queueDirectory, name)).catch(() => undefined);
+              throw error;
+            }
+            batch = newBatch;
+            bytes = sealed;
+            await unlink(join(this.queueDirectory, `${oldBatch.id}.gz`));
           });
-          const file = await open(
-            join(this.queueDirectory, name),
-            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-            0o600,
-          );
-          try {
-            await file.writeFile(sealed);
-            await file.sync();
-          } catch (error) {
-            await file.close();
-            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
-            throw error;
-          } finally {
-            await file.close();
-          }
-          const previous = this.state.queue;
-          this.state.queue = previous.map((item) => (item.id === oldBatch.id ? newBatch : item));
-          try {
-            await this.save();
-          } catch (error) {
-            this.state.queue = previous;
-            await unlink(join(this.queueDirectory, name)).catch(() => undefined);
-            throw error;
-          }
-          batch = newBatch;
-          bytes = sealed;
-          await unlink(join(this.queueDirectory, `${oldBatch.id}.gz`));
-        });
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'sealed_batch_conflict') throw error;
+          await this.retainExpiredBatch(oldBatch, epoch, 'sealed_batch_conflict');
+          return;
+        }
       }
 
       if (!this.consentActive() || this.requestedPause || epoch !== this.epoch) return;
@@ -2102,7 +2335,15 @@ export class DiagnosticDelivery {
         // ACK is durable. Cleanup separately verifies retained canonical coverage; it never creates another body.
       });
     } catch (error) {
-      if (epoch !== this.epoch || this.requestedPause) return;
+      if (epoch !== this.epoch || this.requestedPause) {
+        if (this.transportAttempt)
+          this.journal.record('diagnostic_transport_interrupted', {
+            phase: this.transportPhase,
+            ...this.transportTiming(),
+            reason: this.requestedPause ? 'paused' : 'consent_changed',
+          });
+        return;
+      }
       await this.transaction(async () => {
         this.state.failures++;
         this.state.consecutiveFailures++;
@@ -2115,24 +2356,17 @@ export class DiagnosticDelivery {
                   ? detail.status
                   : null,
               reason: transportFailureReason(error),
+              ...(this.transportAttempt ? { attemptId: this.transportAttempt.attemptId } : {}),
             }
           : null;
         this.state.nextAttemptAt = Math.max(
           this.state.serverRetryAt,
-          this.now() +
-            Math.min(
-              15 * 60_000,
-              Math.max(
-                30_000,
-                30_000 *
-                  2 ** Math.min(this.state.consecutiveFailures - 1, 10) *
-                  (0.8 + (randomBytes(1)[0]! / 255) * 0.4),
-              ),
-            ),
+          this.now() + retryDelay(this.state.consecutiveFailures),
         );
         this.error = error instanceof Error ? error.message : 'delivery_failed';
         this.journal.record('diagnostic_transport_failure', {
           transportFailure: this.state.transportFailure,
+          ...this.transportTiming(),
           error: diagnosticValue(error, '', new Set(), [
             this.state.credentials?.enrollmentSecret ?? '',
             this.state.credentials?.token ?? '',
@@ -2148,7 +2382,7 @@ export class DiagnosticDelivery {
         await this.save();
       });
     } finally {
-      this.abort = undefined;
+      if (this.abort === abort) this.abort = undefined;
     }
   }
   private async retainExpiredBatch(

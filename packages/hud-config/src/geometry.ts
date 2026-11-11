@@ -1,13 +1,6 @@
 import { WIDGET_DIMENSIONS } from './widget-dimensions.js';
-import { cloneJson } from './json.js';
-import { HUD_CANVAS_HEIGHT, HUD_CANVAS_WIDTH, HUD_GRID_SIZE, HUD_WIDGET_IDS } from './constants.js';
-import type {
-  HudAnchor,
-  HudWidgetBox,
-  HudWidgetId,
-  HudWidgetPlacement,
-  HudLayout,
-} from './types.js';
+import { HUD_CANVAS_HEIGHT, HUD_CANVAS_WIDTH, HUD_GRID_SIZE } from './constants.js';
+import type { HudAnchor, HudWidgetBox, HudWidgetId, HudWidgetPlacement } from './types.js';
 
 export const DEFAULT_PLACEMENTS: Record<HudWidgetId, HudWidgetPlacement> = {
   'top-score-bar': { visible: true, anchor: 'top-center', offsetX: 0, offsetY: 36 },
@@ -39,17 +32,8 @@ export function getWidgetDimensions(
 }
 
 function anchorPoint(anchor: HudAnchor): { readonly x: number; readonly y: number } {
-  return {
-    'top-left': { x: 0, y: 0 },
-    'top-center': { x: HUD_CANVAS_WIDTH / 2, y: 0 },
-    'top-right': { x: HUD_CANVAS_WIDTH, y: 0 },
-    'center-left': { x: 0, y: HUD_CANVAS_HEIGHT / 2 },
-    center: { x: HUD_CANVAS_WIDTH / 2, y: HUD_CANVAS_HEIGHT / 2 },
-    'center-right': { x: HUD_CANVAS_WIDTH, y: HUD_CANVAS_HEIGHT / 2 },
-    'bottom-left': { x: 0, y: HUD_CANVAS_HEIGHT },
-    'bottom-center': { x: HUD_CANVAS_WIDTH / 2, y: HUD_CANVAS_HEIGHT },
-    'bottom-right': { x: HUD_CANVAS_WIDTH, y: HUD_CANVAS_HEIGHT },
-  }[anchor];
+  const alignment = anchorAlignment(anchor);
+  return { x: HUD_CANVAS_WIDTH * alignment.x, y: HUD_CANVAS_HEIGHT * alignment.y };
 }
 
 function anchorAlignment(anchor: HudAnchor): { readonly x: number; readonly y: number } {
@@ -152,15 +136,6 @@ export function normalizeHudPlacement(
   placement: HudWidgetPlacement,
 ): HudWidgetPlacement {
   return placementFromBox(id, placement, placementToBox(id, placement));
-}
-
-export function normalizeHudLayout(layout: HudLayout): HudLayout {
-  return {
-    ...cloneJson(layout),
-    widgets: Object.fromEntries(
-      HUD_WIDGET_IDS.map((id) => [id, normalizeHudPlacement(id, layout.widgets[id])]),
-    ) as Record<HudWidgetId, HudWidgetPlacement>,
-  };
 }
 
 export function snapToGrid(value: number, grid = HUD_GRID_SIZE): number {

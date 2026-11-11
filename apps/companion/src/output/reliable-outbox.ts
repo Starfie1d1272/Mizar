@@ -342,7 +342,7 @@ export class ReliableOutbox {
       .filter((item) => item.disposition === 'legacy' && item.kind === 'record')
       .map((item) => item.value as ReliableOutboxRecord);
   }
-  private sourceHistory(kind: 'archived' | 'revoked') {
+  private sourceHistory() {
     const scopes = new Set(
       this.currentEvents().map((event) =>
         scopeDigest(
@@ -355,11 +355,11 @@ export class ReliableOutbox {
     );
     return [...scopes]
       .flatMap((scope) => this.repository().sourcesByScope(scope))
-      .filter((item) => item.disposition === kind)
+      .filter((item) => item.disposition === 'revoked')
       .map((item) => {
         const history = this.repository()
           .bySource(item.source)
-          .filter((row) => row.disposition === kind);
+          .filter((row) => row.disposition === 'revoked');
         return {
           identity: item.source,
           disposition: 'revoked_unconfirmed' as const,
@@ -372,11 +372,8 @@ export class ReliableOutbox {
         };
       });
   }
-  private get archivedSources() {
-    return this.sourceHistory('archived');
-  }
   private get revokedSources() {
-    return this.sourceHistory('revoked');
+    return this.sourceHistory();
   }
   private boundaryIntents: readonly BoundaryIntent[] = [];
   private boundaryGap: true | undefined;
@@ -1281,10 +1278,6 @@ export class ReliableOutbox {
     } finally {
       this.activeBoundaryCapture = undefined;
     }
-  }
-
-  retryPendingBoundaryCaptures(drain = false): Promise<void> {
-    return this.retryPendingCaptures(drain);
   }
 
   retryPendingCaptures(drain = false): Promise<void> {

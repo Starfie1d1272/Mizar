@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react';
 import {
   bpSnapshotSchema,
   bpWorkspaceSchema,
-  bpDemoCommandResultSchema,
-  type BpDemoCommand,
-  type BpDemoFormat,
   type BpSnapshot,
   type BpWorkspace,
   type LocalBpDraft,
@@ -102,21 +99,6 @@ export function useBpWorkspace() {
   return value;
 }
 
-export async function sendBpCommand(kind: 'play' | 'hide', expectedRevision: string) {
-  const response = await fetch('/operator/bp-command', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind, expectedRevision }),
-    signal: AbortSignal.timeout(3000),
-  });
-  if (!response.ok)
-    throw new Error(
-      response.status === 409
-        ? 'BP 状态已更新，请核对后重试。'
-        : '操作未确认，请检查连接和当前状态。',
-    );
-}
-
 async function postBpWorkspaceCommand(
   path: '/operator/bp-local-save' | '/operator/bp-rivalhub',
   body: Record<string, unknown>,
@@ -150,38 +132,4 @@ export function switchToRivalhubBp(
     expectedContextRevision,
     expectedPendingRevision,
   });
-}
-
-export async function sendBpDemoCommand(
-  command: BpDemoCommand,
-): Promise<{ readonly active: BpDemoFormat | null; readonly bpRevision: string }> {
-  const response = await fetch('/operator/bp-demo', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(command),
-    signal: AbortSignal.timeout(3000),
-  });
-  let message: string | undefined;
-  let payload: unknown;
-  try {
-    payload = await response.json();
-    if (
-      typeof payload === 'object' &&
-      payload !== null &&
-      'message' in payload &&
-      typeof payload.message === 'string'
-    ) {
-      message = payload.message;
-    }
-  } catch {
-    // Keep a bounded user-facing fallback when the service response is empty.
-  }
-  if (!response.ok) {
-    throw new Error(
-      message ??
-        (response.status === 409 ? '请先收起当前 BP 场景。' : '操作未完成，请检查当前 BP 状态。'),
-    );
-  }
-  const result = bpDemoCommandResultSchema.parse(payload);
-  return { active: result.demo.active, bpRevision: result.bpRevision };
 }

@@ -349,6 +349,10 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
           },
         }),
     ...(diagnosticsEndpoint ? { diagnosticsEndpoint } : {}),
+    diagnosticsEndpointSource:
+      process.env.MIZAR_DIAGNOSTICS_ENDPOINT !== undefined
+        ? 'environment_override'
+        : 'product_default',
     logger: true,
     gsiToken,
     recorder,

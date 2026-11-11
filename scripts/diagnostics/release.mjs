@@ -9,6 +9,7 @@ import { github, promotionTag, releaseIdentity } from '../qualification/box-sync
 const WORKER = 'apps/diagnostics-worker';
 const ACCOUNT = '754634a82d628d202a3da6771b5fb348';
 const NAME = 'mizar-diagnostics';
+const ENDPOINT = 'https://mizar-diagnostics.duxinyu475.workers.dev';
 const DATABASE = 'e85505ac-5388-471c-abbe-7a4d9e15bde7';
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -202,8 +203,9 @@ export function versionIdentity(version) {
   if (!message?.startsWith('mizar-diagnostics/1 ')) return null;
   const identity = JSON.parse(message.slice('mizar-diagnostics/1 '.length));
   if (
+    (identity.kind !== undefined && identity.kind !== 'bootstrap') ||
     !SHA.test(identity.sha) ||
-    !TAG.test(identity.tag) ||
+    (identity.kind === 'bootstrap' ? identity.tag !== undefined : !TAG.test(identity.tag)) ||
     !DIGEST.test(identity.inputs) ||
     !DIGEST.test(identity.bundle) ||
     !UUID.test(identity.base)
@@ -255,12 +257,13 @@ function wrangler(root, args, env = {}) {
   }
 }
 
-export async function prepare(root, manifest, tag, output) {
-  assertStable(tag);
+export async function prepare(root, manifest, tag, output, bootstrap = false) {
+  if (!bootstrap) assertStable(tag);
+  else git(root, 'merge-base', '--is-ancestor', 'refs/remotes/origin/main', manifest.gitSha);
   if (
     !SHA.test(manifest.gitSha) ||
     manifest.gitSha !== git(root, 'rev-parse', 'HEAD') ||
-    tag !== `v${manifest.appVersion}`
+    (!bootstrap && tag !== `v${manifest.appVersion}`)
   )
     fail('接收器必须来自已核验的准确客户端源码');
   const paths = [
@@ -306,7 +309,7 @@ export async function prepare(root, manifest, tag, output) {
   }
   const identity = {
     sha: manifest.gitSha,
-    tag,
+    ...(bootstrap ? { kind: 'bootstrap' } : { tag }),
     inputs: digest(git(root, 'ls-tree', '-r', manifest.gitSha, '--', ...paths)),
     bundle: createHash('sha256').update(bundle).digest('hex'),
   };
@@ -345,11 +348,18 @@ export async function snapshot(api) {
     bindings: version.resources.bindings,
   });
   const subdomain = await api(`${prefix}/subdomain`);
+  const accountSubdomain = await api('workers/subdomain');
+  const ingress = {
+    endpoint: ENDPOINT,
+    enabled: subdomain.enabled,
+    previews_enabled: subdomain.previews_enabled,
+  };
   const schedules = await api(`${prefix}/schedules`);
   const scriptSettings = await api(`${prefix}/script-settings`);
   if (
-    subdomain.enabled ||
-    subdomain.previews_enabled ||
+    subdomain.enabled !== true ||
+    subdomain.previews_enabled !== false ||
+    accountSubdomain.subdomain !== 'duxinyu475' ||
     scriptSettings.observability?.enabled ||
     scriptSettings.logpush ||
     scriptSettings.tail_consumers?.length ||
@@ -374,7 +384,8 @@ export async function snapshot(api) {
     ...before,
     settings,
     identity: versionIdentity(version),
-    configDigest: digest(settings),
+    ingress,
+    configDigest: digest({ settings, ingress }),
     schemaDigest: digest(schema),
     migrations: migrations.map(({ name }) => name),
   };
@@ -388,6 +399,7 @@ export async function deploy({
   execute = wrangler,
   health = globalThis.fetch,
   latestTag,
+  bootstrapSha,
 }) {
   const report = { status: 'failed', phase: 'configuration', productionUploadTest: 'not-run' };
   const record = async () =>
@@ -412,6 +424,7 @@ export async function deploy({
       fail('已审接管基线无效');
     const endpoint = new URL(env.DIAGNOSTICS_ENDPOINT);
     if (
+      endpoint.origin !== ENDPOINT ||
       endpoint.protocol !== 'https:' ||
       endpoint.username ||
       endpoint.password ||
@@ -422,9 +435,22 @@ export async function deploy({
       fail('诊断入口必须是已审 HTTPS 源');
     const candidate = await json(join(output, 'candidate.json'));
     const { identity } = candidate;
-    assertStable(latestTag);
-    assertStable(identity.tag, latestTag);
-    assertStable(identity.tag, env.DIAGNOSTICS_BASELINE_TAG);
+    assertStable(env.DIAGNOSTICS_BASELINE_TAG);
+    if (bootstrapSha) {
+      if (
+        !SHA.test(bootstrapSha) ||
+        git(root, 'rev-parse', 'HEAD') !== bootstrapSha ||
+        identity.kind !== 'bootstrap' ||
+        identity.sha !== bootstrapSha
+      )
+        fail('首次接管必须使用明确审查的源码 SHA');
+      git(root, 'merge-base', '--is-ancestor', 'refs/remotes/origin/main', bootstrapSha);
+    } else {
+      if (identity.kind) fail('发行同步不能部署未发行的接管构件');
+      assertStable(latestTag);
+      assertStable(identity.tag, latestTag);
+      assertStable(identity.tag, env.DIAGNOSTICS_BASELINE_TAG);
+    }
     const config = await json(join(output, 'wrangler.json'));
     if (
       digest(config) !== candidate.configDigest ||
@@ -452,8 +478,15 @@ export async function deploy({
       fail('配置/schema/迁移记录不匹配；需先完成已审增量迁移，不执行初始化 SQL');
     if (before.settings.compatibility_date !== config.compatibility_date)
       fail('兼容日期变更需独立接管审查');
-    if (before.identity) assertStable(identity.tag, before.identity.tag);
-    else if (before.versionId !== env.DIAGNOSTICS_BASELINE_VERSION)
+    if (
+      bootstrapSha &&
+      before.versionId !== env.DIAGNOSTICS_BASELINE_VERSION &&
+      !(before.identity?.kind === 'bootstrap' && before.identity.sha === bootstrapSha)
+    )
+      fail('首次接管不允许覆盖其他已标记版本');
+    if (before.identity && !bootstrapSha && before.identity.kind !== 'bootstrap')
+      assertStable(identity.tag, before.identity.tag);
+    if (!before.identity && before.versionId !== env.DIAGNOSTICS_BASELINE_VERSION)
       fail('未知线上版本，拒绝接管或覆盖');
     await record();
     let versionId = before.versionId;
@@ -500,12 +533,13 @@ export async function deploy({
       // keep-vars inherits the latest uploaded version, not necessarily the live version.
       // Verify its actual bindings before giving it any traffic.
       if (
-        digest(
-          liveConfig({
+        digest({
+          settings: liveConfig({
             ...uploaded.resources.script_runtime,
             bindings: uploaded.resources.bindings,
           }),
-        ) !== before.configDigest
+          ingress: before.ingress,
+        }) !== before.configDigest
       )
         fail('上传版本未保留已审生产配置');
       const current = await snapshot(api);
@@ -527,7 +561,7 @@ export async function deploy({
         '--config',
         join(output, 'wrangler.json'),
         '--message',
-        `Mizar ${identity.tag} ${identity.sha}`,
+        `Mizar ${identity.tag ?? 'bootstrap'} ${identity.sha}`,
       ]);
     }
     report.phase = 'verify';
@@ -625,6 +659,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (mode === 'resolve' && args.length === 1) await resolveRelease(args[0]);
   else if (mode === 'prepare' && args.length === 4)
     await prepare(resolve(args[0]), await json(args[1]), args[2], resolve(args[3]));
+  else if (mode === 'prepare-bootstrap' && args.length === 3)
+    await prepare(resolve(args[0]), { gitSha: args[1] }, undefined, resolve(args[2]), true);
+  else if (mode === 'bootstrap' && args.length === 3)
+    await deploy({ root: resolve(args[0]), output: resolve(args[2]), bootstrapSha: args[1] });
   else if (mode === 'inspect' && !args.length) {
     if (!process.env.CLOUDFLARE_API_TOKEN) fail('缺少只读核查凭据');
     const state = await snapshot(apiClient(process.env.CLOUDFLARE_API_TOKEN));
@@ -632,6 +670,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       JSON.stringify(
         {
           versionId: state.versionId,
+          ingress: state.ingress,
           configDigest: state.configDigest,
           schemaDigest: state.schemaDigest,
           migrations: state.migrations,
@@ -648,6 +687,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     });
   } else
     fail(
-      '用法：release.mjs resolve OUTPUT | prepare ROOT MANIFEST TAG OUTPUT | inspect | deploy ROOT OUTPUT LATEST_RELEASE_JSON',
+      '用法：release.mjs resolve OUTPUT | prepare ROOT MANIFEST TAG OUTPUT | prepare-bootstrap ROOT REVIEWED_SHA OUTPUT | bootstrap ROOT REVIEWED_SHA OUTPUT | inspect | deploy ROOT OUTPUT LATEST_RELEASE_JSON',
     );
 }

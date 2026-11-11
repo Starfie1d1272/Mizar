@@ -51,7 +51,6 @@ const modeTransition = z
     musicAfter: musicOriginals,
   })
   .strict();
-export type ModeTransition = z.infer<typeof modeTransition>;
 const stateSchema = z
   .object({
     revision: z.string().uuid(),
@@ -282,7 +281,6 @@ export class ObsAudioRouting {
     obs: ObsRpc,
     endpoint: string,
     music?: {
-      owner: string;
       sources: { bgm: string | null; stinger: string | null };
       baseUrl: string;
     },

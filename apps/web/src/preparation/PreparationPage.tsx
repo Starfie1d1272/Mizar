@@ -97,8 +97,20 @@ export function PreparationPage() {
       : null,
     5000,
   );
-  const { view, refresh, status: libraryStatus } = useLocalTournament();
-  const local = envelope?.source === 'local' && view?.activeLocalMatchId === match?.matchId;
+  const {
+    view,
+    refresh,
+    status: libraryStatus,
+    unavailable: libraryUnavailable,
+    error: libraryError,
+    reload: reloadLibrary,
+    reloading: libraryReloading,
+  } = useLocalTournament();
+  const local =
+    envelope?.source === 'local' ||
+    (envelope?.source === 'cache' && envelope.cachedFrom === 'local');
+  const canWriteLocal =
+    local && libraryStatus === 'ready' && view?.activeLocalMatchId === match?.matchId;
   const exit = useWorkspaceExitStatus();
   const production = useLocalRead<Production>('/local/v1/production');
   const rivalhub = useLocalRead<{
@@ -685,8 +697,14 @@ export function PreparationPage() {
                 <StatusBanner tone="warning">
                   {libraryStatus === 'loading'
                     ? '正在读取比赛库…'
-                    : '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。'}
+                    : (libraryError ??
+                      '比赛库读取失败，保留最近资料与草稿；连接恢复前暂停保存和载入。')}
                 </StatusBanner>
+              ) : null}
+              {libraryUnavailable ? (
+                <Button loading={libraryReloading} onClick={() => void reloadLibrary()}>
+                  重新加载资料库
+                </Button>
               ) : null}
               {view ? (
                 <EventMatchWorkspace
@@ -721,6 +739,12 @@ export function PreparationPage() {
             </details>
             {match && local ? (
               <>
+                {libraryError ? <StatusBanner tone="warning">{libraryError}</StatusBanner> : null}
+                {libraryUnavailable ? (
+                  <Button loading={libraryReloading} onClick={() => void reloadLibrary()}>
+                    重新加载资料库
+                  </Button>
+                ) : null}
                 {tab === 'roster' ? (
                   <StatusBanner tone="info">
                     现场首发可在工作台连接服务器后识别；这里维护队伍资料与完整名单。
@@ -733,6 +757,7 @@ export function PreparationPage() {
                   <summary>{tab === 'roster' ? '编辑队伍与名单' : '编辑比赛资料'}</summary>
                   <LocalTournamentEditor
                     document={match}
+                    canSave={canWriteLocal}
                     section={tab as MatchSection}
                     view={view}
                     refresh={refresh}
@@ -778,6 +803,7 @@ export function PreparationPage() {
               <MatchBpSection
                 document={match}
                 local={local}
+                canWrite={canWriteLocal}
                 contextRevision={view?.contextRevision}
               />
             ) : null}

@@ -11,8 +11,6 @@ mod cs2_preferences;
 mod cs2_session;
 mod cs2_spectator;
 mod cs2_video;
-mod default_resource;
-mod default_resource_vpk;
 mod demo_host;
 mod demo_test;
 mod desktop_worker;
@@ -31,11 +29,11 @@ mod observer_job;
 mod observer_workspace;
 mod overlay_recovery;
 mod powershell;
+mod preparation_evidence;
 mod preparation_gate;
 mod preparation_ipc;
 mod preparation_task;
 mod production_exit;
-mod spectator_eligibility;
 mod spectator_recovery_plan;
 mod spectator_recovery_vcfg;
 mod spectator_snapshot;
@@ -1137,9 +1135,8 @@ fn open_update_page(
 ) -> Result<(), String> {
     let diagnostic_log = log.inner().clone();
     let diagnostic_result: Result<(), String> = (|| {
-        let url = if source == "mirror" {
-            "https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/?p=/Downloads".to_string()
-        } else if source == "github" {
+        // Retain the old source value for an already-loaded WebView. New assets live on GitHub.
+        let url = if source == "github" || source == "mirror" {
             let base = "https://github.com/Starfie1d1272/Mizar/releases";
             if let Some(version) = version {
                 let parts: Vec<_> = version.split('.').collect();

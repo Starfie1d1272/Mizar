@@ -296,26 +296,6 @@ export class ResourceStore {
   getStatus(packId: string): ResourceStatus {
     return { ...this.entry(packId).status };
   }
-  getVersionRefs(packId: string): {
-    active: ResourceRef | null;
-    prepared: ResourceRef | null;
-    previous: ResourceRef | null;
-  } {
-    const entry = this.entry(packId);
-    const ref = (value: CachedPack | null): ResourceRef | null =>
-      value?.descriptor.manifestSha256
-        ? {
-            id: packId,
-            version: value.descriptor.packVersion,
-            digest: value.descriptor.manifestSha256,
-          }
-        : null;
-    return {
-      active: ref(entry.active),
-      prepared: ref(entry.prepared),
-      previous: ref(entry.previous),
-    };
-  }
   cancel(packId: string): void {
     this.entry(packId);
     this.controllers.get(packId)?.abort();

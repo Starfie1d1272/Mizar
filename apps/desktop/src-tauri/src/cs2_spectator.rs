@@ -1,4 +1,4 @@
-//! Optional spectator preset. Own only number keys and the existing spectator field.
+//! Optional spectator preset. Number keys and HUD own independent, bounded fields.
 use crate::{cs2_frame_rate::field, cs2_session::io_error};
 use serde_json::{json, Value};
 use std::{
@@ -36,7 +36,7 @@ pub fn hud_cfg_name(identity: &str) -> Result<&'static str, String> {
     }
 }
 
-fn config_for(identity: Option<&str>) -> Result<Vec<u8>, String> {
+fn config_for(identity: Option<&str>, numbers: bool) -> Result<Vec<u8>, String> {
     let source = std::str::from_utf8(CFG).map_err(|_| "观战 CFG 格式无效。")?;
     if source.matches(HUD_LINE).count() != 1 {
         return Err("观战 CFG 格式无效。".into());
@@ -47,7 +47,25 @@ fn config_for(identity: Option<&str>) -> Result<Vec<u8>, String> {
         Some("scancode11") => HUD_LINE.replace("\"h\"", "\"scancode11\""),
         _ => return Err("HUD 键身份无法核实。".into()),
     };
-    Ok(source.replace(HUD_LINE, &replacement).into_bytes())
+    let mut result = source.replace(HUD_LINE, &replacement);
+    if !numbers {
+        for (key, command) in NUMBER_BINDINGS {
+            let line = format!("bind \"{key}\" \"{command}\"\n");
+            if result.matches(&line).count() != 1 {
+                return Err("数字键 CFG 格式无效。".into());
+            }
+            result = result.replace(&line, "");
+        }
+        let convar = "spec_usenumberkeys_nobinds 0\n";
+        if result.matches(convar).count() != 1 {
+            return Err("数字键 CFG 格式无效。".into());
+        }
+        result = result.replace(convar, "").replace(
+            "number keys are backed up and restored by the host.",
+            "only the HUD key is backed up and restored by the host.",
+        );
+    }
+    Ok(result.into_bytes())
 }
 
 const LEGACY_CFG: &[u8] = b"// Mizar managed spectator session; personal bindings remain unchanged.\nspec_usenumberkeys_nobinds 1\necho MIZAR_OBSERVER_CFG_LOADED\n";
@@ -74,25 +92,36 @@ pub(crate) fn cfg_path(executable: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "观战 CFG 目录无法核实。".into())
 }
 
-/// Create our fixed file, accept identical bytes, or upgrade the exact old file.
-/// Never replace an
-/// unknown file, including a symlink or a partially written previous install.
-pub fn install(executable: &Path) -> Result<(), String> {
-    install_config(executable, None)
+pub(crate) fn has_hud(record: &Value) -> Result<bool, String> {
+    Ok(config_scope(record)?.0.is_some())
 }
 
-pub fn install_hud(executable: &Path, identity: &str) -> Result<(), String> {
-    hud_cfg_name(identity)?;
-    install_config(executable, Some(identity))
+fn config_scope(record: &Value) -> Result<(Option<&str>, bool), String> {
+    match record["version"].as_u64() {
+        Some(2) => Ok((None, true)),
+        Some(3 | 4) => {
+            let identity = record["hud"]["identity"]
+                .as_str()
+                .ok_or("HUD 键身份缺失。")?;
+            hud_cfg_name(identity)?;
+            Ok((Some(identity), record["version"] == 3))
+        }
+        _ => Err("观战配置版本无法核实。".into()),
+    }
 }
 
-fn install_config(executable: &Path, identity: Option<&str>) -> Result<(), String> {
+/// The persisted record alone selects number keys, HUD, or both.
+/// Replace only exact known CFG bytes, never unknown or partially written files.
+fn install_record(executable: &Path, record: &Value) -> Result<(), String> {
+    let (identity, numbers) = config_scope(record)?;
     let path = cfg_path(executable)?;
-    let expected = config_for(identity)?;
+    let expected = config_for(identity, numbers)?;
     let known = [
-        config_for(None)?,
-        config_for(Some("h"))?,
-        config_for(Some("scancode11"))?,
+        config_for(None, true)?,
+        config_for(Some("h"), true)?,
+        config_for(Some("scancode11"), true)?,
+        config_for(Some("h"), false)?,
+        config_for(Some("scancode11"), false)?,
         LEGACY_CFG.to_vec(),
     ];
     match fs::symlink_metadata(&path) {
@@ -138,9 +167,10 @@ fn install_config(executable: &Path, identity: Option<&str>) -> Result<(), Strin
 }
 
 /// Verify exact managed bytes immediately before submitting a launch.
-pub(crate) fn validate_installed(executable: &Path, identity: Option<&str>) -> Result<(), String> {
+pub(crate) fn validate_installed(executable: &Path, record: &Value) -> Result<(), String> {
     let path = cfg_path(executable)?;
-    let expected = config_for(identity)?;
+    let (identity, numbers) = config_scope(record)?;
+    let expected = config_for(identity, numbers)?;
     let metadata = fs::symlink_metadata(&path).map_err(|e| io_error("观战 CFG 无法核实。", &e))?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -148,6 +178,29 @@ pub(crate) fn validate_installed(executable: &Path, identity: Option<&str>) -> R
         || fs::read(&path).map_err(|e| io_error("观战 CFG 无法核实。", &e))? != expected
     {
         return Err("观战 CFG 已变化，未提交启动。".into());
+    }
+    Ok(())
+}
+
+/// Check only the fields owned by this record before wiring any startup exec.
+/// Older records may lack the executable; their existing field duties still apply.
+pub(crate) fn validate_prepared(record: &Value) -> Result<(), String> {
+    let (hud, numbers) = config_scope(record)?;
+    let video = Path::new(record["video"].as_str().ok_or("观战恢复路径缺失。")?);
+    if numbers {
+        check_archive(video)?;
+        validate_bindings(video, &record["bindings"])?;
+    }
+    if hud.is_some() {
+        validate_hud(video, &record["hud"])?;
+    }
+    if let Some(executable) = record["executable"].as_str() {
+        if !Path::new(executable).is_absolute() {
+            return Err("观战程序路径无效。".into());
+        }
+        validate_installed(Path::new(executable), record)?;
+    } else if !numbers {
+        return Err("观战程序路径缺失。".into());
     }
     Ok(())
 }
@@ -195,7 +248,11 @@ fn read_keys(video: &Path) -> Result<String, String> {
 type Entry = (crate::cs2_frame_rate::Token, crate::cs2_frame_rate::Token);
 
 fn binding_entries(text: &str) -> Result<Vec<Entry>, String> {
-    let entries = crate::cs2_frame_rate::scalar_section(text, &["config", "bindings"])?;
+    crate::cs2_frame_rate::scalar_section(text, &["config", "bindings"])
+}
+
+fn number_entries(text: &str) -> Result<Vec<Entry>, String> {
+    let entries = binding_entries(text)?;
     for (digit, _) in NUMBER_BINDINGS {
         let mut values = entries
             .iter()
@@ -211,7 +268,7 @@ fn binding_entries(text: &str) -> Result<Vec<Entry>, String> {
 }
 
 fn backup_bindings(text: &str) -> Result<Value, String> {
-    let entries = binding_entries(text)?;
+    let entries = number_entries(text)?;
     let mut saved = serde_json::Map::new();
     for (digit, _) in NUMBER_BINDINGS {
         let token = entries
@@ -227,7 +284,7 @@ fn saved_binding(saved: &Value, digit: &str) -> Result<Option<(String, String)>,
     match saved.get(digit) {
         Some(Value::Null) => Ok(None),
         Some(Value::String(raw)) => {
-            // Validate the saved token as one quoted scalar, never as commands.
+            // Validate the saved token as one scalar, never as commands.
             let text = format!("\"config\" {{\"bindings\" {{\"{digit}\" {raw}}}}}");
             let token = field(&text, &["config", "bindings", digit])?
                 .filter(|token| token.end - token.start == raw.len())
@@ -253,7 +310,7 @@ fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
     {
         return Err("数字键备份格式无法核实。".into());
     }
-    let entries = binding_entries(current)?;
+    let entries = number_entries(current)?;
     let mut edits = Vec::new();
     for (digit, applied) in NUMBER_BINDINGS {
         let original = saved_binding(saved, digit)?;
@@ -283,19 +340,6 @@ fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
         restored.replace_range(start..end, &replacement);
     }
     Ok(restored)
-}
-
-pub fn restore_bindings(video: &Path, saved: &Value) -> Result<(), String> {
-    let current = read_keys(video)?;
-    let restored = restored_bindings(saved, &current)?;
-    if restored != current {
-        // Refuse an intervening file edit instead of replacing its newer bytes.
-        if read_keys(video)? != current {
-            return Err("数字键配置在恢复期间发生变化，备份仍保留。".into());
-        }
-        crate::cs2_session::atomic_write(&keys_path(video)?, restored.as_bytes())?;
-    }
-    Ok(())
 }
 
 /// A missing explicit binding uses the standard physical H scancode; aliases are never inferred.
@@ -373,22 +417,53 @@ fn restore_hud(saved: &Value, current: &str) -> Result<String, String> {
 }
 
 pub fn validate_hud(video: &Path, saved: &Value) -> Result<(), String> {
-    if backup_hud(&read_keys(video)?)? != *saved {
+    let original = saved["originalKeys"]
+        .as_str()
+        .ok_or("HUD 原始键位备份缺失。")?;
+    if original.len() > 256 * 1024 || backup_hud(original)? != *saved {
+        return Err("HUD 原始键位备份无法核实。".into());
+    }
+    let current = backup_hud(&read_keys(video)?)?;
+    if current["identity"] != saved["identity"] || current["candidates"] != saved["candidates"] {
         return Err("HUD 键绑定在准备期间发生变化。".into());
     }
     Ok(())
 }
 
-pub fn restore_v3_bindings(video: &Path, bindings: &Value, hud: &Value) -> Result<(), String> {
+/// Compute independent field restores, then write the shared file only once.
+/// A conflicting field keeps its journal responsibility without blocking another owned field.
+pub fn restore_keys(
+    video: &Path,
+    bindings: Option<&Value>,
+    hud: Option<&Value>,
+) -> Result<(), String> {
     let current = read_keys(video)?;
-    let restored = restore_hud(hud, &restored_bindings(bindings, &current)?)?;
+    binding_entries(&current).map_err(|error| format!("{KEYS_NAME} / 恢复前核验结构：{error}"))?;
+    let mut restored = current.clone();
+    let mut errors = Vec::new();
+    if let Some(bindings) = bindings {
+        match restored_bindings(bindings, &restored) {
+            Ok(value) => restored = value,
+            Err(error) => errors.push(error),
+        }
+    }
+    if let Some(hud) = hud {
+        match restore_hud(hud, &restored) {
+            Ok(value) => restored = value,
+            Err(error) => errors.push(error),
+        }
+    }
     if restored != current {
         if read_keys(video)? != current {
             return Err("按键配置在恢复期间发生变化，备份仍保留。".into());
         }
         crate::cs2_session::atomic_write(&keys_path(video)?, restored.as_bytes())?;
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(" "))
+    }
 }
 
 pub fn restore(original: &str, current: &str) -> Result<String, String> {
@@ -400,8 +475,11 @@ pub fn restore_with_applied(
     current: &str,
     applied: bool,
 ) -> Result<String, String> {
-    let before = value(original).map_err(|_| "原观战字段备份无法核实。")?;
-    let now = value(current).map_err(|_| "当前观战字段缺失、重复或值异常，原值备份仍保留。")?;
+    let before = value(original)
+        .map_err(|error| format!("cs2_machine_convars.vcfg / 原观战字段备份无法核实：{error}"))?;
+    let now = value(current).map_err(|error| {
+        format!("cs2_machine_convars.vcfg / 当前观战字段异常，原值备份仍保留：{error}")
+    })?;
     if boolean(&now.value)? != boolean(&before.value)? && boolean(&now.value)? != applied {
         return Err("观战字段已被外部修改，未覆盖外部修改；原值备份仍保留。".into());
     }
@@ -473,7 +551,7 @@ pub fn check_archive(video: &Path) -> Result<(), String> {
             if entry.path() != machine
                 && text.to_ascii_lowercase().contains(KEY)
                 && field(&text, &["config", "convars", KEY])
-                    .map_err(|_| "观战配置镜像字段无法可靠解析。")?
+                    .map_err(|error| format!("观战配置镜像 / 字段无法可靠解析：{error}"))?
                     .is_some()
             {
                 return Err(
@@ -494,7 +572,9 @@ pub(crate) fn full_mode_convar_compatible(files: &[Value], video: &Path) -> Resu
         .filter(|record| record["kind"] == "convars")
         .and_then(|record| record["original"].as_str())
         .ok_or("观战设置无法确认，使用基础观战模式。")?;
-    let token = value(original).map_err(|_| "观战设置无法确认，使用基础观战模式。")?;
+    let token = value(original).map_err(|error| {
+        format!("cs2_machine_convars.vcfg / 观战设置无法确认，使用基础观战模式：{error}")
+    })?;
     if boolean(&token.value)? {
         return Err("当前数字键观战设置需要单独接管，使用基础观战模式。".into());
     }
@@ -503,26 +583,27 @@ pub(crate) fn full_mode_convar_compatible(files: &[Value], video: &Path) -> Resu
 
 /// Preserve FPS/video values; startup CFGs only receive a temporary final exec.
 pub(crate) fn prepare_standalone(video: &Path, executable: &Path) -> Result<Value, String> {
-    check_archive(video)?;
-    let path = video
-        .parent()
-        .ok_or("观战配置目录缺失。")?
-        .join("cs2_machine_convars.vcfg");
-    let metadata = fs::symlink_metadata(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
-        return Err("观战配置无法安全核实。".into());
-    }
-    let original = fs::read_to_string(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
-    if original.len() > 256 * 1024 {
-        return Err("观战配置过大。".into());
-    }
-    value(&original)?;
-    let mut record = prepare(
-        &[json!({"kind":"convars", "original":original})],
+    let original = (|| {
+        let path = video
+            .parent()
+            .ok_or("观战配置目录缺失。")?
+            .join("cs2_machine_convars.vcfg");
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
+            return Err("观战配置无法安全核实。".into());
+        }
+        let original = fs::read_to_string(&path).map_err(|e| io_error("观战配置无法读取。", &e))?;
+        if original.len() > 256 * 1024 {
+            return Err("观战配置过大。".into());
+        }
+        Ok(original)
+    })();
+    let mut record = prepare_original(
+        original.as_deref().map_err(String::clone),
         video,
         executable,
     )?;
-    record["executable"] = json!(executable);
     record["startupFiles"] = json!(crate::cs2_frame_rate::prepare_observer_scripts(
         video, executable
     )?);
@@ -589,32 +670,45 @@ pub(crate) fn startup_files(record: &Value, action: StartupFiles) -> Result<(), 
 }
 
 pub fn prepare(files: &[Value], video: &Path, executable: &Path) -> Result<Value, String> {
-    check_archive(video)?;
-    let record = files
+    let original = files
         .first()
         .filter(|record| record["kind"] == "convars")
-        .ok_or("观战配置备份缺失。")?;
-    let original = record["original"]
-        .as_str()
-        .ok_or("观战配置原值备份缺失。")?;
-    value(original)?;
-    let keys = read_keys(video)?;
-    let bindings = backup_bindings(&keys)?;
-    match backup_hud(&keys) {
-        Ok(hud) => {
-            let identity = hud["identity"].as_str().ok_or("HUD 键身份缺失。")?;
-            match install_hud(executable, identity) {
-                Ok(()) => Ok(
-                    json!({"version":3,"video":video,"original":original,"bindings":bindings,"hud":hud,"loadAttempted":false}),
-                ),
-                Err(warning) => Err(warning),
-            }
+        .and_then(|record| record["original"].as_str())
+        .ok_or_else(|| "观战配置原值备份缺失。".to_string());
+    prepare_original(original, video, executable)
+}
+
+fn prepare_original(
+    original: Result<&str, String>,
+    video: &Path,
+    executable: &Path,
+) -> Result<Value, String> {
+    let keys = read_keys(video).map_err(|error| format!("{KEYS_NAME} / 读取键位：{error}"))?;
+    // A malformed shared file is never permission to patch either field.
+    binding_entries(&keys).map_err(|error| format!("{KEYS_NAME} / 核验结构：{error}"))?;
+    let numbers = (|| {
+        check_archive(video)?;
+        let original = original?;
+        value(original).map_err(|error| format!("cs2_machine_convars.vcfg / 观战设置：{error}"))?;
+        let bindings =
+            backup_bindings(&keys).map_err(|error| format!("{KEYS_NAME} / 备份数字键：{error}"))?;
+        Ok::<_, String>((original, bindings))
+    })();
+    let hud = backup_hud(&keys).map_err(|error| format!("{KEYS_NAME} / 备份 H 键：{error}"));
+    let mut record = match (numbers, hud) {
+        (Ok((original, bindings)), Ok(hud)) => {
+            json!({"version":3,"video":video,"original":original,"bindings":bindings,"hud":hud,"loadAttempted":false})
         }
-        Err(warning) => {
-            install(executable)?;
-            Ok(
-                json!({"version":2,"video":video,"original":original,"bindings":bindings,"hudWarning":warning,"loadAttempted":false}),
-            )
+        (Ok((original, bindings)), Err(warning)) => {
+            json!({"version":2,"video":video,"original":original,"bindings":bindings,"hudWarning":warning,"loadAttempted":false})
         }
-    }
+        (Err(warning), Ok(hud)) => {
+            json!({"version":4,"video":video,"hud":hud,"numberWarning":warning,"loadAttempted":false})
+        }
+        (Err(numbers), Err(hud)) => return Err(format!("{numbers} {hud}")),
+    };
+    record["executable"] = json!(executable);
+    install_record(executable, &record)?;
+    validate_prepared(&record)?;
+    Ok(record)
 }
