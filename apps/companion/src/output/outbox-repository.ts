@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import {
   parseCaptureReference,
   type CaptureInterval,
@@ -225,6 +226,14 @@ async function readLegacy(path: string): Promise<OutboxCommit> {
 
 /** Companion-only transaction owner. Opening does not publish an incomplete import. */
 export class OutboxRepository {
+  private transactionTiming = { count: 0, totalMs: 0, maxMs: 0 };
+
+  takeTransactionTiming() {
+    const timing = this.transactionTiming;
+    this.transactionTiming = { count: 0, totalMs: 0, maxMs: 0 };
+    return timing;
+  }
+
   private constructor(private readonly db: DatabaseSync) {}
 
   static async open(dbPath: string, legacyPath: string): Promise<OutboxRepository> {
@@ -304,11 +313,15 @@ export class OutboxRepository {
   }
 
   private transaction(operation: () => void): void {
-    this.db.exec('BEGIN IMMEDIATE');
+    const started = performance.now();
+    let begun = false;
     try {
+      this.db.exec('BEGIN IMMEDIATE');
+      begun = true;
       operation();
       this.db.exec('COMMIT');
     } catch (error) {
+      if (!begun) throw error;
       let rollbackError: unknown;
       try {
         this.db.exec('ROLLBACK');
@@ -320,6 +333,11 @@ export class OutboxRepository {
           cause: error,
         });
       throw error;
+    } finally {
+      const ms = performance.now() - started;
+      this.transactionTiming.count++;
+      this.transactionTiming.totalMs += ms;
+      this.transactionTiming.maxMs = Math.max(this.transactionTiming.maxMs, ms);
     }
   }
 

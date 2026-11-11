@@ -10,7 +10,7 @@ import {
   obsOutputCommandSchema,
 } from '@mizar/protocol/obs';
 import type { GameAudioController } from './audio-policy-controller.js';
-import type { MusicDirector } from '../music/director.js';
+import type { MusicAudioMode } from '../music/device.js';
 import { ObsOutputError } from './outputs.js';
 import { ObsActionError, obsActionMessage } from './action-error.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
@@ -61,7 +61,8 @@ export function registerObsRoutes(
     readonly canStartOutput?: () => boolean;
     readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
-    readonly musicDirector?: () => MusicDirector | undefined;
+    readonly musicAudio?: () => MusicAudioMode | undefined;
+    readonly prepareMusic?: (valid: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => Promise<void>;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },
 ) {
@@ -279,7 +280,7 @@ export function registerObsRoutes(
         return { ok: true, ...(await options.adapter.cancelAudioWait(parsed.data.revision)) };
       if (!options.gameAudio) throw new Error('audio_policy_unavailable');
       const command = parsed.data;
-      const music = options.musicDirector?.();
+      const music = options.musicAudio?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
         command.mode === 'recover'
@@ -714,12 +715,9 @@ export function registerObsRoutes(
           const connected = () => !request.raw.aborted && !reply.raw.destroyed;
           if (action !== 'check' && (!valid() || !connected()))
             return reply.code(409).send({ message: '制作状态已变化，请刷新后重试。' });
-          const prepareMusic = options.musicDirector
-            ? async (current: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => {
-                await options
-                  .musicDirector?.()
-                  ?.prepare(() => current() && valid() && connected(), guard);
-              }
+          const prepareMusic = options.prepareMusic
+            ? (current: () => boolean, guard: (obs: ObsRpc) => ObsRpc) =>
+                options.prepareMusic!(() => current() && valid() && connected(), guard)
             : undefined;
           const findings =
             action === 'ensure'

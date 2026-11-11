@@ -9,8 +9,6 @@ import {
   useCs2Status,
   useWorkspaceExitStatus,
   workspaceExitLabel,
-  type Cs2ConfigStatus,
-  type WorkspaceExitStatus,
 } from './cs2-status';
 
 /** Cross-window recovery reads the Host journal, never browser storage. */
@@ -45,10 +43,10 @@ export function Cs2Recovery({
     try {
       const outcome = await action(task);
       acknowledged = true;
-      const after = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
+      const after = await desktopInvoke('cs2_config_status', undefined, task);
       const workspaceExit =
         expected === 'restored'
-          ? await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status', undefined, task)
+          ? await desktopInvoke('workspace_exit_status', undefined, task)
           : null;
       const idle = !after.busy && !after.running && !after.pending && after.phase !== 'uncertain';
       const restored =
@@ -66,7 +64,7 @@ export function Cs2Recovery({
             ? idle && !after.spectatorRecoveryPending
             : expected === 'cleanup'
               ? idle && !after.demoCleanupPending
-              : outcome === 'confirmed' && after.running === true && !after.busy;
+              : outcome === 'confirmed' && !after.busy && after.running === true;
       task.finish(
         confirmed
           ? 'confirmed'

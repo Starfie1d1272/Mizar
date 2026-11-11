@@ -50,6 +50,7 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 | 领域入口 | 唯一职责 |
 | --- | --- |
 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) | 提交输入与命令、解析身份、推进系列事实，发布同版本快照与转换 |
+| [输入提交](../../apps/companion/src/runtime/observation-commit.ts) | 统一现场与重放的遥测提交，协调来源代际、投影发布与可靠输出捕获 |
 | [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交 |
 | [制作生命周期](../../apps/companion/src/program-scenes/production.ts) | 制作会话、进入/退出、试播及资源/更新互斥 |
 | [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序 |
@@ -126,6 +127,8 @@ Core 定义 `SeriesProgress`，Companion 的唯一运行时组合持有它。它
 
 Host 验证受管 CS2 后提交连接意图，Companion 串行管理观察器进程、来源代际和私有订阅。用户逐图确认 GoTV 地址与密码；打开工作台、保存偏好和重建窗口都不自动连接历史地址。节目连接、HUD 操作与辅助接收分别去重，辅助重试不重发已接受的游戏命令。
 
+[观察辅助作用域](../../apps/companion/src/telemetry/observer-assist-scope.ts)持有本图确认与等待换图状态，按节目投影中的比赛与地图执行判断何时清除旧确认。观察辅助和运镜读取同一确认结果。
+
 观察器归属独立 Windows Job；正常停止等待组件收尾，宿主异常退出由系统回收子树。Host 持有游戏身份并续约，租约失效或结束制作停止辅助。未知启动、连接和清理结果保留责任，不把命令入队当作实际连接成功。组件版本与来源由[组件配置](../../apps/companion/src/telemetry/observer-component.json)维护，控制契约见[观察器接口](protocol.md#本机观察器控制)。
 
 提前提示根据同图、同回合和连续 live 段的两路时钟证据校准，缺证时等待；不使用固定延迟，也不以死亡事件校准。首次可靠校准或显式重新校准后的基线供提示估算；比赛或执行边界清空旧事件，停滞、暂停和来源变化不跨段补造时刻。时钟估算不能消除源内积压与接收延迟，提示始终是估计值。
@@ -166,6 +169,8 @@ Companion 拥有 `preparation / live / hidden` 制作生命周期，它不等同
 
 `MusicDirector` 独立消费节目投影、制作生命周期和实际 Take started，不把画面人工保持等同于音乐控制权。背景音乐互斥，开场音效可叠加；配置、游标、已消费事件与人工停止由音乐领域保存。`BpSession` 只维护播放状态，正式 BP 来自比赛投影。
 
+音乐通过[设备端口](../../apps/companion/src/music/device.ts)控制媒体和监听。[OBS 音乐设备](../../apps/companion/src/obs/music-device.ts)负责连接、资源核验与请求发出前的身份检查；[音频模式恢复](../../apps/companion/src/obs/audio-mode-recovery.ts)根据 OBS 读回与事务记录决定回退或确认，向音乐请求对应监听回执。
+
 音乐来源查找与播放资格核验只读；创建、改名、挂载和初始化恢复只在显式准备中执行。来源按 UUID 与实例/集合身份登记，其他场景未决项不阻断当前已核验来源的媒体控制。试听的临时监听由音乐状态单一写者保存逐字段回执，按原身份、原值和应用值恢复；人工修改让权，未知结果只保留相关监听责任，不阻止停音或视觉准备。自动与人工播放、监听及试听见[节目音乐](music.md)。
 
 ### OBS 准备与恢复
@@ -184,9 +189,12 @@ OBS 领域核对端点、集合、来源 UUID、类型、连接代际与当前�
 
 网站同步是本机制作之外的独立职责。在线比赛进入现场且当前遥测、上下文、身份和十人名单就绪时，Companion 可自动首次认领；不接管其他设备，不恢复主动停止的来源。返回工作台不触发认领或恢复，人工恢复使用显式来源命令。
 
+[RivalHub 读取客户端](../../apps/companion/src/match-context/rivalhub-read-client.ts)持有赛程、比赛资料与统计缓存；[授权会话](../../apps/companion/src/match-context/rivalhub-authorization.ts)持有凭据和配对过程。更换授权、认领、交接和释放由[连接协调器](../../apps/companion/src/match-context/rivalhub-connection.ts)使用同一串行队列，读取结果按原授权身份核对。
+
 - 来源控制先持久保存各场认领意图，再保存网站确认的完整身份，才启用发送。未知意图按网站、赛事、安装与比赛阻止同场重复认领，包括新生产者或会话；其他比赛仍按当前资格独立认领。
 - 清理在有界预算内轮转核对原请求，迟到确认直接进入该场待释放责任，不取得当前发送资格或退役其他场来源。切场/退出交接旧身份，重启仅恢复清理；重新配对先处理旧责任，来源文件不保存凭据。
 - `ReliableOutbox` 拥有交付顺序，`OutboxRepository` 独占 SQLite 队列、检查点、归档和撤权证据。捕获区间、原事件、回执与连续提交水位按同一事务提交；网络等待不占用本机运行时提交路径。
+- SQLite 写事务在本地服务主线程同步执行。运行诊断按窗口记录快照准备时间、SQLite 事务时间及事件循环延迟；复测方法见[开发验证](../development/development-validation.md#可靠输出性能)。
 - 实时选场与已接受事实的交付目标分开。旧事件固定原来源与幂等键，不借新认领代发；各独立来源可以继续收尾。已落盘、远端接收和来源释放是不同证明。
 - 失败的边界或检查点保留原请求、身份和顺序，恢复只重试原请求。后续成功不能越过缺口，空队列不能证明完整；崩溃前未落盘的正文无法重建。
 - 停止捕获后仍须核对已登记的在途边界及完整区间，才能结清来源。撤权隔离不等于送达，未知记录不能自动清空或伪造完成。

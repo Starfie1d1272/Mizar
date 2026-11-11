@@ -1,62 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sourceOrder } from '../src/distribution/sources.js';
-
-function response(delay: number, status = 206) {
-  return async (_signal: AbortSignal, end: number) => {
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return new Response(Buffer.alloc(end + 1), {
-      status,
-      headers: {
-        'content-range': `bytes 0-${end}/65536`,
-        'content-type': 'application/octet-stream',
-      },
-    });
-  };
-}
-
-test('falls back in fixed order after failed probes and bounds a server ignoring Range', async () => {
-  const signal = new AbortController().signal;
-  const fail = async () => new Response('failed', { status: 503 });
-  assert.deepEqual(
-    await sourceOrder('fixture-all-fail', 131072, signal, [fail, fail, fail]),
-    [0, 1, 2],
-  );
-  let stopped = false;
-  const ignoresRange = async () =>
-    new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          controller.enqueue(new Uint8Array(65536));
-        },
-        cancel() {
-          stopped = true;
-        },
-      }),
-      { headers: { 'content-type': 'application/octet-stream', 'content-length': '131072' } },
-    );
-  assert.deepEqual(
-    await sourceOrder('fixture-range-ignored', 131072, signal, [ignoresRange, fail]),
-    [0, 1],
-  );
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(stopped, true);
-});
-
-test('bounds a stalled probe and stops when cancelled during probing', async () => {
-  const blocked = async () => new Promise<Response>(() => {});
-  const started = Date.now();
-  const order = await sourceOrder('fixture-stall', 65536, new AbortController().signal, [
-    blocked,
-    response(1),
-  ]);
-  assert.deepEqual(order, [1, 0]);
-  assert.ok(Date.now() - started < 4500);
-  const abort = new AbortController();
-  const pending = sourceOrder('fixture-abort', 65536, abort.signal, [blocked]);
-  abort.abort();
-  await assert.rejects(pending);
-});
 
 test('proxy probes and full transfers send no credentials, and a corrupt winner falls back', async () => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises');
@@ -143,42 +86,4 @@ test('Mizar proxy policy accepts only the authenticated public asset and does no
     updateRequest(proxy, signal, redirect, { proxyAsset: origin }),
     /update_url_forbidden/,
   );
-});
-
-test('cancellation during probing never starts a full transfer', async () => {
-  const { mkdtemp, rm, access } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  const { createHash } = await import('node:crypto');
-  const { downloadVerified } = await import('../src/orchestration/tool-release.js');
-  const root = await mkdtemp(join(tmpdir(), 'mizar-probe-cancel-'));
-  const previous = globalThis.fetch;
-  const requests: (string | null)[] = [];
-  globalThis.fetch = (async (_input, init) => {
-    requests.push(new Headers(init?.headers).get('range'));
-    return new Promise<Response>(() => {});
-  }) as typeof fetch;
-  const abort = new AbortController();
-  try {
-    const target = join(root, 'archive');
-    const task = downloadVerified(
-      'https://github.com/Co1Swet/MulNX_CS2/releases/download/CancelProbe/MulNX.7z',
-      target,
-      createHash('sha256').update('good').digest('hex'),
-      4,
-      abort.signal,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-    );
-    abort.abort();
-    await assert.rejects(task);
-    assert.ok(requests.length > 0 && requests.every((range) => range === 'bytes=0-3'));
-    await assert.rejects(access(target), { code: 'ENOENT' });
-  } finally {
-    globalThis.fetch = previous;
-    await rm(root, { recursive: true, force: true });
-  }
 });

@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import {
   parseCaptureReference,
   type CaptureReference,
@@ -17,17 +18,20 @@ import { durableJsonByteLength } from '../match-context/durable-json.js';
 import { SerialCommitQueue } from '../match-context/serial-commit.js';
 import { OutboxRepository, type OutboxHistory } from './outbox-repository.js';
 export * from './outbox-codec.js';
+export * from './reliable-delivery.js';
+import {
+  RELIABLE_SEND_TIMEOUT_MS,
+  type ReliableDeliveryResult,
+  type ReliableEventSink,
+} from './reliable-delivery.js';
 import {
   RELIABLE_OUTBOX_VERSION,
   RELIABLE_OUTBOX_MAX_PENDING,
   RELIABLE_OUTBOX_MAX_RECORDS,
   RELIABLE_OUTBOX_RETENTION_MS,
-  RELIABLE_SEND_TIMEOUT_MS,
-  type ReliableDeliveryResult,
   type ReliableDeliveryStatus,
   isContinuityBoundary,
   dependsOnBoundary,
-  type ReliableEventSink,
   type ReliableOutboxRecord,
   type ReliableDeliveryScope,
   type ReliableScopeDisposition,
@@ -494,6 +498,14 @@ export class ReliableOutbox {
 
   private recovery: OutboxRecovery | undefined;
   private unconfirmedRecovery: true | undefined;
+
+  private preparationTiming = { count: 0, totalMs: 0, maxMs: 0 };
+
+  takePersistenceTiming() {
+    const preparation = this.preparationTiming;
+    this.preparationTiming = { count: 0, totalMs: 0, maxMs: 0 };
+    return { preparation, sqlite: this.database?.takeTransactionTiming() ?? null };
+  }
 
   constructor(
     private readonly filePath: string,
@@ -2440,6 +2452,7 @@ export class ReliableOutbox {
           boundaryIntents.at(-1)?.event ??
           this.continuityReference ??
           this.repository().latestEvent());
+    const preparationStarted = performance.now();
     const file: OutboxFile = sealOutbox({
       version: RELIABLE_OUTBOX_VERSION,
       records,
@@ -2471,6 +2484,10 @@ export class ReliableOutbox {
       history,
     };
     const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+    const preparationMs = performance.now() - preparationStarted;
+    this.preparationTiming.count++;
+    this.preparationTiming.totalMs += preparationMs;
+    this.preparationTiming.maxMs = Math.max(this.preparationTiming.maxMs, preparationMs);
     await this.trackDurability(`snapshot:${key}`, async () =>
       this.repository().commit({
         active: file,

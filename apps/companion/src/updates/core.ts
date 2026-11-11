@@ -2,7 +2,7 @@ import { readMachineFile } from '@mizar/resource-pack-contract/transport';
 import { z } from 'zod';
 import type { Bundle, BundleVerifier } from 'sigstore';
 import { UPDATE_MAX_BYTES, updateManifestSchema, type UpdateManifest } from './contract.js';
-import { verifyAttestation } from './source.js';
+import { verifyAttestation } from './attestation.js';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const releaseSchema = z.object({

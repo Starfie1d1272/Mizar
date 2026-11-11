@@ -454,6 +454,15 @@ export function createBroadcastRuntime(input: {
   return {
     store,
     initialize,
+    appliedDocument() {
+      const document = store.snapshot;
+      document.active = store.appliedDisplay;
+      return document;
+    },
+    referencedResources() {
+      if (!ready) throw new Error('broadcast_config_unavailable');
+      return store.referencedResources();
+    },
     async verifyCameraPack(map: string, pack: string): Promise<boolean> {
       if (!ready) return false;
       const source = store

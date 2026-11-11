@@ -14,6 +14,20 @@ use std::{
 };
 use tauri::Manager;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EntryPhase {
+    Preparing,
+    Requested,
+    Entered,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CancelPhase {
+    Active,
+    Requested,
+    Confirmed,
+}
+
 #[derive(Clone)]
 struct Task {
     id: String,
@@ -22,8 +36,7 @@ struct Task {
     preserve: bool,
     external: Option<(u32, String)>,
     running: bool,
-    cancelled: bool,
-    cancellation_confirmed: bool,
+    cancel_phase: CancelPhase,
     cancellation: Option<Arc<CancellationFlight>>,
     retire_requested: bool,
     obs: bool,
@@ -33,11 +46,23 @@ struct Task {
     capture: bool,
     camera: bool,
     camera_uncertain: bool,
-    entered: bool,
-    enter_attempted: bool,
+    entry_phase: EntryPhase,
     panel_epoch: Option<u64>,
     video_transaction: Option<String>,
     message: String,
+}
+impl Task {
+    fn entered(&self) -> bool {
+        self.entry_phase == EntryPhase::Entered
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel_phase != CancelPhase::Active
+    }
+
+    fn cancellation_confirmed(&self) -> bool {
+        self.cancel_phase == CancelPhase::Confirmed
+    }
 }
 static TASK: Mutex<Option<Task>> = Mutex::new(None);
 // Cancellation belongs to the task; concurrent callers share its result.
@@ -86,8 +111,8 @@ fn retire_ready(task: &Task) -> bool {
     task.retire_requested
         && !task.running
         && task.cancellation.is_none()
-        && (task.cancellation_confirmed || task.entered || !task.cancelled)
-        && (task.entered || task.video_transaction.is_none())
+        && (task.cancellation_confirmed() || task.entered() || !task.cancelled())
+        && (task.entered() || task.video_transaction.is_none())
 }
 struct CancellationOwner {
     id: String,
@@ -107,7 +132,7 @@ impl CancellationOwner {
                         .is_some_and(|current| Arc::ptr_eq(current, &flight))
             }) {
                 if outcome.is_ok() {
-                    task.cancellation_confirmed = true;
+                    task.cancel_phase = CancelPhase::Confirmed;
                 }
                 task.cancellation = None;
                 if retire_ready(task) {
@@ -137,14 +162,13 @@ fn claim_cancellation(id: &str) -> Result<CancellationClaim, String> {
     if let Some(flight) = &task.cancellation {
         return Ok(CancellationClaim::Running(flight.clone()));
     }
-    if task.entered {
+    if task.entered() {
         return Err("工作台已打开，请选择结束本次制作。".into());
     }
-    if task.cancellation_confirmed && task.video_transaction.is_none() {
+    if task.cancellation_confirmed() && task.video_transaction.is_none() {
         return Ok(CancellationClaim::Complete);
     }
-    task.cancellation_confirmed = false;
-    task.cancelled = true;
+    task.cancel_phase = CancelPhase::Requested;
     let flight = Arc::new(CancellationFlight::default());
     task.cancellation = Some(flight.clone());
     Ok(CancellationClaim::Start(flight))
@@ -250,14 +274,14 @@ fn publish(app: &tauri::AppHandle, id: &str, message: String) {
 }
 fn check(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     let t = snapshot()?
-        .filter(|t| t.id == id && !t.cancelled)
+        .filter(|t| t.id == id && !t.cancelled())
         .ok_or("准备已取消。")?;
     preparation_gate::check_preparation(app, Some(id))?;
     app.state::<production_exit::ExitGate>()
         .check_ticket(preparation_gate::preparation_ticket(app, id)?)?;
     let production = request(app, "GET", "/local/v1/production", json!({}))?;
     let production = crate::lifecycle_contract::production_view(&production)?;
-    let valid = if t.entered {
+    let valid = if t.entered() {
         (production.mode == "live" || production.mode == "hidden") && entered(app, id)?
     } else {
         production.mode == "preparation" && production.revision == t.revision
@@ -315,10 +339,10 @@ async fn restore_video(
             .as_mut()
             .filter(|task| {
                 task.id == id
-                    && !task.entered
+                    && !task.entered()
                     && (cancellation_confirmed
-                        || task.cancellation_confirmed
-                        || (!task.cancelled && !task.enter_attempted))
+                        || task.cancellation_confirmed()
+                        || (!task.cancelled() && task.entry_phase == EntryPhase::Preparing))
             })
             .and_then(|task| task.video_transaction.take())
     };
@@ -382,7 +406,7 @@ async fn controlled_post(
             None,
             |stream| {
                 let mut active = OBS_REQUEST.lock().map_err(|_| "准备状态不可用。")?;
-                if !snapshot()?.is_some_and(|task| task.id == id && !task.cancelled) {
+                if !snapshot()?.is_some_and(|task| task.id == id && !task.cancelled()) {
                     return Err("准备已取消。".into());
                 }
                 *active = Some((
@@ -531,7 +555,7 @@ async fn prepare_obs(
             check(&app, &id)
         }
         .await;
-        if prepared.is_err() && !task.entered {
+        if prepared.is_err() && !task.entered() {
             restore_video(&app, &id, false).await?;
         }
         prepared
@@ -756,12 +780,12 @@ async fn prepare_camera(
 }
 
 async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    if snapshot()?.is_some_and(|task| task.id == id && task.enter_attempted && !task.entered)
+    if snapshot()?.is_some_and(|task| task.id == id && task.entry_phase == EntryPhase::Requested)
         && entered(&app, &id)?
     {
         let revision = current_revision(&app)?;
         update(&id, |task| {
-            task.entered = true;
+            task.entry_phase = EntryPhase::Entered;
             task.revision = revision;
         });
     }
@@ -770,8 +794,12 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .ok_or("准备任务不存在。")?;
     main_window(&app)?;
     check(&app, &id)?;
-    if !task.entered {
-        update(&id, |t| t.enter_attempted = true);
+    if !task.entered() {
+        update(&id, |task| {
+            if task.entry_phase == EntryPhase::Preparing {
+                task.entry_phase = EntryPhase::Requested;
+            }
+        });
         diagnostic(&app, &id, "enter", "begin", Value::Null);
         let value = controlled_post(
             &app,
@@ -782,7 +810,7 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .await?;
         let view = crate::lifecycle_contract::production_view(&value)?;
         update(&id, |t| {
-            t.entered = true;
+            t.entry_phase = EntryPhase::Entered;
             t.revision = view.revision;
         });
         diagnostic(&app, &id, "enter", "success", Value::Null);
@@ -983,14 +1011,14 @@ fn spawn(app: tauri::AppHandle, id: String) {
                 &app,
                 &id,
                 "preparation",
-                if task.cancelled {
+                if task.cancelled() {
                     "cancelled"
-                } else if task.entered && task.message.is_empty() {
+                } else if task.entered() && task.message.is_empty() {
                     "success"
                 } else {
                     "partial"
                 },
-                json!({"entered":task.entered,"obs":task.obs,"gsi":task.gsi,"capture":task.capture,"camera":task.camera,"message":task.message}),
+                json!({"entered":task.entered(),"obs":task.obs,"gsi":task.gsi,"capture":task.capture,"camera":task.camera,"message":task.message}),
             );
         }
         mark_run_finished(&id);
@@ -1046,10 +1074,10 @@ fn preparation_start(
         if existing.retire_requested || existing.cancellation.is_some() {
             return Err("原准备任务正在收尾，请稍后重试。".into());
         }
-        if !existing.cancelled {
+        if !existing.cancelled() {
             if existing.revision != expected_revision
                 || (existing.preserve != preserve_settings
-                    && !(preserve_settings && !existing.entered && !existing.running))
+                    && !(preserve_settings && !existing.entered() && !existing.running))
                 || existing.external != external
             {
                 return Err("已有准备任务，请重试或取消原任务。".into());
@@ -1071,7 +1099,7 @@ fn preparation_start(
         if existing.running {
             return Err("原准备任务正在取消，请稍后重试。".into());
         }
-        if !existing.cancellation_confirmed || existing.video_transaction.is_some() {
+        if !existing.cancellation_confirmed() || existing.video_transaction.is_some() {
             return Err("原准备任务取消或恢复未确认，请重试取消。".into());
         }
     }
@@ -1086,8 +1114,7 @@ fn preparation_start(
         preserve: preserve_settings,
         external,
         running: true,
-        cancelled: false,
-        cancellation_confirmed: false,
+        cancel_phase: CancelPhase::Active,
         cancellation: None,
         retire_requested: false,
         obs: false,
@@ -1097,8 +1124,7 @@ fn preparation_start(
         capture: false,
         camera: false,
         camera_uncertain: false,
-        entered: false,
-        enter_attempted: false,
+        entry_phase: EntryPhase::Preparing,
         panel_epoch: None,
         video_transaction: None,
         message: "正在准备游戏和 OBS…".into(),
@@ -1113,10 +1139,10 @@ pub(crate) fn mulnx_context(id: &str) -> Result<Value, String> {
     let task = snapshot()?
         .filter(|task| {
             task.id == id
-                && task.entered
+                && task.entered()
                 && task.running
                 && !task.game
-                && !task.cancelled
+                && !task.cancelled()
                 && !task.retire_requested
         })
         .ok_or("本次游戏准备已失效，请重新打开工作台。")?;
@@ -1124,17 +1150,34 @@ pub(crate) fn mulnx_context(id: &str) -> Result<Value, String> {
 }
 pub(crate) fn waiting_for_game() -> Result<bool, String> {
     Ok(snapshot()?.is_some_and(|task| {
-        task.entered && task.running && !task.game && !task.cancelled && !task.retire_requested
+        task.entered() && task.running && !task.game && !task.cancelled() && !task.retire_requested
     }))
 }
 pub(crate) fn status() -> Result<Value, String> {
-    Ok(snapshot()?.map(|t| json!({"id":t.id,"running":t.running,"cancelled":t.cancelled,"entered":t.entered,"message":t.message,"steps":{"obs":t.obs,"gameConfiguration":t.gsi,"game":t.game,"capture":t.capture,"camera":t.camera}})).unwrap_or(Value::Null))
+    Ok(snapshot()?
+        .map(|task| {
+            json!({
+                "id": task.id,
+                "running": task.running,
+                "cancelled": task.cancelled(),
+                "entered": task.entered(),
+                "message": task.message,
+                "steps": {
+                    "obs": task.obs,
+                    "gameConfiguration": task.gsi,
+                    "game": task.game,
+                    "capture": task.capture,
+                    "camera": task.camera
+                }
+            })
+        })
+        .unwrap_or(Value::Null))
 }
 fn preparation_retry(app: tauri::AppHandle, preparation_id: String) -> Result<(), String> {
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
     let task = state
         .as_mut()
-        .filter(|t| t.id == preparation_id && !t.cancelled && !t.retire_requested)
+        .filter(|t| t.id == preparation_id && !t.cancelled() && !t.retire_requested)
         .ok_or("本次准备任务不可用。")?;
     if task.running {
         return Ok(());
@@ -1184,7 +1227,9 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                         .and_then(|value| crate::lifecycle_contract::cancellation_entered(&value))
                     {
                         Ok(true) => {
-                            update(&preparation_id, |task| task.entered = true);
+                            update(&preparation_id, |task| {
+                                task.entry_phase = EntryPhase::Entered
+                            });
                             publish(
                                 &app,
                                 &preparation_id,
@@ -1369,7 +1414,7 @@ pub(crate) async fn enter(
                 if let Some(existing) = app
                     .state::<EntryIntent>()
                     .commit(&preparation_id, false, snapshot)?
-                    .filter(|task| !task.cancelled)
+                    .filter(|task| !task.cancelled())
                 {
                     if let Err(error) = preparation_cancel(app.clone(), existing.id.clone()).await {
                         let task_entered = entered(&app, &existing.id)
@@ -1448,7 +1493,7 @@ pub(crate) async fn enter(
             }
             if view.mode != "preparation" {
                 if let Some(task) = snapshot()?.filter(|task| {
-                    task.entered && !task.game && !task.cancelled && !task.retire_requested
+                    task.entered() && !task.game && !task.cancelled() && !task.retire_requested
                 }) {
                     if entered(&app, &task.id)? {
                         if view.mode == "hidden" {

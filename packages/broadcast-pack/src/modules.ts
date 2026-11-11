@@ -7,7 +7,7 @@ import {
   type MulnxToolRef,
   type ResourceRef,
 } from '@mizar/broadcast-config';
-import type { TemplateAssetRef } from './index.js';
+import type { TemplateAssetRef } from './manifest.js';
 
 export interface ExportReferences {
   asset(ref: AssetRef): TemplateAssetRef;

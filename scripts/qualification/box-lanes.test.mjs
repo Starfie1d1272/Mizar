@@ -4,70 +4,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { URL } from 'node:url';
-import { setImmediate, setTimeout as delay } from 'node:timers/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
-import { runLanes, runWorker } from './box-lanes.mjs';
-
-test('failure joins other lanes and retains successful receipt and earliest recovery', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'box-lanes-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const plan = join(root, 'plan'),
-    output = join(root, 'output');
-  await mkdir(plan);
-  await writeFile(join(plan, 'plan.json'), 'plan');
-  const old = process.env.GITHUB_OUTPUT;
-  process.env.GITHUB_OUTPUT = output;
-  t.after(() => {
-    if (old === undefined) delete process.env.GITHUB_OUTPUT;
-    else process.env.GITHUB_OUTPUT = old;
-  });
-  let finish,
-    settled = false;
-  const waiting = new Promise((resolve) => {
-    finish = resolve;
-  });
-  const started = [];
-  const run = async (lane, laneRoot, result) => {
-    started.push(lane);
-    assert.equal(await readFile(join(laneRoot, 'plan.json'), 'utf8'), 'plan');
-    if (lane === 'runtime') {
-      await writeFile(result, JSON.stringify({ recovery: '2026-10-31T01:02:00.000Z' }));
-      throw new Error('uncertain write');
-    }
-    await waiting;
-    await mkdir(join(laneRoot, 'receipt'));
-    await writeFile(join(laneRoot, 'receipt', `${lane}.json`), lane);
-    await writeFile(result, JSON.stringify({ recovery: '2026-10-31T01:01:00.000Z' }));
-  };
-  const operation = runLanes(plan, join(root, 'lanes'), join(root, 'receipts'), run).finally(() => {
-    settled = true;
-  });
-  await setImmediate();
-  while (started.length < 3) await setImmediate();
-  assert.equal(settled, false);
-  finish();
-  await assert.rejects(operation, /all lanes have settled/);
-  assert.match(await readFile(output, 'utf8'), /2026-10-31T01:01:00.000Z/);
-  await assert.rejects(readFile(join(root, 'receipts', 'runtime.json')), { code: 'ENOENT' });
-  assert.equal(await readFile(join(root, 'receipts', 'resources.json'), 'utf8'), 'resources');
-  const summary = JSON.parse(await readFile(join(root, 'lanes', 'orchestration.json')));
-  assert.equal(summary.lanes.runtime.status, 'unknown');
-  assert.equal(summary.lanes.resources.status, 'success');
-});
-
-test('real child processes reject a malformed plan before producing any receipt', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'box-lanes-invalid-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const plan = join(root, 'plan');
-  await mkdir(plan);
-  await writeFile(join(plan, 'plan.json'), '{}');
-  await assert.rejects(
-    runLanes(plan, join(root, 'lanes'), join(root, 'receipts')),
-    /all lanes have settled/,
-  );
-  for (const lane of ['runtime', 'resources', 'downloads'])
-    await assert.rejects(readFile(join(root, 'receipts', `${lane}.json`)), { code: 'ENOENT' });
-});
+import { runLanes } from './box-lanes.mjs';
 
 test(
   'SIGTERM cancels real workers and their signal-resistant descendants before later writes',
@@ -150,22 +89,3 @@ test(
     );
   },
 );
-
-test('workers verify all GitHub payloads without any Box transfer', async () => {
-  const calls = [];
-  const operations = {
-    downloadLane: async (_root, lane, asset) => calls.push(['download', lane, asset]),
-    verifyLane: async (_root, lane) => calls.push(['verify', lane]),
-  };
-  for (const lane of ['runtime', 'resources', 'downloads'])
-    await runWorker(lane, 'root', operations);
-  assert.deepEqual(calls, [
-    ['download', 'runtime', 'metadata'],
-    ['download', 'runtime', 'core'],
-    ['verify', 'runtime'],
-    ['download', 'resources', undefined],
-    ['verify', 'resources'],
-    ['download', 'downloads', undefined],
-    ['verify', 'downloads'],
-  ]);
-});

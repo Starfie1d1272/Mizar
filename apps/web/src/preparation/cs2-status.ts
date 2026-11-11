@@ -1,32 +1,17 @@
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
-export interface Cs2ConfigStatus {
-  qualityPreset: 'very-high' | 'high' | 'medium' | 'preserve';
-  frameRateLimit: 0 | 30 | 60;
-  preferMulnx?: boolean;
-  preparationId?: string | null;
-  spectatorRecoveryPending?: boolean;
-  nativeHudToggle?: boolean;
-  demoCleanupPending?: boolean;
-  demoCameraRequestId?: string | null;
-  observerHudPending?: boolean;
-  spectatorWarning?: string | null;
-  /** May preserve quality/FPS, not geometry; Host rechecks identity and applied configuration. */
-  canPreserve?: boolean;
-  preserveSettings?: boolean;
-  pending: boolean;
-  mulnxLaunchResumable?: boolean;
-  cameraLeaseReady?: boolean;
-  running: boolean;
-  message: string | null;
-  busy?: boolean;
-  phase?: 'idle' | 'starting' | 'checking' | 'restoring' | 'uncertain' | 'running' | 'pending';
-}
+import type {
+  Cs2ConfigStatus,
+  Cs2Status,
+  WorkspaceExitStatus,
+} from '@mizar/protocol/desktop-lifecycle';
+export type { Cs2ConfigStatus } from '@mizar/protocol/desktop-lifecycle';
+
 export function useCs2Status() {
   const desktop = Boolean(window.__TAURI_INTERNALS__);
   const [status, setStatus] = useState<Cs2ConfigStatus | null>(null);
-  const [phase, setPhase] = useState<Cs2ConfigStatus['phase']>();
+  const [phase, setPhase] = useState<Cs2Status['phase']>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useEffect(() => {
@@ -35,7 +20,7 @@ export function useCs2Status() {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const next = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status');
+        const next = await desktopInvoke('cs2_config_status');
         if (active) {
           // A busy response deliberately has no game/config facts: retain the
           // last snapshot, and display only its separate operation label.
@@ -61,7 +46,7 @@ export function useCs2Status() {
   }, [desktop, revision]);
   return { status, phase, error, refresh: () => setRevision((current) => current + 1) };
 }
-export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
+export function cs2OperationLabel(phase: Cs2Status['phase']) {
   return phase === 'starting'
     ? '正在启动 CS2，等待 Steam…'
     : phase === 'restoring'
@@ -69,12 +54,6 @@ export function cs2OperationLabel(phase: Cs2ConfigStatus['phase']) {
       : '正在检查 CS2 配置…';
 }
 
-export interface WorkspaceExitStatus {
-  windowMessage?: string | null;
-  busy: boolean;
-  stage: 'checking' | 'production' | 'restoration' | 'detachment' | 'presentation' | '';
-  message: string | null;
-}
 /** Read-only Host feedback: survives navigation and hidden workspace windows. */
 export function useWorkspaceExitStatus() {
   const [status, setStatus] = useState<WorkspaceExitStatus | null>(null);
@@ -84,7 +63,7 @@ export function useWorkspaceExitStatus() {
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        const next = await desktopInvoke<WorkspaceExitStatus>('workspace_exit_status');
+        const next = await desktopInvoke('workspace_exit_status');
         if (active) setStatus(next);
       } catch {
         // Keep the last confirmed outcome; CS2 status reports Host read failures.

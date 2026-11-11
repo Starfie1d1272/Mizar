@@ -8,7 +8,7 @@ import {
   type ModuleRecord,
   type ResourceRef,
 } from '@mizar/broadcast-config';
-import { parseManifest, parsePackJson, verifyFiles } from './index.js';
+import { parseManifest, parsePackJson, verifyFiles } from './manifest.js';
 import { importModule, type ImportReferences } from './modules.js';
 
 const id = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);

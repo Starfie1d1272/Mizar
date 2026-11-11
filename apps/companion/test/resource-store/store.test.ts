@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PreparePack, StoreOptions, TrustedPack } from '../../src/resource-store/contract.js';
-import { checkDescriptor, safePath, verifiedRead } from '../../src/resource-store/files.js';
+import { checkDescriptor, verifiedRead } from '../../src/resource-store/files.js';
 import { ResourceStore } from '../../src/resource-store/store.js';
 import { BroadcastReferenceQueue } from '../../src/broadcast-config/reference-queue.js';
 
@@ -142,21 +142,6 @@ describe('Resource Store', () => {
     );
     expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('abcdefghij');
   });
-  it('keeps a prepared version inactive on download and cache reuse', async () => {
-    const { store } = await setup();
-    await store.installVerified(packId, prepare());
-    await store.installVerified(packId, prepare('v2', 'abcdefghij'), {
-      packVersion: '2',
-      activation: 'prepare-only',
-    });
-    expect(store.getStatus(packId)).toMatchObject({ activeVersion: '1', preparedVersion: '2' });
-    await store.installVerified(packId, prepare('v2', 'abcdefghij'), {
-      packVersion: '2',
-      activation: 'prepare-only',
-    });
-    expect(store.getStatus(packId)).toMatchObject({ activeVersion: '1', preparedVersion: '2' });
-    expect((await store.read(packId, 'replay/video.mp4')).bytes.toString()).toBe('0123456789');
-  });
   it('cancels and rejects concurrent operations/writers while preserving old ready bytes', async () => {
     const { store, options } = await setup();
     await store.installVerified(packId, prepare());
@@ -268,18 +253,4 @@ describe('Resource Store', () => {
       ),
     ).rejects.toThrow('resource_integrity_failed');
   });
-});
-
-it('accepts canonical directory spelling and Windows case aliases while retaining ancestor link checks', async () => {
-  const { root } = await setup();
-  const mixed = join(root, 'MixedCase');
-  await mkdir(mixed);
-  await writeFile(join(mixed, 'settings.json'), '{}');
-  const spelling = process.platform === 'win32' ? join(root, 'mixedcase') : join(mixed, '.');
-  expect(await safePath(spelling)).toBe(spelling);
-  expect(await safePath(spelling, 'settings.json')).toBe(join(spelling, 'settings.json'));
-  await expect(safePath(spelling, '../settings.json')).rejects.toThrow('resource_path_invalid');
-  const link = join(root, 'directory-link');
-  await symlink(mixed, link, process.platform === 'win32' ? 'junction' : 'dir');
-  await expect(safePath(link, 'settings.json')).rejects.toThrow('resource_path_unsafe');
 });

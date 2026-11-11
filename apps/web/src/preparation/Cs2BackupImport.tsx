@@ -2,16 +2,9 @@ import { useState } from 'react';
 import { Button, Checkbox, StatusBanner } from '../ui';
 import { ControlTask } from '../debug/control-task';
 import { desktopInvoke } from '../workspace/client';
-import type { Cs2ConfigStatus } from './cs2-status';
+import type { LifecycleResult } from '@mizar/protocol/desktop-lifecycle';
 
-type Selection = {
-  selectionId: string;
-  nickname: string;
-  avatar: string | null;
-  sourceName: string;
-  targetPath: string;
-  includesFrameRate: boolean;
-};
+type Selection = NonNullable<LifecycleResult<'manage_cs2_backup'>>;
 
 export function Cs2BackupImport() {
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -27,14 +20,14 @@ export function Cs2BackupImport() {
       selectionId: selection?.selectionId ?? null,
     });
     try {
-      const next = await desktopInvoke<Selection | null>(
+      const next = await desktopInvoke(
         'manage_cs2_backup',
         { action, selectionId: selection?.selectionId ?? null },
         task,
       );
       if (action === 'apply') {
-        const after = await desktopInvoke<Cs2ConfigStatus>('cs2_config_status', undefined, task);
-        const complete = !after.pending && !after.busy && !after.running;
+        const after = await desktopInvoke('cs2_config_status', undefined, task);
+        const complete = !after.busy && !after.pending && !after.running;
         task.finish(complete ? 'confirmed' : 'unconfirmed', { after });
         setMessage(
           complete ? '设置已恢复，恢复前的原件已保存。' : '恢复尚未结束，请查看上方恢复状态。',

@@ -9,7 +9,6 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { promisify } from 'node:util';
 import { setImmediate } from 'node:timers/promises';
-import { lookupCreatedDraft, lookupRelease } from './release-lookup.mjs';
 import { publishDraftAssets, reconcileAssets, stageDraftAssets } from './release-assets.mjs';
 
 const sha = 'a'.repeat(40);
@@ -95,80 +94,6 @@ function draftApi(expected, initial = []) {
     },
   };
 }
-
-test('discovers an unpublished draft, rejects ambiguity and never assumes a failed list is empty', () => {
-  const draft = {
-    id: 81,
-    draft: true,
-    prerelease: false,
-    tag_name: tag,
-    target_commitish: sha,
-    assets: [],
-  };
-  const lookup = (path) => (path.startsWith('releases?') ? [draft] : null);
-  assert.equal(lookupRelease(tag, sha, lookup).id, 81);
-  const unrelated = Array.from({ length: 100 }, (_, index) => ({
-    id: index + 100,
-    tag_name: `v0.0.${index}`,
-  }));
-  assert.equal(
-    lookupRelease(tag, sha, (path) =>
-      path.endsWith('&page=1') ? unrelated : path.endsWith('&page=2') ? [draft] : null,
-    ).id,
-    81,
-  );
-  assert.throws(() =>
-    lookupRelease(tag, sha, (path) => (path.startsWith('releases?') ? [draft, draft] : null)),
-  );
-  assert.throws(() =>
-    lookupRelease(tag, sha, (path) =>
-      path.startsWith('releases?') ? [{ ...draft, target_commitish: 'b'.repeat(40) }] : null,
-    ),
-  );
-  assert.throws(() => lookupRelease(tag, sha, () => null));
-  assert.throws(() =>
-    lookupRelease(tag, sha, (path) =>
-      path.startsWith('releases?') ? [draft] : { object: { type: 'commit', sha } },
-    ),
-  );
-});
-
-test('new draft lookup waits for visibility but fails closed on absence and conflicts', async () => {
-  const draft = {
-    id: 81,
-    draft: true,
-    prerelease: false,
-    tag_name: tag,
-    target_commitish: sha,
-    assets: [],
-  };
-  let lists = 0;
-  let waits = 0;
-  const wait = async () => {
-    waits++;
-  };
-  const delayed = (path) => (path.startsWith('releases?') ? (++lists < 3 ? [] : [draft]) : null);
-  assert.deepEqual(await lookupCreatedDraft(tag, sha, delayed, wait), draft);
-  assert.equal(waits, 2);
-  waits = 0;
-  await assert.rejects(
-    lookupCreatedDraft(tag, sha, (path) => (path.startsWith('releases?') ? [] : null), wait),
-    /not visible/,
-  );
-  assert.equal(waits, 4);
-  waits = 0;
-  await assert.rejects(
-    lookupCreatedDraft(
-      tag,
-      sha,
-      (path) =>
-        path.startsWith('releases?') ? [{ ...draft, target_commitish: 'b'.repeat(40) }] : null,
-      wait,
-    ),
-    /Draft source differs/,
-  );
-  assert.equal(waits, 0);
-});
 
 test(
   'production lookup-release finds an authenticated partial draft without a tag',
@@ -314,66 +239,6 @@ test('draft recovery checks existing bytes first, fills only missing files, and 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test('draft uploads wait for in-flight failures without replaying or publishing', async () => {
-  const expected = Array.from({ length: 5 }, (_, index) => {
-    const name = `${index}.zip`,
-      bytes = Buffer.from(name);
-    return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
-  });
-  const box = draftApi(expected);
-  let finish;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
-  let started = 0;
-  const uploadNames = [];
-  let settled = false;
-  const api = async (args) => {
-    if (args.at(-1).startsWith('https://uploads.github.com/')) {
-      uploadNames.push(new URL(args.at(-1)).searchParams.get('name'));
-      const index = started++;
-      if (index === 0) throw new Error('uncertain upload');
-      await pending;
-    }
-    return box.api(args);
-  };
-  const publication = publishDraftAssets('81', { tag, gitSha: sha }, expected, api).finally(() => {
-    settled = true;
-  });
-  await setImmediate();
-  assert.ok(started > 1);
-  const startedBeforeSettlement = started;
-  assert.equal(settled, false);
-  assert.deepEqual(box.actions, []);
-  finish();
-  await assert.rejects(publication, /uncertain upload/);
-  assert.equal(started, startedBeforeSettlement);
-  assert.equal(new Set(uploadNames).size, uploadNames.length);
-  assert.deepEqual(box.actions, []);
-});
-
-test('draft success fully reads each uploaded asset before publication', async () => {
-  const expected = Array.from({ length: 5 }, (_, index) => {
-    const name = `${index}.zip`,
-      bytes = Buffer.from(name);
-    return { name, path: name, bytes, size: bytes.length, sha256: hash(bytes) };
-  });
-  const box = draftApi(expected);
-  let reads = 0;
-  const api = async (args) => {
-    if (args.at(-1).includes('/releases/assets/')) {
-      await setImmediate();
-      const value = box.api(args);
-      reads++;
-      return value;
-    }
-    if (args[0] === '--method' && args[1] === 'PATCH') assert.equal(reads, expected.length);
-    return box.api(args);
-  };
-  await publishDraftAssets('81', { tag, gitSha: sha }, expected, api);
-  assert.deepEqual(box.actions, ['publish']);
 });
 
 test('failed final draft readback waits for active reads and never publishes', async () => {

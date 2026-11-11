@@ -86,6 +86,10 @@
       "types": "./dist/orchestration.d.ts",
       "import": "./dist/orchestration.js"
     },
+    "./desktop-lifecycle": {
+      "types": "./dist/desktop-lifecycle.d.ts",
+      "import": "./dist/desktop-lifecycle.js"
+    },
     "./diagnostics-upload": {
       "types": "./dist/diagnostics-upload.d.ts",
       "import": "./dist/diagnostics-upload.js"

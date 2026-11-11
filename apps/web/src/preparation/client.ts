@@ -1,3 +1,8 @@
+import { sourceCleanupStatusSchema } from '@mizar/protocol/output';
+import {
+  productionExitEvidenceSchema,
+  type ProductionExitEvidence,
+} from '@mizar/protocol/program-scenes';
 import { ControlTask } from '../debug/control-task';
 import { useEffect, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
@@ -108,13 +113,11 @@ export async function openRivalHubAuthorization(url: string, popup?: Window | nu
   else if (popup && !popup.closed) popup.location.replace(url);
   else window.open(url, 'mizar-rivalhub');
 }
-export interface Production {
+export interface Production extends Partial<ProductionExitEvidence> {
   mode: 'preparation' | 'live' | 'hidden';
   revision: string;
   sessionId?: string;
   canEnter: boolean;
-  releaseHandoffState?: 'idle' | 'pending' | 'recorded' | 'confirmed' | 'unconfirmed';
-  obsExitState?: 'idle' | 'pending' | 'confirmed' | 'unconfirmed';
 }
 
 /** Retry only the Companion OBS exit task; do not repeat Host game cleanup. */
@@ -262,7 +265,7 @@ async function enterDesktopWorkspace(
     void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
   signal?.addEventListener('abort', cancel);
   try {
-    const document = await desktopInvoke<string>('entry_document');
+    const document = await desktopInvoke('entry_document');
     if (signal?.aborted || window.location.href !== location) throw new Error('进入已取消。');
     await desktopInvoke(
       'enter_workspace',
@@ -308,23 +311,16 @@ export async function productionAction(
       await desktopInvoke('finish_workspace', confirmation, task);
       const [production, source] = await Promise.all([
         fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
-          .then((response) => (response.ok ? (response.json() as Promise<Production>) : null))
+          .then(async (response) =>
+            response.ok ? productionExitEvidenceSchema.parse(await response.json()) : null,
+          )
           .catch(() => null),
         fetch('/local/v1/rivalhub-connection', {
           cache: 'no-store',
           signal: AbortSignal.timeout(5000),
         })
-          .then((response) =>
-            response.ok
-              ? (response.json() as Promise<{
-                  sourceCleanup?: {
-                    pending: number;
-                    blocked: number;
-                    claimIntent: boolean;
-                    handoffPending?: number;
-                  };
-                }>)
-              : null,
+          .then(async (response) =>
+            response.ok ? sourceCleanupStatusSchema.parse(await response.json()) : null,
           )
           .catch(() => null),
       ]);
@@ -340,7 +336,7 @@ export async function productionAction(
         cleanup.pending > 0 ||
         cleanup.blocked > 0 ||
         cleanup.claimIntent ||
-        (cleanup.handoffPending ?? 0) > 0
+        cleanup.handoffPending > 0
       ) {
         task.finish('unconfirmed', { reason: 'local_cleanup_complete_remote_or_obs_pending' });
         return task.result;

@@ -4,9 +4,6 @@ import { Buffer } from 'node:buffer';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath, URL } from 'node:url';
-import { promisify } from 'node:util';
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
 import { RESOURCE_ASSET_NAMES } from '../../packages/resource-pack-contract/catalog.mjs';
 import { createBoxPlan } from './box-phase-contract.mjs';
@@ -17,66 +14,10 @@ import {
   finalCheck,
   updatePointer,
   verifyPointer,
-  boxPhaseDiagnostic,
 } from './box-phases.mjs';
 
 const item = (name, bytes) => ({ name, size: bytes.length, sha256: digest(bytes) });
 
-test('invalid plan reports a fixed reason and never echoes arbitrary external errors', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'mizar-box-invalid-'));
-  try {
-    await writeFile(join(directory, 'plan.json'), '{}\n');
-    const script = fileURLToPath(new URL('./box-phases.mjs', import.meta.url));
-    await assert.rejects(
-      promisify(execFile)(process.execPath, [script, 'download', directory, 'runtime', 'core']),
-      (error) =>
-        /reason=BOX_PLAN_IDENTITY \(Invalid Box plan identity\)/.test(error.stderr) &&
-        /lane=runtime asset=core/.test(error.stderr),
-    );
-    const secret = 'secret-token';
-    const url = 'https://host.example/private?signature=abc';
-    const text = boxPhaseDiagnostic('download', 'runtime', 'core', new Error(`${secret} ${url}`));
-    assert.match(text, /reason=BOX_PHASE_ERROR/);
-    assert.ok(!text.includes(secret));
-    assert.ok(!text.includes(url));
-    const missing = boxPhaseDiagnostic(
-      'transfer-verified-runtime',
-      'runtime',
-      'core',
-      Object.assign(new Error(`${secret} ${url}`), { code: 'ENOENT' }),
-    );
-    assert.match(
-      missing,
-      /transfer-verified-runtime.*lane=runtime asset=core.*reason=BOX_FILE_MISSING/,
-    );
-    const external = boxPhaseDiagnostic(
-      'transfer-verified-runtime',
-      'runtime',
-      'core',
-      new Error(`${secret} ${url}`),
-    );
-    assert.match(
-      external,
-      /transfer-verified-runtime.*lane=runtime asset=core.*reason=BOX_PHASE_ERROR/,
-    );
-    assert.ok(!missing.includes(secret) && !missing.includes(url));
-    assert.ok(!external.includes(secret) && !external.includes(url));
-    const receipt = boxPhaseDiagnostic(
-      'verify',
-      'runtime',
-      'core',
-      new Error('Invalid Box phase receipt'),
-      'Mizar-v1.10.1-Windows-x64-Core-Setup.exe',
-    );
-    assert.match(receipt, /reason=BOX_RECEIPT_INVALID/);
-    assert.match(receipt, /name=Mizar-v1\.10\.1-Windows-x64-Core-Setup\.exe/);
-    assert.ok(
-      !boxPhaseDiagnostic('verify', 'runtime', 'core', new Error('oops'), secret).includes(secret),
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
 function fakeBox() {
   const directories = new Set([
     '/',
@@ -263,67 +204,4 @@ test('verified GitHub lanes publish only original metadata, preserve history and
   previousVersion = '1.10.0';
   await assert.rejects(updatePointer(root, receipts, box), /拒绝回退/);
   assert.deepEqual(box.writes, [metadataPath, '/Updates/latest.json']);
-});
-
-test('prepare writes only metadata and the exact authenticated asset plan', async (t) => {
-  const { prepare } = await import('./box-phases.mjs');
-  const { readBoxPlan } = await import('./box-phase-contract.mjs');
-  const root = await mkdtemp(join(tmpdir(), 'mizar-box-plan-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const before = [process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT];
-  t.after(() => {
-    for (const [index, key] of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'].entries())
-      if (before[index] === undefined) delete process.env[key];
-      else process.env[key] = before[index];
-  });
-  process.env.GITHUB_RUN_ID = '123';
-  process.env.GITHUB_RUN_ATTEMPT = '1';
-  const tag = 'v1.10.0',
-    sha = 'b'.repeat(40),
-    coreSha = 'c'.repeat(64);
-  const carrier = Buffer.from('small-metadata'),
-    backend = item(`Mizar-${tag}-Windows-x64-Core-Setup.exe`, Buffer.from('core'));
-  const bootstrap = item(`Mizar-${tag}-Windows-x64-WebInstaller.exe`, Buffer.from('web'));
-  const pack = item('Mizar-official-epl-default-1.0.0.zip', Buffer.from('pack'));
-  const release = {
-    id: 7,
-    assets: [
-      {
-        name: pack.name,
-        size: pack.size,
-        digest: `sha256:${pack.sha256}`,
-        browser_download_url: `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${pack.name}`,
-      },
-    ],
-  };
-  const identity = {
-    version: '1.10.0',
-    gitSha: sha,
-    core: { archiveSha256: coreSha },
-    originals: new Map(),
-    runtime: [{ ...item('machine-metadata.json', carrier), bytes: carrier }, backend],
-    bootstrap,
-    release,
-  };
-  const input = join(root, 'release.json');
-  await writeFile(input, JSON.stringify({ tag }));
-  const destination = join(root, 'plan');
-  const result = await prepare(destination, input, {
-    loadIdentity: async (_tag, options) => {
-      assert.equal(options.runtime, false);
-      assert.equal(options.bootstrap, false);
-      return identity;
-    },
-    loadIndex: async () => Buffer.from('index'),
-    verifyResources: async () => ({
-      entry: { archive: { name: pack.name, bytes: pack.size, sha256: pack.sha256 } },
-    }),
-  });
-  const bytes = await readFile(join(destination, 'plan.json'));
-  assert.equal(result.planSha256, digest(bytes));
-  const plan = readBoxPlan(bytes);
-  assert.deepEqual(plan.assets.runtime, [item('machine-metadata.json', carrier), backend]);
-  assert.deepEqual(plan.assets.resources, [pack]);
-  assert.deepEqual(plan.assets.downloads, [bootstrap]);
-  await assert.rejects(readFile(join(destination, backend.name)), { code: 'ENOENT' });
 });

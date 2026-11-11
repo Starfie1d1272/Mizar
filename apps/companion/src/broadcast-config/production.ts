@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { lstat, readFile } from 'node:fs/promises';
 import { canonicalJson } from '@mizar/hud-config';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type {
@@ -7,6 +8,9 @@ import type {
   MulnxToolRef,
   ResourceRef,
 } from '@mizar/broadcast-config';
+import { readMusicPack } from '../music/archive.js';
+import { PACK_ID } from '../resource-store/runtime-adapter.js';
+import type { ResourceStore } from '../resource-store/store.js';
 import type { MusicStore } from '../music/store.js';
 import { readMusicAsset } from './music-assets.js';
 import { BroadcastReferenceQueue } from './reference-queue.js';
@@ -133,4 +137,71 @@ export function createProductionBroadcastDependencies(
         throw new Error('dependency_missing');
     },
   };
+}
+
+/** Route official resources through their exact-version owner. */
+export function withOfficialBroadcastResources(
+  base: BroadcastRuntimeDependencies,
+  currentStore: () => Pick<ResourceStore, 'readExact' | 'verifyExact' | 'isDeleting'> | undefined,
+  hudPath?: string,
+): BroadcastRuntimeDependencies {
+  const store = () => {
+    const current = currentStore();
+    if (!current) throw new Error('resource_store_unavailable');
+    return current;
+  };
+  return {
+    ...base,
+    hudPath: base.hudPath ?? hudPath,
+    isDeleting: async (ref) =>
+      ref.id === PACK_ID ? store().isDeleting(ref) : base.isDeleting(ref),
+    resolve: {
+      scene: (value) => base.resolve.scene(value),
+      camera: (value) => base.resolve.camera(value),
+      hud: (value) => base.resolve.hud(value),
+      ...(base.resolve.image ? { image: (value: AssetRef) => base.resolve.image!(value) } : {}),
+      asset: async (ref) => {
+        if (ref.resource.id !== PACK_ID) return base.resolve.asset(ref);
+        await store().readExact(ref.resource, ref.fileId);
+      },
+    },
+    verifyActive: async (active) => {
+      await base.verifyActive(active);
+      for (const ref of active.lock.resources) {
+        if (ref.id === PACK_ID) await store().verifyExact(ref);
+      }
+    },
+  };
+}
+
+export async function loadLegacyMusic(
+  music: MusicStore,
+  broadcastPath: string,
+  builtinPack: string | undefined,
+  onBuiltinError: (error: unknown) => void,
+) {
+  const missing = async (path: string) =>
+    lstat(path).then(
+      () => false,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return true;
+        throw error;
+      },
+    );
+  if (!(await missing(broadcastPath))) return;
+  let initialPack: Buffer | undefined;
+  if (
+    builtinPack &&
+    (await missing(join(music.directory, 'state.json'))) &&
+    (await missing(broadcastPath))
+  ) {
+    try {
+      initialPack = await readFile(builtinPack);
+      await readMusicPack(initialPack);
+    } catch (error) {
+      initialPack = undefined;
+      onBuiltinError(error);
+    }
+  }
+  await music.load(initialPack);
 }

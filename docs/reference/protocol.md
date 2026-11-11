@@ -10,12 +10,15 @@
 | 公开快照与可靠事件 | [output.ts](../../packages/protocol/src/output.ts) |
 | 本地通道版本与消息 | [version.ts](../../packages/protocol/src/version.ts)、[协议包](../../packages/protocol/src/) |
 | 制作、场景与展示 | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts)、[跨语言生命周期](../../apps/companion/src/match-context/lifecycle-contract.json) |
+| 桌面生命周期 IPC | [Rust 命令注册与窗口权限](../../apps/desktop/src-tauri/ipc_commands.rs)、[关键命令参数与回执](../../packages/protocol/src/desktop-lifecycle.ts) |
 | RivalHub 输入 | [来源适配器](../../packages/rivalhub/src/) |
 | HUD 与播出模块 | [hud-config](../../packages/hud-config/src/index.ts)、[broadcast-config](../../packages/broadcast-config/README.md) |
 | 音乐、混音与运镜 | [music.ts](../../packages/protocol/src/music.ts)、[mixer.ts](../../packages/protocol/src/mixer.ts)、[orchestration.ts](../../packages/protocol/src/orchestration.ts) |
 | 诊断事件 | [diagnostics.ts](../../packages/protocol/src/diagnostics.ts) |
 
 Mizar 契约严格校验结构、版本与大小，各契约独立演进；破坏性变化升级对应版本，不同步抬升所有通道。提供方 DTO 的兼容规则留在其适配器，不替代 Mizar 契约。
+
+桌面进入、取消、退出与配置恢复命令按命令名推导参数和返回类型，Web 在调用边界验证 Host 回执。CS2 状态忙碌时只表示当前操作，完整状态用于核对恢复结果。确认制作收尾还要读取并校验本地 OBS 与网站来源收尾证据。
 
 带预期修订的修改在提交时核对；哪些请求需要该字段以对应路由为准，不给严格请求结构自行添加字段。冲突不自动覆盖草稿，也不能因为同为 HTTP 409 就重放；生命周期合同的 `status/error/retryable` 决定允许的自动重试，文案不参与机器判断。未知副作用先核对原操作，不能按未执行处理。
 

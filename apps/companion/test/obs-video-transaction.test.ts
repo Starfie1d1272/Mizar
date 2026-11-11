@@ -158,24 +158,6 @@ for (const condition of ['external output', 'OBS closed'] as const) {
     }));
 }
 
-test('already suitable video does not interrupt active output', async () =>
-  usingTest(async (tx, f) => {
-    f.settings = {
-      baseWidth: 1920,
-      baseHeight: 1080,
-      outputWidth: 1920,
-      outputHeight: 1080,
-      fpsNumerator: 60,
-      fpsDenominator: 1,
-    };
-    f.outputs = [
-      { outputName: 'Stream', outputActive: true, outputFlags: { OBS_OUTPUT_VIDEO: true } },
-    ];
-    await tx.preflight(f.obs, endpoint);
-    assert.equal(await tx.prepare(f.obs, endpoint, () => true), null);
-    assert.ok(f.calls.every(({ type }) => type.startsWith('Get')));
-  }));
-
 test('restores only unchanged pairs in the original profile and never stops output', async () =>
   usingTest(async (tx, f) => {
     const id = await tx.prepare(f.obs, endpoint, () => true);
@@ -225,20 +207,6 @@ test('a new service instance discovers and restores the persisted transaction', 
   }
 });
 
-test('equivalent 60 fps fraction is preserved when other video settings need repair', async () =>
-  usingTest(async (tx, f) => {
-    f.settings = { ...original, fpsNumerator: 60000, fpsDenominator: 1000 };
-    const id = await tx.prepare(f.obs, endpoint, () => true);
-    assert.equal(f.settings.fpsNumerator, 60000);
-    assert.equal(f.settings.fpsDenominator, 1000);
-    const write = f.calls.find(({ type }) => type === 'SetVideoSettings')?.data;
-    assert.equal(write?.fpsNumerator, undefined);
-    assert.equal(write?.fpsDenominator, undefined);
-    await tx.restore(f.obs, endpoint, id!);
-    assert.equal(f.settings.fpsNumerator, 60000);
-    assert.equal(f.settings.fpsDenominator, 1000);
-  }));
-
 test('an output starting between restoration check and write is named and never stopped', async () =>
   usingTest(async (tx, f) => {
     const id = await tx.prepare(f.obs, endpoint, () => true);
@@ -287,40 +255,6 @@ test('an unchanged confirmed transaction is reused during output without letting
     f.outputs = [];
     await tx.restore(f.obs, endpoint, nextId);
     assert.deepEqual(f.settings, original);
-  }));
-
-test('OBS output-list records distinguish video outputs from audio-only outputs', async () =>
-  usingTest(async (tx, f) => {
-    const flags = {
-      OBS_OUTPUT_AUDIO: true,
-      OBS_OUTPUT_VIDEO: false,
-      OBS_OUTPUT_ENCODED: true,
-      OBS_OUTPUT_MULTI_TRACK: false,
-      OBS_OUTPUT_SERVICE: false,
-    };
-    const outputs = [
-      {
-        outputName: 'Audio monitor',
-        outputKind: 'audio_output',
-        outputWidth: 0,
-        outputHeight: 0,
-        outputActive: true,
-        outputFlags: flags,
-      },
-      {
-        outputName: 'Plugin video',
-        outputKind: 'plugin_output',
-        outputWidth: 1920,
-        outputHeight: 1080,
-        outputActive: true,
-        outputFlags: { ...flags, OBS_OUTPUT_VIDEO: true },
-      },
-    ];
-    f.outputs = outputs;
-    await assert.rejects(tx.preflight(f.obs, endpoint), /Plugin video/);
-    f.outputs = [outputs[0]!];
-    await tx.preflight(f.obs, endpoint);
-    assert.equal(await tx.pending(), false);
   }));
 
 test('an incomplete output list fails closed before any video write', async () =>

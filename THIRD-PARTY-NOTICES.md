@@ -10,7 +10,6 @@
 | `@fastify/static`                        |   10.1.5 | Companion 静态文件服务           | MIT                                    |
 | `@fastify/websocket`                     |   11.3.3 | Companion WebSocket 承载         | MIT                                    |
 | `@fontsource/inter`                      |    5.3.0 | Program/Web 本地字体             | OFL-1.1                                |
-| `@playwright/test`                       |   1.63.0 | 浏览器与视觉回归                 | Apache-2.0                             |
 | `@types/node`                            |   26.6.4 | Node 类型声明                    | MIT                                    |
 | `@types/react`                           |   19.3.0 | React 类型声明                   | MIT                                    |
 | `@types/react-dom`                       |   19.3.0 | React DOM 类型声明               | MIT                                    |
@@ -22,7 +21,6 @@
 | `eslint`                                 |  10.12.0 | 静态检查                         | MIT                                    |
 | `eslint-plugin-react-hooks`              |    7.1.1 | React Hooks 规则                 | MIT                                    |
 | `fastify`                                |   5.12.5 | Companion HTTP 组合层            | MIT                                    |
-| `jsdom`                                  |   30.1.1 | 测试 DOM 环境                    | MIT                                    |
 | `prettier`                               |    3.9.9 | 代码格式化                       | MIT                                    |
 | `react`                                  |   19.3.0 | Web 渲染                         | MIT                                    |
 | `react-dom`                              |   19.3.0 | Web DOM 渲染                     | MIT                                    |
@@ -52,7 +50,6 @@ Windows Setup 使用 NSIS 3.11 封装完整便携 payload，不属于 Mizar 的�
 | 依赖                                                            | 当前版本 | 用途                                 | 许可证  |
 | --------------------------------------------------------------- | -------: | ------------------------------------ | ------- |
 | `storybook` / `@storybook/react-vite` / `@storybook/addon-a11y` |   10.6.1 | 独立组件目录、可复用样例与无障碍审查 | MIT     |
-| `@vitest/browser-playwright`                                    |    5.0.3 | Chromium 组件交互测试                | MIT     |
 | `axe-core`                                                      |   4.13.0 | WCAG 2.2 自动无障碍验证              | MPL-2.0 |
 | `jsonc-parser`                                                  |    3.3.1 | DTCG JSON 结构与重复键校验           | MIT     |
 | `postcss`                                                       |   8.5.28 | 限定范围的 CSS 声明架构检查          | MIT     |
