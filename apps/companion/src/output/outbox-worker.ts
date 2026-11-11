@@ -1,7 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import { parentPort, workerData } from 'node:worker_threads';
-import { durableJsonByteLength } from '../match-context/durable-json.js';
 import { sealOutbox } from './outbox-codec.js';
 import { OutboxRepository, type HistoryScope, type OutboxCommit } from './outbox-repository.js';
 
@@ -18,6 +17,8 @@ function operations(repository: OutboxRepository) {
     }),
     readHistory,
     captureCapacity: repository.captureCapacity.bind(repository),
+    archivedInterval: repository.archivedInterval.bind(repository),
+    captureInterval: repository.captureInterval.bind(repository),
     forDelivery: repository.forDelivery.bind(repository),
     sourceFences: (scopes: readonly string[]) =>
       scopes.map((scope) => ({
@@ -35,7 +36,9 @@ function operations(repository: OutboxRepository) {
     commit(value: OutboxCommit, scopes: readonly HistoryScope[], trackIdentity: boolean) {
       const started = performance.now();
       const active = sealOutbox(value.active);
-      if (durableJsonByteLength(active) > 4_000_000)
+      const activeJson = JSON.stringify(active);
+      const activeBytes = Buffer.byteLength(activeJson);
+      if (activeBytes > 4_000_000)
         return {
           ok: false as const,
           key: 'outbox_too_large',
@@ -63,14 +66,14 @@ function operations(repository: OutboxRepository) {
         : undefined;
       const preparationMs = performance.now() - started;
       try {
-        const projection = repository.commit({ ...value, active }, () => ({
+        const projection = repository.commit({ ...value, active }, activeJson, () => ({
           history: readHistory(scopes),
           interval: value.capture && repository.captureInterval(value.capture.intervalId),
           revoked: value.history?.some((entry) => entry.disposition === 'revoked')
             ? repository.revokedSummary()
             : undefined,
         }));
-        return { ok: true as const, ...projection, key, preparationMs };
+        return { ok: true as const, ...projection, key, preparationMs, activeBytes };
       } catch (error) {
         return { ok: false as const, key, error };
       }

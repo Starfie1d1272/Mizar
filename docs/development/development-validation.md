@@ -108,7 +108,7 @@ pnpm architecture:check
 
 修改[桌面 IPC 声明](../../apps/desktop/src-tauri/ipc_contract.rs)后，从 `apps/desktop/src-tauri` 编译并运行 `ipc_generate.rs`，命令为 `rustc --edition=2021 ipc_generate.rs -o <临时可执行文件路径>`。Windows 构建核对生成的命令名及全部参数与结果校验。
 
-`runtime_performance_window` 分别记录 Outbox worker 的快照准备、SQLite 写事务以及 Companion 主线程的事件循环延迟。主线程诊断使用 20 ms 采样间隔，实际制作机的接收间隔以现场诊断为准。
+`runtime_performance_window` 分别记录 Outbox 快照准备与字节数、worker 请求往返、SQLite 写事务、视频 Range 读取字节和缓存复用，以及 Companion 主线程的事件循环延迟。文件读取字节按应用的读取计数，可能由操作系统缓存满足。主线程诊断使用 20 ms 采样间隔，实际制作机的接收间隔以现场诊断为准。
 
 ## 样例、重放与来源
 

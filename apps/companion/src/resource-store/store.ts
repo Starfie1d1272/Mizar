@@ -21,6 +21,8 @@ import {
   readJson,
   syncDirectory,
   verifiedRead,
+  verifiedRange,
+  type VerifiedRangeProof,
 } from './files.js';
 
 interface CachedPack {
@@ -61,6 +63,9 @@ export class ResourceStore {
   private lease: string | null = null;
   private readingBytes = 0;
   private readers = 0;
+  private readonly rangeProofs = new Map<string, VerifiedRangeProof>();
+  private rangeTiming = { count: 0, reused: 0, fileReadBytes: 0, servedBytes: 0, maxMs: 0 };
+
   private readonly deletingPacks = new Set<string>();
 
   private constructor(private readonly options: StoreOptions) {
@@ -776,6 +781,12 @@ export class ResourceStore {
     }
   }
 
+  takeRangeTiming() {
+    const timing = this.rangeTiming;
+    this.rangeTiming = { count: 0, reused: 0, fileReadBytes: 0, servedBytes: 0, maxMs: 0 };
+    return timing;
+  }
+
   private async readCandidate(
     packId: string,
     active: CachedPack,
@@ -815,13 +826,39 @@ export class ResourceStore {
       throw new ResourceStoreError('resource_operation_conflict');
     this.readers++;
     this.readingBytes += readBytes;
+    const root = this.content(packId, active.id);
+    const proofKey =
+      range !== undefined && relative.endsWith('.mp4')
+        ? JSON.stringify([packId, active.id, relative, file.sha256])
+        : null;
     try {
       const result = Buffer.alloc(readBytes);
-      await verifiedRead(this.content(packId, active.id), file, signal, (chunk, offset) => {
-        const from = Math.max(start, offset),
-          to = Math.min(end + 1, offset + chunk.length);
-        if (to > from) chunk.copy(result, from - start, from - offset, to - offset);
-      });
+      if (proofKey) {
+        const started = performance.now();
+        const read = await verifiedRange(
+          root,
+          file,
+          signal,
+          start,
+          result,
+          this.rangeProofs.get(proofKey),
+        );
+        this.rangeProofs.delete(proofKey);
+        this.rangeProofs.set(proofKey, read.proof);
+        if (this.rangeProofs.size > 32)
+          this.rangeProofs.delete(this.rangeProofs.keys().next().value!);
+        this.rangeTiming.count++;
+        this.rangeTiming.reused += Number(read.reused);
+        this.rangeTiming.fileReadBytes += read.readBytes;
+        this.rangeTiming.servedBytes += readBytes;
+        this.rangeTiming.maxMs = Math.max(this.rangeTiming.maxMs, performance.now() - started);
+      } else {
+        await verifiedRead(root, file, signal, (chunk, offset) => {
+          const from = Math.max(start, offset),
+            to = Math.min(end + 1, offset + chunk.length);
+          if (to > from) chunk.copy(result, from - start, from - offset, to - offset);
+        });
+      }
       return {
         bytes: result,
         contentType: contentType(relative),
@@ -831,6 +868,7 @@ export class ResourceStore {
         partial: range !== undefined,
       };
     } catch (error) {
+      if (!signal.aborted && proofKey) this.rangeProofs.delete(proofKey);
       if (!signal.aborted && entry.active?.id === active.id) this.failed(entry, error);
       throw error;
     } finally {

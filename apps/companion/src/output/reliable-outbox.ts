@@ -171,7 +171,12 @@ export class ReliableOutbox {
     if (reference) reference = parseCaptureReference(reference);
     return this.queue.run(async () => {
       const key = sourceKey(source);
-      const interval = this.view.intervalForSource(source);
+      const current = this.view.intervalForSource(source);
+      const retired =
+        !current && reference && reference.storeId === this.captureStoreId()
+          ? await this.repository().request('archivedInterval', source)
+          : undefined;
+      const interval = current ?? retired;
       if (
         !reference ||
         reference.storeId !== this.captureStoreId() ||
@@ -182,7 +187,10 @@ export class ReliableOutbox {
         return;
       }
       if (!interval) {
-        if (this.view.intervals.has(reference.id)) {
+        if (
+          this.view.intervals.has(reference.id) ||
+          (await this.repository().request('captureInterval', reference.id))
+        ) {
           this.unknownCaptures.set(key, 'mismatch');
           await this.recordUnknownCapture(source, 'mismatch');
           return;
@@ -195,6 +203,9 @@ export class ReliableOutbox {
           committedSequence: 0,
           endCursor: reference.startCursor,
         });
+      } else if (retired) {
+        this.view.setInterval(retired);
+        this.view.archived.add(key);
       } else if (interval.state !== 'sealed' && !this.captures.has(key)) {
         this.unknownCaptures.set(key, 'unclean');
         await this.recordUnknownCapture(source, 'unclean');
@@ -584,12 +595,12 @@ export class ReliableOutbox {
   private recovery: OutboxRecovery | undefined;
   private unconfirmedRecovery: true | undefined;
 
-  private preparationTiming = { count: 0, totalMs: 0, maxMs: 0 };
+  private preparationTiming = { count: 0, totalMs: 0, maxMs: 0, activeSnapshotBytes: 0 };
 
   takePersistenceTiming() {
     const preparation = this.preparationTiming;
-    this.preparationTiming = { count: 0, totalMs: 0, maxMs: 0 };
-    return { preparation, sqlite: this.database?.takeTransactionTiming() ?? null };
+    this.preparationTiming = { count: 0, totalMs: 0, maxMs: 0, activeSnapshotBytes: 0 };
+    return { preparation, worker: this.database?.takeTiming() ?? null };
   }
 
   constructor(
@@ -808,7 +819,20 @@ export class ReliableOutbox {
 
   /** Exact closure moves records and its fence in the same transaction. */
   async archiveConfirmedSource(input: ExactSource): Promise<void> {
-    if (this.captureCoverage(input).state !== 'sealed') throw new Error('capture_coverage_unknown');
+    if (this.captureCoverage(input).state !== 'sealed') {
+      const identity = parseSource(input);
+      const key = sourceKey(identity);
+      const previouslyArchived = await this.queue.run(
+        async () =>
+          this.available &&
+          !this.view.intervalForSource(identity) &&
+          !this.unknownCaptures.has(key) &&
+          !this.view.unknown.has(key) &&
+          !!(await this.repository().request('archivedInterval', identity)),
+      );
+      if (previouslyArchived) return;
+      throw new Error('capture_coverage_unknown');
+    }
     await this.retryPendingEnqueues();
     if (this.hasPendingEnqueues(input)) throw new Error('outbox_source_unsettled');
     return this.runDurable(`archive:${sourceKey(parseSource(input))}`, async () => {
@@ -2674,6 +2698,7 @@ export class ReliableOutbox {
     if (!context && failureKey) this.unconfirmedWrites.delete(failureKey);
     this.preparationTiming.count++;
     this.preparationTiming.totalMs += result.preparationMs;
+    this.preparationTiming.activeSnapshotBytes += result.activeBytes;
     this.preparationTiming.maxMs = Math.max(this.preparationTiming.maxMs, result.preparationMs);
     plan.apply(result.history);
     if (result.revoked) this.revokedSummary = result.revoked;
