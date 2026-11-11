@@ -190,7 +190,6 @@ function ContextPanel({
           operator={operator}
           program={program}
           cursor={programCursor}
-          connection={connection}
           onOpen={openPreparation}
         />
       </div>

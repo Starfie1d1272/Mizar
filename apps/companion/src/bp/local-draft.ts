@@ -517,6 +517,3 @@ export function localBpDraftFromBinding(
 ): LocalBpDraft | null {
   return isLocalBinding(binding) ? bpAuthoringDraftFromBinding(binding, eventRules) : null;
 }
-
-export const localBpMapOptions = LOCAL_BP_MAP_CATALOG;
-export const defaultLocalBpMapPool = DEFAULT_LOCAL_BP_MAP_POOL;

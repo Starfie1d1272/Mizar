@@ -80,10 +80,6 @@ export function resetPresetDraft(draft: HudPreset): HudPreset {
   };
 }
 
-export function createCustomResourceId(): string {
-  return crypto.randomUUID();
-}
-
 export function getBuiltinResolvedPreset(id: string = BUILTIN_PRESET_ID): HudResolvedPreset {
   const preset = getBuiltinPresets().find((item) => item.id === id);
   if (preset === undefined) throw new Error(`未知内置 HUD 预设：${id}`);

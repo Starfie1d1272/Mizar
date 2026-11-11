@@ -1592,10 +1592,6 @@ export class OutputService {
     return this.outbox?.getRecovery();
   }
 
-  getReliableScopeDisposition(scope: ReliableDeliveryScope) {
-    return this.outboxUnavailable ? undefined : this.outbox?.getScopeDisposition(scope);
-  }
-
   getRevokedIsolationSummary() {
     return this.outboxUnavailable ? undefined : this.outbox?.getRevokedIsolationSummary();
   }

@@ -68,30 +68,6 @@ export function realRadarSnapshot(): RadarSnapshot {
   return radarSnapshotSchema.parse(artifact.fixtures['dense-utility'].samples[0]!.snapshot);
 }
 
-export type RadarEditorPreviewScene =
-  'dense-utility' | 'warmup' | 'bomb-dropped' | 'bomb-planted' | 'bomb-defusing';
-
-export function radarEditorPreviewSnapshot(scene: RadarEditorPreviewScene): RadarSnapshot {
-  const fixture =
-    scene === 'bomb-planted'
-      ? artifact.fixtures['bomb-plant']
-      : scene === 'bomb-defusing'
-        ? artifact.fixtures['bomb-defuse']
-        : artifact.fixtures[scene];
-
-  const sample =
-    scene === 'bomb-planted'
-      ? fixture.samples.find((candidate) => candidate.snapshot.payload.bomb?.state === 'planted')
-      : scene === 'bomb-defusing'
-        ? fixture.samples.find((candidate) => candidate.snapshot.payload.bomb?.state === 'defusing')
-        : fixture.samples[0];
-
-  if (sample === undefined) {
-    throw new Error(`Radar editor preview scene is missing: ${scene}`);
-  }
-  return radarSnapshotSchema.parse(structuredClone(sample.snapshot));
-}
-
 function sameCursor(program: ProgramSnapshot['cursor'], radar: RadarSnapshot['cursor']): boolean {
   return (
     program.producerInstanceId === radar.producerInstanceId &&

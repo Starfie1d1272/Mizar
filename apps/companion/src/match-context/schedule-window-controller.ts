@@ -87,12 +87,6 @@ export class ScheduleWindowController {
     return this.currentBinding;
   }
 
-  /** Cancel in-flight refreshes and remove the current schedule binding. */
-  clearCurrent(): void {
-    this.refreshGeneration += 1;
-    this.currentBinding = undefined;
-  }
-
   async refresh(source: ScheduleWindowSource): Promise<ScheduleWindowRefreshResult> {
     const generation = ++this.refreshGeneration;
     const isCurrent = () => generation === this.refreshGeneration;

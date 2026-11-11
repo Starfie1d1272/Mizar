@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { Miniflare } from 'miniflare';
 import { build } from 'esbuild';
 // Bundle the actual production entry and shared protocol export, as Wrangler does.
@@ -57,5 +56,3 @@ export function runtime(directory: string, uploadLimit = 300, enrollmentLimit = 
     },
   });
 }
-export const adminHeaders = { authorization: `Bearer ${bindings.ADMIN_KEY}` };
-export const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');

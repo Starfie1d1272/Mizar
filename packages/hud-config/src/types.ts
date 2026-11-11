@@ -97,7 +97,6 @@ export type HudConfigDocument = Omit<
   readonly customLayouts: HudLayout[];
   readonly customThemes: HudTheme[];
 };
-export type HudActivePresetReference = HudConfigDocument['activePreset'];
 
 export type HudEditorControl = {
   readonly path: string;

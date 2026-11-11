@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createLocalWebOriginPolicy } from '../src/local-web/origin-policy.js';
 import { OBS_COLLECTION } from '../src/obs/desired-state.js';
-import { ensureObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
+import { checkObsConfiguration, type ObsRpc } from '../src/obs/reconcile.js';
 import {
   createProduction,
   registerProductionRoutes,
@@ -11,7 +11,7 @@ import {
 } from '../src/program-scenes/production.js';
 import type { ProgramSceneController } from '../src/program-scenes/controller.js';
 
-test('passive OBS preparation never takes another collection', async () => {
+test('OBS inspection never takes another collection', async () => {
   const calls: string[] = [];
   const obs: ObsRpc = {
     call: (type) => {
@@ -25,7 +25,7 @@ test('passive OBS preparation never takes another collection', async () => {
     },
   };
   assert.equal(
-    (await ensureObsConfiguration(obs, 'http://127.0.0.1:3000'))[0]?.code,
+    (await checkObsConfiguration(obs, 'http://127.0.0.1:3000'))[0]?.code,
     'collection_inactive',
   );
   assert.ok(calls.every((type) => type.startsWith('Get')));

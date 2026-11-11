@@ -169,7 +169,10 @@ export class MusicDirector {
     });
   }
   /** Explicit operator preparation; reads and playback never enter this structural path. */
-  async prepare(valid: () => boolean = () => true): Promise<void> {
+  async prepare(
+    valid: () => boolean = () => true,
+    guard: (obs: ObsRpc) => ObsRpc = (obs) => obs,
+  ): Promise<void> {
     if (!this.store.ready || this.store.failure) throw new Error('music_unavailable');
     await this.withAudioModeRecovery(async (current) => {
       const active = () => valid() && current();
@@ -179,7 +182,8 @@ export class MusicDirector {
             config.tracks.length > 0 && (layer === 'stinger' || group !== 'opening'),
         );
       const failures: unknown[] = [];
-      await this.provider.session(async (obs) => {
+      await this.provider.session(async (connection) => {
+        const obs = guard(connection);
         for (const layer of ['bgm', 'stinger'] as const) {
           if (!active()) throw new Error('music_cancelled');
           if (
