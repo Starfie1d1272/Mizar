@@ -273,10 +273,18 @@ function Record-UpdateActivity([string]$phase, [string]$detail = '') {
 function Assert-PlainPath([string]$path) { [MizarUpdateFiles]::PlainPath($path) }
 
 # Retire only a recognized old execution capability, never its plan or backup.
-function Read-HandoffJson([string]$path) {
+function Read-HandoffJson([string]$path, [switch]$SharedSnapshot) {
   Assert-PlainPath $path
   if ((Get-Item -LiteralPath $path -Force).Length -gt 65536) { throw 'update_handoff_record_large' }
-  return [IO.File]::ReadAllText($path, [Text.UTF8Encoding]::new($false, $true)) | ConvertFrom-Json
+  if (!$SharedSnapshot) { return [IO.File]::ReadAllText($path, [Text.UTF8Encoding]::new($false, $true)) | ConvertFrom-Json }
+  # Pending publication is an atomic replace. A read-only discovery snapshot must
+  # not deny the active bootstrap's rename; mutation rechecks under its lease.
+  $file = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
+  try {
+    if ($file.Length -gt 65536) { throw 'update_handoff_record_large' }
+    $reader = [IO.StreamReader]::new($file, [Text.UTF8Encoding]::new($false, $true))
+    try { return $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+  } finally { $file.Dispose() }
 }
 function Handoff-Path([string]$path) { Assert-PlainPath $path; return [IO.Path]::GetFullPath($path).TrimEnd('\') }
 function Test-LegacyHelperHash([string]$hash) {
@@ -405,6 +413,9 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
     if ((Handoff-Path $registeredPlan.bundleRoot) -eq $target) { [void]$roots.Add((Handoff-Path $registeredPlan.stateRoot)) }
   }
   $refusal = "throw 'update_legacy_retired: use the current installer; original recovery files are preserved.'`r`n"
+  $cache = Join-Path (Join-Path $env:LOCALAPPDATA 'Mizar') 'bootstrap-cache'
+  $pendingPath = Join-Path $cache 'fresh-install.pending'; Assert-PlainPath $pendingPath
+  $pendingSnapshot = if (Test-Path -LiteralPath $pendingPath) { Read-HandoffJson $pendingPath -SharedSnapshot }
   $candidates = @()
   foreach ($root in $roots) {
     $root = Handoff-Path $root
@@ -430,6 +441,8 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
         $expected = '@echo off', 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0update-install.ps1" -Mode Recover -StageRoot "%~dp0."', 'pause'
         if (([IO.File]::ReadAllText($cmd).TrimEnd("`r", "`n") -replace "`r`n", "`n") -cne ($expected -join "`n") -or (Test-Path -LiteralPath ($cmd + '.retired'))) { throw 'update_handoff_archive_conflict' }
       }
+      $command = '"' + (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $source + '" -Mode Recover -StageRoot "' + $directory.FullName + '"'
+      if ($archived -and (Test-Path -LiteralPath $source) -and !(Test-Path -LiteralPath $cmd) -and $entry -ne $command -and $pendingSnapshot.updateStage -ne $directory.FullName) { continue }
       $cmdHash = if (Test-Path -LiteralPath $cmd) { [MizarUpdateFiles]::Hash($cmd) } else { '' }
       $candidates += @{ cmdHash = $cmdHash; stage = $directory.FullName; source = $source; archive = $archive; archived = $archived; hash = $hash; cmd = $cmd; plan = $binding }
     }
@@ -933,7 +946,20 @@ if ($Mode -eq 'Handoff') {
     }
     [Console]::Write($root)
     exit 0
-  } catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }
+  } catch {
+    $failure = $_.Exception.ToString()
+    [Console]::Error.WriteLine($failure)
+    try {
+      $logRoot = Handoff-Path $(if ($context -and $context.state) { $context.state } else { $HandoffState })
+      if ($logRoot -eq $target -or $logRoot.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'update_data_inside_installation' }
+      $logDirectory = Join-Path $logRoot 'updates'; Assert-PlainPath $logDirectory
+      [IO.Directory]::CreateDirectory($logDirectory) | Out-Null
+      $logPath = Join-Path $logDirectory 'handoff-last.log'; Assert-PlainPath $logPath
+      if ($failure.Length -gt 32768) { $failure = $failure.Substring(0,32768) }
+      [IO.File]::WriteAllText($logPath, ([DateTime]::UtcNow.ToString('o') + " target=" + $HandoffTarget + " caller=" + $CallerProcessId + "`r`n" + $failure), [Text.UTF8Encoding]::new($false))
+    } catch { }
+    exit 1
+  }
   finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
 }
 

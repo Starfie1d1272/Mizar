@@ -65,6 +65,8 @@ try {
   Assert ((Get-Content (Join-Path $target 'successor')) -eq 'same location successor must remain') 'Successor payload changed'
   Assert (!$script:registry[$runKey].ContainsKey('!MizarUpdateRecovery')) 'Exact old RunOnce retained'
   Invoke-LegacyHandoff $target $state|Out-Null
+  $completedLease=[IO.File]::Open((Join-Path (Split-Path -Parent $pending) 'fresh-install.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  try { Invoke-LegacyHandoff $target $state|Out-Null } finally { $completedLease.Dispose() }
   Write-Output 'PASS production retirement + repeat: original plan/journal/helper/backup preserved, same-location successor unchanged, pending/cmd/RunOnce retired'
   # Resume the exact crash boundary after rename, before refusal publication.
   $interrupted=Stage '2';Move-Item (Join-Path $interrupted 'update-install.ps1') (Join-Path $interrupted 'update-install.ps1.retired')
@@ -109,6 +111,7 @@ Assert ($LASTEXITCODE -eq 0) 'NSIS compilation failed'
 function Run-Setup {
   $p=Start-Process $installer -ArgumentList @('/S',('"/MIZARSTATE='+$state+'"'),('/D='+$target)) -PassThru
   Assert ($p.WaitForExit(60000)) 'NSIS fixture exceeded its bounded wait; do not kill it'
+  if($p.ExitCode -ne 0) { $log=Join-Path $state 'updates/handoff-last.log'; if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log|Write-Output} }
   Assert ($p.ExitCode -eq 0) ('NSIS fixture failed '+$p.ExitCode);$p.Dispose()
 }
 function Run-Update([string]$helper) {
