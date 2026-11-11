@@ -32,6 +32,26 @@ function validImage(bytes: Buffer, mime: keyof typeof MIME_EXTENSION): boolean {
   );
 }
 
+async function readAsset(path: string): Promise<Buffer> {
+  const file = await open(path, 'r');
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > MAX_ASSET_BYTES) throw new Error('local_asset_invalid');
+    // Read at most the published size, with one extra byte to detect a changed file.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    if (size !== stat.size) throw new Error('local_asset_invalid');
+    return buffer.subarray(0, size);
+  } finally {
+    await file.close();
+  }
+}
+
 export function registerLocalAssetRoutes(
   app: FastifyInstance,
   options: {
@@ -67,8 +87,9 @@ export function registerLocalAssetRoutes(
     const digest = createHash('sha256').update(bytes).digest('hex');
     const filename = `${digest}.${MIME_EXTENSION[mime]}`;
     try {
-      // Every upload has the filename's digest. Replacing it also repairs an interrupted old write.
-      await replaceDurableFile(join(options.directory, filename), () => bytes);
+      const path = join(options.directory, filename);
+      const existing = await readAsset(path).catch(() => undefined);
+      if (!existing?.equals(bytes)) await replaceDurableFile(path, () => bytes);
     } catch (error) {
       request.log.warn(
         { stage: 'control_failure', error: diagnosticValue(error) },
@@ -84,25 +105,7 @@ export function registerLocalAssetRoutes(
     if (!/^[a-f0-9]{64}\.(?:png|jpg|webp)$/.test(filename))
       return reply.code(404).send({ error: 'local_asset_not_found' });
     try {
-      const file = await open(join(options.directory, filename), 'r');
-      const bytes = await (async () => {
-        try {
-          const stat = await file.stat();
-          if (!stat.isFile() || stat.size > MAX_ASSET_BYTES) throw new Error('local_asset_invalid');
-          // Read at most the published size, with one extra byte to detect a changed file.
-          const buffer = Buffer.alloc(stat.size + 1);
-          let size = 0;
-          while (size < buffer.length) {
-            const { bytesRead } = await file.read(buffer, size, buffer.length - size);
-            if (bytesRead === 0) break;
-            size += bytesRead;
-          }
-          if (size !== stat.size) throw new Error('local_asset_invalid');
-          return buffer.subarray(0, size);
-        } finally {
-          await file.close();
-        }
-      })();
+      const bytes = await readAsset(join(options.directory, filename));
       if (createHash('sha256').update(bytes).digest('hex') !== filename.slice(0, 64))
         throw new Error('local_asset_digest_mismatch');
       const mime = filename.endsWith('.png')

@@ -65,6 +65,14 @@ test('private production routes require a loopback Host and remain private in LA
     assert.equal((await lan.inject({ url, headers: { host } })).statusCode, 403, url);
   }
 
+  const encodedPrivate = '/lo%63al/v1/tournament';
+  assert.equal(
+    (await app.inject({ url: encodedPrivate, headers: { host: 'foreign.example:3000' } }))
+      .statusCode,
+    403,
+  );
+  assert.equal((await lan.inject({ url: encodedPrivate, headers: { host } })).statusCode, 403);
+
   const publicProgram = await lan.inject({
     url: '/program',
     headers: { host: 'studio.test:3000' },
@@ -77,7 +85,7 @@ test('private production routes require a loopback Host and remain private in LA
   assert.equal(unknown.statusCode, 404);
   const write = await app.inject({
     method: 'POST',
-    url: '/operator/local-asset',
+    url: '/operator/diagnostics/%63onsent',
     headers: { host, origin: 'https://foreign.example' },
     payload: {},
   });
