@@ -1107,31 +1107,26 @@ function Trim-CompletedRecords {
     Remove-Item -LiteralPath $entry.FullName -Recurse -Force
   }
 }
-function Remove-StagedInstaller {
-  $installer = Join-Path $StageRoot 'Installer.exe'; Assert-PlainPath $installer
-  if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force }
+function Remove-StagedPayload {
+  foreach ($name in @('Installer.exe', 'Mizar.lnk', '卸载 Mizar.lnk')) {
+    $path = Join-Path $StageRoot $name; Assert-PlainPath $path
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+  }
 }
 function Install-StartMenu {
-  # Create only missing links after completion; updates never read or rewrite links.
+  # NSIS prepares the links. Publish only missing entries after completion.
   $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Mizar'
-  $shell = $null
   try {
     Assert-PlainPath $menu
     [IO.Directory]::CreateDirectory($menu) | Out-Null
-    $shell = New-Object -ComObject WScript.Shell
-    foreach ($item in @(@('Mizar', 'Mizar.exe'), @('卸载 Mizar', 'Uninstall.exe'))) {
-      $path = Join-Path $menu ($item[0] + '.lnk'); Assert-PlainPath $path
-      if (Test-Path -LiteralPath $path) { continue }
-      $temporary = Join-Path $StageRoot ($item[0] + '.lnk'); Assert-PlainPath $temporary
-      try {
-        $link = $shell.CreateShortcut($temporary)
-        try { $link.TargetPath = Join-Path $plan.bundleRoot $item[1]; $link.WorkingDirectory = $plan.bundleRoot; $link.Save() }
-        finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
-        [IO.File]::Move($temporary, $path)
-      } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+    foreach ($name in @('Mizar.lnk', '卸载 Mizar.lnk')) {
+      $path = Join-Path $menu $name; Assert-PlainPath $path
+      $prepared = Join-Path $StageRoot $name; Assert-PlainPath $prepared
+      if (!(Test-Path -LiteralPath $prepared)) { continue }
+      if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $prepared -Force }
+      else { [IO.File]::Move($prepared, $path) }
     }
   } catch { Record-UpdateActivity 'shortcut_creation_failed' $_.ToString() }
-  finally { if ($null -ne $shell) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) } }
 }
 function Complete-Cleanup {
   $previous = Previous-Directory
@@ -1192,7 +1187,7 @@ function Complete-Restore {
       try { Remove-TransactionDirectory $directory $plan.contentDigest $plan.bundleRoot }
       catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
     }
-    try { Remove-StagedInstaller } catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
+    try { Remove-StagedPayload } catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
   }
 }
 function Restore-Previous {
@@ -1549,7 +1544,7 @@ try {
     Recovery-Registration $false
     try { Remove-TransactionDirectory (Candidate-Directory) $plan.contentDigest $plan.bundleRoot } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
     if (!$KeepBackup) {
-      try { Remove-StagedInstaller } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
+      try { Remove-StagedPayload } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
     }
   }
   $script:updateExitCode = 1

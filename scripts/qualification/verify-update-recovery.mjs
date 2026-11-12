@@ -425,6 +425,7 @@ public class UpdateFixture {
     if (!fresh && !File.Exists(Path.Combine(target, "Mizar.exe"))) throw new InvalidOperationException("Old program was removed before preparation");
     if (fresh && Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length != 0) throw new InvalidOperationException("Fresh target was written before preparation");
     target += ".mizar-candidate-" + Path.GetFileName(stage);
+    if (fresh) { File.WriteAllText(Path.Combine(stage,"Mizar.lnk"), "prepared application link"); File.WriteAllText(Path.Combine(stage,"卸载 Mizar.lnk"), "prepared uninstall link"); }
     if (fresh || mode == "success" || mode == "collision") {
       Copy(Path.Combine(stage, "new-payload"), target);
       if (mode == "collision") File.WriteAllText(Path.Combine(target, "user-note.txt"), "new payload collision");
@@ -560,25 +561,21 @@ public class UpdateFixture {
       if (success) {
         assert.equal(await realpath(registration.output), await realpath(installed));
         assert.deepEqual(await readFile(join(installed, 'Mizar.exe')), binary);
-        const links = await run([
+        const menuResult = await run([
           '-Command',
-          "$shell = New-Object -ComObject WScript.Shell; $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Mizar'; @('Mizar', '卸载 Mizar') | ForEach-Object { $shell.CreateShortcut((Join-Path $menu ($_ + '.lnk'))).TargetPath }",
+          "Join-Path ([Environment]::GetFolderPath('Programs')) 'Mizar'",
         ]);
-        assert.equal(links.code, 0, links.errors);
-        const destinations = links.output.split(/\r?\n/);
-        assert.equal(
-          destinations.length,
-          2,
-          await readFile(join(stage, 'update-activity.ndjson'), 'utf8'),
-        );
-        for (const [index, name] of ['Mizar.exe', 'Uninstall.exe'].entries()) {
-          assert.equal(await realpath(dirname(destinations[index])), await realpath(installed));
-          assert(destinations[index].endsWith('\\' + name));
+        assert.equal(menuResult.code, 0, menuResult.errors);
+        const menu = menuResult.output;
+        // The stub proves publication; actual .lnk targets belong to real NSIS acceptance.
+        for (const [name, bytes] of [
+          ['Mizar.lnk', 'prepared application link'],
+          ['卸载 Mizar.lnk', 'prepared uninstall link'],
+        ]) {
+          assert.equal(await readFile(join(menu, name), 'utf8'), bytes);
+          await rm(join(menu, name));
         }
-        await run([
-          '-Command',
-          "$menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Mizar'; Remove-Item -LiteralPath (Join-Path $menu 'Mizar.lnk'), (Join-Path $menu '卸载 Mizar.lnk') -Force; [IO.Directory]::Delete($menu, $false)",
-        ]);
+        await rm(menu, { recursive: true });
         if (timingFault) assert.match(result.output, /update_timing_write_failed/);
       } else {
         assert.equal(report.code, 'update_rolled_back');

@@ -267,6 +267,15 @@ Section "-Mizar" SecMain
   ; The verified update parent owns the only transaction. Extract beside the
   ; target, without uninstalling it or changing registration and shortcuts.
   StrCmp $PreparePayload "1" 0 payload_target_ready
+  ; Prepare first-install links with NSIS's Unicode Shell API. The transaction
+  ; publishes them only after commit; existing installations keep their links.
+  IfFileExists "$INSTDIR\installed.flag" prepare_links_ready
+  StrCpy $OUTDIR "$INSTDIR"
+  ClearErrors
+  CreateShortcut "$EXEDIR\Mizar.lnk" "$INSTDIR\Mizar.exe"
+  CreateShortcut "$EXEDIR\卸载 Mizar.lnk" "$INSTDIR\Uninstall.exe"
+  IfErrors instance_write_failed
+  prepare_links_ready:
   StrCpy $INSTDIR "$INSTDIR.mizar-candidate-$InstallationOwner"
   payload_target_ready:
   ; Each install claims its own instance before any previous payload is removed.
