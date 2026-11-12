@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact version tag; stable publication requires a separate Promotion run
+        description: Exact version tag; successful qualification automatically publishes and syncs
         required: true
         type: string
       release_kind:
