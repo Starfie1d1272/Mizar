@@ -297,15 +297,20 @@ export function createBroadcastRuntime(input: {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     if (!existing) {
-      await music.load(
-        music.builtinPack
-          ? () =>
-              music.prepareBuiltin().catch((error) => {
-                input.diagnostic(error);
-                return undefined;
-              })
-          : undefined,
-      );
+      try {
+        await music.load(
+          music.builtinPack
+            ? () =>
+                music.prepareBuiltin().catch((error) => {
+                  input.diagnostic(error);
+                  return undefined;
+                })
+            : undefined,
+        );
+      } catch (error) {
+        input.diagnostic(error);
+        return;
+      }
       if (!hud.canMigrate || !camera.ready) return;
       const prepared = await prepareLegacyMigration({
         hud: hud.getState(),
@@ -447,21 +452,21 @@ export function createBroadcastRuntime(input: {
     ensureBuiltinMusic(): Promise<void> {
       if (!ready || !music.builtinPack) return Promise.resolve();
       // Catalog reads share a single registration. HUD and gameplay do not use this path.
-      return (builtinMusicRegistration ??= deps.references
-        .run(async () => {
-          if (store.snapshot.modules.some((module) => module.id === BUILTIN_MUSIC_MODULE_ID))
-            return;
-          await store.addBuiltinMusic({
+      return (builtinMusicRegistration ??= (async () => {
+        if (store.snapshot.modules.some((module) => module.id === BUILTIN_MUSIC_MODULE_ID)) return;
+        const value = portableMusicDraft(await music.prepareBuiltin(), true);
+        await deps.references.run(() =>
+          store.addBuiltinMusic({
             id: BUILTIN_MUSIC_MODULE_ID,
             revision: BUILTIN_REVISION,
             kind: 'music',
             schemaVersion: 1,
             name: '内置节目音乐',
             origin: null,
-            value: portableMusicDraft(await music.prepareBuiltin(), true),
-          });
-        })
-        .catch(input.diagnostic));
+            value,
+          }),
+        );
+      })().catch(input.diagnostic));
     },
     appliedDocument() {
       const document = store.snapshot;

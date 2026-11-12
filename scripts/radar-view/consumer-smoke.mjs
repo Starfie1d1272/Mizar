@@ -38,6 +38,7 @@ assert.equal(manifest.devDependencies, undefined);
 assert.equal(manifest.scripts, undefined);
 assert(!/workspace:|catalog:/.test(JSON.stringify(manifest)));
 assert.equal(manifest.publishConfig.access, 'public');
+const assetRoot = '/vendor/radar/' + manifest.version;
 const fixture = JSON.parse(
   await readFile(join(root, 'packages/protocol/test/fixtures/live-snapshot-v1.radar.json'), 'utf8'),
 );
@@ -129,7 +130,7 @@ const model = new RadarPresentation(); model.accept(frame, 0);
 assert(model.players.size > 0); assert(model.grenades.size > 0);
 assert([...model.grenades.values()].some(g => g.source.flames.length > 0 && g.phase === 'effect'));
 assert([...model.grenades.values()].some(g => g.source.effectTimeSeconds !== null));
-assert(renderToString(createElement(RadarView, {snapshot: frame, assetBaseUrl:'/vendor/radar/0.1.0'})).includes('canvas'));
+assert(renderToString(createElement(RadarView, {snapshot: frame, assetBaseUrl:${JSON.stringify(assetRoot)}})).includes('canvas'));
 for (const path of Object.values(getRadarArtwork(frame.mapName).artwork)) {
   const file = import.meta.resolve('@mizar-hud/radar-view/assets/' + path.replace(/^\\//, ''));
   assert((await readFile(new URL(file))).length > 0);
@@ -138,7 +139,7 @@ console.log('Standalone installed ESM, declarations, SSR, players/utility/flames
 `,
 );
 run(process.execPath, ['smoke.mjs'], work);
-await cp(join(installed, 'dist/assets'), join(work, 'public/vendor/radar/0.1.0'), {
+await cp(join(installed, 'dist/assets'), join(work, 'public', assetRoot), {
   recursive: true,
 });
 await writeFile(

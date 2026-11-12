@@ -36,7 +36,7 @@ export function RivalHubRadar({
       snapshot={frame}
       paused={status === 'stale'}
       presentationRevision={resetRevision}
-      assetBaseUrl="/vendor/radar/0.1.0"
+      assetBaseUrl="/vendor/radar/0.1.1"
     />
   );
 }
