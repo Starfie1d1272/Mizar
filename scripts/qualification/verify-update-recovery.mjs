@@ -2,7 +2,7 @@
 import { setTimeout } from 'node:timers';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -888,10 +888,20 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       "$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); @{ directory = (Get-ItemProperty 'HKCU:\\Software\\Mizar').InstallDir; version = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar').DisplayVersion } | ConvertTo-Json -Compress",
     ]);
     assert.equal(registration.code, 0, registration.errors);
-    assert.deepEqual(JSON.parse(registration.output), {
-      directory: installed,
-      version: success ? '1.11.7' : '1.11.6',
-    });
+    const registeredInstallation = JSON.parse(registration.output);
+    assert.equal(registeredInstallation.version, success ? '1.11.7' : '1.11.6');
+    // The registry can store the expanded Windows path rather than RUNNER~1.
+    // Independently resolve both paths instead of comparing alias spelling.
+    assert.equal(await realpath(registeredInstallation.directory), await realpath(installed));
+    if (success) {
+      for (const removed of [
+        `${installed}.mizar-restore-${stageId}`,
+        join(stage, 'Installer.exe'),
+        installer,
+      ]) {
+        await assert.rejects(realpath(removed), { code: 'ENOENT' });
+      }
+    }
     if (scenario === 'success-no-shortcut')
       await assert.rejects(readFile(shortcut), { code: 'ENOENT' });
     else if (scenario !== 'interrupted')
