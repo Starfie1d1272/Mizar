@@ -38,13 +38,11 @@ node scripts/qualification/resource-provenance/create.mjs \
   pack.zip pack-provenance.json publication-parameters.json resource-publication.json
 ```
 
-本模块不改 CI/Release 工作流，不签发生产资产，不改 Stable/Box。现有工作流尚未调用资源 producer 或签发声明，因此本地生成包不能宣称真实发行已完成。Store/Installer 接线、受信任描述符的发布与下载域/重定向限制由对应模块和父会话统一落实。完整性测试使用真实 EPL；安全测试中的自制声明与无签名证明必须在真实 gh 校验中拒绝，测试不伪造有效生产签名。
+发行集成由 [resource-release.mjs](../../ci/resource-release.mjs)负责；本地生成的未签声明不能作为正式发行授权。资源获取和下载来源约束由 Companion 的[资源分发入口](../../../apps/companion/src/distribution/resources.ts)维护。
 
 ## 无外部 CLI 的运行时入口
 
 Store 使用 `@mizar/resource-pack-contract/runtime` 的 `verifyResourcePublicationBytes`，传入同一策略、应用持有的持久 `tufCachePath` 和四份下载字节：`statementBytes`、`publicationBundleBytes`、`archiveBytes`、`archiveBundleBytes`，可另传 `signal`。返回 CLI 的内容与授权结果，以及下述持久化 `receipt`。输入在 await 前冻结，双证据始终经过 Sigstore 真实签名、证书 issuer、固定 main signer、CT 与 tlog 门槛，再核对 SLSA subject、main ref 和精确源码。生产入口不接受外部 verifier，不运行子进程或依赖用户安装 `gh`。
-
-正式 v1.0.0 的现有签名与公开根样例独立验证真实密码学成功和反例；它们不冒充新资源包的已签发行声明。新资源的完整签发与首次安装仍须父会话集成。`attestation` 子入口提供与现有 `StableSource` 相同的证据判定，便于父会话将既有更新入口提取共用；当前本分支不越界修改 Companion。
 
 证书的来源仓库、SHA 和 main ref 通过 Sigstore `certificateOIDs` 绑定，同时核对签名的 SLSA 源码依赖。通用 OID 的短 DER UTF8String 编码依据 [Fulcio 规范](https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md)。Sigstore 5 的 signer identity 选项按正则处理，因此资源入口将固定 URI 转义并加首尾锚点，避免相似 URI 或 main 后缀被接受。既有更新入口后续共用该策略时可同步获得此精确匹配约束。
 
@@ -76,4 +74,4 @@ policy 的版本身份来自先前已认证的版本描述符/可信目录；最
 
 离线根材料认证从 `@sigstore/tuf@5.0.0` 随包的固定 Sigstore seed 开始；receipt 携带连续、双重签名的 TUF root 轮换链和 root 授权的 targets 签名，后者绑定精确 `trusted_root.json` 长度与摘要。没有可替换根、镜像 URL 或 keySelector 输入。公开证据在首次在线核验后捕获并持久化；安装时最多捕获 32 次连续根轮换，超过范围应更新受信任 Core/Sigstore 基线后重新资格确认。缓存验证将它作为历史签名证据使用，不借元数据到期回退联网；新安装仍执行在线 freshness。
 
-SDK 的 `tufForceCache` 在损坏/到期时仍会回退网络，所以本入口不以该名称冒充离线保证。实际离线测试禁止 fetch，并把日期推进到 2040 年，仍可核验现有真实 Release 的签名、CT/tlog 与证书/source，且篡改根证据、target 或 subject 拒绝。该既有样例不代表新的 EPL 资源发行声明已生产签发；新包的完整安装/断网重启正例仍需父会话签发和 Store 接线验收。
+SDK 的 `tufForceCache` 在损坏或到期时仍可能回退网络。离线 receipt 验证直接使用已认证的历史根材料，不依赖该选项；新包安装仍须通过当前发行授权及来源校验。

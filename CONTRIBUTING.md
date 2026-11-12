@@ -1,33 +1,38 @@
-# 参与开发
+# 参与 Mizar 开发
 
-按任务查阅[产品定位](docs/guide/product.md)、[架构](docs/reference/architecture.md)、[接口](docs/reference/protocol.md)、[数据语义](docs/reference/telemetry.md)或[设计系统](docs/design/README.md)，以及相关决策背景；纯文档维护只读受影响的规范。
+欢迎提交问题、改进文档或贡献代码。了解项目用途可先读[产品定位](docs/guide/product.md)，查找其他资料可从[文档目录](docs/README.md)开始。
 
-## 工作范围
+## 提交问题或建议
 
-实现任务应说明目标、范围、既定约束、验收标准与文档影响，小修改可在任务说明中简述。确有无法从现有证据确定的关键产品判断时，先讨论依赖该判断的部分，其余工作继续；局部实现选择在既有边界内完成。代理的推进、澄清与批准遵循 [工作约定](AGENTS.md#推进澄清与批准)。范围外问题另行记录，不顺手扩张。
+先搜索已有 Issue。报告问题时，请提供 Mizar 版本、运行环境、复现步骤，以及预期和实际结果；截图或日志只附与问题有关的部分，注意移除凭据和私人信息。
 
-改变产品边界先更新产品文档；改变职责、安全、恢复或协议决策按 [决策维护规则](docs/decisions/README.md)记录。新增功能先复用既有模块，不建立第二份比赛状态、通用事件总线或没有真实需求的插件框架。
+较大的功能或架构调整，建议先通过 Issue 讨论目标和取舍。小修复和文档改进可以直接提交 PR。
 
-任务的性质、领域、优先级和投入顺序通过 GitHub Issue 标签管理；只有具体发布范围明确的任务才关联 Release Milestone。产品远期目标在[路线图](docs/roadmap.md)维护，不将每次任务进度同步到长期文档。
+## 准备开发环境
 
-分支从当前 main 创建，完成审查并合并后由维护者清理；长期保留的分支应明确用途。不要删除仍在使用的分支。
+从最新的 `main` 创建分支。Node 和 pnpm 版本见 [package.json](package.json)，依赖安装与更新见[依赖维护](docs/development/dependency-maintenance.md)。
 
-## 开发与提交
+在 PowerShell 中运行：
 
-1. 需要安装或更新依赖时，按[依赖维护](docs/development/dependency-maintenance.md)准备环境，使用冻结安装；已有环境满足当前验证时不重复安装。
-2. 实现并执行[改动面对应验证](docs/development/development-validation.md)，架构改动运行 `pnpm architecture:check`，设计变更遵循设计系统检查。
-3. 同步唯一负责该规则的文档，移除旧表述；写作和归属规则见[文档索引](docs/README.md#写作与维护)。
-4. PR 说明具体变化、实际验证、影响范围和未完成的必要验收。重大取舍提供理由，小修改不套长篇模板。
+```powershell
+pnpm install --frozen-lockfile
+pnpm build
+$env:GSI_TOKEN = "mizar-local-preview"
+pnpm dev
+```
 
-完成本地实现和必要检查后直接创建 Ready PR；仅用户明确要求草稿时保持 Draft。Ready 表示可供审查，合并仍须父会话或负责维护者审查通过，并通过最新提交的必需 CI。涉及权限、持久数据、原生恢复或发版的 PR 记录对应提交 SHA、审查人或父会话及独立验证结果。用户已明确授权的 Ready／合并操作不增加重复批准步骤；工具强制审批与安全边界仍须遵守。
+本地服务地址、GSI 配置和 Windows 开发说明见[开发验证](docs/development/development-validation.md#本地运行)。
 
-代码交付和实机验收分开记录。需要实机证据的任务在证据缺失时保持待验收，不虚构结果；先完成可执行的实现与自动化。任务包含候选交付或实机移交时，再按[版本发布流程](docs/development/release-readiness.md)准备指定版本；普通修改不要求单独生成 RC。
+## 修改与验证
 
-## 完成标准
+让一次修改聚焦一个问题，优先复用现有模块。涉及模块职责时查阅[架构](docs/reference/architecture.md)，接口与游戏数据分别参考[协议](docs/reference/protocol.md)和[数据语义](docs/reference/telemetry.md)；界面改动遵循[设计系统](docs/design/README.md)。
 
-- 范围内行为实现，必要回归可复现，适用检查通过。
-- 文档、示例与实现一致，无过时入口和重复规则。
-- 涉及公开接口、依赖或资源时，版本与来源说明完整。
-- PR 记录已验证与待验证内容；正式发布另按实际变更风险和资格验收门槛判定。
+按[改动范围](docs/development/development-validation.md#验证层次)运行必要检查，优先使用已有测试，只补关键风险缺少的覆盖。Windows、CS2、OBS 和安装更新行为需要相应的实机验证；缺少环境时，在 PR 中说明未验证的部分。
 
-代理工具的仓库工作约定见 [AGENTS.md](AGENTS.md)。
+行为变化时同步负责该内容的文档，写作和归属见[文档维护](docs/README.md#写作与维护)。涉及架构决策时，按[决策记录](docs/decisions/README.md)保留理由和取舍。
+
+## 提交 PR
+
+说明解决的问题、修改后的行为、关联 Issue 和实际验证结果。有待讨论或尚未完成的工作可以使用草稿 PR，准备好后再请求审查。
+
+维护者根据审查结果、最新提交的 CI 和必要验收决定是否合并。只有达到对应 Issue 的验收条件时才关闭；未完成的部分写明原因和下一步。版本发布另见[发布流程](docs/development/release-readiness.md)。
