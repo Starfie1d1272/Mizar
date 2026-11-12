@@ -129,7 +129,8 @@ public static class MizarUpdateFiles {
       shortcut=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"),true));
       ((System.Runtime.InteropServices.ComTypes.IPersistFile)shortcut).Load(path,0);
       var raw=new System.Text.StringBuilder(32768);
-      if(((MizarShortcutPath)shortcut).GetPath(raw,raw.Capacity,IntPtr.Zero,4)!=0 || raw.Length==0) throw new IOException("update_shortcut_target_unknown");
+      int status=((MizarShortcutPath)shortcut).GetPath(raw,raw.Capacity,IntPtr.Zero,4);
+      if(status!=0 || raw.Length==0) throw new IOException("update_shortcut_target_unknown", new System.Runtime.InteropServices.COMException("IShellLink.GetPath returned no target (characters="+raw.Length+")",status));
       return Environment.ExpandEnvironmentVariables(raw.ToString());
     } finally { if(shortcut!=null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut); }
   }

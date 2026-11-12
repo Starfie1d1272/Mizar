@@ -535,7 +535,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario !== 'success-no-shortcut') {
       const createdShortcut = await run([
         '-Command',
-        `$shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save()`,
+        `$shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save(); $saved = $shell.CreateShortcut(${psLiteral(shortcut)}); if ($saved.TargetPath -ne ${psLiteral(join(installed, 'Mizar.exe'))}) { throw 'Shortcut fixture target was not saved correctly' }`,
       ]);
       assert.equal(createdShortcut.code, 0, createdShortcut.errors);
       originalShortcut = await readFile(shortcut);
