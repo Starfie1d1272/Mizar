@@ -178,7 +178,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [build, quality, native]
+    needs: [build, quality, native, update-recovery]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful checks and report elapsed time
@@ -187,6 +187,7 @@ jobs:
           BUILD: ${{ needs.build.result }}
           NATIVE: ${{ needs.native.result }}
           QUALITY: ${{ needs.quality.result }}
+          UPDATE_RECOVERY: ${{ needs.update-recovery.result }}
         run: |
           elapsed=
           {
@@ -211,3 +212,4 @@ jobs:
             echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
           test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success
+          test "$UPDATE_RECOVERY" = skipped || test "$UPDATE_RECOVERY" = success
