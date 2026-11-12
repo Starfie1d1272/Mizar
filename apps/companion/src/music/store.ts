@@ -11,7 +11,7 @@ import {
   type MusicGroup,
 } from '@mizar/protocol/music';
 import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.js';
-import { audioBytes, readMusicPack } from './archive.js';
+import { audioBytes, MUSIC_MAX_BYTES, readMusicPack } from './archive.js';
 import { preserveDamagedTrack } from './asset-repair.js';
 import type { MusicLayer } from './device.js';
 import {
@@ -142,6 +142,7 @@ export class MusicStore {
   failure = false;
   automaticEnabled = true;
   private importing = false;
+  private builtin: Promise<MusicConfig> | undefined;
   private persistence: MusicConfigPersistence | undefined;
   private runtimeAvailable = false;
   state: MusicState = {
@@ -168,6 +169,7 @@ export class MusicStore {
   constructor(
     readonly directory: string,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
+    readonly builtinPack?: string,
   ) {}
   private async stage<T>(stage: string, evidence: unknown, run: () => Promise<T> | T): Promise<T> {
     this.diagnostic(stage, { result: 'begin', ...(evidence as object) });
@@ -187,11 +189,11 @@ export class MusicStore {
       /* Diagnostics cannot own playback. */
     }
   }
-  async load() {
+  async load(defaultConfig?: () => Promise<MusicConfig | undefined>) {
     const run = async () => {
       try {
         await this.stage('music_load', { directory: this.directory }, () =>
-          this.persistence ? this.loadDelegatedState() : this.loadState(),
+          this.persistence ? this.loadDelegatedState() : this.loadState(defaultConfig),
         );
       } catch (error) {
         this.failure = true;
@@ -204,7 +206,7 @@ export class MusicStore {
     this.queue = result.catch(() => undefined);
     return result;
   }
-  private async loadState() {
+  private async loadState(defaultConfig?: () => Promise<MusicConfig | undefined>) {
     await ensureDirectory(this.directory);
     await ensureDirectory(join(this.directory, 'tracks'));
     await safePath(this.directory);
@@ -219,7 +221,9 @@ export class MusicStore {
     if (!exists) {
       this.failure = false;
       this.ready = true;
-      await this.update(() => undefined);
+      const config = await defaultConfig?.();
+      if (config) await this.configure(config, false);
+      else await this.update(() => undefined);
       this.diagnostic('music_loaded_snapshot', { state: this.state });
       return;
     }
@@ -536,7 +540,7 @@ export class MusicStore {
       const tracks = [];
       for (const track of spec.tracks)
         tracks.push({
-          ...(await this.add(basename(track.path), entries.get(track.path)!)),
+          ...(await this.installTrackAsset(basename(track.path), entries.get(track.path)!)),
           startMs: track.startMs,
           endMs: track.endMs,
         });
@@ -544,20 +548,23 @@ export class MusicStore {
     }
     return config;
   }
-  async prepareImport(zip: Buffer): Promise<MusicConfig> {
-    if (this.importing || this.failure || !this.ready) throw new Error('music_import_unavailable');
-    this.importing = true;
-    try {
-      return await this.prepareArchive(zip);
-    } finally {
-      this.importing = false;
-    }
+  prepareBuiltin(): Promise<MusicConfig> {
+    return (this.builtin ??= this.loadBuiltin());
   }
-  async import(zip: Buffer) {
+  private async loadBuiltin(): Promise<MusicConfig> {
+    if (!this.builtinPack) throw new Error('builtin_music_unavailable');
+    const file = await lstat(this.builtinPack);
+    if (!file.isFile() || file.size > MUSIC_MAX_BYTES) throw new Error('music_archive_invalid');
+    return this.prepareArchive(await readFile(this.builtinPack));
+  }
+  async import(zip: Buffer | 'builtin') {
     if (this.importing || this.failure || !this.ready) throw new Error('music_import_unavailable');
     this.importing = true;
     try {
-      await this.configure(await this.prepareArchive(zip), false);
+      await this.configure(
+        zip === 'builtin' ? await this.prepareBuiltin() : await this.prepareArchive(zip),
+        false,
+      );
     } finally {
       this.importing = false;
     }

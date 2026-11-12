@@ -7,10 +7,12 @@ import type {
   BroadcastConfigDocument,
   ResourceRef,
 } from '@mizar/broadcast-config';
-import { sameEffectiveModule } from '@mizar/broadcast-config';
+import { BUILTIN_MUSIC_MODULE_ID, sameEffectiveModule } from '@mizar/broadcast-config';
 import type { HudConfigStore } from '../hud-config/store.js';
 import type { MusicStore } from '../music/store.js';
 import type { OrchestrationStore } from '../orchestration/store.js';
+import { BUILTIN_REVISION } from './builtin-modules.js';
+import { portableMusicDraft } from './music-assets.js';
 import { backupLegacyConfig } from './legacy-backup.js';
 import { prepareLegacyMigration } from './prepare-migration.js';
 import { createBroadcastResolver, type BroadcastDependencyResolver } from './resolver.js';
@@ -54,6 +56,7 @@ export function createBroadcastRuntime(input: {
   let candidate: BroadcastConfigDocument | undefined;
   let pendingLegacyCamera: PendingLegacyCamera | undefined;
   let ready = false;
+  let builtinMusicRegistration: Promise<void> | undefined;
   function canSynchronizeCamera(active: ActiveBroadcastSnapshot): boolean {
     if (store.snapshot.active.revision !== active.revision) return false;
     const applied = store.appliedSnapshot('camera');
@@ -294,7 +297,16 @@ export function createBroadcastRuntime(input: {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     if (!existing) {
-      if (!hud.canMigrate || !music.ready || music.failure || !camera.ready) return;
+      await music.load(
+        music.builtinPack
+          ? () =>
+              music.prepareBuiltin().catch((error) => {
+                input.diagnostic(error);
+                return undefined;
+              })
+          : undefined,
+      );
+      if (!hud.canMigrate || !camera.ready) return;
       const prepared = await prepareLegacyMigration({
         hud: hud.getState(),
         music,
@@ -432,6 +444,25 @@ export function createBroadcastRuntime(input: {
   return {
     store,
     initialize,
+    ensureBuiltinMusic(): Promise<void> {
+      if (!ready || !music.builtinPack) return Promise.resolve();
+      // Catalog reads share a single registration. HUD and gameplay do not use this path.
+      return (builtinMusicRegistration ??= deps.references
+        .run(async () => {
+          if (store.snapshot.modules.some((module) => module.id === BUILTIN_MUSIC_MODULE_ID))
+            return;
+          await store.addBuiltinMusic({
+            id: BUILTIN_MUSIC_MODULE_ID,
+            revision: BUILTIN_REVISION,
+            kind: 'music',
+            schemaVersion: 1,
+            name: '内置节目音乐',
+            origin: null,
+            value: portableMusicDraft(await music.prepareBuiltin(), true),
+          });
+        })
+        .catch(input.diagnostic));
+    },
     appliedDocument() {
       const document = store.snapshot;
       document.active = store.appliedDisplay;

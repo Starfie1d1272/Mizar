@@ -68,3 +68,27 @@ await copyFile(
   resolve(root, 'packages/cs2-assets/generated/manifest.json'),
   resolve(pkg, 'dist/icon-provenance.json'),
 );
+
+for (const name of ['playerBg.png', 'shootFire.png']) {
+  const target = resolve(pkg, 'dist/assets/brand/hud/esl', name);
+  await mkdir(dirname(target), { recursive: true });
+  await copyFile(resolve(pkg, 'assets/radar-reference/esl', name), target);
+}
+
+await copyFile(
+  resolve(pkg, 'assets/radar-reference/esl/SOURCE.md'),
+  resolve(pkg, 'dist/esl-artwork-provenance.md'),
+);
+
+const fonts = resolve(root, 'apps/web/public/brand/fonts/esl');
+const fontName = 'legend-bold.woff2';
+const fontSource = JSON.parse(await readFile(resolve(fonts, 'sources.json'), 'utf8')).find(
+  ({ file }) => file === fontName,
+);
+const fontBytes = await readFile(resolve(fonts, fontName));
+if (createHash('sha256').update(fontBytes).digest('hex') !== fontSource?.sha256)
+  throw new Error('Radar Legend font differs from source');
+const fontTarget = resolve(pkg, 'dist/assets/brand/fonts/esl');
+await mkdir(fontTarget, { recursive: true });
+await writeFile(resolve(fontTarget, fontName), fontBytes);
+await writeFile(resolve(fontTarget, 'sources.json'), JSON.stringify([fontSource], null, 2) + '\n');

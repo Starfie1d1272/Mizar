@@ -21,6 +21,7 @@ export interface AssetRef {
   resource: ResourceRef;
   fileId: string;
 }
+export const BUILTIN_MUSIC_MODULE_ID = 'fb81f5a0-9e35-4ae5-8f15-000000000008';
 export type ModuleKind = 'hud' | 'program' | 'music' | 'camera';
 export const MODULE_KINDS: readonly ModuleKind[] = ['hud', 'program', 'music', 'camera'];
 export type VisualColor =

@@ -7,6 +7,7 @@ import {
   type HudLayout,
   type HudWidgetSettings,
 } from '@mizar/hud-config';
+import { BUILTIN_MUSIC_MODULE_ID } from '@mizar/broadcast-config';
 import type {
   BroadcastConfigDocument,
   HudModule,
@@ -22,7 +23,7 @@ export const BUILTIN_MODULE_IDS = {
   'builtin:perfectworld-preset': 'fb81f5a0-9e35-4ae5-8f15-000000000004',
   'builtin:esl-preset': 'fb81f5a0-9e35-4ae5-8f15-000000000005',
   pulse: 'fb81f5a0-9e35-4ae5-8f15-000000000006',
-  music: 'fb81f5a0-9e35-4ae5-8f15-000000000008',
+  music: BUILTIN_MUSIC_MODULE_ID,
 } as const;
 export const BUILTIN_REVISION = 'fb81f5a0-9e35-4ae5-8f15-000000000007';
 const ids = new Set<string>(Object.values(BUILTIN_MODULE_IDS));

@@ -171,8 +171,13 @@ Program series-strip map scenes and CT/T side marks are Valve / Counter-Strike 2
 
 - `BarlowCondensed-Bold.ttf` 来自 Barlow 字体，使用 SIL Open Font License 1.1；原文随包保留为 `OFL.txt`。
 - `SourceHanSansCN-Regular.woff2` 从 [Adobe Source Han Sans 官方仓库](https://github.com/adobe-fonts/source-han-sans) 的 CN Regular OTF 转为 WOFF2。Copyright 2014–2021 Adobe，使用 SIL Open Font License 1.1；来源、SHA-256 和许可随文件保存。
-- `texture.svg`、`contour.svg`、雷达方向与开火标记由 Mizar 绘制。Windows 包、LHM 导出与 Radar npm 包使用各自的构建资产；LHM 随包字体保留原许可。
-- 旧发行的 ESL Legend 字体、LexoRadar 两个 PNG 与音乐 ZIP 缺少可核对的再分发授权。新构件排除这批原件；既有发行历史与本机音乐配置照常保留。
+- `legend-{regular,bold,light}.woff2` 来自 ESL 官方网站，来源 URL 和 SHA-256 见 `apps/web/public/brand/fonts/esl/sources.json`。字体权利归 ESL 或相应权利人，再分发许可待核实。
+- `playerBg.png` 与 `shootFire.png` 来自用户提供的 `HUD/overlay4.zip` 中的 LexoRadar 展示资源，版权归原权利人。源文件未附独立许可证。来源与 SHA-256 见 `packages/radar-view/assets/radar-reference/esl/SOURCE.md`。
+- `texture.svg` 与 `contour.svg` 由 Mizar 绘制。LHM 导出随附 HUD 所用字体、图案及声明。
+
+## 内置节目音乐
+
+`apps/companion/builtin-music.zip` 随 Windows 安装包提供。音轨元数据包含 `BLAST Bounty 2025 SOUNDTRACKS`。各曲的权利归相应权利人，来源与使用许可待核实，见 [#432](https://github.com/Starfie1d1272/Mizar/issues/432)。
 
 EPL 样例的 Falcons 与 Natus Vincere 队伍标识来自公开 HLTV 队伍图片，仅用于比赛身份展示；原始地址、获取时间与 SHA-256 记录在 `fixtures/epl-s24/media.json`。商标与图片权利仍归原权利人，不作为 Mizar 品牌或项目许可资产。
 

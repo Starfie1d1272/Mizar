@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { parseModuleRecord, type ModuleRecord } from '@mizar/broadcast-config';
+import {
+  BUILTIN_MUSIC_MODULE_ID,
+  parseModuleRecord,
+  type ModuleRecord,
+} from '@mizar/broadcast-config';
 import type { MusicGroup } from '@mizar/protocol/music';
 import { useLocalRead } from '../preparation/client';
 import { Button, Checkbox, Field, Panel, Select, StatusBanner } from '../ui';
@@ -344,6 +348,11 @@ export function ResourceModules({
         (category === 'all' || category === module.kind) &&
         module.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
     ) ?? [];
+  const builtinMusicMissing =
+    !!directory &&
+    !metadata?.modules.some(({ id }) => id === BUILTIN_MUSIC_MODULE_ID) &&
+    (category === 'all' || category === 'music') &&
+    '内置节目音乐'.includes(query.trim());
   useEffect(() => {
     if (!scrollToSelection.current || !selected || !showList) return;
     const target = document.getElementById(`resource-${selected}`);
@@ -828,10 +837,20 @@ export function ResourceModules({
           </details>
         </Panel>
       )}
+      {builtinMusicMissing && (
+        <Panel className="resource-library__item" id={'resource-' + BUILTIN_MUSIC_MODULE_ID}>
+          <div>
+            <span className="resource-library__kind">音乐 · 内置</span>
+            <h3>内置节目音乐</h3>
+            <p>内置音乐暂不可用，请检查安装包后重试。</p>
+          </div>
+        </Panel>
+      )}
       {showList &&
         snapshot &&
         directory &&
         !entries.length &&
+        !builtinMusicMissing &&
         !((category === 'all' || category === 'camera') && pendingCamera?.pending) && (
           <p>没有找到匹配的资源，可导入资源包。</p>
         )}

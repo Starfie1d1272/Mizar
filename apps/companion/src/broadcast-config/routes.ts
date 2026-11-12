@@ -74,6 +74,7 @@ export function registerBroadcastConfigRoutes(
     module: ModuleRecord,
   ) => Promise<{ state: 'ready' | 'dependency_missing'; reason?: string }>,
   displayAvailable: () => boolean = () => true,
+  ensureBuiltinMusic?: () => Promise<void>,
 ): void {
   const authorized = (origin: string | undefined) =>
     originPolicy.mode === 'loopback' && checkLocalWebOrigin(originPolicy, origin).allowed;
@@ -90,7 +91,7 @@ export function registerBroadcastConfigRoutes(
     if (fallback.reason) reply.header('x-mizar-hud-fallback', fallback.reason);
     return reply.header('cache-control', 'no-store').send({ ...display, hud: fallback.hud });
   });
-  app.get('/local/v1/broadcast-presets', (request, reply) => {
+  app.get('/local/v1/broadcast-presets', async (request, reply) => {
     if (
       originPolicy.mode !== 'loopback' ||
       !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(request.hostname) ||
@@ -99,6 +100,7 @@ export function registerBroadcastConfigRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    await ensureBuiltinMusic?.();
     return reply.header('cache-control', 'no-store').send(store.snapshot);
   });
   app.get('/local/v1/broadcast-modules', async (request, reply) => {
@@ -110,6 +112,7 @@ export function registerBroadcastConfigRoutes(
     )
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     if (!isReady()) return reply.code(503).send({ error: 'broadcast_config_unavailable' });
+    await ensureBuiltinMusic?.();
     return reply.header('cache-control', 'no-store').send({
       consumers: store.consumerStatus,
       modules: await Promise.all(

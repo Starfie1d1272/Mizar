@@ -3,7 +3,7 @@
 .hud-widget-design[data-hud-design='esl'] .round-history-panel,
 .hud-widget-design[data-hud-design='esl'] .broadcast-pause__event strong,
 .hud-widget-design[data-hud-design='esl'] .broadcast-pause__brand-main strong {
-  font-family: 'Barlow Condensed', SourceHanSans, var(--mizar-type-family-display), sans-serif;
+  font-family: ESLLegend, SourceHanSans, var(--mizar-type-family-display), sans-serif;
 }
 .broadcast-pause[data-hud-design='esl'] .broadcast-pause__dock {
   left: 16px;

@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { lstat } from 'node:fs/promises';
 import { canonicalJson } from '@mizar/hud-config';
 import { MUSIC_GROUPS } from '@mizar/protocol/music';
 import type {
@@ -11,7 +10,7 @@ import type {
 import { PACK_ID } from '../resource-store/runtime-adapter.js';
 import type { ResourceStore } from '../resource-store/store.js';
 import type { MusicStore } from '../music/store.js';
-import { readMusicAsset } from './music-assets.js';
+import { musicAssetPath } from './music-assets.js';
 import { BroadcastReferenceQueue } from './reference-queue.js';
 import type { BroadcastRuntimeDependencies } from './runtime.js';
 import type { CameraConfigResolver } from './camera.js';
@@ -28,7 +27,7 @@ export function createProductionBroadcastDependencies(
 ): BroadcastRuntimeDependencies {
   const references = new BroadcastReferenceQueue();
   const asset = async (ref: AssetRef) => {
-    if (ref.resource.id.startsWith('local:music:')) await readMusicAsset(music, ref);
+    if (ref.resource.id.startsWith('local:music:')) await musicAssetPath(music, ref);
     else if (ref.resource.id.startsWith('local:mizar-pack:') && musicPacks)
       await musicPacks.readAsset(ref);
     else await readAdditionalAsset(ref);
@@ -36,7 +35,7 @@ export function createProductionBroadcastDependencies(
   const localTrackId = async (ref: AssetRef) => {
     if (ref.resource.id.startsWith('local:mizar-pack:') && musicPacks)
       return musicPacks.materialize(ref, music);
-    await readMusicAsset(music, ref);
+    await musicAssetPath(music, ref);
     return ref.fileId;
   };
   const image = async (ref: AssetRef) => {
@@ -171,13 +170,4 @@ export function withOfficialBroadcastResources(
       }
     },
   };
-}
-
-export async function loadLegacyMusic(music: MusicStore, broadcastPath: string) {
-  try {
-    await lstat(broadcastPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    await music.load();
-  }
 }
