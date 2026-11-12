@@ -332,11 +332,11 @@ export async function publishDraftAssets(releaseId, identity, expected, api = gi
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [mode, product, ...args] = process.argv.slice(2);
-  const paths = await publicProductAssets(product);
-  if (mode === 'assets') console.log(JSON.stringify(paths));
+  const [mode, ...args] = process.argv.slice(2);
+  if (mode === 'assets') console.log(JSON.stringify(await publicProductAssets(args[0])));
   else if (mode === 'draft-stage' || mode === 'publish-draft') {
-    const [identityPath, resources, releaseId, releaseOutput, refOutput] = args;
+    const [product, identityPath, resources, releaseId, releaseOutput, refOutput] = args;
+    const paths = await publicProductAssets(product);
     const { readdir } = await import('node:fs/promises');
     if (resources !== '-') {
       const archives = (await readdir(resources)).filter((name) => name.endsWith('.zip'));
@@ -364,7 +364,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } else if (mode === 'mark-latest') {
     await markLatest(JSON.parse(await readFile(args[0], 'utf8')));
   } else if (mode === 'reconcile') {
-    const [releasePath, refPath, identityPath, resources] = args;
+    const [product, releasePath, refPath, identityPath, resources] = args;
+    const paths = await publicProductAssets(product);
     if (resources && resources !== '-') {
       const { readdir } = await import('node:fs/promises');
       for (const name of await readdir(resources))
