@@ -2519,6 +2519,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       )
         throw new Error('business_journal_close_unconfirmed');
     });
+    // Release delivery's source holds before producers need space for their final flush.
+    // Final records remain in the journal for recovery on the next startup.
+    await closeStep(() => diagnosticDelivery.close());
     await closeStep(() => nativeSource?.close());
     await closeStep(async () => {
       await performanceContext?.close();
@@ -2538,8 +2541,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           throw new Error('session_journal_close_unconfirmed');
       }
     });
-    await closeStep(() => diagnosticDelivery.close());
-
     await closeStep(() =>
       closeWebsiteOutput(options.rivalhubConnection, outputService, (error) =>
         app.log.warn({ err: error }, '远端数据源收尾待重试'),
