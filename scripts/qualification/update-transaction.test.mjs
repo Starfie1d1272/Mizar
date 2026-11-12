@@ -113,12 +113,15 @@ foreach ($script:scenario in @('success', 'refusal', 'cancel', 'collision', 'reg
   [IO.File]::WriteAllText($download, 'fixture installer')
   Copy-Item -LiteralPath $download -Destination (Join-Path $StageRoot 'Installer.exe')
   $plan=[pscustomobject]@{
-    bundleRoot=$target; stateRoot=$state; installer=$download; version='1.11.7'; gitSha=('a'*40)
+    schemaVersion=1
+    # Input aliases must be normalized before comparing FileInfo.FullName.
+    bundleRoot=(Join-Path $case '.\program'); stateRoot=$state; installer=$download; version='1.11.7'; gitSha=('a'*40)
     installerBytes=(Get-Item $download).Length; installerSha256=[MizarUpdateFiles]::Hash($download)
     contentDigest=$NewDigest; previousContentDigest=$OldDigest
     previousInstallationId=[MizarUpdateFiles]::Hash((Join-Path $target 'installed.flag'))
     transactionProtocol='mizar.directory-swap.v1'
   }
+  Assert-Plan $plan
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase='prepared' }
   $Mode='Install'; $script:registered=0; $script:restored=0; $script:programGate=$null
   $script:updateExitCode=0; $script:launchAfterCommit=$false; $script:restoredTransaction=$false

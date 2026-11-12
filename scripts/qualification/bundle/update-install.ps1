@@ -714,6 +714,11 @@ function Assert-Plan($plan) {
   if ((Split-Path -Parent $downloadDirectory).TrimEnd('\') -ne $updatesDirectory -or
     $downloadName -notmatch '^download-[A-Za-z0-9_-]+$' -or
     (Split-Path -Leaf $installerPath) -ne ('Mizar-v' + $plan.version + '-Windows-x64-' + $(if ($plan.coreArchiveSha256) { 'Core-' } else { '' }) + 'Setup.exe')) { throw 'update_installer_path_invalid' }
+  # FileInfo.FullName is expanded by Windows PowerShell. Use the same spelling
+  # for all later relative-path calculations, including short-name input paths.
+  $plan.bundleRoot = $bundle
+  $plan.stateRoot = $state
+  $plan.installer = $installerPath
 }
 function Assert-Installer($plan, [string]$path) {
   Assert-PlainPath $path

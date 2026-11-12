@@ -272,7 +272,11 @@ async function installWithHost(binaryPath, stage, env = {}) {
       assert.equal(completed.code, 0, completed.errors);
     }
     const result = await installation;
-    assert.notEqual(result.code, null, `Update helper exceeded its fixture deadline: ${result.errors}`);
+    assert.notEqual(
+      result.code,
+      null,
+      `Update helper exceeded its fixture deadline: ${result.errors}`,
+    );
     if (env.MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE) {
       for (
         let count = 0;
