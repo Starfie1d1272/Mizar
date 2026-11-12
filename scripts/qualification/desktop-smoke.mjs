@@ -178,15 +178,18 @@ async function health() {
 
 async function desktopLog(stateRoot) {
   const logs = join(stateRoot, 'logs');
-  const names = (await readdir(logs).catch(() => [])).filter((name) =>
-    /^desktop(?:\.\d+)?\.ndjson$/.test(name),
-  );
-  assert.ok(names.length <= 4, 'desktop log exceeded the four-file rotation bound');
+  const segments = /^desktop-[a-f0-9-]{36}\.ndjson$/;
+  const legacy = /^desktop(?:\.[123])?\.ndjson$/;
+  const names = await readdir(logs).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
   const entries = [];
   for (const name of names) {
-    assert.match(name, /^desktop(?:\.[123])?\.ndjson$/);
+    if (!segments.test(name) && !legacy.test(name)) continue;
     const path = join(logs, name);
-    assert.ok((await stat(path)).size <= PRODUCT_LOG_BYTES, `${name} exceeded 25 MiB`);
+    const limit = legacy.test(name) ? PRODUCT_LOG_BYTES : 1024 * 1024;
+    assert.ok((await stat(path)).size <= limit, `${name} exceeded the desktop log segment limit`);
     const contents = await readFile(path, 'utf8');
     // The active writer may not yet have terminated its final JSONL record.
     for (const line of contents.split('\n').slice(0, -1).filter(Boolean)) {
