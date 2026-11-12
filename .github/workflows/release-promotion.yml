@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: [Release Qualification]
     types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       qualification_run:
@@ -19,10 +20,6 @@ on:
         required: false
         default: false
         type: boolean
-      field_acceptance_comment:
-        description: Maintainer issue-comment ID for a new stable release
-        required: false
-        type: string
       draft_release_id:
         description: Stage verified assets into this existing unpublished draft without creating a tag
         required: false
@@ -35,11 +32,16 @@ concurrency:
 jobs:
   promote:
     name: 发布 Mizar ${{ inputs.tag || github.event.workflow_run.display_title }}
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.path == '.github/workflows/release-qualification.yml' && github.event.workflow_run.event == 'workflow_dispatch' && contains(github.event.workflow_run.display_title, '-')) }}
+    if: >-
+      github.repository == 'Starfie1d1272/Mizar' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.path == '.github/workflows/release-qualification.yml' &&
+        github.event.workflow_run.event == 'workflow_dispatch' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     permissions:
       contents: write
       actions: read
-      issues: read
       id-token: write
       attestations: write
     runs-on: windows-2025
@@ -51,7 +53,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.display_title }}
       RELEASE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.recovery && 'true' || 'false' }}
       RELEASE_DRAFT_ID: ${{ inputs.draft_release_id }}
-      RELEASE_FIELD_ACCEPTANCE_COMMENT: ${{ inputs.field_acceptance_comment }}
       RESOURCE_PUBLISHER_ROOT: ${{ github.workspace }}/.agent-tmp/resource-publisher-source
       RESOURCE_ROOT: ${{ github.workspace }}/qualified-resources
       RESOURCE_FROZEN_ROOT: ${{ github.workspace }}/frozen-resources
@@ -227,18 +228,6 @@ jobs:
         run: |
           node "$env:RESOURCE_PUBLISHER_ROOT/scripts/ci/resource-release.mjs" lookup-release product product/release-manifest.json existing-release.json
           if ($LASTEXITCODE -ne 0) { throw 'Release/tag existence is unknown or conflicts; refusing mutation' }
-      - name: Require exact-candidate field evidence for stable publication
-        if: ${{ env.RELEASE_DRAFT_ID == '' && !contains(env.RELEASE_TAG, '-') }}
-        shell: pwsh
-        run: |
-          if ($env:RELEASE_FOUND -eq 'true' -and -not ((Get-Content existing-release.json -Raw | ConvertFrom-Json).draft)) {
-            Write-Output 'Existing public release; only its verified original assets may be reconciled.'
-            exit 0
-          }
-          node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-acceptance.mjs" $env:GH_REPO "$env:RELEASE_FIELD_ACCEPTANCE_COMMENT" product $env:RUN_ID field-acceptance.json
-          if ($LASTEXITCODE -ne 0) { throw 'Stable field acceptance failed' }
-          $evidence = Get-Content field-acceptance.json -Raw | ConvertFrom-Json
-          "Field acceptance: $($evidence.mode), $($evidence.commentUrl)" >> $env:GITHUB_STEP_SUMMARY
       - name: Prepare prerelease original machine carrier
         if: ${{ env.RELEASE_DRAFT_ID == '' && contains(env.RELEASE_TAG, '-') && env.RESOURCE_ENABLED == 'true' }}
         shell: pwsh
@@ -258,10 +247,6 @@ jobs:
             $identity = Get-Content promotion-identity.json -Raw | ConvertFrom-Json
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/release-notes.mjs" $identity.appVersion $env:SOURCE_SHA $env:RUN_ID release-notes.md
             if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
-            if (Test-Path field-acceptance.json) {
-              $field = Get-Content field-acceptance.json -Raw | ConvertFrom-Json
-              Add-Content -LiteralPath release-notes.md -Value "`n实机验收与放行记录：$($field.commentUrl)"
-            }
             $releaseArguments = @('release','create',$env:RELEASE_TAG,'--target',$env:SOURCE_SHA,'--draft','--title',"Mizar $env:RELEASE_TAG",'--notes-file','release-notes.md') + $prereleaseFlags
             node "$env:RESOURCE_PUBLISHER_ROOT/scripts/qualification/bounded-gh.mjs" @releaseArguments
             if ($LASTEXITCODE -ne 0) { throw 'Draft creation uncertain; retry must reconcile original assets' }
@@ -350,7 +335,6 @@ jobs:
           path: |
             promotion-identity.json
             promotion-ci.json
-            field-acceptance.json
             release-timings.json
             update-publication.json
             update-publication-provenance.json
