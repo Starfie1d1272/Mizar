@@ -25,7 +25,6 @@ const VAR_NAMES = [
   'DAILY_BATCHES',
   'DAILY_REGISTRATIONS',
   'INSTALLATION_DAILY_BYTES',
-  'INSTALLATION_DAILY_BATCHES',
 ];
 const canonical = (value) =>
   JSON.stringify(value, (_key, item) =>
@@ -138,7 +137,7 @@ export function liveConfig(settings) {
       if (type === 'secret_text' && SECRET_NAMES.includes(name)) return { name, type };
       if (
         type === 'plain_text' &&
-        VAR_NAMES.includes(name) &&
+        (VAR_NAMES.includes(name) || name === 'INSTALLATION_DAILY_BATCHES') &&
         /^(0|[1-9]\d*)$/.test(binding.text) &&
         Number.isSafeInteger(Number(binding.text)) &&
         (name !== 'ACCEPTING' || ['0', '1'].includes(binding.text))
@@ -164,7 +163,12 @@ export function liveConfig(settings) {
       fail('线上绑定不在已审范围内');
     })
     .sort((a, b) => a.name.localeCompare(b.name));
-  if (bindings.length !== SECRET_NAMES.length + VAR_NAMES.length + 4)
+  // Older production versions retain this inert binding until an explicit
+  // configuration cleanup; it is no longer an enforced receiver budget.
+  if (
+    bindings.length !==
+    SECRET_NAMES.length + VAR_NAMES.length + 4 + Number(names.has('INSTALLATION_DAILY_BATCHES'))
+  )
     fail('线上绑定或运行时密钥缺失');
   if (
     settings.bindings.some(
@@ -225,7 +229,6 @@ export function verifyHealth(response, body, versionId, config) {
     dailyBatches: 'DAILY_BATCHES',
     dailyRegistrations: 'DAILY_REGISTRATIONS',
     installationDailyBytes: 'INSTALLATION_DAILY_BYTES',
-    installationDailyBatches: 'INSTALLATION_DAILY_BATCHES',
     databaseBytes: 'DATABASE_BYTES',
   };
   if (

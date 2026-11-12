@@ -3,6 +3,18 @@ import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
 import { useState } from 'react';
 import { Button, Checkbox, Select, StatusBanner } from '../ui';
 import { command, useLocalRead } from '../preparation/client';
+const transportMessages: Record<string, string> = {
+  permit_budget: '接收端暂未提供发送额度；待传批次保留在本机，将按计划重试。',
+  daily_batch_budget: '接收端今日处理额度已用尽；诊断保留本机，额度恢复后自动续传。',
+  daily_byte_budget: '接收端今日接收容量已用尽；诊断保留本机，额度恢复后自动续传。',
+  installation_byte_budget: '本机今日发送容量已用尽；诊断保留本机，额度恢复后自动续传。',
+  intake_paused: '接收端暂时停止接收；诊断保留本机，将按计划重试。',
+  rate_limited: '接收端请求过于频繁；将按接收端指定时间自动重试。',
+  connection_timeout: '连接诊断接收端超时，尚未取得响应；请检查网络，将按计划重试。',
+  connection_failed: '无法连接诊断接收端；请检查网络，将按计划重试。',
+  request_timeout: '等待接收端响应超时；本机批次保留，将按计划重试。',
+  receipt_invalid: '接收端返回的确认无效；本机批次保留，将按计划重试。',
+};
 interface DeliveryStatus {
   available: boolean;
   configured: boolean;
@@ -228,19 +240,7 @@ export function DiagnosticDeliverySettings({
             ? `${{ enrollment: '登记', permit: '发送许可', upload: '上传', withdrawal: '删除请求' }[value.transportFailure.phase]}${value.transportFailure.status ? `（HTTP ${value.transportFailure.status}）` : ''}：`
             : null}
           {value.transportFailure
-            ? value.transportFailure.reason === 'permit_budget'
-              ? '接收端暂未提供发送额度；待传批次保留在本机，将按计划重试。'
-              : value.transportFailure.reason === 'rate_limited'
-                ? '接收端请求过于频繁；将稍后自动重试。'
-                : value.transportFailure.reason === 'connection_timeout'
-                  ? '连接诊断接收端超时，尚未取得响应；请检查网络，将按计划重试。'
-                  : value.transportFailure.reason === 'connection_failed'
-                    ? '无法连接诊断接收端；请检查网络，将按计划重试。'
-                    : value.transportFailure.reason === 'request_timeout'
-                      ? '等待接收端响应超时；本机批次保留，将按计划重试。'
-                      : value.transportFailure.reason === 'receipt_invalid'
-                        ? '接收端返回的确认无效；本机批次保留，将按计划重试。'
-                        : '未确认；将按计划重试。'
+            ? (transportMessages[value.transportFailure.reason] ?? '未确认；将按计划重试。')
             : '暂时无法发送，请检查本机状态或网络。'}
           可导出本机诊断报告。
         </StatusBanner>

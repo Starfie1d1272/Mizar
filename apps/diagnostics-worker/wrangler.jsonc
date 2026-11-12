@@ -17,7 +17,7 @@
     "ACCEPTING": "0",
     "DATABASE_BYTES": "0",
     "DAILY_BYTES": "0", "DAILY_BATCHES": "0", "DAILY_REGISTRATIONS": "0",
-    "INSTALLATION_DAILY_BYTES": "0", "INSTALLATION_DAILY_BATCHES": "0"
+    "INSTALLATION_DAILY_BYTES": "0"
   },
   "triggers": { "crons": ["*/15 * * * *"] }
 }
