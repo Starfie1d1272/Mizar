@@ -13,7 +13,7 @@ import type {
 } from '@mizar/broadcast-config';
 import type { MusicConfigPersistence, MusicStore } from '../music/store.js';
 import type { BroadcastConfigStore } from './store.js';
-import { portableMusicConfig, readMusicAsset } from './music-assets.js';
+import { portableMusicConfig, musicAssetPath } from './music-assets.js';
 
 function musicRevision(revision: string): string {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(revision))
@@ -31,7 +31,7 @@ export function createMusicConfigPersistence(
     current: ActiveBroadcastSnapshot,
   ) => Promise<ActiveBroadcastSnapshot['lock']>,
   localTrackId: (ref: AssetRef) => Promise<string> = async (ref) => {
-    await readMusicAsset(music, ref);
+    await musicAssetPath(music, ref);
     return ref.fileId;
   },
 ): MusicConfigPersistence {

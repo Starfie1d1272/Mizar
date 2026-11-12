@@ -511,7 +511,7 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail,
 .hud-widget-design[data-hud-design='esl'] .focused-player,
 .hud-widget-design[data-hud-design='esl'] .match-header {
-  font-family: 'Barlow Condensed', SourceHanSans, var(--mizar-type-family-display), sans-serif;
+  font-family: ESLLegend, SourceHanSans, var(--mizar-type-family-display), sans-serif;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__name,
 .hud-widget-design[data-hud-design='esl'] .player-rail__health-value {

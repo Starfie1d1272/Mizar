@@ -12,12 +12,12 @@ pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run build
 node scripts/radar-view/pack.mjs /tmp/radar-package
 
 # RivalHub / 独立 consumer
-pnpm add --save-exact /tmp/radar-package/mizar-hud-radar-view-0.1.0.tgz
+pnpm add --save-exact /tmp/radar-package/mizar-hud-radar-view-0.1.1.tgz
 ```
 
 包只有 React 19 peer；不需要 `@mizar/core`、protocol、私有 workspace 包或源码 alias。包版本与 wire schema 独立；不兼容展示 API 提升 minor（1.0 前），兼容修复提升 patch。正式发布后用 `@mizar-hud/radar-view@精确版本` 替代 tarball。审查 artifact 应同时记录 git SHA 与 tarball SHA-256，不把同名可变文件当作版本锁定。
 
-将安装包的 `dist/assets/` 整个目录复制到网站静态目录，例如 `public/vendor/radar/0.1.0/`。保留内部 `assets/cs2/...` 路径。`dist/radar-provenance.json`、`dist/icon-provenance.json` 与 `dist/THIRD-PARTY-NOTICES.md` 记录来源和 hash。资源包由现有 cs2-assets pipeline 产生，不热链第三方。
+将安装包的 `dist/assets/` 整个目录复制到网站静态目录，例如 `public/vendor/radar/0.1.1/`。保留内部 `assets/cs2/...` 路径。`dist/radar-provenance.json`、`dist/icon-provenance.json` 与 `dist/THIRD-PARTY-NOTICES.md` 记录来源和 hash。地图与图标由现有 cs2-assets 构建产生。ESL 外观使用包内方向图、开火图和 Legend 字体，来源分别随附于 ESL 图案声明和字体目录。
 
 ```tsx
 import { RadarView, fromPublicRadar } from '@mizar-hud/radar-view';
@@ -39,11 +39,11 @@ const frame = fromPublicRadar(live.radar, {
   snapshot={frame}
   paused={status === 'stale'}
   presentationRevision={reconnectRevision}
-  assetBaseUrl="/vendor/radar/0.1.0"
+  assetBaseUrl="/vendor/radar/0.1.1"
 />;
 ```
 
-父容器提供雷达尺寸（通常为正方形）。`assetBaseUrl` 也可为 `https://cdn.example/radar/0.1.0`。可选 `resolveAssetUrl` 接收与 base 拼接后的路径，供宿主映射素材地址；保持函数引用稳定可避免重复加载。CSS 独立导入，保留宿主控制权；颜色可通过 `--mizar-side-ct`、`--mizar-side-t`、`--mizar-hud-objective-bomb` 覆盖，缺失时使用原雷达默认值。组件默认响应 `prefers-reduced-motion`，也可显式传 `reducedMotion`。Canvas 只读，无键盘焦点或禁用操作；连接提示、加载失败说明与文字替代内容由页面提供。
+父容器提供雷达尺寸（通常为正方形）。`assetBaseUrl` 也可为 `https://cdn.example/radar/0.1.1`。可选 `resolveAssetUrl` 接收与 base 拼接后的路径，供宿主映射素材地址；保持函数引用稳定可避免重复加载。CSS 独立导入，保留宿主控制权；颜色可通过 `--mizar-side-ct`、`--mizar-side-t`、`--mizar-hud-objective-bomb` 覆盖，缺失时使用原雷达默认值。组件默认响应 `prefers-reduced-motion`，也可显式传 `reducedMotion`。Canvas 只读，无键盘焦点或禁用操作；连接提示、加载失败说明与文字替代内容由页面提供。
 
 ## 数据与连续性
 
@@ -79,7 +79,7 @@ node scripts/radar-view/consumer-smoke.mjs ../RivalHub
 ```sh
 sha256sum --check SHA256SUMS # macOS 可用 shasum -a 256 -c SHA256SUMS
 npm login
-npm publish ./mizar-hud-radar-view-0.1.0.tgz --ignore-scripts --access public --tag latest
+npm publish ./mizar-hud-radar-view-0.1.1.tgz --ignore-scripts --access public --tag latest
 ```
 
 首次发布完成后，在 npm 包 Settings → Trusted publishing 添加 GitHub Actions：
@@ -91,4 +91,4 @@ npm publish ./mizar-hud-radar-view-0.1.0.tgz --ignore-scripts --access public --
 
 后续发布修改包版本、通过完整 CI，再创建并推送 `radar-view-v<package.version>` 标签。`.github/workflows/publish-radar.yml` 使用 GitHub-hosted runner、Node 24、固定 npm 12.2.0 与 OIDC，无长期 NPM_TOKEN；生成 provenance。它校验标签和包版本完全相符，并要求该精确提交最近一次 push/PR CI 成功；重新执行外部安装、类型与 production build 验证后发布。稳定版本使用 `latest`，预发布版本使用 `next`。失败需先修复原因再重跑；已经发布的版本不可覆盖，内容变化必须升版本。
 
-标签发布不要求合并 PR，也不会合并 PR。普通 PR CI 只上传安装包，不执行 registry 写入；首次人工发布的 0.1.0 不要再次用标签重复发布。仓库管理员可对 `radar-view-v*` 设置 tag ruleset 以限定发布者。npm 发布与 Mizar 桌面发行版独立。
+标签发布不要求合并 PR，也不会合并 PR。普通 PR CI 只上传安装包，不执行 registry 写入；首次人工发布的 0.1.1 不要再次用标签重复发布。仓库管理员可对 `radar-view-v*` 设置 tag ruleset 以限定发布者。npm 发布与 Mizar 桌面发行版独立。

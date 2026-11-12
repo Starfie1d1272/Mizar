@@ -20,8 +20,7 @@ export function musicAssetRef(id: string): AssetRef {
   };
 }
 
-/** Resolve only our own namespace, then independently check the bytes read. */
-export async function readMusicAsset(store: MusicStore, ref: AssetRef): Promise<Buffer> {
+export function musicAssetPath(store: MusicStore, ref: AssetRef): Promise<string> {
   const expected = musicAssetRef(ref.fileId);
   if (
     ref.resource.id !== expected.resource.id ||
@@ -29,7 +28,12 @@ export async function readMusicAsset(store: MusicStore, ref: AssetRef): Promise<
     ref.resource.digest !== expected.resource.digest
   )
     throw new Error('music_track_invalid');
-  const bytes = await readFile(await store.trackPath(ref.fileId));
+  return store.trackPath(ref.fileId);
+}
+
+/** Verify the bytes actually read when exporting portable audio. */
+export async function readMusicAsset(store: MusicStore, ref: AssetRef): Promise<Buffer> {
+  const bytes = await readFile(await musicAssetPath(store, ref));
   if (
     !audioBytes(ref.fileId, bytes) ||
     createHash('sha256').update(bytes).digest('hex') !== ref.resource.digest
@@ -44,7 +48,7 @@ export async function portableMusicTrack(
   value: MusicTrack,
 ): Promise<PortableTrack> {
   const track = portableTrackDraft(value);
-  await readMusicAsset(store, track.asset);
+  await musicAssetPath(store, track.asset);
   return track;
 }
 
@@ -69,7 +73,7 @@ export async function portableMusicConfig(
   const config = portableMusicDraft(input, automaticEnabled);
   for (const group of MUSIC_GROUPS)
     await Promise.all(
-      config.groups[group].tracks.map((track) => readMusicAsset(store, track.asset)),
+      config.groups[group].tracks.map((track) => musicAssetPath(store, track.asset)),
     );
   return config;
 }

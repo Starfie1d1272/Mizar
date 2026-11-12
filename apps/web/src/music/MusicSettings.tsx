@@ -3,6 +3,7 @@ import { MusicVolumeField } from './MusicVolumeField';
 import { controlEvidence } from '../debug/control-journal';
 import { localFile, type UploadedMusicTrack } from './music-files';
 import { useState } from 'react';
+import { BUILTIN_MUSIC_MODULE_ID } from '@mizar/broadcast-config';
 import {
   MUSIC_GROUPS,
   musicConfigSchema,
@@ -103,6 +104,25 @@ export function MusicSettings({ active = true }: { active?: boolean }) {
             <div className="music-settings-save__actions">
               <details className="music-settings-import">
                 <summary>导入音乐包</summary>
+                <p>在资源管理中查看或使用内置节目音乐。</p>
+                <Button
+                  disabled={busy}
+                  onClick={async () => {
+                    if (
+                      dirty &&
+                      !(await confirmation.confirm(
+                        '音乐配置有未保存的修改，离开后将丢失。继续吗？',
+                      ))
+                    )
+                      return;
+                    void action(async () => {
+                      await preview.stop();
+                      window.location.assign('/packages?resource=' + BUILTIN_MUSIC_MODULE_ID);
+                    });
+                  }}
+                >
+                  查看内置节目音乐
+                </Button>
                 <Button
                   disabled={busy}
                   onClick={() => {

@@ -173,6 +173,21 @@ export function registerMusicRoutes(
       });
     }
   });
+  app.post('/operator/music/builtin', async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    try {
+      await store.import('builtin');
+      director.invalidate();
+      return { config: store.state.config };
+    } catch (error) {
+      request.log.error(
+        { stage: 'music_builtin', error: diagnosticValue(error) },
+        '内置音乐加载失败',
+      );
+      return reply.code(400).send({ message: '内置音乐未加载，原配置已保留。' });
+    }
+  });
   for (const repair of [false, true])
     app.post(
       repair ? '/operator/music/track/repair' : '/operator/music/track',

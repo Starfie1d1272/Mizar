@@ -9,7 +9,6 @@ import {
 } from './broadcast-config/music-pack-routes.js';
 import {
   createProductionBroadcastDependencies,
-  loadLegacyMusic,
   withOfficialBroadcastResources,
 } from './broadcast-config/production.js';
 import {
@@ -237,6 +236,7 @@ export interface CompanionAppOptions {
   readonly hudConfigPath?: string;
   readonly hudConfigStore?: HudConfigStore;
   readonly obsConfigPath?: string;
+  readonly builtinMusicPack?: string;
   readonly mulnxCamPacksRoot?: string;
   readonly mulnxBundle?: string;
   readonly readObsCaptureEvidence?: () => Promise<ObsNativeEvidence>;
@@ -1548,16 +1548,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     const musicStore = new MusicStore(
       join(dirname(options.obsConfigPath), 'music'),
       (stage, evidence) => sessionJournal?.record(stage, evidence),
+      options.builtinMusicPack,
     );
-    app.addHook('onReady', async () => {
-      try {
-        await loadLegacyMusic(musicStore, broadcastConfig!.path);
-      } catch (error) {
-        app.log.error({ stage: 'music_load', err: error, result: 'failure' }, '音乐配置加载失败');
-        musicStore.failure = true;
-        musicStore.ready = false;
-      }
-    });
     musicProvider = new ObsMusicProvider(
       obsConfigStore,
       (stage, evidence) => sessionJournal?.record(stage, evidence),
@@ -1671,6 +1663,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       () => runtime.restoreLegacyCamera(),
       (module) => runtime.moduleAvailability(module),
       () => runtime.displayAvailable,
+      () => runtime.ensureBuiltinMusic(),
     );
     catalogTool = mulnxTool;
     const mulnxProvider = new MulnxProvider(cameraEvidence);
