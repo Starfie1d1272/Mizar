@@ -370,7 +370,8 @@ try {
     binaryPath = join(root, 'Stub.exe');
   await writeFile(
     compiler,
-    String.raw`param([string]$Output)
+    '\uFEFF' +
+      String.raw`param([string]$Output)
 Add-Type -OutputAssembly $Output -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 using System.IO;
@@ -589,6 +590,8 @@ public class UpdateFixture {
         installed + '.mizar-candidate-' + stageId,
         installed + '.mizar-failed-' + stageId,
         join(stage, 'Installer.exe'),
+        join(stage, 'Mizar.lnk'),
+        join(stage, '卸载 Mizar.lnk'),
         shortcut,
       ])
         await assert.rejects(realpath(path), { code: 'ENOENT' });
