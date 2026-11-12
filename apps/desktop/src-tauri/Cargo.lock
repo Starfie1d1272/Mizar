@@ -1791,7 +1791,7 @@ dependencies = [
 
 [[package]]
 name = "mizar-desktop"
-version = "1.11.10"
+version = "1.11.11"
 dependencies = [
  "chrono",
  "regex",

@@ -691,7 +691,7 @@ export class DiagnosticDelivery {
   private pendingBytes = 0;
   private recoveryNeeded = false;
   private serial = Promise.resolve();
-  private sending: Promise<void> | undefined;
+  private pumping: Promise<void> | undefined;
   private cleaningAcknowledged: Promise<void> | undefined;
   private acknowledgedScanNext: string | undefined;
   private abort: AbortController | undefined;
@@ -2060,32 +2060,32 @@ export class DiagnosticDelivery {
     });
     return this.cleaningAcknowledged;
   }
-  async tick(forceCollection = true) {
-    await this.collectAcknowledged();
-    await this.transaction(async () => {
-      await this.renewExpiredInstallation();
-      const collecting = forceCollection || this.now() >= this.nextCollectionAt;
-      if (collecting) {
-        await this.recover();
-        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
-      }
-      if (!collecting && this.recoveryNeeded) await this.recover(false);
-      // persist() freezes the admitted prefix; a second pass here would turn
-      // records arriving during gzip/fsync into an immediate tiny extra batch.
-      // recover() already persists its own recovered prefix when needed.
-    });
-    if (!this.endpoint || this.closed) return;
-    this.sending ??= (async () => {
+  tick(forceCollection = true): Promise<void> {
+    // Coalesce the whole round: slow source recovery must not let every timer
+    // enqueue another scan ahead of the active upload's state transactions.
+    return (this.pumping ??= (async () => {
+      await this.collectAcknowledged();
+      await this.transaction(async () => {
+        await this.renewExpiredInstallation();
+        const collecting = forceCollection || this.now() >= this.nextCollectionAt;
+        if (collecting) {
+          await this.recover();
+          this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+        }
+        if (!collecting && this.recoveryNeeded) await this.recover(false);
+        // Recovery alone persists the admitted prefix; a second pass would
+        // turn records arriving during gzip/fsync into a tiny extra batch.
+      });
+      if (!this.endpoint || this.closed) return;
       for (let count = 0; count < DELIVERY_LIMITS.sendPerTick; count++) {
         const acknowledged = this.state.acknowledged;
         await this.send();
         if (this.state.acknowledged === acknowledged) break;
       }
+      await this.collectAcknowledged();
     })().finally(() => {
-      this.sending = undefined;
-    });
-    await this.sending;
-    await this.collectAcknowledged();
+      this.pumping = undefined;
+    }));
   }
   private async syncWithdrawal(cancellation: AbortSignal) {
     // One due identity per pump. A stalled old deletion has its own durable
@@ -2492,7 +2492,7 @@ export class DiagnosticDelivery {
     clearInterval(this.timer);
     this.unsubscribe?.();
     this.abort?.abort();
-    await this.sending;
+    await this.pumping;
     await this.cleaningAcknowledged;
     await this.releaseAcknowledgedPins();
     await this.transaction(() => this.persist());
