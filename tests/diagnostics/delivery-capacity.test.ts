@@ -134,7 +134,7 @@ test('interleaved producers share collection; failed manifest advances no source
   }
 });
 
-test('original packets pass 128; global budget backs off, survives restart and resumes after UTC reset', async () => {
+test('retained ACK history frees sending capacity; quota retry survives restart and UTC reset', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-budget-'));
   const receiver = meteredRuntime(root, 160);
   const db = await receiver.getD1Database('DIAGNOSTICS_DB');
@@ -152,6 +152,8 @@ test('original packets pass 128; global budget backs off, survives restart and r
   const options = {
     endpoint: 'https://diagnostics.invalid',
     now: () => now,
+    // An unavailable source owner cannot authorize removing acknowledged wire.
+    participants: () => [],
     fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       headers.set('cf-connecting-ip', '192.0.2.10');
@@ -165,7 +167,9 @@ test('original packets pass 128; global budget backs off, survives restart and r
   let delivery = await new DiagnosticDelivery(join(root, 'client'), journal, options).initialize(
     false,
   );
+  const batchLimit = DELIVERY_LIMITS.batches;
   try {
+    DELIVERY_LIMITS.batches = 161;
     await delivery.consent(true);
     await delivery.pause(true);
     for (let count = 0; count < 161; count++) {
@@ -176,6 +180,10 @@ test('original packets pass 128; global budget backs off, survives restart and r
     await delivery.pause(false);
     for (let count = 0; count < 160; count++) await delivery.tick(false);
     assert.equal(delivery.status().acknowledged, 160);
+    assert.equal(delivery.status().retainedAcknowledgedBatches, 160);
+    await journal.recordCommitted('retained_capacity_probe', {});
+    await delivery.tick();
+    assert.equal(delivery.status().queuedBatches, 2, 'ACK history must not consume sending slots');
     const counters = () =>
       db.prepare('SELECT permits,batches,bytes FROM daily WHERE day=?').bind(day).first();
     const before = await counters();
@@ -255,6 +263,7 @@ test('original packets pass 128; global budget backs off, survives restart and r
       await (await receiver.dispatchFetch('https://diagnostics.invalid/__test/metrics')).json(),
     );
   } finally {
+    DELIVERY_LIMITS.batches = batchLimit;
     await delivery.close();
     await journal.close();
     await receiver.dispose();
