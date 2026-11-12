@@ -378,7 +378,12 @@ public class UpdateFixture {
     foreach (var path in Directory.GetFiles(source)) File.Copy(path, Path.Combine(target, Path.GetFileName(path)), true);
     foreach (var path in Directory.GetDirectories(source)) Copy(path, Path.Combine(target, Path.GetFileName(path)));
   }
-  public static void Main(string[] args) {
+  [STAThread]
+  public static int Main(string[] args) {
+    try { Run(args); return 0; }
+    catch(Exception error) { Console.Error.WriteLine(error); return 2; }
+  }
+  static void Run(string[] args) {
     if (args.Length == 3 && args[0] == "--shortcut") {
       // Match NSIS's Unicode Shell link writer. WScript.Shell.TargetPath can
       // reject the Unicode fixture path on an English Windows runner.
