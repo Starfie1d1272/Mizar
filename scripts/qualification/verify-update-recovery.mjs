@@ -566,7 +566,11 @@ public class UpdateFixture {
         ]);
         assert.equal(links.code, 0, links.errors);
         const destinations = links.output.split(/\r?\n/);
-        assert.equal(destinations.length, 2);
+        assert.equal(
+          destinations.length,
+          2,
+          await readFile(join(stage, 'update-activity.ndjson'), 'utf8'),
+        );
         for (const [index, name] of ['Mizar.exe', 'Uninstall.exe'].entries()) {
           assert.equal(await realpath(dirname(destinations[index])), await realpath(installed));
           assert(destinations[index].endsWith('\\' + name));
