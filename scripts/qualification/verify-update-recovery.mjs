@@ -22,6 +22,13 @@ async function run(args, overrides = {}) {
     Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
   );
   Object.assign(env, overrides);
+  const command = args.indexOf('-Command');
+  if (command >= 0) {
+    args = [...args];
+    args[command + 1] =
+      '$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); ' +
+      args[command + 1];
+  }
   const directTransaction = args.includes('-Mode');
   const child = spawn(
     'powershell.exe',
