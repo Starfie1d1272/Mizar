@@ -2,7 +2,7 @@
 import { setTimeout } from 'node:timers';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +11,7 @@ import assert from 'node:assert/strict';
 import { safeLogText } from './product-logs.mjs';
 
 if (process.platform !== 'win32') throw new Error('此验证需要 Windows PowerShell 与真实文件系统');
-// Shell shortcut APIs require the canonical target, not the runner's mixed
-// 8.3 TEMP alias with newly created Unicode path segments.
-const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar 更新 recovery ')));
+const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'bundle/update-install.ps1');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 let ownsRegistration = false;
@@ -365,6 +363,14 @@ using System;
 using System.IO;
 using System.Threading;
 using Microsoft.Win32;
+[System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("000214F9-0000-0000-C000-000000000046"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+public interface FixtureShellLink {
+  void GetPath(); void GetIDList(); void SetIDList(); void GetDescription(); void SetDescription();
+  void GetWorkingDirectory(); void SetWorkingDirectory(); void GetArguments(); void SetArguments();
+  void GetHotkey(); void SetHotkey(); void GetShowCmd(); void SetShowCmd(); void GetIconLocation();
+  void SetIconLocation(); void SetRelativePath(); void Resolve();
+  void SetPath([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string path);
+}
 public class UpdateFixture {
   static void Copy(string source, string target) {
     Directory.CreateDirectory(target);
@@ -372,6 +378,16 @@ public class UpdateFixture {
     foreach (var path in Directory.GetDirectories(source)) Copy(path, Path.Combine(target, Path.GetFileName(path)));
   }
   public static void Main(string[] args) {
+    if (args.Length == 3 && args[0] == "--shortcut") {
+      // Match NSIS's Unicode Shell link writer. WScript.Shell.TargetPath can
+      // reject the Unicode fixture path on an English Windows runner.
+      object link=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"),true));
+      try {
+        ((FixtureShellLink)link).SetPath(args[2]);
+        ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Save(args[1],true);
+      } finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link); }
+      return;
+    }
     if (args.Length > 0 && args[0] == "--host") { using (var desktop = new Mutex(false, @"Global\MizarDesktop")) { Console.WriteLine(System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks); Console.ReadLine(); } return; }
     var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
     if (Path.GetFileName(exe).Equals("Mizar.exe", StringComparison.OrdinalIgnoreCase)) {
@@ -537,7 +553,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario !== 'success-no-shortcut') {
       const createdShortcut = await run([
         '-Command',
-        `$ErrorActionPreference = 'Stop'; $shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save(); $saved = $shell.CreateShortcut(${psLiteral(shortcut)}); if ($saved.TargetPath -ne ${psLiteral(join(installed, 'Mizar.exe'))}) { throw 'Shortcut fixture target was not saved correctly' }`,
+        `& ${psLiteral(binaryPath)} --shortcut ${psLiteral(shortcut)} ${psLiteral(join(installed, 'Mizar.exe'))}; exit $LASTEXITCODE`,
       ]);
       assert.equal(createdShortcut.code, 0, createdShortcut.errors);
       originalShortcut = await readFile(shortcut);
