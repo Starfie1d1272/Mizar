@@ -9,6 +9,8 @@ const transportMessages: Record<string, string> = {
   daily_byte_budget: '接收端今日接收容量已用尽；诊断保留本机，额度恢复后自动续传。',
   installation_byte_budget: '本机今日发送容量已用尽；诊断保留本机，额度恢复后自动续传。',
   intake_paused: '接收端暂时停止接收；诊断保留本机，将按计划重试。',
+  installation_revoked: '接收端已撤回本机的诊断登记；未确认诊断仍保留本机。',
+  unauthorized: '接收端未通过本机诊断登记校验；诊断保留本机，将按计划重试。',
   rate_limited: '接收端请求过于频繁；将按接收端指定时间自动重试。',
   connection_timeout: '连接诊断接收端超时，尚未取得响应；请检查网络，将按计划重试。',
   connection_failed: '无法连接诊断接收端；请检查网络，将按计划重试。',
