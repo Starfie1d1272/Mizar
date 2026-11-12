@@ -129,10 +129,10 @@ test('original packets pass 128; global budget backs off, survives restart and r
   await migrate(db);
   let now = Date.now();
   const day = Math.floor(now / 86400_000);
-  const control = () =>
+  const control = (accepting = true) =>
     receiver.dispatchFetch('https://diagnostics.invalid/__test/control', {
       method: 'POST',
-      body: JSON.stringify({ now }),
+      body: JSON.stringify({ now, accepting }),
     });
   await control();
   const journal = new SessionJournal(join(root, 'client'));
@@ -209,6 +209,26 @@ test('original packets pass 128; global budget backs off, survives restart and r
       assert(delivery.status().acknowledged > confirmed, 'original bytes resume after reset');
       assert.equal(delivery.status().transportFailure, null);
     }
+    await control(false);
+    await journal.recordCommitted('intake_pause_probe', {});
+    await delivery.tick();
+    assert.equal(delivery.status().transportFailure?.reason, 'intake_paused');
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(join(root, 'client'), journal, options).initialize(
+      false,
+    );
+    assert.equal(delivery.status().transportFailure?.reason, 'intake_paused');
+    now = delivery.status().nextAttemptAt + 1;
+    await control();
+    await delivery.tick(false);
+    assert.equal(delivery.status().transportFailure, null);
+    await db.prepare('UPDATE installations SET revoked_at=?').bind(now).run();
+    await journal.recordCommitted('revoked_identity_probe', {});
+    const beforeRevocation = delivery.status().acknowledged;
+    await delivery.tick();
+    assert.equal(delivery.status().transportFailure?.reason, 'unauthorized');
+    assert.equal(delivery.status().acknowledged, beforeRevocation);
+    assert(delivery.status().queuedBatches > 0, 'revocation retains unconfirmed local evidence');
     console.log(
       'production receiver counters',
       await (await receiver.dispatchFetch('https://diagnostics.invalid/__test/metrics')).json(),
