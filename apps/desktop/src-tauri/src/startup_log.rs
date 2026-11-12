@@ -1428,7 +1428,7 @@ impl DesktopLog {
             Err(error) => {
                 let message = format!("{error}\n{error:?}");
                 self.event(stage, "failure", Some(&message));
-                Err(format!("{stage}: {message}"))
+                Err(error.to_string())
             }
         }
     }

@@ -823,13 +823,9 @@ pub(crate) async fn finish_workspace(
         let _operation = observer_workspace::cleanup_operation();
         let managed = host.state::<Mutex<managed_cs2::ManagedCs2>>();
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
-        // Companion freeze and scene/remote work have their own owner. Never
-        // serialize the exact local process cleanup behind their HTTP response.
+        // Freeze automatic work before local cleanup. Demo recovery and production
+        // finish share Companion's mutation gate, so they must not run concurrently.
         let exit_intent = crate::production_exit::set_exit_intent(&log, "begin-exit");
-        let production_log = log.inner().clone();
-        let production_task = std::thread::spawn(move || {
-            crate::production_exit::finish_workspace_production(&production_log)
-        });
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
@@ -874,7 +870,9 @@ pub(crate) async fn finish_workspace(
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
         let presentation = log.step("workspace_exit_presentation", || workspace_presentation::present_production_inner_checked(&host, false, None, None));
-        let production = production_task.join().unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
+        // Run after local cleanup even if restoration failed; remote work cannot
+        // delay stopping the owned game or restoring its temporary configuration.
+        let production = crate::production_exit::finish_workspace_production(&log);
         crate::production_exit::cleanup_results(crate::production_exit::cleanup_results(exit_intent, production), crate::production_exit::cleanup_results(game, presentation))
         })
     } })
