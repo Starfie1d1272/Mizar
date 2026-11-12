@@ -268,7 +268,9 @@ const stateSchema = z
           }),
         }),
       )
-      .max(DELIVERY_LIMITS.batches),
+      .refine(
+        (queue) => queue.filter((batch) => !batch.acknowledgedAt).length <= DELIVERY_LIMITS.batches,
+      ),
     omitted: counter,
     omissionReasons: z.record(z.string().max(96), counter),
     acknowledged: counter,
@@ -1336,7 +1338,10 @@ export class DiagnosticDelivery {
           if (++count % 32 === 0) await yieldIO();
           if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
             return;
-          if (this.state.queue.length >= DELIVERY_LIMITS.batches) {
+          if (
+            this.state.queue.filter((batch) => !batch.acknowledgedAt).length >=
+            DELIVERY_LIMITS.batches
+          ) {
             this.error = 'queue_budget_local_journal_retained';
             // Capacity may stop recovery before reaching the unqueued tail in a
             // later segment. Keep scanning eligible source records after ACKs
@@ -1512,7 +1517,7 @@ export class DiagnosticDelivery {
         }
         const queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
         const capacity =
-          queue.length <= DELIVERY_LIMITS.batches &&
+          queue.filter((batch) => !batch.acknowledgedAt).length <= DELIVERY_LIMITS.batches &&
           queue.reduce((n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES), 0) <=
             DELIVERY_LIMITS.queueBytes;
         const manifest =
