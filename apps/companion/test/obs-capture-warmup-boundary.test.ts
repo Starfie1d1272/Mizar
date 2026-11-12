@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { ObsAdapter } from '../src/obs/adapter.js';
 import { ObsCaptureWarmup } from '../src/obs/capture-warmup.js';
 import { ObsConfigStore } from '../src/obs/config.js';
+import { ObsOutputController } from '../src/obs/outputs.js';
 import { obsSceneName } from '../src/obs/desired-state.js';
 import type { ObsNativeEvidence } from '../src/obs/native-evidence.js';
 import { registerObsRoutes } from '../src/obs/routes.js';
@@ -249,6 +250,8 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   const post = (path: string, payload: object) =>
     app.inject({ method: 'POST', url: `/operator/obs/${path}`, headers: { origin }, payload });
   return {
+    config,
+    stopObs: () => obsServer.close(),
     post,
     calls,
     visibleWrites,
@@ -260,6 +263,23 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
     journal: () => readFile(join(dir, 'warmup.json'), 'utf8'),
   };
 }
+
+it('keeps disconnected observations valid across failed reconnects, but revokes them on configuration reset', async () => {
+  const r = await rig();
+  await r.stopObs();
+  const outputs = new ObsOutputController(r.config, () => {});
+  try {
+    await expect(outputs.read()).rejects.toThrow();
+    const epoch = outputs.preparationConfigurationEpoch();
+    await expect(outputs.read()).rejects.toThrow();
+    expect(outputs.preparationConfigurationEpoch()).toBe(epoch);
+    expect(outputs.snapshot().stream.active).toBeNull();
+    outputs.reset();
+    expect(outputs.preparationConfigurationEpoch()).not.toBe(epoch);
+  } finally {
+    await outputs.close();
+  }
+});
 
 it('uses actual HTTP routes and OBS WebSocket for disabled → zero → enabled → capture → cleanup', async () => {
   const r = await rig();
