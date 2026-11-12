@@ -38,6 +38,7 @@ async function run(args, overrides = {}) {
       cwd: overrides.MIZAR_UPDATE_TEST_CWD,
       windowsHide: overrides.MIZAR_UPDATE_TEST_UI !== '1',
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120000,
     },
   );
   let output = '',
@@ -526,6 +527,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     'committed-valid',
     'committed-corrupt',
   ]) {
+    console.log(`Native update scenario: ${scenario}`);
     const success = scenario.startsWith('success') || scenario === 'committed-valid';
     const area = join(root, scenario),
       installed = join(area, 'installed path'),
