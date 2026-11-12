@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import {
   DiagnosticDelivery,
+  DELIVERY_LIMITS,
   decodeDiagnosticBatch,
 } from '../../apps/companion/src/support/delivery.js';
 import { meteredRuntime } from '../../scripts/diagnostics/capacity-runtime.mjs';
@@ -68,6 +69,17 @@ test('interleaved producers share collection; failed manifest advances no source
       oldIds.size,
       'polling must not seal tiny batches',
     );
+    const batchLimit = DELIVERY_LIMITS.batches;
+    try {
+      DELIVERY_LIMITS.batches = oldIds.size + 1;
+      await delivery.tick();
+      assert(
+        (await manifest()) === before,
+        'one free slot must not fragment a two-producer prefix',
+      );
+    } finally {
+      DELIVERY_LIMITS.batches = batchLimit;
+    }
     const files = (await readdir(outbox)).sort();
     // A real filesystem failure after packet fsync, before manifest replacement.
     await mkdir(join(outbox, 'state.json.tmp'));

@@ -1519,9 +1519,16 @@ export class DiagnosticDelivery {
           Buffer.byteLength(JSON.stringify({ ...this.state, queue })) <=
           DELIVERY_LIMITS.manifestBytes;
         if (capacity && manifest) break;
-        // A smaller contiguous prefix can fit without advancing over an unwritten
-        // producer. Even a full queue can still send its already committed batches.
-        if (count === 1) {
+        // Split only a prefix that exceeds the queue's hard capacity on its own.
+        // Temporary occupancy must wait for sends, not create tiny packets per poll.
+        const prefix = packets.map(({ batch }) => batch);
+        const fitsEmptyQueue =
+          prefix.length <= DELIVERY_LIMITS.batches &&
+          prefix.reduce((n, v) => n + v.bytes + DIAGNOSTIC_PERMIT_BYTES, 0) <=
+            DELIVERY_LIMITS.queueBytes &&
+          Buffer.byteLength(JSON.stringify({ ...this.state, queue: prefix })) <=
+            DELIVERY_LIMITS.manifestBytes;
+        if (count === 1 || fitsEmptyQueue) {
           this.error = capacity
             ? 'manifest_budget_local_journal_retained'
             : 'queue_budget_local_journal_retained';
