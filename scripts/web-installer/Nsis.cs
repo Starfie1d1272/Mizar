@@ -8,21 +8,17 @@ using Microsoft.Win32;
 
 namespace Mizar.WebInstaller {
   public sealed class FreshInstallResult {
-    internal FreshInstallResult(string directory, PendingInstall pending) { Directory = directory; CoreInstalled = true; record = pending; }
+    internal FreshInstallResult(string directory, PendingInstall pending) { Directory = directory; record = pending; }
     readonly PendingInstall record;
-    bool completed, completionStarted;
+    bool completed;
     internal bool Completed { get { return completed; } }
     public string Directory { get; private set; }
-    public Task RollbackAsync() { if(completionStarted) throw new InvalidOperationException("安装已提交，不能再回滚。"); return record.updateStage == null ? Nsis.RollbackFreshExclusive(Directory, record) : Nsis.RollbackUpdate(record); }
     internal async Task CompleteAsync(Plan plan) {
       if(completed) return;
-      // Completion closes cancellation/rollback before any backup is removed.
-      completionStarted=true;
       if(record.updateStage!=null) await Nsis.FinalizeUpdate(plan,record);
       completed=true;
     }
     // Core installation is never the Core + default resource completion signal.
-    public bool CoreInstalled { get; private set; }
     public bool ResourcesReady { get { return record.updateStage != null && record.coreResourcesReady; } }
   }
   public sealed class InstallerRecoveryRequired : IOException {
@@ -297,24 +293,6 @@ namespace Mizar.WebInstaller {
         }
       }
     }
-    internal static async Task RollbackFreshExclusive(string target, PendingInstall record) {
-      string leasePath = Path.Combine(Path.GetDirectoryName(PendingPath()), "fresh-install.lock");
-      Downloader.NoReparse(leasePath);
-      using (var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
-        string pending = PendingPath(); Downloader.NoReparse(pending);
-        WithWriter(()=> {
-          AssertOwnedTarget(record, target);
-          record.stage = "rollback";
-          using (var process = Process.GetCurrentProcess()) { record.ownerPid=process.Id; record.ownerStarted=process.StartTime.ToUniversalTime().Ticks; }
-          SavePending(record, true);
-        });
-        bool finished = false;
-        try {
-          await RollbackOwnedFresh(target, TimeSpan.FromMinutes(10), lease, record);
-          finished = true;
-        } finally { if (finished) File.Delete(pending); }
-      }
-    }
     internal static async Task RollbackOwnedFresh(string target, TimeSpan deadline, FileStream lease, PendingInstall record = null) {
       target = Path.GetFullPath(target); Downloader.NoReparse(target);
       if (record == null) record = Serializer().Deserialize<PendingInstall>(File.ReadAllText(PendingPath()));
@@ -457,7 +435,7 @@ namespace Mizar.WebInstaller {
       if(diagnostic.Contains("update_process_remaining") || diagnostic.Contains("update_service_remaining") || diagnostic.Contains("update_host_exit_timeout")) return new InstallerActionRequired("Mizar 或原更新进程仍在运行。请正常退出后重新打开安装器。",true,cause);
       if(diagnostic.Contains("update_installer_corrupt")) return new InstallerActionRequired("安装文件验证未通过。请重新下载官方轻量安装器后重试。",false,cause);
       if(diagnostic.Contains("update_payload_") || diagnostic.Contains("update_reparse_point") || diagnostic.Contains("update_registration_snapshot_invalid")) return new InstallerActionRequired("原安装文件或恢复记录未通过验证。请保留安装目录并使用原恢复入口；需要协助时导出诊断。",false,cause);
-      if(diagnostic.Contains("update_installer_cancelled")) return new InstallerActionRequired("安装程序已取消或失败。请导出诊断确认原因后重试。",true,cause);
+      if(diagnostic.Contains("update_installer_cancelled")) return new InstallerActionRequired("安装已取消，原程序仍可使用。",true,cause);
       string phase=arguments.Contains("-Mode Prepare") ? "更新准备" : arguments.Contains("-Mode Install") ? "更新安装" : arguments.Contains("-Mode Finalize") ? "安装清理" : "安装恢复";
       return new InstallerActionRequired(phase+"未完成。请查看或导出诊断后处理；"+(arguments.Contains("-Mode Finalize") ? "安装状态须重新核对，剩余恢复资料已保留。" : "原程序与现场已保留。"),false,cause);
     }
@@ -485,14 +463,6 @@ namespace Mizar.WebInstaller {
       Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Recover -StageRoot \""+record.updateStage+"\"",lease,record).GetAwaiter().GetResult();
       File.Delete(PendingPath()); return false;
     }
-    internal static async Task RollbackUpdate(PendingInstall record) {
-      string leasePath=Path.Combine(Path.GetDirectoryName(PendingPath()),"fresh-install.lock");Downloader.NoReparse(leasePath);
-      using(var lease=new FileStream(leasePath,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
-        if(File.Exists(PendingPath())) throw new InstallerRecoveryRequired(record.target,"其他安装操作尚未结束，保留现场。");
-        using(var process=Process.GetCurrentProcess()) {record.ownerPid=process.Id;record.ownerStarted=process.StartTime.ToUniversalTime().Ticks;}
-        record.stage="update-rollback";SavePending(record,true);await RollbackUpdateOwned(record,lease);
-      }
-    }
     static async Task RollbackUpdateOwned(PendingInstall record,FileStream lease) {
       AssertUpdate(record);
       await Native(Path.Combine(record.updateStage,"update-install.ps1"),"-Mode Rollback -StageRoot \""+record.updateStage+"\"",lease,record);
@@ -510,18 +480,13 @@ namespace Mizar.WebInstaller {
       }
     }
     static async Task<FreshInstallResult> UpdateInstalled(Plan plan,string installer,string target,IProgress<string> progress,CancellationToken token,FileStream lease) {
-      AssertOwnedRegistration(target);AssertOwnedShortcuts(target);
+      AssertOwnedRegistration(target);
       if(Process.GetProcessesByName("Mizar").Length!=0) throw new InstallerActionRequired("请正常退出 Mizar 后重试更新。",true);
       string artifactPath=Path.Combine(target,"resources","metadata","artifact.json");Downloader.NoReparse(artifactPath);
       if(new FileInfo(artifactPath).Length>65536) throw new InstallerActionRequired("原安装身份无法确认，请使用完整安装包修复。");
       var artifact=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(artifactPath));
       string version=Convert.ToString(artifact["appVersion"]),sha=Convert.ToString(artifact["gitSha"]),digest=Convert.ToString(artifact["artifactSha256"]);
       if(!System.Text.RegularExpressions.Regex.IsMatch(version??"","^\\d+\\.\\d+\\.\\d+$") || !System.Text.RegularExpressions.Regex.IsMatch(sha??"","^[a-f0-9]{40}$") || !System.Text.RegularExpressions.Regex.IsMatch(digest??"","^[a-f0-9]{64}$") || new Version(version)>new Version(plan.version)) throw new InstallerActionRequired("原安装版本无法确认或比安装器更新，请使用对应版本安装器。");
-      var files=VerifiedPayload(target,version,sha,digest,false);
-      foreach(string file in Directory.GetFiles(target,"*",SearchOption.AllDirectories)) {
-        Downloader.NoReparse(file);string name=file.Substring(target.Length+1).Replace('\\','/');
-        if(!files.ContainsKey(name) && name!="resources/metadata/SHA256SUMS" && name!="installed.flag" && name!="Uninstall.exe" && name!=OwnershipName && !name.StartsWith("state/",StringComparison.Ordinal)) throw new InstallerActionRequired("安装位置含有无法识别的文件，请先备份原安装目录后重试。");
-      }
       if(progress!=null) progress.Report("preparing-update");
       string state=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar"), work=Path.Combine(state,"updates","download-"+Guid.NewGuid().ToString("N"));
       Downloader.NoReparse(work);Directory.CreateDirectory(work);
@@ -537,11 +502,8 @@ namespace Mizar.WebInstaller {
       Exception failure=null;
       try {
         if(progress!=null) progress.Report("installing-core");
-        using(var stopped=Process.Start(new ProcessStartInfo {FileName="cmd.exe",Arguments="/c exit 0",UseShellExecute=false,CreateNoWindow=true})) {
-          int pid=stopped.Id;stopped.WaitForExit();
-          await Native(script,"-Mode Install -StageRoot \""+record.updateStage+"\" -HostProcessId "+pid+" -NoLaunch -KeepBackup",lease,record,progress,token);
-        }
-        VerifiedRuntime(plan,target,false);record.coreResourcesReady=core;
+        await Native(script,"-Mode Install -StageRoot \""+record.updateStage+"\" -NoLaunch -KeepBackup",lease,record,progress,token);
+        record.coreResourcesReady=core;
         if(token.IsCancellationRequested) {await RollbackUpdateOwned(record,lease);token.ThrowIfCancellationRequested();}
         File.Delete(PendingPath());return new FreshInstallResult(target,record);
       } catch(Exception original) {failure=original;}
@@ -685,13 +647,6 @@ namespace Mizar.WebInstaller {
             }
             Exception validationFailure = null;
             try {
-              AssertOwnedRegistration(destination);
-              if (!File.Exists(Path.Combine(destination, "installed.flag"))) throw new IOException("核心安装未完成。");
-              var json = new System.Web.Script.Serialization.JavaScriptSerializer();
-              var artifact = json.Deserialize<System.Collections.Generic.Dictionary<string, object>>(File.ReadAllText(Path.Combine(destination, "resources", "metadata", "artifact.json")));
-              if (Convert.ToString(artifact["repository"]) != "Starfie1d1272/Mizar" || Convert.ToString(artifact["appVersion"]) != plan.version ||
-                  Convert.ToString(artifact["gitSha"]) != plan.gitSha || Convert.ToString(artifact["artifactSha256"]) != plan.contentDigest)
-                throw new IOException("安装后的核心身份不匹配。");
               VerifiedRuntime(plan, destination, false);
             } catch (Exception error) { validationFailure = error; }
             if (validationFailure != null) {

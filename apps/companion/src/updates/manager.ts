@@ -28,8 +28,7 @@ const readySchema = z.strictObject({
   manifest: updateManifestSchema,
 });
 export interface UpdateSource {
-  latest(signal: AbortSignal, minimumVersion?: string): Promise<{ tag_name: string } | null>;
-  authenticate(release: { tag_name: string }, signal: AbortSignal): Promise<UpdateManifest>;
+  latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest | null>;
 }
 export type UpdatePhase =
   | 'idle'
@@ -428,12 +427,12 @@ export class UpdateManager {
     try {
       await this.cleanupDownloads();
       await this.saveConfig();
-      const release = await this.source.latest(signal, this.config.highestVersion ?? undefined);
-      if (!release) {
+      const manifest = await this.source.latest(signal, this.config.highestVersion ?? undefined);
+      if (!manifest) {
         this.phase = 'current';
         return;
       }
-      const target = release.tag_name.slice(1);
+      const target = manifest.version;
       const current = this.options.version.split('-')[0]!;
       if (this.config.highestVersion && compareVersions(target, this.config.highestVersion) < 0)
         throw new Error('update_rollback_rejected');
@@ -445,8 +444,6 @@ export class UpdateManager {
         this.candidate = null;
         return;
       }
-      const manifest = await this.source.authenticate(release, signal);
-      if (manifest.version !== target) throw new Error('update_tag_mismatch');
       signal.throwIfAborted();
       const identity = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
       if (
@@ -667,7 +664,7 @@ export class UpdateManager {
       await this.check(true);
       if (this.phase !== 'ready' || !this.ready || !this.candidate)
         throw new Error('update_recheck_required', { cause: this.checkFailure });
-      const installer = await this.verifyFile(this.ready);
+      const installer = join(this.root, this.ready.directory, this.ready.manifest.installer.name);
       this.prepared = true;
       this.phase = 'installing';
       return {

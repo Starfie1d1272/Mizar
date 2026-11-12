@@ -1,15 +1,8 @@
-import { Buffer } from 'node:buffer';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { PACK_ID, REPLAY_IDS, LIMITS } from '@mizar/resource-pack-contract';
-import {
-  getResourceAuthorization,
-  verifyCatalogResourcePublicationBytes,
-} from '@mizar/resource-pack-contract/runtime';
-import {
-  createActivePolicyVerifier,
-  isOfficialWebResource,
-} from '../resource-store/runtime-adapter.js';
+import { PACK_ID, REPLAY_IDS } from '@mizar/resource-pack-contract';
+import { getResourceAuthorization } from '@mizar/resource-pack-contract/runtime';
+import { createActivePolicyVerifier } from '../resource-store/runtime-adapter.js';
 
 /**
  * The caller supplies the existing App ResourceStore and its real authorization
@@ -19,10 +12,8 @@ import {
  */
 export async function installOfficialPack({
   store,
-  inputs,
   loadVerified,
   authorization,
-  tufCachePath,
   signal = new globalThis.AbortController().signal,
   onProgress = () => {},
 }) {
@@ -44,43 +35,12 @@ export async function installOfficialPack({
   } catch (error) {
     // A rejected historical/corrupt cache may be replaced only by a separately
     // authenticated new publication. Offline identity failures remain failures.
-    if (
-      signal.aborted ||
-      (typeof loadVerified !== 'function' &&
-        !['statementBytes', 'publicationBundleBytes', 'archiveBytes', 'archiveBundleBytes'].every(
-          (name) => Buffer.isBuffer(inputs?.[name]),
-        ))
-    )
-      throw error;
+    if (signal.aborted || !loadVerified) throw error;
   }
   if (cached)
     return finishOfficialPack(store, cached, pinnedPolicy, signal, undefined, authorization);
-  let verified;
-  if (loadVerified !== undefined) {
-    if (typeof loadVerified !== 'function') throw new Error('Official resource loader is invalid');
-    verified = await loadVerified(signal);
-  } else {
-    const frozenInputs = Object.fromEntries(
-      [
-        ['statementBytes', 64 * 1024],
-        ['publicationBundleBytes', 2 * 1024 * 1024],
-        ['archiveBytes', LIMITS.archiveBytes],
-        ['archiveBundleBytes', 2 * 1024 * 1024],
-      ].map(([name, maximum]) => {
-        const bytes = inputs?.[name];
-        if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maximum) {
-          throw new Error('Official resource input exceeds the publisher contract');
-        }
-        return [name, Buffer.from(bytes)];
-      }),
-    );
-    verified = await verifyCatalogResourcePublicationBytes({
-      ...frozenInputs,
-      authorization,
-      tufCachePath,
-      signal,
-    });
-  }
+  if (!loadVerified) throw new Error('Authenticated resource cache is unavailable');
+  const verified = await loadVerified(signal);
   signal.throwIfAborted();
   // The shared verifier owns the receipt schema and offline trust snapshot.
   // Forward its authenticated receipt unchanged; do not reconstruct evidence here.
@@ -113,13 +73,6 @@ export async function installOfficialPack({
     verified.manifestSha256,
     authorization,
   );
-}
-
-/** Preserve the old Web URLs while delegating all authorization/Range work to Store. */
-export async function readOfficialWebResource(store, path, range) {
-  if (typeof path !== 'string') return undefined;
-  if (!isOfficialWebResource(path)) return undefined;
-  return store.read(PACK_ID, path, range);
 }
 
 async function assertDefaultEplReadable(store, signal) {

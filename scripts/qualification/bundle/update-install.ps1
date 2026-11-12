@@ -53,11 +53,6 @@ Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.Security.Cryptography;
-[System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("000214F9-0000-0000-C000-000000000046"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
-public interface MizarShortcutPath {
-  [System.Runtime.InteropServices.PreserveSig]
-  int GetPath([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] System.Text.StringBuilder path, int capacity, IntPtr data, uint flags);
-}
 public static class MizarUpdateFiles {
   [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] struct MutexOwner { public IntPtr Process, Thread; }
   [System.Runtime.InteropServices.DllImport("ntdll.dll")] static extern int NtQueryMutant(IntPtr handle, int kind, out MutexOwner owner, int size, out int returned);
@@ -122,18 +117,6 @@ public static class MizarUpdateFiles {
     file.Position=0;
     using(var hash=SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();
   }
-  public static string ShortcutTarget(string path) {
-    PlainPath(path);
-    object shortcut=null;
-    try {
-      shortcut=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"),true));
-      ((System.Runtime.InteropServices.ComTypes.IPersistFile)shortcut).Load(path,0);
-      var raw=new System.Text.StringBuilder(32768);
-      int status=((MizarShortcutPath)shortcut).GetPath(raw,raw.Capacity,IntPtr.Zero,4);
-      if(status!=0 || raw.Length==0) throw new IOException("update_shortcut_target_unknown", new System.Runtime.InteropServices.COMException("IShellLink.GetPath returned no target (characters="+raw.Length+")",status));
-      return Environment.ExpandEnvironmentVariables(raw.ToString());
-    } finally { if(shortcut!=null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut); }
-  }
   public static void PlainPath(string path) {
     if (!Path.IsPathRooted(path) || path.IndexOfAny(new char[]{'"','\r','\n'}) >= 0) throw new IOException("update_path_invalid");
     for (string cursor=Path.GetFullPath(path); cursor!=null; cursor=Path.GetDirectoryName(cursor)) {
@@ -157,13 +140,7 @@ public static class MizarUpdateFiles {
     try { return new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.Delete); }
     catch(Exception error) { throw new IOException("update_program_in_use",error); }
   }
-  public static void Delete(string path) {
-    PlainPath(path);
-    if (!File.Exists(path)) throw new FileNotFoundException("Product file is missing",path);
-    var attributes=File.GetAttributes(path);
-    if ((attributes & FileAttributes.ReadOnly)!=0) File.SetAttributes(path,attributes & ~FileAttributes.ReadOnly);
-    File.Delete(path);
-  }
+
 }
 '@
 $script:updateWindowAvailable = !$NoStatusWindow -and $Mode -and $Mode -notin @('Prepare', 'Handoff')
@@ -189,7 +166,7 @@ public static class MizarUpdateWindow {
   static Button cancel, logs, close;
   static ProgressBar activity;
   static System.Windows.Forms.Timer elapsed;
-  static Stopwatch phaseClock = new Stopwatch();
+  static readonly Stopwatch phaseClock = new Stopwatch();
   static void RefreshElapsed() {
     detail.Text="本阶段已用 "+(long)phaseClock.Elapsed.TotalSeconds+" 秒。完成核验后自动继续。";
   }
@@ -260,23 +237,16 @@ public static class MizarUpdateWindow {
       case "stopped-and-installer": text="正在核对安装工具"; break;
       case "previous-payload": text="正在核对原程序"; break;
       case "reparse-and-registration": text="正在保存安装登记"; break;
-      case "backup-copy": text="正在备份原程序"; break;
-      case "backup-payload": text="正在核对备份"; break;
       case "program-exclusion": text="正在确认程序已停止"; break;
-      case "remove-previous-files": text="正在准备替换程序"; break;
-      case "nsis-install": text="正在安装新版 Mizar"; break;
       case "prepare-payload": text="正在解包新版，原程序尚未替换"; break;
       case "prepared-payload": text="正在核对新版完整性"; break;
       case "preserve-extra-files": text="正在保留安装目录中的其他文件"; break;
       case "switch-program": text="正在切换到新版"; break;
       case "starting-program": text="正在确认新版能够启动"; break;
       case "cleanup": text="正在清理本次更新的临时文件"; break;
-      case "installed-payload": text="正在核对新版完整性"; break;
       case "resources": text="正在核对并准备素材"; break;
       case "restore-check": text="正在核对恢复条件"; break;
-      case "restore-copy": text="正在准备恢复旧版"; break;
       case "restore-swap": text="正在恢复原程序"; break;
-      case "restore-verify": text="正在核对恢复结果"; break;
       default: text="正在处理更新，请稍候"; break;
     }
     Apply(delegate { heading.Text=text; phaseClock.Restart(); RefreshElapsed(); elapsed.Start(); });
@@ -293,7 +263,7 @@ public static class MizarUpdateWindow {
         else { hint.Text="旧版备份未通过核验；请关闭 Mizar，手动安装正式安装包。"; cancel.Text="重试恢复"; cancel.Visible=true; cancel.Enabled=false; packageLink.Visible=true; }
       }
       if(status=="recovery-required" && !String.IsNullOrEmpty(code) &&
-        (code.Contains("update_recovery_target_") || code.Contains("update_recovery_owner_") || code.Contains("update_recovery_result_") || code.Contains("update_shortcut_"))) {
+        (code.Contains("update_recovery_target_") || code.Contains("update_recovery_owner_") || code.Contains("update_recovery_result_"))) {
         heading.Text="恢复目标需要核对"; detail.Text="不能确认旧恢复任务仍属于当前安装。";
         hint.Text="请保留当前程序和恢复记录，核对后使用对应安装的恢复入口。"; cancel.Visible=false; packageLink.Visible=false;
       }
@@ -579,6 +549,9 @@ function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentS
       $candidates += @{ cmdHash = $cmdHash; stage = $directory.FullName; source = $source; archive = $archive; archived = $archived; hash = $hash; cmd = $cmd; plan = $binding }
     }
   }
+    # Only legacy stages need process discovery. Modern stages enforce their own
+    # instance ownership; an unrelated PowerShell is not evidence of an old writer.
+    if ($candidates.Count -eq 0) { return $state }
     # Exclude late standard loads before observing any already loaded processes.
     foreach ($candidate in $candidates) {
       if (!$candidate.archived) {
@@ -851,7 +824,7 @@ function Assert-RecoveryTarget {
     $restore = $plan.bundleRoot + '.mizar-restore-' + (Split-Path -Leaf $StageRoot)
     $failed = $plan.bundleRoot + '.mizar-failed-' + (Split-Path -Leaf $StageRoot)
     $paired = $failed
-    if ($plan.transactionProtocol -eq 'mizar.directory-swap.v1' -and !(Test-Path -LiteralPath $failed)) {
+    if (!(Test-Path -LiteralPath $failed)) {
       $paired = Candidate-Directory
       Assert-CandidateInstance $paired
     }
@@ -950,29 +923,7 @@ function Test-RestoredTransaction($journal) {
   if ($entry -and $entry.'!MizarUpdateRecovery' -eq (Recovery-Command)) { Recovery-Registration $false }
   return $true
 }
-function Installation-Shortcuts {
-  $menu = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\Mizar'
-  return @(
-    @{ current = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk'); saved = (Join-Path $StageRoot 'shortcut-0'); target = (Join-Path $plan.bundleRoot 'Mizar.exe') },
-    @{ current = (Join-Path $menu 'Mizar.lnk'); saved = (Join-Path $StageRoot 'shortcut-1\Mizar.lnk'); target = (Join-Path $plan.bundleRoot 'Mizar.exe') },
-    @{ current = (Join-Path $menu '卸载 Mizar.lnk'); saved = (Join-Path $StageRoot 'shortcut-1\卸载 Mizar.lnk'); target = (Join-Path $plan.bundleRoot 'Uninstall.exe') }
-  )
-}
-function Read-ShortcutTarget([string]$path) { return [MizarUpdateFiles]::ShortcutTarget($path) }
-function Assert-ShortcutOwnership([bool]$includeSaved = $false) {
-  foreach ($shortcut in (Installation-Shortcuts)) {
-    $paths = @($shortcut.current)
-    if ($includeSaved) { $paths += $shortcut.saved }
-    foreach ($path in $paths) {
-      Assert-PlainPath $path
-      if (!(Test-Path -LiteralPath $path)) { continue }
-      $target = Read-ShortcutTarget $path
-      if (![IO.Path]::IsPathRooted($target) -or [IO.Path]::GetFullPath($target) -ne [IO.Path]::GetFullPath($shortcut.target)) { throw 'update_shortcut_target_changed' }
-    }
-  }
-}
 function Save-Registration {
-  Assert-ShortcutOwnership
   Assert-RecoveryRegistration
   Assert-InstallationRegistration
   $keys = @('HKCU:\Software\Mizar', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar')
@@ -984,14 +935,9 @@ function Save-Registration {
     $snapshot += @{ key = $key; exists = [bool]$item; values = $values }
   }
   Write-JsonAtomic (Join-Path $StageRoot 'registration.json') $snapshot
-  $shortcuts = @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mizar.lnk'), (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\Mizar'))
-  for ($index = 0; $index -lt $shortcuts.Count; $index++) {
-    if (Test-Path -LiteralPath $shortcuts[$index]) { Copy-Item -LiteralPath $shortcuts[$index] -Destination (Join-Path $StageRoot ('shortcut-' + $index)) -Recurse }
-  }
 }
 function Restore-Registration {
   Assert-RecoveryTarget
-  Assert-ShortcutOwnership $true
   # PowerShell 5.1 emits a JSON array as one pipeline object. Assign it first
   # so foreach visits individual registry records rather than the outer array.
   $snapshot = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'registration.json') -Raw | ConvertFrom-Json
@@ -1014,15 +960,6 @@ function Restore-Registration {
       foreach ($value in $entry.values) { New-ItemProperty -LiteralPath $entry.key -Name $value.name -Value $value.value -PropertyType $value.kind -Force | Out-Null }
     }
   }
-  # Restore only the three owned links. Never recursively remove a menu directory
-  # that may now contain unrelated user files.
-  foreach ($shortcut in (Installation-Shortcuts)) {
-    if (Test-Path -LiteralPath $shortcut.current) { Remove-Item -LiteralPath $shortcut.current -Force }
-    if (Test-Path -LiteralPath $shortcut.saved) {
-      [IO.Directory]::CreateDirectory((Split-Path -Parent $shortcut.current)) | Out-Null
-      Copy-Item -LiteralPath $shortcut.saved -Destination $shortcut.current
-    }
-  }
 }
 function Record-Result([string]$status, [string]$code) {
   $result = @{ status = $status; code = $code; version = $plan.version; recoveryDirectory = (Split-Path $StageRoot -Leaf) }
@@ -1031,10 +968,7 @@ function Record-Result([string]$status, [string]$code) {
   $script:updateResultWritten = $true
 }
 function Previous-Directory {
-  if ($plan.transactionProtocol -eq 'mizar.directory-swap.v1') {
-    return $plan.bundleRoot + '.mizar-restore-' + (Split-Path -Leaf $StageRoot)
-  }
-  return Join-Path $StageRoot 'previous'
+  return $plan.bundleRoot + '.mizar-restore-' + (Split-Path -Leaf $StageRoot)
 }
 function Candidate-Directory {
   return $plan.bundleRoot + '.mizar-candidate-' + (Split-Path -Leaf $StageRoot)
@@ -1049,7 +983,7 @@ function Assert-TransactionDirectory([string]$directory) {
   if (Get-ChildItem -LiteralPath $directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
 }
 function Product-Paths([string]$directory) {
-  # Call only after Assert-Payload has authenticated the manifest.
+  # Call only after Read-PayloadRecords has authenticated the manifest.
   $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $directory 'resources/metadata/SHA256SUMS'))) {
     [void]$paths.Add($line.Substring(66).Replace('/', '\'))
@@ -1074,7 +1008,6 @@ function Preserve-ExtraFiles([string]$candidate) {
 }
 function Install-Registration {
   Assert-InstallationRegistration
-  Assert-ShortcutOwnership $true
   $productKey = 'HKCU:\Software\Mizar'
   $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar'
   foreach ($key in @($productKey, $uninstallKey)) {
@@ -1087,9 +1020,17 @@ function Install-Registration {
   foreach ($name in @('NoModify', 'NoRepair')) { New-ItemProperty -LiteralPath $uninstallKey -Name $name -PropertyType DWord -Value 1 -Force | Out-Null }
   # Existing shortcuts already point at the unchanged final path.
 }
-function Remove-VerifiedPayload([string]$directory, [string]$digest, [string]$preservedAt) {
+function Remove-TransactionDirectory([string]$directory, [string]$digest, [string]$preservedAt) {
+  if (!(Test-Path -LiteralPath $directory)) { return }
   Assert-TransactionDirectory $directory
-  Assert-Payload $directory $digest
+  $entries = @(Get-ChildItem -LiteralPath $directory -Force)
+  if ($entries.Count -eq 1 -and $entries[0].Name -eq '.mizar-update-owner') {
+    Remove-Item -LiteralPath $directory -Recurse -Force
+    return
+  }
+  # The authenticated manifest identifies owned files even after partial extraction.
+  # Recovery verifies payload bytes separately before using a directory as a program.
+  [void](Read-PayloadRecords $directory $digest)
   $managed = Product-Paths $directory
   $prefix = $directory.TrimEnd('\') + '\'
   $files = @(Get-ChildItem -LiteralPath $directory -Recurse -Force -File)
@@ -1111,7 +1052,7 @@ function Trim-CompletedRecords {
   $runOnce = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name '!MizarUpdateRecovery' -ErrorAction SilentlyContinue).'!MizarUpdateRecovery'
   $allowed = @('plan.json', 'journal.json', 'result.json', 'registration.json', 'update-install.ps1', 'Restore-Mizar.cmd',
     'update-activity.ndjson', 'update-activity.ndjson.previous', 'installer.log', 'install-timings.json', 'recover-timings.json',
-    'rollback-timings.json', 'finalize-timings.json', 'shortcut-0', 'shortcut-1\Mizar.lnk', 'shortcut-1\卸载 Mizar.lnk')
+    'rollback-timings.json', 'finalize-timings.json')
   foreach ($entry in (Get-ChildItem -LiteralPath $updates -Directory)) {
     if ($entry.Name -notmatch '^install-[a-f0-9]{32}$' -or $entry.FullName -eq $StageRoot) { continue }
     try {
@@ -1132,8 +1073,7 @@ function Trim-CompletedRecords {
       foreach ($item in (Get-ChildItem -LiteralPath $entry.FullName -Recurse -Force)) {
         Assert-PlainPath $item.FullName
         $relative = $item.FullName.Substring($prefix.Length)
-        if (($item.PSIsContainer -and $relative -ne 'shortcut-1') -or
-          (!$item.PSIsContainer -and $relative -notin $allowed)) { $remaining = $true }
+        if ($item.PSIsContainer -or $relative -notin $allowed) { $remaining = $true }
       }
       if (!$remaining) { $finished += $entry }
     } catch { Record-UpdateActivity 'history_cleanup_retained' $_.ToString() }
@@ -1145,52 +1085,18 @@ function Trim-CompletedRecords {
   }
 }
 function Remove-StagedInstaller {
-  $installer = Join-Path $StageRoot 'Installer.exe'
-  Assert-PlainPath $installer
-  if (!(Test-Path -LiteralPath $installer)) { return }
-  Assert-Installer $plan $installer
-  # Do not remove the image of a still-running extraction process.
-  $image = [IO.File]::Open($installer, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-  $image.Dispose()
-  [MizarUpdateFiles]::Delete($installer)
+  $installer = Join-Path $StageRoot 'Installer.exe'; Assert-PlainPath $installer
+  if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force }
 }
 function Complete-Cleanup {
   $previous = Previous-Directory
-  if (Test-Path -LiteralPath $previous) {
-    if ($plan.transactionProtocol -eq 'mizar.directory-swap.v1') {
-      Remove-VerifiedPayload $previous $plan.previousContentDigest $plan.bundleRoot
-    } else {
-      Assert-PlainPath $previous
-      Assert-PreviousInstance $previous
-      if (Get-ChildItem -LiteralPath $previous -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'update_reparse_point' }
-      Remove-Item -LiteralPath $previous -Recurse -Force
-    }
-  }
+  if (Test-Path -LiteralPath $previous) { Remove-TransactionDirectory $previous $plan.previousContentDigest $plan.bundleRoot }
   foreach ($download in @((Join-Path $StageRoot 'Installer.exe'), $plan.installer)) {
     Assert-PlainPath $download
-    if (Test-Path -LiteralPath $download) { Assert-Installer $plan $download; Remove-Item -LiteralPath $download -Force }
+    if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
   }
   Record-UpdateActivity 'finalized'
   Trim-CompletedRecords
-}
-function Remove-PreparedPayload {
-  $candidate = Candidate-Directory
-  if (!(Test-Path -LiteralPath $candidate)) { return }
-  Assert-TransactionDirectory $candidate
-  $entries = @(Get-ChildItem -LiteralPath $candidate -Force)
-  if ($entries.Count -eq 1 -and $entries[0].Name -eq '.mizar-update-owner') {
-    Remove-Item -LiteralPath $candidate -Recurse -Force
-    return
-  }
-  [void](Read-PayloadRecords $candidate $plan.contentDigest $plan.version $plan.gitSha)
-  $managed = Product-Paths $candidate
-  $prefix = $candidate.TrimEnd('\') + '\'
-  foreach ($file in (Get-ChildItem -LiteralPath $candidate -Recurse -Force -File)) {
-    if (!$managed.Contains($file.FullName.Substring($prefix.Length))) { throw 'update_cleanup_unknown_file' }
-  }
-  # The new manifest is authenticated even when extraction failed halfway.
-  # Only this transaction's exclusively prepared, product-only directory is removed.
-  Remove-Item -LiteralPath $candidate -Recurse -Force
 }
 function Start-VerifiedInstallation {
   $script:startupConfirmed = $false
@@ -1235,12 +1141,10 @@ function Complete-Restore {
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'restored' }
   Remove-RecoveryOwner
   Recovery-Registration $false
-  if (!$KeepBackup -and $plan.transactionProtocol -eq 'mizar.directory-swap.v1') {
+  if (!$KeepBackup) {
     foreach ($directory in @((Candidate-Directory), ($plan.bundleRoot + '.mizar-failed-' + (Split-Path -Leaf $StageRoot)))) {
-      if (Test-Path -LiteralPath $directory) {
-        try { Remove-VerifiedPayload $directory $plan.contentDigest $plan.bundleRoot }
-        catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
-      }
+      try { Remove-TransactionDirectory $directory $plan.contentDigest $plan.bundleRoot }
+      catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
     }
     try { Remove-StagedInstaller } catch { Record-UpdateActivity 'restore_cleanup_retained' $_.ToString() }
   }
@@ -1252,7 +1156,6 @@ function Restore-Previous {
   Record-UpdateActivity 'restore-check'
   Assert-Stopped
   Assert-RecoveryTarget
-  Assert-ShortcutOwnership $true
   # Windows refuses write access to an executable image while it is mapped.
   # Check the actual file, avoiding PID gaps and short/Unicode path aliases.
   # No bytes are written; an unreadable or still-used installer fails closed.
@@ -1271,12 +1174,6 @@ function Restore-Previous {
   }
   Assert-PreviousInstance $backup
   if ((Test-Path -LiteralPath $plan.bundleRoot) -and (Test-Path -LiteralPath $failed)) { throw 'update_recovery_conflict' }
-  # New transactions retain the original directory here; only legacy recovery
-  # needs to materialize a copy from its historical, possibly cross-volume stage.
-  Update-WindowPhase 'restore-copy'
-  Record-UpdateActivity 'restore-copy'
-  if (!(Test-Path -LiteralPath $restore)) { Copy-Item -LiteralPath $backup -Destination $restore -Recurse }
-  Assert-PreviousInstance $restore
   # The backup predates ownership publication. Carry this transaction's marker
   # across the swap, including restoration of a legacy static installed.flag.
   $restoreMarker = Join-Path $restore '.mizar-update-owner'; Assert-PlainPath $restoreMarker
@@ -1295,13 +1192,8 @@ function Restore-Previous {
     Move-Item -LiteralPath $plan.bundleRoot -Destination $failed
   }
   Move-Item -LiteralPath $restore -Destination $plan.bundleRoot
-  if ($null -ne $script:programGate) { $script:programGate.Dispose(); $script:programGate = $null }
-  Update-WindowPhase 'restore-verify'
-  Record-UpdateActivity 'restore-verify'
-  Assert-PreviousInstance $plan.bundleRoot
   Restore-Registration
   Complete-Restore
-  # Retain the displaced directory: unverified files must never be deleted during recovery.
 }
 
 if ($Mode -eq 'Handoff') {
@@ -1394,6 +1286,7 @@ if ($Mode -eq 'Prepare') {
 Assert-PlainPath $StageRoot
 $plan = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'plan.json') -Raw | ConvertFrom-Json
 Assert-Plan $plan
+if ($plan.transactionProtocol -ne 'mizar.directory-swap.v1') { throw 'update_install_protocol_unsupported' }
 $StageRoot = [IO.Path]::GetFullPath($StageRoot).TrimEnd('\')
 if ((Split-Path -Parent $StageRoot) -ne [IO.Path]::GetFullPath((Join-Path $plan.stateRoot 'updates')).TrimEnd('\') -or
   (Split-Path -Leaf $StageRoot) -notmatch '^install-[a-f0-9]{32}$') { throw 'update_stage_invalid' }
@@ -1472,12 +1365,11 @@ try {
     } else { Restore-Previous }
     return
   }
-  if ($Mode -ne 'Install' -or $HostProcessId -le 0) { throw 'update_host_invalid' }
-  if ($plan.transactionProtocol -ne 'mizar.directory-swap.v1' -or [version]$plan.version -lt [version]'1.11.7') { throw 'update_install_protocol_unsupported' }
+  if ($Mode -ne 'Install' -or $HostProcessId -lt 0) { throw 'update_host_invalid' }
   Update-WindowPhase 'waiting-host'
   Record-UpdateActivity 'waiting-host'
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
-  while (Get-Process -Id $HostProcessId -ErrorAction SilentlyContinue) {
+  while ($HostProcessId -gt 0 -and (Get-Process -Id $HostProcessId -ErrorAction SilentlyContinue)) {
     if (Test-UpdateCancellation) { throw 'update_cancelled_before_install' }
     if ([DateTime]::UtcNow -gt $deadline) { throw 'update_host_exit_timeout' }
     Start-Sleep -Milliseconds 200
@@ -1541,7 +1433,6 @@ try {
     [IO.Directory]::Move($plan.bundleRoot, $previous)
     [IO.Directory]::Move($candidate, $plan.bundleRoot)
   }
-  Invoke-UpdatePhase 'installed-payload' { Assert-CandidateInstance }
   Install-Registration
   Write-JsonAtomic (Join-Path $StageRoot 'journal.json') @{ phase = 'committed' }
   Remove-RecoveryOwner
@@ -1554,13 +1445,7 @@ try {
   Record-UpdateActivity 'failure' ($_.ToString() + "`n" + $_.ScriptStackTrace)
   [Console]::Error.WriteLine($_.ToString())
   [Console]::Error.WriteLine($_.ScriptStackTrace)
-  # Static file operations preserve the original named failure through invocation wrappers.
-  $cause = $_.Exception
-  $code = 'update_installation_failed'
-  while ($null -ne $cause) {
-    if ([string]$cause.Message -match '^update_[a-z_]+$') { $code = [string]$cause.Message; break }
-    $cause = $cause.InnerException
-  }
+  $code = Update-ErrorCode $_ 'update_installation_failed'
   $script:updateFailureCode = $code
   $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
   if ($Mode -eq 'Rollback' -or ($Mode -eq 'Recover' -and $journal.phase -eq 'installing')) {
@@ -1594,7 +1479,7 @@ try {
     $status = if ($code -in @('update_cancelled_before_install', 'update_installer_cancelled')) { 'cancelled' } else { 'failed' }
     Record-Result $status $code
     Recovery-Registration $false
-    try { Remove-PreparedPayload } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
+    try { Remove-TransactionDirectory (Candidate-Directory) $plan.contentDigest $plan.bundleRoot } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
     if (!$KeepBackup) {
       try { Remove-StagedInstaller } catch { Record-UpdateActivity 'preparation_cleanup_failed' $_.ToString() }
     }
@@ -1628,12 +1513,7 @@ $script:restoredTransaction = $false
 try { Invoke-UpdateTransaction }
 catch {
   $script:updateExitCode = 1
-  $cause = $_.Exception
-  $script:updateFailureCode = 'update_installation_failed'
-  while ($null -ne $cause) {
-    if ([string]$cause.Message -match '^update_[a-z_]+$') { $script:updateFailureCode = [string]$cause.Message; break }
-    $cause = $cause.InnerException
-  }
+  $script:updateFailureCode = Update-ErrorCode $_ 'update_installation_failed'
   Record-UpdateActivity 'transaction_entry_failed' $_.ToString()
   [Console]::Error.WriteLine($_.ToString())
 }
@@ -1646,9 +1526,6 @@ $status = if ($script:restoredTransaction) { 'restored' } elseif ($currentResult
 $code = if ($script:restoredTransaction) { 'update_rolled_back' } elseif ($currentResult) { [string]$result.code } elseif ($phase -eq 'prepared') { 'update_not_started' } else { 'update_result_unavailable' }
 if ($script:updateFailureCode -and $script:updateFailureCode -ne $code) { $code = $script:updateFailureCode + ' / ' + $code }
 $canRestore = $false
-if ($status -eq 'recovery-required' -and $script:updateFailureCode -notmatch '^(update_recovery_(target|owner|result)_|update_shortcut_)' -and (Test-Path -LiteralPath (Join-Path $StageRoot 'Installer.exe'))) {
-  try { Assert-Payload (Previous-Directory) $plan.previousContentDigest; $canRestore = $true } catch { Record-UpdateActivity 'backup_unavailable' $_.ToString() }
-}
 # No protected writes remain; the new Host can now acquire its desktop object.
 $launchFailed = $false
 if ($script:launchAfterCommit) {
@@ -1670,7 +1547,7 @@ if ($script:launchAfterCommit) {
     }
   }
 }
-if ($status -eq 'recovery-required' -and !$canRestore) {
+if ($status -eq 'recovery-required' -and $script:updateFailureCode -notmatch '^(update_recovery_(target|owner|result)_)') {
   try { Assert-PreviousInstance (Previous-Directory); $canRestore = $true } catch { Record-UpdateActivity 'backup_unavailable' $_.ToString() }
 }
 if ($script:updateWindowAvailable) {

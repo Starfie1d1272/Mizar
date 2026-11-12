@@ -127,9 +127,6 @@ namespace Mizar.WebInstaller {
           throw new IOException("缓存路径不能包含链接。");
       }
     }
-    public static bool Matches(string path, Plan plan) {
-      return MatchesAsync(path, plan, CancellationToken.None).GetAwaiter().GetResult();
-    }
     static async Task<bool> MatchesAsync(string path, Plan plan, CancellationToken token) {
       NoReparse(path); token.ThrowIfCancellationRequested();
       if (!File.Exists(path)) return false;
@@ -470,7 +467,7 @@ namespace Mizar.WebInstaller {
     internal void ShowStage(string phase) {
       if(phase!="waiting-for-installer") activePhase=phase;
       if(phase=="checking-cache" || phase=="connecting-download" || phase=="validating-download") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-cache" ? "正在检查已有下载" : phase=="validating-download" ? "正在验证下载文件" : "正在连接下载源";detail.Text="请稍候。";return;}
-      if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在备份原程序";detail.Text="请稍候。";return;}
+      if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在准备更新";detail.Text="请稍候。";return;}
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
       heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
