@@ -466,7 +466,10 @@ export function createBroadcastRuntime(input: {
             value,
           }),
         );
-      })().catch(input.diagnostic));
+      })().catch((error: unknown) => {
+        builtinMusicRegistration = undefined;
+        input.diagnostic(error);
+      }));
     },
     appliedDocument() {
       const document = store.snapshot;

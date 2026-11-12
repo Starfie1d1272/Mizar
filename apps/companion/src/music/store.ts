@@ -549,7 +549,10 @@ export class MusicStore {
     return config;
   }
   prepareBuiltin(): Promise<MusicConfig> {
-    return (this.builtin ??= this.loadBuiltin());
+    return (this.builtin ??= this.loadBuiltin().catch((error: unknown) => {
+      this.builtin = undefined;
+      throw error;
+    }));
   }
   private async loadBuiltin(): Promise<MusicConfig> {
     if (!this.builtinPack) throw new Error('builtin_music_unavailable');
