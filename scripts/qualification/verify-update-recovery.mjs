@@ -2,7 +2,7 @@
 import { setTimeout } from 'node:timers';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 import { safeLogText } from './product-logs.mjs';
 
 if (process.platform !== 'win32') throw new Error('此验证需要 Windows PowerShell 与真实文件系统');
-const root = await mkdtemp(join(tmpdir(), 'mizar 更新 recovery '));
+// Shell shortcut APIs require the canonical target, not the runner's mixed
+// 8.3 TEMP alias with newly created Unicode path segments.
+const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar 更新 recovery ')));
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'bundle/update-install.ps1');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 let ownsRegistration = false;
@@ -535,7 +537,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario !== 'success-no-shortcut') {
       const createdShortcut = await run([
         '-Command',
-        `$shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save(); $saved = $shell.CreateShortcut(${psLiteral(shortcut)}); if ($saved.TargetPath -ne ${psLiteral(join(installed, 'Mizar.exe'))}) { throw 'Shortcut fixture target was not saved correctly' }`,
+        `$ErrorActionPreference = 'Stop'; $shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut(${psLiteral(shortcut)}); $link.TargetPath = ${psLiteral(join(installed, 'Mizar.exe'))}; $link.Save(); $saved = $shell.CreateShortcut(${psLiteral(shortcut)}); if ($saved.TargetPath -ne ${psLiteral(join(installed, 'Mizar.exe'))}) { throw 'Shortcut fixture target was not saved correctly' }`,
       ]);
       assert.equal(createdShortcut.code, 0, createdShortcut.errors);
       originalShortcut = await readFile(shortcut);
