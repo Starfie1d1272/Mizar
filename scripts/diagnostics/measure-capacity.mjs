@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import { meteredRuntime } from './capacity-runtime.mjs';
 import { fullOutbox } from './outbox-capacity.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
@@ -450,12 +451,17 @@ async function profile(directory, minutes) {
         );
         const deadline = performance.now() + 5000;
         for (;;) {
-          const cursor = await readFile(join(sourceDirectory, 'native-source-cursor.json'), 'utf8')
-            .then(JSON.parse)
-            .catch((error) => {
-              if (error.code === 'ENOENT') return { cursors: [] };
-              throw error;
-            });
+          // This observer runs in the writer's process. Close its read handle
+          // before yielding, so the measurement cannot hold the Windows target
+          // open across the owner's atomic replacement.
+          let cursor = { cursors: [] };
+          try {
+            cursor = JSON.parse(
+              readFileSync(join(sourceDirectory, 'native-source-cursor.json'), 'utf8'),
+            );
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
           if (
             sources.every((source) =>
               cursor.cursors.some(

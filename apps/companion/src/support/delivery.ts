@@ -43,6 +43,7 @@ export const DELIVERY_LIMITS = {
   tombstones: 8,
   collectMs: 20 * 60_000,
   pollMs: 5000,
+  sendPerTick: 4,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
 const retryDelay = (failures: number) =>
@@ -63,6 +64,9 @@ const transportReasons = [
   'payload_clock_future',
   'payload_creation_time_missing',
   'permit_budget',
+  'daily_batch_budget',
+  'daily_byte_budget',
+  'installation_byte_budget',
   'registration_budget',
   'installation_capacity',
   'capacity_or_concurrent_reservation',
@@ -1283,7 +1287,7 @@ export class DiagnosticDelivery {
         });
     }
   }
-  private async recover() {
+  private async recover(flush = true) {
     if (!this.consentActive() || this.closed) return;
     // A live commit must not overtake an older record in the disk snapshot.
     // Keep live notifications behind recovery until a complete scan is stable.
@@ -1409,8 +1413,10 @@ export class DiagnosticDelivery {
     }
     // A stable source clock does not mean the scan completed. Capacity or
     // unreadable source can leave an unadmitted tail; keep its cursors and the
-    // recovery flag until both scanning and prefix persistence succeed.
-    if (!(await this.persist()) || sourceUnavailable) return;
+    // recovery flag until the complete prefix is admitted. Background scans
+    // keep it in the existing pending buffer until the normal collection time;
+    // only persisted batches advance durable cursors.
+    if ((flush && !(await this.persist())) || sourceUnavailable) return;
     // Keep producer cursors across restart; forgetting a recovered producer would
     // regenerate its already-queued immutable batches on the next scan.
     this.registerSession(0);
@@ -1426,148 +1432,175 @@ export class DiagnosticDelivery {
   private async persist(): Promise<boolean> {
     if (!this.consentActive()) return false;
     const epoch = this.epoch;
-    // Bound this collection to its admitted prefix. New committed records may
-    // arrive during compression/fsync; keep them for the next scheduled batch.
+    // Freeze a contiguous carrier prefix. Group its events for transport, then
+    // commit every resulting file and its source cursors in one manifest write.
     this.pending.sort((a, b) => a.cursorId.localeCompare(b.cursorId) || a.sequence - b.sequence);
     let remaining = this.pending.length;
     while (remaining > 0) {
-      const selected: typeof this.pending = [];
-      let bytes = 128;
-      for (const item of this.pending.slice(0, remaining)) {
-        const length = Buffer.byteLength(item.line);
-        if (
-          selected.length &&
-          (item.sessionId !== selected[0]!.sessionId ||
-            bytes + length > DELIVERY_LIMITS.expandedBytes ||
-            selected.length >= DELIVERY_LIMITS.events)
-        )
-          break;
-        selected.push(item);
-        bytes += length;
-      }
-      let events = selected.map((v) => cloudRecord(v.line, this.state.consentAt));
-      let raw = Buffer.from(
-        JSON.stringify({
-          schema: 'mizar-technical-diagnostics/1',
-          coverage: {
-            omitted: this.state.omitted,
-            reasons: this.state.omissionReasons,
-            scope: 'consented retained technical journal; not complete raw GSI or browser pixels',
-          },
-          events,
-        }),
-      );
-      let compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
-      while (
-        selected.length > 1 &&
-        (compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
-          raw.length > DELIVERY_LIMITS.expandedBytes)
-      ) {
-        selected.splice(Math.ceil(selected.length / 2));
-        events = selected.map((v) => cloudRecord(v.line, this.state.consentAt));
-        raw = Buffer.from(
-          JSON.stringify({
-            schema: 'mizar-technical-diagnostics/1',
-            coverage: {
-              omitted: this.state.omitted,
-              reasons: this.state.omissionReasons,
-              scope: 'consented retained technical journal; not complete raw GSI or browser pixels',
-            },
-            events,
-          }),
-        );
-        compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
-      }
-      if (!this.consentActive() || epoch !== this.epoch) return false;
-      if (
-        compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES ||
-        raw.length > DELIVERY_LIMITS.expandedBytes
-      ) {
-        this.omitted('batch_size_budget', selected.length);
-        this.pending.splice(0, selected.length);
-        remaining -= selected.length;
-        this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
-        continue;
-      }
-      if (
-        this.state.queue.length >= DELIVERY_LIMITS.batches ||
-        this.state.queue.reduce(
-          (n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES),
-          0,
-        ) +
-          compressed.length +
-          DIAGNOSTIC_PERMIT_BYTES >
-          DELIVERY_LIMITS.queueBytes
-      ) {
-        this.error = 'queue_budget_local_journal_retained';
-        return false;
-      }
-      const id = checksum(compressed);
-      const path = join(this.queueDirectory, `${id}.gz`);
-      await safePath(this.queueDirectory, `${id}.gz`).catch((error) => {
-        if (!missing(error)) throw error;
-      });
-      let file: Awaited<ReturnType<typeof open>> | undefined;
-      try {
-        file = await open(
-          path,
-          constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-          0o600,
-        );
-        await file.writeFile(compressed);
-        await file.sync();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (
-          checksum(
-            await secureRead(this.queueDirectory, `${id}.gz`, DELIVERY_LIMITS.compressedBytes),
-          ) !== id
-        )
-          throw new Error('existing_batch_integrity', { cause: error });
-      } finally {
-        await file?.close();
-      }
-      if (!this.consentActive() || epoch !== this.epoch) {
-        await unlink(path).catch(() => undefined);
-        return false;
-      }
-      const batch: Batch = {
-        id,
-        bytes: compressed.length,
-        index: {
-          schema: 'mizar-technical-diagnostics/1',
-          events: events.length,
-          expandedBytes: raw.length,
-          stages: [...new Set(events.map((v) => (v as { stage: string }).stage))].slice(0, 32),
-          ...batchMetadata(selected[0]!.sessionId, events),
-        },
-      };
-      const oldCursors = structuredClone(this.state.sessions);
-      const oldQueue = [...this.state.queue];
-      this.state.queue.push(batch);
-      for (const item of selected) {
-        const cursor = this.state.sessions[item.cursorId];
-        if (cursor) {
-          if (item.sequence > cursor.queued + 1)
-            this.omitted('source_sequence_gap', item.sequence - cursor.queued - 1);
-          cursor.queued = Math.max(cursor.queued, item.sequence);
+      let count = Math.min(remaining, DELIVERY_LIMITS.events);
+      let packets: { batch: Batch; compressed: Buffer }[];
+      let skipped: number;
+      for (;;) {
+        packets = [];
+        skipped = 0;
+        const groups = new Map<string, typeof this.pending>();
+        for (const item of this.pending.slice(0, count)) {
+          const group = groups.get(item.sessionId) ?? [];
+          group.push(item);
+          groups.set(item.sessionId, group);
         }
-      }
-      try {
-        await this.save();
-      } catch (error) {
-        this.state.sessions = oldCursors;
-        this.state.queue = oldQueue;
-        if (!oldQueue.some((v) => v.id === id)) await unlink(path).catch(() => undefined);
-        if (error instanceof Error && error.message === 'manifest_budget') {
-          this.error = 'manifest_budget_local_journal_retained';
+        for (const group of groups.values()) {
+          while (group.length) {
+            let size = group.length;
+            let raw: Buffer;
+            let compressed: Buffer;
+            let events: ReturnType<typeof cloudRecord>[];
+            for (;;) {
+              events = group
+                .slice(0, size)
+                .map((item) => cloudRecord(item.line, this.state.consentAt));
+              raw = Buffer.from(
+                JSON.stringify({
+                  schema: 'mizar-technical-diagnostics/1',
+                  coverage: {
+                    omitted: this.state.omitted,
+                    reasons: this.state.omissionReasons,
+                    scope:
+                      'consented retained technical journal; not complete raw GSI or browser pixels',
+                  },
+                  events,
+                }),
+              );
+              compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
+              if (
+                raw.length <= DELIVERY_LIMITS.expandedBytes &&
+                compressed.length <= DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES
+              )
+                break;
+              if (size === 1) break;
+              size = Math.ceil(size / 2);
+            }
+            if (
+              raw.length > DELIVERY_LIMITS.expandedBytes ||
+              compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES
+            ) {
+              skipped++;
+            } else {
+              packets.push({
+                compressed,
+                batch: {
+                  id: checksum(compressed),
+                  bytes: compressed.length,
+                  index: {
+                    schema: 'mizar-technical-diagnostics/1',
+                    events: events.length,
+                    expandedBytes: raw.length,
+                    stages: [...new Set(events.map((v) => (v as { stage: string }).stage))].slice(
+                      0,
+                      32,
+                    ),
+                    ...batchMetadata(group[0]!.sessionId, events),
+                  },
+                },
+              });
+            }
+            group.splice(0, size);
+          }
+        }
+        const queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
+        const capacity =
+          queue.length <= DELIVERY_LIMITS.batches &&
+          queue.reduce((n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES), 0) <=
+            DELIVERY_LIMITS.queueBytes;
+        const manifest =
+          Buffer.byteLength(JSON.stringify({ ...this.state, queue })) <=
+          DELIVERY_LIMITS.manifestBytes;
+        if (capacity && manifest) break;
+        // A smaller contiguous prefix can fit without advancing over an unwritten
+        // producer. Even a full queue can still send its already committed batches.
+        if (count === 1) {
+          this.error = capacity
+            ? 'manifest_budget_local_journal_retained'
+            : 'queue_budget_local_journal_retained';
           return false;
         }
-        throw error;
+        count = Math.floor(count / 2);
       }
-      this.pending.splice(0, selected.length);
-      remaining -= selected.length;
-      this.pendingBytes -= selected.reduce((n, v) => n + Buffer.byteLength(v.line), 0);
+      if (!this.consentActive() || epoch !== this.epoch) return false;
+      const created: string[] = [];
+      let committed = false;
+      try {
+        for (const { batch, compressed } of packets) {
+          const path = join(this.queueDirectory, `${batch.id}.gz`);
+          await safePath(this.queueDirectory, `${batch.id}.gz`).catch((error) => {
+            if (!missing(error)) throw error;
+          });
+          let file: Awaited<ReturnType<typeof open>> | undefined;
+          try {
+            file = await open(
+              path,
+              constants.O_CREAT |
+                constants.O_EXCL |
+                constants.O_WRONLY |
+                (constants.O_NOFOLLOW ?? 0),
+              0o600,
+            );
+            created.push(path);
+            await file.writeFile(compressed);
+            await file.sync();
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+            if (
+              checksum(
+                await secureRead(
+                  this.queueDirectory,
+                  `${batch.id}.gz`,
+                  DELIVERY_LIMITS.compressedBytes,
+                ),
+              ) !== batch.id
+            )
+              throw new Error('existing_batch_integrity', { cause: error });
+          } finally {
+            await file?.close();
+          }
+        }
+        if (!this.consentActive() || epoch !== this.epoch) return false;
+        const selected = this.pending.slice(0, count);
+        const previous = {
+          sessions: structuredClone(this.state.sessions),
+          queue: this.state.queue,
+          omitted: this.state.omitted,
+          omissionReasons: { ...this.state.omissionReasons },
+        };
+        this.state.queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
+        for (const item of selected) {
+          const cursor = this.state.sessions[item.cursorId];
+          if (cursor) {
+            if (item.sequence > cursor.queued + 1)
+              this.omitted('source_sequence_gap', item.sequence - cursor.queued - 1);
+            cursor.queued = Math.max(cursor.queued, item.sequence);
+          }
+        }
+        if (skipped) this.omitted('batch_size_budget', skipped);
+        try {
+          await this.save();
+        } catch (error) {
+          Object.assign(this.state, previous);
+          if (error instanceof Error && error.message === 'manifest_budget') {
+            this.error = 'manifest_budget_local_journal_retained';
+            return false;
+          }
+          throw error;
+        }
+        committed = true;
+        this.pending.splice(0, count);
+        remaining -= count;
+        this.pendingBytes -= selected.reduce((n, item) => n + Buffer.byteLength(item.line), 0);
+      } finally {
+        // Only files created by this uncommitted attempt are disposable. Existing
+        // immutable batches and their identities are never rewritten or removed.
+        if (!committed) for (const path of created) await unlink(path);
+      }
       await yieldIO();
     }
     return true;
@@ -2021,13 +2054,19 @@ export class DiagnosticDelivery {
         await this.recover();
         this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
       }
-      if (!collecting && this.recoveryNeeded) await this.recover();
+      if (!collecting && this.recoveryNeeded) await this.recover(false);
       // persist() freezes the admitted prefix; a second pass here would turn
       // records arriving during gzip/fsync into an immediate tiny extra batch.
       // recover() already persists its own recovered prefix when needed.
     });
     if (!this.endpoint || this.closed) return;
-    this.sending ??= this.send().finally(() => {
+    this.sending ??= (async () => {
+      for (let count = 0; count < DELIVERY_LIMITS.sendPerTick; count++) {
+        const acknowledged = this.state.acknowledged;
+        await this.send();
+        if (this.state.acknowledged === acknowledged) break;
+      }
+    })().finally(() => {
       this.sending = undefined;
     });
     await this.sending;

@@ -26,7 +26,6 @@ export interface Env {
   DAILY_BATCHES: string;
   DAILY_REGISTRATIONS: string;
   INSTALLATION_DAILY_BYTES: string;
-  INSTALLATION_DAILY_BATCHES: string;
   DATABASE_BYTES: string;
 }
 const DAY = 86400_000;
@@ -51,9 +50,18 @@ const json = (body: unknown, status = 200) =>
     },
   });
 type SetReceiverStage = (stage: DiagnosticReceiverStage) => void;
-function capacityDenied(stage: DiagnosticReceiverStage, error: string, status: 429 | 503) {
+function capacityDenied(
+  stage: DiagnosticReceiverStage,
+  error: string,
+  status: 429 | 503,
+  retryAt?: number,
+  now = Date.now(),
+) {
   console.warn({ event: 'diagnostics_capacity_denied', stage, error, status });
-  return json({ error, stage }, status);
+  const response = json({ error, stage }, status);
+  if (retryAt)
+    response.headers.set('retry-after', String(Math.max(1, Math.ceil((retryAt - now) / 1000))));
+  return response;
 }
 const sql = (env: Env, query: string, ...values: (string | number | null | ArrayBuffer)[]) =>
   env.DIAGNOSTICS_DB.prepare(query).bind(...values);
@@ -491,11 +499,16 @@ async function upload(
   if (existing && JSON.stringify(metadata(existing.metadata)) !== canonicalIndex)
     return json({ error: 'batch_metadata_conflict' }, 409);
   if (existing?.state === 'ready') return accepted(id);
-  if (
-    bytes.length > budget(env.INSTALLATION_DAILY_BYTES) ||
-    !budget(env.INSTALLATION_DAILY_BATCHES)
-  )
-    return capacityDenied('upload_preflight', 'installation_capacity', 429);
+  if (!budget(env.INSTALLATION_DAILY_BYTES) || !budget(env.DAILY_BYTES))
+    return capacityDenied('upload_preflight', 'intake_paused', 503);
+  if (bytes.length > budget(env.INSTALLATION_DAILY_BYTES))
+    return capacityDenied(
+      'upload_preflight',
+      'installation_byte_budget',
+      429,
+      (Math.floor(now / DAY) + 1) * DAY,
+      now,
+    );
   if (!(preflight[2]!.meta.size_after < budget(env.DATABASE_BYTES)))
     return capacityDenied('upload_preflight', 'index_allocation_budget', 503);
   if (existing && (existing.state === 'deleting' || existing.writers >= 8))
@@ -558,7 +571,7 @@ async function upload(
       `INSERT INTO batches(installation_id,id,object_key,owner,state,bytes,received_at,expires_at,metadata)
       SELECT ?,?,?,?,'pending',?,?,?,? WHERE
       EXISTS(SELECT 1 FROM installations WHERE id=? AND revoked_at IS NULL AND
-        (quota_day!=? OR (quota_bytes+?<=? AND quota_batches<?))) AND
+        (quota_day!=? OR quota_bytes+?<=?)) AND
       EXISTS(SELECT 1 FROM daily WHERE day=? AND bytes+?<=? AND batches<?)
       ON CONFLICT(installation_id,id) DO NOTHING`,
       installation,
@@ -573,7 +586,6 @@ async function upload(
       day,
       bytes.length,
       budget(env.INSTALLATION_DAILY_BYTES),
-      budget(env.INSTALLATION_DAILY_BATCHES),
       day,
       bytes.length,
       budget(env.DAILY_BYTES),
@@ -629,7 +641,34 @@ async function upload(
     const concurrent = reserved[5]?.results[0] as BatchRow | undefined;
     if (concurrent && JSON.stringify(metadata(concurrent.metadata)) !== canonicalIndex)
       return json({ error: 'batch_metadata_conflict' }, 409);
-    return capacityDenied('upload_reservation', 'capacity_or_concurrent_reservation', 429);
+    const counters = await env.DIAGNOSTICS_DB.batch<Record<string, number | null>>([
+      sql(
+        env,
+        'SELECT revoked_at,quota_day,quota_bytes FROM installations WHERE id=?',
+        installation,
+      ),
+      sql(env, 'SELECT bytes,batches FROM daily WHERE day=?', day),
+    ]);
+    const installationQuota = counters[0]?.results[0];
+    if (!installationQuota || installationQuota.revoked_at !== null)
+      return json({ error: 'installation_revoked' }, 410);
+    const globalQuota = counters[1]?.results[0];
+    const reason =
+      installationQuota.quota_day === day &&
+      Number(installationQuota.quota_bytes) + bytes.length > budget(env.INSTALLATION_DAILY_BYTES)
+        ? 'installation_byte_budget'
+        : Number(globalQuota?.bytes) + bytes.length > budget(env.DAILY_BYTES)
+          ? 'daily_byte_budget'
+          : Number(globalQuota?.batches) >= budget(env.DAILY_BATCHES)
+            ? 'daily_batch_budget'
+            : 'capacity_or_concurrent_reservation';
+    return capacityDenied(
+      'upload_reservation',
+      reason,
+      429,
+      reason === 'capacity_or_concurrent_reservation' ? now + 60_000 : (day + 1) * DAY,
+      now,
+    );
   }
   let row: BatchRow | null = null;
   try {
@@ -980,7 +1019,6 @@ async function admin(request: Request, env: Env, path: string, now: number) {
         dailyBatches: budget(env.DAILY_BATCHES),
         dailyRegistrations: budget(env.DAILY_REGISTRATIONS),
         installationDailyBytes: budget(env.INSTALLATION_DAILY_BYTES),
-        installationDailyBatches: budget(env.INSTALLATION_DAILY_BATCHES),
         databaseBytes: budget(env.DATABASE_BYTES),
       },
       scope:
@@ -1161,7 +1199,7 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
     const ipKey = base64(await mac(env.IP_HASH_KEY, `${Math.floor(now / DAY)}:${ip}`));
     const limiter = path === '/v1/diagnostics/enroll' ? env.ENROLL_LIMITER : env.UPLOAD_LIMITER;
     if (!(await limiter.limit({ key: ipKey })).success)
-      return json({ error: 'rate_limited', stage }, 429);
+      return capacityDenied(stage, 'rate_limited', 429, now + 60_000, now);
     if (path === '/v1/diagnostics/enroll' && request.method === 'POST') {
       stage = 'enrollment';
       return await enroll(request, env, now);
@@ -1190,8 +1228,7 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
       const payload = permitMatch[1]!;
       let first = await permitRow(env, payload);
       if (!first) {
-        if (!budget(env.DAILY_BATCHES) || !budget(env.INSTALLATION_DAILY_BATCHES))
-          return capacityDenied('permit', 'permit_budget', 429);
+        if (!budget(env.DAILY_BATCHES)) return capacityDenied('permit', 'intake_paused', 503);
         if (!(await withinDatabaseBudget(env)))
           return capacityDenied('permit', 'index_allocation_budget', 503);
         const day = Math.floor(now / DAY);
@@ -1202,8 +1239,8 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
           sql(
             env,
             `INSERT OR IGNORE INTO upload_permits(payload_sha256,installation_id,installation_created_at,consent_revision,issued_at,payload_created_at,retire_at)
-            SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL
-              AND (quota_day!=? OR quota_permits<?)) AND EXISTS(SELECT 1 FROM daily WHERE day=? AND permits<?)`,
+            SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL)
+              AND EXISTS(SELECT 1 FROM daily WHERE day=? AND permits<?)`,
             binaryId(payload),
             binaryId(installation),
             owner.created_at,
@@ -1213,8 +1250,6 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
             payloadCreatedAt + DIAGNOSTIC_AUTOMATIC_LIFETIME_MS,
             installation,
             owner.created_at,
-            day,
-            budget(env.INSTALLATION_DAILY_BATCHES),
             day,
             budget(env.DAILY_BATCHES),
           ),
@@ -1231,8 +1266,16 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
             installation,
           ),
         ]);
-        if (!reservation[0]?.meta.changes && !(await permitRow(env, payload)))
-          return capacityDenied('permit', 'permit_budget', 429);
+        if (!reservation[0]?.meta.changes && !(await permitRow(env, payload))) {
+          const active = await sql(
+            env,
+            'SELECT 1 FROM installations WHERE id=? AND created_at=? AND revoked_at IS NULL',
+            installation,
+            owner.created_at,
+          ).first();
+          if (!active) return json({ error: 'installation_revoked' }, 410);
+          return capacityDenied('permit', 'daily_batch_budget', 429, (day + 1) * DAY, now);
+        }
         first = await permitRow(env, payload);
       }
       if (
