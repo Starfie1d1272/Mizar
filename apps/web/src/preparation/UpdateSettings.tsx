@@ -47,7 +47,7 @@ export interface UpdateStatus {
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   canResumeAutomatic?: boolean;
-  lastResult?: 'installed' | 'restored' | 'recovery-required' | 'cancelled' | null;
+  lastResult?: 'installed' | 'restored' | 'recovery-required' | 'cancelled' | 'failed' | null;
 }
 const failures: Record<string, string> = {
   update_network_failed: '更新网络请求失败，具体原因请查看诊断；网络恢复后可重新检查。',
@@ -337,6 +337,9 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       ) : null}
       {status?.lastResult === 'restored' ? (
         <StatusBanner tone="warning">升级未完成，已恢复旧版。</StatusBanner>
+      ) : null}
+      {status?.lastResult === 'failed' ? (
+        <StatusBanner tone="warning">更新准备失败，原程序未被替换。请查看诊断后重试。</StatusBanner>
       ) : null}
       {status?.lastResult === 'recovery-required' ? (
         <StatusBanner tone="danger">

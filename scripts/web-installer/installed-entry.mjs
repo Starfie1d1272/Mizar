@@ -54,7 +54,8 @@ try {
   const { defaultResourceRoot } = await import('../resource-store/store.js');
   const { authenticatePublishedBootstrap, restoreResourceAuthorization } =
     await import('./published-bootstrap.mjs');
-  const { completeBootstrap } = await import('./complete-bootstrap.mjs');
+  const { installOfficialPack } = await import('./install-official-pack.mjs');
+  const { getResourceAuthorization } = await import('@mizar/resource-pack-contract/runtime');
   const stateRoot = writableRoot(coreRoot);
   const tufCachePath = join(stateRoot, 'updates', 'trust');
   app = buildApp({
@@ -71,7 +72,7 @@ try {
   await app.ready();
   const store = app.getDecorator('getResourceStore')();
   if (!store) throw new Error('Actual product resource Store is unavailable');
-  let authorization, inputs, loadVerified;
+  let authorization, loadVerified;
   try {
     authorization = await restoreResourceAuthorization({
       store,
@@ -83,23 +84,27 @@ try {
       `${safeLogText(inspect(cachedError, { depth: 8, customInspect: false, getters: false })).slice(0, 4096)}\n`,
     );
     signal.throwIfAborted();
-    ({ authorization, inputs, loadVerified } = await authenticatePublishedBootstrap({
+    ({ authorization, loadVerified } = await authenticatePublishedBootstrap({
       version: artifact.appVersion,
       expectedCore: { ...nativePlan, coreMode: artifact.resourceMode === 'core' },
       tufCachePath,
       signal,
     }));
   }
-  const result = await completeBootstrap({
-    app,
-    coreRoot,
-    corePlan: nativePlan,
-    authorization,
-    inputs,
-    loadVerified,
-    tufCachePath,
-    signal,
-  });
+  const identity = getResourceAuthorization(authorization);
+  if (
+    identity.core.appVersion !== version ||
+    identity.core.gitSha !== gitSha ||
+    identity.core.archiveSha256 !== coreSha256
+  )
+    throw new Error('Resource catalog belongs to another authenticated Core');
+  const resources = await installOfficialPack({ store, authorization, loadVerified, signal });
+  const result = {
+    coreInstalled: true,
+    resourcesReady: true,
+    core: { version, gitSha, contentDigest },
+    resources,
+  };
   // Release the exact product Store writer before the native host starts Mizar.
   await app.close();
   app = undefined;

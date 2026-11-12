@@ -779,7 +779,7 @@ function WorkspaceDockContent() {
         <LocalOverlayControls onMessage={setMessage} />
       </Dialog>
       <Dialog
-        open={dockDetail === 'notices'}
+        open={dockDetail === 'notices' && Boolean(entryNotice)}
         title={preparation?.running ? '启动准备状态' : '上次准备结果'}
         onClose={() => setDockDetail(null)}
       >

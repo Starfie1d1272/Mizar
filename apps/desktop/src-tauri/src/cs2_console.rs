@@ -1092,6 +1092,7 @@ fn category(line: &str) -> Category<'_> {
         && [
             "Ignoring CSVCMsg_UserCommands_t: Missing command to delta from",
             "Ignoring CSVCMsg_UserCommands_t with no command data",
+            "Disconnected from server: NETWORK_DISCONNECT_REPLAY_INCOMPATIBLE",
         ]
         .iter()
         .any(|prefix| body.trim_start().starts_with(prefix))
@@ -1186,7 +1187,11 @@ fn technical_failure(channel: &str, line: &str) -> Option<&'static str> {
         Some("graphics_device_lost")
     } else if body.starts_with("error: ") {
         Some("engine_error")
-    } else if body.starts_with("failed ") || body.starts_with("failure: ") {
+    } else if body.starts_with("failed ")
+        || body.starts_with("failure: ")
+        || (channel == "Client"
+            && body.starts_with("disconnected from server: network_disconnect_replay_incompatible"))
+    {
         Some("engine_failure")
     } else if body.starts_with("fatal: ") || body.starts_with("assertion ") {
         Some("engine_fatal")

@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      update_recovery:
+        description: Run explicit native update recovery fixtures on a clean Windows runner
+        type: boolean
+        default: false
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -142,10 +147,38 @@ jobs:
           registry-hit: ${{ steps.cargo-cache.outputs.registry-hit }}
           target-key: ${{ steps.cargo-cache.outputs.target-key }}
           target-hit: ${{ steps.cargo-cache.outputs.target-hit }}
+  update-recovery:
+    name: explicit update recovery / Windows
+    if: github.event_name == 'workflow_dispatch' && inputs.update_recovery
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          install: false
+      - name: Verify native update and recovery
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .agent-tmp -Force | Out-Null
+          node scripts/qualification/verify-update-recovery.mjs 2>&1 | Tee-Object .agent-tmp/update-recovery.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native update recovery verification failed' }
+      - name: Preserve native verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-recovery-evidence
+          path: |
+            .agent-tmp/update-recovery.log
+            .agent-tmp/update-window/
+          retention-days: 14
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [build, quality, native]
+    needs: [build, quality, native, update-recovery]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful checks and report elapsed time
@@ -154,6 +187,7 @@ jobs:
           BUILD: ${{ needs.build.result }}
           NATIVE: ${{ needs.native.result }}
           QUALITY: ${{ needs.quality.result }}
+          UPDATE_RECOVERY: ${{ needs.update-recovery.result }}
         run: |
           elapsed=
           {
@@ -178,3 +212,4 @@ jobs:
             echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
           test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success
+          test "$UPDATE_RECOVERY" = skipped || test "$UPDATE_RECOVERY" = success

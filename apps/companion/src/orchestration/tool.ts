@@ -422,7 +422,7 @@ export class MulnxTool {
     try {
       const data = z
         .object({
-          directory: z.string().regex(/^release-[a-f0-9]{64}-[a-f0-9-]{36}$/),
+          directory: z.string().regex(/^release-(?:[a-f0-9]{64}-)?[a-f0-9-]{36}$/),
           release: releaseSchema,
           packs: z
             .array(
@@ -488,7 +488,7 @@ export class MulnxTool {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const installed = this.installed?.release;
-    for (const previous of [highest, installed]) {
+    for (const previous of [highest, installed, this.bundled]) {
       if (!previous) continue;
       if (
         release.id === previous.id &&
@@ -919,7 +919,12 @@ export class MulnxTool {
     }
     this.installed = installed;
     if (this.latest && (this.checkResult === 'current' || this.checkResult === 'available'))
-      this.checkResult = sameMulnxAsset(installed.release, this.latest) ? 'current' : 'available';
+      this.checkResult =
+        Date.parse(this.latest.publishedAt) < Date.parse(installed.release.publishedAt)
+          ? 'error'
+          : sameMulnxAsset(installed.release, this.latest)
+            ? 'current'
+            : 'available';
   }
 
   private async install(release: MulnxRelease, verify: () => void) {
@@ -1072,7 +1077,7 @@ export class MulnxTool {
         await prepareIsolatedPack(join(packsRoot, entry.name), packsRoot, name);
         packs.push({ name, sourceName: entry.name, treeSha256 });
       }
-      const directory = `release-${release.sha256}-${randomUUID()}`;
+      const directory = `release-${randomUUID()}`;
       await rename(unpacked, join(this.directory, directory));
       return { release, directory, packs };
     } finally {

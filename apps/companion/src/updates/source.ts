@@ -16,15 +16,7 @@ import {
   type UpdateManifest,
 } from './contract.js';
 
-type Release = {
-  tag_name: string;
-  draft: false;
-  prerelease: false;
-  published_at: string;
-  assets: never[];
-};
 export class StableSource {
-  private mirrorCandidate: { release: Release; manifest: UpdateManifest } | undefined;
   constructor(
     private readonly cachePath: string,
     private readonly fetcher: UpdateFetch = globalThis.fetch,
@@ -92,26 +84,19 @@ export class StableSource {
   }
   private async verify(
     bytes: Buffer,
-    bundles: Bundle[],
+    bundle: Bundle,
     signal: AbortSignal,
   ): Promise<UpdateManifest> {
     const verifier = await this.verifier(UPDATE_WORKFLOW, signal);
     signal.throwIfAborted();
-    let verifiedCommit: string | undefined;
-    const failures: unknown[] = [];
-    for (const bundle of bundles) {
-      try {
-        verifiedCommit = verifyAttestation(bytes, 'update-manifest.json', bundle, verifier);
-        break;
-      } catch (error) {
-        failures.push(error);
-        this.diagnostic?.('qualification_proof_rejected', error);
-        /* No alternative signer or trust root is accepted. */
-      }
+    let commit: string;
+    try {
+      commit = verifyAttestation(bytes, 'update-manifest.json', bundle, verifier);
+    } catch (cause) {
+      throw new Error('update_provenance_failed', { cause });
     }
-    if (!verifiedCommit) throw new AggregateError(failures, 'update_provenance_failed');
     const manifest = updateManifestSchema.parse(JSON.parse(bytes.toString('utf8')));
-    if (manifest.gitSha !== verifiedCommit) throw new Error('update_source_mismatch');
+    if (manifest.gitSha !== commit) throw new Error('update_source_mismatch');
     return manifest;
   }
   private async selectCore(manifest: UpdateManifest, signal: AbortSignal, carrier: Buffer) {
@@ -165,7 +150,7 @@ export class StableSource {
     const bytes = Buffer.from(index.manifestBase64, 'base64');
     if (bytes.length > 64 * 1024 || bytes.toString('base64') !== index.manifestBase64)
       throw new Error('update_metadata_corrupt');
-    const manifest = await this.verify(bytes, [index.provenance as Bundle], signal);
+    const manifest = await this.verify(bytes, index.provenance as Bundle, signal);
     const publicationBytes = Buffer.from(index.publicationBase64, 'base64');
     if (
       publicationBytes.length > 64 * 1024 ||
@@ -192,29 +177,15 @@ export class StableSource {
       ),
     );
   }
-  async latest(signal: AbortSignal, minimumVersion?: string): Promise<Release | null> {
-    this.mirrorCandidate = undefined;
+  async latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest> {
     const carrier = await this.machine(undefined, signal);
-    const { manifest, publication } = await this.authenticateIndex(
+    const { manifest } = await this.authenticateIndex(
       readMachineFile(carrier, 'update-index.json'),
       signal,
     );
     if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
-      throw new Error('update_mirror_unavailable');
-    const release: Release = {
-      tag_name: 'v' + manifest.version,
-      draft: false,
-      prerelease: false,
-      published_at: publication.publishedAt,
-      assets: [],
-    };
-    this.mirrorCandidate = { release, manifest: await this.selectCore(manifest, signal, carrier) };
-    return release;
-  }
-  async authenticate(release: Release, signal: AbortSignal): Promise<UpdateManifest> {
-    signal.throwIfAborted();
-    if (release !== this.mirrorCandidate?.release) throw new Error('update_metadata_missing');
-    return this.mirrorCandidate.manifest;
+      throw new Error('update_rollback_rejected');
+    return this.selectCore(manifest, signal, carrier);
   }
   /** Fixed-version installers authenticate that version's original dual-signed index. */
   async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {

@@ -840,7 +840,16 @@ fn run_desktop(
     let exit_code = application.run_return(move |app, event| match event {
         tauri::RunEvent::Ready => {
             match log.step("runtime_startup_committed", || job.kill_on_close(false)) {
-                Ok(()) => log.event("host_loop_ready", "success", None),
+                Ok(()) => {
+                    log.event("host_loop_ready", "success", None);
+                    if let Err(error) = windows_startup::acknowledge_update_start() {
+                        log.event(
+                            "update_start_acknowledgement",
+                            "failure",
+                            Some(&error.to_string()),
+                        );
+                    }
+                }
                 Err(error) => {
                     if let Ok(mut failure) = callback_error.lock() {
                         *failure = Some(error);

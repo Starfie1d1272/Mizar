@@ -59,10 +59,8 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
   );
   for (const name of [
     'installed-entry',
-    'complete-bootstrap',
     'install-official-pack',
     'published-bootstrap',
-    'resource-mirror',
     'cancel-control',
   ]) {
     if (!checksummedPaths.has(`resources/app/dist/web-installer/${name}.mjs`))

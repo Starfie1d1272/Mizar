@@ -281,7 +281,8 @@ export class ObsOutputController {
     this.mediaInputGeneration++;
     if (this.ready) this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
-    this.preparationConfigurationGeneration++;
+    // A failed reconnect has no configuration to revoke; explicit reset still does.
+    if (this.ready || !client) this.preparationConfigurationGeneration++;
     this.warmupGeneration++;
     this.streamBytes = undefined;
     this.warmupExtraOutputs.replay = 'unknown';

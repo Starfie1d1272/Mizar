@@ -68,11 +68,11 @@ $element = [Windows.Automation.AutomationElement]::FromHandle($window)
 $cancel = [UpdateWindowProbe]::Button($window,'取消更新')
 @{ buttonMissing=($cancel -eq [IntPtr]::Zero); nativeHandle=[long]$cancel; nativeEnabled=($cancel -ne [IntPtr]::Zero -and [UpdateWindowProbe]::IsWindowEnabled($cancel)) } | ConvertTo-Json -Compress | Write-Output
 if ($cancel -ne [IntPtr]::Zero) { $observed=[Windows.Automation.AutomationElement]::FromHandle($cancel); @{ controlType=$observed.Current.ControlType.ProgrammaticName; isEnabled=$observed.Current.IsEnabled; patterns=@($observed.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName }) } | ConvertTo-Json -Compress | Write-Output }
-if ($Action -eq 'restore') { $restore = [UpdateWindowProbe]::Button($window,'恢复旧版'); if ($restore -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($restore)) { throw 'Verified recovery action is unavailable' } }
+if ($Action -eq 'restore') { $restore = [UpdateWindowProbe]::Button($window,'重试恢复'); if ($restore -eq [IntPtr]::Zero -or ![UpdateWindowProbe]::IsWindowEnabled($restore)) { throw 'Verified recovery action is unavailable' } }
 if ($Action -eq 'backup-unavailable') {
- $restoreCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'恢复旧版')
+ $restoreCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'重试恢复')
  $restoreButton = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$restoreCondition)
- if ([UpdateWindowProbe]::Button($window,'恢复旧版') -eq [IntPtr]::Zero -or [UpdateWindowProbe]::IsWindowEnabled([UpdateWindowProbe]::Button($window,'恢复旧版'))) { throw 'Unverified backup must disable recovery' }
+ if ([UpdateWindowProbe]::Button($window,'重试恢复') -eq [IntPtr]::Zero -or [UpdateWindowProbe]::IsWindowEnabled([UpdateWindowProbe]::Button($window,'重试恢复'))) { throw 'Unverified backup must disable recovery' }
  $downloadCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'下载正式安装包')
  if ($null -eq $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$downloadCondition)) { throw 'Unavailable backup lacks a concrete download path' }
 }
@@ -98,7 +98,7 @@ try { $graphics.CopyFromScreen($rectangle.Left,$rectangle.Top,0,0,$bitmap.Size);
 finally { $graphics.Dispose(); $bitmap.Dispose() }
 @{ realNativeWindow=$true; source='production update helper'; syntheticInstaller=$true; actualNSIS=$false; action=$Action; title=$title; names=$names } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($OutputPath+'.json') -Encoding UTF8
 if ($Action -eq 'cancel') { Invoke-Button '取消更新' }
-if ($Action -eq 'restore') { Invoke-Button '恢复旧版' }
+if ($Action -eq 'restore') { Invoke-Button '重试恢复' }
 if ($Action -eq 'close-completed') {
  [void][UpdateWindowProbe]::PostMessage($window,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
  $deadline = [DateTime]::UtcNow.AddSeconds(5)

@@ -127,9 +127,6 @@ namespace Mizar.WebInstaller {
           throw new IOException("缓存路径不能包含链接。");
       }
     }
-    public static bool Matches(string path, Plan plan) {
-      return MatchesAsync(path, plan, CancellationToken.None).GetAwaiter().GetResult();
-    }
     static async Task<bool> MatchesAsync(string path, Plan plan, CancellationToken token) {
       NoReparse(path); token.ThrowIfCancellationRequested();
       if (!File.Exists(path)) return false;
@@ -396,11 +393,10 @@ namespace Mizar.WebInstaller {
     string selectedTarget;
     CancellationTokenSource cancellation;
     string installedCore, technicalDetails, activePhase="checking-release";
-    FreshInstallResult installedResult;
     bool finished, recoveryRequired, downloading, launchFailed;
     public Window(Plan value) : this(value,null,null,false) { }
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
-      plan=value; selectedTarget=operation==null ? Nsis.ResolveDestination(value) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar"); install=operation ?? ((bytes,stages,token)=>Task.Run(()=>Install(bytes,stages,token))); launch=start ?? (path=>Nsis.StartVerifiedProduct(plan,path));
+      plan=value; selectedTarget=operation==null ? Nsis.ResolveDestination(value) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar"); install=operation ?? ((bytes,stages,token)=>Task.Run(()=>Install(bytes,stages,token))); launch=start ?? (path=>Nsis.StartProduct(path));
       Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
       Text=demonstration ? "Mizar 安装 · 界面演示（未执行安装）" : "Mizar 安装";
       AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(590,330); MinimumSize=Size; MaximizeBox=false;
@@ -451,26 +447,17 @@ namespace Mizar.WebInstaller {
       await Publication.Verify(plan,token);
       stages.Report("checking-installation");
       string target=selectedTarget;
-      if(installedCore==null) {
-        if(!Nsis.HasPending() && !Directory.Exists(target)) Nsis.ValidateDestination(target);
-        stages.Report("downloading-core");
-        string installer;
-        using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
-        using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
-          installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token,stages);
-        installedResult=await Nsis.Install(plan,installer,target,token,stages);
-        installedCore=installedResult.Directory;
-      }
-      if(installedResult==null || !installedResult.ResourcesReady) await Nsis.RunResourceBridge(plan,installedCore,token,stages);
-      token.ThrowIfCancellationRequested();
-      // The tracked finalizer must stop successfully before completion/launch.
-      if(installedResult!=null) await installedResult.CompleteAsync(plan);
-      return installedCore;
+      stages.Report("downloading-core");
+      string installer;
+      using(var handler=new HttpClientHandler {AllowAutoRedirect=false,UseCookies=false})
+      using(var client=new HttpClient(handler) {Timeout=Timeout.InfiniteTimeSpan})
+        installer=await new Downloader(client).Download(plan,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar","bootstrap-cache"),bytes,token,stages);
+      return await Nsis.Install(plan,installer,target,token,stages);
     }
     internal void ShowStage(string phase) {
       if(phase!="waiting-for-installer") activePhase=phase;
       if(phase=="checking-cache" || phase=="connecting-download" || phase=="validating-download") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-cache" ? "正在检查已有下载" : phase=="validating-download" ? "正在验证下载文件" : "正在连接下载源";detail.Text="请稍候。";return;}
-      if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在备份原程序";detail.Text="请稍候。";return;}
+      if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在准备安装";detail.Text="请稍候。";return;}
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
       heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
@@ -550,12 +537,11 @@ namespace Mizar.WebInstaller {
           if(cancellation==current && !finished && !current.IsCancellationRequested) ShowStage(phase);
         });
         string path=await install(progress,stages,current.Token);
-        if(installedResult==null || !installedResult.Completed) current.Token.ThrowIfCancellationRequested();
         ShowCompleted(path);
       } catch(OperationCanceledException error) {
         technicalDetails=ErrorDetails(error);
         heading.Text=current.IsCancellationRequested ? "已取消" : "操作超时";
-        detail.Text=current.IsCancellationRequested ? installedCore==null ? "可以重新开始安装。" : "已安装部分保持不变，可以继续完成准备。" : (activePhase=="checking-release" ? "发布验证超时，请检查网络后重试。" : activePhase=="downloading-core" || activePhase=="connecting-download" ? "下载超时，请检查网络后重试。" : "当前操作超时，请查看诊断后重试。"); action.Text="重新开始";
+        detail.Text=current.IsCancellationRequested ? "可以重新开始安装。" : (activePhase=="checking-release" ? "发布验证超时，请检查网络后重试。" : activePhase=="downloading-core" || activePhase=="connecting-download" ? "下载超时，请检查网络后重试。" : "当前操作超时，请查看诊断后重试。"); action.Text="重新开始";
         if(!current.IsCancellationRequested && (activePhase=="downloading-core" || activePhase=="connecting-download")) {offlineDownload.Visible=true;detail.Text+=OfflineHint;}
       } catch(InstallerRecoveryRequired error) {
         recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=ErrorDetails(error);

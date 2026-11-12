@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory = $true)][string]$OutputRoot,
   [Parameter(Mandatory = $true)][string]$ExtractRoot,
   [switch]$BuildOnly,
+  [string]$CompilerPath = (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
   [ValidateSet('release-manifest.json','core-release-manifest.json')][string]$ManifestName = 'release-manifest.json',
   [ValidateSet('distribution-manifest.json','core-distribution-manifest.json')][string]$DistributionName = 'distribution-manifest.json'
 )
@@ -14,7 +15,7 @@ $extract = [IO.Path]::GetFullPath($ExtractRoot)
 $target = Join-Path $extract $name
 $archive = Join-Path $output ($name + '-Setup.exe')
 if ((Test-Path -LiteralPath $archive) -or (Test-Path -LiteralPath $extract)) { throw 'Setup output/install path already exists' }
-$compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+$compiler = [IO.Path]::GetFullPath($CompilerPath)
 if (!(Test-Path -LiteralPath $compiler)) { throw 'NSIS 3.11 is required' }
 $version = (& $compiler /VERSION | Out-String).Trim()
 if ($version -ne 'v3.11') { throw "Unexpected NSIS version: $version" }

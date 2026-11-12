@@ -479,19 +479,23 @@ async fn prepare_obs(
                 Some(diagnostic_identity(&id, task.attempt, "obs")),
             )
             .await?;
-            for _ in 0..30 {
-                check(&app, &id)?;
-                tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
-                    .await
-                    .map_err(|_| "OBS 等待失败。")?;
-                obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
-                if obs["connection"] == "connected" {
-                    break;
-                }
+        }
+        // OBS accepts WebSocket connections before its output requests are ready.
+        for _ in 0..30 {
+            if obs["connection"] == "connected"
+                && obs["streaming"].is_boolean()
+                && obs["recording"].is_boolean()
+            {
+                break;
             }
-            if obs["connection"] != "connected" {
-                return Err("OBS 未能连接，请检查后重试。".into());
-            }
+            check(&app, &id)?;
+            tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
+                .await
+                .map_err(|_| "OBS 等待失败。")?;
+            obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+        }
+        if obs["connection"] != "connected" {
+            return Err("OBS 未能连接，请检查后重试。".into());
         }
         if task.obs_owned && preparation_evidence::obs_taken_over(&obs) {
             return Err("OBS 场景已由操作者接管，未自动切换。".into());
