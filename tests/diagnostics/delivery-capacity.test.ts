@@ -30,7 +30,9 @@ test('interleaved producers share collection; failed manifest advances no source
     await delivery.consent(true);
     await delivery.pause(true);
     await journal.flush();
-    await delivery.tick();
+    const collecting = delivery.tick();
+    assert.equal(delivery.tick(), collecting, 'overlapping polls join the entire active round');
+    await collecting;
     const before = await manifest();
     const oldIds = new Set(JSON.parse(before).queue.map((batch: { id: string }) => batch.id));
     for (let sequence = 1; sequence <= 160; sequence++) {
