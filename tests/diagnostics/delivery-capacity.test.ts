@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
@@ -129,6 +129,24 @@ test('interleaved producers share collection; failed manifest advances no source
       JSON.parse(await manifest()).queue.map((batch: { id: string }) => batch.id),
       committedIds,
     );
+    await delivery.close();
+    await journal.close();
+    // Retained cursors from earlier runs must not impose a lifetime start limit.
+    const history = JSON.parse(await manifest());
+    while (Object.keys(history.sessions).length < 128)
+      history.sessions[randomUUID()] = { from: 0, queued: 1 };
+    await writeFile(join(outbox, 'state.json'), JSON.stringify(history));
+    journal = new SessionJournal(root);
+    delivery = await new DiagnosticDelivery(root, journal, options).initialize(false);
+    assert.equal(delivery.status().error, null, 'old cursors must not block a new producer');
+    await journal.recordCommitted('cursor_capacity_probe', {});
+    await delivery.tick();
+    const latest = JSON.parse(await manifest()).queue.at(-1);
+    const decoded = await decodeDiagnosticBatch(await readFile(join(outbox, latest.id + '.gz')));
+    assert(decoded.events.some((event) => event.stage === 'cursor_capacity_probe'));
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(root, journal, options).initialize(false);
+    assert.equal(delivery.status().error, null, 'cursor history survives restart past 128 runs');
   } finally {
     await delivery.close();
     await journal.close();

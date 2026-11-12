@@ -39,7 +39,6 @@ export const DELIVERY_LIMITS = {
   manifestBytes: 2 * 1024 * 1024,
   pendingBytes: 8 * 1024 * 1024,
   events: 4096,
-  sessions: 128,
   tombstones: 8,
   collectMs: 20 * 60_000,
   pollMs: 5000,
@@ -282,7 +281,6 @@ const stateSchema = z
   .passthrough()
   .refine(
     (v) =>
-      Object.keys(v.sessions).length <= DELIVERY_LIMITS.sessions &&
       v.withdrawals.length +
         v.retiredIdentities.length +
         (v.credentials && (v.credentials.enrollmentAttempted || v.credentials.token) ? 1 : 0) <=
@@ -939,14 +937,6 @@ export class DiagnosticDelivery {
       });
   }
   private registerSession(from: number) {
-    if (
-      !this.state.sessions[this.journal.sessionId] &&
-      Object.keys(this.state.sessions).length >= DELIVERY_LIMITS.sessions
-    ) {
-      this.error = 'session_budget_waiting_for_capacity';
-      this.recoveryNeeded = true;
-      return;
-    }
     this.state.sessions[this.journal.sessionId] ??= { from, queued: from };
   }
   status() {
@@ -1228,24 +1218,14 @@ export class DiagnosticDelivery {
       this.omitted('invalid_source_cursor');
       return;
     }
-    // Invalid records and new chat-only sources must not consume producer slots.
+    // Invalid records and new chat-only sources must not create producer cursors.
     // Existing cursors deduplicate old chat records before counting their exclusion.
     if (!this.state.sessions[cursorId] && /chat/i.test(value.stage)) {
       this.omitted('chat_not_collected');
       return;
     }
-    if (
-      !this.state.sessions[cursorId] &&
-      Object.keys(this.state.sessions).length < DELIVERY_LIMITS.sessions
-    )
-      this.state.sessions[cursorId] = { from: 0, queued: 0 };
-    const cursor = this.state.sessions[cursorId];
-    if (!cursor) {
-      // Never treat a producer rejected by the cursor budget as a completed scan.
-      this.error = 'session_budget_waiting_for_capacity';
-      this.recoveryNeeded = true;
-      return 'cursor-capacity' as const;
-    }
+    // Cursor history shares the existing manifest byte budget with queue metadata.
+    const cursor = (this.state.sessions[cursorId] ??= { from: 0, queued: 0 });
     if (
       sequence <= cursor.queued ||
       this.pending.some((v) => v.cursorId === cursorId && v.sequence === sequence)
@@ -1330,7 +1310,6 @@ export class DiagnosticDelivery {
           } catch {
             this.omitted('unreadable_journal_record');
           }
-          if (admitted === 'cursor-capacity') sourceUnavailable = true;
           if (admitted === false) {
             await this.persist();
             return;
@@ -1400,7 +1379,6 @@ export class DiagnosticDelivery {
         try {
           for (const event of await read(source.name)) {
             const admitted = this.observe(JSON.stringify(event) + '\n', true, 'performance:');
-            if (admitted === 'cursor-capacity') sourceUnavailable = true;
             if (admitted === false) {
               await this.persist();
               return;
@@ -1429,8 +1407,6 @@ export class DiagnosticDelivery {
     // regenerate its already-queued immutable batches on the next scan.
     this.registerSession(0);
     await this.save();
-    if (!this.state.sessions[this.journal.sessionId]) return;
-    if (this.error === 'session_budget_waiting_for_capacity') this.error = null;
     // A record may have its sequence allocated before this scan but commit
     // after the file snapshot. Observe durable notifications as well as new
     // allocations so that this tail is picked up on the next bounded scan.
@@ -2385,7 +2361,7 @@ export class DiagnosticDelivery {
         this.state.lastConfirmedAt = new Date(this.now()).toISOString();
         this.state.consecutiveFailures = 0;
         this.state.nextAttemptAt = 0;
-        if (this.error !== 'session_budget_waiting_for_capacity') this.error = null;
+        this.error = null;
         this.state.transportFailure = null;
         try {
           await this.save();

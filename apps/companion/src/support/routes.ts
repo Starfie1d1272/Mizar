@@ -241,7 +241,6 @@ export function registerSupportRoutes(
             'state_unreadable',
             'consent_policy_changed',
             'delivery_failed',
-            'session_budget_waiting_for_capacity',
             'queue_write_unconfirmed',
             'ack_history_release_pending',
             'ack_pin_release_pending',
