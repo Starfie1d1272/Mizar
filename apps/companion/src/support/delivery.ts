@@ -1844,12 +1844,11 @@ export class DiagnosticDelivery {
   }
   /** A wire is a transport projection. Release only the exact acknowledged batch whose
    * stable identities and retained canonical facts still cover every transmitted event. */
-  private async releaseAcknowledged(batches: readonly Batch[]): Promise<Set<string>> {
-    const released = new Set<string>();
+  private async releaseAcknowledged(batches: readonly Batch[]): Promise<void> {
     await this.releaseAcknowledgedPins();
     // Retry cleanup before acquiring anything else: failed release cannot accumulate
     // indefinitely many live pins or requests in this process.
-    if (this.pendingPinReleases.size || this.closed) return released;
+    if (this.pendingPinReleases.size || this.closed) return;
     const pinId = randomUUID();
     const receipts: PinReceipt[] = [];
     const eligible = new Map<string, { batch: Batch; bytes: Buffer | null; remaining: number }>();
@@ -1995,12 +1994,10 @@ export class DiagnosticDelivery {
             }
             this.recoveryNeeded = true;
           });
-          released.add(batch.id);
         } catch {
           /* Keep the queue reference for retry, including an interrupted unlink. */
         }
       }
-      return released;
     } finally {
       // Keep every hold until all unlinks/state transactions settle, not just until
       // the read finishes. An elapsed deadline during unlink does not revoke it.
@@ -2042,14 +2039,9 @@ export class DiagnosticDelivery {
         this.acknowledgedScanNext = candidates[(start + i + 1) % candidates.length]!.id;
       }
       try {
-        const released = await this.releaseAcknowledged(selected);
+        await this.releaseAcknowledged(selected);
         if (this.pendingPinReleases.size) this.error = 'ack_pin_release_pending';
-        else if (released.size < selected.length) this.error = 'ack_history_release_pending';
-        else if (
-          this.error === 'ack_history_release_pending' ||
-          this.error === 'queue_budget_local_journal_retained'
-        )
-          this.error = null;
+        else if (this.error === 'ack_history_release_pending') this.error = null;
       } catch {
         this.error = this.pendingPinReleases.size
           ? 'ack_pin_release_pending'

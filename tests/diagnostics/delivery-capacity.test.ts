@@ -215,6 +215,7 @@ test('retained ACK history frees sending capacity; quota retry survives restart 
     await delivery.tick(false);
     assert(delivery.status().acknowledged >= 161);
     assert.equal(delivery.status().transportFailure, null);
+    assert.equal(delivery.status().error, null, 'retained ACK evidence is not a delivery failure');
     for (const [reason, exhaust] of [
       ['installation_byte_budget', 'UPDATE installations SET quota_bytes=16777216'],
       ['daily_byte_budget', 'UPDATE daily SET bytes=1073741824'],
