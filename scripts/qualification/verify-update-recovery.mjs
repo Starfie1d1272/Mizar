@@ -31,9 +31,14 @@ async function run(args, overrides = {}) {
       '-ExecutionPolicy',
       'Bypass',
       ...args,
-      ...(directTransaction ? ['-NoStatusWindow'] : []),
+      ...(directTransaction ? ['-NoStatusWindow', '-NoLaunch'] : []),
     ],
-    { env, windowsHide: overrides.MIZAR_UPDATE_TEST_UI !== '1', stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      env,
+      cwd: overrides.MIZAR_UPDATE_TEST_CWD,
+      windowsHide: overrides.MIZAR_UPDATE_TEST_UI !== '1',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   );
   let output = '',
     errors = '';
@@ -100,7 +105,7 @@ async function installWithHost(binaryPath, stage, env = {}) {
     installation = run(
       [
         '-Command',
-        `$ready = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, ${literal(readyEvent)}); [IO.File]::WriteAllText(${literal(readyPath)}, 'ready'); [IO.File]::WriteAllText(${literal(join(stage, 'ui-helper-pid.txt'))}, [string]$PID); try { & ${literal(script)} -Mode Install -StageRoot ${literal(stage)} -HostProcessId ${host.pid} -ReadyEvent ${literal(readyEvent)} -NoStatusWindow:${env.MIZAR_UPDATE_TEST_UI === '1' ? '$false' : '$true'}; exit $LASTEXITCODE } finally { $ready.Dispose() }`,
+        `$ready = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, ${literal(readyEvent)}); [IO.File]::WriteAllText(${literal(readyPath)}, 'ready'); [IO.File]::WriteAllText(${literal(join(stage, 'ui-helper-pid.txt'))}, [string]$PID); try { & ${literal(env.MIZAR_UPDATE_TEST_SCRIPT ?? script)} -Mode Install -StageRoot ${literal(stage)} -HostProcessId ${host.pid} -ReadyEvent ${literal(readyEvent)} -NoStatusWindow:${env.MIZAR_UPDATE_TEST_UI === '1' ? '$false' : '$true'}; exit $LASTEXITCODE } finally { $ready.Dispose() }`,
       ],
       env,
     ).then((result) => {
@@ -162,9 +167,9 @@ async function installWithHost(binaryPath, stage, env = {}) {
         'Original desktop existence rule must prevent early restart',
       );
       if (env.MIZAR_UPDATE_TEST_UI === '1') {
-        const blockedClose = await windowProbe(stage, 'close-blocked', 'installing');
-        assert.equal(blockedClose.code, 0, blockedClose.errors);
-        assert.equal(settled, false, 'Closing the active window must not stop the writer');
+        const preparing = await windowProbe(stage, 'capture', 'preparing');
+        assert.equal(preparing.code, 0, preparing.errors);
+        assert.equal(settled, false, 'Preparation must wait for its installer to exit');
       }
       for (const mode of ['Install', 'Recover', 'Rollback']) {
         const duplicate = await run([
@@ -182,10 +187,13 @@ async function installWithHost(binaryPath, stage, env = {}) {
       }
       assert.equal(
         JSON.parse(await readFile(join(stage, 'journal.json'), 'utf8')).phase,
-        'installing',
+        'prepared',
       );
       assert.equal(
-        await readFile(join(stage, 'previous/LICENSE'), 'utf8'),
+        await readFile(
+          join(JSON.parse(await readFile(join(stage, 'plan.json'), 'utf8')).bundleRoot, 'LICENSE'),
+          'utf8',
+        ),
         'independent product license',
       );
       await writeFile(join(stage, 'writer-release.txt'), 'release');
@@ -210,11 +218,16 @@ async function installWithHost(binaryPath, stage, env = {}) {
         await new Promise((done) => setTimeout(done, 50));
       }
       assert.equal(
-        await readFile(join(stage, 'previous/LICENSE'), 'utf8'),
+        await readFile(
+          join(plan.bundleRoot + '.mizar-restore-' + stage.split(/[\\/]/).at(-1), 'LICENSE'),
+          'utf8',
+        ),
         'independent product license',
       );
       assert.deepEqual(
-        await readFile(join(stage, 'previous/Mizar.exe')),
+        await readFile(
+          join(plan.bundleRoot + '.mizar-restore-' + stage.split(/[\\/]/).at(-1), 'Mizar.exe'),
+        ),
         await readFile(binaryPath),
       );
       const rejected = await windowProbe(stage, 'restore', 'recovery-required');
@@ -233,7 +246,10 @@ async function installWithHost(binaryPath, stage, env = {}) {
         await new Promise((done) => setTimeout(done, 50));
       }
       assert.equal(
-        await readFile(join(stage, 'previous/LICENSE'), 'utf8'),
+        await readFile(
+          join(plan.bundleRoot + '.mizar-restore-' + stage.split(/[\\/]/).at(-1), 'LICENSE'),
+          'utf8',
+        ),
         'independent product license',
       );
       const busyWindow = await windowProbe(stage, 'capture-result', 'recovery-blocked');
@@ -266,6 +282,12 @@ async function installWithHost(binaryPath, stage, env = {}) {
       }
       assert.equal(await readFile(env.MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE, 'utf8'), 'allowed');
     }
+    // The fixture acknowledges startup, then exits normally. Do not carry it
+    // into the next case's real process exclusion check.
+    await run([
+      '-Command',
+      'Get-Process -Name Mizar -ErrorAction SilentlyContinue | Wait-Process -Timeout 10',
+    ]);
     return result;
   } catch (error) {
     console.error('Native update original failure before cleanup:', error);
@@ -357,6 +379,13 @@ public class UpdateFixture {
         var evidence = Environment.GetEnvironmentVariable("MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE");
         if (!String.IsNullOrEmpty(evidence)) File.WriteAllText(evidence, created ? "allowed" : "blocked");
         if (args.Length > 0 && args[0] == "--try-start") { Console.WriteLine(created ? "allowed" : "blocked"); }
+        else {
+          var ready = Environment.GetEnvironmentVariable("MIZAR_UPDATE_READY_EVENT");
+          if (created && !String.IsNullOrEmpty(ready)) {
+            using(var signal = EventWaitHandle.OpenExisting(ready)) signal.Set();
+            Thread.Sleep(1000);
+          }
+        }
       }
       return;
     }
@@ -369,12 +398,11 @@ public class UpdateFixture {
       using (var process = System.Diagnostics.Process.GetProcessById(Int32.Parse(host[0])))
         if (!process.HasExited && process.StartTime.ToUniversalTime().Ticks == Int64.Parse(host[1])) throw new InvalidOperationException("Installer ran before Host exit");
     } catch (ArgumentException) { } // The Host exited and its PID is no longer allocated.
-    var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Mizar.lnk");
-    if (File.Exists(shortcut)) File.Delete(shortcut);
     var command = String.Join(" ", args);
     var target = command.Substring(command.IndexOf("/D=") + 3);
-    using (var app = Registry.CurrentUser.CreateSubKey(@"Software\Mizar")) app.SetValue("InstallDir", target);
-    using (var uninstall = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar")) uninstall.SetValue("DisplayVersion", "1.1.0");
+    if (Array.IndexOf(args, "/MIZARPREPARE") < 0) throw new InvalidOperationException("Expected extraction only");
+    if (!File.Exists(Path.Combine(target, "Mizar.exe"))) throw new InvalidOperationException("Old program was removed before preparation");
+    target += ".mizar-candidate-" + Path.GetFileName(stage);
     if (mode == "success") {
       Copy(Path.Combine(stage, "new-payload"), target);
       File.WriteAllText(Path.Combine(target, "installed.flag"), "mizar.install.v1:" + Path.GetFileName(stage));
@@ -387,12 +415,8 @@ public class UpdateFixture {
     }
     if (mode == "failure") {
       File.WriteAllText(Path.Combine(target, "Mizar.exe"), "broken installation"); File.WriteAllText(Path.Combine(target, "unknown-user-file.txt"), "preserve unknown content");
-      if (Environment.GetEnvironmentVariable("MIZAR_UPDATE_TEST_RECOVERY_UI") == "1") {
-        var blocker=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=Path.Combine(stage,"previous","Mizar.exe"),Arguments="--hold",UseShellExecute=false,CreateNoWindow=true});
-        File.WriteAllText(Path.Combine(stage,"blocker-pid.txt"),blocker.Id.ToString());
-      }
     }
-    Environment.Exit(2);
+    Environment.Exit(mode == "cancel" ? 1 : 2);
   }
 }
 '@
@@ -490,7 +514,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       state = join(area, 'user state');
     await mkdir(join(state, 'updates/download-test'), { recursive: true });
     await writeFile(join(state, 'user-data.json'), 'untouched match and settings');
-    const previous = await payload(installed, '1.0.0', binary);
+    const previous = await payload(installed, '1.11.6', binary);
     if (scenario === 'success-no-shortcut') {
       const readOnly = await run([
         '-Command',
@@ -500,7 +524,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     }
     const registered = await run([
       '-Command',
-      `New-Item 'HKCU:\\Software\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Mizar' -Name InstallDir -Value '${installed.replace(/'/g, "''")}' -PropertyType String -Force | Out-Null; New-Item 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Name DisplayVersion -Value '1.0.0' -PropertyType String -Force | Out-Null`,
+      `New-Item 'HKCU:\\Software\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Mizar' -Name InstallDir -Value '${installed.replace(/'/g, "''")}' -PropertyType String -Force | Out-Null; New-Item 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Force | Out-Null; New-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Name DisplayVersion -Value '1.11.6' -PropertyType String -Force | Out-Null`,
     ]);
     assert.equal(registered.code, 0, registered.errors);
     const desktop = await run(['-Command', "[Environment]::GetFolderPath('Desktop')"]);
@@ -517,8 +541,8 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       originalShortcut = await readFile(shortcut);
     }
     const nextPath = join(area, 'next payload'),
-      next = await payload(nextPath, '1.1.0', binary);
-    const installer = join(state, 'updates/download-test/Mizar-v1.1.0-Windows-x64-Setup.exe');
+      next = await payload(nextPath, '1.11.7', binary);
+    const installer = join(state, 'updates/download-test/Mizar-v1.11.7-Windows-x64-Setup.exe');
     await writeFile(installer, binary);
     const plan = {
       schemaVersion: 1,
@@ -529,7 +553,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       installerBytes: binary.length,
       previousContentDigest: previous,
       contentDigest: next,
-      version: '1.1.0',
+      version: '1.11.7',
       gitSha: 'a'.repeat(40),
     };
     const planPath = join(area, 'plan.json');
@@ -538,10 +562,17 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     const prepared = await run(['-File', script, '-Mode', 'Prepare', '-PlanPath', planPath]);
     assert.equal(prepared.code, 0, prepared.errors);
     const stage = JSON.parse(prepared.output).stageRoot;
+    const stageId = stage.split(/[\\/]/).at(-1);
+    if (scenario.startsWith('committed-') || scenario === 'interrupted') {
+      // Compatibility fixtures model plans created before directory switching.
+      const legacyPlan = JSON.parse(await readFile(join(stage, 'plan.json'), 'utf8'));
+      delete legacyPlan.transactionProtocol;
+      await writeFile(join(stage, 'plan.json'), JSON.stringify(legacyPlan));
+    }
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
     await writeFile(
       join(stage, 'mode.txt'),
-      success ? 'success' : scenario === 'recovery-blocked' ? 'failure' : scenario,
+      success || scenario === 'recovery-blocked' ? 'success' : scenario,
     );
     // An actual timing write failure must preserve both a successful commit and
     // the original installer cancellation/rollback, using these existing cases.
@@ -625,6 +656,12 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       continue;
     } else if (scenario === 'interrupted') {
       await cp(installed, join(stage, 'previous'), { recursive: true });
+      const restoringDirectory = installed + '.mizar-restore-' + stageId;
+      const displacedDirectory = installed + '.mizar-failed-' + stageId;
+      await cp(installed, restoringDirectory, { recursive: true });
+      await mkdir(displacedDirectory);
+      await writeFile(join(restoringDirectory, '.mizar-update-owner'), stageId);
+      await writeFile(join(displacedDirectory, '.mizar-update-owner'), stageId);
       // Independent expectations for the original installation registration.
       await writeFile(
         join(stage, 'registration.json'),
@@ -637,7 +674,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
           {
             key: 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar',
             exists: true,
-            values: [{ name: 'DisplayVersion', kind: 'String', value: '1.0.0' }],
+            values: [{ name: 'DisplayVersion', kind: 'String', value: '1.11.6' }],
           },
         ]),
       );
@@ -715,6 +752,24 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
       }
       assert.equal(result.code, 1, 'An existing Mizar process must prevent any installation');
     } else {
+      let recoveryScript;
+      if (scenario === 'recovery-blocked') {
+        // Inject a real external file user only after the directory switch.
+        // Extraction refusal no longer reaches the rollback branch.
+        recoveryScript = join(stage, 'scheduled-install.ps1');
+        const production = await readFile(script, 'utf8');
+        const call = '\n  Install-Registration\n';
+        assert.equal(production.split(call).length, 2);
+        await writeFile(
+          recoveryScript,
+          production.replace(
+            call,
+            '\n  $blocker = Start-Process -FilePath (Join-Path $plan.bundleRoot "Mizar.exe") -ArgumentList "--hold" -WindowStyle Hidden -PassThru\n' +
+              '  [IO.File]::WriteAllText((Join-Path $StageRoot "blocker-pid.txt"), [string]$blocker.Id)\n' +
+              '  throw "update_registration_failed"\n',
+          ),
+        );
+      }
       result = await installWithHost(
         binaryPath,
         stage,
@@ -725,40 +780,63 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
               MIZAR_UPDATE_TEST_LAUNCH_EVIDENCE: join(stage, 'launch-evidence.txt'),
             }
           : scenario === 'recovery-blocked'
-            ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_RECOVERY_UI: '1' }
+            ? {
+                MIZAR_UPDATE_TEST_UI: '1',
+                MIZAR_UPDATE_TEST_RECOVERY_UI: '1',
+                MIZAR_UPDATE_TEST_SCRIPT: recoveryScript,
+              }
             : scenario === 'cancel-before-install'
               ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_CANCEL_UI: '1' }
               : timingFault
                 ? {
                     MIZAR_MEASURE_UPDATE: '1',
-                    ...(scenario === 'failure' ? { MIZAR_UPDATE_TEST_UI: '1' } : {}),
+                    ...(scenario === 'failure'
+                      ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_CWD: installed }
+                      : {}),
                   }
                 : {},
       );
       assert.equal(result.code, success || scenario === 'recovery-blocked' ? 0 : 1, result.errors);
       if (timingFault) {
         assert.match(result.output, /update_timing_write_failed/);
-        if (!success) assert.match(result.errors, /update_installer_cancelled/);
+        if (!success) assert.match(result.errors, /update_installer_failed/);
       }
     }
     const report = JSON.parse(
       (await readFile(join(state, 'updates/result.json'), 'utf8')).replace(/^\uFEFF/, ''),
     );
     assert.notEqual(report.code, 'update_host_exit_timeout', JSON.stringify(report));
-    if (timingFault) assert.equal(report.code, success ? 'update_completed' : 'update_rolled_back');
+    if (timingFault)
+      assert.equal(report.code, success ? 'update_completed' : 'update_installer_failed');
+    if (scenario === 'cancel' || scenario === 'failure') {
+      const activity = (await readFile(join(stage, 'update-activity.ndjson'), 'utf8'))
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line));
+      assert.equal(
+        activity.find((entry) => entry.phase === 'installer-exit').detail,
+        scenario === 'cancel' ? '1' : '2',
+      );
+      assert.match(
+        activity.find((entry) => entry.phase === 'failure').detail,
+        scenario === 'cancel' ? /update_installer_cancelled/ : /update_installer_failed/,
+      );
+    }
     assert.equal(
       report.status,
       success
         ? 'installed'
-        : ['remaining-process', 'cancel-before-install'].includes(scenario)
+        : ['cancel', 'cancel-before-install'].includes(scenario)
           ? 'cancelled'
-          : 'restored',
+          : ['failure', 'remaining-process'].includes(scenario)
+            ? 'failed'
+            : 'restored',
       JSON.stringify(report),
     );
     const identity = JSON.parse(
       await readFile(join(installed, 'resources/metadata/artifact.json'), 'utf8'),
     );
-    assert.equal(identity.appVersion, success ? '1.1.0' : '1.0.0');
+    assert.equal(identity.appVersion, success ? '1.11.7' : '1.11.6');
     assert.equal(
       await readFile(join(state, 'user-data.json'), 'utf8'),
       'untouched match and settings',
@@ -767,7 +845,10 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     if (scenario === 'failure')
       assert.equal(
         await readFile(
-          join(`${installed}.mizar-failed-${stage.split(/[\\/]/).at(-1)}`, 'unknown-user-file.txt'),
+          join(
+            `${installed}.mizar-candidate-${stage.split(/[\\/]/).at(-1)}`,
+            'unknown-user-file.txt',
+          ),
           'utf8',
         ),
         'preserve unknown content',
@@ -779,7 +860,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
     assert.equal(registration.code, 0, registration.errors);
     assert.deepEqual(JSON.parse(registration.output), {
       directory: installed,
-      version: success ? '1.1.0' : '1.0.0',
+      version: success ? '1.11.7' : '1.11.6',
     });
     if (scenario === 'success-no-shortcut')
       await assert.rejects(readFile(shortcut), { code: 'ENOENT' });

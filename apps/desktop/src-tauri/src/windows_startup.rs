@@ -83,6 +83,39 @@ extern "system" {
 }
 
 pub struct DesktopMutex(isize);
+/// A one-shot acknowledgement to the updater which launched this Host.
+/// Runtime readiness and the desktop event loop must both precede this signal.
+pub fn acknowledge_update_start() -> io::Result<()> {
+    let Ok(name) = std::env::var("MIZAR_UPDATE_READY_EVENT") else {
+        return Ok(());
+    };
+    let Some(token) = name.strip_prefix("Local\\MizarUpdateStarted-") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid update event",
+        ));
+    };
+    if token.len() != 32 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid update event",
+        ));
+    }
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let handle = unsafe { OpenEventW(0x0002, 0, name.as_ptr()) };
+    if handle == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let result = unsafe { SetEvent(handle) };
+    let error = io::Error::last_os_error();
+    unsafe { CloseHandle(handle) };
+    if result == 0 {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
 impl DesktopMutex {
     pub fn acquire() -> io::Result<Option<Self>> {
         let name: Vec<u16> = "Global\\MizarDesktop\0".encode_utf16().collect();

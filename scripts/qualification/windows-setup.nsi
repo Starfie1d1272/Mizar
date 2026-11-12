@@ -3,6 +3,7 @@ Unicode true
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
 ManifestDPIAware true
+ManifestLongPathAware true
 Var ControlledUpdate
 Var InstallationOwner
 Var ExternalOwner
@@ -13,6 +14,7 @@ Var HandoffProcessId
 Var HandoffBootstrapOwner
 Var HandoffLease
 Var HandoffPowerShell
+Var PreparePayload
 Name "Mizar"
 BrandingText "Mizar"
 OutFile "${OUTPUT}"
@@ -69,10 +71,30 @@ SetFont /LANG=${LANG_SIMPCHINESE} "Microsoft YaHei UI" 9
   StrCmp $4 "128" writer_acquired
   System::Call 'kernel32::CloseHandle(p r3)'
   writer_blocked:
-  SetErrorLevel 1
+  SetErrorLevel 2
   Abort "安装或恢复正在进行，请等待当前操作完成后重试。"
   writer_acquired:
 !macroend
+
+Function TraceUpdate
+  Exch $R9
+  Push $R8
+  ; A diagnostic is not installation authority. Only append to an existing
+  ; controlled transaction; standalone installers create no extra log directory.
+  StrCmp $ExternalOwner "1" 0 trace_done
+  StrCpy $R8 $InstallationOwner 8
+  StrCmp $R8 "install-" 0 trace_done
+  IfFileExists "$HandoffStateRoot\updates\$InstallationOwner\plan.json" 0 trace_done
+  FileOpen $R8 "$HandoffStateRoot\updates\$InstallationOwner\installer.log" a
+  IfErrors trace_done
+  FileSeek $R8 0 END
+  FileWrite $R8 "$R9$\r$\n"
+  FileClose $R8
+  trace_done:
+  Pop $R8
+  Pop $R9
+  ClearErrors
+FunctionEnd
 
 Function .onInit
   SetShellVarContext current
@@ -82,6 +104,11 @@ Function .onInit
   StrCpy $UpdateWriter "0"
   StrCpy $ControlledUpdate "0"
   ${GetParameters} $0
+  StrCpy $PreparePayload "0"
+  ClearErrors
+  ${GetOptions} $0 "/MIZARPREPARE" $1
+  IfErrors +2
+  StrCpy $PreparePayload "1"
   ClearErrors
   ${GetOptions} $0 "/MIZARLEASE=" $HandoffLease
   ReadRegStr $HandoffStateRoot HKCU "Software\Mizar" "StateRoot"
@@ -136,9 +163,17 @@ Function .onInit
   StrCpy $InstallationOwner $1
   Goto identity_ready
   identity_failed:
-  SetErrorLevel 1
+  SetErrorLevel 2
   Abort "无法创建本次安装身份，请重试。"
   identity_ready:
+  Push "identity-ready"
+  Call TraceUpdate
+  StrCmp $PreparePayload "1" 0 prepare_identity_ready
+  StrCmp $ControlledUpdate "1" 0 identity_failed
+  StrCmp $ExternalOwner "1" 0 identity_failed
+  StrCpy $1 $InstallationOwner 8
+  StrCmp $1 "install-" 0 identity_failed
+  prepare_identity_ready:
   StrCmp $ControlledUpdate "1" 0 acquire_writer
   ; Preserve the existing /MIZARUPDATE contract for older callers. They cannot
   ; prove a new instance owner and retain their previous concurrency boundary.
@@ -149,6 +184,8 @@ Function .onInit
   acquire_writer:
   !insertmacro AcquireUpdateWriter
   writer_ready:
+  Push "checking-program"
+  Call TraceUpdate
   Call CheckRunning
 FunctionEnd
 Function UpdateDirectoryPre
@@ -173,12 +210,17 @@ Function CheckRunning
   Pop $1
   StrCmp $0 "0" done
   MessageBox MB_OK|MB_ICONEXCLAMATION "请先正常退出 Mizar，恢复游戏设置后再安装。" /SD IDOK
+  Push "program-running"
+  Call TraceUpdate
+  SetErrorLevel 2
   Abort
   done:
 FunctionEnd
 
 Section "-Mizar" SecMain
   SectionIn RO
+  Push "handoff"
+  Call TraceUpdate
   ; The directory page has now selected the real target. No marker or payload
   ; is changed until all known old execution paths have been safely retired.
   InitPluginsDir
@@ -205,6 +247,8 @@ Section "-Mizar" SecMain
   StrCpy $2 ' -BootstrapLease $HandoffLease'
   StrCmp $HandoffBootstrapOwner "" +2
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
+  StrCmp $PreparePayload "1" 0 +2
+  StrCpy $2 '$2 -PreparePayload'
   nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
   Pop $0
   Pop $1
@@ -212,10 +256,19 @@ Section "-Mizar" SecMain
   StrCpy $HandoffStateRoot $1
   Goto handoff_ready
   handoff_failed:
+  Push "handoff-failed"
+  Call TraceUpdate
   DetailPrint "$1"
-  SetErrorLevel 1
+  SetErrorLevel 2
   Abort "旧安装或恢复责任尚未交接。请关闭旧更新窗口和轻量安装器，保留恢复资料后重试完整安装包；不要运行旧恢复脚本覆盖当前程序。"
   handoff_ready:
+  Push "handoff-ready"
+  Call TraceUpdate
+  ; The verified update parent owns the only transaction. Extract beside the
+  ; target, without uninstalling it or changing registration and shortcuts.
+  StrCmp $PreparePayload "1" 0 payload_target_ready
+  StrCpy $INSTDIR "$INSTDIR.mizar-candidate-$InstallationOwner"
+  payload_target_ready:
   ; Each install claims its own instance before any previous payload is removed.
   ; An interrupted later Setup must retire an old updater's directory marker too.
   CreateDirectory "$INSTDIR"
@@ -247,12 +300,16 @@ Section "-Mizar" SecMain
   Delete "$INSTDIR\.mizar-bootstrap-owner"
   IfErrors instance_write_failed
   keep_bootstrap_owner:
+  StrCmp $PreparePayload "1" install
   ; The previous uninstaller only removes its own recorded payload. User data is separate.
   IfFileExists "$INSTDIR\Uninstall.exe" 0 install
   ExecWait '"$INSTDIR\Uninstall.exe" /S /MIZARUPDATE /MIZARHANDOFF="$PLUGINSDIR\handoff.json" /MIZARSTATE="$HandoffStateRoot" _?=$INSTDIR' $0
   StrCmp $0 "0" install
+  SetErrorLevel 2
   Abort "旧版本卸载未完成，请正常退出应用后重试。"
   install:
+  Push "writing-identity"
+  Call TraceUpdate
   SetOutPath "$INSTDIR"
   ClearErrors
   IfFileExists "$INSTDIR\installed.flag.$InstallationOwner.tmp" instance_write_failed
@@ -267,11 +324,27 @@ Section "-Mizar" SecMain
   StrCmp $1 "0" instance_write_failed
   Goto instance_ready
   instance_write_failed:
-  SetErrorLevel 1
+  Push "payload-write-failed"
+  Call TraceUpdate
+  SetErrorLevel 2
   Abort "本次安装身份未能保存，安装已停止。请保留现场并检查目录权限。"
   instance_ready:
+  Push "extracting-payload"
+  Call TraceUpdate
+  ; Publish the authenticated file list first, so the parent can remove a
+  ; partially extracted candidate without treating unknown files as payload.
+  SetOutPath "$INSTDIR\resources\metadata"
+  File /oname=SHA256SUMS "${PAYLOAD}\resources\metadata\SHA256SUMS"
+  File /oname=artifact.json "${PAYLOAD}\resources\metadata\artifact.json"
+  IfErrors instance_write_failed
+  SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*"
+  IfErrors instance_write_failed
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  IfErrors instance_write_failed
+  Push "payload-ready"
+  Call TraceUpdate
+  StrCmp $PreparePayload "1" keep_update_owner
   CreateDirectory "$SMPROGRAMS\Mizar"
   CreateShortcut "$SMPROGRAMS\Mizar\Mizar.lnk" "$INSTDIR\Mizar.exe"
   CreateShortcut "$SMPROGRAMS\Mizar\卸载 Mizar.lnk" "$INSTDIR\Uninstall.exe"
@@ -290,7 +363,9 @@ Section "-Mizar" SecMain
   keep_update_owner:
 SectionEnd
 Section /o "桌面快捷方式" SecDesktop
+  StrCmp $PreparePayload "1" desktop_done
   CreateShortcut "$DESKTOP\Mizar.lnk" "$INSTDIR\Mizar.exe"
+  desktop_done:
 SectionEnd
 
 Function un.onInit
@@ -330,7 +405,7 @@ Function un.onInit
   Pop $1
   StrCmp $0 "0" done
   MessageBox MB_OK|MB_ICONEXCLAMATION "请先正常退出 Mizar，再卸载。用户资料将保留。" /SD IDOK
-  SetErrorLevel 1
+  SetErrorLevel 2
   Abort
   done:
 FunctionEnd
@@ -354,7 +429,7 @@ Section "Uninstall"
   Pop $1
   StrCmp $0 "0" uninstall_handoff_ready
   DetailPrint "$1"
-  SetErrorLevel 1
+  SetErrorLevel 2
   Abort "旧恢复责任尚未交接，卸载已停止。请关闭旧更新窗口和安装器，保留恢复资料后重试。"
   uninstall_handoff_ready:
   !include "${REMOVE_FILES}"

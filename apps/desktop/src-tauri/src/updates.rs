@@ -735,6 +735,7 @@ pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
         .map_err(|error| io_failure(log, "helper_handoff_event", &error, "更新工具接力未建立。"))?;
     let mut command: Command = crate::powershell::background();
     command
+        .current_dir(stage)
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")

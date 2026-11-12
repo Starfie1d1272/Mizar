@@ -191,7 +191,7 @@ export class UpdateManager {
     try {
       const result = z
         .object({
-          status: z.enum(['installed', 'restored', 'recovery-required', 'cancelled']),
+          status: z.enum(['installed', 'restored', 'recovery-required', 'cancelled', 'failed']),
           version: z.unknown().optional(),
           recoveryDirectory: z.unknown().optional(),
         })
