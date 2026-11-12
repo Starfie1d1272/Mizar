@@ -474,7 +474,7 @@ public class UpdateFixture {
     }
     const cleared = await run([
       '-Command',
-      "Remove-Item 'HKCU:\\Software\\Mizar', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar' -Recurse -Force -ErrorAction SilentlyContinue",
+      "$ErrorActionPreference = 'Stop'; foreach ($key in @('HKCU:\\Software\\Mizar', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar')) { if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force } }",
     ]);
     assert.equal(cleared.code, 0, cleared.errors);
     const registered = fresh
