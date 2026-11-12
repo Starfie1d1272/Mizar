@@ -29,7 +29,9 @@ export function assertNoNodeConsole(snapshot) {
 
 function isMainWindow(window) {
   return (
-    ['Mizar', 'Mizar · 托盘不可用，关闭主窗口将退出'].includes(window.title) &&
+    ['Mizar', 'Mizar · 托盘不可用', 'Mizar · 托盘不可用，关闭主窗口将退出'].includes(
+      window.title,
+    ) &&
     window.className !== '#32770' &&
     window.hwnd !== 0 &&
     window.width > 0 &&
