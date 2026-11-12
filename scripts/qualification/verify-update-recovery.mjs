@@ -787,7 +787,7 @@ if ($diagnostics.Count -ne 1 -or $diagnostics[0].Message -notmatch 'update_timin
         // Inject a real external file user only after the directory switch.
         // Extraction refusal no longer reaches the rollback branch.
         recoveryScript = join(stage, 'scheduled-install.ps1');
-        const production = await readFile(script, 'utf8');
+        const production = (await readFile(script, 'utf8')).replace(/\r\n/g, '\n');
         const call = '\n  Install-Registration\n';
         assert.equal(production.split(call).length, 2);
         await writeFile(
