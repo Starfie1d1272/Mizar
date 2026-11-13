@@ -39,7 +39,7 @@ fn status_message(status: &Result<StartupRecoveryStatus, String>) -> String {
         Ok(status) if status.uncertain => "启动结果待确认。先取消启动请求并确认 CS2 与 MulNX 启动器已关闭，再明确确认恢复；Mizar 不会在此关闭游戏。".into(),
         Ok(status) if status.requires_service => "可以先恢复本机游戏配置；Demo 资料继续保持隔离，待制播服务恢复后单独确认。".into(),
         Ok(status) if status.pending => "发现待恢复配置，原始备份仍保留。恢复只写回备份，不会启动或关闭游戏。".into(),
-        Ok(_) => "未发现待恢复记录。可以重试启动，或查看本机日志定位服务启动失败。".into(),
+        Ok(_) => "未发现待恢复配置。可以重试启动 Mizar，或查看本机日志。".into(),
     }
 }
 fn restoration_feedback(
@@ -87,11 +87,11 @@ fn choose(
             .chain(Some(0))
             .collect::<Vec<_>>()
     };
-    let title = wide("Mizar 启动与配置恢复");
+    let title = wide("Mizar 运行与配置恢复");
     let instruction = wide(instruction);
     let content = wide(content);
     let details = wide(details);
-    let expand = wide("查看启动原因与日志位置");
+    let expand = wide("查看详细原因与日志位置");
     let labels = choices
         .iter()
         .map(|choice| wide(action_label(*choice, steam_confirmation)))
@@ -142,12 +142,12 @@ pub fn show(log: &DesktopLog, startup_error: &str) -> bool {
     loop {
         let status = managed.startup_recovery_status();
         let content = format!(
-            "启动原因：{reason}\n\n{}\n\n{feedback}",
+            "原因：{reason}\n\n{}\n\n{feedback}",
             status_message(&status)
         );
-        let details = format!("原启动失败：{startup_error}\n\n本机日志目录：{}\n\n原始日志与配置只供本机检查，请勿公开整个数据目录。服务恢复后，从运行诊断导出脱敏诊断包反馈。", log.directory.display());
+        let details = format!("原始错误：{startup_error}\n\n本机日志目录：{}\n\n原始日志与配置只供本机检查，请勿公开整个数据目录。服务恢复后，从运行诊断导出脱敏诊断包反馈。", log.directory.display());
         let choice = match choose(
-            "Mizar 启动未完成",
+            "Mizar 需要恢复",
             &content,
             &details,
             &actions(&status),

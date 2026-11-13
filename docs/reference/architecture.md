@@ -205,7 +205,7 @@ OBS 领域核对端点、集合、来源 UUID、类型、连接代际与当前�
 
 ### 受管游戏与配置
 
-桌面启动入口负责组装与运行生命周期；[命令适配器](../../apps/desktop/src-tauri/src/desktop_commands.rs)将统一 IPC 契约接到领域操作，任务状态由对应宿主持有。[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)协调启动、控制与恢复，[进程模块](../../apps/desktop/src-tauri/src/cs2_process.rs)负责 Win32 句柄、Steam 发现和启动提交。独立帧率与 HUD 事务复用窄进程身份类型。
+桌面启动入口负责组装与运行生命周期；恢复窗口重试启动时先取消旧宿主的更新意图，再从原程序入口创建新宿主和启动身份，不在旧身份下复用退出记录或桌面事件循环。[命令适配器](../../apps/desktop/src-tauri/src/desktop_commands.rs)将统一 IPC 契约接到领域操作，任务状态由对应宿主持有。[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)协调启动、控制与恢复，[进程模块](../../apps/desktop/src-tauri/src/cs2_process.rs)负责 Win32 句柄、Steam 发现和启动提交。独立帧率与 HUD 事务复用窄进程身份类型。
 
 [会话记录](../../apps/desktop/src-tauri/src/cs2_session_record.rs)绑定版本、配置和进程身份，启动只能经准备、提交、绑定或取消迁移。[配置存储](../../apps/desktop/src-tauri/src/cs2_session.rs)负责原子写入和恢复，继续读取 v1–v4 记录并保留扩展证据；损坏记录保留原件。旧完整键位快照保留恢复读者，当前启动不再产生这类快照。具体文件内容仍由各格式模块验证。
 
@@ -251,7 +251,7 @@ Host 可离线写入，文档向 Host 交接后收到原事件的持久回执才
 
 只读取固定产品来源，拒绝链接、硬链接、非普通文件和身份变化，不接受任意路径。精确替换凭据，保留技术上下文和原始原因；不收集任意私人文件、音视频、原始聊天或 console-history。OBS 附件只读取范围受限、含 Mizar 来源标记的近期日志；缺少安全脱敏证据则记录缺口。
 
-各生产者保留预算与 pin 状态独立，云端 ACK 不删除仍被活动会话引用的唯一证据。当前导出只处理新版 ZIP，旧日志和旧包保留原位，不自动迁移或删除。诊断回传的同意、撤回及接收器契约见[技术诊断回传](diagnostics-delivery.md)；完整性审查见[开发验证](../development/development-validation.md#操作记录与失败可诊断性审查)。日志、就绪和命令成功都不能证明实际像素与声音正常。
+各生产者保留预算与 pin 状态独立，云端 ACK 不删除仍被活动会话引用的唯一证据。Companion 的活动保护用于带任务身份的操作和业务记录；普通后台观察及连接失败按现有预算轮转，失败本身不建立进程存续期间的永久保留。显式问题标记、导出和正在读取的回传仍沿用各自固定责任。当前导出只处理新版 ZIP，旧日志和旧包保留原位，不自动迁移或删除。诊断回传的同意、撤回及接收器契约见[技术诊断回传](diagnostics-delivery.md)；完整性审查见[开发验证](../development/development-validation.md#操作记录与失败可诊断性审查)。日志、就绪和命令成功都不能证明实际像素与声音正常。
 
 ### 解说 CFG 与键位恢复
 

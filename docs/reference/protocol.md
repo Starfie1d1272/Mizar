@@ -326,7 +326,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 | `GET /local/v1/updates`、`POST /operator/updates` | 有限状态、检查、下载、取消和偏好，不回暂存路径 |
 | `install_update` | 仅准备中心主窗口发起，Host 重新核对安装计划与运行资格 |
 
-试播 `cancel` 只用于尚未提交游戏启动的撤销；`complete` 在游戏停止和配置恢复后确认。错误响应使用稳定 error/stage/operationId 与有限中文提示，原始原因只进入脱敏诊断。
+试播 `cancel` 只用于尚未提交游戏启动的撤销；`complete` 在游戏停止和配置恢复后确认。试播隔离允许原生宿主调用 `mulnx-prepare` 准备或恢复游戏启动参数，仍校验 Host token、无网页来源及既有制作资格，不开放正式比赛写入。错误响应使用稳定 error/stage/operationId 与有限中文提示，原始原因只进入脱敏诊断。
 
 `mulnx-prepare` 的窗口尺寸仅接受当前事务的有限正整数 16:9 目标，不接受任意参数；清理/更新不借启动许可。更新安装不要求先打开 OBS，但未连接时须通过实际进程查询确认没有 OBS；未知或活动输出阻止安装。完整信任和恢复规则见[应用内更新](updates.md)。
 

@@ -1938,6 +1938,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       [
         '/operator/runtime/demo-test',
         '/operator/runtime/camera-session',
+        '/operator/runtime/mulnx-prepare',
         '/operator/runtime/observer',
         '/operator/runtime/stop',
         '/operator/production',

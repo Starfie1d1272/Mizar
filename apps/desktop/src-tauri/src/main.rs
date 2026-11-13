@@ -1280,20 +1280,36 @@ fn main() {
         "success",
         Some(&windows_startup::windows_version()),
     );
-    // One owner survives GUI recovery within this Host process. Late staging
-    // cannot acquire a fresh GUI's update slot or publish an old exit intent.
+    // This Host owns update staging until it exits; cancelled work cannot
+    // publish an exit intent into the next Host.
     let pending_update = updates::PendingUpdate::new(Arc::new(Mutex::new(None)));
-    while let Err(error) = start_gui(&root, &log, &pending_update) {
+    if let Err(error) = start_gui(&root, &log, &pending_update) {
         pending_update.cancel(&log);
         log.event("startup_failed", "failure", Some(&error));
-        if error.starts_with("webview2_preflight:") {
-            if windows_startup::recover_webview(&log, webview_preflight) {
-                continue;
-            }
+        let retry = if error.starts_with("webview2_preflight:") {
+            windows_startup::recover_webview(&log, webview_preflight)
         } else {
-            if startup_recovery::show(&log, &error) {
-                continue;
+            startup_recovery::show(&log, &error)
+        };
+        if retry {
+            // A retry needs a new startup identity and desktop event loop.
+            // Reusing this session reads its previous supervisor_error as a new failure.
+            drop(_mutex);
+            let restart = log.step("recovery_restart", || {
+                Command::new(std::env::current_exe()?)
+                    .args(args.iter().skip(1))
+                    .current_dir(&root)
+                    .creation_flags(0x08000000)
+                    .spawn()
+            });
+            if let Err(error) = restart {
+                failure_dialog(
+                    &format!("无法重新启动 Mizar：{error}"),
+                    Some(&log.directory),
+                );
+                std::process::exit(1);
             }
+            return;
         }
         std::process::exit(1);
     }
