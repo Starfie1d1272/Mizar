@@ -370,11 +370,10 @@ export class SessionJournal {
           : {}),
       }) + '\n';
     const event = JSON.parse(line) as Record<string, unknown>;
+    // Protect operation and business evidence; background failures use the same
+    // bounded retention as other observations, even while the process stays open.
     const critical = Boolean(
-      event.taskId ||
-      String(event.kind ?? event.stage).startsWith('business_') ||
-      diagnosticEnvelope(event).failureKinds.length > 0 ||
-      ['failed', 'failure', 'error'].includes(String(event.outcome ?? '')),
+      event.taskId || String(event.kind ?? event.stage).startsWith('business_'),
     );
     const bytes = Buffer.byteLength(line);
     if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {

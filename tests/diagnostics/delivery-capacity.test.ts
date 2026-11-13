@@ -13,6 +13,36 @@ import {
 import { meteredRuntime } from '../../scripts/diagnostics/capacity-runtime.mjs';
 import { migrate } from './fixture.js';
 
+test('background failures rotate within the journal budget without blocking operation evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-journal-capacity-'));
+  const journal = new SessionJournal(root);
+  try {
+    await journal.recordCommitted('business_capacity_probe', { marker: 'retained-business' });
+    await journal.withRequest(
+      { requestId: 'capacity', browserOperationId: null, taskId: randomUUID(), trigger: 'user' },
+      () => journal.recordCommitted('operation_result', { marker: 'retained-operation' }),
+    );
+    const error = { message: 'OBS unavailable', stack: 'x'.repeat(1024 * 1024 - 4096) };
+    for (let sequence = 0; sequence < 72; sequence++)
+      await journal.recordCommitted('obs_connect', { result: 'failure', sequence, error });
+    await journal.recordCommitted('after_capacity', {});
+    await journal.close();
+    assert.equal(journal.health().writeError, null);
+    assert.equal(journal.health().pendingRecords, 0);
+    const names = (await readdir(root)).filter((name) => /^session-.*\.ndjson$/.test(name));
+    const text = (await Promise.all(names.map((name) => readFile(join(root, name), 'utf8')))).join(
+      '',
+    );
+    assert(Buffer.byteLength(text) <= 64 * 1024 * 1024);
+    assert(text.includes('retained-business') && text.includes('retained-operation'));
+    assert(text.includes('after_capacity'));
+    assert(journal.health().retention.segments.removed.files > 0);
+  } finally {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('interleaved producers share collection; failed manifest advances no source before restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-batching-'));
   let journal = new SessionJournal(root);
