@@ -1927,23 +1927,16 @@ impl ManagedCs2 {
                 }
             }
         }
-        if self
-            .store
-            .load()?
-            .as_ref()
-            .is_some_and(SessionRecord::unconfirmed_launch)
-        {
-            return Err(
-                "Steam 启动仍在等待。请先取消 Steam 启动请求，并确认 CS2 已关闭，再恢复备份。"
-                    .into(),
-            );
-        }
+        // The held launcher handle can cancel our pending MulNX request after
+        // game exit. A bare journal/PID, including after Host restart, cannot.
+        let cancel_pending_mulnx = self.mulnx_launcher.is_some()
+            && self
+                .log
+                .state_root
+                .join("data/mulnx-launch/pending.json")
+                .exists();
         if let Some(launcher) = &self.mulnx_launcher {
             stop_owned_launcher(
-                self.log
-                    .state_root
-                    .join("data/mulnx-launch/pending.json")
-                    .exists(),
                 || any_cs2_running(&self.log),
                 || {
                     launcher.stop().map_err(|error| {
@@ -1961,10 +1954,22 @@ impl ManagedCs2 {
                 "success",
                 Some("owned launch handle stopped after game exit"),
             );
-            self.mulnx_launcher = None;
         }
-        match self.recover(false) {
+        if !cancel_pending_mulnx
+            && self
+                .store
+                .load()?
+                .as_ref()
+                .is_some_and(SessionRecord::unconfirmed_launch)
+        {
+            return Err(
+                "Steam 启动仍在等待。请先取消 Steam 启动请求，并确认 CS2 已关闭，再恢复备份。"
+                    .into(),
+            );
+        }
+        match self.recover(cancel_pending_mulnx) {
             Ok(()) => {
+                self.mulnx_launcher = None;
                 let trial = trial?;
                 if trial.is_some() && any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2，再完成 Demo 试播恢复。".into());
@@ -1979,13 +1984,9 @@ impl ManagedCs2 {
     }
 }
 fn stop_owned_launcher(
-    pending: bool,
     game_running: impl FnOnce() -> Result<bool, String>,
     stop: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    if pending {
-        return Err("MulNX 启动结果仍待确认，请先检查游戏和启动器。".into());
-    }
     if game_running()? {
         return Err("CS2 仍在运行，未关闭本次 MulNX 启动器。".into());
     }

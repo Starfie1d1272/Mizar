@@ -1470,8 +1470,14 @@ try {
     try {
       Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
       Remove-Item Env:NODE_PATH -ErrorAction SilentlyContinue
-      & $node $bridge $plan.version $plan.gitSha $plan.contentDigest $plan.coreArchiveSha256 $plan.installerSha256 $plan.installerBytes
-      if ($LASTEXITCODE -ne 0) { throw 'update_resources_incomplete' }
+      $resourceOutput = Join-Path $StageRoot 'resources.stdout.log'; Assert-PlainPath $resourceOutput
+      $resourceError = Join-Path $StageRoot 'resources.stderr.log'; Assert-PlainPath $resourceError
+      $resourceProcess = Start-Process -FilePath $node -ArgumentList @(('"' + $bridge + '"'), $plan.version, $plan.gitSha, $plan.contentDigest, $plan.coreArchiveSha256, $plan.installerSha256, $plan.installerBytes) -WindowStyle Hidden -RedirectStandardOutput $resourceOutput -RedirectStandardError $resourceError -Wait -PassThru
+      Record-UpdateActivity 'resources-exit' ([string]$resourceProcess.ExitCode)
+      if ($resourceProcess.ExitCode -ne 0) {
+        Record-UpdateActivity 'resources-error' ((Get-Content -LiteralPath $resourceError -Tail 20) -join "`n")
+        throw 'update_resources_incomplete'
+      }
     } finally { $env:NODE_OPTIONS = $savedNodeOptions; $env:NODE_PATH = $savedNodePath }
   }
   if ($plan.previousContentDigest) {
