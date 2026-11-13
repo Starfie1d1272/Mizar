@@ -218,9 +218,9 @@ test('retained ACK history frees sending capacity; quota retry survives restart 
     await delivery.tick(false);
     assert.equal(delivery.status().transportFailure?.reason, 'daily_batch_budget');
     const reset = (day + 1) * 86400_000;
-    assert(
-      delivery.status().nextAttemptAt >= reset && delivery.status().nextAttemptAt < reset + 1000,
-    );
+    // Near UTC midnight the bounded transport backoff can outlast the reset.
+    const retryAt = delivery.status().nextAttemptAt;
+    assert(retryAt >= reset && retryAt < reset + 60_000);
     await delivery.close();
     delivery = await new DiagnosticDelivery(join(root, 'client'), journal, options).initialize(
       false,
@@ -228,7 +228,7 @@ test('retained ACK history frees sending capacity; quota retry survives restart 
     const calls = requests.length;
     await delivery.tick(false);
     assert.equal(requests.length, calls, 'restart respects the receiver reset time');
-    now = reset + 1000;
+    now = retryAt + 1;
     await control();
     await delivery.tick(false);
     assert(delivery.status().acknowledged >= 161);
