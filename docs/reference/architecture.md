@@ -205,7 +205,7 @@ OBS 领域核对端点、集合、来源 UUID、类型、连接代际与当前�
 
 ### 受管游戏与配置
 
-桌面启动入口负责组装与运行生命周期；[命令适配器](../../apps/desktop/src-tauri/src/desktop_commands.rs)将统一 IPC 契约接到领域操作，任务状态由对应宿主持有。[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)协调启动、控制与恢复，[进程模块](../../apps/desktop/src-tauri/src/cs2_process.rs)负责 Win32 句柄、Steam 发现和启动提交。独立帧率与 HUD 事务复用窄进程身份类型。
+桌面启动入口负责组装与运行生命周期；恢复窗口重试启动时先取消旧宿主的更新意图，再从原程序入口创建新宿主和启动身份，不在旧身份下复用退出记录或桌面事件循环。[命令适配器](../../apps/desktop/src-tauri/src/desktop_commands.rs)将统一 IPC 契约接到领域操作，任务状态由对应宿主持有。[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)协调启动、控制与恢复，[进程模块](../../apps/desktop/src-tauri/src/cs2_process.rs)负责 Win32 句柄、Steam 发现和启动提交。独立帧率与 HUD 事务复用窄进程身份类型。
 
 [会话记录](../../apps/desktop/src-tauri/src/cs2_session_record.rs)绑定版本、配置和进程身份，启动只能经准备、提交、绑定或取消迁移。[配置存储](../../apps/desktop/src-tauri/src/cs2_session.rs)负责原子写入和恢复，继续读取 v1–v4 记录并保留扩展证据；损坏记录保留原件。旧完整键位快照保留恢复读者，当前启动不再产生这类快照。具体文件内容仍由各格式模块验证。
 
