@@ -1332,11 +1332,8 @@ export class DiagnosticDelivery {
       } catch (error) {
         // A source removed after indexing interrupts the entire merged run,
         // not just that file. Re-enumerate before admitting later live commits.
-        this.error = missing(error)
-          ? 'journal_source_changed_during_recovery'
-          : error instanceof Error
-            ? error.message
-            : 'journal_unreadable';
+        if (!missing(error))
+          this.error = error instanceof Error ? error.message : 'journal_unreadable';
         sourceUnavailable = true;
       }
     }
