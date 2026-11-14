@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { ManagedObsResources } from '../src/obs/managed-resources.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 import { ObsAdapter } from '../src/obs/adapter.js';
+import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
 import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
 import { ProgramDirector } from '../src/program-scenes/director.js';
@@ -25,6 +26,16 @@ async function rig() {
   const path = join(dir, 'obs.json');
   const scenes = new Map([['个人', ['personal-default', 'personal-program']]]);
   const state = {
+    version: '33.0.1' as string | undefined,
+    versionReadFailed: false,
+    video: {
+      baseWidth: 1280,
+      baseHeight: 720,
+      outputWidth: 1280,
+      outputHeight: 720,
+      fpsNumerator: 30,
+      fpsDenominator: 1,
+    },
     collection: '个人',
     scene: 'personal-program',
     output: false,
@@ -35,6 +46,13 @@ async function rig() {
   const rpc: ObsRpc = {
     call: async (type, data) => {
       if (/^(Set|Create|Stop)/.test(type)) writes.push(type);
+      if (type === 'GetVersion') {
+        if (state.versionReadFailed) throw new Error('version unavailable');
+        return { obsVersion: state.version };
+      }
+      if (type === 'GetVideoSettings') return { ...state.video };
+      if (type === 'GetProfileList') return { currentProfileName: '个人' };
+      if (type === 'SetVideoSettings') Object.assign(state.video, data);
       if (
         [
           'GetStreamStatus',
@@ -100,14 +118,20 @@ async function rig() {
       const message = JSON.parse(raw.toString());
       if (message.op === 1) socket.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
       if (message.op === 6) {
-        const responseData = await rpc.call(message.d.requestType, message.d.requestData);
+        let responseData = {};
+        let requestStatus = { result: true, code: 100 };
+        try {
+          responseData = await rpc.call(message.d.requestType, message.d.requestData);
+        } catch {
+          requestStatus = { result: false, code: 600 };
+        }
         socket.send(
           JSON.stringify({
             op: 7,
             d: {
               requestType: message.d.requestType,
               requestId: message.d.requestId,
-              requestStatus: { result: true, code: 100 },
+              requestStatus,
               responseData,
             },
           }),
@@ -129,6 +153,82 @@ async function rig() {
   return { path, state, scenes, writes, bind, store };
 }
 
+it('reports unsupported or unknown OBS versions and blocks preparation before configuration writes', async () => {
+  const f = await rig();
+  const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
+  cleanups.push(() => adapter.close());
+  for (const [version, code] of [
+    ['30.2.3', 'obs_version_unsupported'],
+    ['32.1.0', 'obs_version_unsupported'],
+    ['33.0.0-beta1', 'obs_version_unsupported'],
+    ['34.0.0', 'obs_version_unsupported'],
+    [undefined, 'obs_version_unknown'],
+  ] as const) {
+    f.state.version = version;
+    expect(await adapter.check()).toEqual([{ code, message: expect.any(String) }]);
+    await expect(adapter.videoPreflight(() => true)).rejects.toMatchObject({ code });
+    await expect(adapter.prepareVideo(() => true)).rejects.toMatchObject({ code });
+    await expect(
+      adapter.ensure(
+        () => 'waiting',
+        () => true,
+      ),
+    ).rejects.toMatchObject({ code });
+  }
+  f.state.versionReadFailed = true;
+  expect(await adapter.check()).toEqual([
+    { code: 'obs_version_unknown', message: expect.stringContaining('重新检查连接') },
+  ]);
+  await expect(
+    adapter.ensure(
+      () => 'waiting',
+      () => true,
+    ),
+  ).rejects.toMatchObject({
+    code: 'obs_version_unknown',
+  });
+  expect(f.writes).toEqual([]);
+  expect(f.state.collection).toBe('个人');
+  expect(await f.store.managedResources.hasPendingReturn()).toBe(false);
+});
+
+it('rechecks after an OBS upgrade, prepares video on the supported major, and permits old-version recovery', async () => {
+  const f = await rig();
+  const adapter = new ObsAdapter(
+    f.store,
+    'http://127.0.0.1:3000',
+    undefined,
+    undefined,
+    undefined,
+    new ObsVideoTransaction(f.path + '.video.json'),
+  );
+  cleanups.push(() => adapter.close());
+  f.state.version = '30.2.3';
+  expect((await adapter.status()).findings).toContainEqual({
+    code: 'obs_version_unsupported',
+    message: expect.stringContaining('OBS 33'),
+  });
+  f.state.version = '33.1.0';
+  expect(await adapter.check()).toEqual([
+    { code: 'collection_missing', message: expect.any(String) },
+  ]);
+  const before = { ...f.state.video };
+  await adapter.videoPreflight(() => true);
+  const id = await adapter.prepareVideo(() => true);
+  expect(id).toEqual(expect.any(String));
+  expect(f.state.video).toEqual({
+    baseWidth: 1920,
+    baseHeight: 1080,
+    outputWidth: 1920,
+    outputHeight: 1080,
+    fpsNumerator: 60,
+    fpsDenominator: 1,
+  });
+  f.state.version = '30.2.3';
+  await adapter.restoreVideo(id!);
+  expect(f.state.video).toEqual(before);
+});
+
 it('keeps the original program across preparation retries and restores it after restart through OBS events', async () => {
   const f = await rig();
   const managed = await f.bind();
@@ -142,6 +242,7 @@ it('keeps the original program across preparation retries and restores it after 
   });
   const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
   cleanups.push(() => adapter.close());
+  f.state.version = '30.2.3';
   const events: string[] = [];
   adapter.onProgramChanged((kind) => events.push(kind));
   await adapter.outputStatus();

@@ -25,6 +25,7 @@ import {
   ObsVideoTransaction,
 } from './video-transaction.js';
 import { obsFindingReadiness } from './prepare-readiness.js';
+import { requireSupportedObs } from './version-support.js';
 import { ObsActionError } from './action-error.js';
 import { BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
@@ -880,6 +881,13 @@ export class ObsAdapter {
     visual?: ObsFinding[],
     includeAudio = true,
   ): Promise<ObsFinding[]> {
+    try {
+      await requireSupportedObs(obs);
+    } catch (error) {
+      if (!(error instanceof ObsVideoError)) throw error;
+      this.diagnostic('obs_version_check', obsErrorEvidence(error));
+      return [{ code: error.code, message: error.message }];
+    }
     const inputGeneration = this.outputs.preparationInputsGeneration();
     this.outputs.observePreparationInputs((await obs.call('GetInputList')).inputs, inputGeneration);
     const findings =
@@ -2385,6 +2393,7 @@ export class ObsAdapter {
       this.withObs(
         async (obs, endpoint) => {
           if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          await requireSupportedObs(obs);
           const lease = await this.captureWarmupGuard();
           await assertNoVideoOutput(obs);
           if (!valid() || !lease())
@@ -2408,6 +2417,7 @@ export class ObsAdapter {
       this.withObs(
         async (obs, endpoint) => {
           if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+          await requireSupportedObs(obs);
           if (!this.videoTransaction) throw new Error('OBS 视频准备不可用。');
           const lease = await this.captureWarmupGuard();
           await assertNoVideoOutput(obs);
@@ -2500,6 +2510,8 @@ export class ObsAdapter {
       this.preparationController = controller;
       if (entry) this.entryPermit = undefined;
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
+      await this.withObs(requireSupportedObs);
+      if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       await this.outputs.read();
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       const outputEpoch = this.outputs.preparationOutputEpoch();
@@ -2587,6 +2599,7 @@ export class ObsAdapter {
       }
       const visualPreparation = await this.withObs(async (connection, endpoint, recovery) => {
         const obs = preparationObs(connection);
+        await requireSupportedObs(obs);
         // Select and prove the visual collection first. Unrelated old collections
         // keep their recovery evidence but do not own this graph.
         await obs.prepareManagedCollection?.(true, guardedPreparationWrites(obs));
