@@ -369,8 +369,8 @@ export function registerRivalHubConnectionRoutes(
   let sourceCommand: Promise<unknown> | null = null;
   // Background maintenance owns the default behavior, never a UI status read.
   const maintainAutomaticSource = () => {
+    const { state } = observeSyncHealth();
     if (sourceCommand) return;
-    const state = sourceStatus();
     if (state.blocked || !state.binding || !state.snapshot) return;
     sourceCommand = options.connection
       .claimAutomatically(
@@ -445,7 +445,7 @@ export function registerRivalHubConnectionRoutes(
     }
   });
   let lastSyncEvidence = '';
-  app.get('/local/v1/rivalhub-connection', (_request, reply) => {
+  const observeSyncHealth = () => {
     const state = sourceStatus();
     const snapshot = state.snapshot;
     const expected = syncExpected();
@@ -478,6 +478,10 @@ export function registerRivalHubConnectionRoutes(
       lastSyncEvidence = signature;
       app.log.info({ diagnostic: evidence }, 'Website sync prerequisites and health changed');
     }
+    return { state, syncHealth };
+  };
+  app.get('/local/v1/rivalhub-connection', (_request, reply) => {
+    const { state, syncHealth } = observeSyncHealth();
     return reply.header('cache-control', 'no-store').send({
       ...options.connection.view(),
       sourceCleanup:

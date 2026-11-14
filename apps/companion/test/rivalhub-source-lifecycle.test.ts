@@ -7,6 +7,8 @@ import { parseLiveSnapshotV1, parseReliableEventV1 } from '@mizar/protocol/outpu
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { OutputService } from '../src/output/service.js';
+import Fastify from 'fastify';
+import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
 
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
@@ -232,6 +234,37 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
   };
 }
+
+test('background maintenance records blocked sync without opening its status page', async (t) => {
+  const h = await setup(t);
+  const logs: { msg?: string; diagnostic?: { snapshotAvailable: boolean } }[] = [];
+  const app = Fastify({
+    logger: { stream: { write: (line: string) => logs.push(JSON.parse(line)) } },
+  });
+  t.after(() => app.close());
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let snapshot: typeof h.snapshot | null = null;
+  registerRivalHubConnectionRoutes(app, {
+    connection: h.connection,
+    controller: null,
+    currentSnapshot: () => snapshot,
+    originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
+  });
+  await app.ready();
+  const evidence = () =>
+    logs.filter((entry) => entry.msg === 'Website sync prerequisites and health changed');
+  t.mock.timers.tick(10_000);
+  assert.equal(evidence().length, 1);
+  assert.equal(evidence()[0]?.diagnostic?.snapshotAvailable, false);
+  t.mock.timers.tick(10_000);
+  assert.equal(evidence().length, 1, 'unchanged background state must not flood the journal');
+  snapshot = h.snapshot;
+  t.mock.timers.tick(10_000);
+  assert.equal(evidence().length, 2);
+  assert.equal(evidence()[1]?.diagnostic?.snapshotAvailable, true);
+  await app.inject({ method: 'GET', url: '/local/v1/rivalhub-connection' });
+  assert.equal(evidence().length, 2, 'UI reads share the same evidence deduplication');
+});
 
 test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
   const h = await setup(t);
