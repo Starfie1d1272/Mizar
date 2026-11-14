@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, dirname, join } from 'node:path';
+import { isAbsolute, dirname, join, basename } from 'node:path';
 import { isIP } from 'node:net';
 import type { GameEventSourceRole } from '@mizar/core/game-events';
 import {
@@ -9,6 +9,7 @@ import {
   type ObserverSourceManager,
 } from './cstv-source-manager.js';
 import { consumeObserverOutput } from './observer-output.js';
+import { diagnosticValue } from '../support/session-journal.js';
 
 /** Runtime paths come from the local installed artifact owner, never match metadata. */
 export interface ObserverProcessOptions<R extends GameEventSourceRole> {
@@ -43,6 +44,10 @@ export interface ObserverAttemptEvidence {
   readonly stdout: { status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number };
   readonly report: 'received' | 'missing' | 'invalid' | 'over-budget';
   readonly reason?: string | undefined;
+  /** Credential-redacted component reason for local diagnosis; not a public error code. */
+  readonly detail?: string | undefined;
+  readonly hostVersion?: number;
+  readonly reportDirectory?: string;
   readonly outcome?: 'failed' | 'incomplete' | 'closed' | undefined;
   readonly phase?: string | undefined;
   readonly nativeBootCode?: number | undefined;
@@ -53,8 +58,8 @@ export interface ObserverAttemptEvidence {
   readonly finalizationFailures: readonly string[];
 }
 
-/** Keep stable terminal evidence, never arbitrary child text or configuration. */
-function terminalEvidence(bytes: Buffer, overflow: boolean) {
+/** Retain the structured report's cause; unrelated stderr and configuration stay private. */
+function terminalEvidence(bytes: Buffer, overflow: boolean, password: string) {
   if (overflow) return { report: 'over-budget' as const };
   const text = bytes.toString('utf8').trim();
   if (!text) return { report: 'missing' as const };
@@ -122,6 +127,10 @@ function terminalEvidence(bytes: Buffer, overflow: boolean) {
         typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
       return {
         report: 'received' as const,
+        detail:
+          typeof row.reason === 'string'
+            ? String(diagnosticValue(row.reason, '', new Set(), [password])).slice(0, 4096)
+            : undefined,
         phase:
           typeof row.phase === 'string' &&
           [
@@ -315,7 +324,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       resolve(code);
     });
   });
-  // Neither raw stderr nor connection configuration is retained in application diagnostics.
+  // Only the credential-redacted structured terminal report is retained.
   let stderr = Buffer.alloc(0);
   let stderrOverflow = false;
   child.stderr.on('data', (chunk: Buffer) => {
@@ -347,7 +356,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   const closed = Promise.all([exit, reading]).then(([code, output]) => {
     unsubscribe();
     clearTimeout(startupTimer);
-    const report = terminalEvidence(stderr, stderrOverflow);
+    const report = terminalEvidence(stderr, stderrOverflow, options.password);
     const reason = 'reason' in report ? report.reason : undefined;
     const stage = spawnCode
       ? 'spawn'
@@ -385,6 +394,8 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       ...report,
       attemptId,
       attemptCount: 1,
+      hostVersion: options.hostVersion,
+      reportDirectory: basename(options.outputDirectory),
       stage,
       code,
       signal: exitSignal,

@@ -69,7 +69,13 @@ export type ObserverRuntimeView = {
     state: 'disabled' | 'connecting' | 'live' | 'reconnecting' | 'ended' | 'stopped' | 'failed';
     lastErrorCode?: string;
   };
-  terminal?: { reason?: string; stage?: string; attemptId?: string; spawnCode?: string };
+  terminal?: {
+    reason?: string;
+    stage?: string;
+    attemptId?: string;
+    spawnCode?: string;
+    nativeBootCode?: number;
+  };
 };
 export function observerNeedsRecovery(view: ObserverRuntimeView) {
   if (view.error || view.failed || view.health.state === 'failed') return true;
@@ -89,6 +95,8 @@ export function observerFailureReason(view: ObserverRuntimeView) {
   if (code === 'initialization-timeout' || code === 'phase-timeout')
     return '提前提示连接超时，请核对地址与服务器状态。';
   if (code === 'source-hltv-stop') return '服务器已结束本次观战连接。';
+  if (code === 'native-start-failed' && view.terminal?.nativeBootCode === 5)
+    return 'Steam 当前未连接在线服务，请确认 Steam 已登录并联网后重试提前提示。';
   if (code === 'native-start-failed') return '提前提示启动失败，请检查游戏与组件状态。';
   if (code === 'output-directory-unavailable' || code === 'output-parent-unavailable')
     return '提前提示输出目录不可用，请检查 Mizar 数据目录是否可写，再重试。';

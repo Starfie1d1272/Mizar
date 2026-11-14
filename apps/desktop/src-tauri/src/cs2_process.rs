@@ -501,6 +501,9 @@ fn identity_failure(
 }
 fn win32_failure(log: &crate::startup_log::DesktopLog, api: &str, message: &str) -> String {
     let code = unsafe { GetLastError() };
+    if code == 1455 {
+        crate::memory_diagnostics::record(log, "commitment_limit");
+    }
     log.event(
         "cs2_launch",
         "failure",

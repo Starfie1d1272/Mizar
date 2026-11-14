@@ -14,6 +14,7 @@ export interface ArchiveWorkerData {
     bytes: number;
     rawAttachment?: boolean;
     rawIndex?: boolean;
+    jsonAttachment?: boolean;
     secrets?: string[];
   }[];
   gaps: unknown[];
@@ -701,11 +702,14 @@ export function runArchiveWorker(
       try {
         if (!Number.isSafeInteger(source.bytes) || source.bytes < 0)
           throw Error('invalid_source_size');
-        if (source.rawIndex || source.name.endsWith('.gz')) {
-          if (source.bytes > (source.rawIndex ? ENTRY_MAX : 16 * 1024 * 1024))
+        if (source.rawIndex || source.jsonAttachment || source.name.endsWith('.gz')) {
+          if (
+            source.bytes >
+            (source.jsonAttachment ? 128 * 1024 : source.rawIndex ? ENTRY_MAX : 16 * 1024 * 1024)
+          )
             throw Error('source_decode_budget');
           let value: unknown;
-          if (source.rawIndex) {
+          if (source.rawIndex || source.jsonAttachment) {
             const raw = Buffer.alloc(source.bytes);
             let position = 0;
             while (position < raw.length)
@@ -714,7 +718,11 @@ export function runArchiveWorker(
             value = JSON.parse(raw.toString('utf8'));
             stages.decodeMs += performance.now() - start;
           } else value = readGzip(source);
-          if (source.rawIndex)
+          if (source.jsonAttachment) {
+            if (object(value).schema !== 'cs2-observer-report/1')
+              throw Error('observer_report_schema');
+            add(source.name, Buffer.from(JSON.stringify(redact(value))));
+          } else if (source.rawIndex)
             add('indexes/' + source.name, Buffer.from(JSON.stringify(redact(value))));
           else {
             const events = Array.isArray(value)

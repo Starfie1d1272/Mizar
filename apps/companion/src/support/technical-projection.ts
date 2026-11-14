@@ -81,6 +81,23 @@ const scalarFields = new Set([
   'omittedSamples',
   'droppedFrames',
   'sequence',
+  'hostVersion',
+  'nativeBootCode',
+  'steamInitResult',
+  'remoteEndReason',
+  'rss',
+  'heapTotal',
+  'heapUsed',
+  'external',
+  'arrayBuffers',
+  'privateBytes',
+  'workingSetBytes',
+  'commitBytes',
+  'commitLimitBytes',
+  'physicalTotalBytes',
+  'physicalAvailableBytes',
+  'exitCode',
+  'failureReason',
 ]);
 const nestedFields = new Set([
   'error',
@@ -93,6 +110,9 @@ const nestedFields = new Set([
   'metrics',
   'frames',
   'longTasks',
+  'memory',
+  'host',
+  'system',
 ]);
 const differenceFields = new Set(['missing', 'extra', 'duplicates', 'issues']);
 function fields(value: unknown, exclusions: Set<string>, depth = 0): Record<string, unknown> {

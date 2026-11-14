@@ -29,6 +29,7 @@ mod host_state;
 mod ipc_contract;
 mod lifecycle_contract;
 mod managed_cs2;
+mod memory_diagnostics;
 mod mulnx_launch;
 mod mulnx_stop;
 mod obs_configuration;
@@ -558,7 +559,12 @@ fn run_desktop(
             let observer_running = worker_running.clone();
             let observer_host = host.clone();
             thread::spawn(move || {
+                let mut memory_sample = std::time::Instant::now();
                 while observer_running.load(Ordering::Acquire) {
+                    if std::time::Instant::now() >= memory_sample {
+                        memory_diagnostics::record(&observer_host.state::<DesktopLog>(), "interval");
+                        memory_sample = std::time::Instant::now() + Duration::from_secs(15);
+                    }
                     observer_workspace::pulse(&observer_host);
                     thread::sleep(Duration::from_secs(2));
                 }

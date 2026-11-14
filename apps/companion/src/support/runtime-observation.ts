@@ -45,6 +45,7 @@ export function observeRuntime({
           'synchronous observation acceptance, runtime mutation and projection/output scheduling; excludes upstream adapter and asynchronous delivery',
       },
       eventLoop,
+      memory: process.memoryUsage(),
       slowProcessing: {
         count: slowCount,
         omittedSamples: Math.max(0, slowCount - slow.length),

@@ -256,6 +256,7 @@ export class SupportExports {
       bytes: number;
       rawAttachment?: boolean;
       rawIndex?: boolean;
+      jsonAttachment?: boolean;
       secrets?: string[];
     }[] = [];
     const excludedSources: { source: string; reason: string }[] = [];
@@ -299,11 +300,16 @@ export class SupportExports {
       prefix = '',
       rawIndex = false,
       rawAttachment = false,
+      jsonAttachment = false,
     ) => {
       try {
         const path = await safePath(directory, name);
         const before = await lstat(path);
-        if (!before.isFile() || before.nlink !== 1 || before.size > 64 * 1024 * 1024)
+        if (
+          !before.isFile() ||
+          before.nlink !== 1 ||
+          before.size > (jsonAttachment ? 128 * 1024 : 64 * 1024 * 1024)
+        )
           throw new Error('source_unsafe_or_oversize');
         const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
         handles.push(handle);
@@ -338,6 +344,7 @@ export class SupportExports {
           bytes: expected?.bytes ?? actual.size,
           rawIndex,
           rawAttachment,
+          jsonAttachment,
         });
       } catch (error) {
         gaps.push({ source: prefix + name, reason: String(error) });
@@ -455,6 +462,43 @@ export class SupportExports {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap(folder, 'enumerate', error);
         }
+      }
+      // The pinned observer writes report.json atomically at termination. Include
+      // earlier attempts too: their local journal may already have rotated.
+      try {
+        const directory = await safePath(join(dirname(this.logs), 'data', 'observer'));
+        const names = (await readdir(directory))
+          .filter((name) =>
+            /^(?:retry-[1-9]\d*-)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(name),
+          )
+          .sort();
+        if (names.length > 4096)
+          gap('observer', 'enumerate', new Error('observer_report_count_budget'));
+        for (const name of names.slice(0, 4096)) {
+          this.assertActive(job);
+          try {
+            const parent = await safePath(join(directory, name));
+            const report = await safePath(parent, 'report.json');
+            const stat = await lstat(report);
+            if (
+              (range.from && stat.mtimeMs < Date.parse(range.from)) ||
+              (range.to && stat.mtimeMs > Date.parse(range.to))
+            )
+              continue;
+            await capture(
+              parent,
+              'report.json',
+              `attachments/observer/${name}/`,
+              false,
+              false,
+              true,
+            );
+          } catch (error) {
+            gap(`observer/${name}/report.json`, 'collect', error);
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap('observer', 'enumerate', error);
       }
       const nativeObs = await collectObsNativeEvidence({
         includeRelatedLogs: true,
