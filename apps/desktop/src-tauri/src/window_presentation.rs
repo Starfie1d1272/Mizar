@@ -3,6 +3,7 @@
 //! must also learn about hidden/minimized windows (Microsoft's IsVisible contract).
 use crate::geometry::Rect;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use windows::core::Interface;
 
 trait GeometryTarget {
     fn size(&self) -> Option<(u32, u32)>;
@@ -146,9 +147,14 @@ pub fn observe_process_failure(window: &WebviewWindow, generation: u64) -> Resul
                 let state = host.state::<crate::host_state::HostState>();
                 let mut kind = Default::default();
                 let result = args.as_ref().map(|args| args.ProcessFailedKind(&mut kind));
+                let extended = args.as_ref().and_then(|args| args.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2ProcessFailedEventArgs2>().ok());
+                let mut failure_reason = Default::default();
+                let failure_reason = extended.as_ref().and_then(|args| args.Reason(&mut failure_reason).ok()).map(|_| failure_reason.0);
+                let mut exit_code = 0;
+                let exit_code = extended.as_ref().and_then(|args| args.ExitCode(&mut exit_code).ok()).map(|_| exit_code);
                 let document = (state.overlay_generation.load(std::sync::atomic::Ordering::Acquire) == generation).then(|| state.overlay_document.load(std::sync::atomic::Ordering::Acquire));
                 host.state::<crate::startup_log::DesktopLog>().event("program_overlay_process_failed", "failure",
-                    Some(&serde_json::json!({"generation":generation,"documentId":document,"kind":result.as_ref().and_then(|value| value.as_ref().ok()).map(|_| kind.0),"hresult":result.as_ref().and_then(|value| value.as_ref().err()).map(|error| format!("0x{:08X}", error.code().0 as u32))}).to_string()));
+                    Some(&serde_json::json!({"generation":generation,"documentId":document,"kind":result.as_ref().and_then(|value| value.as_ref().ok()).map(|_| kind.0),"failureReason":failure_reason,"exitCode":exit_code,"memory":crate::memory_diagnostics::snapshot(),"hresult":result.as_ref().and_then(|value| value.as_ref().err()).map(|error| format!("0x{:08X}", error.code().0 as u32))}).to_string()));
                 if result.as_ref().is_some_and(|result| result.is_ok()) && (kind.0 == 0 || kind.0 == 1) {
                     let _presentation = state.overlay_presentation.lock().unwrap_or_else(|error| error.into_inner());
                     if state.overlay_generation.load(std::sync::atomic::Ordering::Acquire) == generation {

@@ -49,6 +49,9 @@ for await (const text of inputLines) {
       reason,
     });
   const earlyFailures = {
+    '127.0.0.25:27020': validReport(
+      'ordered-parser-error: unsupported serializer test_field; password=' + input.password,
+    ),
     '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
     '127.0.0.12:27020': 'configuration-boundary',
     '127.0.0.13:27020':
