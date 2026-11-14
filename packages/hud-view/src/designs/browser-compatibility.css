@@ -1,0 +1,26 @@
+/* OBS 30 embeds Chromium 103. Unsupported color-mix() with var() becomes
+ * invalid at computed-value time, so an earlier background is not a fallback.
+ * Apply after the recipes, preserving their layout and resolved theme colors. */
+@supports not (color: color-mix(in srgb, black, white)) {
+  .hud-widget-design.hud-redraw[data-hud-design] .player-rail__card .player-rail__body {
+    background: var(--mizar-hud-surface-strong);
+  }
+  .hud-widget-design.hud-redraw[data-hud-design]
+    .player-rail__card
+    .player-rail__health-bar
+    > span:first-child {
+    background: var(--mizar-side-ct);
+  }
+  .hud-widget-design.hud-redraw[data-hud-design]
+    .player-rail__card[data-side='T']
+    .player-rail__health-bar
+    > span:first-child {
+    background: var(--mizar-side-t);
+  }
+  .hud-widget-design.hud-redraw[data-hud-design]
+    .player-rail__card.is-low-health
+    .player-rail__health-bar
+    > span:first-child {
+    background: var(--mizar-hud-state-danger);
+  }
+}

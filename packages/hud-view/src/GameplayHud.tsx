@@ -29,6 +29,7 @@ import './designs/iem.css';
 import './designs/esl.css';
 import './designs/perfectworld.css';
 import './designs/native.css';
+import './designs/browser-compatibility.css';
 import { hudDesignForVariant } from './hud-design.js';
 import { AllChat } from './widgets/player-rails/AllChat.js';
 import { BroadcastPause } from './widgets/broadcast-pause/BroadcastPause.js';
