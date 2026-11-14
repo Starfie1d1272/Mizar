@@ -146,7 +146,7 @@ macro_rules! desktop_ipc {
         $command!(sync cancel_entry_intent MAIN
             (window: tauri::WebviewWindow, app: tauri::AppHandle) required [intent_id: String] ()
             -> Unit = crate::desktop_commands::cancel_entry_intent);
-        $command!(sync preparation_status MAIN_AND_DOCK () required [] ()
+        $command!(sync preparation_status PREPARATION_STATUS_WINDOWS () required [] ()
             -> Nullable(PreparationStatus) = crate::preparation_task::status);
         $command!(async cancel_workspace_entry MAIN_AND_DOCK
             (app: tauri::AppHandle) required [entry_id: Nullable(String)] ()

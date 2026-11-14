@@ -318,6 +318,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 | 入口 | 边界 |
 | --- | --- |
+| `preparation_status` | 准备中心、工作台底栏和连接比赛工具只读准备进度；取消和重试仍仅由准备中心与底栏发起 |
 | `GET /local/v1/demo-test` | 有限阶段、requestId、双方和 dataReady；数据就绪不证明选定 Demo 已加载 |
 | `POST /operator/runtime/demo-test` | 私有 `begin/playing/finish/complete/cancel`，重试原 requestId，未知结果保持隔离 |
 | `select_demo_file/start_demo_test` | 短期选择 token 与文件名，不接受网页任意路径；完成须 Host 确认退出与恢复 |
