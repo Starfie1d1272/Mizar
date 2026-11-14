@@ -29,6 +29,10 @@ const registrySchema = z
     roles: z.record(z.string(), identitySchema),
     creating: z.boolean(),
     creationSent: z.boolean().default(false),
+    returnTo: z
+      .object({ collection: z.string().min(1), sceneUuid: z.string().min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 type Registry = z.infer<typeof registrySchema>;
@@ -51,6 +55,9 @@ export class ManagedObsResources {
   private queue: Promise<unknown> = Promise.resolve();
   private initialization: Promise<unknown> = Promise.resolve();
   constructor(private readonly path: string) {}
+  async hasPendingReturn(): Promise<boolean> {
+    return (await this.load()).some((item) => item.returnTo !== undefined);
+  }
   private async load(): Promise<Registry[]> {
     try {
       return z.array(registrySchema).parse(JSON.parse(await readFile(this.path, 'utf8')));
@@ -59,12 +66,16 @@ export class ManagedObsResources {
       throw error;
     }
   }
-  private async save(registry: Registry): Promise<void> {
+  private async save(
+    registry: Registry,
+    returnTo: 'preserve' | 'replace' = 'preserve',
+  ): Promise<void> {
     const task = this.queue.then(async () => {
       const all = await this.load();
       const previous = all.find((item) => item.endpoint === registry.endpoint);
       if (previous && previous.collectionIdentity !== registry.collectionIdentity) throw conflict();
       registry.roles = { ...previous?.roles, ...registry.roles };
+      if (returnTo === 'preserve') registry.returnTo = previous?.returnTo;
       const next = all.filter((item) => item.endpoint !== registry.endpoint);
       next.push(structuredClone(registry));
       await mkdir(dirname(this.path), { recursive: true });
@@ -165,7 +176,17 @@ export class ManagedObsResources {
             creating: true,
             creationSent: false,
           };
-          await this.save(registry);
+        }
+        // Preserve the first entry boundary across retries, reconnects and process restarts.
+        if (allowChange && !registry.returnTo) {
+          const scene = await raw.call('GetCurrentProgramScene');
+          if (typeof scene.currentProgramSceneUuid !== 'string' || !scene.currentProgramSceneUuid)
+            throw conflict();
+          registry.returnTo = {
+            collection: collection.currentSceneCollectionName,
+            sceneUuid: scene.currentProgramSceneUuid,
+          };
+          await this.save(registry, 'replace');
         }
         if (registry.creating) {
           if (registry.creationSent || exists) throw conflict();
@@ -607,6 +628,56 @@ export class ManagedObsResources {
           const task = this.initialization.then(() => prepare(allowChange, writer, dispatch));
           this.initialization = task.catch(() => undefined);
           return task;
+        },
+        activateManagedCollection: async () => {
+          registry = (await this.load()).find((item) => item.endpoint === identityEndpoint);
+          if (!registry || registry.creating || !registry.returnTo) throw conflict();
+          if ((await raw.call('GetPersistentData', markerArgs)).slotValue !== registry.instance)
+            throw conflict();
+          if (!(await active())) {
+            // Reuse the prepared collection's verification and rollback boundary.
+            await prepare(true, raw, dispatch);
+            return;
+          }
+          await verify();
+        },
+        restoreManagedCollection: async () => {
+          registry = (await this.load()).find((item) => item.endpoint === identityEndpoint);
+          const target = registry?.returnTo;
+          if (!registry || !target) return;
+          if ((await raw.call('GetPersistentData', markerArgs)).slotValue !== registry.instance)
+            throw conflict();
+          const collection = await raw.call('GetSceneCollectionList');
+          if (
+            !Array.isArray(collection.sceneCollections) ||
+            !collection.sceneCollections.includes(target.collection)
+          )
+            throw new Error('OBS 原场景集合已不存在，恢复记录已保留。');
+          if (collection.currentSceneCollectionName !== target.collection) {
+            await assertNoVideoOutput(raw);
+            await dispatch('SetCurrentSceneCollection', { sceneCollectionName: target.collection });
+          }
+          if (
+            (await raw.call('GetSceneCollectionList')).currentSceneCollectionName !==
+            target.collection
+          )
+            throw conflict();
+          const scenes = rows((await raw.call('GetSceneList')).scenes);
+          if (!scenes.some((scene) => scene.sceneUuid === target.sceneUuid))
+            throw new Error('OBS 原节目场景已不存在，恢复记录已保留。');
+          if (
+            (await raw.call('GetCurrentProgramScene')).currentProgramSceneUuid !== target.sceneUuid
+          )
+            await dispatch('SetCurrentProgramScene', { sceneUuid: target.sceneUuid });
+          if (
+            (await raw.call('GetSceneCollectionList')).currentSceneCollectionName !==
+              target.collection ||
+            (await raw.call('GetCurrentProgramScene')).currentProgramSceneUuid !== target.sceneUuid
+          )
+            throw new Error('OBS 原节目场景恢复未确认。');
+          beforeMutation?.();
+          delete registry.returnTo;
+          await this.save(registry, 'replace');
         },
         managedResourcesDrift: drift,
         managedResourceConflicts: async () => {

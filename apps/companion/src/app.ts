@@ -1015,18 +1015,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         );
   if (obsAdapter)
     app.addHook('onReady', async () => {
-      await obsAdapter.restoreVideo().catch(async (error: unknown) =>
-        app.log.warn(
-          {
-            event: 'obs',
-            stage: 'video_recovery',
-            diagnostic: {
-              error: obsErrorEvidence(error, (await obsConfigStore?.read())?.password),
+      await obsAdapter
+        .restoreVideo()
+        .then(() => obsAdapter.restoreProgram())
+        .catch(async (error: unknown) =>
+          app.log.warn(
+            {
+              event: 'obs',
+              stage: 'production_recovery',
+              diagnostic: {
+                error: obsErrorEvidence(error, (await obsConfigStore?.read())?.password),
+              },
             },
-          },
-          'OBS video recovery pending',
-        ),
-      );
+            'OBS production recovery pending',
+          ),
+        );
     });
   let musicDirector: MusicDirector | undefined;
   let musicProvider: ObsMusicProvider | undefined;
@@ -1072,10 +1075,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     () => bpPresentationSettings.get().mode,
     () => obsAdapter?.gameBackgroundReady() ?? Promise.resolve(false),
   );
-  obsAdapter?.onBpDisconnect(() => sceneController.compactDisconnected());
-  obsAdapter?.onProgramChanged((kind) => {
-    if (kind === 'disconnected') sceneController.interruptAutomatic();
-    else sceneController.holdAutomatic();
+  obsAdapter?.onBpDisconnect(() =>
+    sceneController.compactDisconnected(production.automaticAllowed()),
+  );
+  obsAdapter?.onProgramChanged(() => {
+    sceneController.obsProgramChanged();
     production.invalidateObsExit();
   });
   if (options.steamAvatars) {
@@ -1770,6 +1774,24 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   sceneController.attachDirector(director);
   const directorTimer = setInterval(() => {
+    const sessionValid = production.sessionValid();
+    void sceneController
+      .reconcileObs(() => sessionValid() && production.automaticAllowed())
+      .catch(async (error: unknown) => {
+        app.log.warn(
+          {
+            event: 'obs',
+            stage: 'program_reconciliation',
+            diagnostic: {
+              error: obsErrorEvidence(
+                error,
+                (await obsConfigStore?.read().catch(() => undefined))?.password,
+              ),
+            },
+          },
+          'OBS program reconciliation pending',
+        );
+      });
     void director.tick().catch(() => director.hold());
     void musicDirector?.tick();
     cameraDirector?.tick();

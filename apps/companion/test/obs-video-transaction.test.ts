@@ -112,6 +112,7 @@ for (const condition of ['external output', 'OBS closed'] as const) {
           startCommentaryRecovery: () => {},
           settleAutomatic: async () => {},
           startBrowserRecovery: () => {},
+          restoreProgram: async () => {},
           restoreVideo: () =>
             condition === 'OBS closed'
               ? tx.restore(
