@@ -740,7 +740,19 @@ export class SessionJournal {
   }
   close() {
     if (!this.closing) {
-      this.record('session_end', this.health());
+      const health = this.health();
+      const { segments, ...rotation } = health.retention;
+      // The durable inventory already owns segment identities and history. Copying
+      // it into the final event can exceed the journal's pending/segment limits.
+      this.record('session_end', {
+        ...health,
+        retention: {
+          ...rotation,
+          segmentCount: segments.segments.length,
+          pinCount: segments.pins.length,
+          removed: segments.removed,
+        },
+      });
       this.closed = true;
       this.closing = this.flush();
     }

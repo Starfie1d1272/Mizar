@@ -280,7 +280,8 @@ export class ObsAdapter {
         if (
           (kind === 'collection' || kind === 'collection-changing') &&
           this.expectedCollection !== undefined &&
-          name === this.expectedCollection
+          // Changing reports the collection being left; Changed reports the target.
+          (kind === 'collection-changing' || name === this.expectedCollection)
         ) {
           if (kind === 'collection') this.expectedCollection = undefined;
           return;
@@ -3252,8 +3253,23 @@ export class ObsAdapter {
     // conflicting writes, never for unrelated audio reads or their deadlines.
     this.preparationController?.abort();
     return this.serial(() =>
-      this.withObs((obs) => switchObsScene(obs, id, this.browserBaseUrl, options)),
+      this.withObs(async (obs) => {
+        if (options?.reconcileCollection) {
+          const guarded = guardedObs(obs, () => options.valid?.() !== false);
+          await guarded.activateManagedCollection?.();
+        }
+        await switchObsScene(obs, id, this.browserBaseUrl, options);
+      }),
     );
+  }
+
+  restoreProgram(valid: () => boolean = () => true): Promise<void> {
+    return this.serial(async () => {
+      if (!(await this.configStore.managedResources.hasPendingReturn())) return;
+      await this.withObs(async (obs) => {
+        await guardedObs(obs, valid).restoreManagedCollection?.();
+      });
+    });
   }
   switchToWaitingForExit(options: ObsSceneSwitchOptions): Promise<void> {
     this.preparationController?.abort();

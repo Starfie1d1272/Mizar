@@ -80,6 +80,9 @@ export class ProgramSceneController {
   private introRevision: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private automaticSwitch: AbortController | undefined;
+  private obsReconciliationNeeded = false;
+  private obsReconciliation: Promise<void> | undefined;
+  private nextObsReconciliation = 0;
   private preparing: { target: ProgramSceneId; revision: string } | undefined;
 
   constructor(
@@ -94,6 +97,37 @@ export class ProgramSceneController {
     private readonly bpPresentationMode: () => 'full' | 'compact' = () => 'full',
     private readonly gameBackgroundReady: () => Promise<boolean> = () => Promise.resolve(false),
   ) {}
+
+  /** External OBS control invalidates an in-flight Take, not Mizar's production intent. */
+  obsProgramChanged(): void {
+    this.interruptAutomatic();
+    this.obsReconciliationNeeded = true;
+  }
+
+  reconcileObs(productionValid: () => boolean, now = performance.now()): Promise<void> {
+    if (this.obsReconciliation) return Promise.resolve();
+    if (!this.obsReconciliationNeeded || !productionValid() || now < this.nextObsReconciliation)
+      return Promise.resolve();
+    const result = this.queue.then(async () => {
+      const current = this.controlValid();
+      const revision = this.revision;
+      const valid = () => productionValid() && current() && revision === this.revision;
+      if (!valid() || !this.switchObs) return;
+      const target = this.active === 'bp' && this.bpCompact === 'on' ? 'gameplay' : this.active;
+      await this.switchObs(target, {
+        transition: programTransition(target, target, true),
+        reconcileCollection: true,
+        valid,
+      });
+      if (valid()) this.obsReconciliationNeeded = false;
+    });
+    this.queue = result.catch(() => undefined);
+    this.obsReconciliation = result.finally(() => {
+      this.obsReconciliation = undefined;
+      this.nextObsReconciliation = performance.now() + 5000;
+    });
+    return this.obsReconciliation;
+  }
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
     if (this.resourceActivationPending) return '官方素材正在激活，请完成后再切换场景。';
@@ -211,10 +245,11 @@ export class ProgramSceneController {
     return result;
   }
 
-  compactDisconnected(): void {
+  compactDisconnected(preservePlayback = false): void {
     if (!this.compactPreparing && (this.bpCompactTarget !== 'managed' || this.bpCompact === 'off'))
       return;
-    this.bpSession.finishSceneExit();
+    if (!preservePlayback || this.active !== 'bp') this.bpSession.finishSceneExit();
+    if (preservePlayback) this.obsReconciliationNeeded = true;
     this.bpCompact = 'unknown';
     this.bpFallbackReason = '紧凑 BP 状态待核对，请检查 OBS。';
     this.revision = randomUUID();

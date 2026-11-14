@@ -353,7 +353,8 @@ export function ObsSettings() {
                   />
                   {obs.sceneAligned === false ? (
                     <StatusBanner tone="warning">
-                      OBS 当前节目与 Mizar 选择不一致。请在工作台重新点击要播出的场景。
+                      OBS 当前节目尚未对齐。制作期间 Mizar 会自动恢复所选场景；若持续异常，请检查
+                      OBS 连接。
                     </StatusBanner>
                   ) : evidence?.state === 'measured' &&
                     evidence.capture?.targetAvailable === false ? (

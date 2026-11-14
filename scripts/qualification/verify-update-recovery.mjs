@@ -423,11 +423,12 @@ public class UpdateFixture {
     var command = String.Join(" ", args);
     var target = command.Substring(command.IndexOf("/D=") + 3);
     if (Array.IndexOf(args, "/MIZARPREPARE") < 0) throw new InvalidOperationException("Expected extraction only");
-    if (!fresh && !File.Exists(Path.Combine(target, "Mizar.exe"))) throw new InvalidOperationException("Old program was removed before preparation");
+    bool missing = mode.StartsWith("missing-executable", StringComparison.Ordinal);
+    if (!fresh && File.Exists(Path.Combine(target, "Mizar.exe")) == missing) throw new InvalidOperationException("Old program presence changed before preparation");
     if (fresh && Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length != 0) throw new InvalidOperationException("Fresh target was written before preparation");
     target += ".mizar-candidate-" + Path.GetFileName(stage);
     if (fresh) { File.WriteAllText(Path.Combine(stage,"Mizar.lnk"), "prepared application link"); File.WriteAllText(Path.Combine(stage,"卸载 Mizar.lnk"), "prepared uninstall link"); }
-    if (fresh || mode == "success" || mode == "collision") {
+    if (fresh || missing || mode == "success" || mode == "collision") {
       Copy(Path.Combine(stage, "new-payload"), target);
       if (mode == "collision") File.WriteAllText(Path.Combine(target, "user-note.txt"), "new payload collision");
       File.WriteAllText(Path.Combine(target, "installed.flag"), "mizar.install.v1:" + Path.GetFileName(stage));
@@ -454,6 +455,8 @@ public class UpdateFixture {
   const psLiteral = (text) => `'${text.replaceAll("'", "''")}'`;
   for (const scenario of [
     'success',
+    'missing-executable',
+    'missing-executable-rollback',
     'fresh-success',
     'fresh-rollback',
     'cancel',
@@ -466,13 +469,15 @@ public class UpdateFixture {
   ]) {
     console.log(`Native update scenario: ${scenario}`);
     const fresh = scenario.startsWith('fresh-');
-    const success = scenario === 'success' || scenario === 'fresh-success';
+    const missing = scenario.startsWith('missing-executable');
+    const success = ['success', 'fresh-success', 'missing-executable'].includes(scenario);
     const area = join(root, scenario),
       installed = join(area, 'installed path'),
       state = join(area, 'user state');
     await mkdir(join(state, 'updates/download-test'), { recursive: true });
     await writeFile(join(state, 'user-data.json'), 'untouched match and settings');
     const previousDigest = fresh ? null : await payload(installed, '1.11.6', binary);
+    if (missing) await rm(join(installed, 'Mizar.exe'));
     if (scenario === 'fresh-success') await mkdir(installed); // Existing empty selection.
     if (scenario === 'success') {
       const readOnly = await run([
@@ -531,7 +536,11 @@ public class UpdateFixture {
     await cp(nextPath, join(stage, 'new-payload'), { recursive: true });
     await writeFile(
       join(stage, 'mode.txt'),
-      fresh ? scenario : success || scenario === 'recovery-blocked' ? 'success' : scenario,
+      fresh || missing
+        ? scenario
+        : success || scenario === 'recovery-blocked'
+          ? 'success'
+          : scenario,
     );
     // An actual timing write failure must preserve both a successful commit and
     // the original installer cancellation/rollback, using these existing cases.
@@ -756,6 +765,16 @@ public class UpdateFixture {
       );
     } else {
       let recoveryScript;
+      if (scenario === 'missing-executable-rollback') {
+        recoveryScript = join(stage, 'registration-failure.ps1');
+        const source = (await readFile(script, 'utf8')).replace(/\r\n/g, '\n');
+        const call = '\n  Install-Registration\n';
+        assert.equal(source.split(call).length, 2);
+        await writeFile(
+          recoveryScript,
+          source.replace(call, '\n  throw "update_registration_failed"\n'),
+        );
+      }
       if (scenario === 'recovery-blocked') {
         // Inject a real external file user only after the directory switch.
         // Extraction refusal no longer reaches the rollback branch.
@@ -797,7 +816,9 @@ public class UpdateFixture {
                       ? { MIZAR_UPDATE_TEST_UI: '1', MIZAR_UPDATE_TEST_CWD: installed }
                       : {}),
                   }
-                : {},
+                : recoveryScript
+                  ? { MIZAR_UPDATE_TEST_SCRIPT: recoveryScript }
+                  : {},
       );
       assert.equal(result.code, success || scenario === 'recovery-blocked' ? 0 : 1, result.errors);
       if (timingFault) {
@@ -844,7 +865,10 @@ public class UpdateFixture {
       await readFile(join(state, 'user-data.json'), 'utf8'),
       'untouched match and settings',
     );
-    assert.deepEqual(await readFile(join(installed, 'Mizar.exe')), binary);
+    if (missing && !success) {
+      await assert.rejects(readFile(join(installed, 'Mizar.exe')), { code: 'ENOENT' });
+      assert.equal(report.code, 'update_rolled_back');
+    } else assert.deepEqual(await readFile(join(installed, 'Mizar.exe')), binary);
     assert.equal(await readFile(join(installed, 'user-note.txt'), 'utf8'), 'keep user content');
     if (scenario === 'collision') assert.equal(report.code, 'update_user_file_conflict');
     if (scenario === 'failure')

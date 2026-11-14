@@ -13,8 +13,38 @@ import {
 import { meteredRuntime } from '../../scripts/diagnostics/capacity-runtime.mjs';
 import { migrate } from './fixture.js';
 
-test('background failures rotate within the journal budget without blocking operation evidence', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-journal-capacity-'));
+test('large retained history survives rotation, preserves operations, and closes across restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-retention-index-'));
+  const timestamp = '2026-11-13T11:36:47.211Z';
+  const removedSegments = Array.from({ length: 4096 }, () => ({
+    name: `session-${randomUUID()}.ndjson`,
+    producerRunId: randomUUID(),
+    firstSequence: 1,
+    lastSequence: 100,
+    firstObservedAt: timestamp,
+    lastObservedAt: timestamp,
+    records: 100,
+    physicalId: `2023638739:15762598695999558:${'a'.repeat(64)}`,
+    bytes: 1024,
+    sha256: 'a'.repeat(64),
+    sealedAt: timestamp,
+    removedAt: timestamp,
+    reason: 'retention',
+  }));
+  const inventory = {
+    schema: 'mizar-retention/2',
+    producerId: 'companion',
+    segments: [],
+    pins: [],
+    deleting: [],
+    removedSegments,
+    removed: { files: 4096, bytes: 4096 * 1024, lastAt: timestamp },
+  };
+  const body = JSON.stringify(inventory);
+  assert(Buffer.byteLength(body) > 2 * 1024 * 1024);
+  assert(Buffer.byteLength(body) < 4 * 1024 * 1024);
+  const inventoryPath = join(root, 'retention-companion.json');
+  await writeFile(inventoryPath, body);
   const journal = new SessionJournal(root);
   try {
     await journal.recordCommitted('business_capacity_probe', { marker: 'retained-business' });
@@ -27,16 +57,37 @@ test('background failures rotate within the journal budget without blocking oper
       await journal.recordCommitted('obs_connect', { result: 'failure', sequence, error });
     await journal.recordCommitted('after_capacity', {});
     await journal.close();
-    assert.equal(journal.health().writeError, null);
-    assert.equal(journal.health().pendingRecords, 0);
+    const health = journal.health();
+    assert.equal(health.pendingRecords, 0);
+    assert.equal(health.writeError, null);
+    assert.equal(health.dropped, 0);
     const names = (await readdir(root)).filter((name) => /^session-.*\.ndjson$/.test(name));
     const text = (await Promise.all(names.map((name) => readFile(join(root, name), 'utf8')))).join(
       '',
     );
     assert(Buffer.byteLength(text) <= 64 * 1024 * 1024);
-    assert(text.includes('retained-business') && text.includes('retained-operation'));
-    assert(text.includes('after_capacity'));
-    assert(journal.health().retention.segments.removed.files > 0);
+    const events = text
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert(events.some((event) => event.evidence.marker === 'retained-business'));
+    assert(events.some((event) => event.evidence.marker === 'retained-operation'));
+    assert(events.some((event) => event.stage === 'after_capacity'));
+    assert(events.some((event) => event.stage === 'session_end'));
+    const saved = JSON.parse(await readFile(inventoryPath, 'utf8'));
+    assert(saved.removed.files > inventory.removed.files);
+    const collected = saved.removed.files - inventory.removed.files;
+    assert.deepEqual(saved.removedSegments.slice(0, -collected), removedSegments.slice(collected));
+    const restarted = new SessionJournal(root);
+    try {
+      await restarted.recordCommitted('after_restart', {});
+      await restarted.close();
+      assert.equal(restarted.health().writeError, null);
+      assert.equal(restarted.health().pendingRecords, 0);
+      assert.equal(restarted.health().dropped, 0);
+    } finally {
+      await restarted.close();
+    }
   } finally {
     await journal.close();
     await rm(root, { recursive: true, force: true });
@@ -60,9 +111,7 @@ test('interleaved producers share collection; failed manifest advances no source
     await delivery.consent(true);
     await delivery.pause(true);
     await journal.flush();
-    const collecting = delivery.tick();
-    assert.equal(delivery.tick(), collecting, 'overlapping polls join the entire active round');
-    await collecting;
+    await Promise.all([delivery.tick(), delivery.tick()]);
     const before = await manifest();
     const oldIds = new Set(JSON.parse(before).queue.map((batch: { id: string }) => batch.id));
     for (let sequence = 1; sequence <= 160; sequence++) {

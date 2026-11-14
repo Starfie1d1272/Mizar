@@ -46,6 +46,8 @@ export interface ObsRpc {
   managedInputIdentity?(name: string): Promise<{ uuid: string; kind: string } | null>;
   observeManagedResources?(): Promise<boolean>;
   prepareManagedCollection?(allowChange: boolean, writer: ObsRpc): Promise<void>;
+  activateManagedCollection?(): Promise<void>;
+  restoreManagedCollection?(): Promise<void>;
   managedResourcesDrift?(): Promise<boolean>;
   managedResourceConflicts?(): Promise<readonly string[]>;
   normalizeManagedResources?(
@@ -67,6 +69,8 @@ export interface ObsRpc {
 export class ObsExitSafetyError extends Error {}
 
 export interface ObsSceneSwitchOptions {
+  /** Reassert the prepared collection after an external OBS change during production. */
+  readonly reconcileCollection?: boolean;
   readonly transition: ProgramTransition;
   readonly onStarted?: () => void;
   readonly onCompleted?: () => void;

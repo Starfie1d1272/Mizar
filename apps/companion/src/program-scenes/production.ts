@@ -34,6 +34,7 @@ export type ProductionDependencies = {
         ObsAdapter,
         | 'settleAutomatic'
         | 'restoreVideo'
+        | 'restoreProgram'
         | 'pauseAutomatic'
         | 'resumeAutomatic'
         | 'startCommentaryRecovery'
@@ -183,6 +184,7 @@ export function createProduction(options: ProductionDependencies) {
       }
       if (!valid()) throw new Error('OBS 播出状态已变化。');
       await options.obs?.restoreVideo(undefined, valid);
+      await options.obs?.restoreProgram(valid);
       if (!valid()) throw new Error('OBS 播出状态已变化。');
     })()
       .then(
@@ -473,14 +475,17 @@ export function createProduction(options: ProductionDependencies) {
             stage = 'production_video_restore';
             try {
               await options.obs?.restoreVideo();
+              stage = 'production_program_restore';
+              await options.obs?.restoreProgram(controlValid);
             } catch (error) {
+              obsExitState = 'unconfirmed';
               options.warn(
                 {
                   event: 'production',
                   stage,
                   diagnostic: { operationId, error: diagnosticValue(error) },
                 },
-                'OBS video restoration deferred',
+                'OBS restoration deferred',
               );
             }
           }

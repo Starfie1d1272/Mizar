@@ -284,6 +284,10 @@ public static class MizarUpdateWindow {
       if(status=="cancelled" && !String.IsNullOrEmpty(code) && !code.Contains("update_cancelled_before_install") && !code.Contains("update_installer_cancelled") && !code.Contains("update_not_started")) {
         heading.Text="更新未能开始"; detail.Text="原程序未被替换，仍可使用。"; hint.Text="查看日志了解失败原因，处理后可重新更新。";
       }
+      if((status=="restored" || status=="failed" || status=="cancelled") && !String.IsNullOrEmpty(code) && code.Contains("update_previous_executable_missing")) {
+        heading.Text="修复尚未完成"; detail.Text="安装前已缺少主程序，原目录和资料已保留。";
+        hint.Text="请重新运行正式安装包完成修复。"; packageLink.Visible=true;
+      }
       if(firstInstall) {
         window.Text="Mizar 安装结果";
         if(status=="installed") { heading.Text="安装已完成"; detail.Text="程序已核验。"; }
@@ -682,6 +686,7 @@ function Assert-Plan($plan) {
     $plan.contentDigest -notmatch '^[a-f0-9]{64}$' -or ($plan.previousContentDigest -and $plan.previousContentDigest -notmatch '^[a-f0-9]{64}$') -or
     ($plan.coreArchiveSha256 -and $plan.coreArchiveSha256 -notmatch '^[a-f0-9]{64}$') -or
     ($plan.previousInstallationId -and (!$plan.previousContentDigest -or $plan.previousInstallationId -notmatch '^[a-f0-9]{64}$')) -or
+    ($null -ne $plan.previousExecutableMissing -and ($plan.previousExecutableMissing -isnot [bool] -or ($plan.previousExecutableMissing -and !$plan.previousContentDigest))) -or
     $plan.installerBytes -le 0 -or $plan.installerBytes -gt 536870912) { throw 'update_plan_invalid' }
   foreach ($path in @($plan.bundleRoot, $plan.stateRoot, $plan.installer)) { Assert-PlainPath $path }
   $bundle = [IO.Path]::GetFullPath($plan.bundleRoot).TrimEnd('\')
@@ -733,9 +738,14 @@ function Read-PayloadRecords([string]$directory, [string]$digest, [string]$versi
   if ($actual -ne $digest) { throw 'update_payload_digest_invalid' }
   return $records
 }
-function Assert-Payload([string]$directory, [string]$digest, [string]$version = '', [string]$gitSha = '') {
+function Assert-Payload([string]$directory, [string]$digest, [string]$version = '', [string]$gitSha = '', [switch]$MissingExecutable) {
   $records = Read-PayloadRecords $directory $digest $version $gitSha
   foreach ($name in $records.Keys) {
+    if ($MissingExecutable -and $name -eq 'Mizar.exe') {
+      $path = Join-Path $directory $name; Assert-PlainPath $path
+      if (Test-Path -LiteralPath $path) { throw 'update_recovery_target_changed' }
+      continue
+    }
     if ([MizarUpdateFiles]::Hash([IO.Path]::Combine($directory, $name)) -ne $records[$name]) { throw 'update_payload_corrupt' }
   }
 }
@@ -771,7 +781,7 @@ function Test-CompletedRecovery([string]$command) {
     return $true
   }
   if ($old.journal.phase -in @('installing','restored') -and $old.result.status -eq 'restored' -and $old.result.code -eq 'update_rolled_back' -and $previousPlan.previousInstallationId) {
-    Assert-Payload $previousPlan.bundleRoot $previousPlan.previousContentDigest
+    Assert-Payload $previousPlan.bundleRoot $previousPlan.previousContentDigest -MissingExecutable:([bool]$previousPlan.previousExecutableMissing)
     return [MizarUpdateFiles]::Hash((Join-Path $previousPlan.bundleRoot 'installed.flag')) -eq $previousPlan.previousInstallationId
   }
   return !$previousPlan.previousContentDigest -and $old.journal.phase -eq 'restored' -and $old.result.status -eq 'failed' -and $old.result.code -eq 'update_rolled_back' -and !(Test-Path -LiteralPath $previousPlan.bundleRoot)
@@ -895,7 +905,7 @@ function Assert-RecoveryTarget {
 }
 function Assert-PreviousInstance([string]$directory) {
   if (!$plan.previousContentDigest) { Assert-EmptyTarget; return }
-  Assert-Payload $directory $plan.previousContentDigest
+  Assert-Payload $directory $plan.previousContentDigest -MissingExecutable:([bool]$plan.previousExecutableMissing)
   if (!$plan.previousInstallationId -or [MizarUpdateFiles]::Hash((Join-Path $directory 'installed.flag')) -ne $plan.previousInstallationId) { throw 'update_recovery_owner_changed' }
 }
 function Assert-CandidateInstance {
@@ -1323,6 +1333,10 @@ if ($Mode -eq 'Prepare') {
   } else { Assert-EmptyTarget }
   Assert-Installer $plan $plan.installer
   $plan | Add-Member -NotePropertyName previousInstallationId -NotePropertyValue $previousId -Force
+  # A registered legacy installation may have lost its entry point. Freeze that
+  # absence, never accept changed remaining files or an executable appearing later.
+  $previousExecutable = Join-Path $plan.bundleRoot 'Mizar.exe'; Assert-PlainPath $previousExecutable
+  $plan | Add-Member -NotePropertyName previousExecutableMissing -NotePropertyValue ([bool]($plan.previousContentDigest -and !(Test-Path -LiteralPath $previousExecutable))) -Force
   $plan | Add-Member -NotePropertyName recoveryProtocol -NotePropertyValue 'mizar.install-instance.v1' -Force
   $plan | Add-Member -NotePropertyName helperSha256 -NotePropertyValue ([MizarUpdateFiles]::Hash($PSCommandPath)) -Force
   # This extraction contract first ships in 1.11.7. Never pass an unknown
@@ -1482,7 +1496,11 @@ try {
   }
   if ($plan.previousContentDigest) {
     Invoke-UpdatePhase 'preserve-extra-files' { Preserve-ExtraFiles $candidate }
-    Invoke-UpdatePhase 'program-exclusion' { Assert-Stopped; $script:programGate = [MizarUpdateFiles]::ExcludeProgram((Join-Path $plan.bundleRoot 'Mizar.exe')) }
+    Invoke-UpdatePhase 'program-exclusion' {
+      Assert-Stopped
+      if ($plan.previousExecutableMissing) { Assert-PreviousInstance $plan.bundleRoot }
+      else { $script:programGate = [MizarUpdateFiles]::ExcludeProgram((Join-Path $plan.bundleRoot 'Mizar.exe')) }
+    }
   } else { Assert-Stopped; Assert-EmptyTarget }
   if (!(Start-UpdateMutation)) { throw 'update_cancelled_before_install' }
   Recovery-Registration $true
@@ -1619,6 +1637,7 @@ if ($plan.previousContentDigest -and $status -eq 'recovery-required' -and $scrip
   try { Assert-PreviousInstance (Previous-Directory); $canRestore = $true } catch { Record-UpdateActivity 'backup_unavailable' $_.ToString() }
 }
 if ($script:updateWindowAvailable) {
+  if ($plan.previousExecutableMissing -and $status -in @('restored','failed','cancelled')) { $code += ' / update_previous_executable_missing' }
   [MizarUpdateWindow]::Complete($status, $code, $false, $canRestore)
   if ($launchFailed -and $script:startupConfirmed) { [MizarUpdateWindow]::CleanupFailed() }
   elseif ($launchFailed) { [MizarUpdateWindow]::LaunchFailed() }

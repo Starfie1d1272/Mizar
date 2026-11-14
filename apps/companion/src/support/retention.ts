@@ -136,7 +136,7 @@ export class ProducerRetention {
   private async save() {
     if (Buffer.byteLength(JSON.stringify(this.state)) > META_LIMIT)
       throw new Error('retention_metadata_budget');
-    await atomicJson(join(this.root, this.name), this.state);
+    await atomicJson(join(this.root, this.name), this.state, META_LIMIT);
   }
   async initialize(now = Date.now()) {
     if (this.ready) return;
@@ -474,7 +474,7 @@ export class IncidentPinCoordinator {
   private ready = false;
   constructor(private readonly root: string) {}
   private async save() {
-    await atomicJson(join(this.root, 'incident-pins.json'), this.state);
+    await atomicJson(join(this.root, 'incident-pins.json'), this.state, META_LIMIT);
   }
   private async initialize() {
     if (this.ready) return;
