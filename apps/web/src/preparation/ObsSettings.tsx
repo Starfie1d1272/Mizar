@@ -14,6 +14,7 @@ import { useLocalRead } from './client';
 
 export function ObsSettings() {
   const obs = useObsStatus();
+  const versionFinding = obs?.findings.find((item) => item.code.startsWith('obs_version_'));
   const program = useLocalRead<ProgramSceneState>('/local/v1/program-scenes', 3000);
   const evidence = obs?.programEvidence;
   const programIssue =
@@ -328,6 +329,18 @@ export function ObsSettings() {
             </div>
           ) : (
             <>
+              {versionFinding ? (
+                <StatusBanner tone="warning">
+                  {versionFinding.message}
+                  {versionFinding.code === 'obs_version_unsupported' ? (
+                    <p>
+                      <a href="https://obsproject.com/download" target="_blank" rel="noreferrer">
+                        OBS 官方下载
+                      </a>
+                    </p>
+                  ) : null}
+                </StatusBanner>
+              ) : null}
               <div className="obs-settings-program">
                 <span>当前节目</span>
                 <strong>{obs.currentScene ?? '待确认'}</strong>
@@ -340,23 +353,26 @@ export function ObsSettings() {
               </div>
               {obs?.connection === 'connected' ? (
                 <>
-                  <ObsCaptureGuidance
-                    expanded
-                    diagnostic={obs.captureDiagnostic}
-                    busy={busy || preparing}
-                    onCheck={() =>
-                      void action(async () => {
-                        await obsCommand('check');
-                        setMessage('已重新检测，请核对当前提示与 OBS 实际画面。');
-                      })
-                    }
-                  />
-                  {obs.sceneAligned === false ? (
+                  {!versionFinding ? (
+                    <ObsCaptureGuidance
+                      expanded
+                      diagnostic={obs.captureDiagnostic}
+                      busy={busy || preparing}
+                      onCheck={() =>
+                        void action(async () => {
+                          await obsCommand('check');
+                          setMessage('已重新检测，请核对当前提示与 OBS 实际画面。');
+                        })
+                      }
+                    />
+                  ) : null}
+                  {!versionFinding && obs.sceneAligned === false ? (
                     <StatusBanner tone="warning">
                       OBS 当前节目尚未对齐。制作期间 Mizar 会自动恢复所选场景；若持续异常，请检查
                       OBS 连接。
                     </StatusBanner>
-                  ) : evidence?.state === 'measured' &&
+                  ) : !versionFinding &&
+                    evidence?.state === 'measured' &&
                     evidence.capture?.targetAvailable === false ? (
                     <StatusBanner tone="warning">
                       捕获目标已不可选。请确认 CS2 已打开，再在 OBS 核对目标窗口。
@@ -426,7 +442,10 @@ export function ObsSettings() {
                       </>
                     ) : null}
                   </details>
-                  {preparing || outputUnknown || (programIssue && !obs.findings.length) ? null : (
+                  {versionFinding ||
+                  preparing ||
+                  outputUnknown ||
+                  (programIssue && !obs.findings.length) ? null : (
                     <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
                       {(obs.streaming || obs.recording) && obs.findings.length > 0
                         ? 'OBS 正在输出，当前配置问题请在停止推流与录制后处理。'
@@ -450,7 +469,7 @@ export function ObsSettings() {
                                         'Mizar 配置检查通过，请核对实际音画。')}
                     </StatusBanner>
                   )}
-                  {sceneRepairNeeded && !sceneRepairBlocked && !preparing ? (
+                  {sceneRepairNeeded && !versionFinding && !sceneRepairBlocked && !preparing ? (
                     <Button
                       variant="primary"
                       loading={busy || preparing}
