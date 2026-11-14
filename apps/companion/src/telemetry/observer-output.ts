@@ -9,7 +9,7 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
   stream: Readable,
   manager: ObserverSourceManager<R>,
   signal?: AbortSignal,
-): Promise<{ status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number }> {
+): Promise<{ status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number; error?: unknown }> {
   let pending = Buffer.alloc(0);
   let parsedRecords = 0;
   const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -50,9 +50,9 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
     if (signal?.aborted) return { status: 'cancelled', parsedRecords };
     if (pending.length) throw new Error('Observer truncated record');
     return { status: 'ended', parsedRecords };
-  } catch {
+  } catch (error) {
     stream.destroy();
-    return { status: signal?.aborted ? 'cancelled' : 'failed', parsedRecords };
+    return { status: signal?.aborted ? 'cancelled' : 'failed', parsedRecords, error };
   } finally {
     signal?.removeEventListener('abort', abort);
     manager.disconnectObserver(signal?.aborted ? 'cancelled' : 'failed');

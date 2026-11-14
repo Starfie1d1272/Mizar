@@ -37,11 +37,22 @@ export interface ObserverAttemptEvidence {
   readonly code: number | null;
   readonly signal: string | null;
   readonly spawnCode?: string | undefined;
+  readonly error?: unknown;
   readonly errnoCode?: string | undefined;
   readonly ready: boolean;
   readonly startupTimedOut: boolean;
   readonly cancelled: boolean;
-  readonly stdout: { status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number };
+  readonly stdout: {
+    status: 'ended' | 'cancelled' | 'failed';
+    parsedRecords: number;
+    error?: unknown;
+  };
+  readonly stderr?: {
+    text: string;
+    observedBytes: number;
+    retainedBytes: number;
+    truncated: boolean;
+  };
   readonly report: 'received' | 'missing' | 'invalid' | 'over-budget';
   readonly reason?: string | undefined;
   /** Credential-redacted component reason for local diagnosis; not a public error code. */
@@ -129,7 +140,7 @@ function terminalEvidence(bytes: Buffer, overflow: boolean, password: string) {
         report: 'received' as const,
         detail:
           typeof row.reason === 'string'
-            ? String(diagnosticValue(row.reason, '', new Set(), [password])).slice(0, 4096)
+            ? String(diagnosticValue(row.reason, '', new Set(), [password]))
             : undefined,
         phase:
           typeof row.phase === 'string' &&
@@ -291,6 +302,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   );
   const attemptId = randomUUID();
   let spawnCode: string | undefined;
+  let processError: unknown;
   let exitSignal: string | null = null;
   let ready = false;
   let startupTimedOut = false;
@@ -310,6 +322,7 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   let stoppingRequested = false;
   const exit = new Promise<number | null>((resolve) => {
     child.once('error', (error: NodeJS.ErrnoException) => {
+      processError = error;
       spawnCode = ['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC', 'ENOMEM', 'EAGAIN'].includes(
         error.code ?? '',
       )
@@ -324,25 +337,23 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       resolve(code);
     });
   });
-  // Only the credential-redacted structured terminal report is retained.
+  // Keep pre-report interpreter failures too. Budget exhaustion must not erase
+  // the retained prefix or masquerade as an empty diagnostic stream.
   let stderr = Buffer.alloc(0);
-  let stderrOverflow = false;
+  let stderrBytes = 0;
   child.stderr.on('data', (chunk: Buffer) => {
-    if (stderrOverflow) return;
-    if (stderr.length + chunk.length > 64 * 1024) {
-      stderr.fill(0);
-      stderr = Buffer.alloc(0);
-      stderrOverflow = true;
-      return;
-    }
-    const next = Buffer.concat([stderr, chunk]);
+    stderrBytes += chunk.length;
+    const remaining = 64 * 1024 - stderr.length;
+    if (remaining <= 0) return;
+    const next = Buffer.concat([stderr, chunk.subarray(0, remaining)]);
     stderr.fill(0);
     stderr = next;
   });
   const configuration = Buffer.from(
     JSON.stringify({ endpoint: options.endpoint, password: options.password }) + '\n',
   );
-  child.stdin.on('error', () => {
+  child.stdin.on('error', (error) => {
+    processError = error;
     configuration.fill(0);
     inputFailed = true;
     child.stdout.destroy();
@@ -356,7 +367,18 @@ function startObserverAttempt<R extends GameEventSourceRole>(
   const closed = Promise.all([exit, reading]).then(([code, output]) => {
     unsubscribe();
     clearTimeout(startupTimer);
+    const stderrOverflow = stderrBytes > stderr.length;
     const report = terminalEvidence(stderr, stderrOverflow, options.password);
+    let stderrText = stderr.toString('utf8');
+    // A bounded prefix may end inside a credential; do not expose that fragment.
+    if (stderrOverflow && options.password) {
+      for (let length = options.password.length; length > 0; length--) {
+        if (stderrText.endsWith(options.password.slice(0, length))) {
+          stderrText = stderrText.slice(0, -length) + '[redacted-partial]';
+          break;
+        }
+      }
+    }
     const reason = 'reason' in report ? report.reason : undefined;
     const stage = spawnCode
       ? 'spawn'
@@ -400,10 +422,19 @@ function startObserverAttempt<R extends GameEventSourceRole>(
       code,
       signal: exitSignal,
       ...(spawnCode ? { spawnCode } : {}),
+      ...(processError === undefined
+        ? {}
+        : { error: diagnosticValue(processError, '', new Set(), [options.password]) }),
       ready,
       startupTimedOut,
       cancelled: stoppingRequested,
-      stdout: output,
+      stdout: diagnosticValue(output, '', new Set(), [options.password]) as typeof output,
+      stderr: {
+        text: String(diagnosticValue(stderrText, '', new Set(), [options.password])),
+        observedBytes: stderrBytes,
+        retainedBytes: stderr.length,
+        truncated: stderrOverflow,
+      },
       finalizationFailures: report.report === 'received' ? report.finalizationFailures : [],
     };
     stderr.fill(0);

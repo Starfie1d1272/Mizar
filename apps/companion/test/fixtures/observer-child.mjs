@@ -50,8 +50,12 @@ for await (const text of inputLines) {
     });
   const earlyFailures = {
     '127.0.0.25:27020': validReport(
-      'ordered-parser-error: unsupported serializer test_field; password=' + input.password,
+      'ordered-parser-error: unsupported serializer test_field; ' +
+        'context '.repeat(700) +
+        'root-cause-at-end; password=' +
+        input.password,
     ),
+    '127.0.0.26:27020': 'interpreter-failure-prefix\n' + 'x'.repeat(64 * 1024) + input.password,
     '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
     '127.0.0.12:27020': 'configuration-boundary',
     '127.0.0.13:27020':
@@ -103,6 +107,13 @@ for await (const text of inputLines) {
   };
   if (Object.hasOwn(earlyFailures, input.endpoint)) {
     process.stderr.write(earlyFailures[input.endpoint]);
+    process.exitCode = 1;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
+  if (input.endpoint === '127.0.0.27:27020') {
+    process.stdout.write('invalid observer JSON\n');
     process.exitCode = 1;
     inputLines.close();
     process.stdin.destroy();
