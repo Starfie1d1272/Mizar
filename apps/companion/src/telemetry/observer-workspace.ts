@@ -231,6 +231,7 @@ export class WorkspaceObserver {
       } catch (error) {
         const cancelled = this.closing || intent !== this.intent || !current();
         this.terminal = {
+          error: diagnosticValue(error, '', new Set(), [password]),
           attemptId: randomUUID(),
           attemptCount: 0,
           stage: cancelled

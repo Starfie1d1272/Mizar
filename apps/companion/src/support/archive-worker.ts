@@ -41,9 +41,8 @@ const ENTRY_MAX = 2 * 1024 * 1024;
 const EXPANDED_MAX = 256 * 1024 * 1024;
 const FINAL_METADATA_RESERVE = 3 * ENTRY_MAX;
 const timestamp = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
-const sensitive =
-  /authorization|cookie|password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket/i;
-function redact(value: unknown, key = ''): unknown {
+/** Collection scope is separate from credential redaction. Keep the producer's field semantics. */
+function excludeChat(value: unknown): unknown {
   const record = object(value);
   if (
     ['program_all_chat', 'program_all_chat_reset'].includes(String(record.kind ?? record.stage))
@@ -73,57 +72,30 @@ function redact(value: unknown, key = ''): unknown {
               'sourceInterval',
             ].includes(name),
           )
-          .map(([name, item]) => [name, redact(item, name)]),
+          .map(([name, item]) => [name, excludeChat(item)]),
       ),
       evidence: { excluded: 'raw-chat-body', scope: 'identity and source interval only' },
       coverage: { excluded: ['raw-chat-body'], unknown: [] },
     };
   }
-  if (sensitive.test(key)) return '[redacted]';
   if (typeof value === 'string') {
     if (/^\s*[{[]/.test(value)) {
       try {
-        return JSON.stringify(redact(JSON.parse(value)));
+        return JSON.stringify(excludeChat(JSON.parse(value)));
       } catch {
         /* Plain text remains evidence. */
       }
     }
-    return value
-      .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (text) => {
-        try {
-          const url = new URL(text);
-          if (url.username || url.password) {
-            url.username = '[redacted]';
-            url.password = '';
-          }
-          for (const name of [...url.searchParams.keys()])
-            if (/password|token|secret|credential|key|code|auth/i.test(name))
-              url.searchParams.set(name, '[redacted]');
-          if (/^rtmps?:$/.test(url.protocol)) {
-            const parts = url.pathname.split('/');
-            if (parts.length > 2) {
-              parts[parts.length - 1] = '[redacted]';
-              url.pathname = parts.join('/');
-            }
-          }
-          return url.toString();
-        } catch {
-          return text;
-        }
-      })
-      .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 [redacted]')
-      .replace(
-        /((?:password|passwd|token|secret|credential|api[_-]?key|stream[_-]?key|ticket)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&?#]+)/gi,
-        '$1[redacted]',
-      );
+    return value;
   }
-  if (Array.isArray(value)) return value.map((item) => redact(item));
+  if (Array.isArray(value)) return value.map(excludeChat);
   if (value !== null && typeof value === 'object')
     return Object.fromEntries(
-      Object.entries(record).map(([name, item]) => [name, redact(item, name)]),
+      Object.entries(record).map(([name, item]) => [name, excludeChat(item)]),
     );
   return value;
 }
+const redact = (value: unknown) => diagnosticValue(excludeChat(value));
 class OutputFailure extends Error {}
 /** Synchronous, bounded work in one finite-lifetime worker; descriptors are pinned by the owner. */
 export function runArchiveWorker(
@@ -577,7 +549,9 @@ export function runArchiveWorker(
             refs.push(id);
         }
         const { detail: ignored, ...header } = event;
+        const { records: ignoredRecords, ...context } = detail;
         void ignored;
+        void ignoredRecords;
         return emit(
           {
             ...header,
@@ -585,6 +559,7 @@ export function runArchiveWorker(
             stage: 'console_carrier_reference',
             sourceInterval: { from: null, to: null },
             evidence: {
+              ...context,
               eventRefs: refs,
               rangeExcludedChildren: detail.records.length - refs.length,
             },
@@ -643,6 +618,16 @@ export function runArchiveWorker(
     }
     if (!variant) {
       uniqueEvents++;
+      const stderr = object(object(event.evidence).stderr);
+      if (event.kind === 'observer_attempt_terminal' && stderr.truncated === true)
+        gaps.push({
+          source,
+          eventId: id,
+          reason: 'observer_stderr_budget',
+          observedBytes: stderr.observedBytes,
+          retainedBytes: stderr.retainedBytes,
+          scope: 'redacted stderr prefix retained; remaining bytes were not collected',
+        });
       const occurrences = event.occurrences ?? object(event.coverage).occurrences;
       aggregatedOccurrences +=
         typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
