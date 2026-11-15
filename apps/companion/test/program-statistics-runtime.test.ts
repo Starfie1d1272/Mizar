@@ -86,6 +86,8 @@ describe('program statistics integration', () => {
     const projected = projectSeries(planned, progress)!;
     expect(projected.currentMapOrder).toBe(2);
     expect(projected.maps[1]?.mapId).toBe('planned-2');
+    expect(projected.score).toEqual({ a: null, b: null });
+    expect(projectSeries(planned, observe('de_ancient'))?.score).toEqual({ a: 0, b: 0 });
     expect(projected.maps[0]).toMatchObject({
       status: 'pending',
       finalScore: null,
