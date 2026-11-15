@@ -141,7 +141,8 @@ export function recordChannelConsumption(
   value.channelSeq = current?.channelSeq ?? null;
   value.cursor = current?.cursor ?? null;
   channels.set(channel, value);
-  if (durationMs >= 50 || gapMs >= 1000 || state === 'protocol-error')
+  // Channel messages are change-driven; an idle receive interval is still recorded above.
+  if (durationMs >= 50 || state === 'protocol-error')
     anomaly({
       time: new Date().toISOString(),
       channel,

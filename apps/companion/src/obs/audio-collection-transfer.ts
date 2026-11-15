@@ -46,7 +46,9 @@ const waitingTarget = completedProbe
   .omit({ name: true })
   .extend({
     revision: z.string().uuid(),
-    phase: z.literal('waiting'),
+    // This file records a deferred selection, not a dispatched audio mutation.
+    // Archive legacy phase metadata unchanged; .switch owns write recovery.
+    phase: z.unknown().optional(),
   })
   .strict();
 const sourceSchema = z

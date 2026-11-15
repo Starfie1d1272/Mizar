@@ -426,7 +426,13 @@ export class RivalHubConnection {
       fetchImpl,
       baseUrl,
       (operation) => this.sourceCommands.run(operation),
-      () => this.releaseLocked(),
+      async () => {
+        this.requireSourceState();
+        await this.retireCurrent('switch');
+        // Persist the old responsibility before replacing credentials. A revoked
+        // credential cannot confirm release and must not prevent reauthorization.
+        await this.cleanup(false);
+      },
       () => {
         this.source = null;
         this.readClient.invalidate();
