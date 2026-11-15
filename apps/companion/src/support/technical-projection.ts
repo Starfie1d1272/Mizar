@@ -121,6 +121,11 @@ type StatusShape = {
 // These are status DTOs owned by the named producers. Never admit arbitrary
 // command results, configuration, geometry, messages, or native session leases.
 const runtimeStatusFields: Readonly<Record<string, StatusShape>> = {
+  preparation_task: {
+    step: 'token',
+    attempt: 'number',
+    details: { code: 'token', intentId: 'token' },
+  },
   gsi_status: {
     observations: 'number',
     result: {

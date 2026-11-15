@@ -1493,10 +1493,24 @@ pub(crate) async fn enter(
                 return Err("试播状态已变化，请重新进入。".into());
             }
             if view.mode != "preparation" {
-                if let Some(task) = snapshot()?.filter(|task| {
-                    task.entered() && !task.game && !task.cancelled() && !task.retire_requested
-                }) {
+                if let Some(task) = snapshot()?
+                    .filter(|task| task.entered() && !task.cancelled() && !task.retire_requested)
+                {
                     if entered(&app, &task.id)? {
+                        if task.game && !task.running {
+                            let game =
+                                crate::cs2_host::preparation_status(app.clone(), task.id.clone())
+                                    .await?;
+                            if preparation_evidence::game_current(&game, &task.id) {
+                                return present_existing(
+                                    &app,
+                                    &preparation_id,
+                                    ticket,
+                                    &expected_url,
+                                    &view,
+                                );
+                            }
+                        }
                         if view.mode == "hidden" {
                             request(
                                 &app,

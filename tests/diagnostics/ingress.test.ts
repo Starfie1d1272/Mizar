@@ -87,6 +87,11 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
   try {
     await delivery.consent(true);
     await journal.recordCommitted('operation_result', { result: 'success' });
+    await journal.recordCommitted('preparation_task', {
+      step: 'game',
+      attempt: 2,
+      details: { code: 'launch_unconfirmed', cause: 'private native failure detail' },
+    });
     await journal.recordCommitted('gsi_status', {
       observations: 2,
       result: {
@@ -178,6 +183,11 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     assert.equal(evidence('cs2_host_status').result.found, true);
     assert.equal(evidence('cs2_host_status').result.layoutAligned, false);
     assert.equal(evidence('camera_host_session').action, 'invalidate');
+    assert.deepEqual(evidence('preparation_task'), {
+      step: 'game',
+      attempt: 2,
+      details: { code: 'launch_unconfirmed' },
+    });
     assert.deepEqual(evidence('observer_assist_state').source, {
       connected: true,
       fresh: false,
@@ -186,6 +196,7 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     assert.equal(evidence('observer_assist_state').lastReset.reason, 'map-changed');
     for (const secret of [
       'private status detail',
+      'private native failure detail',
       'private-path',
       'private-geometry',
       'private-window',
