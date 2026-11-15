@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { DiagnosticDelivery } from '../../apps/companion/src/support/delivery.js';
 import { migrate, runtime } from './fixture.js';
@@ -86,6 +87,41 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
   try {
     await delivery.consent(true);
     await journal.recordCommitted('operation_result', { result: 'success' });
+    await journal.recordCommitted('gsi_status', {
+      observations: 2,
+      result: {
+        detected: true,
+        installed: false,
+        readFailed: false,
+        conflict: true,
+        issues: [{ code: 'endpoint-conflict', message: 'private status detail' }],
+        lastOperation: { code: 'endpoint-conflict', stage: 'checking' },
+        cfgPath: 'private-path',
+      },
+    });
+    await journal.recordCommitted('cs2_host_status', {
+      result: {
+        found: true,
+        managed: false,
+        layoutAligned: false,
+        layoutPending: true,
+        generation: 3,
+        visible: true,
+        geometry: { secret: 'private-geometry' },
+        message: 'private-window',
+      },
+    });
+    await journal.recordCommitted('camera_host_session', {
+      action: 'invalidate',
+      lease: 'private-lease',
+    });
+    await journal.recordCommitted('observer_assist_state', {
+      blocked: 'source-stale',
+      pending: 3,
+      anchors: 0,
+      source: { connected: true, fresh: false, receiveAgeMs: 5000, endpoint: 'private-endpoint' },
+      lastReset: { reason: 'map-changed', atMonotonicMs: 42 },
+    });
     await delivery.tick();
     assert.equal(uploads.length, 1);
     assert.equal(delivery.status().acknowledged, 0);
@@ -128,6 +164,35 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     const object = await (await receiver.getR2Bucket('DIAGNOSTICS_BUCKET')).get(row.object_key);
     assert(object);
     assert.deepEqual(new Uint8Array(await object.arrayBuffer()), uploads[0]!.bytes);
+    const uploaded = JSON.parse(gunzipSync(uploads[0]!.bytes).toString('utf8'));
+    const evidence = (kind: string) =>
+      uploaded.events.find((event: { kind: string }) => event.kind === kind)?.evidence;
+    assert.deepEqual(evidence('gsi_status').result, {
+      detected: true,
+      installed: false,
+      conflict: true,
+      readFailed: false,
+      issues: [{ code: 'endpoint-conflict' }],
+      lastOperation: { code: 'endpoint-conflict', stage: 'checking' },
+    });
+    assert.equal(evidence('cs2_host_status').result.found, true);
+    assert.equal(evidence('cs2_host_status').result.layoutAligned, false);
+    assert.equal(evidence('camera_host_session').action, 'invalidate');
+    assert.deepEqual(evidence('observer_assist_state').source, {
+      connected: true,
+      fresh: false,
+      receiveAgeMs: 5000,
+    });
+    assert.equal(evidence('observer_assist_state').lastReset.reason, 'map-changed');
+    for (const secret of [
+      'private status detail',
+      'private-path',
+      'private-geometry',
+      'private-window',
+      'private-lease',
+      'private-endpoint',
+    ])
+      assert(!JSON.stringify(uploaded).includes(secret));
     await delivery.consent(false);
     await delivery.tick(false);
     assert.equal(delivery.status().deletionPending, 0);

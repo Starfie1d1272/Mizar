@@ -395,13 +395,27 @@ function ensureBinding(
     );
   }
   const candidate = candidates[0]!;
-  if (candidate.mapOrder !== expected.mapOrder) {
+  if (
+    progress.maps.some((map) => map.executionMapEpoch !== null && map.mapOrder > candidate.mapOrder)
+  ) {
     return addIssue(
       { ...progress, currentMapOrder: null, bindingState: 'needs_operator' },
       issue(
         'map_order_exception',
         'error',
-        `实际地图 ${actualMapName} 跳过了下一张计划地图，等待 Operator 明确绑定。`,
+        '实际地图回到更早的计划槽位，等待 Operator 明确绑定。',
+        candidate.mapOrder,
+        observation.mapEpoch,
+      ),
+    );
+  }
+  if (candidate.mapOrder !== expected.mapOrder) {
+    return addIssue(
+      setCurrentMap(progress, candidate.mapOrder, observation.mapEpoch),
+      issue(
+        'map_order_exception',
+        'warning',
+        `已绑定唯一匹配的实际地图 ${actualMapName}；此前地图结果仍缺失，不据此补全系列比分。`,
         candidate.mapOrder,
         observation.mapEpoch,
       ),
