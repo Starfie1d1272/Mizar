@@ -115,6 +115,99 @@ const nestedFields = new Set([
   'system',
 ]);
 const differenceFields = new Set(['missing', 'extra', 'duplicates', 'issues']);
+type StatusShape = {
+  readonly [key: string]: 'boolean' | 'number' | 'token' | StatusShape | readonly [StatusShape];
+};
+// These are status DTOs owned by the named producers. Never admit arbitrary
+// command results, configuration, geometry, messages, or native session leases.
+const runtimeStatusFields: Readonly<Record<string, StatusShape>> = {
+  gsi_status: {
+    observations: 'number',
+    result: {
+      detected: 'boolean',
+      installed: 'boolean',
+      conflict: 'boolean',
+      fileConflict: 'boolean',
+      endpointConflict: 'boolean',
+      readFailed: 'boolean',
+      candidateCount: 'number',
+      conflictCount: 'number',
+      issues: [{ code: 'token' }],
+      lastOperation: { code: 'token', stage: 'token' },
+    },
+  },
+  cs2_host_status: {
+    observations: 'number',
+    result: {
+      found: 'boolean',
+      managed: 'boolean',
+      layoutAligned: 'boolean',
+      generation: 'number',
+      layoutPending: 'boolean',
+      visible: 'boolean',
+    },
+  },
+  camera_host_session: { action: 'token' },
+  observer_assist_state: {
+    blocked: 'token',
+    anchors: 'number',
+    pending: 'number',
+    buffered: 'number',
+    acceptedDeaths: 'number',
+    programDeathChanges: 'number',
+    matchingCandidates: 'number',
+    lastEventReceivedMonotonicMs: 'number',
+    nextDueMonotonicMs: 'number',
+    nextWindowInMs: 'number',
+    source: {
+      state: 'token',
+      lastErrorCode: 'token',
+      connected: 'boolean',
+      generation: 'number',
+      fresh: 'boolean',
+      freshness: 'token',
+      sameMap: 'boolean',
+      mapName: 'token',
+      lastReceiveMonotonicMs: 'number',
+      receiveAgeMs: 'number',
+    },
+    programSource: { generation: 'number', mapEpoch: 'number', receiveSequence: 'number' },
+    lastReset: { reason: 'token', atMonotonicMs: 'number' },
+    calibration: {
+      state: 'token',
+      reason: 'token',
+      effectiveDelayMs: 'number',
+      lastMatchedDeathOffsetMs: 'number',
+      evidenceCount: 'number',
+      evidenceSpreadMs: 'number',
+      lastEvidenceMonotonicMs: 'number',
+    },
+  },
+};
+function statusFields(value: unknown, shape: StatusShape): Record<string, unknown> {
+  const input = object(value);
+  const result: Record<string, unknown> = {};
+  for (const [key, rule] of Object.entries(shape)) {
+    const item = input[key];
+    if (item === null) result[key] = null;
+    else if (rule === 'boolean' && typeof item === 'boolean') result[key] = item;
+    else if (rule === 'number' && typeof item === 'number' && Number.isFinite(item))
+      result[key] = item;
+    else if (rule === 'token' && typeof item === 'string' && /^[\w.:-]{1,160}$/.test(item))
+      result[key] = item;
+    else if (Array.isArray(rule) && Array.isArray(item))
+      result[key] = item.slice(0, 16).map((entry) => statusFields(entry, rule[0]));
+    else if (
+      typeof rule === 'object' &&
+      !Array.isArray(rule) &&
+      item &&
+      typeof item === 'object' &&
+      !Array.isArray(item)
+    )
+      result[key] = statusFields(item, rule as StatusShape);
+  }
+  return result;
+}
 function fields(value: unknown, exclusions: Set<string>, depth = 0): Record<string, unknown> {
   const output: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(object(value))) {
@@ -199,6 +292,8 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
   );
   if (excludedKind) exclusions.add('private-source-kind');
   const evidence = permitted && !excludedKind ? fields(input.evidence, exclusions) : {};
+  if (permitted && !excludedKind && runtimeStatusFields[kind])
+    Object.assign(evidence, statusFields(input.evidence, runtimeStatusFields[kind]));
   // Current business and ControlTask envelopes carry facts below their source metadata.
   // Apply the exact same narrow field policy, never copy the nested body wholesale.
   if (permitted && !excludedKind && (kind === 'business_evidence' || kind === 'task')) {

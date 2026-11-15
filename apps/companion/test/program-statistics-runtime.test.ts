@@ -3,6 +3,10 @@ import type { TelemetryObservation } from '@mizar/core/telemetry';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
 import { createCstvSourceManagers } from '../src/telemetry/cstv-source-manager.js';
+import { readFileSync } from 'node:fs';
+import type { MatchContext } from '@mizar/core/match-context';
+import { createSeriesProgress, syncSeriesProgress } from '@mizar/core/series-progress';
+import { projectSeries } from '@mizar/core/projection';
 
 const ids = Array.from(
   { length: 10 },
@@ -44,6 +48,53 @@ function frame(sequence: number, phase: 'freezetime' | 'live' | 'over'): Telemet
 }
 
 describe('program statistics integration', () => {
+  it('binds a unique later planned map without inventing earlier results', () => {
+    const context: MatchContext = JSON.parse(
+      readFileSync(
+        new URL('../../../packages/protocol/test/fixtures/match-document-v1.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const planned: MatchContext = {
+      ...context,
+      status: 'in_progress',
+      maps: ['de_ancient', 'de_mirage'].map((mapName, index) => ({
+        mapId: `planned-${index + 1}`,
+        mapOrder: index + 1,
+        mapName,
+        pickedByEntryId: null,
+        teamAStartSide: null,
+        scoreA: null,
+        scoreB: null,
+        completedAt: null,
+      })),
+    };
+    const observe = (mapName: string, input = createSeriesProgress(planned)) =>
+      syncSeriesProgress(input, {
+        observation: {
+          sourceGeneration: 0,
+          mapEpoch: 1,
+          mapName,
+          roundNumber: 6,
+          score: { ct: 4, t: 2 },
+          roundWins: [],
+        },
+        events: [],
+        sideProof: null,
+      }).progress;
+    const progress = observe('de_mirage');
+    const projected = projectSeries(planned, progress)!;
+    expect(projected.currentMapOrder).toBe(2);
+    expect(projected.maps[1]?.mapId).toBe('planned-2');
+    expect(projected.maps[0]).toMatchObject({
+      status: 'pending',
+      finalScore: null,
+      winnerEntryId: null,
+    });
+    expect(progress.score).toEqual({ a: 0, b: 0 });
+    expect(observe('de_nuke').currentMapOrder).toBeNull();
+    expect(observe('de_ancient', progress).currentMapOrder).toBeNull();
+  });
   it('publishes a verified round through Core and wire without inventing a GSI sequence', async () => {
     const runtime = createProgramRuntime('verified-round');
     const sources = createCstvSourceManagers({});
