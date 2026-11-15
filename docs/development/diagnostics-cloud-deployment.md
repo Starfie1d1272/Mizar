@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Cloudflare 账户 | `754634a82d628d202a3da6771b5fb348` | 只在此账户操作，不改变套餐或账单设置 |
 | Worker | `mizar-diagnostics` | 部署接收、身份校验、维护检索/读取与定时清理；版本预览和正文日志关闭 |
-| HTTPS 入口 | 客户端固定使用 `https://mizar-diagnostics.duxinyu475.workers.dev` | 接管前核实此账户的子域及 Worker 已启用该入口；保留既有路由，关闭预览 URL，不开通 R2 公共入口 |
+| HTTPS 入口 | 客户端使用 `https://diagnostics.starfie1d.top`；服务器上游为 `https://diagnostics-origin.starfie1d.top` | 国内入口直连维护者服务器，专用上游域名绑定同一 Worker；保留旧 `workers.dev` 供旧客户端及发行管理读取，关闭预览 URL，不开通 R2 公共入口 |
 | R2 Standard | 已准备的私有 `mizar-telemetry` | 绑定唯一桶；正文只写 `v1/` 前缀，读取/撤回/到期清理仅作用于该前缀；添加七天到期规则前先读取并保留已有规则 |
 | D1 | `mizar-telemetry`，ID `e85505ac-5388-471c-abbe-7a4d9e15bde7` | 绑定唯一数据库；创建诊断专用表/索引，不存正文，不修改未知表或其他数据库 |
 | 定时器 | 该 Worker 的 Cron Trigger | 有界分批清理七天正文及过期索引，失败保留待处理状态并重试 |
@@ -26,7 +26,15 @@ Worker 运行时只持有上述 R2/D1 绑定，不持有管理 API Token、R2 S3
 - `IP_HASH_KEY`：对用于短时滥用限流的网络地址生成键，不在诊断索引中保存原始地址。
 - `ADMIN_KEY`：维护检索、有限读取与接收器健康接口；不得进入客户端、公开页面、日志或诊断包。
 
-维护者在安全环境中生成并配置 secret；仓库、PR 和执行记录只记录名称及是否设置，不记录值。客户端使用每安装独立登记证明，不嵌入上述共享密钥。部署不需要 DNS、KV、Durable Objects、Queues、RivalHub、用户电脑或其他生产数据权限。
+维护者在安全环境中生成并配置 secret；仓库、PR 和执行记录只记录名称及是否设置，不记录值。客户端使用每安装独立登记证明，不嵌入上述共享密钥。接收器发行不需要 DNS、KV、Durable Objects、Queues、RivalHub、用户电脑或其他生产数据权限；国内入口的域名和服务器配置由维护者单独管理，不给发行 Token 扩权。
+
+## 国内入口
+
+`diagnostics.starfie1d.top` 的仅 DNS A 记录指向维护者上海服务器 `47.103.131.158`（当前沿用该域已有的泛域名 A 记录，不配置 AAAA）。[Caddy 配置](../../scripts/diagnostics/ingress.caddy)作为独立文件导入 `/etc/caddy/Caddyfile`，由 Caddy 自动管理公开证书，只转发诊断协议路径到同一 Worker 的自定义域 `diagnostics-origin.starfie1d.top`。两段均验证 HTTPS 证书，不固定 Cloudflare IP、不改系统 DNS、不重定向到 `workers.dev`。上游自定义域的 DNS 和证书由 Cloudflare 管理，旧入口保持启用。
+
+入口不缓存或落盘正文、不启用访问日志，拒绝维护接口和其他路径；请求正文限额与接收器的压缩批次上限一致。Caddy 从连接对端覆盖 `X-Mizar-Client-IP`，保留原认证、Origin 和诊断头。接收器仅在 Cloudflare 给出的连接地址是上述服务器且请求位于专用上游域时采用该 IPv4 地址；缺失或非法时拒绝，其余来源忽略转发头。限流仍按客户端当天加盐地址计算，不让所有用户共用代理 IP，也不允许调用者伪造转发头绕过限流。这里只决定限流身份，不能替代安装凭据或维护鉴权。变更服务器出口地址或增加 IPv6 时，须同时审查[接收器入口](../../apps/diagnostics-worker/src/ingress.ts)和 Caddy 配置。
+
+部署先保存原配置，在服务器执行 `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`，通过后无中断 reload。验证国内直连入口、专用上游证书、旧入口保留、维护路径拒绝及其他站点健康；随后用真实客户端执行公开的合成诊断登记、许可、上传持久确认和撤回，不能以一次 HTTP 401 代替收数。验证入口：`pnpm --filter @mizar/companion exec tsx ../../scripts/diagnostics/probe-ingress.mjs --production <报告文件>`，只生成独立合成身份，不读取真实用户记录。客户端积压跨入口重试、R2 原字节、D1 幂等与撤回及限流隔离由 `tests/diagnostics/ingress.test.ts` 验证。
 
 ## 验收与保留的准确含义
 
@@ -73,7 +81,7 @@ Release Promotion 成功完成后，通过 `workflow_run` 触发独立的 Diagno
 仅在这个 Environment 配置：
 
 - Secrets：`DIAGNOSTICS_CLOUDFLARE_API_TOKEN`、既有 `DIAGNOSTICS_ADMIN_KEY`。部署 Token 仅需目标账户的 Workers Scripts 写权限和 D1 读权限；不申请 D1 写、R2 管理、DNS 或账单权限。账户级权限不能声称只限单 Worker，脚本另核对目标。
-- Variables：`DIAGNOSTICS_ENDPOINT` 必须为客户端既有的 `https://mizar-diagnostics.duxinyu475.workers.dev`；`DIAGNOSTICS_BASELINE_VERSION` 为接管时实际全量部署的 Cloudflare 版本 ID；`DIAGNOSTICS_BASELINE_TAG` 为已核实的最低允许客户端正式版本，不猜测旧线上源码。
+- Variables：`DIAGNOSTICS_ENDPOINT` 是发行管理健康读取地址，仍为既有的 `https://mizar-diagnostics.duxinyu475.workers.dev`，与国内客户端入口分开；`DIAGNOSTICS_BASELINE_VERSION` 为接管时实际全量部署的 Cloudflare 版本 ID；`DIAGNOSTICS_BASELINE_TAG` 为已核实的最低允许客户端正式版本，不猜测旧线上源码。
 - `DIAGNOSTICS_CONFIG_SHA256` 与 `DIAGNOSTICS_SCHEMA_SHA256` 为实际配置（包含固定入口、已启用的 workers.dev 与关闭的预览）、SQLite schema 的审查摘要。先冻结安装依赖，在已有安全凭据环境中执行 `node scripts/diagnostics/release.mjs inspect`，只输出版本 ID、摘要和迁移名称。这个只读命令不设置变量、不生成运行时密钥，也不证明真实收数验收已完成。原始配置与凭据不上传为构件。
 
 接管要求已有 `d1_migrations` 记录与源码迁移名称一致，线上 schema 与源码在本地空库生成的 schema、已审摘要都一致。此前手工初始化但没有迁移记录时，先独立核实实际 schema 并按已审迁移流程登记；自动同步不创建迁移账本、不执行 `0001`，也不把未知表删掉来凑齐摘要。后续新增迁移必须先独立审查兼容性、只应用尚未应用的增量，并核验更新基线；本实现遇到待迁移或 schema 漂移明确阻断，不自动执行数据库写入。
