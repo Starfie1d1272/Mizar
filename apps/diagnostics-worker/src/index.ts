@@ -10,6 +10,7 @@ import {
   type DiagnosticUploadPermit,
 } from '@mizar/protocol/diagnostics-upload';
 import { DIAGNOSTIC_CONSENT_REVISION } from '@mizar/protocol/version';
+import { diagnosticClientIp } from './ingress.js';
 /** Private diagnostic ingestion. Bodies are already redacted/compressed by the opted-in client.
  * Only authorized new event/2 batches need bounded inflation to verify their index. */
 export interface Env {
@@ -1192,7 +1193,7 @@ export async function handle(request: Request, env: Env, now = Date.now()): Prom
       return json({ error: 'maintenance_storage_unconfirmed' }, 503);
     }
   }
-  const ip = request.headers.get('cf-connecting-ip');
+  const ip = diagnosticClientIp(request);
   if (!ip) return json({ error: 'missing_edge_identity' }, 403);
   let stage: DiagnosticReceiverStage = 'edge_limit';
   try {

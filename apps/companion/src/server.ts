@@ -226,7 +226,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   const diagnosticsEndpoint =
     process.env.MIZAR_DIAGNOSTICS_ENDPOINT ??
     (productInstance !== undefined && !qualificationMode
-      ? 'https://mizar-diagnostics.duxinyu475.workers.dev'
+      ? 'https://diagnostics.starfie1d.top'
       : undefined);
   const rehearsalCandidates = [
     resolve(process.cwd(), 'fixtures/epl-s24/rehearsal.generated.json'),
