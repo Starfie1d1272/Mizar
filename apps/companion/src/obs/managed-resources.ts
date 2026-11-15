@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   OBS_CAPTURE_INPUT,
   OBS_COLLECTION,
@@ -69,19 +70,34 @@ export class ManagedObsResources {
   private async save(
     registry: Registry,
     returnTo: 'preserve' | 'replace' = 'preserve',
+    expectedIdentity = registry.collectionIdentity,
   ): Promise<void> {
     const task = this.queue.then(async () => {
       const all = await this.load();
       const previous = all.find((item) => item.endpoint === registry.endpoint);
-      if (previous && previous.collectionIdentity !== registry.collectionIdentity) throw conflict();
-      registry.roles = { ...previous?.roles, ...registry.roles };
+      if (previous && previous.collectionIdentity !== expectedIdentity) throw conflict();
+      if (previous?.collectionIdentity === registry.collectionIdentity)
+        registry.roles = { ...previous.roles, ...registry.roles };
       if (returnTo === 'preserve') registry.returnTo = previous?.returnTo;
       const next = all.filter((item) => item.endpoint !== registry.endpoint);
       next.push(structuredClone(registry));
       await mkdir(dirname(this.path), { recursive: true });
       const temp = `${this.path}.${randomUUID()}.tmp`;
-      await writeFile(temp, JSON.stringify(next), { mode: 0o600 });
-      await rename(temp, this.path);
+      await writeFile(temp, JSON.stringify(next), { flag: 'wx', mode: 0o600, flush: true });
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rename(temp, this.path);
+          break;
+        } catch (error) {
+          if (
+            process.platform !== 'win32' ||
+            attempt >= 4 ||
+            !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')
+          )
+            throw error;
+          await delay(25 * (attempt + 1));
+        }
+      }
     });
     this.queue = task.catch(() => undefined);
     await task;
@@ -156,14 +172,30 @@ export class ManagedObsResources {
       registry = (await this.load()).find((item) => item.endpoint === identityEndpoint);
       await assertNoVideoOutput(raw);
       const collection = await raw.call('GetSceneCollectionList');
-      if (typeof collection.currentSceneCollectionName !== 'string') throw conflict();
-      const exists =
-        Array.isArray(collection.sceneCollections) &&
-        collection.sceneCollections.includes(OBS_COLLECTION);
+      if (
+        typeof collection.currentSceneCollectionName !== 'string' ||
+        !Array.isArray(collection.sceneCollections) ||
+        !collection.sceneCollections.every((name) => typeof name === 'string')
+      )
+        throw conflict();
+      const exists = collection.sceneCollections.includes(OBS_COLLECTION);
       if (!allowChange && collection.currentSceneCollectionName !== OBS_COLLECTION)
         throw conflict();
       let switchedFrom: string | undefined;
       try {
+        if (registry && !exists && allowChange && (!registry.creating || registry.creationSent)) {
+          const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+          if (marker && marker !== registry.instance) throw conflict();
+          const previousIdentity = registry.collectionIdentity;
+          registry = {
+            ...registry,
+            collectionIdentity: randomUUID(),
+            roles: {},
+            creating: true,
+            creationSent: false,
+          };
+          await this.save(registry, 'preserve', previousIdentity);
+        }
         if (!registry) {
           if (exists) throw conflict();
           const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
@@ -187,6 +219,54 @@ export class ManagedObsResources {
             sceneUuid: scene.currentProgramSceneUuid,
           };
           await this.save(registry, 'replace');
+        }
+        if (exists && collection.currentSceneCollectionName !== OBS_COLLECTION) {
+          await assertNoVideoOutput(writer);
+          await dispatch(
+            'SetCurrentSceneCollection',
+            { sceneCollectionName: OBS_COLLECTION },
+            () => {
+              switchedFrom = collection.currentSceneCollectionName as string;
+            },
+          );
+        }
+        if (registry.creating && registry.creationSent && exists) {
+          if (!(await active())) throw conflict();
+          const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
+          if (marker && marker !== registry.instance) throw conflict();
+          const { inputs, scenes } = await inventory();
+          // A failed atomic rename retains the post-create UUID receipt in its
+          // temporary file. Recover only the same reserved creation and live graph.
+          const prefix = `${basename(this.path)}.`;
+          let receipt: Registry | undefined;
+          for (const name of await readdir(dirname(this.path))) {
+            if (
+              !name.startsWith(prefix) ||
+              !name.endsWith('.tmp') ||
+              !z.string().uuid().safeParse(name.slice(prefix.length, -4)).success
+            )
+              continue;
+            let candidates: Registry[];
+            try {
+              candidates = z
+                .array(registrySchema)
+                .parse(JSON.parse(await readFile(join(dirname(this.path), name), 'utf8')));
+            } catch {
+              continue;
+            }
+            receipt = candidates.find(
+              (item) =>
+                item.endpoint === registry!.endpoint &&
+                item.instance === registry!.instance &&
+                item.collectionIdentity === registry!.collectionIdentity &&
+                !item.creating &&
+                hasRegisteredIdentity(item, inputs, scenes),
+            );
+            if (receipt) break;
+          }
+          if (!receipt) throw conflict();
+          registry = receipt;
+          await this.save(registry);
         }
         if (registry.creating) {
           if (registry.creationSent || exists) throw conflict();
@@ -218,19 +298,7 @@ export class ManagedObsResources {
           registry.creating = false;
           registry.creationSent = false;
           await this.save(registry);
-        } else {
-          if (!exists) throw conflict();
-          if (collection.currentSceneCollectionName !== OBS_COLLECTION) {
-            await assertNoVideoOutput(writer);
-            await dispatch(
-              'SetCurrentSceneCollection',
-              { sceneCollectionName: OBS_COLLECTION },
-              () => {
-                switchedFrom = collection.currentSceneCollectionName as string;
-              },
-            );
-          }
-        }
+        } else if (!exists) throw conflict();
         const marker = (await raw.call('GetPersistentData', markerArgs)).slotValue;
         if (marker !== registry.instance) {
           if (marker || !(await active())) throw conflict();

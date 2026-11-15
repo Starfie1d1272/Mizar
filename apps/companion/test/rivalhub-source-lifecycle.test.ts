@@ -499,16 +499,20 @@ test(`lost idempotent claim survives restart and ambiguous status`, async (t) =>
   );
 });
 
-test('replacement pairing keeps the old credential until cleanup succeeds', async (t) => {
+test('replacement pairing preserves pending old responsibility while accepting new credentials', async (t) => {
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);
   await h.connection.startPairing();
   h.setFail(true);
-  await assert.rejects(h.connection.pollPairing());
-  assert.equal(JSON.parse(await readFile(h.path, 'utf8')).credential, 'old-secret');
-  h.setFail(false);
   assert.equal(await h.connection.pollPairing(), 'authorized');
   assert.equal(JSON.parse(await readFile(h.path, 'utf8')).installationId, 'installation-b');
+  const state = JSON.parse(
+    await readFile(join(h.path, '..', 'rivalhub-source-state.json'), 'utf8'),
+  );
+  assert.equal(state.records[0]?.state, 'release_pending');
+  assert.equal(state.records[0]?.identity.installationId, 'installation-a');
+  assert.equal(state.records[0]?.identity.matchId, h.snapshot.matchId);
+  assert.ok(h.releases.length > 0);
   assert.ok(h.releases.every((item) => item.authorization === 'Bearer old-secret'));
 });
 

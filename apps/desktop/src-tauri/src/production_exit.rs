@@ -703,7 +703,8 @@ pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
         r#"{"action":"disconnect"}"#,
         Instant::now() + Duration::from_secs(2),
     )?;
-    if code != 200 || camera["status"]["held"] != true || camera["status"]["connected"] != false {
+    // held is the operator's automatic/manual choice; disconnect preserves it.
+    if code != 200 || camera["status"]["connected"] != false {
         return Err("旧运镜连接未能隔离，请检查本地服务；执行及停止均未确认。".into());
     }
     Ok(())
