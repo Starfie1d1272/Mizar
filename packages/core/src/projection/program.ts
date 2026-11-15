@@ -354,7 +354,20 @@ function canonicalTeams(
 
 /** Presentation consumes a confirmed conclusion separately from observed map progress. */
 function seriesPresentationScore(context: MatchContext, progress: SeriesProgress) {
-  if (context.status !== 'finished') return progress.score;
+  if (context.status !== 'finished') {
+    const observedOrder = Math.max(
+      progress.currentMapOrder ?? 0,
+      ...progress.maps.filter((map) => map.status === 'completed').map((map) => map.mapOrder),
+    );
+    if (
+      progress.maps.some(
+        (map) =>
+          map.mapOrder < observedOrder && map.finalScore === null && map.status !== 'not_played',
+      )
+    )
+      return { a: null, b: null };
+    return progress.score;
+  }
   if (context.resultDisposition === 'pending' || context.resultDisposition === 'omitted')
     return { a: null, b: null };
   return { a: context.scoreA, b: context.scoreB };
