@@ -249,7 +249,7 @@ Section "-Mizar" SecMain
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
   StrCmp $PreparePayload "1" 0 +2
   StrCpy $2 '$2 -PreparePayload'
-  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner"$2 -NoStatusWindow'
+  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -ReceiptPath "$PLUGINSDIR\handoff.json" -InstallationOwner "$InstallationOwner" -FailurePath "$PLUGINSDIR\handoff-failure.txt"$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 handoff_failed
@@ -259,8 +259,15 @@ Section "-Mizar" SecMain
   Push "handoff-failed"
   Call TraceUpdate
   DetailPrint "$1"
+  StrCpy $2 "unknown"
+  IfFileExists "$PLUGINSDIR\handoff-failure.txt" 0 handoff_failed_code_ready
+  FileOpen $3 "$PLUGINSDIR\handoff-failure.txt" r
+  FileRead $3 $2
+  FileClose $3
+  handoff_failed_code_ready:
   SetErrorLevel 2
-  Abort "旧安装或恢复责任尚未交接。请关闭旧更新窗口和轻量安装器，保留恢复资料后重试完整安装包；不要运行旧恢复脚本覆盖当前程序。"
+  MessageBox MB_OK|MB_ICONSTOP "安装未能开始。$\r$\n$\r$\n原因代码：$2$\r$\n$\r$\nMizar 没有改动任何文件。请关闭所有 Mizar 安装窗口，以及任务栏或通知区域里的轻量安装器，然后重新运行本安装包；仍然失败时重启电脑后再试。"
+  Abort "安装未能开始"
   handoff_ready:
   Push "handoff-ready"
   Call TraceUpdate
@@ -433,13 +440,20 @@ Section "Uninstall"
   StrCpy $2 '$2 -ParentReceiptPath "$HandoffParentReceipt"'
   StrCmp $HandoffBootstrapOwner "" +2
   StrCpy $2 '$2 -ExpectedBootstrap "$HandoffBootstrapOwner"'
-  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId$2 -NoStatusWindow'
+  nsExec::ExecToStack '"$HandoffPowerShell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-handoff.ps1" -Mode Handoff -HandoffTarget "$INSTDIR" -HandoffState "$HandoffStateRoot" -CallerProcessId $HandoffProcessId -FailurePath "$PLUGINSDIR\handoff-failure.txt"$2 -NoStatusWindow'
   Pop $0
   Pop $1
   StrCmp $0 "0" uninstall_handoff_ready
   DetailPrint "$1"
+  StrCpy $2 "unknown"
+  IfFileExists "$PLUGINSDIR\handoff-failure.txt" 0 uninstall_handoff_code_ready
+  FileOpen $3 "$PLUGINSDIR\handoff-failure.txt" r
+  FileRead $3 $2
+  FileClose $3
+  uninstall_handoff_code_ready:
   SetErrorLevel 2
-  Abort "旧恢复责任尚未交接，卸载已停止。请关闭旧更新窗口和安装器，保留恢复资料后重试。"
+  MessageBox MB_OK|MB_ICONSTOP "卸载未能开始。$\r$\n$\r$\n原因代码：$2$\r$\n$\r$\nMizar 没有改动任何文件。请关闭所有 Mizar 安装窗口，以及任务栏或通知区域里的轻量安装器，然后重新运行卸载；仍然失败时重启电脑后再试。"
+  Abort "卸载未能开始"
   uninstall_handoff_ready:
   !include "${REMOVE_FILES}"
   StrCmp $ControlledUpdate "1" preserve_instance_owner
