@@ -15,6 +15,7 @@
   [string]$InstallationOwner,
   [string]$ExpectedBootstrap,
   [long]$BootstrapLease = 0,
+  [string]$FailurePath,
   [switch]$ProbeWriter,
   [switch]$PreparePayload
 )
@@ -499,6 +500,40 @@ function Publish-HandoffRefusal([string]$path, [string]$text) {
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
   }
   [IO.File]::SetAttributes($path, ([IO.File]::GetAttributes($path) -bor [IO.FileAttributes]::ReadOnly))
+}
+function Test-HandoffResidueFailure($failure) {
+  # A standalone Setup or uninstaller is the last-resort repair path. Stale
+  # bookkeeping from a finished or abandoned transaction must not refuse it;
+  # only a live writer, a live process holding the record, or a filesystem
+  # object this run cannot take over stays fatal.
+  $message = if ($failure -is [System.Management.Automation.ErrorRecord]) { $failure.Exception.Message } else { [string]$failure }
+  return $message -notmatch '^(update_transaction_busy|update_handoff_process_active|update_handoff_process_unknown|update_handoff_process_ended|update_handoff_process_changed|update_installer_remaining|update_data_inside_installation|update_reparse_point|update_path_invalid|update_handoff_caller_unknown|update_handoff_arguments_invalid|update_handoff_bootstrap_active|update_handoff_bootstrap_owner_changed|update_handoff_pending_changed|update_handoff_lease_unknown|update_handoff_writer_unknown)$'
+}
+function Retire-StaleUpdateRecords([string]$target, [string]$state) {
+  # Rename, never delete: every original byte stays on disk for later recovery.
+  $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+  $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($root in @($state, (Join-Path $env:LOCALAPPDATA 'Mizar'))) {
+    try { if ($root -and (Test-Path -LiteralPath $root -PathType Container)) { [void]$roots.Add((Handoff-Path $root)) } } catch { }
+  }
+  $installKey = 'HKCU:\Software\Mizar'
+  if (Test-Path -LiteralPath $installKey) {
+    try {
+      $registered = Get-ItemProperty -LiteralPath $installKey
+      if ($registered.StateRoot -and $registered.InstallDir -and (Handoff-Path $registered.InstallDir) -eq $target) { [void]$roots.Add((Handoff-Path $registered.StateRoot)) }
+    } catch { }
+  }
+  $moved = [Collections.Generic.List[string]]::new()
+  foreach ($root in $roots) {
+    if ($root -eq $target -or $root.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+    $updates = Join-Path $root 'updates'
+    if (!(Test-Path -LiteralPath $updates -PathType Container)) { continue }
+    $archive = Join-Path $root ('updates-retired-' + $stamp)
+    if (Test-Path -LiteralPath $archive) { $archive = $archive + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8) }
+    [IO.Directory]::Move($updates, $archive)
+    $moved.Add($archive)
+  }
+  return @($moved)
 }
 function Invoke-LegacyHandoff([string]$target, [string]$state, [string]$currentStage = '', $context = $null) {
   $target = Handoff-Path $target; $state = Handoff-Path $state
@@ -1288,7 +1323,18 @@ if ($Mode -eq 'Handoff') {
     # The NSIS process owns a duplicate until it exits, including its entire
     # marker/payload window. Parent death cannot release this file object early.
     $retainedLease = [MizarUpdateFiles]::RetainLease($context.lease, $CallerProcessId)
-    $root = Invoke-LegacyHandoff $target $HandoffState '' $context
+    $root = $null
+    try { $root = Invoke-LegacyHandoff $target $HandoffState '' $context }
+    catch {
+      # Current updates keep the strict handoff. Standalone install and uninstall
+      # archive unprovable records and continue instead of refusing to run.
+      if ($context -and $context.stage) { throw }
+      if (!(Test-HandoffResidueFailure $_)) { throw }
+      $retired = @(Retire-StaleUpdateRecords $target $HandoffState)
+      if ($retired.Count -eq 0) { throw }
+      [Console]::Error.WriteLine('retired-stale-handoff-records: ' + ($retired -join '; '))
+      $root = Invoke-LegacyHandoff $target $HandoffState '' $context
+    }
     if ($PreparePayload) {
       if (!$context.stage -or $InstallationOwner -ne (Split-Path -Leaf $context.stage)) { throw 'update_handoff_parent_unknown' }
       $binding = Handoff-Plan $context.stage $target $root
@@ -1318,6 +1364,13 @@ if ($Mode -eq 'Handoff') {
       if ($failure.Length -gt 32768) { $failure = $failure.Substring(0,32768) }
       [IO.File]::WriteAllText($logPath, ([DateTime]::UtcNow.ToString('o') + " target=" + $HandoffTarget + " caller=" + $CallerProcessId + "`r`n" + $failure), [Text.UTF8Encoding]::new($false))
     } catch { }
+    if ($FailurePath) {
+      try {
+        $code = ($failure -split "`r?`n")[0]
+        if ($code.Length -gt 120) { $code = $code.Substring(0, 120) }
+        [IO.File]::WriteAllText($FailurePath, $code, [Text.UTF8Encoding]::new($false))
+      } catch { }
+    }
     exit 1
   }
   finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
