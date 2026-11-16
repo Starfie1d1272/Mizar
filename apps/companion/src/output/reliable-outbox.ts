@@ -282,6 +282,11 @@ export class ReliableOutbox {
       try {
         await this.retryPendingCaptures(true);
         return await this.queue.run(async () => {
+          // Release and tail settlement may request the same seal concurrently.
+          // Read its state under the same queue that commits the transition.
+          const coverage = this.captureCoverage(source);
+          if (coverage.state === 'sealed') return true;
+          if (!current || coverage.state === 'unknown') return false;
           const scope = {
             source,
             matchId: source.matchId,
@@ -2233,7 +2238,11 @@ export class ReliableOutbox {
             const parent = [...next, ...retained].find(
               (r) => r.event.idempotencyKey === mapEndedKey,
             );
-            if (!parent || ['rejected', 'expired', 'superseded'].includes(parent.status)) {
+            if (
+              !parent ||
+              ['rejected', 'expired', 'superseded'].includes(parent.status) ||
+              parent.receiverOutcome === 'needs_attention'
+            ) {
               next.push({
                 ...record,
                 status: 'superseded',

@@ -492,6 +492,71 @@ test('source settlement waits for a reliable request already in flight', async (
   assert.equal(await settling, true);
 });
 
+test('concurrent capture seals remain successful after restart', async (t) => {
+  const { outbox, event, restart } = await setup(t);
+  const sample = event('map_started', 'capture');
+  const source = {
+    baseUrl: 'https://example.com',
+    competitionId: sample.competitionId,
+    installationId: 'installation-1',
+    authorityRevision: 1,
+    matchId: sample.matchId,
+    producerInstanceId: sample.cursor.producerInstanceId,
+    liveSessionId: sample.cursor.liveSessionId!,
+  };
+  const reference = outbox.createCaptureReference(sample.cursor);
+  await outbox.armCapture(source, reference);
+  outbox.activateCapture(source, sample.cursor);
+  assert.deepEqual(
+    await Promise.all([
+      outbox.sealCapture(source, sample.cursor),
+      outbox.sealCapture(source, sample.cursor),
+    ]),
+    [true, true],
+  );
+  const restored = await restart();
+  assert.equal(restored.captureCoverage(source).state, 'sealed');
+});
+
+test('a map result requiring attention prevents its snapshot from being sent', async (t) => {
+  const { outbox, event, restart } = await setup(t);
+  const base = event('map_started', 'result');
+  const end = parseReliableEventV1({
+    ...base,
+    kind: 'map_ended',
+    payload: { scoreA: 13, scoreB: 10, scoreCT: 13, scoreT: 10 },
+  });
+  const snapshot = parseReliableEventV1({
+    ...base,
+    kind: 'map_player_snapshot',
+    idempotencyKey: 'snapshot',
+    payload: {
+      mapEndedKey: end.idempotencyKey,
+      players: [
+        { sourcePlayerId: 'player', canonicalPlayerId: null, kills: 1, assists: 0, deaths: 0 },
+      ],
+    },
+  });
+  await outbox.enqueue(end, now);
+  await outbox.enqueue(snapshot, now);
+  const sent: string[] = [];
+  await outbox.flush({
+    now,
+    isCurrent: () => true,
+    sink: {
+      send: async (item) => {
+        sent.push(item.kind);
+        return { status: 'accepted', outcome: 'needs_attention' };
+      },
+    },
+  });
+  assert.deepEqual(sent, ['map_ended']);
+  const restored = await restart();
+  const record = restored.getRecords().find((item) => item.event.idempotencyKey === 'snapshot');
+  assert.equal(record?.status, 'superseded');
+  assert.equal(record?.supersessionReason, 'map_end_unavailable');
+});
+
 test('missing worker reply fails the active owner and later operations report the same uncertainty', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-worker-deadline-'));
   const failures: string[] = [];
