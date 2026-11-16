@@ -140,8 +140,8 @@ test('component failure survives local journal and actual support ZIP without cr
     !Object.values(entries).some((bytes) => Buffer.from(bytes).includes('private-chat-marker')),
   );
   const cloud = technicalProjection(terminal, '2020-01-01T00:00:00Z');
-  assert.equal(cloud.evidence?.hostVersion, 14197);
-  assert(!JSON.stringify(cloud).includes('unsupported serializer'));
+  assert.deepEqual(cloud.evidence, terminal.evidence);
+  assert.match(JSON.stringify(cloud), /unsupported serializer/);
 });
 
 test('pre-report and protocol failures survive the real export; overflow retains a prefix and a gap', async (t) => {

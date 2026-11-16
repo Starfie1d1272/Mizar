@@ -1,5 +1,6 @@
 import { sourceCoversProjection } from './technical-projection.js';
-import { diagnosticValue } from './session-journal.js';
+import { diagnosticEvidence as redact } from './diagnostic-evidence.js';
+import { diagnosticValue } from './diagnostic-value.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
@@ -41,61 +42,6 @@ const ENTRY_MAX = 2 * 1024 * 1024;
 const EXPANDED_MAX = 256 * 1024 * 1024;
 const FINAL_METADATA_RESERVE = 3 * ENTRY_MAX;
 const timestamp = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
-/** Collection scope is separate from credential redaction. Keep the producer's field semantics. */
-function excludeChat(value: unknown): unknown {
-  const record = object(value);
-  if (
-    ['program_all_chat', 'program_all_chat_reset'].includes(String(record.kind ?? record.stage))
-  ) {
-    return {
-      ...Object.fromEntries(
-        Object.entries(record)
-          .filter(([name]) =>
-            [
-              'schema',
-              'eventId',
-              'producerKind',
-              'producerRunId',
-              'sequence',
-              'kind',
-              'stage',
-              'phase',
-              'outcome',
-              'time',
-              'observedAt',
-              'recordedAt',
-              'startupSessionId',
-              'taskId',
-              'operationId',
-              'parentOperationId',
-              'attemptId',
-              'sourceInterval',
-            ].includes(name),
-          )
-          .map(([name, item]) => [name, excludeChat(item)]),
-      ),
-      evidence: { excluded: 'raw-chat-body', scope: 'identity and source interval only' },
-      coverage: { excluded: ['raw-chat-body'], unknown: [] },
-    };
-  }
-  if (typeof value === 'string') {
-    if (/^\s*[{[]/.test(value)) {
-      try {
-        return JSON.stringify(excludeChat(JSON.parse(value)));
-      } catch {
-        /* Plain text remains evidence. */
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) return value.map(excludeChat);
-  if (value !== null && typeof value === 'object')
-    return Object.fromEntries(
-      Object.entries(record).map(([name, item]) => [name, excludeChat(item)]),
-    );
-  return value;
-}
-const redact = (value: unknown) => diagnosticValue(excludeChat(value));
 class OutputFailure extends Error {}
 /** Synchronous, bounded work in one finite-lifetime worker; descriptors are pinned by the owner. */
 export function runArchiveWorker(
@@ -233,7 +179,7 @@ export function runArchiveWorker(
         if (
           event.schema === 'mizar-diagnostic-event/2' &&
           object(event.projection).sourceEventId === id &&
-          object(event.projection).policyVersion === 2 &&
+          [2, 3].includes(Number(object(event.projection).policyVersion)) &&
           hasTuple
         ) {
           const prefix = 'C:' + key + ':' + tuple + ':';
