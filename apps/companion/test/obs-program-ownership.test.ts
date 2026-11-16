@@ -159,7 +159,7 @@ it('reports unsupported or unknown OBS versions and blocks preparation before co
   cleanups.push(() => adapter.close());
   for (const [version, code] of [
     ['30.2.3', 'obs_version_unsupported'],
-    ['32.1.0', 'obs_version_unsupported'],
+    ['31.1.0', 'obs_version_unsupported'],
     ['33.0.0-beta1', 'obs_version_unsupported'],
     ['34.0.0', 'obs_version_unsupported'],
     [undefined, 'obs_version_unknown'],
@@ -206,9 +206,9 @@ it('rechecks after an OBS upgrade, prepares video on the supported major, and pe
   f.state.version = '30.2.3';
   expect((await adapter.status()).findings).toContainEqual({
     code: 'obs_version_unsupported',
-    message: expect.stringContaining('OBS 33'),
+    message: expect.stringContaining('OBS 32'),
   });
-  f.state.version = '33.1.0';
+  f.state.version = '32.2.2';
   expect(await adapter.check()).toEqual([
     { code: 'collection_missing', message: expect.any(String) },
   ]);

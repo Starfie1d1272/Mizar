@@ -1452,7 +1452,9 @@ export class DiagnosticDelivery {
                   events,
                 }),
               );
-              compressed = Buffer.from(stampDiagnosticGzip(await compress(raw), this.now()));
+              compressed = Buffer.from(
+                stampDiagnosticGzip(await compress(raw, { level: 9 }), this.now()),
+              );
               if (
                 raw.length <= DELIVERY_LIMITS.expandedBytes &&
                 compressed.length <= DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES

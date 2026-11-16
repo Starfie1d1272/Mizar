@@ -4,6 +4,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { setTimeout as delay } from 'node:timers/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { SupportExports } from '../../apps/companion/src/support/export-job.js';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import { DiagnosticDelivery } from '../../apps/companion/src/support/delivery.js';
 import { migrate, runtime } from './fixture.js';
@@ -90,7 +95,10 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     await journal.recordCommitted('preparation_task', {
       step: 'game',
       attempt: 2,
-      details: { code: 'launch_unconfirmed', cause: 'private native failure detail' },
+      details: {
+        code: 'launch_unconfirmed',
+        cause: 'CreateProcess failed: 文件不存在; token=ingress-test-secret',
+      },
     });
     await journal.recordCommitted('gsi_status', {
       observations: 2,
@@ -118,7 +126,8 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     });
     await journal.recordCommitted('camera_host_session', {
       action: 'invalidate',
-      lease: 'private-lease',
+      lease: { token: 'private-lease' },
+      nested: { kind: 'program_all_chat', evidence: { text: 'private-chat-marker' } },
     });
     await journal.recordCommitted('observer_assist_state', {
       blocked: 'source-stale',
@@ -177,8 +186,9 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
       installed: false,
       conflict: true,
       readFailed: false,
-      issues: [{ code: 'endpoint-conflict' }],
+      issues: [{ code: 'endpoint-conflict', message: 'private status detail' }],
       lastOperation: { code: 'endpoint-conflict', stage: 'checking' },
+      cfgPath: 'private-path',
     });
     assert.equal(evidence('cs2_host_status').result.found, true);
     assert.equal(evidence('cs2_host_status').result.layoutAligned, false);
@@ -186,24 +196,51 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     assert.deepEqual(evidence('preparation_task'), {
       step: 'game',
       attempt: 2,
-      details: { code: 'launch_unconfirmed' },
+      details: {
+        code: 'launch_unconfirmed',
+        cause: 'CreateProcess failed: 文件不存在; token=[redacted]',
+      },
     });
     assert.deepEqual(evidence('observer_assist_state').source, {
       connected: true,
       fresh: false,
       receiveAgeMs: 5000,
+      endpoint: 'private-endpoint',
     });
     assert.equal(evidence('observer_assist_state').lastReset.reason, 'map-changed');
-    for (const secret of [
-      'private status detail',
-      'private native failure detail',
-      'private-path',
-      'private-geometry',
-      'private-window',
-      'private-lease',
-      'private-endpoint',
-    ])
-      assert(!JSON.stringify(uploaded).includes(secret));
+    assert(!JSON.stringify(uploaded).includes('ingress-test-secret'));
+    assert(!JSON.stringify(uploaded).includes('private-lease'));
+    assert(!JSON.stringify(uploaded).includes('private-chat-marker'));
+    const exports = new SupportExports(client, () => [journal.exportParticipant()]);
+    const job = await exports.begin({}, {});
+    try {
+      const deadline = Date.now() + 15_000;
+      while (!exports.status(job.exportId)?.settled && Date.now() < deadline) await delay(20);
+      assert.equal(exports.status(job.exportId)?.phase, 'ready');
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          fileURLToPath(
+            new URL('../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+          ),
+          join(exports.directory, job.exportId, 'part-1.zip'),
+        ],
+        { maxBuffer: 4 * 1024 * 1024 },
+      );
+      const exported = stdout
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      for (const event of uploaded.events) {
+        const canonical = exported.find(
+          (entry) => entry.eventId === event.eventId && !entry.projection,
+        );
+        assert(canonical, `Missing exported source: ${event.kind}`);
+        assert.deepEqual(event.evidence, canonical.evidence, event.kind);
+      }
+    } finally {
+      await exports.cancel(job.exportId);
+    }
     await delivery.consent(false);
     await delivery.tick(false);
     assert.equal(delivery.status().deletionPending, 0);

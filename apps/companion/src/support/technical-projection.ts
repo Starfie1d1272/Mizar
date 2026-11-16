@@ -1,272 +1,8 @@
-/** Cloud is a deliberately narrower projection, never a redacted copy of local evidence. */
+import { diagnosticEvidence } from './diagnostic-evidence.js';
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-const scalarFields = new Set([
-  'name',
-  'code',
-  'reason',
-  'stopReason',
-  'expected',
-  'linkedMatchId',
-  'snapshotAvailable',
-  'outputBlockedReason',
-  'sourceBlockedCode',
-  'snapshotMatchId',
-  'identity',
-  'telemetryFresh',
-  'contextFresh',
-  'canonicalTeams',
-  'lineupComplete',
-  'observedLineupReady',
-  'stage',
-  'phase',
-  'result',
-  'status',
-  'state',
-  'operation',
-  'failureKind',
-  'matchId',
-  'competitionId',
-  'mapId',
-  'mapName',
-  'mapEpoch',
-  'liveSessionId',
-  'producerInstanceId',
-  'sourceGeneration',
-  'runtimeSeq',
-  'receiveSequence',
-  'contextRevision',
-  'httpStatus',
-  'attempts',
-  'durationMs',
-  'elapsedMs',
-  'latencyMs',
-  'queueBytes',
-  'pendingBytes',
-  'pendingRecords',
-  'dropped',
-  'writeFailures',
-  'occurrences',
-  'count',
-  'firstObservedAt',
-  'lastObservedAt',
-  'time',
-  'observedAt',
-  'recordedAt',
-  'taskId',
-  'operationId',
-  'attemptId',
-  'parentOperationId',
-  'trigger',
-  'connected',
-  'available',
-  'accepted',
-  'confirmed',
-  'acknowledged',
-  'requested',
-  'received',
-  'sent',
-  'bytes',
-  'anomalyCount',
-  'windowMs',
-  'p50',
-  'p95',
-  'p99',
-  'min',
-  'max',
-  'mean',
-  'total',
-  'omittedSamples',
-  'droppedFrames',
-  'sequence',
-  'hostVersion',
-  'nativeBootCode',
-  'steamInitResult',
-  'remoteEndReason',
-  'rss',
-  'heapTotal',
-  'heapUsed',
-  'external',
-  'arrayBuffers',
-  'privateBytes',
-  'workingSetBytes',
-  'commitBytes',
-  'commitLimitBytes',
-  'physicalTotalBytes',
-  'physicalAvailableBytes',
-  'exitCode',
-  'failureReason',
-]);
-const nestedFields = new Set([
-  'error',
-  'cause',
-  'diagnostic',
-  'syncHealth',
-  'correlation',
-  'coverage',
-  'timing',
-  'metrics',
-  'frames',
-  'longTasks',
-  'memory',
-  'host',
-  'system',
-]);
-const differenceFields = new Set(['missing', 'extra', 'duplicates', 'issues']);
-type StatusShape = {
-  readonly [key: string]: 'boolean' | 'number' | 'token' | StatusShape | readonly [StatusShape];
-};
-// These are status DTOs owned by the named producers. Never admit arbitrary
-// command results, configuration, geometry, messages, or native session leases.
-const runtimeStatusFields: Readonly<Record<string, StatusShape>> = {
-  preparation_task: {
-    step: 'token',
-    attempt: 'number',
-    details: { code: 'token', intentId: 'token' },
-  },
-  gsi_status: {
-    observations: 'number',
-    result: {
-      detected: 'boolean',
-      installed: 'boolean',
-      conflict: 'boolean',
-      fileConflict: 'boolean',
-      endpointConflict: 'boolean',
-      readFailed: 'boolean',
-      candidateCount: 'number',
-      conflictCount: 'number',
-      issues: [{ code: 'token' }],
-      lastOperation: { code: 'token', stage: 'token' },
-    },
-  },
-  cs2_host_status: {
-    observations: 'number',
-    result: {
-      found: 'boolean',
-      managed: 'boolean',
-      layoutAligned: 'boolean',
-      generation: 'number',
-      layoutPending: 'boolean',
-      visible: 'boolean',
-    },
-  },
-  camera_host_session: { action: 'token' },
-  observer_assist_state: {
-    blocked: 'token',
-    anchors: 'number',
-    pending: 'number',
-    buffered: 'number',
-    acceptedDeaths: 'number',
-    programDeathChanges: 'number',
-    matchingCandidates: 'number',
-    lastEventReceivedMonotonicMs: 'number',
-    nextDueMonotonicMs: 'number',
-    nextWindowInMs: 'number',
-    source: {
-      state: 'token',
-      lastErrorCode: 'token',
-      connected: 'boolean',
-      generation: 'number',
-      fresh: 'boolean',
-      freshness: 'token',
-      sameMap: 'boolean',
-      mapName: 'token',
-      lastReceiveMonotonicMs: 'number',
-      receiveAgeMs: 'number',
-    },
-    programSource: { generation: 'number', mapEpoch: 'number', receiveSequence: 'number' },
-    lastReset: { reason: 'token', atMonotonicMs: 'number' },
-    calibration: {
-      state: 'token',
-      reason: 'token',
-      effectiveDelayMs: 'number',
-      lastMatchedDeathOffsetMs: 'number',
-      evidenceCount: 'number',
-      evidenceSpreadMs: 'number',
-      lastEvidenceMonotonicMs: 'number',
-    },
-  },
-};
-function statusFields(value: unknown, shape: StatusShape): Record<string, unknown> {
-  const input = object(value);
-  const result: Record<string, unknown> = {};
-  for (const [key, rule] of Object.entries(shape)) {
-    const item = input[key];
-    if (item === null) result[key] = null;
-    else if (rule === 'boolean' && typeof item === 'boolean') result[key] = item;
-    else if (rule === 'number' && typeof item === 'number' && Number.isFinite(item))
-      result[key] = item;
-    else if (rule === 'token' && typeof item === 'string' && /^[\w.:-]{1,160}$/.test(item))
-      result[key] = item;
-    else if (Array.isArray(rule) && Array.isArray(item))
-      result[key] = item.slice(0, 16).map((entry) => statusFields(entry, rule[0]));
-    else if (
-      typeof rule === 'object' &&
-      !Array.isArray(rule) &&
-      item &&
-      typeof item === 'object' &&
-      !Array.isArray(item)
-    )
-      result[key] = statusFields(item, rule as StatusShape);
-  }
-  return result;
-}
-function fields(value: unknown, exclusions: Set<string>, depth = 0): Record<string, unknown> {
-  const output: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(object(value))) {
-    if (
-      typeof item === 'string' &&
-      ((key === 'eventKind' &&
-        [
-          'match_started',
-          'map_started',
-          'map_ended',
-          'map_player_snapshot',
-          'series_ended',
-          'source_generation_changed',
-          'map_epoch_changed',
-          'identity_mismatch',
-          'lineup_mismatch',
-        ].includes(item)) ||
-        (key === 'dispositionReason' && item === 'boundary_unconfirmed_result') ||
-        (key === 'supersessionReason' &&
-          [
-            'rejected_start_result',
-            'boundary_unconfirmed_start',
-            'map_end_unavailable',
-            'current_scope_failed',
-            'scope_superseded',
-          ].includes(item)))
-    ) {
-      output[key] = item;
-    } else if (
-      scalarFields.has(key) &&
-      (item === null ||
-        typeof item === 'boolean' ||
-        (typeof item === 'number' && Number.isFinite(item)) ||
-        (typeof item === 'string' && item.length <= 160 && /^[\w.:/+-]*$/.test(item)))
-    ) {
-      output[key] = item;
-    } else if (differenceFields.has(key) && Array.isArray(item)) {
-      output[key] = item
-        .filter((value) => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,96}$/.test(value))
-        .slice(0, 64);
-      if ((output[key] as unknown[]).length !== item.length)
-        exclusions.add('difference-list-bounded');
-    } else if (
-      nestedFields.has(key) &&
-      depth < 3 &&
-      item &&
-      typeof item === 'object' &&
-      !Array.isArray(item)
-    ) {
-      output[key] = fields(item, exclusions, depth + 1);
-    } else exclusions.add('unclassified-or-private-field');
-  }
-  return output;
-}
 export function technicalProjection(input: Record<string, unknown>, consentAt: string | null) {
   const exclusions = new Set<string>();
   const token = (value: unknown, limit = 160) =>
@@ -292,20 +28,10 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
       (Number.isFinite(intervalFrom) && intervalFrom >= consentTime));
   if (!permitted) exclusions.add('source-before-consent-or-unknown-time');
   const kind = typeof input.kind === 'string' ? input.kind : 'diagnostic_source_excluded';
-  const excludedKind = /chat|roster|lineup_document|obs_native|attachment|support_bundle/i.test(
-    kind,
-  );
-  if (excludedKind) exclusions.add('private-source-kind');
-  const evidence = permitted && !excludedKind ? fields(input.evidence, exclusions) : {};
-  if (permitted && !excludedKind && runtimeStatusFields[kind])
-    Object.assign(evidence, statusFields(input.evidence, runtimeStatusFields[kind]));
-  // Current business and ControlTask envelopes carry facts below their source metadata.
-  // Apply the exact same narrow field policy, never copy the nested body wholesale.
-  if (permitted && !excludedKind && (kind === 'business_evidence' || kind === 'task')) {
-    const nestedEvidence = object(input.evidence).evidence;
-    if (nestedEvidence != null) evidence.evidence = fields(nestedEvidence, exclusions);
-  }
-  const sourceCoverage = object(input.coverage);
+  // Export and upload share the same evidence policy; consent gates transport only.
+  const safe = object(diagnosticEvidence(input));
+  const evidence = permitted ? (safe.evidence ?? null) : null;
+  const sourceCoverage = object(safe.coverage);
   return {
     schema: 'mizar-diagnostic-event/2',
     eventId,
@@ -342,19 +68,27 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
     operationId: token(input.operationId, 96),
     parentOperationId: token(input.parentOperationId, 96),
     attemptId: token(input.attemptId, 96),
-    scope: permitted ? fields(input.scope, exclusions) : null,
+    scope: permitted ? (safe.scope ?? null) : null,
     evidence,
     coverage: {
+      ...object(safe.coverage),
       durability: 'committed',
       occurrences:
         Number.isSafeInteger(sourceCoverage.occurrences) && Number(sourceCoverage.occurrences) > 0
           ? sourceCoverage.occurrences
           : 1,
-      excluded: [...exclusions],
-      unknown: ['local-detail-not-in-technical-projection'],
-      replayCount: 0,
+      excluded: [
+        ...new Set([
+          ...exclusions,
+          ...(Array.isArray(object(safe.coverage).excluded)
+            ? (object(safe.coverage).excluded as string[])
+            : []),
+        ]),
+      ],
+      unknown: Array.isArray(sourceCoverage.unknown) ? sourceCoverage.unknown : [],
+      replayCount: sourceCoverage.replayCount ?? 0,
     },
-    projection: { policyVersion: 2, consentAt, sourceEventId: eventId },
+    projection: { policyVersion: 3, consentAt, sourceEventId: eventId },
     // Wire /1 index compatibility aliases, not a second evidence body.
     time: observedAt,
     stage: kind,
@@ -374,10 +108,11 @@ export function sourceCoversProjection(
   projected: Record<string, unknown>,
 ): boolean {
   const projection = object(projected.projection);
+  if (projection.policyVersion === 3) source = object(diagnosticEvidence(source));
   if (
     source.schema !== 'mizar-diagnostic-event/2' ||
     projected.schema !== source.schema ||
-    projection.policyVersion !== 2 ||
+    ![2, 3].includes(Number(projection.policyVersion)) ||
     projection.sourceEventId !== projected.eventId ||
     source.projection
   )
