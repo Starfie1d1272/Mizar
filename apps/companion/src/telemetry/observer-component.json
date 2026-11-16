@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "sourceSha": "7c026956fe5f44ad347bc3c7c5a48f3e21fb006d",
-  "asset": "cs2-headless-observer-1.1.0-windows-x64-external-node.zip",
-  "sha256": "eaa9f4a8bddca2311648c4658e98b901d9884911407b157a3dfcb5636c8d8e79"
+  "version": "1.1.1",
+  "sourceSha": "b6e3afc244eef43c5aadfb96718fd127ddea33ca",
+  "asset": "cs2-headless-observer-1.1.1-windows-x64-external-node.zip",
+  "sha256": "d4f6814e5591b8b7ceb1c690e3c2cf035c8128b5d0f4ee3c0a3bbf233f8e46ff"
 }
