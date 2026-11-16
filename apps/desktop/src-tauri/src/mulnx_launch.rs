@@ -998,7 +998,15 @@ fn validate_game_identity(status: &Value, result: &Value, executable: &Path) -> 
 
 /// The fixed gateway must be owned by the held game, not just another service on the same port.
 fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), String> {
-    let script = format!("$ErrorActionPreference='Stop'; $owners=@(Get-NetTCPConnection -State Listen -LocalPort {port} | Select-Object -ExpandProperty OwningProcess -Unique); ConvertTo-Json -Compress -InputObject $owners");
+    if gateway_owned(log, port, pid)? {
+        Ok(())
+    } else {
+        Err("MulNX 网关不属于当前受管的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
+    }
+}
+
+fn gateway_owned(log: &DesktopLog, port: u16, pid: u32) -> Result<bool, String> {
+    let script = format!("$ErrorActionPreference='Stop'; try {{ $owners=@(Get-NetTCPConnection -State Listen -LocalPort {port} | Select-Object -ExpandProperty OwningProcess -Unique) }} catch {{ if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*') {{ throw }}; $owners=@() }}; ConvertTo-Json -Compress -InputObject $owners");
     let mut command = Command::new("powershell.exe");
     command
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -1009,7 +1017,9 @@ fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), Str
         .as_array()
         .is_some_and(|owners| owners.len() == 1 && owners[0].as_u64() == Some(pid as u64))
     {
-        Ok(())
+        Ok(true)
+    } else if owners.as_array().is_some_and(|owners| owners.is_empty()) {
+        Ok(false)
     } else {
         log.event(
             "mulnx_gateway_owner",
@@ -1103,7 +1113,9 @@ pub fn stop_managed_for_exit(
         crate::mulnx_stop::verify_absent(&game)?;
         return crate::mulnx_stop::mark_confirmed(log, &identity);
     }
-    verify_gateway_owner(log, 55202, game.pid)?;
+    if !gateway_owned(log, 55202, game.pid)? {
+        return crate::mulnx_stop::verify_absent(&game);
+    }
     crate::mulnx_stop::verify_present(&game)?;
     let proof = crate::mulnx_stop::UnloadProof::open(game.pid)?;
     crate::mulnx_stop::verify_present(&game)?;
