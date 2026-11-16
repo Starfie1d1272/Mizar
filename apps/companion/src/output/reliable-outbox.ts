@@ -1739,8 +1739,11 @@ export class ReliableOutbox {
         }
         if (capture) {
           const interval = this.view.intervals.get(capture.intervalId);
-          if (!interval || interval.committedSequence + 1 !== capture.sequence)
-            throw new Error('capture_sequence_unconfirmed');
+          if (!interval) throw new Error('capture_sequence_unconfirmed:commit:interval_missing');
+          if (interval.committedSequence + 1 !== capture.sequence)
+            throw new Error(
+              `capture_sequence_unconfirmed:commit:expected_${interval.committedSequence + 1}:received_${capture.sequence}`,
+            );
         }
         // Retain legitimate one-shot results while their preceding boundary is unconfirmed.
         // Do not classify a transient write failure as a missing historical fact.

@@ -214,7 +214,7 @@ export interface ObsNativeLogEvent {
   readonly localTime: string;
   readonly occurredAt?: string | null;
   readonly operation?: string | null;
-  readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio';
+  readonly category: 'hook' | 'renderer' | 'window_capture' | 'audio' | 'lifecycle' | 'stream';
   readonly audioLagMs?: number;
   readonly audioBufferMs?: number;
   /** References are local to one evidence collection, and prove name equality only. */
@@ -321,6 +321,36 @@ export function projectObsNativeLogLine(
 ): ObsNativeLogEvent | null {
   const stamp = /^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?):\s+(.*)$/.exec(line);
   if (!stamp) return null;
+  const lifecycle =
+    /^(?:\[obs-websocket\] \[WebSocketServer::Stop\] Server stopped successfully|Freeing OBS context data)$/i.test(
+      stamp[2]!,
+    );
+  const streamStopped = /^\[rtmp stream: '[^']*'\] User stopped the stream$/i.test(stamp[2]!);
+  const streamFailed = /^\[rtmp stream: '[^']*'\] Connection to \S+ failed: (-?\d+)$/i.exec(
+    stamp[2]!,
+  );
+  if (lifecycle || streamStopped || streamFailed)
+    return {
+      localTime: stamp[1]!,
+      category: lifecycle ? 'lifecycle' : 'stream',
+      operation: lifecycle
+        ? 'obs_shutdown'
+        : streamStopped
+          ? 'stream_user_stopped'
+          : 'stream_connection_failed',
+      outcome: streamFailed ? 'failure' : 'stopped',
+      source: null,
+      target: null,
+      message: lifecycle
+        ? 'OBS shutdown'
+        : streamStopped
+          ? 'Stream stopped by user'
+          : 'Stream connection failed',
+      reason: null,
+      code: streamFailed ? nativeErrorCode(streamFailed[1]) : null,
+      codeHex: null,
+      hookVersions: null,
+    };
   // This is an optional scheduling privilege, not a renderer initialization failure.
   if (/^D3D11 GPU priority setup failed \(not admin\?\)$/i.test(stamp[2]!)) return null;
   const lag =
@@ -637,6 +667,38 @@ export interface ObsNativeEvidence {
     lastOmittedLocalTime: string | null;
   }[];
   interpretation: 'read_only_evidence_not_black_screen_root_cause';
+}
+
+/** Limit remote evidence to observed technical events after the active consent. */
+export function obsDisconnectEvidence(evidence: ObsNativeEvidence, consentAt: string) {
+  const since = Date.parse(consentAt);
+  const observed = Date.parse(evidence.observedAt ?? '');
+  return {
+    observedAt: evidence.observedAt,
+    collectionStatus: evidence.collectionStatus,
+    processStatus: evidence.processStatus,
+    processes: evidence.processes,
+    roots: evidence.roots.map(({ location, logs, logsStatus, directoryTruncated }) => ({
+      location,
+      logs: logs.map((log) => ({
+        slot: log.slot,
+        modifiedAt: log.modifiedAt,
+        processAssociation: log.processAssociation,
+        obsVersion: log.obsVersion,
+        timestampStatus: log.timestampStatus,
+        truncated: log.truncated,
+        scan: log.scan,
+        events: log.events.filter((event) => {
+          const time = Date.parse(event.occurredAt ?? '');
+          return log.timestampStatus === 'ordered' && time >= since && time <= observed;
+        }),
+      })),
+      logsStatus,
+      directoryTruncated,
+    })),
+    errors: evidence.errors,
+    exportTruncated: evidence.exportTruncated,
+  };
 }
 export function failedObsNativeEvidence(error: unknown): ObsNativeEvidence {
   return {
