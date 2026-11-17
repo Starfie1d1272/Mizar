@@ -159,7 +159,9 @@ pub(crate) fn control(
         return Ok(unknown("此前游戏实例的帧率记录仍待核对，本次未写入。"));
     }
     if !valid() {
-        return Ok(unknown("游戏状态或控制权限已经变化，本次没有写入。请重新检查游戏。"));
+        return Ok(unknown(
+            "游戏状态或控制权限已经变化，本次没有写入。请重新检查游戏。",
+        ));
     }
     let current = match probe_frame_rate(log, executable) {
         Ok(current) if valid() => current,

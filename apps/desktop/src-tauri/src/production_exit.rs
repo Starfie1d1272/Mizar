@@ -147,14 +147,8 @@ pub fn user_facing_failure(error: &str) -> String {
             "退出资格",
             "本场收尾还没有确认。请重试；仍然失败时导出诊断。",
         ),
-        (
-            "游戏实例",
-            "CS2 状态已经变化。请重新检查游戏后重试。",
-        ),
-        (
-            "本地服务",
-            "Mizar 后台服务连接中断。请重新打开 Mizar。",
-        ),
+        ("游戏实例", "CS2 状态已经变化。请重新检查游戏后重试。"),
+        ("本地服务", "Mizar 后台服务连接中断。请重新打开 Mizar。"),
         (
             "制播服务启动超时",
             "Mizar 后台服务启动超时。请重新打开 Mizar；多次失败请导出诊断。",
@@ -166,9 +160,16 @@ pub fn user_facing_failure(error: &str) -> String {
         }
     }
     let lower = error.to_ascii_lowercase();
-    if ["companion", "host", "ticket", "qualification", "generation", "journal"]
-        .iter()
-        .any(|term| lower.contains(*term))
+    if [
+        "companion",
+        "host",
+        "ticket",
+        "qualification",
+        "generation",
+        "journal",
+    ]
+    .iter()
+    .any(|term| lower.contains(*term))
     {
         return "Mizar 后台服务没有完成操作。请重试；仍然失败时导出诊断。".into();
     }
@@ -488,7 +489,9 @@ pub(crate) fn managed_source_request(
             "failure",
             Some(&format!("status={status}")),
         );
-        return Err("这次结束制作没有完成。请先退出 CS2，再重试；仍然失败时重新打开 Mizar。".into());
+        return Err(
+            "这次结束制作没有完成。请先退出 CS2，再重试；仍然失败时重新打开 Mizar。".into(),
+        );
     }
     Ok(response)
 }

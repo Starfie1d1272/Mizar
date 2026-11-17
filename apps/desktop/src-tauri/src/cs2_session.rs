@@ -173,7 +173,8 @@ impl SessionStore {
         }
         atomic_write(
             &self.root.join("gsi-source-retire.json"),
-            &serde_json::to_vec(record).map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
+            &serde_json::to_vec(record)
+                .map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
         )
     }
 
@@ -248,7 +249,8 @@ impl SessionStore {
         }
         atomic_write(
             &self.root.join("gsi-source-cancel.json"),
-            &serde_json::to_vec(request).map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
+            &serde_json::to_vec(request)
+                .map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
         )
     }
 
@@ -394,7 +396,10 @@ impl SessionStore {
 
     pub(crate) fn verify_gsi_source(&self, journal: &SessionRecord) -> Result<(), String> {
         use sha2::{Digest, Sha256};
-        let source = journal.gsi_source.as_ref().ok_or("游戏配置恢复记录无效。请重新打开 Mizar。")?;
+        let source = journal
+            .gsi_source
+            .as_ref()
+            .ok_or("游戏配置恢复记录无效。请重新打开 Mizar。")?;
         let source_id = source.source_id.as_str();
         let cfg = PathBuf::from(&source.cfg_path);
         let applied_hash = source.applied_hash.as_str();

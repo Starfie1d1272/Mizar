@@ -547,7 +547,9 @@ impl ManagedCs2 {
         let status = self.status()?;
         let journal = self.store.load()?;
         if status.running && status.preparation_id.as_deref() == Some(id) {
-            let journal = journal.as_ref().ok_or("游戏记录不可用。请重新打开工作台。")?;
+            let journal = journal
+                .as_ref()
+                .ok_or("游戏记录不可用。请重新打开工作台。")?;
             self.store.verify_gsi_source(journal)?;
         }
         // Pending/unknown launches and external games are not proof of an ended attempt.
@@ -571,7 +573,10 @@ impl ManagedCs2 {
         let pid = journal.pid().ok_or("游戏身份未确认。")?;
         let created = journal.created().ok_or("游戏身份未确认。")?;
         let executable = journal.executable.as_str().to_owned();
-        let source = journal.gsi_source.as_ref().ok_or("游戏配置恢复没有完成。请重新打开工作台后再试。")?;
+        let source = journal
+            .gsi_source
+            .as_ref()
+            .ok_or("游戏配置恢复没有完成。请重新打开工作台后再试。")?;
         let ticket = source.ticket.clone();
         let source_id = source.source_id.clone();
         if cs2_pids(&self.log)? != vec![pid] {
