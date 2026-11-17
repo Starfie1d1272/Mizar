@@ -886,10 +886,28 @@ fn run_desktop(
                             "failure",
                             Some(&format!("gate task: {error}")),
                         );
+                        // Exiting must never be blocked by cleanup. Keep the
+                        // recovery record and leave after a short, visible grace.
+                        let dialog_host = host.clone();
+                        let dialog_done = done.clone();
                         host.dialog()
-                            .message("退出任务未能开始，请重试并查看运行日志。")
-                            .title("Mizar 退出未完成")
-                            .show(|_| {});
+                            .message(
+                                "退出收尾未能开始。Mizar 将在 5 秒后退出；待恢复记录已保留，下次启动会继续恢复。",
+                            )
+                            .title("Mizar 即将退出")
+                            .show(move |_| {
+                                if !dialog_done.swap(true, Ordering::AcqRel) {
+                                    dialog_host.exit(code.unwrap_or(0));
+                                }
+                            });
+                        let timer_host = host.clone();
+                        let timer_done = done.clone();
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_secs(5));
+                            if !timer_done.swap(true, Ordering::AcqRel) {
+                                timer_host.exit(code.unwrap_or(0));
+                            }
+                        });
                         return;
                     }
                 }
@@ -994,12 +1012,30 @@ fn run_desktop(
                         let _ =
                             workspace_presentation::open_main(host.clone(), Some("/".into()), None);
                     }
+                    // The recovery record is durable, so cleanup failure must not
+                    // hold the operator in Mizar. Show the reason briefly and exit
+                    // anyway; the next launch continues recovery.
+                    let dialog_host = host.clone();
+                    let dialog_done = done.clone();
                     host.dialog()
                         .message(format!(
-                            "退出 Mizar 未完成，待恢复记录仍保留。\n{error}\n请修复后重试退出。"
+                            "退出收尾没有完成，待恢复记录已保留。Mizar 将在 5 秒后退出，下次启动会继续恢复。\n{}",
+                            production_exit::user_facing_failure(&error)
                         ))
-                        .title("Mizar 退出未完成")
-                        .show(|_| {});
+                        .title("Mizar 即将退出")
+                        .show(move |_| {
+                            if !dialog_done.swap(true, Ordering::AcqRel) {
+                                dialog_host.exit(code.unwrap_or(0));
+                            }
+                        });
+                    let timer_host = host.clone();
+                    let timer_done = done.clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(5));
+                        if !timer_done.swap(true, Ordering::AcqRel) {
+                            timer_host.exit(code.unwrap_or(0));
+                        }
+                    });
                     return;
                 }
                 done.store(true, Ordering::Release);

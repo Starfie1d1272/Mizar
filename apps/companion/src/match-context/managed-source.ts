@@ -42,7 +42,7 @@ const sourceRequest = z.discriminatedUnion('action', [
   }),
   z.strictObject({
     action: z.literal('retire'),
-    phase: z.enum(['prepare', 'settle', 'confirm']),
+    phase: z.enum(['prepare', 'settle', 'confirm', 'abort']),
     ticket: z.string().uuid().optional(),
     expectedSourceId: z.string().uuid().optional(),
   }),
@@ -197,20 +197,33 @@ export function registerManagedSourceRoutes(
           (retirement.expectedSourceId ?? retirement.sourceId) !== body.expectedSourceId
         )
           return reply.code(409).send({ error: 'managed_retirement_changed' });
-        const current = source();
-        if (current.generation !== retirement.generation)
-          retirement = {
-            ...retirement,
-            generation: current.generation,
-            sequence: current.lastAccepted?.sequence ?? null,
-            settled: false,
-          };
-        return { ticket: retirement.ticket };
+        const currentSource = active?.sourceId ?? null;
+        if (
+          retirement.productionSession === options.productionSession() &&
+          retirement.sourceId === currentSource
+        ) {
+          const current = source();
+          if (current.generation !== retirement.generation)
+            retirement = {
+              ...retirement,
+              generation: current.generation,
+              sequence: current.lastAccepted?.sequence ?? null,
+              settled: false,
+            };
+          return { ticket: retirement.ticket };
+        }
+        // A failed finish can leave a ticket bound to a previous production
+        // session or source. It can never settle now; replace it rather than
+        // returning a ticket that is guaranteed to conflict forever.
+        retirement = undefined;
       }
       if (body.expectedSourceId && active && active.sourceId !== body.expectedSourceId)
         return reply.code(409).send({ error: 'managed_retirement_changed' });
       if (body.expectedSourceId && pending && pending.sourceId !== body.expectedSourceId)
         return reply.code(409).send({ error: 'managed_retirement_changed' });
+      // Production is ending. A prepared-but-uncommitted source must not become
+      // active after this retirement; otherwise the retirement can never match.
+      if (pending) pending = undefined;
       const current = source();
       retirement = {
         ticket: randomUUID(),
@@ -222,6 +235,14 @@ export function registerManagedSourceRoutes(
         ...(body.expectedSourceId ? { expectedSourceId: body.expectedSourceId } : {}),
       };
       return { ticket: retirement.ticket };
+    }
+    if (body.phase === 'abort') {
+      if (!body.ticket) return reply.code(400).send({ error: 'managed_source_invalid' });
+      if (body.ticket === completedRetirement) return { ok: true };
+      if (retirement && retirement.ticket !== body.ticket)
+        return reply.code(409).send({ error: 'managed_retirement_changed' });
+      retirement = undefined;
+      return { ok: true };
     }
     if (body.ticket && body.ticket === completedRetirement) return { ok: true };
     if (

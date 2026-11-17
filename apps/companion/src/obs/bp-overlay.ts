@@ -34,7 +34,7 @@ export async function setBpCompactVisible(
     throw new Error('请先在 OBS 中选择 「Mizar 制播」场景集合。');
   const scenes = await obs.call('GetSceneList');
   if (visible && scenes.currentProgramSceneName !== sceneName)
-    throw new Error('请先将受管比赛画面切到播出。');
+    throw new Error('请先将比赛画面切到播出。');
   const inputs = objects((await obs.call('GetInputList')).inputs);
   const input = inputs.find((item) => item.inputName === BP_COMPACT_INPUT);
   if (input && input.inputKind !== 'browser_source') throw new Error('紧凑 BP 来源名称冲突。');
@@ -617,10 +617,10 @@ export class BpOverlayOwner {
     const scene = objects(sceneList.scenes).find((item) => item.sceneName === sceneName);
     if (typeof scene?.sceneUuid !== 'string') {
       this.invalidate();
-      throw new Error('无法确认受管比赛场景身份。');
+      throw new Error('无法确认比赛场景身份。');
     }
     if (visible && sceneList.currentProgramSceneName !== sceneName)
-      throw new Error('请先将受管比赛画面切到播出。');
+      throw new Error('请先将比赛画面切到播出。');
     let items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
     const hud = items.filter((item) => item.sourceName === hudName);
     if (visible && this.lease === null) {
@@ -637,7 +637,7 @@ export class BpOverlayOwner {
         typeof input.inputUuid !== 'string' ||
         settings?.url !== new URL('/program', baseUrl).toString()
       )
-        throw new Error('无法确认受管比赛 HUD 身份。');
+        throw new Error('无法确认比赛 HUD 身份。');
       this.lease = {
         sceneUuid: scene.sceneUuid,
         inputUuid: input.inputUuid,

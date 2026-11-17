@@ -113,7 +113,7 @@ pub(crate) fn pulse_camera(
     let result = if valid {
         crate::production_exit::camera_session(log, "pulse", Some(&camera.lease), None)
     } else {
-        Err("受管游戏身份已变化。".into())
+        Err("当前游戏状态已经变化。请重新检查游戏后重试。".into())
     };
     if let Err(error) = result {
         camera.invalidated = true;
@@ -547,7 +547,7 @@ impl ManagedCs2 {
         let status = self.status()?;
         let journal = self.store.load()?;
         if status.running && status.preparation_id.as_deref() == Some(id) {
-            let journal = journal.as_ref().ok_or("受管游戏记录不可用。")?;
+            let journal = journal.as_ref().ok_or("游戏记录不可用。请重新打开工作台。")?;
             self.store.verify_gsi_source(journal)?;
         }
         // Pending/unknown launches and external games are not proof of an ended attempt.
@@ -571,7 +571,7 @@ impl ManagedCs2 {
         let pid = journal.pid().ok_or("游戏身份未确认。")?;
         let created = journal.created().ok_or("游戏身份未确认。")?;
         let executable = journal.executable.as_str().to_owned();
-        let source = journal.gsi_source.as_ref().ok_or("受管来源资格缺失。")?;
+        let source = journal.gsi_source.as_ref().ok_or("游戏配置恢复没有完成。请重新打开工作台后再试。")?;
         let ticket = source.ticket.clone();
         let source_id = source.source_id.clone();
         if cs2_pids(&self.log)? != vec![pid] {
@@ -623,13 +623,13 @@ impl ManagedCs2 {
         }
         let response = result?;
         if response["ok"] != true {
-            return Err("受管游戏来源未能确认。".into());
+            return Err("游戏连接没有确认。请重新打开工作台后再试。".into());
         }
         if !committed {
             journal
                 .gsi_source
                 .as_mut()
-                .ok_or("受管来源资格缺失。")?
+                .ok_or("游戏配置恢复没有完成。请重新打开工作台后再试。")?
                 .committed = true;
             self.store.save(journal)?;
         }
@@ -642,59 +642,80 @@ impl ManagedCs2 {
         };
         let response = crate::production_exit::managed_source_request(&self.log, request)?;
         if response["ok"] != true {
-            return Err("受管来源清理未确认。".into());
+            return Err("游戏配置恢复没有完成。请重试。".into());
         }
         self.store.clear_source_cancel()
     }
 
     fn retry_source_retire(&self) -> Result<(), String> {
-        let Some(mut record) = self.store.pending_source_retire()? else {
+        let Some(record) = self.store.pending_source_retire()? else {
             return Ok(());
         };
         self.confirm_game_stopped()?;
         let source_id = record["sourceId"]
             .as_str()
-            .ok_or("受管来源退出记录无效。")?
+            .ok_or("游戏配置恢复记录无效。请重新打开 Mizar。")?
             .to_owned();
-        let runtime: Value = serde_json::from_slice(
-            &fs::read(self.log.state_root.join("data/runtime.json"))
-                .map_err(|_| "本地服务身份不可用。")?,
-        )
-        .map_err(|_| "本地服务身份不可用。")?;
-        let instance = runtime["instanceId"]
-            .as_str()
-            .ok_or("本地服务身份不可用。")?;
-        let ticket = if record["runtimeInstanceId"].as_str() == Some(instance)
-            && record["ticket"].is_string()
-        {
-            record["ticket"]
-                .as_str()
-                .ok_or("受管来源退出记录无效。")?
-                .to_owned()
-        } else {
-            let response = crate::production_exit::managed_source_request(
+        // A failed finish can leave an old retirement in memory. Preparing a new
+        // one lets the Companion reconcile it against the current session/source;
+        // if the current source is no longer this record's source, discard the
+        // replacement instead of retiring a different game's source.
+        for _ in 0..2 {
+            let (status, prepared) = crate::production_exit::managed_source_request_status(
                 &self.log,
-                json!({"action":"retire","phase":"prepare","expectedSourceId":source_id}),
+                json!({"action":"retire","phase":"prepare"}),
             )?;
-            let ticket = response["ticket"]
-                .as_str()
-                .ok_or("受管来源退出资格无效。")?
-                .to_owned();
-            record["ticket"] = json!(ticket.clone());
-            record["runtimeInstanceId"] = json!(instance);
-            self.store.remember_source_retire(&record)?;
-            ticket
-        };
-        for phase in ["settle", "confirm"] {
-            let response = crate::production_exit::managed_source_request(
-                &self.log,
-                json!({"action":"retire","phase":phase,"ticket":ticket}),
-            )?;
-            if response["ok"] != true {
-                return Err("受管来源退出未确认。".into());
+            if status != 200 {
+                return Err(format!(
+                    "游戏配置恢复没有完成（状态 {status}）。请重试；仍然失败时重新打开 Mizar。"
+                ));
             }
+            let ticket = prepared["ticket"]
+                .as_str()
+                .ok_or("游戏配置恢复没有完成。请重新打开 Mizar。")?
+                .to_owned();
+            if prepared["sourceId"].as_str() != Some(source_id.as_str()) {
+                let (abort_status, _) = crate::production_exit::managed_source_request_status(
+                    &self.log,
+                    json!({"action":"retire","phase":"abort","ticket":ticket}),
+                )?;
+                if abort_status != 200 {
+                    return Err(format!(
+                        "游戏配置恢复没有完成（状态 {abort_status}）。请重试；仍然失败时重新打开 Mizar。"
+                    ));
+                }
+                self.store.clear_source_retire()?;
+                return Ok(());
+            }
+            let mut conflict = false;
+            for phase in ["settle", "confirm"] {
+                let (status, response) = crate::production_exit::managed_source_request_status(
+                    &self.log,
+                    json!({"action":"retire","phase":phase,"ticket":ticket}),
+                )?;
+                if status == 409 {
+                    conflict = true;
+                    break;
+                }
+                if status != 200 || response["ok"] != true {
+                    return Err(format!(
+                        "游戏配置恢复没有完成（状态 {status}）。请重试；仍然失败时重新打开 Mizar。"
+                    ));
+                }
+            }
+            if !conflict {
+                self.store.clear_source_retire()?;
+                return Ok(());
+            }
+            // The source or production session changed between prepare and
+            // settle. Drop this ticket before the bounded retry; the next
+            // prepare reconciles against the current state.
+            let _ = crate::production_exit::managed_source_request_status(
+                &self.log,
+                json!({"action":"retire","phase":"abort","ticket":ticket}),
+            );
         }
-        self.store.clear_source_retire()
+        Err("游戏配置恢复没有完成。请重新打开 Mizar。".into())
     }
 
     pub fn recover(&mut self, confirm_steam_cancelled: bool) -> Result<(), String> {
@@ -841,7 +862,7 @@ impl ManagedCs2 {
             self.message = Some(format!(
                 "{} {}",
                 if value.preserve_settings {
-                    "本次受管设置已恢复，画质与帧率未接管；观战原值仍待恢复。"
+                    "本次由 Mizar 修改的设置已恢复，画质与帧率未接管；观战原值仍待恢复。"
                 } else {
                     "帧率与画质已恢复，观战原值仍待恢复。"
                 },
@@ -872,7 +893,7 @@ impl ManagedCs2 {
         lease: String,
     ) -> Result<(), String> {
         if !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
-            return Err("受管游戏身份已变化，运镜会话未绑定。".into());
+            return Err("游戏状态已经变化，运镜连接没有绑定。请重试。".into());
         }
         *self.camera.lock().map_err(|_| "运镜会话状态不可用。")? = Some(CameraLease {
             process,
@@ -900,7 +921,7 @@ impl ManagedCs2 {
             ));
         }
         let Some((context, process)) = self.console_source()? else {
-            return Ok(unsupported("当前没有可核验的受管游戏，请使用原生设置。"));
+            return Ok(unsupported("当前没有可核验的游戏，请使用原生设置。"));
         };
         let Some((lease, false)) = self.managed_camera_lease() else {
             return Ok(unsupported(
@@ -1350,15 +1371,15 @@ impl ManagedCs2 {
                 Ok((
                     prepared["ticket"]
                         .as_str()
-                        .ok_or("受管来源资格无效。")?
+                        .ok_or("游戏连接没有准备好。请重新打开工作台后再试。")?
                         .to_owned(),
                     prepared["sourceId"]
                         .as_str()
-                        .ok_or("受管来源资格无效。")?
+                        .ok_or("游戏连接没有准备好。请重新打开工作台后再试。")?
                         .to_owned(),
                     prepared["gsiUri"]
                         .as_str()
-                        .ok_or("受管来源资格无效。")?
+                        .ok_or("游戏连接没有准备好。请重新打开工作台后再试。")?
                         .to_owned(),
                 ))
             })();
@@ -1827,7 +1848,7 @@ impl ManagedCs2 {
     /// A restored or absent journal alone does not prove external CS2 has stopped.
     pub fn confirm_game_stopped(&self) -> Result<(), String> {
         if any_cs2_running(&self.log)? {
-            return Err("CS2 仍在运行，本场回收资格未确认。请退出游戏后重试结束游戏。".into());
+            return Err("CS2 仍在运行，本场收尾未确认。请退出游戏后重试结束游戏。".into());
         }
         Ok(())
     }
@@ -1866,7 +1887,7 @@ impl ManagedCs2 {
         let trial_state = trial_status.as_ref().unwrap_or(&unknown_trial);
         if trial_state["active"] == true && trial_state["gameOwnership"] == "external" {
             if self.store.load()?.is_some() || self.store.spectator_pending() {
-                return Err("请先完成受管游戏的配置恢复。".into());
+                return Err("请先完成游戏配置恢复。".into());
             }
             // Read-only migration of an old external Demo marker. No new external
             // session can be created, and this marker never grants game ownership.

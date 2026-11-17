@@ -332,11 +332,11 @@ export function SupportExport() {
                 : code === 'Error: export_cache_lease_unconfirmed'
                   ? '诊断缓存的占用状态无法确认。若有诊断包保存窗口，请完成或取消保存后重试；否则可能是旧清理标记残留，当前不能安全自动移除，请联系维护者恢复缓存。原始日志已保留。'
                   : code.startsWith('export_http_')
-                    ? `本地服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
+                    ? `Mizar 后台服务未能生成诊断包（HTTP ${code.slice(12)}），请稍后重试。`
                     : code === 'invalid_bundle'
                       ? '诊断包内容不完整或超过大小限制，请缩短导出时间范围后重试。'
                       : stage === 'generate'
-                        ? '诊断包生成请求未完成，请检查本地服务连接后重试。'
+                        ? '诊断包生成请求未完成，请检查 Mizar 后台服务连接后重试。'
                         : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {

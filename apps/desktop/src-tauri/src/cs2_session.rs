@@ -148,17 +148,17 @@ impl SessionStore {
         match fs::read(self.root.join("gsi-source-retire.json")) {
             Ok(bytes) if bytes.len() <= 4096 => serde_json::from_slice(&bytes)
                 .map(Some)
-                .map_err(|_| "受管来源退出记录无效。".into()),
-            Ok(_) => Err("受管来源退出记录无效。".into()),
+                .map_err(|_| "游戏配置恢复记录无效。请重新打开 Mizar。".into()),
+            Ok(_) => Err("游戏配置恢复记录无效。请重新打开 Mizar。".into()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err("受管来源退出记录不可读。".into()),
+            Err(_) => Err("游戏配置恢复记录不可读。请重新打开 Mizar。".into()),
         }
     }
 
     pub(crate) fn remember_source_retire(&self, record: &Value) -> Result<(), String> {
         if let Some(previous) = self.pending_source_retire()? {
             if previous["sourceId"] != record["sourceId"] {
-                return Err("已有其他受管来源退出待处理。".into());
+                return Err("已有其他游戏配置恢复待处理。请重新打开 Mizar。".into());
             }
             if previous["ticket"].is_string() {
                 if record["ticket"].is_null() {
@@ -167,13 +167,13 @@ impl SessionStore {
                 if previous["ticket"] != record["ticket"]
                     && previous["runtimeInstanceId"] == record["runtimeInstanceId"]
                 {
-                    return Err("受管来源退出资格已变化。".into());
+                    return Err("游戏配置恢复状态已经变化。请重新打开 Mizar。".into());
                 }
             }
         }
         atomic_write(
             &self.root.join("gsi-source-retire.json"),
-            &serde_json::to_vec(record).map_err(|_| "受管来源退出记录无法保存。")?,
+            &serde_json::to_vec(record).map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
         )
     }
 
@@ -181,7 +181,7 @@ impl SessionStore {
         match fs::remove_file(self.root.join("gsi-source-retire.json")) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err("受管来源退出记录无法移除。".into()),
+            Err(_) => Err("游戏配置恢复记录无法移除。请重新打开 Mizar。".into()),
         }
     }
 
@@ -232,23 +232,23 @@ impl SessionStore {
         match fs::read(self.root.join("gsi-source-cancel.json")) {
             Ok(bytes) if bytes.len() <= 4096 => serde_json::from_slice(&bytes)
                 .map(Some)
-                .map_err(|_| "受管来源清理记录无效。".into()),
-            Ok(_) => Err("受管来源清理记录无效。".into()),
+                .map_err(|_| "游戏配置恢复记录无效。请重新打开 Mizar。".into()),
+            Ok(_) => Err("游戏配置恢复记录无效。请重新打开 Mizar。".into()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err("受管来源清理记录不可读。".into()),
+            Err(_) => Err("游戏配置恢复记录不可读。请重新打开 Mizar。".into()),
         }
     }
 
     pub(crate) fn remember_source_cancel(&self, request: &Value) -> Result<(), String> {
         if let Some(previous) = self.pending_source_cancel()? {
             if previous != *request {
-                return Err("已有受管来源清理待处理。".into());
+                return Err("已有其他游戏配置恢复待处理。请重新打开 Mizar。".into());
             }
             return Ok(());
         }
         atomic_write(
             &self.root.join("gsi-source-cancel.json"),
-            &serde_json::to_vec(request).map_err(|_| "受管来源清理记录无法保存。")?,
+            &serde_json::to_vec(request).map_err(|_| "游戏配置恢复记录无法保存。请重新打开 Mizar。")?,
         )
     }
 
@@ -256,7 +256,7 @@ impl SessionStore {
         match fs::remove_file(self.root.join("gsi-source-cancel.json")) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err("受管来源清理记录无法移除。".into()),
+            Err(_) => Err("游戏配置恢复记录无法移除。请重新打开 Mizar。".into()),
         }
     }
 
@@ -277,7 +277,7 @@ impl SessionStore {
                 .all(|b| b.is_ascii_hexdigit() || b == b'-')
             || uri != format!("http://127.0.0.1:3000/gsi?source={source_id}")
         {
-            return Err("受管游戏来源响应无效。".into());
+            return Err("游戏连接返回了无效结果。请重新打开工作台后再试。".into());
         }
         let state_path = self
             .root
@@ -320,7 +320,7 @@ impl SessionStore {
         }
         let old_uri = "http://127.0.0.1:3000/gsi";
         if text.matches(old_uri).count() != 1 || text.contains("/gsi?source=") {
-            return Err("GSI 配置不支持受管来源，请先恢复。".into());
+            return Err("当前游戏数据配置不支持本次启动。请先恢复游戏设置。".into());
         }
         let applied = text.replacen(old_uri, uri, 1);
         let original_hash = format!("{:x}", Sha256::digest(&original));
@@ -394,7 +394,7 @@ impl SessionStore {
 
     pub(crate) fn verify_gsi_source(&self, journal: &SessionRecord) -> Result<(), String> {
         use sha2::{Digest, Sha256};
-        let source = journal.gsi_source.as_ref().ok_or("受管来源记录无效。")?;
+        let source = journal.gsi_source.as_ref().ok_or("游戏配置恢复记录无效。请重新打开 Mizar。")?;
         let source_id = source.source_id.as_str();
         let cfg = PathBuf::from(&source.cfg_path);
         let applied_hash = source.applied_hash.as_str();
@@ -415,7 +415,7 @@ impl SessionStore {
                 .map_err(|_| "GSI 配置不可读。")?
                 .contains(&format!("http://127.0.0.1:3000/gsi?source={source_id}"))
         {
-            return Err("受管 GSI 配置已变化。".into());
+            return Err("游戏数据配置已经变化。请重新打开 Mizar。".into());
         }
         Ok(())
     }
@@ -1555,7 +1555,7 @@ impl SessionStore {
         // prevent completion of the existing FPS/video transaction.
         let mut warning = self.restore_core_spectator_locked(guard);
         if geometry_yielded {
-            let notice = "窗口设置已被更改，已保留这些新值；其余受管设置已恢复。";
+            let notice = "窗口设置已被更改，已保留这些新值；其余由 Mizar 修改的设置已恢复。";
             warning = Some(match warning {
                 Some(other) => format!("{notice} {other}"),
                 None => notice.into(),

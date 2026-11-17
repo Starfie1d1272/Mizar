@@ -302,7 +302,7 @@ export function DemoTestPanel({ forceExpanded = false }: { forceExpanded?: boole
       {audioWarning ? <StatusBanner tone="warning">{audioWarning}</StatusBanner> : null}
       {message ? <StatusBanner tone="danger">{message}</StatusBanner> : null}
       {shown && !trial?.active && editor.error ? (
-        <StatusBanner tone="warning">画面设置暂不可用，请检查本地服务后重试。</StatusBanner>
+        <StatusBanner tone="warning">画面设置暂不可用，请检查 Mizar 后台服务后重试。</StatusBanner>
       ) : null}
     </Container>
   );

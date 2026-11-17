@@ -752,7 +752,7 @@ async fn prepare_camera(
         }
         preparation_evidence::CameraEvidence::Unconfirmed => {
             update(&id, |t| t.camera = false);
-            return Err("受管游戏或上次运镜准备结果未确认，请完成恢复后重试。".into());
+            return Err("游戏或上次运镜准备结果没有确认，请完成恢复后重试。".into());
         }
         preparation_evidence::CameraEvidence::Prepare => update(&id, |t| t.camera = false),
     }

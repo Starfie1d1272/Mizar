@@ -16,7 +16,7 @@ export function CameraControls({
   const [detailsOpen, setDetailsOpen] = useState(false);
   if (!view || (!setup && !workspace && !view.preset.maps.length))
     return workspace ? (
-      <p className="workspace-camera-empty">运镜状态暂不可用，请检查本地服务。</p>
+      <p className="workspace-camera-empty">运镜状态暂不可用，请检查 Mizar 后台服务。</p>
     ) : null;
   const s = view.status;
   const preparation = s.preparation;

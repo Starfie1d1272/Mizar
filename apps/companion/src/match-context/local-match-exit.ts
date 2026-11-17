@@ -132,7 +132,7 @@ export function registerLocalMatchExitRoutes(
     )
       return reply.code(lifecycleErrors.exitQualificationChanged.status).send({
         ...lifecycleErrors.exitQualificationChanged,
-        message: '比赛或制作状态已变化，退出资格未确认。请通过桌面重新关闭游戏并确认。',
+        message: '比赛或制作状态已变化，本场收尾未确认。请通过桌面重新关闭游戏并确认。',
       });
     if (body.action === 'settle') {
       pending = { ticket: pending.ticket, witness: current!, settled: true };
