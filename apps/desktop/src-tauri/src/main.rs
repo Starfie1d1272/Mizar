@@ -967,7 +967,9 @@ fn run_desktop(
                                 match result {
                                     Err(error) if native_game_finished => {
                                         cleanup_host.state::<DesktopLog>().event(
-                                            "managed_source", "deferred", Some(&error),
+                                            "managed_source",
+                                            "deferred",
+                                            Some(&error),
                                         );
                                         Ok(())
                                     }
@@ -994,7 +996,9 @@ fn run_desktop(
                         // native journal. The update path additionally needs to
                         // ensure it can hand off the program and its resources.
                         cleanup_host.state::<DesktopLog>().event(
-                            "cs2_exit_recovery", "deferred", Some(&error),
+                            "cs2_exit_recovery",
+                            "deferred",
+                            Some(&error),
                         );
                     }
                     updates::recheck(&cleanup_host)
@@ -1191,8 +1195,10 @@ fn main() {
             };
             let root = host_runtime::bundle_root()?;
             let state = startup_log::writable_root(
-                &root, std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
-            ).map_err(|error| error.to_string())?;
+                &root,
+                std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
+            )
+            .map_err(|error| error.to_string())?;
             support_export::save_local_logs(&state, Path::new(destination))
         })();
         if let Err(error) = result {

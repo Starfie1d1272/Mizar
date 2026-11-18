@@ -143,7 +143,9 @@ fn retention_reclaims_ordinary_sealed_segments_in_the_current_run() -> io::Resul
             segment_name: reserve_segment(&directory, "desktop")?,
             document_segment_name: reserve_segment(&directory, "document")?,
             critical_segments: [critical].into_iter().collect(),
-            pin_work: [("in-flight".to_owned(), vec![pinned])].into_iter().collect(),
+            pin_work: [("in-flight".to_owned(), vec![pinned])]
+                .into_iter()
+                .collect(),
             write_poisoned: false,
             retention_issue: None,
         };
@@ -1345,7 +1347,10 @@ impl DesktopLog {
                 });
             }
             Err(TryLockError::Poisoned(_)) => {
-                self.remember_write_failure(stage, &io::Error::other("desktop log lock unavailable"));
+                self.remember_write_failure(
+                    stage,
+                    &io::Error::other("desktop log lock unavailable"),
+                );
                 self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
             }
         }

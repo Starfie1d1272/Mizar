@@ -890,16 +890,26 @@ pub(crate) async fn save_support_bundle(
 pub(crate) async fn save_local_logs(app: tauri::AppHandle) -> Result<bool, String> {
     let root = app.state::<DesktopLog>().state_root.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let name = format!("mizar-local-logs-{}.zip", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-        let Some(destination) = app.dialog().file()
+        let name = format!(
+            "mizar-local-logs-{}.zip",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        let Some(destination) = app
+            .dialog()
+            .file()
             .set_title("保存本机日志")
             .set_file_name(name)
             .add_filter("ZIP 日志包", &["zip"])
-            .blocking_save_file() else { return Ok(false); };
+            .blocking_save_file()
+        else {
+            return Ok(false);
+        };
         let path = destination.into_path().map_err(|_| "保存位置无效。")?;
         support_export::save_local_logs(&root, &path)?;
         Ok(true)
-    }).await.map_err(|_| "本机日志归档任务中断。".to_string())?
+    })
+    .await
+    .map_err(|_| "本机日志归档任务中断。".to_string())?
 }
 
 pub(crate) async fn select_cs2_installation(
