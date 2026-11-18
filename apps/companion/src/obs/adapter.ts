@@ -329,9 +329,11 @@ export class ObsAdapter {
     return this.outputs.outputObservationEpoch();
   }
 
-  async outputStatus(): Promise<ObsOutputsStatus> {
+  async outputStatus(includePreparation = true): Promise<ObsOutputsStatus> {
     const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
-    return { ...outputs, preparation: await this.preparationStatus() };
+    return includePreparation
+      ? { ...outputs, preparation: await this.preparationStatus() }
+      : outputs;
   }
 
   outputCommand(

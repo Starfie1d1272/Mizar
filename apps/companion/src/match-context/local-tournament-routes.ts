@@ -58,7 +58,6 @@ function registerRoutes(
     readonly controller: MatchContextController;
     readonly canReleaseLocalSelection: () => boolean;
     readonly canConfirmLocalExit: () => boolean;
-    readonly withLocalSelectionRelease: (commit: () => Promise<void>) => Promise<boolean>;
     readonly originPolicy: LocalWebOriginPolicy;
   },
 ): void {
@@ -307,11 +306,8 @@ function registerRoutes(
           const revision = controller.getActiveRevision();
           const safe = () =>
             controller.getActiveRevision() === revision && options.canReleaseLocalSelection();
-          const released = await options.withLocalSelectionRelease(async () => {
-            await store.trashMatch(matchId, safe);
-            if (controller.getActiveRevision() === revision) controller.clearActive();
-          });
-          if (!released) throw new Error('local_match_in_use');
+          await store.trashMatch(matchId, safe);
+          if (controller.getActiveRevision() === revision) controller.clearActive();
         }
         return { ok: true };
       } catch (error) {

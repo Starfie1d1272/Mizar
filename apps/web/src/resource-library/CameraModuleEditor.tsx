@@ -8,12 +8,14 @@ export function CameraModuleEditor({
   value,
   onChange,
   onSave,
+  saveLabel = '保存草稿',
   busy,
   sources,
 }: {
   value: CameraModuleV2;
   onChange: (value: CameraModuleV2) => void;
   onSave: () => void;
+  saveLabel?: string;
   busy: boolean;
   sources: CameraSourceRef[];
 }) {
@@ -187,7 +189,7 @@ export function CameraModuleEditor({
       </Button>
       {availableSources.length === 0 && <p>请先导入含运镜来源的资源。</p>}
       <Button variant="primary" disabled={busy} onClick={onSave}>
-        保存草稿
+        {saveLabel}
       </Button>
     </div>
   );

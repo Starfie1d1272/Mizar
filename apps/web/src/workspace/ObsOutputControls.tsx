@@ -48,29 +48,29 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
     confirmedState.active === true &&
     !confirmedState.pending &&
     confirmedState.phase !== 'stopping' &&
-    !pending &&
-    !recovering;
+    !pending[confirmation.output];
   return (
     <>
       <div className="workspace-obs-controls" aria-label="OBS 输出控制">
         {(['stream', 'record'] as const).map((kind) => {
           const state = outputs?.[kind];
+          const commandPending = pending[kind];
           const busy = Boolean(
-            pending ||
-            recovering ||
+            commandPending ||
+            (recovering && state?.active !== true) ||
             state?.pending ||
             state?.phase === 'starting' ||
             state?.phase === 'stopping',
           );
           const preparation = !state?.active && outputs?.preparation;
-          const text = label(kind, state, pending);
+          const text = label(kind, state, commandPending);
           return (
             <Button
               key={kind}
               disabled={busy || Boolean(preparation) || !state || state.active === null}
               aria-label={text}
               loading={Boolean(
-                (pending?.output === kind && pending) ||
+                commandPending ||
                 state?.pending ||
                 state?.phase === 'starting' ||
                 state?.phase === 'stopping',
@@ -100,7 +100,7 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
               ? '游戏画面检查未完成，请重新检查。'
               : '游戏画面检查未完成，请先确认 OBS 直播和录像已停止。')}
           <Button
-            disabled={Boolean(pending) || recovering || !outputsIdle}
+            disabled={Boolean(pending.stream || pending.record) || recovering || !outputsIdle}
             loading={recovering}
             onClick={() => {
               onError('');

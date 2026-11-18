@@ -17,6 +17,7 @@ import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
 import { installerUrl, StableSource } from './source.js';
 
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+const INSTALL_CHECK_FRESHNESS = 60_000;
 const configSchema = z.strictObject({
   automatic: z.boolean().default(true),
   lastAttempt: z.number().nonnegative(),
@@ -50,6 +51,7 @@ export class UpdateManager {
   private phase: UpdatePhase = 'idle';
   private error: string | null = null;
   private candidate: UpdateManifest | null = null;
+  private candidateCheckedAt: number | null = null;
   private ready: z.infer<typeof readySchema> | null = null;
   private downloaded = 0;
   private downloadSource: string | null = null;
@@ -420,6 +422,7 @@ export class UpdateManager {
     }
   }
   private async doCheck(signal: AbortSignal, reason: 'manual' | 'startup' | 'periodic') {
+    this.candidateCheckedAt = null;
     this.operationId = randomUUID();
     this.failureDetails = [];
     this.checkFailure = undefined;
@@ -455,6 +458,7 @@ export class UpdateManager {
       this.config.highestIdentity = identity;
       await this.saveConfig();
       this.candidate = manifest;
+      this.candidateCheckedAt = this.now();
       if (!isCompatible(this.options.version, manifest) || !this.options.installed) {
         this.phase = 'manual';
         return;
@@ -660,8 +664,26 @@ export class UpdateManager {
       throw new Error('update_unavailable');
     this.planning = true;
     try {
-      // Re-authenticate at installation time; a previously downloaded version can be revoked by publication of a newer Stable.
-      await this.check(true);
+      // Only reuse the recent selection validated in this process.
+      const age =
+        this.candidateCheckedAt === null ? Infinity : this.now() - this.candidateCheckedAt;
+      if (
+        !this.candidate ||
+        age < 0 ||
+        age > INSTALL_CHECK_FRESHNESS ||
+        JSON.stringify(this.ready.manifest) !== JSON.stringify(this.candidate)
+      ) {
+        await this.check(true);
+      } else {
+        try {
+          await this.verifyFile(this.ready, AbortSignal.timeout(60_000));
+        } catch (error) {
+          this.failure('cached_download_verify', error);
+          this.phase = 'available';
+          await this.discard();
+          throw error;
+        }
+      }
       if (this.phase !== 'ready' || !this.ready || !this.candidate)
         throw new Error('update_recheck_required', { cause: this.checkFailure });
       const installer = join(this.root, this.ready.directory, this.ready.manifest.installer.name);

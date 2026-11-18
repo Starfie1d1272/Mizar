@@ -10,6 +10,35 @@ const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MANIFEST_LIMIT: u64 = 1024 * 1024;
 const PART_LIMIT: u64 = 18_874_368;
 
+pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(), String> {
+    let logs = state_root.join("logs");
+    if !fs::symlink_metadata(&logs).is_ok_and(|metadata| metadata.is_dir() && plain(&metadata)) {
+        return Err("本机日志目录不可用。".into());
+    }
+    let source = logs.canonicalize()
+        .map_err(|error| format!("无法读取本机日志目录：{error}"))?;
+    let destination = std::path::absolute(destination).map_err(|error| error.to_string())?;
+    let parent = destination.parent().ok_or("日志包保存位置无效。")?.canonicalize()
+        .map_err(|error| format!("无法打开保存目录：{error}"))?;
+    if parent.starts_with(&source) {
+        return Err("请选择日志目录以外的保存位置。".into());
+    }
+    let target = parent.join(destination.file_name().ok_or("日志包文件名无效。")?);
+    if target.exists() {
+        return Err("保存位置已有同名文件，请选择新的文件名。".into());
+    }
+    let output = crate::powershell::background()
+        .env("MIZAR_EXPORT_LOG_SOURCE", crate::powershell::provider_path(&source))
+        .env("MIZAR_EXPORT_LOG_DESTINATION", crate::powershell::provider_path(&target))
+        .args(["-Command", include_str!("export_local_logs.ps1")])
+        .output()
+        .map_err(|error| format!("无法启动本机日志归档：{error}"))?;
+    if !output.status.success() {
+        return Err("本机日志包未能写入。请检查保存位置的空间和写入权限。".into());
+    }
+    Ok(())
+}
+
 fn plain(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return false;

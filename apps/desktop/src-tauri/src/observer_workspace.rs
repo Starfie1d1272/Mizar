@@ -135,9 +135,12 @@ fn stop_inner(log: &DesktopLog, force: bool) -> Result<(), String> {
 
 /// The caller holds the game/observer operation lock.
 pub fn finish_locked(log: &DesktopLog) -> Result<(), String> {
-    let observer = stop_inner(log, false);
-    let hud = crate::observer_hud::restore(log);
-    production_exit::cleanup_results(observer, hud)
+    if let Err(error) = stop_inner(log, false) {
+        // The Host lease is already revoked. An absent response does not
+        // prevent the native HUD owner from restoring its own settings.
+        log.event("workspace_exit_observer", "stop_unconfirmed", Some(&error));
+    }
+    crate::observer_hud::restore(log)
 }
 
 fn verify_session(

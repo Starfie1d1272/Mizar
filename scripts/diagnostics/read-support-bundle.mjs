@@ -165,6 +165,31 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
   )
     throw new Error('Unindexed ZIP entry');
+  const coverageDetails = [];
+  if (coverage.coverageFiles !== undefined) {
+    if (!Array.isArray(coverage.coverageFiles)) throw new Error('Invalid coverage file index');
+    const detailNames = new Set();
+    for (const ref of coverage.coverageFiles) {
+      if (
+        !Number.isSafeInteger(ref?.partIndex) ||
+        ref.partIndex < 1 ||
+        ref.partIndex > expectedIndex ||
+        !/^coverage\/details-[1-9][0-9]*\.ndjson$/.test(ref.name) ||
+        detailNames.has(ref.name)
+      )
+        throw new Error('Invalid coverage file reference');
+      detailNames.add(ref.name);
+      if (ref.partIndex !== expectedIndex) continue;
+      const data = entries.get(ref.name);
+      if (!data) throw new Error('Missing coverage file');
+      for (const line of data.toString('utf8').trimEnd().split('\n')) {
+        const detail = JSON.parse(line);
+        if (!['gap', 'excluded'].includes(detail?.kind) || !Object.hasOwn(detail, 'value'))
+          throw new Error('Invalid coverage detail');
+        if (emit) coverageDetails.push(detail);
+      }
+    }
+  }
   if (!emit) return;
   for (const [name, data] of entries)
     if (name.startsWith('events/') && name.endsWith('.ndjson'))
@@ -180,6 +205,7 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
       bundleId: metadata.bundleId,
       partIndex: metadata.partIndex,
       coverage,
+      ...(coverageDetails.length ? { coverageDetails } : {}),
     }) + '\n',
   );
 }

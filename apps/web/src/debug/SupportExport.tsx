@@ -128,6 +128,7 @@ export function SupportExport() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
+  const [savingLocal, setSavingLocal] = useState(false);
   const busyRef = useRef(false);
   const [progress, setProgress] = useState<{
     exportId: string;
@@ -154,8 +155,8 @@ export function SupportExport() {
     let hostPinId: string | undefined;
     let hostPinSubmitted = false;
     let deliveryJob = readyJob;
+    const desktop = Boolean(window.__TAURI_INTERNALS__);
     try {
-      const desktop = Boolean(window.__TAURI_INTERNALS__);
       const cached =
         !regenerate && readyJob && Date.parse(readyJob.expiresAt) > Date.now() ? readyJob : null;
       if (readyJob && !cached) {
@@ -336,7 +337,9 @@ export function SupportExport() {
                     : code === 'invalid_bundle'
                       ? '诊断包内容不完整或超过大小限制，请缩短导出时间范围后重试。'
                       : stage === 'generate'
-                        ? '诊断包生成请求未完成，请检查 Mizar 后台服务连接后重试。'
+                        ? desktop
+                          ? '结构化诊断包未能生成。你可以直接保存本机日志。'
+                          : '诊断包生成请求未完成。请在 Mizar 桌面端直接保存本机日志。'
                         : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {
@@ -441,6 +444,27 @@ export function SupportExport() {
       >
         {hasReadyJob ? (window.__TAURI_INTERNALS__ ? '重新保存' : '重新下载') : '保存诊断包'}
       </Button>
+      {window.__TAURI_INTERNALS__ ? (
+        <Button
+          loading={savingLocal}
+          onClick={() => {
+            setSavingLocal(true);
+            void desktopInvoke('save_local_logs')
+              .then((saved) => {
+                if (saved) setResult({ error: false, message: '本机日志已保存。' });
+              })
+              .catch((error: unknown) => {
+                setResult({
+                  error: true,
+                  message: error instanceof Error ? error.message : '本机日志包未能保存。',
+                });
+              })
+              .finally(() => setSavingLocal(false));
+          }}
+        >
+          保存本机日志
+        </Button>
+      ) : null}
       {!busy &&
       hasReadyJob &&
       !window.__TAURI_INTERNALS__ &&

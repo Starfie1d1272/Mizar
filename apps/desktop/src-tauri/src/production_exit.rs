@@ -947,6 +947,7 @@ pub(crate) async fn finish_workspace(
             }
         }
         feedback.stage(WorkspaceExitStage::Restoration);
+        let mut native_game_finished = false;
         let game = crate::production_exit::restore_then_cleanup(
         || log.step("workspace_exit_observer", || observer_workspace::finish_locked(&log)),
         || -> Result<(), String> {
@@ -958,6 +959,7 @@ pub(crate) async fn finish_workspace(
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
             log.step("workspace_exit_game_finish", || cs2.finish())?;
+            native_game_finished = true;
         } else {
             feedback.stage(WorkspaceExitStage::Restoration);
             let _activity = activity.begin(2);
@@ -969,6 +971,7 @@ pub(crate) async fn finish_workspace(
                 if requires_proof {
                     log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
                 }
+                native_game_finished = true;
                 Ok(())
             })?;
         }
@@ -976,6 +979,7 @@ pub(crate) async fn finish_workspace(
         });
         workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
         drop(cs2);
+        if native_game_finished { retire_preparation(); }
         feedback.stage(WorkspaceExitStage::Presentation);
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.
@@ -1000,7 +1004,6 @@ pub(crate) async fn finish_workspace(
         crate::production_exit::set_exit_intent(&intent_host.state::<DesktopLog>(), "cancel-exit")
     }).await.unwrap_or_else(|_| Err("制作退出状态未能恢复，请重试。".into()));
     let result = crate::production_exit::cleanup_results(result, intent_result);
-    if result.is_ok() { retire_preparation(); }
     if let Err(error) = &result {
         app.state::<DesktopLog>().event(
             "production_finish",

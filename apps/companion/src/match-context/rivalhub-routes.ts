@@ -813,24 +813,22 @@ export function registerRivalHubConnectionRoutes(
   app.post('/operator/rivalhub/source/release', { bodyLimit: 1024 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ message: '本机页面来源无效。' });
-    if (options.connection.view().sourceState === 'unavailable')
-      return reply.code(503).send({ error: 'rivalhub_source_state_unavailable' });
-    if (!targetMatches(request.body, linkedBinding()))
+    const binding = linkedBinding();
+    if (!binding || !targetMatches(request.body, binding))
       return reply.code(409).send({ message: '比赛已变化，请重新打开本场网站同步。' });
-    if (sourceCommand) return reply.code(409).send({ message: '数据源操作正在进行，请稍候。' });
+    options.connection.stopSync(binding.context.matchId);
     try {
-      options.connection.stopSync(linkedBinding()?.context.matchId ?? null);
-      sourceCommand = options.connection.release();
-      await sourceCommand;
-      return options.connection.view();
+      await options.connection.handoffForExit(binding.context.matchId);
+      return {
+        ...options.connection.view(),
+        message: '已停止本机网站同步，网站释放将在后台核对。',
+      };
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub operation failed');
-      return reply.code(502).send({
-        message: '数据源停止未确认，请稍后再试。',
-        sourceCleanup: options.connection.view().sourceCleanup,
+      return reply.code(202).send({
+        ...options.connection.view(),
+        message: '已停止本机网站同步，本地交接尚待确认。',
       });
-    } finally {
-      sourceCommand = null;
     }
   });
 }

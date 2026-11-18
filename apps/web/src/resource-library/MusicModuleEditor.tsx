@@ -9,12 +9,14 @@ export function MusicModuleEditor({
   value,
   onChange,
   onSave,
+  saveLabel = '保存音乐配置',
   busy: saving,
   importTracks,
 }: {
   value: PortableMusicConfigV1;
   onChange: (value: PortableMusicConfigV1) => void;
   onSave: () => void;
+  saveLabel?: string;
   busy: boolean;
   importTracks: (files: File[]) => Promise<PortableTrack[]>;
 }) {
@@ -311,7 +313,7 @@ export function MusicModuleEditor({
       </div>
       <div className="music-settings-save__actions">
         <Button variant="primary" loading={busy} disabled={busy} onClick={onSave}>
-          保存音乐配置
+          {saveLabel}
         </Button>
       </div>
     </>

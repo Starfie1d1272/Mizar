@@ -78,7 +78,7 @@ export async function desktopInvoke(
   if (!window.__TAURI_INTERNALS__) return Promise.reject(new Error('此操作需要桌面工作区。'));
   const operationId = crypto.randomUUID();
   const observe =
-    !/^(?:gsi_status|cs2_host_status|cs2_config_status|cs2_console_status|workspace_exit_status|preparation_status|read_obs_configuration_context|save_support_bundle)$/.test(
+    !/^(?:gsi_status|cs2_host_status|cs2_config_status|cs2_console_status|workspace_exit_status|preparation_status|read_obs_configuration_context|save_support_bundle|save_local_logs)$/.test(
       command,
     );
   if (observe)
@@ -108,7 +108,7 @@ export async function desktopInvoke(
         operationId,
         result,
       });
-    if (!observe && command !== 'save_support_bundle') {
+    if (!observe && command !== 'save_support_bundle' && command !== 'save_local_logs') {
       nativeSnapshot(command, result);
       if (task) task.event('native_snapshot', { command, operationId, result });
     }
@@ -120,7 +120,7 @@ export async function desktopInvoke(
         operationId,
         error: browserErrorEvidence(error),
       });
-    if (!observe && command !== 'save_support_bundle')
+    if (!observe && command !== 'save_support_bundle' && command !== 'save_local_logs')
       nativeSnapshot(command, {
         error: browserErrorEvidence(error),
       });

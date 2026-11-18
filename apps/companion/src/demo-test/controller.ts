@@ -273,25 +273,23 @@ export class DemoTestController {
         if (body.action === 'cancel' && this.phase !== 'starting')
           return conflict('demo_test_already_playing', '播放已开始，请先结束试播。');
         if (body.action === 'complete' && this.phase !== 'recovery' && !this.waitingConfirmed)
-          return conflict('demo_test_recovery_required', '请先结束试播并切换等待画面。');
+          return conflict('demo_test_recovery_required', '请先结束试播输入。');
         if (body.action === 'complete' && !this.waitingConfirmed) {
-          stage = 'waiting_scene';
-          if (!(await this.finish())) {
-            // This private command follows Host's verified local restoration.
-            // Keep the existing marker and the output fence until OBS is safe.
-            if (!this.marker!.localRestored) {
-              stage = 'local_recovery_receipt';
-              const current = markerSchema.parse(
-                JSON.parse(await readFile(this.options.markerPath!, 'utf8')),
-              );
-              if (current.requestId !== body.requestId)
-                throw new Error('demo_recovery_marker_changed');
-              const marker = { ...current, localRestored: true as const };
-              await replaceDurableJson(this.options.markerPath!, marker);
-              this.marker = marker;
-            }
-            return { code: 200, value: this.get() };
+          if (!this.marker!.localRestored) {
+            stage = 'local_recovery_receipt';
+            const current = markerSchema.parse(
+              JSON.parse(await readFile(this.options.markerPath!, 'utf8')),
+            );
+            if (current.requestId !== body.requestId)
+              throw new Error('demo_recovery_marker_changed');
+            const marker = { ...current, localRestored: true as const };
+            await replaceDurableJson(this.options.markerPath!, marker);
+            this.marker = marker;
           }
+          // OBS recovery has its own persisted status. Host already settled the
+          // game; formal output stays quarantined until local restoration below.
+          stage = 'obs_recovery_handoff';
+          await this.options.production.deferTrialObsExit();
         }
         // Host completes after owned-game restoration or external-game detachment preparation.
         this.dropFormalGsi = true;

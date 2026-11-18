@@ -1,41 +1,17 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
-import type { ObsStatus } from '../obs/adapter.js';
-import { isObsProcessRunning } from '../obs/config.js';
-import { diagnosticValue } from '../support/session-journal.js';
+import type { ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ProgramSceneController } from '../program-scenes/controller.js';
 import type { createProduction } from '../program-scenes/production.js';
 import { UpdateManager, safeCode, updateFailure } from './manager.js';
 import type { MulnxTool } from '../orchestration/tool.js';
 
-export function installBlockReason(
-  production: { mode: string },
-  scenes: ReturnType<ProgramSceneController['get']>,
-  obs: ObsStatus | undefined,
-  obsProcessAbsent?: boolean,
-): string | null {
-  if (production.mode !== 'preparation') return '结束制作后可更新。';
-  if (scenes.preparing || scenes.active !== 'waiting' || scenes.director?.mode === 'manual')
-    return '结束节目制作后可更新。';
-  return outputBlockReason(obs, obsProcessAbsent);
-}
-
-function outputBlockReason(obs: ObsStatus | undefined, obsProcessAbsent?: boolean): string | null {
-  if (obs?.streaming || obs?.recording) return '停止 OBS 推流或录制后可更新。';
-  if (
-    obs?.connection === 'connected' &&
-    (obs.streaming !== false ||
-      obs.recording !== false ||
-      obs.streamPhase !== 'idle' ||
-      obs.recordPhase !== 'idle' ||
-      obs.outputPending !== false)
-  )
-    return 'OBS 推流或录制状态尚未确认或正在变化，请在 OBS 核对后重试。';
-  if ((!obs || obs.connection !== 'connected') && !obsProcessAbsent)
-    return obsProcessAbsent === false
-      ? 'OBS 正在运行但未连接，请关闭 OBS，或连接后核对推流与录制再更新。'
-      : 'OBS 进程状态检测未完成，升级尚未启动。请查看诊断、核对 OBS 已关闭后重试；再次失败时从正式发布页下载。';
+function outputBlockReason(obs: ObsOutputsStatus | undefined): string | null {
+  const outputs = obs ? [obs.stream, obs.record] : [];
+  if (outputs.some((output) => output.active === true)) return '停止 OBS 推流或录制后可更新。';
+  if (outputs.some((output) => output.pending || output.phase === 'starting'))
+    return 'OBS 正在启动或停止输出，请等这次操作结束后安装。';
   return null;
 }
 export function registerUpdateRoutes(
@@ -46,9 +22,7 @@ export function registerUpdateRoutes(
     controlToken: string;
     production: ReturnType<typeof createProduction>;
     scenes: ProgramSceneController;
-    obs: () => Promise<ObsStatus | undefined>;
-    obsEpoch?: () => number | undefined;
-    obsProcessRunning?: () => Promise<boolean>;
+    obs: () => Promise<ObsOutputsStatus | undefined>;
     mulnx?: () => MulnxTool | undefined;
   },
 ) {
@@ -56,13 +30,9 @@ export function registerUpdateRoutes(
   let updateOwner: string | undefined;
   let updatePreparing = false;
   let updateReserved = false;
-  let updateObservation: number | undefined;
-  let updateRevision: string | undefined;
   const releaseOwner = (owner: string) => {
     if (updateOwner !== owner) return;
     updateOwner = undefined;
-    updateObservation = undefined;
-    updateRevision = undefined;
     manager.release();
     if (updateReserved) {
       updateReserved = false;
@@ -70,45 +40,7 @@ export function registerUpdateRoutes(
       scenes.setUpdatePending(false);
     }
   };
-  const assess = async (exiting = false) => {
-    const obs = await options.obs().catch(() => undefined);
-    const reason = exiting
-      ? outputBlockReason(obs)
-      : installBlockReason(production.get(), scenes.get(), obs);
-    if (
-      !reason ||
-      (!exiting &&
-        (production.get().mode !== 'preparation' ||
-          scenes.get().preparing ||
-          scenes.get().active !== 'waiting' ||
-          scenes.get().director?.mode === 'manual')) ||
-      obs?.connection === 'connected' ||
-      obs?.streaming ||
-      obs?.recording
-    )
-      return reason;
-    try {
-      const running = await (options.obsProcessRunning ?? isObsProcessRunning)();
-      // Read production/scene state again after the asynchronous process probe.
-      return exiting
-        ? outputBlockReason(obs, !running)
-        : installBlockReason(production.get(), scenes.get(), obs, !running);
-    } catch (error) {
-      app.log.warn(
-        {
-          event: 'update',
-          stage: 'install_plan',
-          code: 'update_obs_process_probe_failed',
-          result: 'failure',
-          diagnostic: { error: diagnosticValue(error) },
-        },
-        'OBS process state could not be confirmed',
-      );
-      return exiting
-        ? outputBlockReason(obs)
-        : installBlockReason(production.get(), scenes.get(), obs);
-    }
-  };
+  const assess = async () => outputBlockReason(await options.obs().catch(() => undefined));
   const publicView = async () => {
     const status = manager.status();
     const tool = options.mulnx?.()?.view();
@@ -119,19 +51,12 @@ export function registerUpdateRoutes(
     const blocked =
       status.phase === 'ready' || reminderPhase || mulnxPending ? await assess() : null;
     const installBlockedReason = status.phase === 'ready' ? blocked : null;
-    const scene = scenes.get();
     return {
       ...status,
       mulnx: tool ?? null,
       mulnxNotificationPending: mulnxPending,
-      productionRevision: production.get().revision,
       installBlockedReason,
       notificationSafe: status.automatic && (reminderPhase || mulnxPending) && blocked === null,
-      canResumeAutomatic:
-        production.get().mode === 'preparation' &&
-        scene.active === 'waiting' &&
-        !scene.preparing &&
-        scene.director?.mode === 'manual',
     };
   };
   app.get('/local/v1/updates', async (_request, reply) =>
@@ -170,15 +95,6 @@ export function registerUpdateRoutes(
         typeof body.identity === 'string'
       ) {
         options.mulnx?.()?.dismissNotification(body.identity);
-      } else if (body?.action === 'resume') {
-        const scene = scenes.get();
-        if (
-          production.get().mode !== 'preparation' ||
-          scene.active !== 'waiting' ||
-          scene.preparing ||
-          !scenes.resumeAutomatic(scene.revision)
-        )
-          throw new Error('update_production_busy');
       } else return reply.code(400).send({ error: 'update_action_invalid' });
       return await publicView();
     } catch (e) {
@@ -229,7 +145,6 @@ export function registerUpdateRoutes(
       if (updateOwner || updatePreparing)
         return reply.code(409).send({ message: '更新已经在准备，请稍候。' });
       updateOwner = owner;
-      updateRevision = production.get().revision;
       updatePreparing = true;
     } else if (action === 'release' && updateOwner === undefined) {
       // An earlier response can be lost after release has already committed.
@@ -245,31 +160,15 @@ export function registerUpdateRoutes(
     const current = () => updateOwner === owner && !request.raw.aborted && !reply.raw.destroyed;
     try {
       if (action === 'prepare') {
-        // Authentication and Host staging do not reserve production or OBS output.
-        blockedReason = await assess();
-        if (blockedReason) throw new Error(blockedReason);
-        updateObservation = options.obsEpoch?.();
-        if (!current() || production.get().revision !== updateRevision)
-          throw new Error('制作状态已变化，本次更新已取消，请重新尝试。');
         const plan = await manager.prepare();
-        if (
-          !current() ||
-          production.get().revision !== updateRevision ||
-          options.obsEpoch?.() !== updateObservation
-        )
-          throw new Error('制作或 OBS 状态已变化，本次更新已取消，请重新尝试。');
+        if (!current()) throw new Error('更新准备已取消，请重新尝试。');
         return plan;
       }
       if (manager.status().phase !== 'installing')
         throw new Error('更新准备状态已变化，请重新尝试。');
       if (action === 'commit') {
-        if (
-          updateReserved ||
-          production.get().revision !== updateRevision ||
-          options.obsEpoch?.() !== updateObservation ||
-          !production.reserveUpdate()
-        ) {
-          blockedReason = '制作状态已变化，请结束制作后重试。';
+        if (updateReserved || !production.reserveUpdate()) {
+          blockedReason = '应用正在退出，请等当前操作结束。';
           throw new Error(blockedReason);
         }
         updateReserved = true;
@@ -277,13 +176,9 @@ export function registerUpdateRoutes(
       } else if (!updateReserved) {
         throw new Error('更新准备状态已变化，请重新尝试。');
       }
-      blockedReason = await assess(action === 'recheck');
+      blockedReason = await assess();
       if (blockedReason) throw new Error(blockedReason);
       if (!current()) throw new Error('更新准备已取消，请重新尝试。');
-      if (options.obsEpoch?.() !== updateObservation) {
-        blockedReason = 'OBS 输出状态已变化，本次更新已取消，请核对后重试。';
-        throw new Error(blockedReason);
-      }
       return { accepted: true };
     } catch (e) {
       const reason =
@@ -314,12 +209,10 @@ export function registerUpdateRoutes(
     beforeStop: async () => {
       if (!updateReserved) return null;
       const owner = updateOwner;
-      const reason = await assess(true);
+      const reason = await assess();
       const blocked =
         reason ??
-        (updateOwner !== owner || !updateReserved || options.obsEpoch?.() !== updateObservation
-          ? 'OBS 输出或更新状态已变化，本次更新已取消，请核对后重试。'
-          : null);
+        (updateOwner !== owner || !updateReserved ? '更新状态已变化，本次更新已取消。' : null);
       if (blocked && owner) releaseOwner(owner);
       return blocked;
     },

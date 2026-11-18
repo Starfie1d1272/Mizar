@@ -348,6 +348,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 | `POST /debug/support-exports/:id/cancel` | 请求取消，不证明 worker 已退出或输入已释放 |
 | `GET /debug/support-exports/:id/files/:name` | 受控附件下载，校验本机同源请求 |
 | `save_support_bundle(exportId)` | 原生选择目标并保存既有 ZIP，不接收任意源路径或前端摘要 |
+| `save_local_logs()` | 原生选择目标后直接归档本机日志目录，ZIP 中列出读取缺口。桌面界面不可用时可从命令行执行 `Mizar.exe --export-logs <日志包.zip>` |
 
 `settled` 表示输入使用结束且已尝试收尾，要等待 worker 实际退出；单个终态消息不够。有效 ZIP 的临时清理失败仍可 ready，另报 `cleanupStatus:unconfirmed`，不删除有效包、不伪造正文缺口，也不声称资源全释放。
 

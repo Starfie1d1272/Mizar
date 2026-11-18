@@ -285,6 +285,9 @@ macro_rules! desktop_ipc {
         $command!(async save_support_bundle SUPPORT_WINDOWS
             (app: tauri::AppHandle) required [export_id: String]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::save_support_bundle);
+        $command!(async save_local_logs SUPPORT_WINDOWS
+            (app: tauri::AppHandle) required []
+            () -> bool = crate::desktop_commands::save_local_logs);
         $command!(async select_cs2_installation MAIN
             (app: tauri::AppHandle) required [executable: bool]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::select_cs2_installation);

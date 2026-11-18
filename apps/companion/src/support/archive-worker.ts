@@ -60,6 +60,12 @@ export function runArchiveWorker(
   const parts: Entry[] = [],
     gaps = [...d.gaps];
   const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
+  const coverageFiles: { partIndex: number; name: string }[] = [];
+  // Keep space for the entry index and other final metadata even with a large inventory.
+  const inlineCoverageLimit = ENTRY_MAX / 4;
+  function inlineCoverage() {
+    return Buffer.byteLength(JSON.stringify([gaps, excludedSources])) <= inlineCoverageLimit;
+  }
   let carrierRecords = 0,
     uniqueEvents = 0,
     aggregatedOccurrences = 0,
@@ -386,6 +392,7 @@ export function runArchiveWorker(
       ),
       true,
     );
+    const inline = inlineCoverage();
     add(
       'coverage.json',
       Buffer.from(
@@ -394,8 +401,15 @@ export function runArchiveWorker(
           uniqueEvents,
           carrierRecords,
           aggregatedOccurrences,
-          gaps: redact(gaps),
-          excludedSources,
+          gaps: inline ? redact(gaps) : [],
+          excludedSources: inline ? excludedSources : [],
+          ...(inline
+            ? {}
+            : {
+                gapCount: gaps.length,
+                excludedSourceCount: excludedSources.length,
+                coverageFiles,
+              }),
           interpretation: {
             gaps: 'Missing or unconfirmed evidence; archive completion does not resolve these gaps.',
             source_not_safely_fixed:
@@ -443,6 +457,41 @@ export function runArchiveWorker(
     add(file, Buffer.from(JSON.stringify(records)));
     refs.push({ partIndex: part, name: file });
     records.length = 0;
+  }
+  function writeCoverageFiles() {
+    if (inlineCoverage()) return;
+    let lines: string[] = [];
+    let bytes = 0;
+    const flushCoverage = () => {
+      if (!lines.length) return;
+      const name = 'coverage/details-' + (coverageFiles.length + 1) + '.ndjson';
+      add(name, Buffer.from(lines.join('')));
+      coverageFiles.push({ partIndex: part, name });
+      lines = [];
+      bytes = 0;
+    };
+    for (const [kind, values] of [
+      ['gap', gaps],
+      ['excluded', excludedSources],
+    ] as const) {
+      for (const value of values) {
+        const line = JSON.stringify({ kind, value: redact(value) }) + '\n';
+        const size = Buffer.byteLength(line);
+        if (size > ENTRY_MAX) {
+          lines.push(
+            JSON.stringify({ kind, value: { reason: 'coverage_record_oversize', bytes: size } }) +
+              '\n',
+          );
+          bytes += Buffer.byteLength(lines.at(-1)!);
+          if (bytes >= ENTRY_MAX / 2) flushCoverage();
+          continue;
+        }
+        if (bytes + size > ENTRY_MAX / 2) flushCoverage();
+        lines.push(line);
+        bytes += size;
+      }
+    }
+    flushCoverage();
   }
   function emit(
     input: unknown,
@@ -692,6 +741,15 @@ export function runArchiveWorker(
                 if (secret) line = line.split(secret).join('[redacted]');
               line = String(redact(line)) + '\n';
               const lineBytes = Buffer.byteLength(line);
+              if (lineBytes > ENTRY_MAX) {
+                gaps.push({
+                  source: source.name,
+                  offset,
+                  reason: 'attachment_line_budget',
+                  bytes: lineBytes,
+                });
+                return;
+              }
               if (bodyBytes + lineBytes > 1024 * 1024 && body) {
                 add(source.name + '-' + ++attachmentIndex + '.log', Buffer.from(body));
                 body = '';
@@ -755,7 +813,15 @@ export function runArchiveWorker(
           JSON.stringify({ schema: 'mizar-reference-index/2', parts: refs, tail: records }),
         ),
       );
-    add('snapshots/current.json', Buffer.from(JSON.stringify(redact(d.snapshot))));
+    const snapshot = Buffer.from(JSON.stringify(redact(d.snapshot)));
+    if (snapshot.length <= ENTRY_MAX) add('snapshots/current.json', snapshot);
+    else
+      gaps.push({
+        source: 'snapshots/current.json',
+        reason: 'snapshot_entry_budget',
+        bytes: snapshot.length,
+      });
+    writeCoverageFiles();
     finish(true);
   } catch (error) {
     failed = true;
@@ -798,8 +864,11 @@ export function runArchiveWorker(
       uniqueEvents,
       carrierRecords,
       aggregatedOccurrences,
-      gaps: redact(gaps),
-      excludedSources,
+      gaps: inlineCoverage() ? redact(gaps) : [],
+      excludedSources: inlineCoverage() ? excludedSources : [],
+      ...(coverageFiles.length
+        ? { coverageFiles, excludedSourceCount: excludedSources.length }
+        : {}),
       inputBytes: processedBytes,
       outputBytes: totalBytes,
       measurements: measurements(),

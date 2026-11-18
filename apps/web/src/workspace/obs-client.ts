@@ -225,11 +225,14 @@ export class ObsOutputCommandError extends Error {
 
 export function useObsOutputs() {
   const [outputs, setOutputs] = useState<ObsOutputsStatus | null>(null);
-  const [pending, setPending] = useState<ObsOutputCommand | null>(null);
+  const [pending, setPending] = useState<
+    Partial<Record<ObsOutputCommand['output'], ObsOutputCommand>>
+  >({});
   const [recovering, setRecovering] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const revision = useRef(0);
-  const inFlight = useRef(false);
+  const inFlight = useRef(new Set<ObsOutputCommand['output']>());
+  const captureInFlight = useRef(false);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -259,10 +262,10 @@ export function useObsOutputs() {
     };
   }, []);
   async function execute(command: ObsOutputCommand) {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    if (inFlight.current.has(command.output)) return;
+    inFlight.current.add(command.output);
     revision.current++;
-    setPending(command);
+    setPending((current) => ({ ...current, [command.output]: command }));
     try {
       const response = await fetch('/operator/obs/output', {
         method: 'POST',
@@ -271,9 +274,12 @@ export function useObsOutputs() {
         signal: AbortSignal.timeout(25_000),
       });
       const result = (await response.json()) as { outputs?: ObsOutputsStatus; message?: string };
-      if (result.outputs) {
+      const observed = result.outputs;
+      if (observed) {
         revision.current++;
-        setOutputs(result.outputs);
+        setOutputs((current) =>
+          current ? { ...current, [command.output]: observed[command.output] } : observed,
+        );
       }
       if (!response.ok || !result.outputs)
         throw new ObsOutputCommandError(
@@ -284,7 +290,6 @@ export function useObsOutputs() {
     } catch (error) {
       revision.current++;
       if (error instanceof ObsOutputCommandError) throw error;
-      setOutputs(null);
       throw new Error(
         error instanceof Error && error.name !== 'TimeoutError'
           ? error.message
@@ -292,13 +297,13 @@ export function useObsOutputs() {
         { cause: error },
       );
     } finally {
-      inFlight.current = false;
-      setPending(null);
+      inFlight.current.delete(command.output);
+      setPending((current) => ({ ...current, [command.output]: undefined }));
     }
   }
   async function recoverCapture() {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    if (captureInFlight.current || inFlight.current.size) return;
+    captureInFlight.current = true;
     revision.current++;
     setRecovering(true);
     setRecoveryError('');
@@ -327,7 +332,7 @@ export function useObsOutputs() {
           : '画面检查结果尚未确认，请等待 OBS 状态更新。',
       );
     } finally {
-      inFlight.current = false;
+      captureInFlight.current = false;
       setRecovering(false);
     }
   }

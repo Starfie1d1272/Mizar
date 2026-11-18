@@ -209,6 +209,7 @@ export class RivalHubConnection {
   } | null = null;
   private readonly sourceState: RivalHubSourceState;
   private intentReconcileCursor = 0;
+  private readonly intentRetry = new Map<string, { attempts: number; nextAt: number }>();
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
@@ -806,9 +807,13 @@ export class RivalHubConnection {
     }
   }
 
-  private async reconcileIntent(deadline: number): Promise<void> {
+  private async reconcileIntent(deadline: number, force: boolean): Promise<void> {
     const state = await this.sourceState.snapshot();
     const intents = state.intents.filter((intent) => this.scopeMatches(intent.scope));
+    const pendingIds = new Set(intents.map((intent) => intent.id));
+    for (const id of this.intentRetry.keys()) {
+      if (!pendingIds.has(id)) this.intentRetry.delete(id);
+    }
     if (!intents.length) return;
     const start = this.intentReconcileCursor % intents.length;
     const ordered = [...intents.slice(start), ...intents.slice(0, start)];
@@ -817,6 +822,9 @@ export class RivalHubConnection {
     for (const intent of ordered) {
       if (examined >= 8 || Date.now() >= deadline) break;
       examined++;
+      const retry = this.intentRetry.get(intent.id);
+      if (!force && retry && Date.now() < retry.nextAt) continue;
+      const attempts = Math.min((retry?.attempts ?? 0) + 1, 6);
       try {
         await this.reconcileIntentForState(
           intent,
@@ -827,6 +835,11 @@ export class RivalHubConnection {
         );
       } catch (error) {
         this.onDiagnostic('source_status', error);
+      } finally {
+        this.intentRetry.set(intent.id, {
+          attempts,
+          nextAt: Date.now() + Math.min(300_000, 10_000 * 2 ** (attempts - 1)),
+        });
       }
     }
     this.intentReconcileCursor = (start + examined) % intents.length;
@@ -923,17 +936,17 @@ export class RivalHubConnection {
   }
 
   /** Freeze this exact source now; persist its handoff without waiting for delivery. */
-  handoffForExit(): Promise<void> {
-    return this.finishExitHandoffs(this.freezeExitSource('finish'));
+  handoffForExit(matchId?: string): Promise<void> {
+    return this.finishExitHandoffs(this.freezeExitSource('finish', matchId));
   }
 
-  private async freezeExitSource(cause: 'finish' | 'shutdown'): Promise<void> {
+  private async freezeExitSource(cause: 'finish' | 'shutdown', matchId?: string): Promise<void> {
     if (!this.sourceStateAvailable && (this.source || this.exitHandoffs.size))
       throw new Error('rivalhub_source_handoff_unavailable');
     this.requireSourceState();
     ++this.bindingGeneration;
     const source = this.source;
-    if (source) {
+    if (source && (matchId === undefined || source.matchId === matchId)) {
       this.stopSync(source.matchId);
       source.draining = true;
       source.paused = true;
@@ -1016,7 +1029,7 @@ export class RivalHubConnection {
     }
     try {
       // Keep part of the cleanup budget for already confirmed sources.
-      await this.reconcileIntent(Math.min(deadline, Date.now() + 4000));
+      await this.reconcileIntent(Math.min(deadline, Date.now() + 4000), force);
     } catch (error) {
       this.onDiagnostic('source_status', error);
     }

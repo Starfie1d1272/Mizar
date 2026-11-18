@@ -97,12 +97,14 @@ function SceneEditor({
   module,
   modules,
   busy,
+  saveLabel,
   save,
   cancel,
 }: {
   module: Extract<ModuleRecord, { kind: 'program' }>;
   modules: ModuleRecord[];
   busy: boolean;
+  saveLabel: string;
   save: (value: ModuleRecord) => Promise<boolean>;
   cancel: () => void;
 }) {
@@ -163,7 +165,7 @@ function SceneEditor({
           })
         }
       >
-        保存草稿
+        {saveLabel}
       </Button>
       <Button onClick={cancel}>取消编辑</Button>
     </div>
@@ -174,18 +176,20 @@ function ModuleDraftEditor({
   module,
   modules,
   busy,
+  saveLabel,
   save,
   cancel,
 }: {
   module: ModuleRecord<'music'> | ModuleRecord<'camera'>;
   modules: ModuleRecord[];
   busy: boolean;
-  save: (value: ModuleRecord, revision: string) => Promise<boolean>;
+  saveLabel?: string;
+  save: (value: ModuleRecord) => Promise<boolean>;
   cancel: () => void;
 }) {
   const [draft, setDraft] = useState(() => structuredClone(module));
   const finish = async () => {
-    if (await save(draft, draft.revision)) cancel();
+    if (await save(draft)) cancel();
   };
   return (
     <div>
@@ -207,6 +211,7 @@ function ModuleDraftEditor({
           }}
           onChange={(value) => setDraft({ ...draft, value })}
           onSave={() => void finish()}
+          {...(saveLabel ? { saveLabel } : {})}
         />
       ) : (
         <CameraModuleEditor
@@ -219,6 +224,7 @@ function ModuleDraftEditor({
           ]}
           onChange={(value) => setDraft({ ...draft, value })}
           onSave={() => void finish()}
+          {...(saveLabel ? { saveLabel } : {})}
         />
       )}
       <Button onClick={cancel}>取消编辑</Button>
@@ -323,6 +329,7 @@ export function ResourceModules({
   const [editing, setEditing] = useState<
     ModuleRecord<'program'> | ModuleRecord<'music'> | ModuleRecord<'camera'> | null
   >(null);
+  const [conflictedEdit, setConflictedEdit] = useState<typeof editing>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{
     tone: 'success' | 'danger' | 'warning';
@@ -373,11 +380,10 @@ export function ResourceModules({
         )
       : [];
   const currentDraftModule = editing && snapshot?.modules.find((entry) => entry.id === editing.id);
-  const draftStale = !snapshot || !metadata;
   const draftConflict =
     !!editing &&
-    !draftStale &&
-    (!currentDraftModule || currentDraftModule.revision !== editing.revision);
+    (conflictedEdit === editing ||
+      (!!snapshot && (!currentDraftModule || currentDraftModule.revision !== editing.revision)));
   const referenceView = {
     active:
       !!module &&
@@ -403,10 +409,16 @@ export function ResourceModules({
         const result = (await response.json().catch(() => ({}))) as {
           error?: { code?: string; message?: string };
         };
+        if (
+          path === '/operator/broadcast-modules/save' &&
+          result.error?.code === 'revision_conflict'
+        ) {
+          setConflictedEdit(editing);
+          refreshAll();
+          return false;
+        }
         throw new Error(
-          (path === '/operator/broadcast-modules/save' && result.error?.code === 'revision_conflict'
-            ? '资源已被修改或删除，保存未完成，草稿已保留。请复制需要的内容，再取消编辑并重新打开最新资源。'
-            : result.error?.message) ??
+          result.error?.message ??
             (response.status === 409
               ? '配置已变化，请刷新后重试。'
               : '操作未完成，请检查资源后重试。'),
@@ -426,6 +438,25 @@ export function ResourceModules({
     } finally {
       setBusy(false);
     }
+  }
+
+  function saveDraft(value: ModuleRecord) {
+    const copy = draftConflict;
+    return perform(
+      '/operator/broadcast-modules/save',
+      {
+        value: copy
+          ? {
+              ...value,
+              id: crypto.randomUUID(),
+              origin: null,
+              name: `${value.name.slice(0, 115)}（副本）`,
+            }
+          : value,
+        expectedRevision: copy ? null : value.revision,
+      },
+      copy ? '已另存为新草稿，尚未使用。' : '草稿已保存，尚未使用。',
+    );
   }
   async function handlePendingCamera(action: 'restore' | 'delete') {
     if (busy) return;
@@ -665,43 +696,28 @@ export function ResourceModules({
       {editing && (
         <Panel aria-label={`编辑${editing.name}`}>
           <h2>{editing.name}</h2>
-          {draftStale && (
-            <StatusBanner tone="warning">
-              资源目录暂不可用，草稿已保留；恢复连接后才能保存。
-            </StatusBanner>
-          )}
           {draftConflict && (
             <StatusBanner tone="warning">
-              资源已被修改或删除，草稿已保留。请复制需要的内容，再取消编辑并重新打开最新资源。
+              资源已被修改或删除。可将当前编辑内容另存为新资源。
             </StatusBanner>
           )}
           {editing.kind === 'program' ? (
             <SceneEditor
               module={editing}
               modules={snapshot?.modules ?? []}
-              busy={busy || draftStale || draftConflict}
+              busy={busy}
+              saveLabel={draftConflict ? '另存新草稿' : '保存草稿'}
               cancel={() => setEditing((current) => (current === editing ? null : current))}
-              save={(value) =>
-                perform(
-                  '/operator/broadcast-modules/save',
-                  { value, expectedRevision: editing.revision },
-                  '场景已保存，尚未使用。',
-                )
-              }
+              save={saveDraft}
             />
           ) : (
             <ModuleDraftEditor
               module={editing}
               modules={snapshot?.modules ?? []}
-              busy={busy || draftStale || draftConflict}
+              busy={busy}
+              {...(draftConflict ? { saveLabel: '另存新草稿' } : {})}
               cancel={() => setEditing((current) => (current === editing ? null : current))}
-              save={(value, expectedRevision) =>
-                perform(
-                  '/operator/broadcast-modules/save',
-                  { value, expectedRevision },
-                  '资源已保存，尚未使用。',
-                )
-              }
+              save={saveDraft}
             />
           )}
         </Panel>

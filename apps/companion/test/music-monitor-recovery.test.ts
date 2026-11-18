@@ -9,8 +9,62 @@ import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { createMusicDevice } from '../src/obs/music-device.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicDirector } from '../src/music/director.js';
-import type { MusicDeviceProvider } from '../src/music/device.js';
+import type { MusicDevice, MusicDeviceProvider, MusicMonitorMode } from '../src/music/device.js';
 import type { MusicTruth } from '../src/music/cues.js';
+
+test('closing music monitor during route migration survives restart and applies on recovery', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-disable-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  await store.update((state) => {
+    state.sources.bgm = 'music-source';
+    state.monitorPreference = true;
+  });
+  let migrating = true;
+  let sessions = 0;
+  let mode: MusicMonitorMode = 'monitor-and-output';
+  const device = {
+    hasSource: async (_store, layer) => layer === 'bgm',
+    monitorRelationship: async () => 'independent',
+    setMonitorMode: async ({ sourceId, mode: next }) => {
+      assert.equal(sourceId, 'music-source');
+      mode = next;
+    },
+    monitorMode: async () => mode,
+  } satisfies Pick<
+    MusicDevice,
+    'hasSource' | 'monitorRelationship' | 'setMonitorMode' | 'monitorMode'
+  >;
+  const provider: MusicDeviceProvider = {
+    session: (run) => {
+      sessions++;
+      return run(device as unknown as MusicDevice, 1);
+    },
+    close: async () => {},
+  };
+  const director = (state: MusicStore) =>
+    new MusicDirector(
+      state,
+      provider,
+      () => assert.fail('unexpected automatic playback'),
+      Date.now,
+      Math.random,
+      async () => migrating,
+    );
+  await director(store).monitor(false);
+  assert.equal(sessions, 0);
+  const reopened = new MusicStore(directory);
+  await reopened.load();
+  const resumed = director(reopened);
+  assert.equal(reopened.state.monitorPreference, false);
+  assert.equal(resumed.get().monitorDisablePending, true);
+  migrating = false;
+  await resumed.tick();
+  assert.equal(mode, 'off');
+  assert.equal(resumed.get().monitor, 'disabled');
+  assert.equal(resumed.get().monitorDisablePending, undefined);
+});
 
 test('monitor restoration retains a lost receipt and confirms it by readback after restart', async (t) => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-recovery-'));
