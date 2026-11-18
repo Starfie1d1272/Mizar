@@ -370,12 +370,13 @@ export class OutboxRepository {
         ).n;
         if (count >= MAX_CAPTURE_RECEIPTS) throw new Error('capture_receipt_capacity_exhausted');
         const interval = this.captureInterval(value.capture.intervalId);
-        if (
-          !interval ||
-          interval.state === 'sealed' ||
-          value.capture.sequence !== interval.committedSequence + 1
-        )
-          throw new Error('capture_sequence_unconfirmed');
+        if (!interval) throw new Error('capture_sequence_unconfirmed:commit:interval_missing');
+        if (interval.state === 'sealed')
+          throw new Error('capture_sequence_unconfirmed:commit:already_sealed');
+        if (value.capture.sequence !== interval.committedSequence + 1)
+          throw new Error(
+            `capture_sequence_unconfirmed:commit:expected_${interval.committedSequence + 1}:received_${value.capture.sequence}`,
+          );
         if (
           interval.activationCursor &&
           JSON.stringify(interval.activationCursor) !==
@@ -681,8 +682,13 @@ export class OutboxRepository {
   ): CaptureInterval {
     return this.transaction(() => {
       const interval = this.captureInterval(id);
-      if (!interval || interval.state !== 'armed' || interval.committedSequence !== sequence)
-        throw new Error('capture_sequence_unconfirmed');
+      if (!interval) throw new Error('capture_sequence_unconfirmed:seal:interval_missing');
+      if (interval.state !== 'armed')
+        throw new Error(`capture_sequence_unconfirmed:seal:state_${interval.state}`);
+      if (interval.committedSequence !== sequence)
+        throw new Error(
+          `capture_sequence_unconfirmed:seal:committed_${interval.committedSequence}:requested_${sequence}`,
+        );
       if (
         interval.activationCursor &&
         JSON.stringify(interval.activationCursor) !== JSON.stringify(activationCursor)

@@ -10,6 +10,10 @@ export type ReliableRejectionReason =
   | 'epoch_fence'
   | 'authority_changed'
   | 'idempotency_conflict'
+  | 'snapshot_duplicate'
+  | 'snapshot_parent_unavailable'
+  | 'snapshot_scope_mismatch'
+  | 'snapshot_map_unavailable'
   | 'invalid_schema';
 export interface ReliableRejection {
   readonly status: 'rejected';
@@ -34,6 +38,10 @@ export function parseReliableRejection(input: unknown): ReliableRejection | unde
     epoch_fence: 'reconcile',
     authority_changed: 'none',
     idempotency_conflict: 'none',
+    snapshot_duplicate: 'none',
+    snapshot_parent_unavailable: 'none',
+    snapshot_scope_mismatch: 'none',
+    snapshot_map_unavailable: 'none',
     invalid_schema: 'none',
   };
   if (
