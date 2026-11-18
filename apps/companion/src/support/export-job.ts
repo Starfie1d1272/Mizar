@@ -321,6 +321,8 @@ export class SupportExports {
           ...(hostPin?.segments ?? []),
         ].find((segment) => segment.name === prefix + name);
         if (expected) {
+          if (expected.physicalId !== `${actual.dev}:${actual.ino}:${expected.sha256}`)
+            throw new Error('pin_source_identity_changed');
           if (actual.size !== expected.bytes) throw new Error('pin_source_length_changed');
           const hash = createHash('sha256');
           const buffer = Buffer.alloc(65536);
@@ -347,7 +349,7 @@ export class SupportExports {
           jsonAttachment,
         });
       } catch (error) {
-        gaps.push({ source: prefix + name, reason: String(error) });
+        gap(prefix + name, 'read', error);
       }
     };
     let readyResult: (ExportJob & Record<string, unknown>) | undefined;
@@ -407,6 +409,10 @@ export class SupportExports {
       }
       const companionPin = receipts.find((receipt) => receipt.producerId === 'companion');
       const performancePin = receipts.find((receipt) => receipt.producerId === 'performance');
+      const emptyHostSegments = new Set(
+        (hostPin?.sourceState as { emptyAtCutoffSegments?: string[] } | undefined)
+          ?.emptyAtCutoffSegments,
+      );
       const pinned = (receipt: { segments: { name: string }[] } | null | undefined, name: string) =>
         receipt?.segments.some((segment) => segment.name === name) ?? false;
       const successor = (receipt: PinReceipt | null | undefined, name: string): boolean => {
@@ -424,18 +430,38 @@ export class SupportExports {
       };
       try {
         await safePath(this.logs);
+        const fixedLogs = new Set(
+          [...(companionPin?.segments ?? []), ...(hostPin?.segments ?? [])]
+            .map((segment) => segment.name)
+            .filter((name) => diagnosticSegmentPattern.test(name)),
+        );
+        // Read the producer's exact inventory even if a promised file has
+        // disappeared. Directory enumeration alone would hide that gap.
+        for (const name of [...fixedLogs].sort()) {
+          this.assertActive(job);
+          await capture(this.logs, name);
+        }
         const names = (await readdir(this.logs)).sort();
         for (const name of names) {
           this.assertActive(job);
           if (diagnosticSegmentPattern.test(name)) {
             const pin = name.startsWith('session-') ? companionPin : hostPin;
-            if (pinned(pin, name)) await capture(this.logs, name);
-            else if (successor(pin, name))
+            if (fixedLogs.has(name)) continue;
+            if (successor(pin, name))
               excludedSources.push({
                 source: name,
                 reason: 'producer-declared-post-cutoff-segment',
               });
-            else gap(name, 'pin', new Error('source_not_safely_fixed'));
+            else if (emptyHostSegments.has(name)) {
+              try {
+                const file = await lstat(await safePath(this.logs, name));
+                if (!file.isFile() || file.nlink !== 1 || file.size !== 0)
+                  throw new Error('source_changed_after_empty_cutoff');
+                excludedSources.push({ source: name, reason: 'producer-declared-empty-at-cutoff' });
+              } catch (error) {
+                gap(name, 'pin', error);
+              }
+            } else gap(name, 'pin', new Error('source_not_safely_fixed'));
           } else if (currentProcessLogs.test(name)) await capture(this.logs, name, '', false, true);
         }
         if (names.includes('host-retention.ndjson'))

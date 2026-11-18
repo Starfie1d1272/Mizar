@@ -18,8 +18,6 @@ export function createObserverAssistScope(
       ...settings.settings,
       enabled: settings.settings.enabled && eligible() && !waitingMap,
     }),
-    canRecalibrate: (program: ProgramProjection) =>
-      eligible() && program.status.telemetry === 'fresh' && Boolean(program.map.name),
     observe(program: ProgramProjection, resetAssist: () => void) {
       const map = observerMapScope(program);
       if (waitingMap && program.map.name && map !== waitingMap) {

@@ -273,14 +273,14 @@ BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用�
 | --- | --- |
 | `GET /local/v1/observer` | 组件/连接健康、当前失败、pending、retryAvailable、stopReason 与 recovering |
 | `GET /local/v1/observer-assist` | 设置、游戏自动操作、连接摘要、mapConnection 和修订，不返回密码 |
-| `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接、接收恢复和校准意图 |
+| `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接和接收恢复意图 |
 | `POST /operator/runtime/observer` | 仅 Host 私有能力的准备、启动、停止与续约，路径/运行时由安装和数据目录推导 |
 
 `prepare` 的修订令牌绑定游戏、Job、启动方式和配置，原样传给 `start-configured`。辅助设置、节目连接和 HUD 命令分别去重；只改提前时间保留缓冲/测量，不重启已接受游戏连接。停止辅助保留本场连接，`resume-receiver` 核对连接 ID 与修订，旧目标拒绝。
 
-`recalibrate` 提交连接 ID、预期修订和 `calibrationRevision`；仅当前制作、启用且未暂停/等下一图时接受。它推进独立校准修订、清空基线，不重建游戏连接；旧请求 409 不再次清空。
+`configure` 保存名义节目延迟 `delaySeconds`，接受整数 1–600 秒，旧配置缺字段时默认 120 秒。提前时间 `leadSeconds` 独立设置。
 
-`assist` schema 3 使用 `timingBasis:estimated`，返回测量/等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和倒计时来自私有投影；无可靠校准时等待，无事件是正常状态。公开 Program/Radar 不包含这些信息。
+`assist` schema 5 返回配置延迟 `effectiveDelaySeconds`、等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和估算倒计时由私有投影提供。
 
 ### 观战连接命令
 

@@ -664,7 +664,10 @@ export class OutputService {
 
   sourceCaptureCoverage(identity: ExactSource) {
     if (this.outboxUnavailable || !this.outbox) return { state: 'unknown' as const };
-    return this.outbox.captureCoverage(identity);
+    return {
+      ...this.outbox.captureCoverage(identity),
+      durableUnknown: this.outbox.hasDurableUnknownCapture(identity),
+    };
   }
 
   private executionEligible(binding: MatchContextBinding | undefined): boolean {

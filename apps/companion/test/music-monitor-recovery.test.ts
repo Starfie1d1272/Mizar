@@ -8,6 +8,9 @@ import { PreviewMonitor } from '../src/music/preview-monitor.js';
 import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { createMusicDevice } from '../src/obs/music-device.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
+import { MusicDirector } from '../src/music/director.js';
+import type { MusicDeviceProvider } from '../src/music/device.js';
+import type { MusicTruth } from '../src/music/cues.js';
 
 test('monitor restoration retains a lost receipt and confirms it by readback after restart', async (t) => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-recovery-'));
@@ -73,4 +76,61 @@ test('monitor restoration retains a lost receipt and confirms it by readback aft
   assert.equal(await recovery.restore(device, () => true), true);
   assert.deepEqual(reopened.state.previewMonitorLeases, []);
   assert.equal(writes, 1);
+});
+
+test('automatic music bounds collection probes while telemetry changes and retries on collection recovery', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-cooldown-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  await store.update((state) => {
+    state.sources.bgm = 'owned-source';
+  });
+  let now = 0;
+  let collectionRevision = 1;
+  let collectionReads = 0;
+  let inactive = true;
+  const device = createMusicDevice({
+    async call(method) {
+      if (method === 'GetSceneCollectionList') {
+        collectionReads++;
+        return { currentSceneCollectionName: inactive ? 'Personal' : OBS_COLLECTION };
+      }
+      if (method === 'GetInputList') return { inputs: [] };
+      assert.fail(`Unexpected OBS request: ${method}`);
+    },
+  });
+  const provider: MusicDeviceProvider = {
+    get collectionRevision() {
+      return collectionRevision;
+    },
+    session: (run) => run(device, 1),
+    close: async () => {},
+  };
+  const truth = (): MusicTruth => ({
+    active: 'waiting',
+    production: false,
+    program: {
+      map: { name: 'de_test', phase: null },
+      cursor: { mapEpoch: now / 100 },
+      match: null,
+      clock: null,
+      status: { telemetry: 'fresh' },
+    } as MusicTruth['program'],
+  });
+  const director = new MusicDirector(store, provider, truth, () => now);
+  for (; now < 60000; now += 100) await director.tick();
+  assert.ok(collectionReads >= 4 && collectionReads <= 10, `got ${collectionReads} probes`);
+  const beforeExplicit = collectionReads;
+  await director.tick(true);
+  assert.equal(collectionReads, beforeExplicit + 1);
+  inactive = false;
+  collectionRevision++;
+  now += 100;
+  await director.tick();
+  assert.ok(collectionReads > beforeExplicit + 1);
+  const afterRecovery = collectionReads;
+  now += 100;
+  await director.tick();
+  assert.ok(collectionReads > afterRecovery);
 });

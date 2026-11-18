@@ -882,6 +882,7 @@ impl DesktopLog {
             }
             let receipt = if action == "prepare" {
                 let mut segments = Vec::new();
+                let mut empty_segments = Vec::new();
                 for entry in fs::read_dir(&self.directory).map_err(|e| e.to_string())? {
                     let entry = entry.map_err(|e| e.to_string())?;
                     let name = entry.file_name().to_string_lossy().into_owned();
@@ -892,13 +893,17 @@ impl DesktopLog {
                     if !meta.is_file() || meta.file_type().is_symlink() {
                         return Err("诊断固定源无效。".into());
                     }
-                    if meta.len() == 0 {
-                        continue;
-                    }
-                    if meta.len() > 2 * 1024 * 1024 || segments.len() >= 4096 {
+                    if meta.len() > 2 * 1024 * 1024 || segments.len() + empty_segments.len() >= 4096
+                    {
                         return Err("诊断固定源超出预算。".into());
                     }
-                    segments.push(json!({"name":name,"bytes":meta.len()}));
+                    if meta.len() == 0 {
+                        if name != log.segment_name && name != log.document_segment_name {
+                            empty_segments.push(name);
+                        }
+                    } else {
+                        segments.push(json!({"name":name,"bytes":meta.len()}));
+                    }
                 }
                 // Seal live carriers before dropping the producer lock; the
                 // source names are never reused while background hashing runs.
@@ -923,6 +928,9 @@ impl DesktopLog {
                 let mut source_state = self.deferred_source_state();
                 source_state["postCutoffSegments"] =
                     json!([log.segment_name, log.document_segment_name]);
+                if !empty_segments.is_empty() {
+                    source_state["emptyAtCutoffSegments"] = json!(empty_segments);
+                }
                 let mut receipt = json!({"sourceState":source_state,"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments});
                 if let Some(owner) = &delivery_owner {
                     receipt["deliveryOwner"] = owner.clone();

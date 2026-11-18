@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useLocalChannelClient } from '../realtime';
 import { Button, StatusPill } from '../ui';
-import { useLocalRead, openTool, command } from '../preparation/client';
+import { useLocalRead, openTool } from '../preparation/client';
 import {
   observerFailureReason,
   observerNeedsRecovery,
@@ -13,9 +13,7 @@ import { observerHotkeyLabel } from '@mizar/hud-view';
 
 export function ObserverHints() {
   const runtime = useLocalRead<ObserverRuntimeView>('/local/v1/observer');
-  const configuration = useLocalRead<ConnectionPreparationView & { calibrationRevision: string }>(
-    '/local/v1/observer-assist',
-  );
+  const configuration = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -23,12 +21,6 @@ export function ObserverHints() {
   }, []);
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState('');
-  const [recalibrating, setRecalibrating] = useState(false);
-  const scope = JSON.stringify([configuration?.revision, configuration?.mapConnection?.id]);
-  const [calibrationError, setCalibrationError] = useState<{
-    scope: string;
-    message: string;
-  } | null>(null);
   const client = useLocalChannelClient('assist');
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const observer = state.state === 'live' ? state.current?.payload.observer : undefined;
@@ -41,8 +33,7 @@ export function ObserverHints() {
     !runtime.pending &&
     now - configuration.connectionRequestedAt > 60_000 &&
     observer?.state !== 'ready' &&
-    observer?.state !== 'paused' &&
-    observer?.waitingReason !== 'calibration-pending',
+    observer?.state !== 'paused',
   );
   const [clock, setClock] = useState({ observer, elapsed: 0 });
   useEffect(() => {
@@ -162,64 +153,9 @@ export function ObserverHints() {
               ? '正在连接提前提示'
               : observer?.state === 'paused'
                 ? '比赛暂停'
-                : observer?.waitingReason === 'calibration-pending'
-                  ? '正在校准提前提示…'
-                  : '正在接收比赛数据…'}
+                : '正在接收比赛数据…'}
         </StatusPill>
       ) : null}
-      {runtime?.active && !paused && !pending && !needsRecovery && !reconnecting && !connecting ? (
-        <div>
-          <Button
-            disabled={
-              recalibrating ||
-              retrying ||
-              !configuration.calibrationRevision ||
-              configuration.waitingForMap ||
-              state.state !== 'live'
-            }
-            aria-busy={recalibrating}
-            title="提示与画面时间不符时重新校准；期间暂时停止提示，不会重连游戏。"
-            onClick={() => {
-              if (recalibrating || !configuration.mapConnection) return;
-              setRecalibrating(true);
-              setError('');
-              setCalibrationError(null);
-              const requestScope = scope;
-              const mapConnectionId = configuration.mapConnection.id;
-              void (async () => {
-                const response = await fetch('/local/v1/observer-assist', {
-                  cache: 'no-store',
-                  signal: AbortSignal.timeout(5000),
-                });
-                if (!response.ok) throw new Error('无法读取当前校准状态，请重试。');
-                const current = (await response.json()) as typeof configuration;
-                if (
-                  current?.revision !== configuration.revision ||
-                  current?.mapConnection?.id !== mapConnectionId ||
-                  typeof current?.calibrationRevision !== 'string'
-                )
-                  throw new Error('本图连接已变化，请刷新后重新校准。');
-                await command('/operator/observer-assist', {
-                  action: 'recalibrate',
-                  calibrationRevision: current.calibrationRevision,
-                  id: mapConnectionId,
-                  expectedRevision: configuration.revision,
-                });
-              })()
-                .catch((reason: unknown) => {
-                  setCalibrationError({
-                    scope: requestScope,
-                    message: reason instanceof Error ? reason.message : '重新校准未完成，请重试。',
-                  });
-                })
-                .finally(() => setRecalibrating(false));
-            }}
-          >
-            {recalibrating ? '正在重新校准…' : '重新校准提前提示'}
-          </Button>
-        </div>
-      ) : null}
-      {calibrationError?.scope === scope ? <p role="alert">{calibrationError.message}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {hints.length && !paused && !pending && !needsRecovery && !reconnecting && !connecting ? (
         <ol className="observer-hints">

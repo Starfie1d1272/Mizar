@@ -7,9 +7,100 @@ import { test, type TestContext } from 'node:test';
 import { buildApp } from '../src/app.js';
 import type { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
+import { closeWebsiteOutput } from '../src/output/shutdown.js';
+import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
+import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 
 const host = '127.0.0.1:3000';
 const origin = `http://${host}`;
+
+test('website shutdown cannot acknowledge a failed local source commit', async () => {
+  const closed: string[] = [];
+  await assert.rejects(
+    closeWebsiteOutput(
+      {
+        prepareSourceShutdown: async () => {
+          throw new Error('disk write failed');
+        },
+        shutdownSource: async () => {
+          assert.fail('remote release must wait for the local commit');
+        },
+        closeSourceState: async () => {
+          closed.push('source');
+        },
+      },
+      {
+        close: async () => {
+          closed.push('outbox');
+        },
+      },
+      () => assert.fail('local failure must reach the flush owner'),
+    ),
+    (error: AggregateError) => error.errors[0]?.message === 'disk write failed',
+  );
+  assert.deepEqual(closed.sort(), ['outbox', 'source']);
+});
+
+test('Demo recovery retains its marker and remains isolated until output restoration commits', async (t) => {
+  const { directory } = await fixture(t);
+  const markerPath = join(directory, 'demo-test.json');
+  const requestId = randomUUID();
+  const marker = { version: 'mizar.demo-test.v1', requestId, teamAName: 'A', teamBName: 'B' };
+  await writeFile(markerPath, JSON.stringify(marker));
+  let obsReady = false;
+  let outputQuarantined = true;
+  let failOutputRestore = true;
+  const stages: string[] = [];
+  type Options = ConstructorParameters<typeof DemoTestController>[0];
+  const open = () =>
+    new DemoTestController({
+      markerPath,
+      recovery: readDemoTestRecovery(markerPath),
+      dataReady: () => false,
+      context: null,
+      runtime: createProgramRuntime('demo-recovery-test'),
+      obs: async () => undefined,
+      scenes: {
+        get: () => ({ revision: 'observed-scene' }),
+        selectWaitingForExit: async () =>
+          obsReady ? { ok: true } : { ok: false, message: 'OBS offline' },
+      } as unknown as Options['scenes'],
+      production: {
+        setTrialPreparation: () => {},
+        setTrialPending: () => {},
+        reserveTrialOperation: () => true,
+        releaseTrialOperation: () => {},
+      } as unknown as Options['production'],
+      diagnostic: (stage) => stages.push(stage),
+      quarantineOutput(value) {
+        if (!value && failOutputRestore) throw new Error('restore interrupted');
+        outputQuarantined = value;
+      },
+      refresh: () => {},
+      restoreFormal: async () => {},
+      hold: () => {},
+    });
+  let demo = open();
+  assert.equal((await demo.command({ action: 'finish', requestId })).code, 200);
+  assert.equal(demo.get().phase, 'recovery');
+  assert.equal(demo.canAcceptGsi(), false);
+  assert.equal((await demo.command({ action: 'complete', requestId })).code, 200);
+  assert.deepEqual(readDemoTestRecovery(markerPath), { ...marker, localRestored: true });
+  assert.equal(demo.get().active, true);
+  obsReady = true;
+  assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);
+  assert.deepEqual(readDemoTestRecovery(markerPath), { ...marker, localRestored: true });
+  assert.equal(outputQuarantined, true);
+  assert.ok(stages.includes('formal_output_restore'));
+  failOutputRestore = false;
+  demo = open();
+  assert.equal((await demo.command({ action: 'complete', requestId })).code, 200);
+  await assert.rejects(readFile(markerPath), { code: 'ENOENT' });
+  assert.equal(outputQuarantined, false);
+  assert.equal(demo.canAcceptGsi(), false);
+  demo.openFormalBoundary();
+  assert.equal(demo.canAcceptGsi(), true);
+});
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-runtime-boundaries-'));

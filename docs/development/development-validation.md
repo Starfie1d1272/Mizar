@@ -61,12 +61,16 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 自动化启动实际构建的 Companion，核对就绪、主页面渲染无未捕获异常及正常退出。Chromium 被信号终止、失败或超时应保留原因和有界 stderr，不放宽门禁。`--app-version` 只核对 EXE 版本，不证明 GUI 加载或正常退出。
 
+Windows 上的生产网页启停检查用临时运行身份调用本机停止入口，并核对当前实例的落盘回执。脚本使用隔离的数据目录和测试凭据。
+
 ### 测试职责与独立判定
 
 - 只保留能独立证明关键风险结果的用例。优先从生产入口核对实际副作用、持久化结果或隔离边界；删除依赖内部调用顺序、重复覆盖或需要随实现同步改写的低价值用例。预期结果由独立证据确定。
 - 对真实风险覆盖成功、失败/未知、取消、重试和陈旧请求。不同领域复用窄契约，不在每层复制完整矩阵。
 - 持久化和恢复检查原文件、精确身份、提交顺序与重启后的结果；不能以空队列、空状态或一次成功请求证明恢复完整。
 - 对外命令的受理、回执、读回与最终音画分开验证。协议桩能证明控制逻辑，不能证明 Windows、CS2、OBS 或直播平台真实效果。
+- 结束与恢复分别取证本机持久写入、远端回执和重启续办。断网、晚到认领与重启的反例见[来源生命周期验证](../../apps/companion/test/rivalhub-source-lifecycle.test.ts)。
+- 注入可选外部依赖失败，核对独立的本机操作和隔离边界。用请求上界验证限频，同时检查首因、恢复和输出效果。参见[观察辅助时间线](../../packages/core/test/observer-assist-clock.test.ts)、[音乐恢复](../../apps/companion/test/music-monitor-recovery.test.ts)与[运行时边界](../../apps/companion/test/runtime-boundaries.test.ts)。
 - 检查通过后，只有新改动、失败或未解决风险才补充验证。最终提交后重跑受影响检查；环境缺失明确列为未运行或证据不足。
 
 ## 操作记录与失败可诊断性审查
@@ -109,6 +113,8 @@ pnpm architecture:check
 ## 桌面 IPC 与可靠输出
 
 修改[桌面 IPC 声明](../../apps/desktop/src-tauri/ipc_contract.rs)后，从 `apps/desktop/src-tauri` 编译并运行 `ipc_generate.rs`，命令为 `rustc --edition=2021 ipc_generate.rs -o <临时可执行文件路径>`。Windows 构建核对生成的命令名及全部参数与结果校验。
+
+原生 CI 从 Tauri 生成的能力文件核对准备读取、工作台退出和诊断保存命令的实际窗口与来源授权。正负反例见[架构检查用例](../../scripts/architecture/check.test.mjs)。真实窗口接入与行为由 [#546](https://github.com/Starfie1d1272/Mizar/issues/546)验收。
 
 `runtime_performance_window` 分别记录 Outbox 快照准备与字节数、worker 请求往返、SQLite 写事务、视频 Range 读取字节和缓存复用，以及 Companion 主线程的事件循环延迟。文件读取字节按应用的读取计数，可能由操作系统缓存满足。主线程诊断使用 20 ms 采样间隔，实际制作机的接收间隔以现场诊断为准。
 

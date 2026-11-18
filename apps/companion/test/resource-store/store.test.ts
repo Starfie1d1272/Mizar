@@ -220,12 +220,16 @@ describe('Resource Store', () => {
       ),
     ).toThrow();
     const { root, store } = await setup();
-    const outside = join(root, 'outside.mp4');
-    await writeFile(outside, '0123456789');
+    const outside = join(root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'video.mp4'), '0123456789');
     await expect(
       store.installVerified(packId, async ({ directory }) => {
-        await mkdir(join(directory, 'replay'));
-        await symlink(outside, join(directory, 'replay/video.mp4'));
+        await symlink(
+          outside,
+          join(directory, 'replay'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
         return 'v1';
       }),
     ).rejects.toThrow('resource_path_unsafe');

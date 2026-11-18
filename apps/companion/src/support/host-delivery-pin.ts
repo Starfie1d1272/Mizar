@@ -13,6 +13,19 @@ import { readHostPin, type IncidentParticipant } from './retention.js';
 export function hostDeliveryParticipant(root: string, signal: AbortSignal): IncidentParticipant {
   const directory = join(root, 'host-delivery-pins');
   let ownerInstance: string | undefined;
+  const withdraw = async (name: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await unlink(await safePath(directory, name));
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return;
+        if (code !== 'EBUSY' || attempt >= 3) throw error;
+        await delay(50 * (attempt + 1));
+      }
+    }
+  };
   const request = async (pinId: string, action: 'prepare' | 'commit') => {
     if (signal.aborted) throw new Error('ack_cleanup_cancelled');
     if (!/^[a-f0-9-]{36}$/.test(pinId)) throw new Error('host_pin_id_invalid');
@@ -76,16 +89,8 @@ export function hostDeliveryParticipant(root: string, signal: AbortSignal): Inci
     release: async (pinId) => {
       // Withdraw before deleting the response. A late native prepare/commit cannot
       // resurrect a hold without the request; native owns receipt cleanup.
-      await safePath(directory, `${pinId}.json`)
-        .then(unlink)
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        });
-      await safePath(directory, `${pinId}.response.json`)
-        .then(unlink)
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        });
+      await withdraw(`${pinId}.json`);
+      await withdraw(`${pinId}.response.json`);
     },
   };
 }

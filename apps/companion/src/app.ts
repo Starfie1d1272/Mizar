@@ -871,7 +871,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         const key = JSON.stringify([
           diagnostics.blocked,
           diagnostics.lastReset,
-          diagnostics.anchors > 0,
           diagnostics.pending > 0,
         ]);
         const now = debugClock.nowMonotonicMs();
@@ -1925,8 +1924,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     observerSettings,
     localWebTransport.getOriginPolicy(),
     observerEligible,
-    () => observerAssist.canRecalibrate(projectionCoordinator.getCurrent().program),
-    () => projectionCoordinator.recalibrateObserver(),
+    () =>
+      observerEligible() &&
+      projectionCoordinator.getCurrent().program.status.telemetry === 'fresh' &&
+      Boolean(projectionCoordinator.getCurrent().program.map.name),
   );
   const observerSettingsUnsubscribe = observerAssist.subscribe({
     program: () => projectionCoordinator.getCurrent().program,

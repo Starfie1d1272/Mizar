@@ -72,6 +72,8 @@ export interface MusicDevice {
 }
 
 export interface MusicDeviceProvider {
+  readonly collectionRevision?: number;
+  readonly nextConnectionAttemptAt?: number;
   session<T>(run: (device: MusicDevice, epoch: number) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }

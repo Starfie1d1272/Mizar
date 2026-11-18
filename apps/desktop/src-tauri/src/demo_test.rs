@@ -514,7 +514,16 @@ pub fn quarantine(log: &DesktopLog) -> Result<Option<String>, String> {
 
 pub fn complete(log: &DesktopLog, request_id: Option<&str>) -> Result<(), String> {
     if let Some(id) = request_id {
-        request(log, "complete", id, None)?;
+        let state = request(log, "complete", id, None)?;
+        if state["active"] == true {
+            if state["phase"] != "recovery"
+                || state["requestId"] != id
+                || state["localRestored"] != true
+            {
+                return Err("Demo 恢复结果未确认，请重试。".into());
+            }
+            log.event("demo_test", "pending", Some("stage=waiting_scene"));
+        }
     }
     Ok(())
 }

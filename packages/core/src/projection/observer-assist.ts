@@ -3,17 +3,6 @@ import type { ProgramSafeRuntimeView } from './program-safe-runtime.js';
 import type { ProgramProjection, ProgramPlayerProjection } from './program.js';
 import type { PlayerDeathGameEvent, GameEventObservation } from '../game-events/index.js';
 
-/** A position proven to share one playback timeline and continuity with an event. */
-export interface ProgramClock {
-  readonly timeDomain: string;
-  readonly continuity: string;
-  readonly mapName: string;
-  readonly tick: number;
-  readonly ticksPerSecond: number;
-  /** Set only after freshness, progress and continuity have been checked by the caller. */
-  readonly usable: boolean;
-}
-
 export interface ObserverHint {
   readonly id: string;
   readonly remainingSeconds: number;
@@ -23,6 +12,7 @@ export interface ObserverHint {
 export interface ObserverHintSettings {
   readonly enabled: boolean;
   readonly leadSeconds: number;
+  readonly delaySeconds: number;
 }
 
 /** Operator-only hints share the Program cursor while retaining their own payload. */
@@ -31,19 +21,16 @@ export interface ObserverAssistProjection {
   readonly availability: 'unavailable' | 'available';
   readonly observer?: ObserverHintSettings & {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
-    readonly timingBasis: 'estimated' | 'program-clock';
-    readonly calibrationState: 'uncalibrated' | 'measured' | 'held' | 'reacquiring';
-    readonly effectiveDelaySeconds: number | null;
+    readonly effectiveDelaySeconds: number;
     readonly waitingReason: string | null;
     readonly nextWindowSeconds: number | null;
-    readonly measuredDelaySeconds: number | null;
     readonly hints: readonly ObserverHint[];
   };
 }
 
 export type ObserverProgramView = Pick<ProgramProjection, 'cursor' | 'status'> & {
   readonly match: { readonly matchId: string } | null;
-  readonly map: Pick<ProgramProjection['map'], 'name'>;
+  readonly map: Pick<ProgramProjection['map'], 'name' | 'roundNumber'>;
   readonly clock: Pick<NonNullable<ProgramProjection['clock']>, 'phase'> | null;
   readonly coverage: Pick<ProgramProjection['coverage'], 'allPlayers'>;
   readonly players: readonly Pick<
@@ -54,32 +41,10 @@ export type ObserverProgramView = Pick<ProgramProjection, 'cursor' | 'status'> &
 interface BufferedKill {
   event: PlayerDeathGameEvent;
   sourceMs: number;
-  matched: boolean;
   retired: boolean;
   shownDueMs: number | null;
-  position?: Omit<ProgramClock, 'usable'>;
 }
 
-interface ClockPoint {
-  round: number;
-  remaining: number;
-  received: number;
-  generation: number;
-  segment: number;
-}
-interface ClockBoundary {
-  round: number;
-  received: number;
-  generation: number;
-}
-interface ClockInput {
-  round: number;
-  remaining: number;
-  received: number;
-  generation: number;
-}
-
-/** Private event projection; clock comparisons use receive times from this process. */
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
   private pendingMap: {
@@ -92,35 +57,10 @@ export class ObserverHintTimeline {
   private context = '';
   private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
-  private previous = new Map<string, boolean>();
-  private seenReceive: number | null = null;
-  private sourceClocks: ClockPoint[] = [];
+  private lastDeathSequence = -1;
   private sourceExecution: number | undefined;
   private sourceExecutionGeneration: number | undefined;
   private sourceExecutionChanged = false;
-  private freezeEnds: ClockBoundary[] = [];
-  private programPhase: {
-    phase: string;
-    round: number;
-    received: number;
-    generation: number;
-  } | null = null;
-  private freezeOffset: { delay: number; round: number; generation: number } | null = null;
-  private lastProgramClock: ClockInput | null = null;
-  private clockSegment = 0;
-  private clockEvidence: {
-    delay: number;
-    time: number;
-    remaining: number;
-    round: number;
-    segment: number;
-  }[] = [];
-  private effectiveDelayMs: number | null = null;
-  private lastMatchedDeathOffsetMs: number | null = null;
-  private lastEvidenceAt: number | null = null;
-  private evidenceCount = 0;
-  private evidenceSpreadMs: number | null = null;
-  private estimateReason = 'awaiting-evidence';
   private earliest = -Infinity;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
@@ -131,8 +71,6 @@ export class ObserverHintTimeline {
   private recentEventKinds: GameEventObservation['kind'][] = [];
   private discarded: Record<string, number> = {};
   private acceptedDeaths = 0;
-  private programDeaths = 0;
-  private candidateCount = 0;
   private lastReceivedMs: number | null = null;
   private nextDueMs: number | null = null;
   private nextWindowMs: number | null = null;
@@ -159,22 +97,10 @@ export class ObserverHintTimeline {
       acceptedDeaths: this.acceptedDeaths,
       discarded: { ...this.discarded },
       buffered: this.kills.length,
-      pending: this.kills.filter((k) => !k.retired && !k.matched).length,
+      pending: this.kills.filter((k) => !k.retired).length,
       nextDueMonotonicMs: this.nextDueMs,
       nextWindowInMs:
         this.nextWindowMs === null ? null : Math.max(0, this.nextWindowMs - this.lastNow),
-      programDeathChanges: this.programDeaths,
-      matchingCandidates: this.candidateCount,
-      anchors: this.evidenceCount,
-      calibration: {
-        state: this.calibrationState(this.lastNow),
-        effectiveDelayMs: this.effectiveDelayMs,
-        lastMatchedDeathOffsetMs: this.lastMatchedDeathOffsetMs,
-        evidenceCount: this.evidenceCount,
-        evidenceSpreadMs: this.evidenceSpreadMs,
-        lastEvidenceMonotonicMs: this.lastEvidenceAt,
-        reason: this.estimateReason,
-      },
       lastReset: { ...this.lastReset },
       blocked: this.blocked,
     };
@@ -183,7 +109,7 @@ export class ObserverHintTimeline {
     this.discarded[reason] = (this.discarded[reason] ?? 0) + 1;
   }
   private reset(reason: string, now: number) {
-    if (this.lastReset.reason !== reason || this.kills.length || this.effectiveDelayMs !== null)
+    if (this.lastReset.reason !== reason || this.kills.length)
       this.lastReset = { reason, atMonotonicMs: now };
     this.clear();
     this.earliest = now;
@@ -195,28 +121,13 @@ export class ObserverHintTimeline {
 
   clear() {
     this.kills = [];
-    this.sourceClocks = [];
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
     this.sourceExecutionChanged = false;
-    this.freezeEnds = [];
-    this.programPhase = null;
-    this.freezeOffset = null;
-    this.lastProgramClock = null;
-    this.clockEvidence = [];
-    this.clockSegment++;
-    this.effectiveDelayMs = null;
-    this.lastMatchedDeathOffsetMs = null;
-    this.lastEvidenceAt = null;
-    this.evidenceCount = 0;
-    this.evidenceSpreadMs = null;
-    this.estimateReason = 'awaiting-evidence';
-    this.previous.clear();
-    this.seenReceive = null;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
-  consume(event: GameEventObservation, position?: Omit<ProgramClock, 'usable'>) {
+  consume(event: GameEventObservation) {
     if (event.cursor.role !== 'lookahead') return;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
     this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
@@ -231,9 +142,7 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
-      this.clockGenerationChanged(true);
-      this.generation = event.cursor.generation;
-      this.lastMatchedDeathOffsetMs = null;
+      this.advanceGeneration(event.cursor.generation);
     }
     if (event.kind !== 'player-death') return;
     if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) {
@@ -244,293 +153,62 @@ export class ObserverHintTimeline {
       this.discard('invalid-or-before-boundary');
       return;
     }
-    if (
-      this.kills.some(
-        (k) =>
-          k.event.cursor.generation === event.cursor.generation &&
-          k.event.cursor.sequence === event.cursor.sequence,
-      )
-    ) {
+    if (event.cursor.sequence <= this.lastDeathSequence) {
       this.discard('duplicate');
       return;
     }
+    this.lastDeathSequence = event.cursor.sequence;
     this.acceptedDeaths++;
     this.kills.push({
       event,
       sourceMs: event.cursor.observedMonotonicMs,
-      matched: false,
       retired: false,
       shownDueMs: null,
-      ...(position ? { position } : {}),
     });
     if (this.kills.length > 4096) {
       this.kills.shift();
       this.discard('capacity');
     }
   }
-  recalibrate(now: number): void {
-    // Only an explicit operator action replaces a calibration within this map.
-    // Already shown estimated events must not reappear with a later deadline.
-    for (const kill of this.kills) {
-      if (kill.shownDueMs !== null && !kill.retired) {
-        kill.retired = true;
-        this.discard('manual-recalibration');
-      }
-    }
-    this.effectiveDelayMs = null;
-    this.lastEvidenceAt = null;
-    this.evidenceCount = 0;
-    this.evidenceSpreadMs = null;
-    this.lastMatchedDeathOffsetMs = null;
-    this.lastProgramClock = null;
-    this.clockEvidence = [];
-    this.programPhase = null;
-    this.freezeOffset = null;
-    this.previous.clear();
-    this.seenReceive = null;
-    this.estimateReason = 'manual-recalibration';
-    this.lastReset = { reason: 'manual-recalibration', atMonotonicMs: now };
-  }
-  private clockGenerationChanged(source: boolean): void {
-    this.lastProgramClock = null;
-    this.clockEvidence = [];
-    this.programPhase = null;
-    this.freezeOffset = null;
-    if (source) {
-      this.sourceClocks = [];
-      this.freezeEnds = [];
-      this.clockSegment++;
-    }
-  }
-  private calibrationState(now: number): 'uncalibrated' | 'measured' | 'held' {
-    if (this.effectiveDelayMs === null) return 'uncalibrated';
-    const age = this.lastEvidenceAt === null ? Infinity : now - this.lastEvidenceAt;
-    return age <= 60000 ? 'measured' : 'held';
+  private advanceGeneration(generation: number) {
+    this.generation = generation;
+    this.lastDeathSequence = -1;
+    this.kills = [];
   }
 
-  private observeClock(
-    source: ClockInput | undefined,
-    program: ClockInput | undefined,
-    now: number,
-    freezeEnd?: ClockBoundary,
-    sourceExecution?: number,
-    sourceGeneration?: number,
-    phase?: { phase: string; round: number; received: number; generation: number },
-  ) {
-    if (sourceExecution !== undefined) {
-      if (
-        this.sourceExecutionGeneration === sourceGeneration &&
-        this.sourceExecution !== undefined &&
-        sourceExecution !== this.sourceExecution
-      ) {
-        this.sourceExecutionChanged = true;
-        this.kills = [];
-        this.effectiveDelayMs = null;
-        this.lastEvidenceAt = null;
-        this.evidenceCount = 0;
-        this.evidenceSpreadMs = null;
-        this.lastProgramClock = null;
-        this.previous.clear();
-        this.seenReceive = null;
-        this.sourceClocks = [];
-        this.clockEvidence = [];
-        this.freezeEnds = [];
-        this.freezeOffset = null;
-      }
-      this.sourceExecution = sourceExecution;
-      this.sourceExecutionGeneration = sourceGeneration;
-    }
+  private observeExecution(execution: number | undefined, generation: number) {
+    if (execution === undefined) return;
     if (
-      freezeEnd &&
-      !this.freezeEnds.some(
-        (p) => p.generation === freezeEnd.generation && p.received === freezeEnd.received,
-      )
+      this.sourceExecutionGeneration === generation &&
+      this.sourceExecution !== undefined &&
+      execution !== this.sourceExecution
     ) {
-      this.freezeEnds.push(freezeEnd);
-      this.freezeEnds = this.freezeEnds.filter((p) => p.received >= now - 780000).slice(-128);
+      this.sourceExecutionChanged = true;
+      this.kills = [];
     }
-    if (phase && phase.received !== this.programPhase?.received) {
-      const previousPhase = this.programPhase;
-      if (
-        previousPhase?.phase === 'freezetime' &&
-        phase.phase === 'live' &&
-        previousPhase.round === phase.round &&
-        previousPhase.generation === phase.generation &&
-        phase.received > previousPhase.received &&
-        phase.received - previousPhase.received <= 2000
-      ) {
-        const candidates = this.freezeEnds.filter(
-          (p) =>
-            p.round === phase.round &&
-            phase.received >= p.received &&
-            phase.received - p.received <= 600000,
-        );
-        this.freezeOffset =
-          candidates.length === 1
-            ? {
-                delay: phase.received - candidates[0]!.received,
-                round: phase.round,
-                generation: candidates[0]!.generation,
-              }
-            : null;
-      }
-      this.programPhase = phase;
-    } else if (!phase) this.programPhase = null;
-    const last = this.sourceClocks.at(-1);
-    if (source && (!last || source.received !== last.received)) {
-      const elapsed = last ? (source.received - last.received) / 1000 : 0;
-      const advanced = last ? last.remaining - source.remaining : 0;
-      if (
-        last &&
-        source.generation === last.generation &&
-        source.round === last.round &&
-        elapsed > 0 &&
-        elapsed <= 2 &&
-        advanced === 0
-      ) {
-        // Quantized clocks may repeat between progress samples. Keep the last advancing point.
-      } else {
-        if (
-          !last ||
-          source.generation !== last.generation ||
-          source.round !== last.round ||
-          elapsed <= 0 ||
-          elapsed > 2 ||
-          advanced <= 0 ||
-          Math.abs(advanced - elapsed) > 0.35
-        ) {
-          this.clockSegment++;
-        }
-        this.sourceClocks.push({ ...source, segment: this.clockSegment });
-        this.sourceClocks = this.sourceClocks
-          .filter((p) => p.received >= now - 780000)
-          .slice(-16000);
-      }
-    } else if (!source && last && last.segment === this.clockSegment) {
-      this.clockSegment++;
-    }
-    // Keep source samples while isolated, but never calibrate against the previous execution.
-    if (this.sourceExecutionChanged) return;
-    // Calibrate once per map execution. Reconnects and later clock noise never
-    // change this baseline or gate otherwise usable hints.
-    if (this.effectiveDelayMs !== null) return;
-    if (!program) {
-      this.lastProgramClock = null;
-      this.clockEvidence = [];
-      return;
-    }
-    if (this.lastProgramClock && program.received === this.lastProgramClock.received) return;
-    const previous = this.lastProgramClock;
-    if (
-      !previous ||
-      previous.generation !== program.generation ||
-      previous.round !== program.round
-    ) {
-      this.lastProgramClock = program;
-      this.clockEvidence = [];
-      return;
-    }
-    const elapsed = (program.received - previous.received) / 1000;
-    const advanced = previous.remaining - program.remaining;
-    if (elapsed > 0 && elapsed <= 2 && advanced === 0) return;
-    this.lastProgramClock = program;
-    if (elapsed <= 0 || elapsed > 2 || advanced <= 0 || Math.abs(advanced - elapsed) > 0.35) {
-      this.clockEvidence = [];
-      return;
-    }
-    const candidates: { delay: number; segment: number }[] = [];
-    for (let i = 1; i < this.sourceClocks.length; i++) {
-      const a = this.sourceClocks[i - 1]!;
-      const b = this.sourceClocks[i]!;
-      if (
-        a.segment !== b.segment ||
-        a.round !== program.round ||
-        b.round !== program.round ||
-        a.remaining < program.remaining ||
-        b.remaining > program.remaining
-      )
-        continue;
-      const fraction = (a.remaining - program.remaining) / (a.remaining - b.remaining);
-      const sourceTime = a.received + fraction * (b.received - a.received);
-      const delay = program.received - sourceTime;
-      if (
-        delay >= 0 &&
-        delay <= 600000 &&
-        !candidates.some((c) => c.segment === a.segment && Math.abs(c.delay - delay) < 1)
-      )
-        candidates.push({ delay, segment: a.segment });
-    }
-    if (candidates.length !== 1) {
-      this.clockEvidence = [];
-      return;
-    }
-    const lastEvidence = this.clockEvidence.at(-1);
-    // Limit correlated samples; paced backlog cannot be identified from this contract.
-    if (
-      lastEvidence &&
-      (lastEvidence.round !== program.round || lastEvidence.segment !== candidates[0]!.segment)
-    ) {
-      this.clockEvidence = [];
-    } else if (lastEvidence && program.received - lastEvidence.time < 2000) return;
-    this.clockEvidence.push({
-      delay: candidates[0]!.delay,
-      segment: candidates[0]!.segment,
-      time: program.received,
-      remaining: program.remaining,
-      round: program.round,
-    });
-    this.clockEvidence = this.clockEvidence.filter((p) => p.time >= now - 30000).slice(-12);
-    if (
-      this.clockEvidence.length < 3 ||
-      this.clockEvidence.at(-1)!.time - this.clockEvidence[0]!.time < 5000
-    )
-      return;
-    const delays = this.clockEvidence.map((p) => p.delay).sort((a, b) => a - b);
-    const spread = delays.at(-1)! - delays[0]!;
-    if (spread > 1500) {
-      this.estimateReason = 'unstable-clock';
-      return;
-    }
-    const median = delays[Math.floor(delays.length / 2)]!;
-    if (
-      this.freezeOffset &&
-      this.freezeOffset.round === program.round &&
-      this.freezeOffset.generation ===
-        this.sourceClocks.find((p) => p.segment === candidates[0]!.segment)?.generation &&
-      Math.abs(this.freezeOffset.delay - median) > 2500
-    ) {
-      this.estimateReason = 'freeze-boundary-conflict';
-      return;
-    }
-    this.effectiveDelayMs = median;
-    this.evidenceCount = delays.length;
-    this.evidenceSpreadMs = spread;
-    this.lastEvidenceAt = now;
-    this.estimateReason = 'consistent-round-clock';
+    this.sourceExecution = execution;
+    this.sourceExecutionGeneration = generation;
   }
+
   project(
     program: ObserverProgramView,
     settings: ObserverHintSettings,
     now: number,
     source: typeof this.sourceHealth,
-    programReceiveMs = now,
-    clock?: {
-      playback?: ProgramClock | null;
-      source?: ClockInput;
-      program?: ClockInput;
-      freezeEnd?: ClockBoundary;
-      sourceExecution?: number;
-      phase?: { phase: string; round: number; received: number; generation: number };
-    },
+    sourceExecution?: number,
   ): ObserverAssistProjection {
     this.lastNow = now;
+    const delayMs = settings.delaySeconds * 1000;
+    const previousDelayMs = (this.configuration?.delaySeconds ?? settings.delaySeconds) * 1000;
+    this.kills = this.kills.filter((kill) => {
+      const due = kill.shownDueMs ?? kill.sourceMs + Math.min(previousDelayMs, delayMs);
+      if (kill.retired || now < due) return !kill.retired;
+      this.discard('expired');
+      return false;
+    });
+    this.nextDueMs = null;
+    this.nextWindowMs = null;
     this.configuration = { ...settings };
-    if (this.programSource.generation !== program.cursor.programSourceGeneration) {
-      this.clockGenerationChanged(false);
-      this.seenReceive = null;
-      this.previous.clear();
-      this.lastMatchedDeathOffsetMs = null;
-    }
     this.programSource = {
       generation: program.cursor.programSourceGeneration,
       mapEpoch: program.cursor.mapEpoch,
@@ -545,16 +223,14 @@ export class ObserverHintTimeline {
       observer: {
         ...settings,
         state,
-        timingBasis: clock && 'playback' in clock ? 'program-clock' : 'estimated',
-        calibrationState: this.calibrationState(now),
-        effectiveDelaySeconds: this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
+        effectiveDelaySeconds: settings.delaySeconds,
         waitingReason: this.blocked,
         nextWindowSeconds: null,
-        measuredDelaySeconds: null,
         hints: [],
       },
     });
     if (!settings.enabled) {
+      if (this.blocked !== 'disabled') this.reset('disabled', now);
       this.blocked = 'disabled';
       return { cursor: program.cursor, availability: 'unavailable' };
     }
@@ -573,9 +249,9 @@ export class ObserverHintTimeline {
         (this.pendingMap.conflicted ||
           this.pendingMap.generation !== source.generation ||
           (this.pendingMap.execution !== undefined &&
-            clock?.sourceExecution !== undefined &&
+            sourceExecution !== undefined &&
             this.pendingMap.generation === source.generation &&
-            this.pendingMap.execution !== clock.sourceExecution));
+            this.pendingMap.execution !== sourceExecution));
       const pending =
         prior &&
         prior.match === program.match.matchId &&
@@ -591,7 +267,7 @@ export class ObserverHintTimeline {
           : [];
       this.reset('program-context', now);
       if (pendingConflict) {
-        this.sourceExecution = clock?.sourceExecution;
+        this.sourceExecution = sourceExecution;
         this.sourceExecutionGeneration = source.generation;
         this.sourceExecutionChanged = true;
       }
@@ -605,10 +281,13 @@ export class ObserverHintTimeline {
       };
     }
     if (this.generation === undefined || source.generation > this.generation) {
-      this.clockGenerationChanged(true);
-      this.generation = source.generation;
-      this.lastMatchedDeathOffsetMs = null;
+      this.advanceGeneration(source.generation);
     }
+    if (source.generation !== this.generation) {
+      this.blocked = 'source-generation-mismatch';
+      return empty('unavailable');
+    }
+    if (source.sameMap === true) this.observeExecution(sourceExecution, source.generation);
     if (!source.connected) {
       this.blocked = 'source-disconnected';
       return empty('connecting');
@@ -619,6 +298,7 @@ export class ObserverHintTimeline {
       program.status.telemetry !== 'fresh' ||
       program.coverage.allPlayers !== 'present' ||
       !program.map.name ||
+      !program.match ||
       program.status.identity === 'mismatch'
     ) {
       this.blocked = !source.fresh
@@ -635,23 +315,19 @@ export class ObserverHintTimeline {
           this.pendingMap = {
             name: source.mapName,
             since: now,
-            execution: clock?.sourceExecution,
+            execution: sourceExecution,
             generation: source.generation,
             conflicted: false,
           };
         } else if (
           this.pendingMap.generation !== source.generation ||
           (this.pendingMap.execution !== undefined &&
-            clock?.sourceExecution !== undefined &&
-            this.pendingMap.execution !== clock.sourceExecution)
+            sourceExecution !== undefined &&
+            this.pendingMap.execution !== sourceExecution)
         ) {
           this.pendingMap.conflicted = true;
         }
       }
-      this.previous.clear();
-      this.seenReceive = null;
-      this.lastProgramClock = null;
-      this.clockSegment++;
       return empty('unavailable');
     }
     const players = program.players.filter((p) => p.lineupEvidence === 'current');
@@ -659,148 +335,13 @@ export class ObserverHintTimeline {
       this.blocked = 'identity-unavailable';
       return empty('unavailable');
     }
-    if (clock && 'playback' in clock) {
-      const playback = clock.playback;
-      const valid =
-        playback &&
-        playback.usable &&
-        playback.timeDomain.length > 0 &&
-        playback.continuity.length > 0 &&
-        playback.mapName === program.map.name &&
-        Number.isFinite(playback.tick) &&
-        Number.isFinite(playback.ticksPerSecond) &&
-        playback.ticksPerSecond > 0;
-      if (!valid) {
-        this.blocked = 'program-clock-unavailable';
-        return empty('unavailable');
-      }
-      if (
-        this.kills.some(
-          (kill) => kill.event.cursor.generation === source.generation && !kill.position,
-        )
-      ) {
-        this.blocked = 'program-clock-syncing';
-        return empty('unavailable');
-      }
-      const hints: ObserverHint[] = [];
-      let nextWindow: number | null = null;
-      for (const kill of this.kills) {
-        const position = kill.position;
-        if (
-          !position ||
-          kill.event.cursor.generation !== source.generation ||
-          kill.event.cursor.mapName !== position.mapName ||
-          position.timeDomain !== playback.timeDomain ||
-          position.continuity !== playback.continuity ||
-          position.mapName !== playback.mapName ||
-          position.ticksPerSecond !== playback.ticksPerSecond ||
-          !Number.isFinite(position.tick)
-        )
-          continue;
-        const remaining = (position.tick - playback.tick) / playback.ticksPerSecond;
-        if (remaining <= 0) continue;
-        const attacker = players.find(
-          (p) => p.sourcePlayerId === kill.event.attacker!.sourcePlayerId,
-        );
-        const victim = players.find((p) => p.sourcePlayerId === kill.event.victim.sourcePlayerId);
-        if (!attacker || !victim || victim.lifeState === 'dead') continue;
-        const window = Math.max(0, remaining - settings.leadSeconds);
-        nextWindow = nextWindow === null ? window : Math.min(nextWindow, window);
-        if (window > 0) continue;
-        const ref = (player: typeof attacker) => ({
-          name: (player.displayName ?? '选手').slice(0, 256),
-          observerSlot:
-            player.observerSlot !== null &&
-            Number.isInteger(player.observerSlot) &&
-            player.observerSlot >= 0 &&
-            player.observerSlot <= 9 &&
-            players.filter((p) => p.observerSlot === player.observerSlot).length === 1
-              ? player.observerSlot
-              : null,
-        });
-        hints.push({
-          id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
-          remainingSeconds: remaining,
-          attacker: ref(attacker),
-          victim: ref(victim),
-        });
-      }
-      hints.sort((a, b) => a.remainingSeconds - b.remainingSeconds);
-      this.blocked = null;
-      return {
-        cursor: program.cursor,
-        availability: 'available',
-        observer: {
-          ...settings,
-          state: 'ready',
-          timingBasis: 'program-clock',
-          calibrationState: this.calibrationState(now),
-          effectiveDelaySeconds:
-            this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
-          waitingReason: nextWindow === null ? 'waiting-event' : hints.length ? null : 'buffering',
-          nextWindowSeconds: nextWindow,
-          measuredDelaySeconds:
-            this.effectiveDelayMs === null ? null : this.effectiveDelayMs / 1000,
-          hints: hints.slice(0, 6),
-        },
-      };
-    }
     this.blocked = null;
-    this.observeClock(
-      clock?.source,
-      clock?.program,
-      now,
-      clock?.freezeEnd,
-      clock?.sourceExecution,
-      source.generation,
-      clock?.phase,
-    );
     if (this.sourceExecutionChanged) {
       this.blocked = 'source-execution-ahead';
-      this.nextDueMs = null;
-      this.nextWindowMs = null;
       return empty('unavailable');
     }
-    const alive = new Map(
-      players
-        .filter((p) => p.lifeState !== 'unknown')
-        .map((p) => [p.sourcePlayerId, p.lifeState === 'alive']),
-    );
-    if (program.cursor.programReceiveSequence !== this.seenReceive) {
-      const fallen = [...alive]
-        .filter(([id, live]) => !live && this.previous.get(id) === true)
-        .map(([id]) => id);
-      this.programDeaths += fallen.length;
-      for (const victim of fallen) {
-        const candidates = this.kills.filter(
-          (kill) =>
-            !kill.matched &&
-            kill.event.victim.sourcePlayerId === victim &&
-            kill.event.cursor.mapName === program.map.name &&
-            kill.shownDueMs !== null &&
-            programReceiveMs >= kill.shownDueMs - settings.leadSeconds * 1000 &&
-            programReceiveMs <= kill.shownDueMs + 1000,
-        );
-        if (candidates.length === 1) {
-          const match = candidates[0]!;
-          match.matched = true;
-          if (this.effectiveDelayMs !== null)
-            this.lastMatchedDeathOffsetMs =
-              programReceiveMs - match.sourceMs - this.effectiveDelayMs;
-        }
-      }
-      this.previous = alive;
-      this.seenReceive = program.cursor.programReceiveSequence;
-    }
-    const keepSince = now - 780000;
-    this.kills = this.kills.filter((kill) => kill.sourceMs >= keepSince);
-    if (this.effectiveDelayMs === null) {
-      this.blocked = 'calibration-pending';
-      this.nextDueMs = null;
-      this.nextWindowMs = null;
-      return empty('unavailable');
-    }
-    const stableDelay = this.effectiveDelayMs;
+    const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(program.clock?.phase ?? '');
+    const leadMs = settings.leadSeconds * 1000;
     const ref = (player: ObserverProgramView['players'][number]) => ({
       name: (player.displayName ?? '选手').slice(0, 256),
       observerSlot:
@@ -813,16 +354,9 @@ export class ObserverHintTimeline {
           : null,
     });
     const hints: ObserverHint[] = [];
-    this.nextDueMs = null;
-    this.nextWindowMs = null;
-    for (const kill of [...this.kills].sort((a, b) => a.sourceMs - b.sourceMs)) {
-      // A Program-confirmed death is never a future hint.
-      const due = kill.shownDueMs ?? kill.sourceMs + stableDelay;
-      if (now >= due && kill.shownDueMs !== null && !kill.retired) {
-        kill.retired = true;
-        this.discard('expired');
-      }
-      if (kill.matched || kill.retired || now >= due) continue;
+    for (const kill of this.kills) {
+      const due = kill.shownDueMs ?? kill.sourceMs + delayMs;
+      const window = Math.max(kill.sourceMs, due - leadMs);
       if (kill.event.cursor.mapName !== program.map.name) {
         kill.retired = true;
         this.discard('map-mismatch');
@@ -837,17 +371,23 @@ export class ObserverHintTimeline {
         this.discard('event-identity');
         continue;
       }
-      // Suppress only the event entering its window, not later rounds for this player.
-      if (now >= due - settings.leadSeconds * 1000 && victim.lifeState === 'dead') {
+      const eventRound = kill.event.cursor.roundsCompleted;
+      const programRound = program.map.roundNumber;
+      if (eventRound === undefined || programRound === null) continue;
+      if (
+        eventRound < programRound ||
+        (eventRound === programRound && victim.lifeState === 'dead')
+      ) {
         kill.retired = true;
-        this.discard('victim-already-dead');
+        this.discard('program-already-past-event');
         continue;
       }
+      if (paused || eventRound !== programRound || victim.lifeState !== 'alive') continue;
       if (this.nextDueMs === null || due < this.nextDueMs) {
         this.nextDueMs = due;
-        this.nextWindowMs = due - settings.leadSeconds * 1000;
+        this.nextWindowMs = window;
       }
-      if (now < due - settings.leadSeconds * 1000) continue;
+      if (now < window) continue;
       if (hints.length >= 6) continue;
       kill.shownDueMs = due;
       hints.push({
@@ -857,21 +397,22 @@ export class ObserverHintTimeline {
         victim: ref(victim),
       });
     }
+    if (paused) {
+      this.blocked = 'program-paused';
+      return empty('paused');
+    }
     return {
       cursor: program.cursor,
       availability: 'available',
       observer: {
         ...settings,
         state: 'ready',
-        timingBasis: 'estimated',
-        calibrationState: this.calibrationState(now),
-        effectiveDelaySeconds: stableDelay / 1000,
+        effectiveDelaySeconds: settings.delaySeconds,
         waitingReason:
           this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
         nextWindowSeconds:
           this.nextWindowMs === null ? null : Math.max(0, (this.nextWindowMs - now) / 1000),
-        measuredDelaySeconds: stableDelay === null ? null : stableDelay / 1000,
-        hints: hints.slice(0, 6),
+        hints,
       },
     };
   }

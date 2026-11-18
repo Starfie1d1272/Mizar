@@ -1,4 +1,7 @@
 use crate::geometry::{avoid_game_frame, overlay_visible, workspace_layout, Layout, Rect};
+use std::time::{Duration, Instant};
+
+const ALIGNMENT_WINDOW: Duration = Duration::from_secs(30);
 
 pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() }
@@ -414,15 +417,15 @@ pub struct GameTracker {
     pub generation: u64,
     monitor: Monitor,
     pub layout_aligned: bool,
-    explicit_layout: bool,
-    initial_layout_started: bool,
+    initial_layout_confirmed: bool,
+    alignment_deadline: Option<Instant>,
+    placement_pending: bool,
     pub overlay_enabled: bool,
     pub fullscreen_layout: bool,
     frame: Option<crate::window_frame::GameFrame>,
     last_client: Option<Rect>,
     last_work_area: Option<Rect>,
     last_dpi: u32,
-    alignment_retries: u8,
     last_alignment: Option<std::time::Instant>,
     pub alignment_failure: Option<AlignmentFailure>,
     reported_alignment_failure: Option<AlignmentFailure>,
@@ -443,7 +446,7 @@ impl GameTracker {
         let submitted = self.frame.as_mut().map_or(Ok(()), |frame| frame.retire());
         self.frame = None;
         self.layout_aligned = false;
-        self.alignment_retries = 0;
+        self.reset_initial_layout();
         if let Err(error) = &submitted {
             self.alignment_failure = Some(AlignmentFailure {
                 stage: "frame_restore",
@@ -458,9 +461,32 @@ impl GameTracker {
         if self.owner.as_ref().map(|p| (p.pid, p.created))
             != owner.as_ref().map(|p| (p.pid, p.created))
         {
-            self.initial_layout_started = false;
+            self.observe(None);
+            self.reset_initial_layout();
         }
         self.owner = owner;
+    }
+    fn reset_initial_layout(&mut self) {
+        self.initial_layout_confirmed = false;
+        self.alignment_deadline = None;
+        self.placement_pending = false;
+        self.last_alignment = None;
+        self.last_client = None;
+        self.last_dpi = 0;
+        self.alignment_failure = None;
+        self.reported_alignment_failure = None;
+    }
+    fn confirm_layout(&mut self) {
+        self.initial_layout_confirmed = true;
+        self.alignment_deadline = None;
+        self.placement_pending = false;
+        self.alignment_failure = None;
+    }
+    fn start_initial_layout(&mut self, now: Instant) {
+        if !self.initial_layout_confirmed {
+            self.alignment_deadline
+                .get_or_insert(now + ALIGNMENT_WINDOW);
+        }
     }
     pub fn finish_session_feedback(
         &mut self,
@@ -475,8 +501,7 @@ impl GameTracker {
         }
         self.observe(None);
         // Hidden panels may already have no HWND yet retain the last failure.
-        self.alignment_failure = None;
-        self.reported_alignment_failure = None;
+        self.reset_initial_layout();
         self.group_failure = None;
         self.layout_aligned = false;
         Ok(true)
@@ -526,7 +551,7 @@ impl GameTracker {
             "ownedWindow": self.owned_window().is_some(), "layoutAligned": self.layout_aligned, "outer": outer.map(area),
             "monitorBounds": monitor_bounds.map(area), "workArea": work_area.map(area),
             "layoutArea": layout_area.map(area), "target": target.map(area),
-            "alignmentRetries": self.alignment_retries,
+            "alignmentPending": self.placement_pending,
             "fullscreenLayout": self.fullscreen_layout,
             "alignmentFailure": self.alignment_failure.map(AlignmentFailure::diagnostic),
             "groupFailure": self.group_failure.map(crate::workspace_group::Failure::diagnostic),
@@ -540,16 +565,16 @@ impl GameTracker {
         }
         self.frame = None;
         self.window = found;
-        self.explicit_layout = false;
+        self.placement_pending = false;
         self.generation += 1;
         self.layout_aligned = false;
-        self.alignment_failure = None;
-        self.reported_alignment_failure = None;
+        if found.is_some() {
+            self.alignment_failure = None;
+            self.reported_alignment_failure = None;
+        }
         self.group_failure = None;
         self.last_client = None;
         self.last_dpi = 0;
-        self.alignment_retries = if self.initial_layout_started { 0 } else { 30 };
-        self.last_alignment = None;
         true
     }
     fn observe_target(&mut self, found: Option<Cs2Window>, monitor: Monitor) -> bool {
@@ -583,101 +608,80 @@ impl GameTracker {
     pub fn restore_layout(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
         self.refresh_target();
-        self.alignment_retries = 30;
-        // Only an explicit request rearms placement after initial alignment.
-        self.explicit_layout = true;
+        self.alignment_deadline = Some(Instant::now() + ALIGNMENT_WINDOW);
+        self.last_alignment = None;
+        self.placement_pending = false;
+        self.alignment_failure = None;
         self.apply_locked_layout()
     }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
-        let correcting = self.last_work_area == Some(work)
-            && self
-                .alignment_failure
-                .is_some_and(|failure| failure.stage == "pending");
+        let correcting = self.last_work_area == Some(work) && self.placement_pending;
         self.last_work_area = Some(work);
         let mut layout = workspace_layout(work);
-        if !self.explicit_layout && self.initial_layout_started && self.alignment_retries == 0 {
-            self.alignment_retries = 0;
-            self.alignment_failure = None;
-            self.last_client = self
-                .owned_window()
-                .and_then(|window| client_rect(window.hwnd));
-            self.layout_aligned = self.last_client == Some(layout.game);
+        let Some(window) = self.owned_window() else {
             return Some(layout);
-        }
-        if let Some(window) = self.window {
-            self.initial_layout_started = true;
-            if self.frame.is_none() {
-                self.frame = self
-                    .owner
-                    .as_ref()
-                    .filter(|owner| owner.pid == window.pid && owner.is_running())
-                    .and_then(|owner| {
-                        crate::window_frame::GameFrame::capture(window.hwnd, owner.clone())
+        };
+        let now = Instant::now();
+        self.start_initial_layout(now);
+        self.last_client = client_rect(window.hwnd);
+        self.last_dpi = unsafe { GetDpiForWindow(window.hwnd) };
+        self.layout_aligned = self.last_client == Some(layout.game);
+        if !self.layout_aligned {
+            if let Some(deadline) = self.alignment_deadline {
+                if now >= deadline {
+                    self.placement_pending = false;
+                    self.alignment_failure.get_or_insert(AlignmentFailure {
+                        stage: "client_mismatch",
+                        api: None,
+                        last_error: None,
                     });
-            }
-            if let Some(frame) = &self.frame {
-                frame.apply();
+                } else if self
+                    .last_alignment
+                    .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1))
+                {
+                    if self.frame.is_none() {
+                        self.frame = self.owner.as_ref().and_then(|owner| {
+                            crate::window_frame::GameFrame::capture(window.hwnd, owner.clone())
+                        });
+                    }
+                    let result = if let Some(frame) = &self.frame {
+                        frame.apply();
+                        align_cs2(window, layout.game, correcting)
+                    } else {
+                        Err(AlignmentFailure {
+                            stage: "frame_capture",
+                            api: None,
+                            last_error: None,
+                        })
+                    };
+                    self.last_alignment = Some(now);
+                    match result {
+                        Ok(()) => self.layout_aligned = true,
+                        Err(failure) if failure.stage == "pending" => self.placement_pending = true,
+                        Err(failure) => {
+                            self.placement_pending = false;
+                            self.alignment_failure = Some(failure);
+                            if failure.last_error == Some(1400) {
+                                // Rediscover only the same verified process within the original budget.
+                                self.observe(None);
+                            }
+                        }
+                    }
+                }
             }
         }
-        let alignment = self.window.map(|window| {
-            if self.frame.is_none() {
-                Err(AlignmentFailure {
-                    stage: "frame_capture",
-                    api: None,
-                    last_error: None,
-                })
-            } else {
-                align_cs2(window, layout.game, correcting)
-            }
-        });
-        self.layout_aligned = matches!(alignment, Some(Ok(())));
-        self.alignment_failure = alignment.and_then(Result::err);
-        if self
-            .alignment_failure
-            .is_some_and(|failure| failure.last_error == Some(1400))
-        {
-            // Destroyed between identity validation and Win32 placement: exit
-            // race, not a reason to widen retries or take another window.
-            self.observe(None);
-            self.alignment_retries = 0;
-            return Some(layout);
-        }
-        if let Some(window) = self.window.filter(|_| self.layout_aligned) {
+        if self.layout_aligned {
+            self.confirm_layout();
             let mut outer = WinRect::default();
             if unsafe { GetWindowRect(window.hwnd, &mut outer) } != 0 {
                 layout = avoid_game_frame(layout, rect(outer));
             }
         }
-        self.alignment_retries = if self.layout_aligned {
-            0
-        } else {
-            self.alignment_retries.saturating_sub(1)
-        };
-        if self.alignment_retries == 0 {
-            self.explicit_layout = false;
-        }
-        if self.alignment_retries == 0
-            && self
-                .alignment_failure
-                .is_some_and(|failure| failure.stage == "pending")
-        {
-            self.alignment_failure = Some(AlignmentFailure {
-                stage: "client_mismatch",
-                api: None,
-                last_error: None,
-            });
-        }
-        self.last_alignment = Some(std::time::Instant::now());
-        self.last_client = self.window.and_then(|window| client_rect(window.hwnd));
-        self.last_dpi = self
-            .window
-            .map_or(0, |window| unsafe { GetDpiForWindow(window.hwnd) });
         Some(layout)
     }
     pub fn tick(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
-        let previous = self.window;
         let changed = self.refresh_target();
         if self
             .window
@@ -686,49 +690,24 @@ impl GameTracker {
             return None;
         }
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout);
-        if self.monitor == 0 || work.is_none() {
-            return self.apply_locked_layout();
-        }
-        if work != self.last_work_area
-            && previous == self.window
-            && self.last_work_area.is_some()
-            && self.alignment_retries == 0
-        {
-            // After a request ends, monitor/DPI changes rearrange panels only.
-            self.last_work_area = work;
-            self.alignment_retries = 0;
-            self.layout_aligned = false;
-            return work.map(workspace_layout);
-        }
         if work != self.last_work_area || changed {
             return self.apply_locked_layout();
         }
-        let Some(window) = self.window else {
-            return None;
-        };
+        let window = self.owned_window()?;
         let client = client_rect(window.hwnd);
         let dpi = unsafe { GetDpiForWindow(window.hwnd) };
         if client != self.last_client || dpi != self.last_dpi {
-            self.last_client = client;
-            self.last_dpi = dpi;
-            self.layout_aligned =
-                work.is_some_and(|area| client == Some(workspace_layout(area).game));
-            // SetWindowPos is asynchronous. Intermediate client/DPI changes
-            // must not cancel the existing confirmation/correction budget.
-            if self.layout_aligned || self.alignment_retries == 0 {
-                self.alignment_retries = 0;
-                self.alignment_failure = None;
-                self.explicit_layout = false;
-            }
+            return self.apply_locked_layout();
         }
-        // Initial and explicit requests share one bounded confirmation budget.
-        // Once finished, external geometry changes never rearm that request.
-        if !self.layout_aligned
-            && self.alignment_retries > 0
-            && self
-                .last_alignment
-                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1))
-        {
+        let now = Instant::now();
+        if self.alignment_deadline.is_some_and(|deadline| {
+            if now < deadline {
+                self.last_alignment
+                    .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1))
+            } else {
+                self.placement_pending || self.alignment_failure.is_none()
+            }
+        }) {
             return self.apply_locked_layout();
         }
         None
@@ -830,4 +809,35 @@ pub fn overlay_diagnostic(
 
 fn overlay_foreground_allowed(foreground: isize, game: isize, workspace_windows: &[isize]) -> bool {
     foreground != 0 && (foreground == game || workspace_windows.contains(&foreground))
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_uses_original_deadline_and_confirmed_layout_does_not_rearm() {
+        let mut tracker = GameTracker::default();
+        let start = Instant::now();
+        tracker.observe(Some(Cs2Window { hwnd: 1, pid: 10 }));
+        tracker.start_initial_layout(start);
+        tracker.placement_pending = true;
+        tracker.observe(None);
+        tracker.observe(Some(Cs2Window { hwnd: 2, pid: 10 }));
+        tracker.start_initial_layout(start + Duration::from_secs(20));
+        assert_eq!(tracker.alignment_deadline, Some(start + ALIGNMENT_WINDOW));
+        assert!(!tracker.placement_pending);
+
+        tracker.confirm_layout();
+        tracker.observe(Some(Cs2Window { hwnd: 3, pid: 10 }));
+        tracker.start_initial_layout(start + Duration::from_secs(21));
+        assert_eq!(tracker.alignment_deadline, None);
+
+        tracker.reset_initial_layout();
+        tracker.start_initial_layout(start + Duration::from_secs(22));
+        assert_eq!(
+            tracker.alignment_deadline,
+            Some(start + Duration::from_secs(52))
+        );
+    }
 }

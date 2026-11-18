@@ -904,14 +904,12 @@ fn run_desktop(
                     let service_stopped = cleanup_host
                         .state::<production_exit::VerifiedStop>()
                         .complete();
-                    let exit_intent = if service_stopped {
-                        Ok(())
-                    } else {
-                        production_exit::set_exit_intent(
-                            &cleanup_host.state::<DesktopLog>(),
-                            "begin-exit",
-                        )
-                    };
+                    if !service_stopped {
+                        let log = cleanup_host.state::<DesktopLog>();
+                        let _ = log.step("production_begin_exit", || {
+                            production_exit::set_exit_intent(&log, "begin-exit")
+                        });
+                    }
                     let production_host = cleanup_host.clone();
                     let production_task = std::thread::spawn(move || {
                         if service_stopped {
@@ -960,10 +958,7 @@ fn run_desktop(
                     let production = production_task
                         .join()
                         .unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-                    production_exit::cleanup_results(
-                        production_exit::cleanup_results(exit_intent, production),
-                        cleanup,
-                    )?;
+                    production_exit::cleanup_results(production, cleanup)?;
                     updates::recheck(&cleanup_host)
                 })
                 .await

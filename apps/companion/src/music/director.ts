@@ -127,6 +127,9 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   private epoch = 0;
   private monitorSettingsChanged = false;
   private lastPoll = -Infinity;
+  private nextProbeAt = 0;
+  private probeDelayMs = 0;
+  private collectionRevision: number | undefined;
   private nextRequested = false;
   private manual: {
     cue: MusicCue;
@@ -337,7 +340,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     this.preview.submit(request);
     while (this.inFlight && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
     this.lastPoll = -Infinity;
-    await this.tick();
+    await this.tick(true);
   }
   invalidate() {
     this.generation++;
@@ -404,7 +407,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.stopMedia(obs, layer, uuid, current),
       );
       if (current()) this.status.playback = 'stopped';
-    } else await this.tick();
+    } else await this.tick(true);
     if (!current()) return;
     if (persistenceError)
       throw new Error('music_hold_persistence_failed', { cause: persistenceError });
@@ -443,7 +446,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       await new Promise((resolve) => setTimeout(resolve, 10));
     if (revision !== this.commandRevision || this.closed) return;
     this.lastPoll = -Infinity;
-    await this.tick();
+    await this.tick(true);
     if (this.status.connection !== 'connected' || !this.manual)
       throw new Error('music_play_unconfirmed');
   }
@@ -1032,7 +1035,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     );
     if (previewOwned && !this.preview.busy) this.expectedStops.delete('stinger');
   }
-  async tick(): Promise<void> {
+  async tick(explicit = false): Promise<void> {
     if (this.closed) return;
     // Route recovery defers automatic playback, never an already-started audition's stop.
     const automaticDeferred =
@@ -1078,13 +1081,29 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.generation++;
     }
     if (this.inFlight) return;
+    const collectionRevision = this.provider.collectionRevision;
+    if (collectionRevision !== this.collectionRevision) {
+      this.collectionRevision = collectionRevision;
+      this.nextProbeAt = 0;
+      this.probeDelayMs = 0;
+    }
+    const now = this.now();
+    if (this.pendingOpening && this.pendingOpening.expires < now) this.pendingOpening = null;
+    if (!explicit && now < Math.max(this.nextProbeAt, this.provider.nextConnectionAttemptAt ?? 0))
+      return;
     // Facts still invalidate every 100 ms; steady media polling is bounded, fades remain smooth.
     const interval = Object.keys(this.fades).length || this.preview.busy ? 100 : 250;
     if (!changed && !this.pendingOpening && this.now() - this.lastPoll < interval) return;
     this.lastPoll = this.now();
     this.inFlight = true;
     const generation = this.generation;
-    const valid = () => !this.closed && generation === this.generation;
+    const currentCollection = () => collectionRevision === this.provider.collectionRevision;
+    const valid = () => !this.closed && generation === this.generation && currentCollection();
+    const recovered = () => {
+      this.nextProbeAt = 0;
+      this.probeDelayMs = 0;
+      this.operationFailures.clear('music_operation_recovered');
+    };
     try {
       if (automaticDeferred || this.store.failure || !this.store.ready) {
         await this.provider.session(async (obs, epoch) => {
@@ -1095,6 +1114,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             this.status.message = null;
           }
         });
+        if (valid()) recovered();
         return;
       }
       if (pause && this.store.state.pause?.map !== map)
@@ -1241,23 +1261,31 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         await this.configureDefaultMonitor(obs, valid);
         if (valid()) await this.readMonitor(obs, valid);
       });
-      if (valid()) this.operationFailures.clear('music_operation_recovered');
+      if (valid()) recovered();
     } catch (error) {
-      if (!(error instanceof Error && error.message === 'music_cancelled'))
-        this.preview.unavailable(error);
+      if (
+        this.closed ||
+        !currentCollection() ||
+        (error instanceof Error && error.message === 'music_cancelled')
+      )
+        return;
+      const failure = musicFailure(error);
+      if (failure.code === 'scene_missing') {
+        this.probeDelayMs = Math.min(10000, Math.max(2000, this.probeDelayMs * 2));
+        this.nextProbeAt = this.now() + this.probeDelayMs;
+      }
+      try {
+        const diagnostic = diagnosticValue(error);
+        this.operationFailures.record(
+          'music_operation_failed',
+          JSON.stringify([this.epoch, collectionRevision, failure.code]),
+          { error: diagnostic, code: failure.code },
+        );
+      } catch {
+        this.store.previewEvent('music_operation_failed', { error, code: failure.code });
+      }
       if (valid()) {
-        const failure = musicFailure(error);
-        try {
-          const diagnostic = diagnosticValue(error);
-          this.operationFailures.record(
-            'music_operation_failed',
-            JSON.stringify([this.desiredKey, this.epoch, failure.code, diagnostic]),
-            { error: diagnostic, code: failure.code },
-          );
-        } catch {
-          // Preserve the original failure path even when diagnostics cannot be serialized.
-          this.store.previewEvent('music_operation_failed', { error, code: failure.code });
-        }
+        this.preview.unavailable(error);
         this.status.failure = failure.code;
         this.status.connection = failure.code === 'obs_disconnected' ? 'unavailable' : 'connected';
         if (this.manual) {
@@ -1272,8 +1300,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.status.cursorMs = null;
         this.status.durationMs = null;
         this.status.monitor = 'unknown';
-        this.status.message =
-          error instanceof Error && error.message === 'music_cancelled' ? null : failure.message;
+        this.status.message = failure.message;
       }
     } finally {
       this.inFlight = false;

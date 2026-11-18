@@ -8,7 +8,8 @@ import {
 import { broadcastStatsSchema, type BroadcastStats } from '@mizar/protocol/broadcast-stats';
 import { createOnlineManifestSource, readOnlineManifestResponse } from './http-source.js';
 import { RivalHubLibrary } from './rivalhub-library.js';
-import { SourceLoadError } from './source-error.js';
+import { SourceLoadError, sourceErrorEvidence } from './source-error.js';
+import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { CONTROL_TIMEOUT_MS, type Installation } from './rivalhub-authorization.js';
 
 export type StatsTarget = {
@@ -50,13 +51,20 @@ export class RivalHubReadClient {
     private readonly readJson: (response: Response) => Promise<unknown>,
     private readonly monotonicNow: () => number,
     private readonly rememberViewer: (installation: Installation, viewer: unknown) => Promise<void>,
-  ) {}
+    diagnostic: (stage: string, evidence: unknown) => void = () => {},
+  ) {
+    this.manifestFailures = new RepeatedDiagnostic(diagnostic);
+  }
 
   private get installation() {
     return this.currentInstallation();
   }
 
   private scheduleGeneration = 0;
+  private schedulePending = new Map<
+    string,
+    { installation: Installation | null; read: ReturnType<RivalHubReadClient['readSchedule']> }
+  >();
   scheduleWarning: string | null = null;
   private scheduleCache: {
     competitionId: string;
@@ -82,10 +90,12 @@ export class RivalHubReadClient {
     this.clearStats();
     this.statsAuthorizationBlocked = sameBlockedInstallation ? loaded : null;
     this.scheduleCache = null;
+    this.schedulePending.clear();
     this.scheduleWarning = null;
     this.browsingLibrary = null;
     this.manifestScope?.abort.abort();
     this.manifestScope = null;
+    this.manifestFailures.clear();
   }
   private statsAuthorizationBlocked: Installation | null = null;
   private statsScope: {
@@ -239,14 +249,28 @@ export class RivalHubReadClient {
       return null;
     return scope.value ?? (scope.pending ? await scope.pending : null);
   }
-  async schedule(from: string, to: string) {
+  schedule(from: string, to: string) {
+    const key = JSON.stringify([from, to]);
+    const pending = this.schedulePending.get(key);
+    const installation = this.installation;
+    if (pending && pending.installation === installation) return pending.read;
+    const read = this.readSchedule(from, to).finally(() => {
+      if (this.schedulePending.get(key)?.read === read) this.schedulePending.delete(key);
+    });
+    this.schedulePending.set(key, { installation, read });
+    return read;
+  }
+
+  private async readSchedule(from: string, to: string) {
     const generation = ++this.scheduleGeneration;
     const installation = this.installation;
     const response = await this.request(
       `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     );
+    if (installation !== this.installation) throw new Error('赛事连接已变化。');
     if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
     const result = validateBroadcastScheduleWindow(await this.readJson(response));
+    if (installation !== this.installation) throw new Error('赛事连接已变化。');
     if (!result.ok) throw new Error('赛事赛程格式不兼容。');
     if (
       this.installation &&
@@ -340,9 +364,22 @@ export class RivalHubReadClient {
     installation: Installation;
     pending: Map<string, Promise<unknown>>;
     retryState: { notBefore: number };
+    failure: { error: SourceLoadError; retryAt: number; delayMs: number } | null;
     abort: AbortController;
     recent: Map<string, { value: unknown; at: number }>;
   } | null = null;
+  private readonly manifestFailures: RepeatedDiagnostic;
+
+  automaticManifestDeferred(matchId: string): boolean {
+    const scope = this.manifestScope;
+    return Boolean(
+      scope &&
+      scope.installation === this.installation &&
+      !scope.pending.has(matchId) &&
+      (scope.retryState.notBefore > Date.now() ||
+        (scope.failure && scope.failure.retryAt > this.monotonicNow())),
+    );
+  }
 
   matchSource(matchId: string, fresh = true) {
     const installation = this.installation;
@@ -352,6 +389,7 @@ export class RivalHubReadClient {
         installation,
         pending: new Map(),
         retryState: { notBefore: 0 },
+        failure: null,
         abort: new AbortController(),
         recent: new Map(),
       };
@@ -360,6 +398,7 @@ export class RivalHubReadClient {
       urlTemplate: `${installation.baseUrl}/api/mizar/match?matchId={matchId}`,
       readToken: installation.credential,
       fetchImpl: this.fetchImpl,
+      ...(fresh ? { retries: 0 } : {}),
       retryState: scope.retryState,
       signal: scope.abort.signal,
       isCurrent: () => this.installation === installation,
@@ -382,6 +421,15 @@ export class RivalHubReadClient {
         )
           return structuredClone(recent.value);
         if (!pending) {
+          if (!fresh && this.automaticManifestDeferred(matchId) && scope.failure)
+            throw scope.failure.error;
+          if (scope.retryState.notBefore > Date.now())
+            throw new SourceLoadError(
+              '网站请求过于频繁，请稍后重试。',
+              undefined,
+              'unavailable',
+              429,
+            );
           if (scope.pending.size >= 3)
             throw new SourceLoadError('比赛资料正在读取，请稍后重试。', undefined, 'unavailable');
           pending = source
@@ -400,10 +448,32 @@ export class RivalHubReadClient {
               scope.recent.delete(matchId);
               scope.recent.set(matchId, { value: valid.value, at: Date.now() });
               while (scope.recent.size > 2) scope.recent.delete(scope.recent.keys().next().value!);
+              scope.failure = null;
+              this.manifestFailures.clear('manifest_refresh_recovered');
               return valid.value;
             })
             .catch((error: unknown) => {
               scope.recent.delete(matchId);
+              if (this.installation === installation) {
+                if (
+                  error instanceof SourceLoadError &&
+                  (error.code === 'network' ||
+                    error.code === 'timeout' ||
+                    (error.status !== undefined && error.status >= 500))
+                ) {
+                  const delayMs = Math.min(
+                    60000,
+                    Math.max(10000, (scope.failure?.delayMs ?? 0) * 2),
+                  );
+                  scope.failure = { error, delayMs, retryAt: this.monotonicNow() + delayMs };
+                }
+                const evidence = sourceErrorEvidence(error);
+                this.manifestFailures.record(
+                  'manifest_refresh_failed',
+                  JSON.stringify([matchId, evidence.code, evidence.status]),
+                  { matchId, error: evidence },
+                );
+              }
               throw error;
             })
             .finally(() => scope.pending.delete(matchId));

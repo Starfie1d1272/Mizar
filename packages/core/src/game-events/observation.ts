@@ -15,6 +15,8 @@ export interface GameEventSourceCursor {
   readonly observedMonotonicMs: number;
   readonly mapName?: string;
   readonly ticksPerSecond?: number;
+  /** Raw completed-round count from the same source record, when supplied. */
+  readonly roundsCompleted?: number;
 }
 
 export interface GameEventObservationBase {

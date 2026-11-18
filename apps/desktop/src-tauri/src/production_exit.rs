@@ -826,7 +826,7 @@ pub(crate) async fn finish_workspace(
         let mut cs2 = log.step("workspace_exit_lock", || managed.lock().map_err(|error| command_log.preserve_error("finish_workspace", native_operation_id.as_deref(), &error, "CS2 配置状态不可用。")))?;
         // Freeze automatic work before local cleanup. Demo recovery and production
         // finish share Companion's mutation gate, so they must not run concurrently.
-        let exit_intent = crate::production_exit::set_exit_intent(&log, "begin-exit");
+        let _ = log.step("workspace_begin_exit", || crate::production_exit::set_exit_intent(&log, "begin-exit"));
         let activity = host.state::<cs2_activity::Activity>();
         // Open the visible recovery owner before any potentially slow cleanup.
         // A presentation failure cannot skip safe production or game cleanup.
@@ -874,7 +874,7 @@ pub(crate) async fn finish_workspace(
         // Run after local cleanup even if restoration failed; remote work cannot
         // delay stopping the owned game or restoring its temporary configuration.
         let production = crate::production_exit::finish_workspace_production(&log);
-        crate::production_exit::cleanup_results(crate::production_exit::cleanup_results(exit_intent, production), crate::production_exit::cleanup_results(game, presentation))
+        crate::production_exit::cleanup_results(production, crate::production_exit::cleanup_results(game, presentation))
         })
     } })
     .await

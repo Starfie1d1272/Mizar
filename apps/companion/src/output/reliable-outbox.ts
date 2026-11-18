@@ -326,6 +326,12 @@ export class ReliableOutbox {
     }
   }
 
+  hasDurableUnknownCapture(source: ExactSource): boolean {
+    return (
+      this.available && this.view.unknown.has(sourceKey(source)) && !this.hasUnconfirmedWrites()
+    );
+  }
+
   private markCaptureUnknown(source: ExactSource): void {
     const key = sourceKey(source);
     this.unknownCaptures.set(key, 'unclean');

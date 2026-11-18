@@ -1,7 +1,7 @@
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { parseMatchDocumentV1 } from '@mizar/protocol/context';
@@ -18,6 +18,7 @@ const markerSchema = z.object({
   teamAName: z.string().min(1).max(128),
   teamBName: z.string().min(1).max(128),
   gameOwnership: z.literal('external').optional(),
+  localRestored: z.literal(true).optional(),
 });
 type Marker = z.infer<typeof markerSchema>;
 export type DemoTestView = {
@@ -28,6 +29,7 @@ export type DemoTestView = {
   teamBName: string;
   dataReady: boolean;
   gameOwnership?: 'external';
+  localRestored?: true;
 };
 
 /** Read before runtime/projection composition: even an unreadable marker fails closed. */
@@ -137,6 +139,7 @@ export class DemoTestController {
       teamBName: this.marker?.teamBName ?? 'B',
       dataReady: this.phase === 'playing' && this.options.dataReady(),
       ...(this.marker?.gameOwnership ? { gameOwnership: this.marker.gameOwnership } : {}),
+      ...(this.marker?.localRestored ? { localRestored: true } : {}),
     };
   }
   configureCameraSession(requestId: string, commit: () => void): void {
@@ -240,6 +243,8 @@ export class DemoTestController {
           await replaceDurableJson(this.options.markerPath!, marker);
           this.marker = marker;
           this.phase = 'recovery';
+          this.restored = false;
+          this.waitingConfirmed = false;
           await this.options.quarantineOutput(true);
           stage = 'temporary_binding';
           this.options.runtime.resetSession(true);
@@ -249,8 +254,6 @@ export class DemoTestController {
           this.phase = 'starting';
           this.taken = false;
           this.nextTakeAttemptAt = 0;
-          this.restored = false;
-          this.waitingConfirmed = false;
         });
         if (!prepared)
           return conflict(
@@ -271,6 +274,25 @@ export class DemoTestController {
           return conflict('demo_test_already_playing', '播放已开始，请先结束试播。');
         if (body.action === 'complete' && this.phase !== 'recovery' && !this.waitingConfirmed)
           return conflict('demo_test_recovery_required', '请先结束试播并切换等待画面。');
+        if (body.action === 'complete' && !this.waitingConfirmed) {
+          stage = 'waiting_scene';
+          if (!(await this.finish())) {
+            // This private command follows Host's verified local restoration.
+            // Keep the existing marker and the output fence until OBS is safe.
+            if (!this.marker!.localRestored) {
+              stage = 'local_recovery_receipt';
+              const current = markerSchema.parse(
+                JSON.parse(await readFile(this.options.markerPath!, 'utf8')),
+              );
+              if (current.requestId !== body.requestId)
+                throw new Error('demo_recovery_marker_changed');
+              const marker = { ...current, localRestored: true as const };
+              await replaceDurableJson(this.options.markerPath!, marker);
+              this.marker = marker;
+            }
+            return { code: 200, value: this.get() };
+          }
+        }
         // Host completes after owned-game restoration or external-game detachment preparation.
         this.dropFormalGsi = true;
         if (!this.restored) {
@@ -280,11 +302,22 @@ export class DemoTestController {
           this.options.refresh();
           this.restored = true;
         }
-        stage = 'recovery_marker_remove';
         try {
-          await unlink(this.options.markerPath!);
+          stage = 'formal_output_restore';
+          await this.options.quarantineOutput(false);
+          stage = 'recovery_marker_remove';
+          await unlink(this.options.markerPath!).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+          });
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          try {
+            await this.options.quarantineOutput(true);
+          } catch (quarantineError) {
+            throw new AggregateError([error, quarantineError], 'demo_output_quarantine_failed', {
+              cause: error,
+            });
+          }
+          throw error;
         }
         this.completedRequestId = this.marker!.requestId;
         this.options.context?.endTemporary();
@@ -292,7 +325,6 @@ export class DemoTestController {
         this.phase = 'idle';
         this.options.production.setTrialPreparation();
         this.options.production.setTrialPending(false);
-        await this.options.quarantineOutput(false);
         this.options.refresh();
       }
       return { code: 200, value: this.get() };
@@ -314,17 +346,32 @@ export class DemoTestController {
       if (body.action !== 'begin') this.options.production.releaseTrialOperation();
     }
   }
-  async finish(): Promise<void> {
-    if (!this.marker || this.waitingConfirmed) return;
+  async finish(): Promise<boolean> {
+    if (!this.marker || this.waitingConfirmed) return true;
     // Stop ingress before OBS I/O; a failed switch stays quarantined and retryable.
     this.phase = 'stopping';
-    const result = await this.options.scenes.select('waiting', this.options.scenes.get().revision);
-    if (!result.ok) throw new Error(result.message);
-    this.waitingConfirmed = true;
-    this.options.production.setTrialPreparation();
-    this.options.runtime.resetSession(true);
-    this.options.hold();
-    this.options.refresh();
+    try {
+      this.options.production.setTrialPreparation();
+      this.options.runtime.resetSession(true);
+      this.options.hold();
+      this.options.refresh();
+      try {
+        const result = await this.options.scenes.selectWaitingForExit(
+          this.options.scenes.get().revision,
+        );
+        if (!result.ok) throw new Error(result.message);
+        this.waitingConfirmed = true;
+      } catch (error) {
+        this.options.diagnostic('waiting_scene', {
+          operationId: randomUUID(),
+          requestId: this.marker.requestId,
+          error: diagnosticValue(error),
+        });
+      }
+      return this.waitingConfirmed;
+    } finally {
+      this.phase = 'recovery';
+    }
   }
   observationAccepted(): void {
     if (
@@ -335,15 +382,19 @@ export class DemoTestController {
       performance.now() < this.nextTakeAttemptAt
     )
       return;
+    const marker = this.marker;
+    const current = () => this.phase === 'playing' && this.marker === marker;
     this.takePending = true;
     void this.options.scenes
-      .select('gameplay', this.options.scenes.get().revision)
+      .selectAutomatic('gameplay', this.options.scenes.get().revision, current)
       .then((result) => {
-        if (this.phase !== 'playing') return;
+        if (!current()) return;
         if (result.ok) this.taken = true;
         else this.takeFailed(new Error(result.message));
       })
-      .catch((error: unknown) => this.takeFailed(error))
+      .catch((error: unknown) => {
+        if (current()) this.takeFailed(error);
+      })
       .finally(() => {
         this.takePending = false;
       });

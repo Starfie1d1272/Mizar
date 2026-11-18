@@ -12,13 +12,10 @@ export const assistPayloadSchema = z.object({
   observer: z
     .object({
       state: z.enum(['connecting', 'ready', 'paused', 'unavailable']),
-      timingBasis: z.enum(['estimated', 'program-clock']),
-      calibrationState: z.enum(['uncalibrated', 'measured', 'held', 'reacquiring']).optional(),
-      effectiveDelaySeconds: z.number().finite().nonnegative().nullable(),
+      effectiveDelaySeconds: z.number().int().min(1).max(600),
       waitingReason: z.string().max(64).nullable(),
       nextWindowSeconds: z.number().finite().nonnegative().nullable(),
       leadSeconds: z.number().finite(),
-      measuredDelaySeconds: z.number().finite().nullable(),
       hints: z
         .array(
           z.object({
@@ -43,13 +40,14 @@ export const observerSettingsSchema = z.strictObject({
   enabled: z.boolean(),
   nicknameSource: z.enum(['game', 'website']).default('game'),
   leadSeconds: z.number().int().min(1).max(30),
+  delaySeconds: z.number().int().min(1).max(600).default(120),
 });
 export type ObserverSettings = z.infer<typeof observerSettingsSchema>;
 export const DEFAULT_OBSERVER_SETTINGS: ObserverSettings = {
   enabled: true,
   nicknameSource: 'game',
-
   leadSeconds: 5,
+  delaySeconds: 120,
 };
 
 export const gameAutomationSettingsSchema = z.strictObject({

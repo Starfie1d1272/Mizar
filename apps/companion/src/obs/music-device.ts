@@ -191,6 +191,7 @@ export class ObsMusicProvider implements MusicDeviceProvider {
   private connected = false;
   private epoch = 0;
   private retryAt = 0;
+  private collectionChanges = 0;
   private knownSecrets: readonly string[] = [];
   constructor(
     private readonly config: ObsConfigStore,
@@ -200,6 +201,12 @@ export class ObsMusicProvider implements MusicDeviceProvider {
   ) {}
   get isConnected(): boolean {
     return this.connected;
+  }
+  get collectionRevision(): number {
+    return this.collectionChanges;
+  }
+  get nextConnectionAttemptAt(): number {
+    return this.retryAt;
   }
   private trace(stage: string, evidence: unknown, secrets = this.knownSecrets) {
     try {
@@ -223,6 +230,12 @@ export class ObsMusicProvider implements MusicDeviceProvider {
       this.client = client;
       client.on('InputAudioMonitorTypeChanged', () => this.onMonitorSettingsChanged());
       client.on('CurrentProfileChanged', () => this.onMonitorSettingsChanged());
+      client.on('CurrentSceneCollectionChanging', () => {
+        if (this.client === client) this.collectionChanges++;
+      });
+      client.on('CurrentSceneCollectionChanged', () => {
+        if (this.client === client) this.collectionChanges++;
+      });
       client.on('ConnectionClosed', (error) => {
         if (this.client === client) {
           this.connected = false;
@@ -290,7 +303,13 @@ export class ObsMusicProvider implements MusicDeviceProvider {
             throw new Error('music_obs_unavailable', { cause: error });
           }
           const code = (error as { code?: unknown } | undefined)?.code;
-          throw new Error(code === 600 ? 'music_source_missing' : 'music_playback_failed', {
+          const failure =
+            code === 600
+              ? 'music_source_missing'
+              : code === 207
+                ? 'music_obs_not_ready'
+                : 'music_playback_failed';
+          throw new Error(failure, {
             cause: error,
           });
         } finally {
