@@ -219,5 +219,8 @@ jobs:
           if [ "${elapsed:-0}" -gt 180 ]; then
             echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
-          test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success
+          if [ "$BUILD" != success ] || [ "$QUALITY" != success ] || [ "$NATIVE" != success ]; then
+            echo "::error::Required jobs must succeed (build=$BUILD, quality=$QUALITY, native=$NATIVE)"
+            exit 1
+          fi
           test "$UPDATE_RECOVERY" = skipped || test "$UPDATE_RECOVERY" = success
