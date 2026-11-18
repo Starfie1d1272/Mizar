@@ -5,10 +5,78 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseLiveSnapshotV1, parseReliableEventV1 } from '@mizar/protocol/output';
 import { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
+import { RivalHubReadClient } from '../src/match-context/rivalhub-read-client.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { OutputService } from '../src/output/service.js';
 import Fastify from 'fastify';
 import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
+
+test('manifest refresh bounds automatic retries, allows explicit recovery, and honors Retry-After', async () => {
+  const fixture = async (name: string) =>
+    JSON.parse(
+      await readFile(
+        new URL(`../../../packages/rivalhub/test/fixtures/${name}`, import.meta.url),
+        'utf8',
+      ),
+    );
+  const manifest = await fixture('broadcast-manifest-v1.valid.json');
+  const schedule = await fixture('broadcast-schedule-window-v1.valid.json');
+  const installation = {
+    baseUrl: 'https://example.com',
+    credential: 'test-credential',
+    installationId: 'installation-a',
+    competitionId: 'competition-m2',
+    displayName: 'test',
+  };
+  let now = 0;
+  let requests = 0;
+  let scheduleRequests = 0;
+  let status = 503;
+  const diagnostics: string[] = [];
+  const client = new RivalHubReadClient(
+    'unused',
+    async () => {
+      requests++;
+      if (status === 200) return Response.json(manifest);
+      return new Response(null, { status, headers: { 'Retry-After': '120' } });
+    },
+    () => installation,
+    async () => {
+      scheduleRequests++;
+      return Response.json(schedule);
+    },
+    (response) => response.json(),
+    () => now,
+    async () => {},
+    (stage) => diagnostics.push(stage),
+  );
+  const matchId = manifest.match.matchId;
+  const explicit = client.matchSource(matchId, true);
+  await assert.rejects(explicit.load(), /503/);
+  for (; now < 10000; now += 1000) {
+    assert.equal(client.automaticManifestDeferred(matchId), true);
+    await assert.rejects(client.matchSource(matchId, false).load(), /503/);
+  }
+  assert.equal(requests, 1);
+  assert.deepEqual(diagnostics, ['manifest_refresh_failed']);
+  assert.equal(client.automaticManifestDeferred(matchId), false);
+  status = 200;
+  const [a, b] = await Promise.all([explicit.load(), explicit.load()]);
+  assert.equal(requests, 2);
+  assert.deepEqual(a, b);
+  assert.equal(diagnostics.at(-1), 'manifest_refresh_recovered');
+  status = 429;
+  await assert.rejects(explicit.load(), /429/);
+  await assert.rejects(explicit.load(), (error: { status?: number }) => error.status === 429);
+  assert.equal(requests, 3);
+  assert.equal(client.automaticManifestDeferred(matchId), true);
+  await Promise.all([
+    client.schedule(schedule.from, schedule.to),
+    client.schedule(schedule.from, schedule.to),
+    client.schedule('2026-09-16T07:00:00.000Z', schedule.to),
+  ]);
+  assert.equal(scheduleRequests, 2);
+});
 
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-lifecycle-'));
@@ -281,7 +349,7 @@ test('an unconfirmed claim error remains durable rather than assuming not_found'
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
 });
 
-for (const operation of ['switch', 'backoff'] as const) {
+for (const operation of ['switch', 'backoff', 'exit'] as const) {
   test(`a LIVE 403 drains the existing outbox during ${operation}`, async (t) => {
     const h = await setup(t);
     const tail = parseReliableEventV1({
@@ -293,6 +361,7 @@ for (const operation of ['switch', 'backoff'] as const) {
       cursor: { ...h.event.cursor, runtimeSeq: h.event.cursor.runtimeSeq + 1 },
     });
     const outbox = new ReliableOutbox(join(h.path, '..', 'reliable.json'));
+    let allowSeal = operation !== 'exit';
     let now = new Date();
     const output = new OutputService({
       outbox,
@@ -336,7 +405,7 @@ for (const operation of ['switch', 'backoff'] as const) {
       arm: (identity, reference) => output.armSourceCapture(identity, reference),
       activate: (identity) => output.activateSourceCapture(identity),
       restore: (identity, reference) => output.restoreSourceCapture(identity, reference),
-      seal: (identity) => output.sealSourceCapture(identity),
+      seal: (identity) => (allowSeal ? output.sealSourceCapture(identity) : Promise.resolve(false)),
       coverage: (identity) => output.sourceCaptureCoverage(identity),
     });
     await h.connection.claim(h.snapshot, 'revision', false);
@@ -359,6 +428,28 @@ for (const operation of ['switch', 'backoff'] as const) {
       (scope) => output.settleSourceForRelease(scope),
       (scope) => output.resumeSource(scope),
     );
+    if (operation === 'exit') {
+      const source = h.connection.reliableExactSource();
+      assert.ok(source);
+      h.setReliable(503);
+      await assert.rejects(h.connection.handoffForExit(), /source_capture_unconfirmed/);
+      assert.equal(h.releases.length, 0);
+      allowSeal = true;
+      await h.connection.retryExitHandoffs();
+      assert.equal(output.sourceCaptureCoverage(source).state, 'sealed');
+      assert.equal(h.connection.view().activeSourceMatchId, null);
+      assert.equal(h.connection.view().sourceCleanup.pending, 1);
+      const committed = JSON.parse(
+        await readFile(join(h.path, '..', 'rivalhub-source-state.json'), 'utf8'),
+      );
+      assert.equal(committed.records[0]?.state, 'release_pending');
+      assert.equal(
+        outbox.getRecords().find(({ event }) => event.idempotencyKey === tail.idempotencyKey)
+          ?.status,
+        'pending',
+      );
+      return;
+    }
     if (operation === 'switch') {
       const next = structuredClone(h.snapshot);
       next.matchId = 'match-b';
@@ -598,6 +689,34 @@ test('a delayed claim after a binding switch cannot enable the old source', asyn
   assert.equal(h.releases.length, 1);
 });
 
+test('local exit accepts the durable claim intent while its remote response is pending', async (t) => {
+  const h = await setup(t);
+  let respond!: () => void;
+  h.setClaimGate(
+    new Promise<void>((resolve) => {
+      respond = resolve;
+    }),
+  );
+  const claiming = h.connection.claim(h.snapshot, 'revision', false);
+  await h.claimStarted;
+  await h.connection.handoffForExit();
+  const file = join(h.path, '..', 'rivalhub-source-state.json');
+  const pending = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(pending.intents[0]?.scope.matchId, h.snapshot.matchId);
+  assert.equal(h.connection.view().activeSourceMatchId, null);
+  h.setFail(true);
+  respond();
+  await assert.rejects(claiming, /比赛已变化/);
+  const handedOff = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(handedOff.records[0]?.identity.matchId, h.snapshot.matchId);
+  assert.equal(handedOff.records[0]?.state, 'release_pending');
+  const restarted = await h.restart();
+  h.setFail(false);
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.pending, 0);
+  assert.ok(h.releases.every((release) => release.authority === '1'));
+});
+
 test('a release response after shutdown cancellation preserves the original handoff for recovery', async (t) => {
   const h = await setup(t);
   await h.connection.claim(h.snapshot, 'revision', false);
@@ -614,6 +733,7 @@ test('a release response after shutdown cancellation preserves the original hand
     return response;
   });
   const shutdown = new AbortController();
+  await h.connection.prepareSourceShutdown();
   const pending = h.connection.shutdownSource(shutdown.signal);
   const requestSignal = await started;
   shutdown.abort(new Error('shutdown timeout'));

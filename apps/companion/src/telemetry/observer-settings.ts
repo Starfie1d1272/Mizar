@@ -16,7 +16,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
-type SettingsChange = 'scope' | 'lead' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
+type SettingsChange = 'scope' | 'timing' | 'name' | 'enabled' | 'game' | 'connection' | 'map';
 
 /** Persist operator preferences; the current match's credentials stay in memory. */
 export class ObserverSettingsStore {
@@ -93,8 +93,9 @@ export class ObserverSettingsStore {
       const kind =
         this.settings.enabled !== value.enabled
           ? 'enabled'
-          : this.settings.leadSeconds !== value.leadSeconds
-            ? 'lead'
+          : this.settings.leadSeconds !== value.leadSeconds ||
+              this.settings.delaySeconds !== value.delaySeconds
+            ? 'timing'
             : undefined;
 
       this.settings = value;
@@ -191,7 +192,7 @@ export class ObserverSettingsStore {
   }
   private changed(kind: SettingsChange) {
     // Timing preferences affect projection calculation, never Host preparation.
-    if (kind !== 'lead' && kind !== 'name') this.revision = randomUUID();
+    if (kind !== 'timing' && kind !== 'name') this.revision = randomUUID();
 
     this.listeners.forEach((f) => f(kind));
   }
@@ -203,21 +204,12 @@ export function registerObserverSettings(
   policy: LocalWebOriginPolicy,
   canRegisterCurrent: () => boolean = () => true,
   isObserving: () => boolean = () => false,
-  recalibrateObserver: () => boolean = () => false,
 ) {
-  let calibrationRevision = randomUUID();
-  const view = () => ({ ...store.view(isObserving()), calibrationRevision });
   app.get('/local/v1/observer-assist', (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(view()),
+    reply.header('cache-control', 'no-store').send(store.view(isObserving())),
   );
   const schema = z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('configure'), settings: observerSettingsSchema }),
-    z.strictObject({
-      action: z.literal('recalibrate'),
-      calibrationRevision: z.uuid(),
-      id: z.uuid(),
-      expectedRevision: z.uuid(),
-    }),
     z.strictObject({
       action: z.literal('connection'),
       connection: observerConnectionSchema,
@@ -245,23 +237,6 @@ export function registerObserverSettings(
     const parsed = schema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ message: '请核对时间设置、GOTV 地址和密码格式。' });
-    if (parsed.data.action === 'recalibrate') {
-      if (
-        parsed.data.calibrationRevision !== calibrationRevision ||
-        parsed.data.expectedRevision !== store.revision ||
-        parsed.data.id !== store.mapConnection?.id ||
-        !canRegisterCurrent() ||
-        !store.settings.enabled ||
-        store.receiverPaused ||
-        store.waitingForMap ||
-        !recalibrateObserver()
-      )
-        return reply
-          .code(409)
-          .send({ message: '当前无法重新校准，请确认本图连接和提前提示接收状态。' });
-      calibrationRevision = randomUUID();
-      return reply.header('cache-control', 'no-store').send(view());
-    }
     if (parsed.data.action === 'copy-connection') {
       const connection = store.configured();
       if (parsed.data.expectedRevision !== store.revision || !connection)

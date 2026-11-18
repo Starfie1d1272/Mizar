@@ -14,7 +14,7 @@ export function ReviewDialog({
   kind,
   ...props
 }: ComponentProps<typeof Dialog> & {
-  kind: 'preflight' | 'roster' | 'sync' | 'issues';
+  kind: 'preflight' | 'roster' | 'sync' | 'issues' | 'previous-score';
 }) {
   const external = Boolean(window.__TAURI_INTERNALS__) && !isReviewWindow();
   const [error, setError] = useState('');

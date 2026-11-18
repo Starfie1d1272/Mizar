@@ -92,7 +92,20 @@ export function normalizeObserverGameEvent(
     fields[key] = identity.userId;
     fields[playerKey] = { steamId: identity.steamId };
   }
-  return normalizeGameEvent(row.name as CstvGameEventName, fields, context);
+  const round = row.round;
+  return normalizeGameEvent(row.name as CstvGameEventName, fields, {
+    cursor: {
+      ...context.cursor,
+      ...(role === 'lookahead' &&
+      row.name === 'player_death' &&
+      row.warmup === false &&
+      typeof round === 'number' &&
+      Number.isSafeInteger(round) &&
+      round >= 0
+        ? { roundsCompleted: round }
+        : {}),
+    },
+  });
 }
 
 /** Validate the public individual account bit fields without losing uint64 precision. */

@@ -1,4 +1,3 @@
-import { sourceErrorEvidence } from './source-error.js';
 import { bindHistoricalStats, projectHistoricalStats } from '../projections/historical-stats.js';
 import { projectHistoricalProgram } from '../projections/historical-program.js';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
@@ -32,7 +31,11 @@ export function registerRivalHubConnectionRoutes(
   },
 ) {
   options.connection.setDiagnosticHandler?.((operation, error) => {
-    if (operation === 'live_recovered')
+    if (operation === 'manifest_refresh_recovered')
+      app.log.info({ operation, diagnostic: error }, 'RivalHub 比赛资料读取已恢复');
+    else if (operation === 'manifest_refresh_failed')
+      app.log.warn({ operation, diagnostic: error }, 'RivalHub 比赛资料读取失败');
+    else if (operation === 'live_recovered')
       app.log.info(
         { operation, event: 'rivalhub_live', stage: 'accepted', result: 'success' },
         'RivalHub LIVE delivery recovered',
@@ -92,23 +95,6 @@ export function registerRivalHubConnectionRoutes(
     }
     return { ok: true };
   });
-  const sourceFor = (matchId: string, fresh = true) => {
-    const source = options.connection.matchSource(matchId, fresh);
-    return {
-      ...source,
-      load: async () => {
-        try {
-          return await source.load();
-        } catch (error) {
-          app.log.error(
-            { diagnostic: sourceErrorEvidence(error), matchId },
-            'RivalHub manifest fetch failed',
-          );
-          throw error;
-        }
-      },
-    };
-  };
   const refresh = (fresh = true) => {
     if (refreshing) return refreshing;
     const binding = linkedBinding();
@@ -119,13 +105,17 @@ export function registerRivalHubConnectionRoutes(
       throw new Error('请先确认或重新选择待加载的比赛。');
     const controller = options.controller;
     refreshing = controller
-      .refreshOnlineMatch(sourceFor(binding.context.matchId, fresh), options.canUpdatePlan)
+      .refreshOnlineMatch(
+        options.connection.matchSource(binding.context.matchId, fresh),
+        options.canUpdatePlan,
+      )
       .then((result) => {
         if (!result.ok) {
-          app.log.warn(
-            { diagnostics: result.diagnostics, matchId: binding.context.matchId },
-            'RivalHub manifest refresh rejected',
-          );
+          if (!result.diagnostics.some((item) => item.sourceEvidence))
+            app.log.warn(
+              { diagnostics: result.diagnostics, matchId: binding.context.matchId },
+              'RivalHub 比赛资料未应用',
+            );
           throw new Error(result.diagnostics.map((item) => item.message).join('；'));
         }
         lastRefreshAt = new Date().toISOString();
@@ -140,7 +130,6 @@ export function registerRivalHubConnectionRoutes(
       })
       .catch((error: unknown) => {
         refreshError = error instanceof Error ? error.message : '比赛资料刷新失败，请重试。';
-        app.log.error({ err: error, matchId: binding.context.matchId }, 'RivalHub refresh failed');
         throw error;
       })
       .finally(() => {
@@ -158,7 +147,11 @@ export function registerRivalHubConnectionRoutes(
         (statsBinding.origin === 'cache' && statsBinding.cachedFrom === 'online'))
     )
       void options.connection.stats(statsTarget(statsBinding.context));
-    if (linkedBinding() && !options.controller?.isOnlineCandidateLoading())
+    if (
+      statsBinding &&
+      !options.controller?.isOnlineCandidateLoading() &&
+      !options.connection.automaticManifestDeferred?.(statsBinding.context.matchId)
+    )
       void Promise.resolve()
         .then(() => refresh(false))
         .catch(() => undefined);
@@ -586,7 +579,7 @@ export function registerRivalHubConnectionRoutes(
     if (!options.controller || typeof body?.matchId !== 'string')
       return reply.code(400).send({ message: '请选择一场比赛。' });
     try {
-      const source = sourceFor(body.matchId);
+      const source = options.connection.matchSource(body.matchId);
       const outcome =
         body.activate === true
           ? await options.controller.loadOnlineMatch(body.matchId, source)

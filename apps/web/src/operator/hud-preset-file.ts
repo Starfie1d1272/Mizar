@@ -47,7 +47,7 @@ export async function downloadLhmHud(activeRevision: string): Promise<void> {
     body: JSON.stringify({ expectedActiveRevision: activeRevision }),
   });
   if (response.status === 409) throw new Error('播出配置已更新，请重试。');
-  if (!response.ok) throw new Error('HUD 导出失败，请检查本地服务和资源。');
+  if (!response.ok) throw new Error('HUD 导出失败，请检查 Mizar 后台服务和资源。');
   const url = URL.createObjectURL(await response.blob());
   try {
     const link = document.createElement('a');

@@ -4,7 +4,11 @@ export function musicFailure(error: unknown): { code: MusicFailureCode; message:
   const message = error instanceof Error ? error.message : '';
   if (message === 'music_obs_unavailable')
     return { code: 'obs_disconnected', message: 'OBS 尚未连接。请打开 OBS 并检查控制连接。' };
-  if (message === 'music_collection_inactive' || message === 'music_scenes_missing')
+  if (
+    message === 'music_collection_inactive' ||
+    message === 'music_scenes_missing' ||
+    message === 'music_obs_not_ready'
+  )
     return {
       code: 'scene_missing',
       message: 'OBS 音乐场景尚未就绪。请停止输出后检查并修复 Mizar 场景。',

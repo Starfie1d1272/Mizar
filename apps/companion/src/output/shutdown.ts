@@ -2,11 +2,19 @@ import type { RivalHubConnection } from '../match-context/rivalhub-connection.js
 import type { OutputService } from './service.js';
 
 export async function closeWebsiteOutput(
-  connection: Pick<RivalHubConnection, 'shutdownSource' | 'closeSourceState'> | undefined,
+  connection:
+    | Pick<RivalHubConnection, 'prepareSourceShutdown' | 'shutdownSource' | 'closeSourceState'>
+    | undefined,
   output: Pick<OutputService, 'close'>,
   onRemoteFailure: (error: unknown) => void,
 ): Promise<void> {
-  if (connection?.shutdownSource) {
+  const failures: unknown[] = [];
+  try {
+    await connection?.prepareSourceShutdown?.();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (!failures.length && connection?.shutdownSource) {
     const remote = new AbortController();
     const timeout = new Error('数据源远端收尾超时');
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -32,6 +40,8 @@ export async function closeWebsiteOutput(
     Promise.resolve().then(() => connection?.closeSourceState?.()),
     Promise.resolve().then(() => output.close()),
   ]);
-  const failures = local.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []));
+  for (const result of local) {
+    if (result.status === 'rejected') failures.push(result.reason);
+  }
   if (failures.length) throw new AggregateError(failures, 'website_local_shutdown_failed');
 }

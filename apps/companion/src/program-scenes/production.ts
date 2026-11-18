@@ -390,6 +390,7 @@ export function createProduction(options: ProductionDependencies) {
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
       } else {
+        let localHandoff: Promise<void> | undefined;
         if (shutdown && options.source?.handoffForExit) {
           stage = 'production_release';
           try {
@@ -397,7 +398,10 @@ export function createProduction(options: ProductionDependencies) {
           } catch (error) {
             if (!sourceStateUnavailable(error)) throw error;
           }
-        } else if (!shutdown && !obsOnlyRetry) void startHandoff().catch(() => {});
+        } else if (!shutdown && !obsOnlyRetry && options.source?.handoffForExit) {
+          localHandoff = startHandoff();
+          void localHandoff.catch(() => {});
+        }
         if (!trialPending && options.source?.handoffForExit) {
           if (obsExitTask && !obsExitTask.valid()) {
             if (body?.action === 'finish') {
@@ -455,7 +459,10 @@ export function createProduction(options: ProductionDependencies) {
             if (!controlValid()) throw new Error('OBS 播出状态已变化。');
             if (trialPending) {
               stage = 'production_safe_scene';
-              await options.demo()?.finish();
+              if ((await options.demo()?.finish()) === false) {
+                if (shutdown) throw new Error('demo_waiting_scene_unconfirmed');
+                safeScene = false;
+              }
             }
             if (mode !== 'preparation') {
               stage = 'production_safe_scene';
@@ -490,7 +497,7 @@ export function createProduction(options: ProductionDependencies) {
             }
           }
           stage = 'production_release';
-          if (shutdown) {
+          if (shutdown && !options.source?.handoffForExit) {
             if (!controlValid())
               return {
                 ok: false as const,
@@ -517,6 +524,14 @@ export function createProduction(options: ProductionDependencies) {
           mode = 'preparation';
           statsActive = false;
           options.source?.clearStats();
+        }
+        if (localHandoff) {
+          stage = 'production_release';
+          try {
+            await localHandoff;
+          } catch (error) {
+            if (!sourceStateUnavailable(error)) throw error;
+          }
         }
       }
       committed = true;
@@ -558,9 +573,7 @@ export function createProduction(options: ProductionDependencies) {
         error instanceof Error && error.message === 'camera_settings_saving'
           ? '运镜设置正在保存，请稍后重试。'
           : stage === 'production_release'
-            ? error instanceof Error && /数据源释放待重试|可靠事件仍待确认/.test(error.message)
-              ? '等待画面已保留，数据源释放尚未确认，记录待重试或核对；制作状态仍保留。'
-              : '等待画面已保留，但数据源释放失败，制作状态仍保留。请查看诊断，处理记录的问题后再结束制作。'
+            ? '网站同步收尾未确认，请查看诊断并重试。'
             : stage === 'production_safe_scene'
               ? '切换等待画面失败，制作尚未结束。请查看诊断，处理记录的问题后再结束制作。'
               : '比赛状态读取失败，当前状态和具体原因未确认。请复制诊断信息后排查。';

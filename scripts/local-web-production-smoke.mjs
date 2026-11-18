@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,13 @@ const port = await new Promise((resolvePort, reject) => {
   });
 });
 const url = `http://127.0.0.1:${port}`;
+// Windows terminates the process for SIGTERM instead of delivering a Node
+// signal handler. Exercise the existing private product stop on that host.
+const windowsStop =
+  process.platform === 'win32'
+    ? { instanceId: randomUUID(), token: randomBytes(32).toString('hex') }
+    : null;
+const smokeArtifact = '0'.repeat(64);
 function bounded(promise, label, ms = 5000) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -33,7 +41,15 @@ const service = spawn(process.execPath, [join(root, 'apps/companion/dist/server.
     GSI_TOKEN: 'mizar-startup-smoke',
     WEB_ROOT: join(root, 'apps/web/dist'),
     MIZAR_STATE_ROOT: temporary,
-    CAPTURE_DIR: join(temporary, 'recordings'),
+    CAPTURE_DIR: join(temporary, 'data', 'recordings'),
+    ...(windowsStop
+      ? {
+          MIZAR_PRODUCT_INSTANCE: windowsStop.instanceId,
+          MIZAR_ARTIFACT_SHA256: smokeArtifact,
+          MIZAR_RUNTIME_TOKEN: windowsStop.token,
+          MIZAR_DIAGNOSTICS_ENDPOINT: '',
+        }
+      : {}),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -187,7 +203,7 @@ try {
 } catch (error) {
   failure = error;
 } finally {
-  if (browser && browser.exitCode === null && browser.signalCode === null) {
+  if (browser?.pid && browser.exitCode === null && browser.signalCode === null) {
     if (socket?.readyState === globalThis.WebSocket.OPEN) {
       socket.send(JSON.stringify({ id: 2147483647, method: 'Browser.close' }));
     } else browser.kill('SIGTERM');
@@ -198,7 +214,8 @@ try {
     } catch (error) {
       failure ??= error;
       try {
-        process.kill(-browser.pid, 'SIGKILL');
+        if (process.platform === 'win32') browser.kill('SIGKILL');
+        else process.kill(-browser.pid, 'SIGKILL');
       } catch (killError) {
         if (killError.code !== 'ESRCH') failure ??= killError;
       }
@@ -210,7 +227,24 @@ try {
     failure ??= new Error(`Chromium exited before controlled shutdown: ${browserLogs}`);
   }
   socket?.close();
-  if (service.exitCode === null) service.kill('SIGTERM');
+  if (service.exitCode === null && service.signalCode === null) {
+    if (windowsStop) {
+      try {
+        const response = await globalThis.fetch(`${url}/operator/runtime/stop`, {
+          method: 'POST',
+          headers: { 'x-runtime-token': windowsStop.token },
+          signal: globalThis.AbortSignal.timeout(5000),
+        });
+        if (response.status !== 202) {
+          failure ??= new Error(`Companion stop returned HTTP ${response.status}`);
+          service.kill('SIGTERM');
+        }
+      } catch (error) {
+        failure ??= error;
+        service.kill('SIGTERM');
+      }
+    } else service.kill('SIGTERM');
+  }
   const exit = await Promise.race([
     serviceExit,
     delay(10000, null, { ref: false }).then(() => null),
@@ -222,11 +256,25 @@ try {
       failure ??= error;
     });
   }
+  if (exit && exit.code !== 0)
+    failure ??= new Error(`Companion exit failed: ${JSON.stringify(exit)} ${logs}`);
+  if (windowsStop && exit?.code === 0) {
+    try {
+      const path = join(temporary, 'data', `runtime-flush-${windowsStop.instanceId}.json`);
+      const receipt = JSON.parse(await readFile(path, 'utf8'));
+      if (
+        receipt.instanceId !== windowsStop.instanceId ||
+        receipt.artifactSha256 !== smokeArtifact ||
+        receipt.pid !== service.pid
+      )
+        failure ??= new Error('Companion flush receipt does not match the smoke process');
+    } catch (error) {
+      failure ??= error;
+    }
+  }
   await rm(temporary, { recursive: true, force: true }).catch((error) => {
     console.warn(`Temporary smoke directory retained for runner cleanup: ${error.message}`);
   });
-  if (exit && exit.code !== 0)
-    failure ??= new Error(`Companion exit failed: ${JSON.stringify(exit)} ${logs}`);
   if (
     await globalThis.fetch(`${url}/health`, { signal: globalThis.AbortSignal.timeout(2000) }).then(
       () => true,

@@ -77,7 +77,10 @@ export interface SourceCaptureLifecycle {
   activate(identity: ExactSource): void;
   restore(identity: ExactSource, reference: CaptureReference | undefined): Promise<void>;
   seal(identity: ExactSource): Promise<boolean>;
-  coverage(identity: ExactSource): { state: 'armed' | 'sealed' | 'unknown' };
+  coverage(identity: ExactSource): {
+    state: 'armed' | 'sealed' | 'unknown';
+    durableUnknown?: boolean;
+  };
 }
 
 type Source = ExactSource & {
@@ -196,10 +199,9 @@ export class RivalHubConnection {
   private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
   private readonly exitHandoffs = new Map<
     string,
-    { identity: ExactSource; cause: 'finish' | 'switch' | 'recovery' }
+    { identity: ExactSource; cause: 'finish' | 'switch' | 'recovery' | 'shutdown' }
   >();
   private readonly sourceCommands = new SerialCommitQueue();
-  private claimOperationsInFlight = 0;
   private automaticClaimAttempts: {
     installation: Installation;
     target: string;
@@ -448,6 +450,7 @@ export class RivalHubConnection {
       (response) => this.authorization.readJson(response),
       monotonicNow,
       (installation, viewer) => this.authorization.rememberViewer(installation, viewer),
+      (operation, evidence) => this.onDiagnostic(operation, evidence),
     );
   }
 
@@ -463,6 +466,9 @@ export class RivalHubConnection {
   }
   schedule(from: string, to: string) {
     return this.readClient.schedule(from, to);
+  }
+  automaticManifestDeferred(matchId: string) {
+    return this.readClient.automaticManifestDeferred(matchId);
   }
   library() {
     return this.readClient.library();
@@ -646,19 +652,20 @@ export class RivalHubConnection {
 
   private shutdownSignal: AbortSignal | undefined;
 
-  async shutdownSource(signal: AbortSignal): Promise<void> {
-    this.shutdownSignal = signal;
+  async prepareSourceShutdown(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
-    ++this.bindingGeneration;
-    if (this.source) this.sealCapture(this.exactSource(this.source));
+    if (!this.sourceStateAvailable && !this.source && !this.exitHandoffs.size) return;
+    await this.freezeExitSource('shutdown');
+  }
+
+  async shutdownSource(signal: AbortSignal): Promise<void> {
+    if (!this.sourceStateAvailable) return;
+    this.shutdownSignal = signal;
     await this.sourceCommands.run(async () => {
       signal.throwIfAborted();
-      const deadline = Date.now() + 8000;
-      await this.retireCurrent('shutdown');
-      await this.cleanup(true, deadline);
+      await this.cleanup(true, Date.now() + 8000);
       signal.throwIfAborted();
-      if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
     });
   }
 
@@ -810,7 +817,6 @@ export class RivalHubConnection {
     for (const intent of ordered) {
       if (examined >= 8 || Date.now() >= deadline) break;
       examined++;
-      this.claimOperationsInFlight++;
       try {
         await this.reconcileIntentForState(
           intent,
@@ -821,8 +827,6 @@ export class RivalHubConnection {
         );
       } catch (error) {
         this.onDiagnostic('source_status', error);
-      } finally {
-        this.claimOperationsInFlight--;
       }
     }
     this.intentReconcileCursor = (start + examined) % intents.length;
@@ -920,59 +924,37 @@ export class RivalHubConnection {
 
   /** Freeze this exact source now; persist its handoff without waiting for delivery. */
   handoffForExit(): Promise<void> {
-    if (!this.sourceStateAvailable)
-      return Promise.reject(new Error('rivalhub_source_state_unavailable'));
-    this.bindingGeneration++;
+    return this.finishExitHandoffs(this.freezeExitSource('finish'));
+  }
+
+  private async freezeExitSource(cause: 'finish' | 'shutdown'): Promise<void> {
+    if (!this.sourceStateAvailable && (this.source || this.exitHandoffs.size))
+      throw new Error('rivalhub_source_handoff_unavailable');
+    this.requireSourceState();
+    ++this.bindingGeneration;
     const source = this.source;
     if (source) {
       this.stopSync(source.matchId);
       source.draining = true;
       source.paused = true;
-      const identity = this.exactSource(source);
-      this.trackExitHandoff(identity, 'finish');
-      if (!this.settleSource) return Promise.reject(new Error('可靠事件范围尚未冻结。'));
-      // settle() enters the output owner's fence synchronously; false remains pending.
-      void this.settle(identity);
+      this.trackExitHandoff(this.exactSource(source), cause);
     }
-    // The source-state owner serializes its own durable writes. Do not queue
-    // this local handoff behind claim/release HTTP operations.
-    const handoff = (async () => {
-      await this.persistExitHandoffs();
-      await this.updateCleanupSummary();
-      if (
-        this.cleanupSummary.claimIntent ||
-        this.claimOperationsInFlight > 0 ||
-        this.exitHandoffs.size > 0
-      )
-        throw new Error('数据源认领结果待核对。');
-    })();
-    void handoff
-      .then(
-        () => this.sourceCommands.run(() => this.cleanup(false)),
-        () => undefined,
-      )
-      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
-    return handoff;
+    await this.persistExitHandoffs();
+    await this.updateCleanupSummary();
   }
 
   /** Retry only identities frozen by a prior exit, never the current source. */
   retryExitHandoffs(): Promise<void> {
-    if (!this.sourceStateAvailable)
-      return Promise.reject(new Error('rivalhub_source_state_unavailable'));
-    if (this.exitHandoffs.size && !this.settleSource)
-      return Promise.reject(new Error('可靠事件范围尚未冻结。'));
-    const identities = [...this.exitHandoffs.values()].map(({ identity }) => identity);
-    const handoff = (async () => {
-      await this.persistExitHandoffs();
-      for (const identity of identities) void this.settle(identity);
-      await this.updateCleanupSummary();
-      if (
-        this.cleanupSummary.claimIntent ||
-        this.claimOperationsInFlight > 0 ||
-        this.exitHandoffs.size > 0
-      )
-        throw new Error('数据源认领结果待核对。');
-    })();
+    return this.finishExitHandoffs(this.retryLocalExitHandoffs());
+  }
+
+  private async retryLocalExitHandoffs(): Promise<void> {
+    this.requireSourceState();
+    await this.persistExitHandoffs();
+    await this.updateCleanupSummary();
+  }
+
+  private finishExitHandoffs(handoff: Promise<void>): Promise<void> {
     void handoff
       .then(
         () => this.sourceCommands.run(() => this.cleanup(false)),
@@ -982,7 +964,10 @@ export class RivalHubConnection {
     return handoff;
   }
 
-  private trackExitHandoff(identity: ExactSource, cause: 'finish' | 'switch' | 'recovery'): string {
+  private trackExitHandoff(
+    identity: ExactSource,
+    cause: 'finish' | 'switch' | 'recovery' | 'shutdown',
+  ): string {
     const key = JSON.stringify(identity);
     if (!this.exitHandoffs.has(key)) this.exitHandoffs.set(key, { identity, cause });
     return key;
@@ -990,6 +975,13 @@ export class RivalHubConnection {
 
   private async persistExitHandoffs(): Promise<void> {
     for (const [key, { identity, cause }] of this.exitHandoffs) {
+      const active = this.source;
+      const current = active?.draining && JSON.stringify(this.exactSource(active)) === key;
+      if (current && this.captureLifecycle && !(await this.captureLifecycle.seal(identity))) {
+        if (!this.captureLifecycle.coverage(identity).durableUnknown)
+          throw new Error('rivalhub_source_capture_unconfirmed');
+        this.cleanupEvidence(identity, 'source_capture_coverage_unknown', 0);
+      }
       const state = await this.sourceState.snapshot();
       const record = state.records.find((item) => JSON.stringify(item.identity) === key);
       if (record) await this.sourceState.handoff(identity, cause);
@@ -1008,6 +1000,10 @@ export class RivalHubConnection {
       )
         throw new Error('数据源交接未确认。');
       this.exitHandoffs.delete(key);
+      if (current && this.source === active) {
+        this.source = null;
+        this.cleanupEvidence(identity, `source_retired_${cause}`, 0);
+      }
     }
   }
 
@@ -1385,7 +1381,6 @@ export class RivalHubConnection {
     generation: number,
     isCurrent: () => boolean = () => true,
   ) {
-    this.claimOperationsInFlight++;
     this.business('business_claim', snapshot, { contextRevision, reason: 'claim_started' });
     try {
       return await this.claimLockedOnce(snapshot, contextRevision, takeover, generation, isCurrent);
@@ -1397,8 +1392,6 @@ export class RivalHubConnection {
         causeCode: requestFailureCode(error),
       });
       throw error;
-    } finally {
-      this.claimOperationsInFlight--;
     }
   }
 

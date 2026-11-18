@@ -117,22 +117,6 @@ export class WorkspaceObserver {
     return {
       ...health,
       generation: health.generation + this.generationBase,
-      ...(health.roundClock
-        ? {
-            roundClock: {
-              ...health.roundClock,
-              generation: health.roundClock.generation + this.generationBase,
-            },
-          }
-        : {}),
-      ...(health.freezeEnd
-        ? {
-            freezeEnd: {
-              ...health.freezeEnd,
-              generation: health.freezeEnd.generation + this.generationBase,
-            },
-          }
-        : {}),
     };
   }
   readonly source: CstvSourceManager<'lookahead'>;
@@ -548,7 +532,7 @@ export function registerWorkspaceObserver(
   };
   const unsubscribe = settings?.subscribe((kind) => {
     if (kind === 'game' && !settings.gameAutomation.hideGameHud) hiddenGame = '';
-    if (kind === 'lead' || kind === 'name' || kind === 'game' || kind === 'scope') return;
+    if (kind === 'timing' || kind === 'name' || kind === 'game' || kind === 'scope') return;
 
     const attempt = ++epoch;
     if (kind === 'map')

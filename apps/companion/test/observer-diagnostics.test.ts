@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, rm, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -244,5 +244,111 @@ test('support export rejects hard-linked or invalid observer reports and records
   );
   assert(
     !Object.values(entries).some((bytes) => Buffer.from(bytes).includes('unrelated-file-marker')),
+  );
+});
+
+test('support ZIP keeps safe fixed segments and reports each unavailable committed segment', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-pinned-log-gap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const logs = join(await realpath(root), 'logs');
+  await mkdir(logs);
+  const pinId = randomUUID();
+  const emptyOld = `desktop-${randomUUID()}.ndjson`;
+  const successor = `document-${randomUUID()}.ndjson`;
+  const unknown = `document-${randomUUID()}.ndjson`;
+  const good = `desktop-${randomUUID()}.ndjson`;
+  const missingHost = `desktop-${randomUUID()}.ndjson`;
+  const changedHost = `document-${randomUUID()}.ndjson`;
+  const fixedContent = '{"eventId":"safely-fixed-host-event"}\n';
+  const fixed = {
+    bytes: Buffer.byteLength(fixedContent),
+    sha256: createHash('sha256').update(fixedContent).digest('hex'),
+  };
+  await mkdir(join(logs, 'host-pins'));
+  await Promise.all([
+    writeFile(join(logs, emptyOld), ''),
+    writeFile(join(logs, successor), 'post-cutoff'),
+    writeFile(join(logs, unknown), 'unfixed-original'),
+    writeFile(join(logs, good), fixedContent),
+    writeFile(join(logs, changedHost), fixedContent.replace('safely', 'edited')),
+    writeFile(
+      join(logs, 'host-pins', `${pinId}.json`),
+      JSON.stringify({
+        schema: 'mizar-producer-pin/2',
+        pinId,
+        producerKind: 'host',
+        producerRunId: randomUUID(),
+        kind: 'export',
+        state: 'committed',
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        segments: [missingHost, changedHost, good].map((name) => ({ name, ...fixed })),
+        sourceState: {
+          asOf: new Date().toISOString(),
+          memoryOnly: { events: 0, bytes: 0 },
+          unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
+          emptyAtCutoffSegments: [emptyOld],
+          postCutoffSegments: [successor],
+        },
+      }),
+    ),
+  ]);
+  const journal = new SessionJournal(logs);
+  t.after(() => journal.close());
+  await journal.recordCommitted('before_cutoff', { recorded: true });
+  const participant = journal.exportParticipant();
+  let missing: string | undefined;
+  const exports = new SupportExports(logs, () => [
+    {
+      ...participant,
+      async commit(pinId) {
+        const receipt = await participant.commit(pinId);
+        missing = receipt.segments[0]?.name;
+        assert.ok(missing);
+        await rm(join(logs, missing));
+        return receipt;
+      },
+    },
+  ]);
+  const job = await exports.begin({}, {}, pinId);
+  t.after(() => exports.cancel(job.exportId));
+  const deadline = Date.now() + 15_000;
+  while (!exports.status(job.exportId)?.settled && Date.now() < deadline) await delay(20);
+  const status = exports.status(job.exportId)!;
+  assert.equal(status.phase, 'ready', status.error);
+  const entries = unzipSync(await readFile(join(exports.directory, job.exportId, 'part-1.zip')));
+  const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
+  const events = Object.entries(entries)
+    .filter(([name]) => name.startsWith('events/'))
+    .map(([, bytes]) => Buffer.from(bytes).toString())
+    .join('');
+  assert.match(events, /safely-fixed-host-event/);
+  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original/);
+  assert.deepEqual(
+    coverage.gaps
+      .filter((entry: { source: string }) => [missingHost, changedHost].includes(entry.source))
+      .map(({ source, phase }: { source: string; phase: string }) => [source, phase]),
+    [
+      [missingHost, 'read'],
+      [changedHost, 'read'],
+    ],
+  );
+  assert.ok(
+    coverage.gaps.some(
+      (entry: { source: string; phase: string }) =>
+        entry.source === missing && entry.phase === 'read',
+    ),
+  );
+  assert.ok(coverage.gaps.some((entry: { source: string }) => entry.source === unknown));
+  assert.ok(
+    coverage.excludedSources.some(
+      (entry: { source: string; reason: string }) =>
+        entry.source === emptyOld && entry.reason === 'producer-declared-empty-at-cutoff',
+    ),
+  );
+  assert.ok(
+    coverage.excludedSources.some(
+      (entry: { source: string; reason: string }) =>
+        entry.source === successor && entry.reason === 'producer-declared-post-cutoff-segment',
+    ),
   );
 });

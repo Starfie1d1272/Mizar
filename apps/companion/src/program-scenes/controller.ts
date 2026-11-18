@@ -273,7 +273,7 @@ export class ProgramSceneController {
         (this.blockedReason('bp') !== null ||
           (actualTarget === 'managed' && this.active !== 'gameplay'))
       )
-        return { ok: false as const, message: '请先准备完整 BP；受管比赛输出需要切到比赛画面。' };
+        return { ok: false as const, message: '请先准备完整 BP；比赛输出需要切到比赛画面。' };
       const bp = this.bpSession.get();
       if (visible && this.bpCompact !== 'on' && bp.state !== 'hidden')
         return { ok: false as const, message: 'BP 正在其他画面播放，请先关闭。' };

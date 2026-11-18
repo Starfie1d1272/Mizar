@@ -85,6 +85,7 @@ jobs:
             /.github/actions/cargo-cache/
             /.github/actions/save-cargo-cache/
             /scripts/ci/cargo-cache-key.mjs
+            /scripts/architecture/windows-ipc-acl.mjs
             /scripts/web-installer/Bootstrap.cs
             /scripts/web-installer/Nsis.cs
             /apps/desktop/src-tauri/
@@ -101,7 +102,7 @@ jobs:
           native=true
           installer=true
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri packages/protocol/src/desktop-ipc.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri packages/protocol/src/desktop-ipc.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs scripts/architecture/windows-ipc-acl.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
               native=false
             else
               result=$?
@@ -134,8 +135,15 @@ jobs:
         if: steps.select.outputs.native == 'true'
         with:
           profile: ci
-      - if: steps.select.outputs.native == 'true'
-        run: cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Build Host and check generated Windows IPC capabilities
+        if: steps.select.outputs.native == 'true'
+        shell: pwsh
+        run: |
+          $messages = cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml --message-format=json-render-diagnostics
+          if ($LASTEXITCODE -ne 0) { $messages; exit $LASTEXITCODE }
+          $hostBuild = @($messages | ConvertFrom-Json | Where-Object { $_.reason -eq 'build-script-executed' -and $_.package_id -match '#mizar-desktop@' })
+          if ($hostBuild.Count -ne 1) { throw 'Desktop build did not report its capability output directory' }
+          node scripts/architecture/windows-ipc-acl.mjs (Join-Path $hostBuild[0].out_dir 'capabilities.json')
       - if: steps.select.outputs.native == 'true'
         run: cargo clippy --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
       - name: Save Cargo caches on main
@@ -211,5 +219,8 @@ jobs:
           if [ "${elapsed:-0}" -gt 180 ]; then
             echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
-          test "$BUILD" = success && test "$QUALITY" = success && test "$NATIVE" = success
+          if [ "$BUILD" != success ] || [ "$QUALITY" != success ] || [ "$NATIVE" != success ]; then
+            echo "::error::Required jobs must succeed (build=$BUILD, quality=$QUALITY, native=$NATIVE)"
+            exit 1
+          fi
           test "$UPDATE_RECOVERY" = skipped || test "$UPDATE_RECOVERY" = success

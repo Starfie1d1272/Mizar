@@ -61,8 +61,8 @@ impl Qualification {
             Some(Value::Null) => Ok(None),
             Some(value) => fields("qualification", value)
                 .map(|value| Some(Self(value)))
-                .map_err(|_| "本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
-            None => Err("本场回收资格响应无效。请重试；再次失败时查看诊断。".into()),
+                .map_err(|_| "本场收尾响应无效。请重试；再次失败时查看诊断。".into()),
+            None => Err("本场收尾响应无效。请重试；再次失败时查看诊断。".into()),
         }
     }
     pub fn as_value(&self) -> &Value {

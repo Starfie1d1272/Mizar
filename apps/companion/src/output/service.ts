@@ -664,7 +664,10 @@ export class OutputService {
 
   sourceCaptureCoverage(identity: ExactSource) {
     if (this.outboxUnavailable || !this.outbox) return { state: 'unknown' as const };
-    return this.outbox.captureCoverage(identity);
+    return {
+      ...this.outbox.captureCoverage(identity),
+      durableUnknown: this.outbox.hasDurableUnknownCapture(identity),
+    };
   }
 
   private executionEligible(binding: MatchContextBinding | undefined): boolean {
@@ -1704,6 +1707,19 @@ export class OutputService {
         bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId)
     )
       return true;
+    // Preserve a captured result while later source generations are queued.
+    // The receiver still validates its original cursor and authority.
+    if (
+      retained?.status === 'pending' &&
+      (event.kind === 'map_ended' || event.kind === 'map_player_snapshot') &&
+      binding.context.matchId === event.matchId &&
+      bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+      event.cursor.liveSessionId !== null &&
+      bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
+      bundle.program.cursor.programSourceGeneration >= event.cursor.programSourceGeneration &&
+      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
+    )
+      return true;
     if (
       event.kind === 'map_started' &&
       bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
@@ -1861,6 +1877,8 @@ export class OutputService {
       return event.evidence.contextFresh;
     if (
       (event.kind === 'map_player_snapshot' ||
+        (event.kind === 'map_ended' &&
+          bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration) ||
         (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
           bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch)) &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId

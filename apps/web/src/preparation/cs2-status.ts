@@ -1,46 +1,58 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { desktopInvoke } from '../workspace/client';
 
 import type { Cs2ConfigStatus, Cs2Status, WorkspaceExitStatus } from '@mizar/protocol/desktop-ipc';
 export type { Cs2ConfigStatus } from '@mizar/protocol/desktop-ipc';
 
-export function useCs2Status() {
-  const desktop = Boolean(window.__TAURI_INTERNALS__);
-  const [status, setStatus] = useState<Cs2ConfigStatus | null>(null);
-  const [phase, setPhase] = useState<Cs2Status['phase']>();
-  const [error, setError] = useState('');
-  const [revision, setRevision] = useState(0);
-  useEffect(() => {
-    if (!desktop) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const next = await desktopInvoke('cs2_config_status');
-        if (active) {
-          // A busy response deliberately has no game/config facts: retain the
-          // last snapshot, and display only its separate operation label.
-          if (!next.busy) setStatus(next);
-          setPhase(
-            next.busy && ['starting', 'restoring', 'checking'].includes(next.phase ?? '')
-              ? next.phase
-              : undefined,
-          );
-          setError('');
+let current: { status: Cs2ConfigStatus | null; phase?: Cs2Status['phase']; error: string } = {
+  status: null,
+  error: '',
+};
+const listeners = new Set<() => void>();
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let polling = false;
+
+async function pollCs2Status() {
+  if (!listeners.size || polling) return;
+  clearTimeout(pollTimer);
+  polling = true;
+  try {
+    const next = await desktopInvoke('cs2_config_status');
+    current = next.busy
+      ? {
+          status: current.status,
+          ...(next.phase === 'idle' ? {} : { phase: next.phase }),
+          error: '',
         }
-      } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : '无法读取 CS2 设置。');
-      } finally {
-        if (active) timer = setTimeout(() => void poll(), 1000);
-      }
+      : { status: next, error: '' };
+  } catch (error) {
+    current = {
+      ...current,
+      error: error instanceof Error ? error.message : '无法读取 CS2 设置。',
     };
-    void poll();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [desktop, revision]);
-  return { status, phase, error, refresh: () => setRevision((current) => current + 1) };
+  } finally {
+    polling = false;
+    if (listeners.size) pollTimer = setTimeout(() => void pollCs2Status(), 1000);
+  }
+  for (const listener of listeners) listener();
+}
+
+function subscribeCs2Status(listener: () => void) {
+  if (!window.__TAURI_INTERNALS__) return () => {};
+  listeners.add(listener);
+  if (listeners.size === 1) void pollCs2Status();
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) clearTimeout(pollTimer);
+  };
+}
+
+const getCs2Status = () => current;
+const refreshCs2Status = () => void pollCs2Status();
+
+export function useCs2Status() {
+  const snapshot = useSyncExternalStore(subscribeCs2Status, getCs2Status, getCs2Status);
+  return { ...snapshot, refresh: refreshCs2Status };
 }
 export function cs2OperationLabel(phase: Cs2Status['phase']) {
   return phase === 'starting'

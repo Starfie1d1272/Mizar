@@ -115,7 +115,11 @@ import { ObsCaptureWarmup } from './obs/capture-warmup.js';
 import { ObsAudioRouting } from './obs/audio-routing.js';
 import { GameAudioController } from './obs/audio-policy-controller.js';
 import { gameAudioTruth } from './obs/audio-policy-truth.js';
-import type { ObsNativeEvidence } from './obs/native-evidence.js';
+import {
+  collectObsNativeEvidence,
+  obsDisconnectEvidence as projectObsDisconnectEvidence,
+  type ObsNativeEvidence,
+} from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
@@ -312,7 +316,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             // Raw cause stays in the local log; support export applies its existing redaction.
             const evidence = {
               event: 'outbox',
-              stage: 'outbox_load',
+              stage:
+                error instanceof Error && error.message.startsWith('capture_sequence_unconfirmed:')
+                  ? 'outbox_capture'
+                  : 'outbox_load',
               err: outboxLocalError(error),
               recovery: recovery ?? null,
               result:
@@ -323,7 +330,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                     : 'unconfirmed',
             };
             if (recovery === undefined)
-              app.log.error(evidence, '发送队列无法安全恢复；原始文件保留。');
+              app.log.error(evidence, '网站可靠输出操作未确认；原始文件保留。');
             else {
               app.log.warn(evidence, recovery.message);
               recordRuntimeDiagnostic(`output-${recovery.code}`, 'projection', false);
@@ -871,7 +878,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         const key = JSON.stringify([
           diagnostics.blocked,
           diagnostics.lastReset,
-          diagnostics.anchors > 0,
           diagnostics.pending > 0,
         ]);
         const now = debugClock.nowMonotonicMs();
@@ -1078,9 +1084,29 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   obsAdapter?.onBpDisconnect(() =>
     sceneController.compactDisconnected(production.automaticAllowed()),
   );
-  obsAdapter?.onProgramChanged(() => {
+  let obsDisconnectEvidence: Promise<void> | undefined;
+  let diagnosticConsentTime: () => string | null = () => null;
+  obsAdapter?.onProgramChanged((kind) => {
     sceneController.obsProgramChanged();
     production.invalidateObsExit();
+    const consentAt = diagnosticConsentTime();
+    if (kind === 'disconnected' && sessionJournal && consentAt && !obsDisconnectEvidence) {
+      obsDisconnectEvidence = collectObsNativeEvidence()
+        .then((evidence) => {
+          if (diagnosticConsentTime() !== consentAt) return;
+          sessionJournal.record(
+            'obs_native_disconnect',
+            projectObsDisconnectEvidence(evidence, consentAt),
+          );
+        })
+        .catch((error: unknown) => {
+          if (diagnosticConsentTime() === consentAt)
+            app.log.warn({ err: diagnosticValue(error) }, 'OBS 断连诊断采集未完成');
+        })
+        .finally(() => {
+          obsDisconnectEvidence = undefined;
+        });
+    }
   });
   if (options.steamAvatars) {
     options.steamAvatars.onChanged(() => projectionCoordinator.refresh());
@@ -1925,8 +1951,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     observerSettings,
     localWebTransport.getOriginPolicy(),
     observerEligible,
-    () => observerAssist.canRecalibrate(projectionCoordinator.getCurrent().program),
-    () => projectionCoordinator.recalibrateObserver(),
+    () =>
+      observerEligible() &&
+      projectionCoordinator.getCurrent().program.status.telemetry === 'fresh' &&
+      Boolean(projectionCoordinator.getCurrent().program.map.name),
   );
   const observerSettingsUnsubscribe = observerAssist.subscribe({
     program: () => projectionCoordinator.getCurrent().program,
@@ -2261,6 +2289,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       });
     },
   });
+  diagnosticConsentTime = () => {
+    const status = diagnosticDelivery.snapshotStatus().delivery;
+    return status?.consent ? status.consentAt : null;
+  };
   const unsubscribeObserverEvidence = options.workspaceObserver?.subscribeEvidence((evidence) =>
     sessionJournal?.record('observer_attempt_terminal', evidence),
   );
@@ -2544,6 +2576,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     // Release delivery's source holds before producers need space for their final flush.
     // Final records remain in the journal for recovery on the next startup.
+    diagnosticConsentTime = () => null;
     await closeStep(() => diagnosticDelivery.close());
     await closeStep(() => nativeSource?.close());
     await closeStep(async () => {

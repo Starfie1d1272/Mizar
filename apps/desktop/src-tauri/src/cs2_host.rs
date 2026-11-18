@@ -76,7 +76,7 @@ pub(crate) async fn begin_camera(
             let game = cs2
                 .workspace_process()?
                 .filter(|game| game.is_running())
-                .ok_or("请先确认受管 CS2 已启动。")?;
+                .ok_or("请先启动 CS2 并进入比赛。")?;
             let actual = cs2.mulnx_handoff_status()?;
             let unique = actual["processes"].as_array().is_some_and(|processes| {
                 processes.len() == 1
@@ -85,7 +85,7 @@ pub(crate) async fn begin_camera(
                     && processes[0]["managed"] == true
             });
             if !unique {
-                return Err("受管游戏身份不唯一，未建立运镜会话。".into());
+                return Err("检测到多个 CS2 实例，无法建立运镜连接。请只保留一个游戏。".into());
             }
             let log = app.state::<DesktopLog>();
             let gate = app.state::<preparation_gate::PreparationGate>();
@@ -122,7 +122,7 @@ pub(crate) async fn begin_camera(
         })
     })
     .await
-    .map_err(|_| "受管运镜会话未能准备。".to_string())?
+    .map_err(|_| "运镜连接没有准备好。请重试。".to_string())?
 }
 
 pub(crate) async fn cancel_camera(app: tauri::AppHandle) -> Result<(), String> {
@@ -142,7 +142,7 @@ pub(crate) async fn cancel_camera(app: tauri::AppHandle) -> Result<(), String> {
         Ok(())
     })
     .await
-    .map_err(|_| "受管运镜会话未能取消。".to_string())?
+    .map_err(|_| "运镜连接没有取消。请重试。".to_string())?
 }
 
 pub(crate) async fn launch_mulnx(

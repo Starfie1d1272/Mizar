@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { URL, fileURLToPath } from 'node:url';
+import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const group = process.argv[2];
@@ -29,7 +29,7 @@ if (nodeFiles.length) {
   const args = [];
   if (nodeFiles.some((file) => /\.[cm]?tsx?$/.test(file))) {
     const require = createRequire(new URL('../../apps/companion/package.json', import.meta.url));
-    args.push('--import', require.resolve('tsx'));
+    args.push('--import', pathToFileURL(require.resolve('tsx')).href);
   }
   execFileSync(process.execPath, [...args, '--test', ...nodeFiles], {
     cwd: root,

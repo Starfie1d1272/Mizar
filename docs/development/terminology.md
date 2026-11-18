@@ -15,10 +15,14 @@
 | 叙述用语 | 精确实现对应 |
 | --- | --- |
 | 播出画面 | `Program` / `ProgramProjection` |
+| 制作生命周期 | `Production`，管理进入、退出和试播互斥 |
+| 节目呈现 | `Presentation`，持有待播或已冻结的节目内容 |
 | 制作控制 | `Operator` / `OperatorCommand` |
 | 观察辅助 | `Observer Assist` / `ObserverAssistProjection` |
 | 制播工作台（现场工作区） | `Workspace`，具体操作名见产品文案 |
 | 运行状态 | `RuntimeState` |
+| 制作会话 | 制作生命周期的 `sessionId`，绑定进入、退出和异步控制回执 |
+| 运行会话、来源代际、地图执行 | 投影游标的 `liveSessionId`、`programSourceGeneration`、`mapEpoch`，分别判断运行身份、输入连续性和地图执行 |
 | 投影 | `Projection`；消费面需要的只读数据 |
 | 本地服务 | `Companion` |
 | 本地协议 | `Local Protocol` |

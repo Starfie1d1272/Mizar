@@ -1,4 +1,5 @@
 import { desktopTransport } from './desktop-transport';
+import { userFacingError } from './error-copy';
 import {
   type DesktopIpcCommand,
   type DesktopArgs,
@@ -141,11 +142,13 @@ export async function desktopInvoke(
     ) {
       throw new HostWindowControlError(error.message, { cause: error });
     }
-    // Tauri commands returning Result<T, String> reject with a string.
-    throw error instanceof Error
-      ? error
-      : new Error(typeof error === 'string' && error.trim() ? error : '桌面操作失败，请重试。', {
-          cause: error,
-        });
+    // Tauri commands returning Result<T, String> reject with a string. Keep the
+    // raw failure in diagnostics, but never render internal ownership terms.
+    if (error instanceof Error) {
+      const copy = userFacingError(error.message);
+      throw copy === error.message ? error : new Error(copy, { cause: error });
+    }
+    const message = typeof error === 'string' && error.trim() ? error : '桌面操作失败，请重试。';
+    throw new Error(userFacingError(message), { cause: error });
   }
 }

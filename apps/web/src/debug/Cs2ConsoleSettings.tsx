@@ -57,7 +57,7 @@ export function Cs2ConsoleSettings() {
         ? '聊天上屏已开启'
         : phase === 'unavailable'
           ? '暂时无法读取，原因已保存到诊断报告'
-          : '已开启，等待受管游戏';
+          : '已开启，等待游戏启动';
   async function save() {
     if (!status || busy || !dirty) return;
     const task = new ControlTask('cs2_console_capture_consent', 'user', {

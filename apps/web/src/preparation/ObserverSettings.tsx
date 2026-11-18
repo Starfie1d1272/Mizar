@@ -50,7 +50,8 @@ export function ObserverSettingsPanel() {
     setError('');
     try {
       const parsed = observerSettingsSchema.safeParse(settings);
-      if (!parsed.success) throw new Error('请填写有效整数：提前时间为 1–30 秒。');
+      if (!parsed.success)
+        throw new Error('请输入整数。节目延迟为 1–600 秒，提示提前时间为 1–30 秒。');
       const value = parsed.data;
       await command('/operator/observer-assist', { action: 'configure', settings: value });
       setSaved(true);
@@ -84,6 +85,16 @@ export function ObserverSettingsPanel() {
           onChange={(e) => edit({ enabled: e.target.checked })}
           disabled={busy || runtime?.pending || !view}
           message="开启后，提示显示在工作台左侧雷达下方；关闭后沿用常规工作台布局。"
+        />
+        <Field
+          label="节目延迟（秒）"
+          type="number"
+          min={1}
+          max={600}
+          value={settings.delaySeconds}
+          disabled={busy || runtime?.pending || !settings.enabled}
+          onChange={(e) => edit({ delaySeconds: Number(e.target.value) })}
+          message="填写节目相对提示来源的配置延迟，默认 120 秒。倒计时按此值估算。"
         />
         <Field
           label="提示提前时间（秒）"

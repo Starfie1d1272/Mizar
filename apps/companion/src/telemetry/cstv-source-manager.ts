@@ -29,21 +29,8 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly lastSync?: CstvSyncMetadata;
   readonly lastReceiveMonotonicMs?: number;
   readonly mapName?: string;
-  readonly clockExecution?: number;
-  readonly freezeEnd?: {
-    readonly round: number;
-    readonly received: number;
-    readonly generation: number;
-    readonly sequence: number;
-    readonly committedTick: number;
-  };
+  readonly mapExecution?: number;
   readonly tailTick?: number;
-  readonly roundClock?: {
-    readonly round: number;
-    readonly remaining: number;
-    readonly received: number;
-    readonly generation: number;
-  };
   readonly lastEventTick?: number;
   readonly lastEventSequence?: number;
   readonly lastEventObservedAt?: string;
@@ -138,15 +125,8 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private lastSync: CstvSyncMetadata | undefined;
   private lastReceiveMonotonicMs: number | undefined;
   private tailTick: number | undefined;
-  private roundClock: CstvSourceHealth['roundClock'];
-  private liveStartTime: number | undefined;
-  private liveDuration: number | undefined;
-  private liveTickInterval: number | undefined;
-  private liveCommittedTick: number | undefined;
-  private livePausedTicks: number | undefined;
-  private clockExecution = 0;
-  private clockHadLive = false;
-  private freezeEnd: CstvSourceHealth['freezeEnd'];
+  private mapExecution = 0;
+  private executionHadLive = false;
   private lastEventTick: number | undefined;
   private lastEventSequence: number | undefined;
   private lastEventObservedAt: string | undefined;
@@ -226,9 +206,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         ? {}
         : { lastReceiveMonotonicMs: this.lastReceiveMonotonicMs }),
       ...(this.tailTick === undefined ? {} : { tailTick: this.tailTick }),
-      ...(this.observerIdentity === undefined ? {} : { clockExecution: this.clockExecution }),
-      ...(this.freezeEnd === undefined ? {} : { freezeEnd: this.freezeEnd }),
-      ...(this.roundClock === undefined ? {} : { roundClock: this.roundClock }),
+      ...(this.observerIdentity === undefined ? {} : { mapExecution: this.mapExecution }),
       ...(this.lastEventTick === undefined ? {} : { lastEventTick: this.lastEventTick }),
       ...(this.lastEventSequence === undefined
         ? {}
@@ -296,13 +274,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.generation += 1;
     this.observerEventSequence = 0;
     this.observerMap = undefined;
-    this.roundClock = undefined;
-    this.liveStartTime = undefined;
-    this.liveDuration = undefined;
-    this.liveTickInterval = undefined;
-    this.liveCommittedTick = undefined;
-    this.livePausedTicks = undefined;
-    this.freezeEnd = undefined;
+    this.executionHadLive = false;
     this.observerTicksPerSecond = undefined;
     this.recentGameEvents.length = 0;
     this.tailTick = undefined;
@@ -386,24 +358,12 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         return;
       this.lastReceiveMonotonicMs = this.receiveNow();
       if (this.observerMap !== undefined && this.observerMap !== row.map) {
-        this.clockExecution++;
-        this.clockHadLive = false;
-        this.freezeEnd = undefined;
-        this.liveStartTime = undefined;
-        this.liveDuration = undefined;
-        this.liveTickInterval = undefined;
-        this.liveCommittedTick = undefined;
-        this.livePausedTicks = undefined;
+        this.mapExecution++;
+        this.executionHadLive = false;
       }
-      const clock =
-        typeof row.roundClock === 'object' &&
-        row.roundClock !== null &&
-        !Array.isArray(row.roundClock)
-          ? (row.roundClock as Record<string, unknown>)
-          : undefined;
-      if (row.warmup === true && row.round === 0 && this.clockHadLive) {
-        this.clockExecution++;
-        this.clockHadLive = false;
+      if (row.warmup === true && row.round === 0 && this.executionHadLive) {
+        this.mapExecution++;
+        this.executionHadLive = false;
       }
       if (
         row.warmup === false &&
@@ -411,96 +371,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         Number.isSafeInteger(row.round) &&
         row.round > 0
       )
-        this.clockHadLive = true;
-      if (
-        clock?.warmupPeriod === false &&
-        clock.freezePeriod === false &&
-        typeof clock.totalRoundsPlayed === 'number' &&
-        Number.isSafeInteger(clock.totalRoundsPlayed) &&
-        clock.totalRoundsPlayed > 0
-      )
-        this.clockHadLive = true;
-      const pause =
-        typeof clock?.pause === 'object' && clock.pause !== null && !Array.isArray(clock.pause)
-          ? (clock.pause as Record<string, unknown>)
-          : undefined;
-      if (
-        this.freezeEnd &&
-        (clock?.warmupPeriod === true ||
-          clock?.bombPlanted === true ||
-          (typeof clock?.totalRoundsPlayed === 'number' &&
-            clock.totalRoundsPlayed !== this.freezeEnd.round) ||
-          (this.liveStartTime !== undefined &&
-            (clock?.freezePeriod === true ||
-              clock?.startTime !== this.liveStartTime ||
-              clock?.duration !== this.liveDuration ||
-              row.tickInterval !== this.liveTickInterval ||
-              (typeof clock?.committedTick === 'number' &&
-                this.liveCommittedTick !== undefined &&
-                clock.committedTick < this.liveCommittedTick))) ||
-          pause?.active !== false ||
-          (this.livePausedTicks !== undefined && pause.totalPausedTicks !== this.livePausedTicks))
-      ) {
-        this.freezeEnd = undefined;
-        this.liveStartTime = undefined;
-        this.liveDuration = undefined;
-        this.liveTickInterval = undefined;
-        this.liveCommittedTick = undefined;
-        this.livePausedTicks = undefined;
-      }
-      // A nonzero cumulative value is usable only when the round start agrees with the
-      // observed freeze boundary; never infer an adjustment from unknown pause semantics.
-      if (
-        clock &&
-        (clock.status === 'available' || clock.status === 'partial') &&
-        this.freezeEnd !== undefined &&
-        this.freezeEnd.round === clock.totalRoundsPlayed &&
-        this.freezeEnd.generation === this.generation &&
-        row.sequence > this.freezeEnd.sequence &&
-        typeof clock.committedTick === 'number' &&
-        clock.committedTick > this.freezeEnd.committedTick &&
-        (this.liveCommittedTick === undefined || clock.committedTick > this.liveCommittedTick) &&
-        clock.freezePeriod === false &&
-        clock.warmupPeriod === false &&
-        clock.bombPlanted === false &&
-        pause?.active === false &&
-        typeof pause.totalPausedTicks === 'number' &&
-        Number.isSafeInteger(pause.totalPausedTicks) &&
-        pause.totalPausedTicks >= 0 &&
-        (pause.totalPausedTicks === 0 ||
-          (typeof clock.startTime === 'number' &&
-            Math.abs(clock.startTime - this.freezeEnd.committedTick * row.tickInterval) <= 0.35)) &&
-        typeof clock.totalRoundsPlayed === 'number' &&
-        Number.isSafeInteger(clock.totalRoundsPlayed) &&
-        clock.totalRoundsPlayed >= 0 &&
-        typeof clock.startTime === 'number' &&
-        Number.isFinite(clock.startTime) &&
-        typeof clock.duration === 'number' &&
-        Number.isFinite(clock.duration) &&
-        clock.duration > 0 &&
-        typeof clock.committedTick === 'number' &&
-        Number.isSafeInteger(clock.committedTick) &&
-        clock.committedTick > 0
-      ) {
-        const remaining = clock.duration + clock.startTime - clock.committedTick * row.tickInterval;
-        this.roundClock =
-          remaining >= 0 && remaining <= clock.duration
-            ? {
-                round: clock.totalRoundsPlayed,
-                remaining,
-                received: this.lastReceiveMonotonicMs,
-                generation: this.generation,
-              }
-            : undefined;
-        if (this.roundClock) {
-          this.clockHadLive = true;
-          this.liveStartTime = clock.startTime;
-          this.liveDuration = clock.duration;
-          this.liveTickInterval = row.tickInterval;
-          this.liveCommittedTick = clock.committedTick;
-          this.livePausedTicks = pause.totalPausedTicks;
-        }
-      } else this.roundClock = undefined;
+        this.executionHadLive = true;
       this.observerMap = row.map;
       this.observerTicksPerSecond = 1 / row.tickInterval;
       this.tailTick = row.tick;
@@ -510,60 +381,24 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       return;
     }
     if (row.type !== 'raw-event' || this.state !== 'live' || row.map !== this.observerMap) return;
-    if (
-      [
-        'round_freeze_end',
-        'round_end',
-        'round_prestart',
-        'round_start',
-        'round_officially_ended',
-        'round_announce_warmup',
-        'begin_new_match',
-      ].includes(row.kind)
-    ) {
-      if (row.name !== row.kind) return;
+    if (row.kind === row.name) {
       if (row.kind === 'begin_new_match' || row.kind === 'round_announce_warmup') {
-        if (this.clockHadLive) this.clockExecution++;
-        this.clockHadLive = false;
+        if (this.executionHadLive) this.mapExecution++;
+        this.executionHadLive = false;
+        this.notifySnapshotChanged();
+        return;
+      }
+      if (row.kind === 'round_freeze_end') {
+        this.executionHadLive = true;
+        return;
       }
       if (
-        row.kind === 'round_freeze_end' &&
-        typeof row.tick === 'number' &&
-        Number.isSafeInteger(row.tick) &&
-        row.tick >= 0 &&
-        typeof row.round === 'number' &&
-        Number.isSafeInteger(row.round) &&
-        row.round >= 0 &&
-        typeof row.committedTick === 'number' &&
-        Number.isSafeInteger(row.committedTick) &&
-        row.committedTick > 0
-      ) {
-        this.clockHadLive = true;
-        this.freezeEnd = {
-          round: row.round,
-          received: this.receiveNow(),
-          generation: this.generation,
-          sequence: row.sequence,
-          committedTick: row.committedTick,
-        };
-      } else this.freezeEnd = undefined;
-      this.liveStartTime = undefined;
-      this.liveDuration = undefined;
-      this.liveTickInterval = undefined;
-      this.liveCommittedTick = undefined;
-      this.livePausedTicks = undefined;
-      this.roundClock = undefined;
-      this.notifySnapshotChanged();
-      return;
-    }
-    if (row.kind === 'bomb_planted') {
-      this.freezeEnd = undefined;
-      this.liveStartTime = undefined;
-      this.liveDuration = undefined;
-      this.liveTickInterval = undefined;
-      this.liveCommittedTick = undefined;
-      this.livePausedTicks = undefined;
-      this.roundClock = undefined;
+        row.kind === 'round_end' ||
+        row.kind === 'round_prestart' ||
+        row.kind === 'round_start' ||
+        row.kind === 'round_officially_ended'
+      )
+        return;
     }
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),

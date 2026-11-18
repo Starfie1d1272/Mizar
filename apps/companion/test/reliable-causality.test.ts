@@ -557,6 +557,67 @@ test('a map result requiring attention prevents its snapshot from being sent', a
   assert.equal(record?.supersessionReason, 'map_end_unavailable');
 });
 
+test('a durable map result and its snapshot keep their original cursor across a source change', async (t) => {
+  const { outbox, event, restart, cleanup } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+  const base = event('map_started', 'result-before-reconnect');
+  const end = parseReliableEventV1({
+    ...base,
+    kind: 'map_ended',
+    payload: { scoreA: 13, scoreB: 10, scoreCT: 13, scoreT: 10 },
+  });
+  const snapshot = parseReliableEventV1({
+    ...base,
+    kind: 'map_player_snapshot',
+    idempotencyKey: 'snapshot-before-reconnect',
+    payload: {
+      mapEndedKey: end.idempotencyKey,
+      players: [
+        { sourcePlayerId: 'player', canonicalPlayerId: null, kills: 1, assists: 0, deaths: 0 },
+      ],
+    },
+  });
+  await outbox.enqueue(end, now);
+  await outbox.enqueue(snapshot, now);
+  const restored = await restart();
+  const sent: ReliableEventV1[] = [];
+  const service = new OutputService({
+    outbox: restored,
+    now: () => now,
+    sink: {
+      async send(item) {
+        sent.push(item);
+        return 'accepted';
+      },
+    },
+  });
+  cleanup.push(() => service.close());
+  service.setCurrent(
+    {
+      program: {
+        cursor: {
+          ...base.cursor,
+          runtimeSeq: base.cursor.runtimeSeq + 1,
+          programSourceGeneration: base.cursor.programSourceGeneration + 1,
+        },
+        players: [],
+        match: { matchId: base.matchId },
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+        map: { phase: 'warmup', name: base.mapName },
+        series: { status: 'live' },
+      },
+    } as never,
+    {
+      origin: 'online',
+      freshness: 'fresh',
+      manifest: { revision: base.contextRevision },
+      context: { matchId: base.matchId },
+    } as never,
+  );
+  await service.retry();
+  assert.deepEqual(sent, [end, snapshot]);
+});
+
 test('missing worker reply fails the active owner and later operations report the same uncertainty', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-worker-deadline-'));
   const failures: string[] = [];

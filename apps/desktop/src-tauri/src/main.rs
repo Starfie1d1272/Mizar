@@ -686,11 +686,15 @@ fn run_desktop(
                                 // after the native suggested-size handler has completed.
                                 let request = host.state::<HostState>().layout_request.load(Ordering::Acquire);
                                 let layout = if worker_layout_dirty.swap(false, Ordering::AcqRel) {
-                                    let result = tracker.restore_layout();
-                                    if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
-                                        host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                    if request == host.state::<HostState>().layout_completed.load(Ordering::Acquire) {
+                                        tracker.refresh_layout()
+                                    } else {
+                                        let result = tracker.restore_layout();
+                                        if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
+                                            host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                        }
+                                        result
                                     }
-                                    result
                                 } else {
                                     tracker.tick()
                                 };
@@ -904,14 +908,12 @@ fn run_desktop(
                     let service_stopped = cleanup_host
                         .state::<production_exit::VerifiedStop>()
                         .complete();
-                    let exit_intent = if service_stopped {
-                        Ok(())
-                    } else {
-                        production_exit::set_exit_intent(
-                            &cleanup_host.state::<DesktopLog>(),
-                            "begin-exit",
-                        )
-                    };
+                    if !service_stopped {
+                        let log = cleanup_host.state::<DesktopLog>();
+                        let _ = log.step("production_begin_exit", || {
+                            production_exit::set_exit_intent(&log, "begin-exit")
+                        });
+                    }
                     let production_host = cleanup_host.clone();
                     let production_task = std::thread::spawn(move || {
                         if service_stopped {
@@ -960,10 +962,7 @@ fn run_desktop(
                     let production = production_task
                         .join()
                         .unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-                    production_exit::cleanup_results(
-                        production_exit::cleanup_results(exit_intent, production),
-                        cleanup,
-                    )?;
+                    production_exit::cleanup_results(production, cleanup)?;
                     updates::recheck(&cleanup_host)
                 })
                 .await
@@ -996,7 +995,8 @@ fn run_desktop(
                     }
                     host.dialog()
                         .message(format!(
-                            "退出 Mizar 未完成，待恢复记录仍保留。\n{error}\n请修复后重试退出。"
+                            "Mizar 尚未确认安全退出。\n{}\n请处理后重试退出。",
+                            production_exit::user_facing_failure(&error)
                         ))
                         .title("Mizar 退出未完成")
                         .show(|_| {});

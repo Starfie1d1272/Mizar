@@ -107,7 +107,7 @@ LAN 仅开放 `program/radar/program-cue`，协议发现也只列可访问通道
 
 - 高影响事实需要新鲜上下文、匹配身份和当前执行证明。单图结果同时携带参赛方与当时 CT/T 比分，接收端不重算换边。选手快照独立关联终图幂等键，未知统计为空，不补造 ADR。
 - 终图回执为 `needs_attention` 时，关联的选手统计快照标记为不可交付，保留终态证据供核对。
-- 已接受事件固定原平台、赛事、安装、比赛、生产实例、会话和 authority，不能借新选场或新认领代发。普通重试保持原事件与幂等键；原授权不可用时保留待处理或终态证据。
+- 已接受事件固定原平台、赛事、安装、比赛、生产实例、会话和 authority，不能借新选场或新认领代发。普通重试保持原事件与幂等键；同一会话进入后续来源代际时，已捕获的终图事件按原游标在后续边界之前重试。原授权不可用时保留待处理或终态证据。
 - 来源/执行边界及检查点在同一持久事务提交；后续事实不能越过未确认边界、失败检查点或捕获缺口。拒收/过期/撤权保留原范围阻断，不当作送达。
 - `map_started` 表示已观察到有效执行，不一定是首回合边沿。恢复或重新认领后必须取得新遥测并可靠入队，旧检查点不代替新证明。
 - 中途接入唯一匹配的后续计划图时，当前地图 ID 与序号继续用于 LIVE 和可靠事件；此前图结果保持未知，系列比分对外使用空值，不将仅观察到的胜场数当作完整系列比分。网站可确认仅展示的开图并返回 `needs_attention`，当前执行 ACK 后继续发送 LIVE，正式赛果是否可写仍由网站独立判定。
@@ -187,6 +187,8 @@ RivalHub 另有业务确认：
 人工 Gameplay 选择不要求新鲜遥测，人工对阵可使用现有比赛资料；它们只切画面，不建立赛事绑定或放宽自动资格。导演可选 `gg={mapEpoch,remainingMs}` 仅表示可信终局过渡，客户端核对当前场景/执行后展示，不自行判胜或另起倒计时。
 
 Host 私有 `POST /operator/runtime/local-match-exit` 使用 `prepare/settle/confirm/invalidate` 管理一次性退出票据。Host 实际完成受管收尾并确认全机无 CS2 后才能确认，绑定比赛、制作会话和接收游标；新输入/启动/选择使资格失效。票据不持久化、不进普通视图，恢复的当前选择须重新核实；回收最终写盘仍检查引用与退出资格。
+
+Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resume/cancel` 管理本次受管来源，并以 retire 的 `prepare/settle/confirm/abort` 收尾。退休票据只在制作会话与当前来源仍一致时复用。退休期间暂停来源提交，确认退休时清除尚未提交的来源，本地收尾失败时撤销该次票据。重启恢复按本机记录中的 `expectedSourceId` 请求退休，经过确认才清除恢复记录。
 
 ## OBS 控制
 
@@ -273,14 +275,14 @@ BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用�
 | --- | --- |
 | `GET /local/v1/observer` | 组件/连接健康、当前失败、pending、retryAvailable、stopReason 与 recovering |
 | `GET /local/v1/observer-assist` | 设置、游戏自动操作、连接摘要、mapConnection 和修订，不返回密码 |
-| `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接、接收恢复和校准意图 |
+| `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接和接收恢复意图 |
 | `POST /operator/runtime/observer` | 仅 Host 私有能力的准备、启动、停止与续约，路径/运行时由安装和数据目录推导 |
 
 `prepare` 的修订令牌绑定游戏、Job、启动方式和配置，原样传给 `start-configured`。辅助设置、节目连接和 HUD 命令分别去重；只改提前时间保留缓冲/测量，不重启已接受游戏连接。停止辅助保留本场连接，`resume-receiver` 核对连接 ID 与修订，旧目标拒绝。
 
-`recalibrate` 提交连接 ID、预期修订和 `calibrationRevision`；仅当前制作、启用且未暂停/等下一图时接受。它推进独立校准修订、清空基线，不重建游戏连接；旧请求 409 不再次清空。
+`configure` 保存名义节目延迟 `delaySeconds`，接受整数 1–600 秒，旧配置缺字段时默认 120 秒。提前时间 `leadSeconds` 独立设置。
 
-`assist` schema 3 使用 `timingBasis:estimated`，返回测量/等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和倒计时来自私有投影；无可靠校准时等待，无事件是正常状态。公开 Program/Radar 不包含这些信息。
+`assist` schema 5 返回配置延迟 `effectiveDelaySeconds`、等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和估算倒计时由私有投影提供。
 
 ### 观战连接命令
 
