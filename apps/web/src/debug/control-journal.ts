@@ -319,51 +319,58 @@ function observeSnapshot(snapshot: NativeSnapshot, now: string) {
   snapshot.observations++;
 }
 
+const CS2_CONFIG_STATUS = 'cs2_config_status';
+
+function observeCs2Status(result: object, signature: string, now: string): string | null {
+  if (!('busy' in result)) return signature;
+  if (result.busy === true) {
+    const monotonic = performance.now();
+    let busy = cs2BusySnapshots.get(signature);
+    if (!busy) {
+      busy = { signature, firstObservedAt: now, lastObservedAt: now, observations: 0, result };
+      cs2BusySnapshots.set(signature, busy);
+    }
+    observeSnapshot(busy, now);
+    if (cs2BusyEpisode?.signature !== signature) {
+      if (cs2BusyEpisode?.reported)
+        flushSnapshot(
+          CS2_CONFIG_STATUS,
+          cs2BusySnapshots.get(cs2BusyEpisode.signature)!,
+          'busy_aggregate',
+        );
+      cs2BusyEpisode = { signature, since: monotonic, reported: false };
+    }
+    if (!cs2BusyEpisode.reported && monotonic - cs2BusyEpisode.since >= 5000) {
+      cs2BusyEpisode.reported = true;
+      flushSnapshot(CS2_CONFIG_STATUS, busy, 'busy_sustained');
+    }
+    return null;
+  }
+  if (result.busy !== false) return signature;
+  if (cs2BusyEpisode?.reported) {
+    flushSnapshot(
+      CS2_CONFIG_STATUS,
+      cs2BusySnapshots.get(cs2BusyEpisode.signature)!,
+      'busy_aggregate',
+    );
+    controlEvidence(CS2_CONFIG_STATUS, 'busy_ended', { observedAt: now, result });
+  }
+  cs2BusyEpisode = undefined;
+  const facts = Object.fromEntries(
+    Object.entries(result)
+      .filter(([key]) => key !== 'busy')
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  return JSON.stringify(facts);
+}
+
 export function nativeSnapshot(operation: string, result: unknown): void {
   try {
     const now = new Date().toISOString();
-    let signature = JSON.stringify(result) ?? 'null';
-    if (operation === 'cs2_config_status' && result && typeof result === 'object') {
-      if ('busy' in result && result.busy === true) {
-        const monotonic = performance.now();
-        let busy = cs2BusySnapshots.get(signature);
-        if (!busy) {
-          busy = { signature, firstObservedAt: now, lastObservedAt: now, observations: 0, result };
-          cs2BusySnapshots.set(signature, busy);
-        }
-        observeSnapshot(busy, now);
-        if (cs2BusyEpisode?.signature !== signature) {
-          if (cs2BusyEpisode?.reported)
-            flushSnapshot(
-              operation,
-              cs2BusySnapshots.get(cs2BusyEpisode.signature)!,
-              'busy_aggregate',
-            );
-          cs2BusyEpisode = { signature, since: monotonic, reported: false };
-        }
-        if (!cs2BusyEpisode.reported && monotonic - cs2BusyEpisode.since >= 5000) {
-          cs2BusyEpisode.reported = true;
-          flushSnapshot(operation, busy, 'busy_sustained');
-        }
-        return;
-      }
-      if ('busy' in result && result.busy === false) {
-        if (cs2BusyEpisode?.reported) {
-          flushSnapshot(
-            operation,
-            cs2BusySnapshots.get(cs2BusyEpisode.signature)!,
-            'busy_aggregate',
-          );
-          controlEvidence(operation, 'busy_ended', { observedAt: now, result });
-        }
-        cs2BusyEpisode = undefined;
-        const facts = Object.fromEntries(
-          Object.entries(result)
-            .filter(([key]) => key !== 'busy')
-            .sort(([a], [b]) => a.localeCompare(b)),
-        );
-        signature = JSON.stringify(facts);
-      }
+    let signature: string | null = JSON.stringify(result) ?? 'null';
+    if (operation === CS2_CONFIG_STATUS && result && typeof result === 'object') {
+      signature = observeCs2Status(result, signature, now);
+      if (signature === null) return;
     }
     const previous = nativeSnapshots.get(operation);
     if (previous?.signature === signature) {
@@ -387,7 +394,7 @@ export function nativeSnapshot(operation: string, result: unknown): void {
 export function flushControlSnapshots(): void {
   for (const [operation, evidence] of nativeSnapshots) flushSnapshot(operation, evidence);
   for (const evidence of cs2BusySnapshots.values())
-    flushSnapshot('cs2_config_status', evidence, 'busy_aggregate');
+    flushSnapshot(CS2_CONFIG_STATUS, evidence, 'busy_aggregate');
 }
 
 /** Drain a fixed prefix only. A hung IPC or continuously arriving events cannot hold export. */

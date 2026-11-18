@@ -47,3 +47,35 @@ it('preserves CS2 facts across brief busy polls and flushes each observation onc
   ]);
   expect(records.at(-1)?.evidence.result).toEqual(pending);
 });
+
+it('keeps the export cutoff and snapshot counts local to each document', async () => {
+  vi.stubGlobal('window', {});
+  vi.stubGlobal('location', { pathname: '/workspace' });
+  const records: Array<{ producerRunId: string; sequence: number; phase: string }> = [];
+  vi.stubGlobal('fetch', (_url: string, init: RequestInit) => {
+    records.push(JSON.parse(String(init.body)));
+    return Promise.resolve(new Response(null, { status: 204 }));
+  });
+  vi.resetModules();
+  const main = await import('./control-journal');
+  vi.resetModules();
+  const dock = await import('./control-journal');
+  const fact = { busy: false, phase: 'idle', running: false, pending: false };
+  main.nativeSnapshot('cs2_config_status', fact);
+  main.nativeSnapshot('cs2_config_status', { busy: true, phase: 'checking' });
+  dock.nativeSnapshot('cs2_config_status', fact);
+  main.flushControlSnapshots();
+  const cutoff = await main.flushControlEvidence();
+  expect(cutoff.stopReason).toBe('drained');
+  expect(cutoff.throughSequence).toBe(2);
+  expect(
+    records
+      .filter((record) => record.producerRunId === cutoff.documentId)
+      .map(({ sequence, phase }) => [sequence, phase]),
+  ).toEqual([
+    [1, 'snapshot'],
+    [2, 'busy_aggregate'],
+  ]);
+  expect(records[1]?.producerRunId).not.toBe(cutoff.documentId);
+  expect((await dock.flushControlEvidence()).throughSequence).toBe(1);
+});

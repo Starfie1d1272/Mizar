@@ -1,5 +1,10 @@
 import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
-import { readHostPin, type IncidentParticipant, type PinReceipt } from './retention.js';
+import {
+  readHostPin,
+  type IncidentParticipant,
+  type PinReceipt,
+  type RetainedSegment,
+} from './retention.js';
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants, lstatSync, unlinkSync, utimesSync, type Stats } from 'node:fs';
 import { mkdir, open, lstat, readdir, rm, rmdir, type FileHandle } from 'node:fs/promises';
@@ -249,6 +254,7 @@ export class SupportExports {
     const handles: FileHandle[] = [];
     const participants = this.participants();
     const receipts: PinReceipt[] = [];
+    const fixedByName = new Map<string, RetainedSegment>();
     let hostPin: Awaited<ReturnType<typeof readHostPin>> | null = null;
     const sources: {
       name: string;
@@ -316,10 +322,7 @@ export class SupportExports {
         const actual = await handle.stat();
         if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
           throw new Error('source_changed');
-        const expected = [
-          ...receipts.flatMap((receipt) => receipt.segments),
-          ...(hostPin?.segments ?? []),
-        ].find((segment) => segment.name === prefix + name);
+        const expected = fixedByName.get(prefix + name);
         if (expected) {
           if (expected.physicalId !== `${actual.dev}:${actual.ino}:${expected.sha256}`)
             throw new Error('pin_source_identity_changed');
@@ -423,12 +426,14 @@ export class SupportExports {
       }
       const companionPin = receipts.find((receipt) => receipt.producerId === 'companion');
       const performancePin = receipts.find((receipt) => receipt.producerId === 'performance');
+      for (const receipt of [...receipts, ...(hostPin ? [hostPin] : [])])
+        for (const segment of receipt.segments)
+          if (!fixedByName.has(segment.name)) fixedByName.set(segment.name, segment);
       const emptyHostSegments = new Set(
         (hostPin?.sourceState as { emptyAtCutoffSegments?: string[] } | undefined)
           ?.emptyAtCutoffSegments,
       );
-      const pinned = (receipt: { segments: { name: string }[] } | null | undefined, name: string) =>
-        receipt?.segments.some((segment) => segment.name === name) ?? false;
+      const pinnedPerformance = new Set(performancePin?.segments.map(({ name }) => name));
       const successor = (receipt: PinReceipt | null | undefined, name: string): boolean => {
         if (!receipt || receipt.status !== 'committed') return false;
         const state = receipt.sourceState as { postCutoffSegments?: unknown } | undefined;
@@ -493,7 +498,7 @@ export class SupportExports {
           const directory = await safePath(join(this.logs, folder));
           for (const name of (await readdir(directory)).sort()) {
             if (!pattern.test(name)) continue;
-            if (folder === 'performance-pending' && !pinned(performancePin, folder + '/' + name)) {
+            if (folder === 'performance-pending' && !pinnedPerformance.has(folder + '/' + name)) {
               gap(folder + '/' + name, 'pin', new Error('source_not_safely_fixed'));
               continue;
             }
