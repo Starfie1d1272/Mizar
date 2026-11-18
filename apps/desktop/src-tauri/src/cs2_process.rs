@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 const LAUNCH_ARGS: &[&str] = &[
     "-applaunch",
@@ -627,19 +627,28 @@ pub(crate) fn close_owned_process(
         windows: 0,
         error: None,
     };
-    if unsafe { EnumWindows(close_window, &mut request as *mut CloseRequest as isize) } == 0
-        && request.error.is_none()
-    {
-        request.error = Some(("EnumWindows", unsafe { GetLastError() }));
-    }
-    // A game that exited during enumeration no longer needs a close request.
-    // Failures and absent windows get an immediate stop check, not a 15s wait.
-    let wait_ms = if request.error.is_some() || request.windows == 0 {
-        0
-    } else {
-        15000
+    let window_deadline = Instant::now() + Duration::from_secs(10);
+    let waited = loop {
+        if unsafe { EnumWindows(close_window, &mut request as *mut CloseRequest as isize) } == 0
+            && request.error.is_none()
+        {
+            request.error = Some(("EnumWindows", unsafe { GetLastError() }));
+        }
+        if request.error.is_some() {
+            break unsafe { WaitForSingleObject(process.0, 0) };
+        }
+        if request.windows != 0 {
+            break unsafe { WaitForSingleObject(process.0, 15000) };
+        }
+        // Steam can expose a verified CS2 process before it creates a window.
+        // Keep the same exit request pending until it can be delivered or the game exits.
+        let remaining = window_deadline.saturating_duration_since(Instant::now());
+        let wait_ms = remaining.as_millis().min(100) as u32;
+        let result = unsafe { WaitForSingleObject(process.0, wait_ms) };
+        if result != 258 || wait_ms == 0 {
+            break result;
+        }
     };
-    let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
     if waited == 0 {
         return Ok(());
     }
