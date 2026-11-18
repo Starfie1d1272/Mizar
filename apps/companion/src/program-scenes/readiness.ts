@@ -1,12 +1,15 @@
+import type { FastifyInstance } from 'fastify';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
 import type { ObsStatus } from '../obs/adapter.js';
 import { obsSceneName } from '../obs/desired-state.js';
 import { obsFindingReadiness } from '../obs/prepare-readiness.js';
+import { ObsVideoError } from '../obs/video-transaction.js';
 
 export function obsReadiness(
   status: ObsStatus | undefined,
   active: Parameters<typeof obsSceneName>[0],
+  refreshing = false,
 ) {
   const { blockingFindings, warnings } = obsFindingReadiness(status?.findings ?? []);
   const ready =
@@ -17,11 +20,13 @@ export function obsReadiness(
     status?.connection === 'connected'
       ? (blockingFindings[0]?.message ??
         (status.currentScene === obsSceneName(active) ? '已就绪' : '当前场景与播出场景不一致'))
-      : status?.connection === 'password_required'
-        ? '需要密码'
-        : status?.connection === 'invalid_password'
-          ? '密码无效'
-          : '等待连接';
+      : refreshing
+        ? '正在刷新 OBS 状态'
+        : status?.connection === 'password_required'
+          ? '需要密码'
+          : status?.connection === 'invalid_password'
+            ? '密码无效'
+            : '等待连接';
   return {
     id: 'obs',
     attention: Boolean(
@@ -37,17 +42,18 @@ export function obsReadiness(
     ready,
     reason,
     href: '/settings?tab=obs',
-    action: ready ? null : '检查 OBS 连接与配置',
+    action: ready || refreshing ? null : '检查 OBS 连接与配置',
     blockingFindings,
     warnings,
   };
 }
 
 /** One capability read model for Preparation; no new runtime state or duplicated eligibility. */
-export function productionReadiness(
+function productionReadiness(
   bundle: ProjectionBundle,
   scenes: ReturnType<ProgramSceneController['get']>,
   obs?: ObsStatus,
+  refreshingObs = false,
 ) {
   const { operator, radar } = bundle;
   const item = (
@@ -106,6 +112,28 @@ export function productionReadiness(
       '/settings?tab=gsi',
       operator.runtime.telemetryFreshness === 'stale' ? '检查游戏连接' : null,
     ),
-    obsReadiness(obs, scenes.active),
+    obsReadiness(obs, scenes.active, refreshingObs),
   ];
+}
+
+export function registerProductionReadiness(
+  app: FastifyInstance,
+  read: {
+    projection: () => ProjectionBundle;
+    scenes: ProgramSceneController['get'];
+    obs: () => Promise<ObsStatus | undefined>;
+  },
+) {
+  app.get('/local/v1/readiness', async (_request, reply) => {
+    let refreshing = false;
+    const obs = await read.obs().catch((error: unknown) => {
+      if (!(error instanceof ObsVideoError) || error.code !== 'obs_observation_changed')
+        throw error;
+      refreshing = true;
+      return undefined;
+    });
+    return reply
+      .header('cache-control', 'no-store')
+      .send(productionReadiness(read.projection(), read.scenes(), obs, refreshing));
+  });
 }

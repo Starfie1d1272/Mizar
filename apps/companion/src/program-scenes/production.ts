@@ -531,7 +531,9 @@ export function createProduction(options: ProductionDependencies) {
           try {
             await localHandoff;
           } catch (error) {
-            if (!sourceStateUnavailable(error)) throw error;
+            // The workbench has already ended locally. Keep the handoff
+            // unconfirmed and retryable in its owner without rolling back that result.
+            if (mode !== 'preparation' && !sourceStateUnavailable(error)) throw error;
           }
         }
       }

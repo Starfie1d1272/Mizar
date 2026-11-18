@@ -60,7 +60,7 @@ import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avat
 import { ProductionGuidanceStore } from './program-scenes/guidance.js';
 import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
-import { productionReadiness } from './program-scenes/readiness.js';
+import { registerProductionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
 import { createProduction, registerProductionRoutes } from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
@@ -1112,11 +1112,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       return Promise.resolve();
     });
   }
-  app.get('/local/v1/readiness', async (_request, reply) => {
-    const obs = await obsAdapter?.status();
-    return reply
-      .header('cache-control', 'no-store')
-      .send(productionReadiness(projectionCoordinator.getCurrent(), sceneController.get(), obs));
+  registerProductionReadiness(app, {
+    projection: () => projectionCoordinator.getCurrent(),
+    scenes: () => sceneController.get(),
+    obs: async () => obsAdapter?.status(),
   });
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),

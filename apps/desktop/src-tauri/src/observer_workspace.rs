@@ -296,7 +296,13 @@ pub async fn observer_command(
                     return Ok(());
                 }
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let cs2 = managed.try_lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                let cs2 = match managed.try_lock() {
+                    Ok(cs2) => cs2,
+                    Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        return Err("游戏状态不可用。".into())
+                    }
+                };
                 let game = crate::mulnx_launch::observer_control_snapshot(&cs2, &log);
                 drop(cs2);
                 automation = Some(game.is_some_and(|game| crate::mulnx_launch::observer_gateway_available(&game, &log)));

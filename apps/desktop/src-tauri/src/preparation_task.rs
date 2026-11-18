@@ -1075,6 +1075,17 @@ fn preparation_start(
         _ => return Err("游戏实例标识不完整。".into()),
     };
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+    // This entry path has already read Companion in preparation mode. An
+    // entered task from a previous revision no longer owns the new entry.
+    // Native launch and recovery still verify their own persisted ownership.
+    if state.as_ref().is_some_and(|task| {
+        task.entered()
+            && !task.running
+            && task.cancellation.is_none()
+            && task.revision != expected_revision
+    }) {
+        *state = None;
+    }
     if let Some(existing) = state.as_mut() {
         if existing.retire_requested || existing.cancellation.is_some() {
             return Err("原准备任务正在收尾，请稍后重试。".into());

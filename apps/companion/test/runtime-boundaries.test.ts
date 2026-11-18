@@ -11,12 +11,47 @@ import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { closeWebsiteOutput } from '../src/output/shutdown.js';
 import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
+import { registerProductionReadiness } from '../src/program-scenes/readiness.js';
+import { ObsVideoError } from '../src/obs/video-transaction.js';
 import { registerUpdateRoutes } from '../src/updates/routes.js';
 import { UpdateManager } from '../src/updates/manager.js';
 import { updateManifestSchema } from '../src/updates/contract.js';
 
 const host = '127.0.0.1:3000';
 const origin = `http://${host}`;
+
+test('readiness retains local facts when a concurrent OBS change invalidates its snapshot', async (t) => {
+  const app = fastify();
+  t.after(() => app.close());
+  type Readers = Parameters<typeof registerProductionReadiness>[1];
+  const projection = {
+    operator: {
+      matchContext: { summary: {} },
+      identity: { state: 'matched' },
+      runtime: { telemetryFreshness: 'fresh' },
+    },
+    radar: { telemetryFreshness: 'stale' },
+  } as ReturnType<Readers['projection']>;
+  const scenes = {
+    active: 'waiting',
+    available: ['waiting'],
+    blocked: {},
+  } as ReturnType<Readers['scenes']>;
+  registerProductionReadiness(app, {
+    projection: () => projection,
+    scenes: () => scenes,
+    obs: async () => {
+      throw new ObsVideoError('obs_observation_changed', 'Discard the mixed OBS generation');
+    },
+  });
+  const response = await app.inject('/local/v1/readiness');
+  assert.equal(response.statusCode, 200);
+  const items = response.json<{ id: string; ready: boolean; reason: string }[]>();
+  assert.equal(items.find((item) => item.id === 'match')?.ready, true);
+  assert.equal(items.find((item) => item.id === 'game-data')?.ready, true);
+  assert.equal(items.find((item) => item.id === 'obs')?.ready, false);
+  assert.equal(items.find((item) => item.id === 'obs')?.reason, '正在刷新 OBS 状态');
+});
 
 test('install reuses a recent authenticated candidate, rechecks stale trust and rejects changed bytes', async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-install-'));

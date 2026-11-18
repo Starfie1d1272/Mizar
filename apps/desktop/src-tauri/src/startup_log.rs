@@ -81,6 +81,7 @@ struct DeferredLog {
     lost_bytes: AtomicU64,
     first_lost_ms: AtomicU64,
     last_lost_ms: AtomicU64,
+    last_write_failure: Mutex<Option<Value>>,
 }
 fn add_count(counter: &AtomicU64, count: u64) {
     let mut current = counter.load(Ordering::Relaxed);
@@ -102,7 +103,7 @@ struct LogFile {
     sequence: u64,
     segment_name: String,
     document_segment_name: String,
-    active_segments: Vec<String>,
+    critical_segments: std::collections::HashSet<String>,
     // In-flight seal/hash work belongs to this same producer, not another ledger.
     pin_work: std::collections::HashMap<String, Vec<String>>,
     write_poisoned: bool,
@@ -112,6 +113,48 @@ struct LogFile {
 struct PinWork {
     inner: Arc<Mutex<LogFile>>,
     pin_id: String,
+}
+
+#[cfg(test)]
+#[test]
+fn retention_reclaims_ordinary_sealed_segments_in_the_current_run() -> io::Result<()> {
+    let directory = std::env::temp_dir().join(format!(
+        "mizar-host-retention-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::create_dir(&directory)?;
+    let result = (|| -> io::Result<()> {
+        let sealed = reserve_segment(&directory, "document")?;
+        let sealed_path = directory.join(&sealed);
+        fs::write(&sealed_path, [b'x'; 200])?;
+        let critical = reserve_segment(&directory, "desktop")?;
+        let critical_path = directory.join(&critical);
+        fs::write(&critical_path, [b'x'; 100])?;
+        let pinned = reserve_segment(&directory, "document")?;
+        let pinned_path = directory.join(&pinned);
+        fs::write(&pinned_path, [b'x'; 75])?;
+        let mut log = LogFile {
+            directory: directory.clone(),
+            identity: Value::Null,
+            limit: LOG_LIMIT,
+            page_loads: 0,
+            sequence: 0,
+            segment_name: reserve_segment(&directory, "desktop")?,
+            document_segment_name: reserve_segment(&directory, "document")?,
+            critical_segments: [critical].into_iter().collect(),
+            pin_work: [("in-flight".to_owned(), vec![pinned])].into_iter().collect(),
+            write_poisoned: false,
+            retention_issue: None,
+        };
+        DesktopLog::collect_segments(&mut log, 100 * 1024 * 1024 - 175)?;
+        assert!(!sealed_path.exists());
+        assert_eq!(fs::metadata(&critical_path)?.len(), 100);
+        assert_eq!(fs::metadata(&pinned_path)?.len(), 75);
+        assert!(fs::read_to_string(directory.join("host-retention.ndjson"))?.contains(&sealed));
+        Ok(())
+    })();
+    result.and(fs::remove_dir_all(directory))
 }
 impl Drop for PinWork {
     fn drop(&mut self) {
@@ -473,7 +516,7 @@ impl DesktopLog {
                 sequence: 0,
                 segment_name: reserve_segment(&directory, "desktop")?,
                 document_segment_name: reserve_segment(&directory, "document")?,
-                active_segments: Vec::new(),
+                critical_segments: std::collections::HashSet::new(),
                 pin_work: std::collections::HashMap::new(),
                 write_poisoned: false,
                 retention_issue: None,
@@ -666,16 +709,16 @@ impl DesktopLog {
         let mut current = log.directory.join(&log.segment_name);
         if fs::metadata(&current).map_or(0, |m| m.len()) + bytes.len() as u64 > log.limit {
             Self::collect_segments(log, bytes.len() as u64)?;
-            let sealed = log.segment_name.clone();
-            log.active_segments.push(sealed);
             log.segment_name = reserve_segment(&log.directory, "desktop")?;
             current = log.directory.join(&log.segment_name);
         }
         if fs::metadata(&current)?.len() == 0 {
             Self::collect_segments(log, LOG_LIMIT)?;
         }
-        let _ = durable;
         append_committed(log, &current, &bytes)?;
+        if durable {
+            log.critical_segments.insert(log.segment_name.clone());
+        }
         Ok(())
     }
 
@@ -722,8 +765,6 @@ impl DesktopLog {
         let mut path = self.directory.join(&log.document_segment_name);
         if fs::metadata(&path).map_or(0, |m| m.len()) + bytes.len() as u64 > LOG_LIMIT {
             Self::collect_segments(&mut log, bytes.len() as u64).map_err(|e| e.to_string())?;
-            let current = log.document_segment_name.clone();
-            log.active_segments.push(current);
             log.document_segment_name =
                 reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
             path = self.directory.join(&log.document_segment_name);
@@ -740,7 +781,7 @@ impl DesktopLog {
 
     fn collect_segments(log: &mut LogFile, incoming: u64) -> io::Result<()> {
         use std::collections::HashSet;
-        let mut protected: HashSet<String> = log.active_segments.iter().cloned().collect();
+        let mut protected: HashSet<String> = log.critical_segments.clone();
         protected.insert(log.segment_name.clone());
         protected.insert(log.document_segment_name.clone());
         protected.extend(log.pin_work.values().flatten().cloned());
@@ -913,8 +954,7 @@ impl DesktopLog {
                 {
                     let next =
                         reserve_segment(&log.directory, "desktop").map_err(|e| e.to_string())?;
-                    let sealed = std::mem::replace(&mut log.segment_name, next);
-                    log.active_segments.push(sealed);
+                    log.segment_name = next;
                 }
                 if segments
                     .iter()
@@ -922,8 +962,7 @@ impl DesktopLog {
                 {
                     let next =
                         reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
-                    let sealed = std::mem::replace(&mut log.document_segment_name, next);
-                    log.active_segments.push(sealed);
+                    log.document_segment_name = next;
                 }
                 let mut source_state = self.deferred_source_state();
                 source_state["postCutoffSegments"] =
@@ -1267,6 +1306,7 @@ impl DesktopLog {
                     false,
                     Some((&observed_at, monotonic_ms)),
                 ) {
+                    self.remember_write_failure(stage, &error);
                     self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
                     eprintln!("桌面日志写入失败：{error}");
                 }
@@ -1305,8 +1345,20 @@ impl DesktopLog {
                 });
             }
             Err(TryLockError::Poisoned(_)) => {
+                self.remember_write_failure(stage, &io::Error::other("desktop log lock unavailable"));
                 self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
             }
+        }
+    }
+
+    fn remember_write_failure(&self, stage: &str, error: &io::Error) {
+        if let Ok(mut last) = self.deferred.last_write_failure.try_lock() {
+            *last = Some(json!({
+                "stage":stage,
+                "kind":format!("{:?}", error.kind()),
+                "osCode":error.raw_os_error(),
+                "message":error.to_string(),
+            }));
         }
     }
 
@@ -1374,12 +1426,17 @@ impl DesktopLog {
             // count/bytes/range are cumulative for this Host run; dropped is the
             // new loss since the previous gap. Use already-approved projection
             // fields so cloud/support evidence cannot silently erase the gap.
-            let detail = json!({"reason":"native_event_loss_cumulative","failureKind":"diagnostic_io","count":self.deferred.total_lost.load(Ordering::Relaxed),"dropped":counts.iter().fold(0u64, |sum,count| sum.saturating_add(*count)),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed)),"bufferOverflow":counts[0],"bufferContended":counts[1],"writeFailed":counts[2]}).to_string();
+            let mut detail = json!({"reason":"native_event_loss_cumulative","failureKind":"diagnostic_io","count":self.deferred.total_lost.load(Ordering::Relaxed),"dropped":counts.iter().fold(0u64, |sum,count| sum.saturating_add(*count)),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed)),"bufferOverflow":counts[0],"bufferContended":counts[1],"writeFailed":counts[2]});
+            if counts[2] > 0 {
+                if let Ok(last) = self.deferred.last_write_failure.try_lock() {
+                    detail["lastWriteFailure"] = json!(*last);
+                }
+            }
             if let Err(error) = Self::write_locked(
                 &mut log,
                 "native_diagnostic_coverage_gap",
                 "unconfirmed",
-                Some(&detail),
+                Some(&detail.to_string()),
                 false,
                 None,
             ) {

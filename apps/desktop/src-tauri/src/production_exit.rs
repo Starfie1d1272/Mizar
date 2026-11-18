@@ -963,7 +963,7 @@ pub(crate) async fn finish_workspace(
         } else {
             feedback.stage(WorkspaceExitStage::Restoration);
             let _activity = activity.begin(2);
-            crate::production_exit::finish_managed_game(&log, |requires_proof| {
+            let result = crate::production_exit::finish_managed_game(&log, |requires_proof| {
                 if confirm_steam_cancelled == Some(true) {
                     log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
                 }
@@ -973,7 +973,13 @@ pub(crate) async fn finish_workspace(
                 }
                 native_game_finished = true;
                 Ok(())
-            })?;
+            });
+            if let Err(error) = result {
+                if !native_game_finished {
+                    return Err(error);
+                }
+                log.event("workspace_exit_managed_source", "deferred", Some(&error));
+            }
         }
         Ok(())
         });
