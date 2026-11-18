@@ -5,6 +5,7 @@ import { MatchConnectionControl } from './MatchConnectionControl';
 import { ObserverHints } from './ObserverHints';
 import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
 import { PreflightReview } from './PreflightReview';
+import { PreviousScoreReminder } from './PreviousScoreReminder';
 import { RosterCapture } from '../preparation/RosterCapture';
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
@@ -215,6 +216,7 @@ function ContextPanel({
           {visibleIssueError ? <span role="alert">{visibleIssueError}</span> : null}
         </StatusBanner>
       ) : null}
+      <PreviousScoreReminder operator={operator} program={program} document={document} />
       <LiveRosterAlert
         alert={rosterAlert}
         matchId={operator?.matchContext.summary?.matchId}

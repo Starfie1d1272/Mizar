@@ -1157,6 +1157,7 @@ pub(crate) async fn open_tool(
             "roster" => "上场名单核对",
             "sync" => "网站同步",
             "issues" => "当前问题",
+            "previous-score" => "上一图比分",
             "exit" => "结束制作需要处理",
             _ => return Err("核对页面无法识别。".into()),
         };

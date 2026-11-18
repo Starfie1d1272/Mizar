@@ -1707,6 +1707,19 @@ export class OutputService {
         bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId)
     )
       return true;
+    // Preserve a captured result while later source generations are queued.
+    // The receiver still validates its original cursor and authority.
+    if (
+      retained?.status === 'pending' &&
+      (event.kind === 'map_ended' || event.kind === 'map_player_snapshot') &&
+      binding.context.matchId === event.matchId &&
+      bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
+      event.cursor.liveSessionId !== null &&
+      bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
+      bundle.program.cursor.programSourceGeneration >= event.cursor.programSourceGeneration &&
+      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
+    )
+      return true;
     if (
       event.kind === 'map_started' &&
       bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch &&
@@ -1865,7 +1878,9 @@ export class OutputService {
     if (
       (event.kind === 'map_player_snapshot' ||
         (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
-          bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch)) &&
+          (bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch ||
+            bundle.program.cursor.programSourceGeneration !==
+              event.cursor.programSourceGeneration))) &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId
     ) {
       if (event.kind === 'map_epoch_changed') return event.evidence.contextFresh;
