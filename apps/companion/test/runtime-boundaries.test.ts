@@ -49,6 +49,7 @@ test('Demo recovery retains its marker and remains isolated until output restora
   await writeFile(markerPath, JSON.stringify(marker));
   let obsReady = false;
   let outputQuarantined = true;
+  let failFormalRestore = true;
   let failOutputRestore = true;
   const stages: string[] = [];
   type Options = ConstructorParameters<typeof DemoTestController>[0];
@@ -77,7 +78,9 @@ test('Demo recovery retains its marker and remains isolated until output restora
         outputQuarantined = value;
       },
       refresh: () => {},
-      restoreFormal: async () => {},
+      restoreFormal: async () => {
+        if (failFormalRestore) throw new Error('formal restore interrupted');
+      },
       hold: () => {},
     });
   let demo = open();
@@ -88,6 +91,9 @@ test('Demo recovery retains its marker and remains isolated until output restora
   assert.deepEqual(readDemoTestRecovery(markerPath), { ...marker, localRestored: true });
   assert.equal(demo.get().active, true);
   obsReady = true;
+  assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);
+  assert.ok(stages.includes('formal_restore'));
+  failFormalRestore = false;
   assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);
   assert.deepEqual(readDemoTestRecovery(markerPath), { ...marker, localRestored: true });
   assert.equal(outputQuarantined, true);

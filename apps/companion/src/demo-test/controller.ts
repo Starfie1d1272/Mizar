@@ -314,7 +314,7 @@ export class DemoTestController {
             await this.options.quarantineOutput(true);
           } catch (quarantineError) {
             throw new AggregateError([error, quarantineError], 'demo_output_quarantine_failed', {
-              cause: error,
+              cause: quarantineError,
             });
           }
           throw error;
