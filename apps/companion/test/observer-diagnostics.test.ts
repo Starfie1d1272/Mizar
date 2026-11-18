@@ -354,7 +354,10 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
   const good = `desktop-${randomUUID()}.ndjson`;
   const missingHost = `desktop-${randomUUID()}.ndjson`;
   const changedHost = `document-${randomUUID()}.ndjson`;
-  const fixedContent = '{"eventId":"safely-fixed-host-event"}\n';
+  const unavailableAtPrepare = `document-${randomUUID()}.ndjson`;
+  const fixedContent =
+    '{"eventId":"safely-fixed-host-event"}\n' +
+    '{"eventId":"reported-host-loss","kind":"native_diagnostic_coverage_gap","evidence":{"dropped":2}}\n';
   const fixed = {
     bytes: Buffer.byteLength(fixedContent),
     sha256: createHash('sha256').update(fixedContent).digest('hex'),
@@ -364,6 +367,7 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     writeFile(join(logs, emptyOld), ''),
     writeFile(join(logs, successor), 'post-cutoff'),
     writeFile(join(logs, unknown), 'unfixed-original'),
+    writeFile(join(logs, unavailableAtPrepare), 'unverified-by-host'),
     writeFile(join(logs, good), fixedContent),
     writeFile(join(logs, changedHost), fixedContent.replace('safely', 'edited')),
     writeFile(
@@ -383,6 +387,9 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
           unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
           emptyAtCutoffSegments: [emptyOld],
           postCutoffSegments: [successor],
+          unavailableSegments: [
+            { name: unavailableAtPrepare, reason: 'host_pin_source_read_failed' },
+          ],
         },
       }),
     ),
@@ -417,7 +424,26 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     .map(([, bytes]) => Buffer.from(bytes).toString())
     .join('');
   assert.match(events, /safely-fixed-host-event/);
-  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original/);
+  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original|unverified-by-host/);
+  const generated = JSON.parse(
+    await readFile(join(exports.directory, job.exportId, 'generated.json'), 'utf8'),
+  );
+  assert.equal(generated.completeKnownSources, false);
+  assert.equal(
+    coverage.gaps.filter(
+      ({ source, phase, reason }: { source: string; phase: string; reason: string }) =>
+        source === unavailableAtPrepare &&
+        phase === 'prepare' &&
+        reason === 'host_pin_source_read_failed',
+    ).length,
+    1,
+  );
+  assert.ok(
+    coverage.gaps.some(
+      (entry: { reason: string; eventId?: string }) =>
+        entry.reason === 'native_event_loss_reported' && entry.eventId === 'reported-host-loss',
+    ),
+  );
   assert.deepEqual(
     coverage.gaps
       .filter((entry: { source: string }) => [missingHost, changedHost].includes(entry.source))

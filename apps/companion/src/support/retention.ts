@@ -727,6 +727,7 @@ export async function readHostPin(
     sourceState?: {
       postCutoffSegments?: string[];
       emptyAtCutoffSegments?: string[];
+      unavailableSegments?: { name: string; reason: string; detail?: string }[];
       asOf: string;
       memoryOnly: { events: number | null; bytes: number | null };
       unreportedLoss: { overflow: number; contended: number; writeFailed: number };
@@ -799,6 +800,7 @@ export async function readHostPin(
       throw new Error('host_deferred_coverage_invalid');
     const successors = state.postCutoffSegments;
     const emptySegments = state.emptyAtCutoffSegments;
+    const unavailableSegments = state.unavailableSegments;
     if (
       successors !== undefined &&
       (!Array.isArray(successors) ||
@@ -826,9 +828,38 @@ export async function readHostPin(
         ))
     )
       throw new Error('host_pin_cutoff_invalid');
+    if (unavailableSegments !== undefined) {
+      const known = new Set([...fixedNames, ...(successors ?? []), ...(emptySegments ?? [])]);
+      if (
+        kind !== 'export' ||
+        !Array.isArray(unavailableSegments) ||
+        unavailableSegments.length + (emptySegments?.length ?? 0) + fixedNames.size > 4096
+      )
+        throw new Error('host_pin_cutoff_invalid');
+      for (const entry of unavailableSegments) {
+        if (
+          !entry ||
+          typeof entry.name !== 'string' ||
+          !immutableName.test(entry.name) ||
+          !/^(desktop|document)-/.test(entry.name) ||
+          known.has(entry.name) ||
+          ![
+            'host_pin_source_metadata_failed',
+            'host_pin_source_read_failed',
+            'host_pin_source_unsafe',
+            'host_pin_source_oversize',
+          ].includes(entry.reason) ||
+          (entry.detail !== undefined &&
+            (typeof entry.detail !== 'string' || [...entry.detail].length > 120))
+        )
+          throw new Error('host_pin_cutoff_invalid');
+        known.add(entry.name);
+      }
+    }
     sourceState = {
       ...(successors ? { postCutoffSegments: successors } : {}),
       ...(emptySegments ? { emptyAtCutoffSegments: emptySegments } : {}),
+      ...(unavailableSegments ? { unavailableSegments } : {}),
       asOf: state.asOf,
       memoryOnly: {
         included: false,

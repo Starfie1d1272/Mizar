@@ -273,7 +273,7 @@ export class SupportExports {
         phase,
         reason: String(error),
         cause: diagnosticValue(error),
-        scope: 'source unavailable; retained original and unknown range',
+        scope: 'source unavailable; coverage unknown',
       });
     if (!documentHandoff)
       gap('document', 'handoff', new Error('document_handoff_coverage_unreported'));
@@ -396,6 +396,7 @@ export class SupportExports {
             | {
                 memoryOnly: { events: number | null };
                 unreportedLoss: Record<string, number>;
+                unavailableSegments?: { name: string; reason: string; detail?: string }[];
               }
             | undefined;
           if (
@@ -405,6 +406,16 @@ export class SupportExports {
               Object.values(state.unreportedLoss).some((count) => count > 0))
           )
             gap('host', 'coverage', new Error('host_memory_only_or_unreported_loss'));
+          for (const entry of state?.unavailableSegments ?? []) {
+            failedHostSegments.add(entry.name);
+            gaps.push({
+              source: entry.name,
+              phase: 'prepare',
+              reason: entry.reason,
+              cause: diagnosticValue(entry.detail),
+              scope: 'Host inventoried this source at cutoff; its bytes could not be fixed',
+            });
+          }
         } catch (error) {
           hostPin = null;
           gap('host', 'pin', error);

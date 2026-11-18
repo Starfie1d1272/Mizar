@@ -613,7 +613,16 @@ export function runArchiveWorker(
     }
     if (!variant) {
       uniqueEvents++;
-      const stderr = object(object(event.evidence).stderr);
+      const evidence = object(event.evidence);
+      const stderr = object(evidence.stderr);
+      if (event.kind === 'native_diagnostic_coverage_gap' && Number(evidence.dropped) > 0)
+        gaps.push({
+          source,
+          eventId: id,
+          reason: 'native_event_loss_reported',
+          dropped: evidence.dropped,
+          scope: 'Host reported missing records in the selected interval',
+        });
       if (event.kind === 'observer_attempt_terminal' && stderr.truncated === true)
         gaps.push({
           source,
