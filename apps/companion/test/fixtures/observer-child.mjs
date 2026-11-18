@@ -119,6 +119,36 @@ for await (const text of inputLines) {
     process.stdin.destroy();
     break;
   }
+  if (input.endpoint === '127.0.0.28:27020') {
+    const source = `ahead:${arg('--source-id')}`;
+    const health = {
+      type: 'cs2-observer-health/2',
+      source,
+      channel: 1,
+      world: 1,
+      state: 'backoff',
+      ready: false,
+      reconnects: 0,
+    };
+    const report = {
+      schema: 'cs2-observer-report/2',
+      outcome: 'failed',
+      reason: 'reconnect-budget-exhausted',
+      lastOutputSequence: 1,
+      cleanupCompleted: true,
+      reportWritten: true,
+      health,
+    };
+    await new Promise((resolve) =>
+      process.stderr.write('noise\n' + 'x'.repeat(70 * 1024) + '\n', resolve),
+    );
+    process.stderr.write(JSON.stringify(health) + '\n');
+    process.stderr.write(JSON.stringify(report) + '\n');
+    process.exitCode = 1;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
   if (input.endpoint === '127.0.0.2:27020') {
     process.stderr.write(
       JSON.stringify({

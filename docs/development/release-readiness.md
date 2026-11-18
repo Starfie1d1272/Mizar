@@ -139,6 +139,8 @@ Promotion 对同次已成功资格任务的产品和验收证据并行下载到�
 
 正式发行从 release profile 构建产品，CI 的 Windows 宿主构建使用独立的 ci profile。
 
+Windows 产品包使用固定的观察器 external-node 发行资产。装配时核对归档摘要、精确源码、清单全部文件及其摘要，并在同包 Windows x64 Node 上运行上游合成自检。组件 Native ABI、Parser IPC 和 Managed Protocol 分别核验。源码和许可随包分发。自检覆盖离线运行，实际 GoTV 的连接和恢复需另行验证。
+
 固定旧版本的组装、Core 准备、解压与证明核验实验已退出日常 CI；其原始结果、来源和摘要保存在[历史实验归档](https://github.com/Starfie1d1272/Mizar/tree/archive/2026-10-17/evidence-index)。归档记录不能代替当前版本的资格验收，原固定候选过期后也不重建冒充原样本。
 
 Box Sync 自动和手动同步默认使用 `transport=curl`；`native` 仅作为显式诊断备选，具有独立建连和空闲截止。curl 临时上传地址仅通过标准输入传递，不进入命令参数或日志，不跟随重定向。GitHub Release 资产单次下载（包括正文读取）最多 180 秒。Box 单次下载回读最多 180 秒，连续 60 秒无响应或数据时提前中止，并按既有只读规则重试；匿名入口单次下载也最多 180 秒。两种上传传输共享回执校验、远端原字节核对和最后发布更新指针的顺序；具体超时与次数以同步脚本为准。

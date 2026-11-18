@@ -133,10 +133,8 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private lastErrorCode: CstvDiagnosticCode | undefined;
   private lastTerminalStatus: CstvSessionTerminalStatus | undefined;
   private observerIdentity: ObserverSourceIdentity | undefined;
-  private observerAttached = true;
+  private observerChannelOpen = false;
   private observerSequence = 0;
-  private observerKinds = new Set<string>();
-  private observerEventSequence = 0;
   private observerMap: string | undefined;
   private observerTicksPerSecond: number | undefined;
   private started = false;
@@ -176,7 +174,9 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.reconnectTimer = undefined;
       this.reconnectScheduled = false;
     }
-    if (this.url !== undefined || this.observerIdentity !== undefined) {
+    if (this.observerIdentity !== undefined) {
+      this.resetObserverContinuity('stopped');
+    } else if (this.url !== undefined) {
       this.state = 'stopped';
       this.notifySnapshotChanged();
     }
@@ -249,30 +249,15 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     return () => this.liveGameEventListeners.delete(listener);
   }
 
-  /** The local process owner supplies attachment identity; wire records cannot replace it. */
-  attachObserver(identity: ObserverSourceIdentity): void {
+  disconnectObserver(reason: 'failed' | 'ended'): void {
     if (this.observerIdentity === undefined || this.stopRequested) return;
-    validateObserverIdentity(this.role, identity);
-    this.observerIdentity = { ...identity };
-    this.observerAttached = true;
-    this.observerSequence = 0;
-    this.observerKinds.clear();
-    this.resetObserverContinuity();
+    this.observerChannelOpen = false;
+    this.resetObserverContinuity(reason);
+    if (reason === 'failed') this.recordDiagnostic({ code: 'session-run-failed' });
   }
 
-  disconnectObserver(reason: 'failed' | 'cancelled' = 'failed'): void {
-    if (this.observerIdentity === undefined || this.stopRequested || !this.observerAttached) return;
-    this.observerAttached = false;
-    this.resetObserverContinuity();
-    this.state = 'reconnecting';
-    this.recordDiagnostic({
-      code: reason === 'cancelled' ? 'session-cancelled' : 'session-run-failed',
-    });
-  }
-
-  private resetObserverContinuity(): void {
+  private resetObserverContinuity(state: CstvSourceState = 'connecting'): void {
     this.generation += 1;
-    this.observerEventSequence = 0;
     this.observerMap = undefined;
     this.executionHadLive = false;
     this.observerTicksPerSecond = undefined;
@@ -283,74 +268,86 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.lastEventObservedAt = undefined;
     this.lastSync = undefined;
     this.lastReceiveMonotonicMs = undefined;
-    this.state = 'connecting';
+    this.state = state;
     this.notifySnapshotChanged();
   }
 
   /** Consume bounded, parsed local observer output, not arbitrary network messages. */
   consumeObserverRecord(input: unknown): void {
+    const owner = this.observerIdentity;
     if (
       !this.started ||
-      !this.observerAttached ||
       this.stopRequested ||
-      this.observerIdentity === undefined ||
+      !owner ||
       typeof input !== 'object' ||
       input === null ||
       Array.isArray(input)
     )
       return;
     const row = input as Record<string, unknown>;
-    if (
-      row.kind !== 'cursor' &&
-      row.kind !== 'discontinuity' &&
-      ![
-        'round_freeze_end',
-        'round_end',
-        'round_prestart',
-        'round_start',
-        'round_officially_ended',
-        'round_announce_warmup',
-        'begin_new_match',
-      ].includes(String(row.kind)) &&
-      !SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === row.kind)
-    )
-      return;
-    const owner = this.observerIdentity;
+    const { kind, sequence, channel, world } = row;
     if (
       row.source !== owner.source ||
-      row.channel !== owner.channel ||
-      typeof row.world !== 'number' ||
-      !Number.isSafeInteger(row.world) ||
-      row.world < owner.world ||
-      typeof row.sequence !== 'number' ||
-      !Number.isSafeInteger(row.sequence) ||
-      row.sequence < 1 ||
-      row.sequence < this.observerSequence ||
-      typeof row.kind !== 'string'
+      typeof kind !== 'string' ||
+      typeof sequence !== 'number' ||
+      !Number.isSafeInteger(sequence) ||
+      sequence <= this.observerSequence ||
+      typeof channel !== 'number' ||
+      !Number.isSafeInteger(channel) ||
+      typeof world !== 'number' ||
+      !Number.isSafeInteger(world)
     )
       return;
-    if (row.world !== owner.world && row.kind !== 'discontinuity') return;
-    if (row.sequence > this.observerSequence) {
-      this.observerSequence = row.sequence;
-      this.observerKinds.clear();
-    }
-    if (this.observerKinds.has(row.kind)) return;
-    this.observerKinds.add(row.kind);
-    if (row.kind === 'discontinuity') {
-      this.observerIdentity = { ...owner, world: row.world };
+
+    if (kind === 'session-start') {
+      if (row.protocol !== 2 || world !== 1 || channel <= owner.channel) return;
+      if (sequence !== this.observerSequence + 1 || channel !== owner.channel + 1)
+        this.recordDiagnostic({ code: 'session-run-failed' });
+      this.observerSequence = sequence;
+      this.observerIdentity = { ...owner, channel, world };
+      this.observerChannelOpen = true;
       this.resetObserverContinuity();
       return;
     }
-    if (row.world !== owner.world) return;
+    if (!this.observerChannelOpen || channel !== owner.channel) return;
+    const worldChange = kind === 'discontinuity' && row.scope === 'world';
+    if (worldChange ? world <= owner.world : world !== owner.world) return;
+    if (sequence !== this.observerSequence + 1) {
+      // A lost boundary cannot be reconstructed from a cursor in this channel.
+      this.observerChannelOpen = false;
+      this.resetObserverContinuity('reconnecting');
+      this.recordDiagnostic({ code: 'session-run-failed' });
+      return;
+    }
+    this.observerSequence = sequence;
+    if (kind === 'discontinuity') {
+      if (row.scope === 'connection') this.observerChannelOpen = false;
+      else if (worldChange) this.observerIdentity = { ...owner, world };
+      else if (row.scope !== 'snapshot') this.observerChannelOpen = false;
+      this.resetObserverContinuity(this.observerChannelOpen ? 'connecting' : 'reconnecting');
+      return;
+    }
+    if (
+      this.role === 'lookahead' &&
+      typeof row.observedAt === 'number' &&
+      Number.isFinite(row.observedAt) &&
+      Date.now() - row.observedAt >= 2000
+    ) {
+      // Upstream local queue age only qualifies these private data. It does not
+      // measure broadcast delay or become the event's scheduling clock.
+      if (this.state === 'live') this.resetObserverContinuity();
+      return;
+    }
     if (row.kind === 'cursor') {
       if (
         typeof row.tick !== 'number' ||
         !Number.isSafeInteger(row.tick) ||
         row.tick < 1 ||
+        row.committedTick !== row.tick ||
         typeof row.tickInterval !== 'number' ||
         !Number.isFinite(row.tickInterval) ||
         row.tickInterval <= 0 ||
-        !Number.isFinite(1 / row.tickInterval) ||
+        row.tickInterval > 1 ||
         typeof row.map !== 'string' ||
         row.map.length === 0 ||
         row.map.length > 256
@@ -380,7 +377,13 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.notifySnapshotChanged();
       return;
     }
-    if (row.type !== 'raw-event' || this.state !== 'live' || row.map !== this.observerMap) return;
+    if (
+      row.type !== 'raw-event' ||
+      kind !== row.name ||
+      this.state !== 'live' ||
+      row.map !== this.observerMap
+    )
+      return;
     if (row.kind === row.name) {
       if (row.kind === 'begin_new_match' || row.kind === 'round_announce_warmup') {
         if (this.executionHadLive) this.mapExecution++;
@@ -400,6 +403,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       )
         return;
     }
+    if (!SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === kind)) return;
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),
@@ -410,7 +414,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           kind: 'cs2-cstv',
           role: this.role,
           generation: this.generation,
-          sequence: this.observerEventSequence,
+          sequence,
           tick: observerEventTick(row),
           observedAt: sample.observedAt,
           observedMonotonicMs: sample.observedMonotonicMs,
@@ -420,7 +424,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
             : { ticksPerSecond: this.observerTicksPerSecond }),
         },
       }) as RoleScopedGameEventObservation<R>;
-      this.observerEventSequence += 1;
       this.handleObservation(this.generation, observation);
     } catch {
       this.recordDiagnostic({ code: 'normalization-failed' });
@@ -661,8 +664,7 @@ export function createCstvSourceManagers(options: {
 }
 
 export interface ObserverSourceManager<R extends GameEventSourceRole> extends CstvSourceManager<R> {
-  attachObserver(identity: ObserverSourceIdentity): void;
-  disconnectObserver(reason?: 'failed' | 'cancelled'): void;
+  disconnectObserver(reason: 'failed' | 'ended'): void;
   consumeObserverRecord(input: unknown): void;
 }
 

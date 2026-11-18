@@ -98,7 +98,8 @@ pub(crate) fn try_cleanup_operation() -> Option<std::sync::MutexGuard<'static, (
 
 fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = production_exit::runtime_token(log)?;
-    let timeout = if body["action"] == "pulse" { 1 } else { 18 };
+    // v2 gets 15 seconds to stop, followed by bounded relay and Job cleanup.
+    let timeout = if body["action"] == "pulse" { 1 } else { 25 };
     let (code, value) = production_exit::request_with_identity(
         log,
         "POST",

@@ -21,7 +21,6 @@ export interface ObserverAssistProjection {
   readonly availability: 'unavailable' | 'available';
   readonly observer?: ObserverHintSettings & {
     readonly state: 'connecting' | 'ready' | 'paused' | 'unavailable';
-    readonly effectiveDelaySeconds: number;
     readonly waitingReason: string | null;
     readonly nextWindowSeconds: number | null;
     readonly hints: readonly ObserverHint[];
@@ -223,7 +222,6 @@ export class ObserverHintTimeline {
       observer: {
         ...settings,
         state,
-        effectiveDelaySeconds: settings.delaySeconds,
         waitingReason: this.blocked,
         nextWindowSeconds: null,
         hints: [],
@@ -407,7 +405,6 @@ export class ObserverHintTimeline {
       observer: {
         ...settings,
         state: 'ready',
-        effectiveDelaySeconds: settings.delaySeconds,
         waitingReason:
           this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
         nextWindowSeconds:

@@ -11,7 +11,7 @@ async function inspectNode(node) {
     node,
     [
       '-e',
-      'console.log(JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch}))',
+      'console.log(JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch,features:[typeof WebAssembly==="object"&&"WebAssembly",typeof ReadableStream==="function"&&"ReadableStream",typeof structuredClone==="function"&&"structuredClone"].filter(Boolean)}))',
     ],
     { windowsHide: true, timeout: 10000, maxBuffer: 4096 },
   );
@@ -43,7 +43,22 @@ export async function stageReleasedObserver(resourcesDirectory, temporaryDirecto
   const manifest = JSON.parse(await readFile(join(extracted, 'manifest.json'), 'utf8'));
   if (manifest.componentVersion !== pin.version || manifest.sourceSha !== pin.sourceSha)
     throw new Error('observer_release_identity');
-  return stageObserverComponent(extracted, resourcesDirectory);
+  const receipt = await stageObserverComponent(extracted, resourcesDirectory);
+  // The installed copy is already fixed. Run the upstream offline replay on
+  // the extracted archive with the exact Node selected for this product.
+  await execute(
+    join(extracted, entrypoints.python),
+    [
+      '-B',
+      join(extracted, 'tools/replay_example.py'),
+      '--node',
+      join(resourcesDirectory, 'runtime/node.exe'),
+      '--output',
+      join(temporaryDirectory, 'observer-self-check'),
+    ],
+    { cwd: extracted, windowsHide: true, timeout: 30_000, maxBuffer: 16 * 1024 },
+  );
+  return receipt;
 }
 
 function safePath(name) {
@@ -93,9 +108,11 @@ export async function stageObserverComponent(
     !/^[a-f0-9]{40}$/.test(manifest.sourceSha) ||
     typeof manifest.workingTreeDirty !== 'boolean' ||
     manifest.platform !== 'win32-x64' ||
-    manifest.nativeAbi !== 3 ||
-    manifest.parserIpc !== 3 ||
-    manifest.managedProtocol !== 'cs2-observer-managed-json/1' ||
+    manifest.nativeAbi !== pin.nativeAbi ||
+    manifest.parserIpc !== pin.parserIpc ||
+    manifest.managedProtocol !== pin.managedProtocol ||
+    !Array.isArray(manifest.managedProtocols) ||
+    !manifest.managedProtocols.includes(pin.managedProtocol) ||
     !Array.isArray(manifest.validatedHostVersions) ||
     !manifest.validatedHostVersions.length ||
     manifest.validatedHostVersions.some(
@@ -103,6 +120,8 @@ export async function stageObserverComponent(
     ) ||
     new Set(manifest.validatedHostVersions).size !== manifest.validatedHostVersions.length ||
     manifest.nodeRequirement?.minimumMajor !== 24 ||
+    JSON.stringify(manifest.nodeRequirement.features) !==
+      JSON.stringify(['WebAssembly', 'ReadableStream', 'structuredClone']) ||
     !manifest.filesSha256 ||
     typeof manifest.filesSha256 !== 'object' ||
     Array.isArray(manifest.filesSha256) ||
@@ -132,7 +151,8 @@ export async function stageObserverComponent(
     !/^\d+\.\d+\.\d+$/.test(runtime.version) ||
     Number(runtime.version.split('.')[0]) < manifest.nodeRequirement.minimumMajor ||
     runtime.platform !== 'win32' ||
-    runtime.arch !== 'x64'
+    runtime.arch !== 'x64' ||
+    !manifest.nodeRequirement.features.every((feature) => runtime.features?.includes(feature))
   )
     throw new Error('observer_component_node_requirement');
   const destination = join(resources, 'observer');
@@ -170,6 +190,9 @@ export async function stageObserverComponent(
     componentVersion: manifest.componentVersion,
     sourceSha: manifest.sourceSha,
     workingTreeDirty: manifest.workingTreeDirty,
+    nativeAbi: manifest.nativeAbi,
+    parserIpc: manifest.parserIpc,
+    managedProtocol: manifest.managedProtocol,
     manifestSha256: sha256(manifestBytes),
     nodeRuntime: { ...runtime, executableSha256: sha256(await readFile(node)) },
     launch: {
