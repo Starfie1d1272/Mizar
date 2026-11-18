@@ -614,6 +614,11 @@ impl GameTracker {
         self.alignment_failure = None;
         self.apply_locked_layout()
     }
+    pub fn refresh_layout(&mut self) -> Option<Layout> {
+        let _coordinates = PhysicalCoordinates::enter();
+        self.refresh_target();
+        self.apply_locked_layout()
+    }
     fn apply_locked_layout(&mut self) -> Option<Layout> {
         let work = monitor_layout_area(self.monitor, self.fullscreen_layout)?;
         let correcting = self.last_work_area == Some(work) && self.placement_pending;

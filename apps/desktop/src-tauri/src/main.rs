@@ -686,11 +686,15 @@ fn run_desktop(
                                 // after the native suggested-size handler has completed.
                                 let request = host.state::<HostState>().layout_request.load(Ordering::Acquire);
                                 let layout = if worker_layout_dirty.swap(false, Ordering::AcqRel) {
-                                    let result = tracker.restore_layout();
-                                    if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
-                                        host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                    if request == host.state::<HostState>().layout_completed.load(Ordering::Acquire) {
+                                        tracker.refresh_layout()
+                                    } else {
+                                        let result = tracker.restore_layout();
+                                        if result.is_some() && host.state::<HostState>().workspace_epoch.load(Ordering::Acquire) == workspace_epoch && allowed() {
+                                            host.state::<HostState>().layout_completed.store(request, Ordering::Release);
+                                        }
+                                        result
                                     }
-                                    result
                                 } else {
                                     tracker.tick()
                                 };
