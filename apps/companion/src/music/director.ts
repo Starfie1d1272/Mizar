@@ -126,6 +126,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   };
   private epoch = 0;
   private monitorSettingsChanged = false;
+  private nextMonitorDisableAttempt = 0;
   private lastPoll = -Infinity;
   private nextProbeAt = 0;
   private probeDelayMs = 0;
@@ -221,6 +222,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   get(): MusicStatus {
     return {
       ...this.status,
+      ...(this.store.state.monitorDisablePending ? { monitorDisablePending: true } : {}),
       message:
         this.status.message ??
         (!this.preview.busy && this.preview.recoveryPending
@@ -899,7 +901,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     });
   }
   async monitor(enabled: boolean) {
-    if (await this.audioModePending()) throw new Error('audio_mode_pending');
+    if (enabled && (await this.audioModePending())) throw new Error('audio_mode_pending');
     if (this.closed || !this.store.ready || this.store.failure)
       throw new Error('music_unavailable');
     const revision = ++this.commandRevision;
@@ -908,15 +910,24 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       await new Promise((resolve) => setTimeout(resolve, 10));
     const current = () => !this.closed && revision === this.commandRevision;
     if (!current()) return;
-    if (await this.audioModePending()) throw new Error('audio_mode_pending');
     this.inFlight = true;
-    this.preview.cancel('monitor_control');
-    this.status.monitor = 'unknown';
     try {
+      if (enabled && (await this.audioModePending())) throw new Error('audio_mode_pending');
+      if (!current()) return;
       await this.store.update((state) => {
-        if (current()) state.monitorPreference = enabled;
+        if (!current()) return;
+        state.monitorPreference = enabled;
+        if (enabled) delete state.monitorDisablePending;
+        else state.monitorDisablePending = true;
       });
       if (!current()) return;
+      if (await this.audioModePending().catch(() => true)) {
+        if (current() && enabled) throw new Error('audio_mode_pending');
+        return;
+      }
+      if (!current()) return;
+      this.preview.cancel('monitor_control');
+      this.status.monitor = 'unknown';
       await this.provider.session(async (obs) => {
         await this.reconcilePreview(obs, this.epoch, current);
         const monitorRecovered = await this.preview.recoverMonitor(obs, current);
@@ -961,6 +972,10 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         if (current()) {
           this.status.monitor = monitorPending ? 'unknown' : enabled ? 'enabled' : 'disabled';
           this.status.monitorPending = monitorPending;
+          if (!enabled)
+            await this.store.update((state) => {
+              if (current()) delete state.monitorDisablePending;
+            });
         }
       });
     } catch (error) {
@@ -1037,11 +1052,23 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   }
   async tick(explicit = false): Promise<void> {
     if (this.closed) return;
+    const modePending = await this.audioModePending().catch(() => true);
+    if (
+      !modePending &&
+      !this.closed &&
+      !this.inFlight &&
+      this.store.ready &&
+      !this.store.failure &&
+      this.store.state.monitorDisablePending &&
+      this.now() >= this.nextMonitorDisableAttempt
+    ) {
+      this.nextMonitorDisableAttempt = this.now() + 5_000;
+      await this.monitor(false).catch(() => undefined);
+      return;
+    }
     // Route recovery defers automatic playback, never an already-started audition's stop.
     const automaticDeferred =
-      (await this.audioModePending().catch(() => true)) &&
-      !this.manual &&
-      !(this.isHeld() && !this.isExternalHold());
+      modePending && !this.manual && !(this.isHeld() && !this.isExternalHold());
     if (this.closed) return;
     if (automaticDeferred && !this.preview.busy && !this.preview.recoveryPending) return;
     if (this.store.failure && this.preview.busy) this.preview.cancel('storage_unavailable');

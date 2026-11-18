@@ -95,6 +95,7 @@ export function createProduction(options: ProductionDependencies) {
   let shuttingDown = false;
   let exitIntentGeneration = 0;
   let updatePending = false;
+  let mulnxSelectionPending = false;
   let trialPending = false;
   let preparationGeneration = 0;
   let sessionGeneration = 0;
@@ -530,7 +531,9 @@ export function createProduction(options: ProductionDependencies) {
           try {
             await localHandoff;
           } catch (error) {
-            if (!sourceStateUnavailable(error)) throw error;
+            // The workbench has already ended locally. Keep the handoff
+            // unconfirmed and retryable in its owner without rolling back that result.
+            if (mode !== 'preparation' && !sourceStateUnavailable(error)) throw error;
           }
         }
       }
@@ -661,7 +664,8 @@ export function createProduction(options: ProductionDependencies) {
         !trialPending;
     },
     canPrepareMulnx: (task?: { id: string; revision: string }) =>
-      task
+      !mulnxSelectionPending &&
+      (task
         ? mode !== 'preparation' &&
           !busy &&
           !shuttingDown &&
@@ -671,7 +675,7 @@ export function createProduction(options: ProductionDependencies) {
           lastEnteredId === task.id &&
           revision === task.revision &&
           !preparationCancelled(task.id)
-        : mode === 'preparation',
+        : mode === 'preparation'),
     // Exit restores owned launch options before finishing the production state.
     canCleanupMulnx: () => mode === 'preparation' || (exitFrozen && shuttingDown),
     configureCameraSession: (expectedRevision: string, commit: () => void) => {
@@ -694,7 +698,7 @@ export function createProduction(options: ProductionDependencies) {
     },
     isTrialPending: () => trialPending,
     reserveTrialOperation: (allowShutdownCleanup = false) => {
-      if (!trialPending || busy || (shuttingDown && !allowShutdownCleanup) || updatePending)
+      if (!trialPending || busy || ((shuttingDown || updatePending) && !allowShutdownCleanup))
         return false;
       busy = true;
       return true;
@@ -713,6 +717,10 @@ export function createProduction(options: ProductionDependencies) {
     setTrialPreparation: () => {
       mode = 'preparation';
       revision = randomUUID();
+    },
+    deferTrialObsExit: async () => {
+      obsExitState = 'unconfirmed';
+      await options.obsExit.record('unconfirmed');
     },
     prepareTrial: async (commit: () => Promise<void>): Promise<boolean> => {
       if (
@@ -735,6 +743,24 @@ export function createProduction(options: ProductionDependencies) {
     },
     setTrialPending: (value: boolean) => {
       trialPending = value;
+    },
+
+    withMulnxSelection: async (commit: () => Promise<void>): Promise<boolean> => {
+      if (
+        mode !== 'preparation' ||
+        trialPending ||
+        shuttingDown ||
+        updatePending ||
+        mulnxSelectionPending
+      )
+        return false;
+      mulnxSelectionPending = true;
+      try {
+        await commit();
+        return true;
+      } finally {
+        mulnxSelectionPending = false;
+      }
     },
 
     withResourceActivation: async (commit: () => Promise<void>): Promise<boolean> => {
@@ -761,8 +787,7 @@ export function createProduction(options: ProductionDependencies) {
     },
     canStartObsOutput: () => !updatePending,
     reserveUpdate: () => {
-      if (trialPending || mode !== 'preparation' || busy || shuttingDown || updatePending)
-        return false;
+      if (shuttingDown || updatePending) return false;
       updatePending = true;
       return true;
     },

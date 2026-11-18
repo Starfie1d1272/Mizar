@@ -43,6 +43,7 @@ const stateSchema = z
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
+    monitorDisablePending: z.boolean().optional(),
     previewMonitorLeases: z
       .array(
         z

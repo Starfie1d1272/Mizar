@@ -500,7 +500,6 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
     use std::io::Write;
 
     const FILE_LIMIT: u64 = 512 * 1024 * 1024;
-    const TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
     let (mut source, source_identity) = match checked(&path(executable).map_err(io::Error::other)?)
     {
         Ok(value) => value,
@@ -527,11 +526,13 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
         std::process::id(),
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
-    let result = (|| {
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let history = directory.as_path();
+    let capture_path = temporary.as_path();
+    let result = (move || -> io::Result<PathBuf> {
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         let mut copied = 0u64;
@@ -555,7 +556,7 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
         {
             return Err(io::Error::other("raw_console_changed_during_capture"));
         }
-        let target = directory.join(format!("{:x}.log", hasher.finalize()));
+        let target = history.join(format!("{:x}.log", hasher.finalize()));
         if target.exists() {
             let (mut existing, _) = checked(&target)?;
             let mut hash = Sha256::new();
@@ -570,33 +571,124 @@ fn preserve_previous_console(log: &DesktopLog, executable: &Path) -> io::Result<
             {
                 return Err(io::Error::other("raw_console_existing_copy_corrupt"));
             }
-            return Ok(());
-        }
-        let mut total = copied;
-        let mut count = 0;
-        for entry in fs::read_dir(&directory)? {
-            let entry = entry?;
-            if entry.path() == temporary {
-                continue;
-            }
-            let metadata = fs::symlink_metadata(entry.path())?;
-            if !metadata.is_file() || !plain(&metadata) {
-                return Err(io::Error::other("raw_console_history_unsafe"));
-            }
-            count += 1;
-            total += metadata.len();
-        }
-        if count >= 16 || total > TOTAL_LIMIT {
-            return Err(io::Error::other("raw_console_history_budget"));
+            return Ok(target);
         }
         output.sync_all()?;
         drop(output);
-        // Hard-link commits without replacing an existing file on either platform.
-        fs::hard_link(&temporary, &target)?;
+        fs::hard_link(capture_path, &target)?;
+        Ok(target)
+    })();
+    if let Err(error) = fs::remove_file(&temporary) {
+        log.event(
+            "cs2_console_history",
+            "cleanup_failed",
+            Some(&error.to_string()),
+        );
+    }
+    let target = result?;
+    if let Err(error) = rotate_console_history(&directory, &target) {
+        log.event(
+            "cs2_console_history",
+            "rotation_failed",
+            Some(&error.to_string()),
+        );
+    }
+    Ok(())
+}
+
+fn rotate_console_history(directory: &Path, keep: &Path) -> io::Result<()> {
+    const COPIES_LIMIT: usize = 16;
+    const TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+    parents(&directory.join("probe"))?;
+    let mut copies = Vec::new();
+    let mut count = 0;
+    let mut total = 0u64;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(hash) = name.to_str().and_then(|name| name.strip_suffix(".log")) else {
+            continue;
+        };
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !metadata.is_file() || !plain(&metadata) {
+            continue;
+        }
+        count += 1;
+        total = total.saturating_add(metadata.len());
+        if path != keep {
+            copies.push((metadata.modified()?, path, metadata.len()));
+        }
+    }
+    copies.sort_unstable();
+    let mut remove_error = None;
+    for (_, path, bytes) in copies {
+        if count <= COPIES_LIMIT && total <= TOTAL_LIMIT {
+            break;
+        }
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                remove_error = Some(error);
+                continue;
+            }
+        }
+        count -= 1;
+        total -= bytes;
+    }
+    if count > COPIES_LIMIT || total > TOTAL_LIMIT {
+        return Err(remove_error.unwrap_or_else(|| io::Error::other("raw_console_history_budget")));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn console_history_rotates_owned_copies_and_keeps_current_capture() -> io::Result<()> {
+    use std::time::{Duration, SystemTime};
+
+    let temp = std::env::temp_dir().canonicalize()?;
+    let root = temp.join(format!(
+        "mizar-console-history-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    // Windows canonicalize returns a verbatim path; use the ordinary path form
+    // that the Host uses so parent verification has the same drive root.
+    #[cfg(windows)]
+    let root = PathBuf::from(root.to_string_lossy().trim_start_matches(r"\\?\"));
+    fs::create_dir(&root)?;
+    let result = (|| -> io::Result<()> {
+        let keep = root.join(format!("{:064x}.log", 0));
+        let old = root.join(format!("{:064x}.log", 1));
+        let other = root.join("manual.log");
+        for index in 0..17 {
+            let path = root.join(format!("{index:064x}.log"));
+            File::create(path)?.set_modified(
+                SystemTime::UNIX_EPOCH + Duration::from_secs(index + 1_600_000_000),
+            )?;
+        }
+        fs::write(&other, b"other")?;
+        rotate_console_history(&root, &keep)?;
+        assert!(keep.is_file());
+        assert!(!old.exists());
+        assert_eq!(fs::read(&other)?, b"other");
+        assert_eq!(fs::read_dir(&root)?.count(), 17);
         Ok(())
     })();
-    let cleanup = fs::remove_file(&temporary);
-    result.and(cleanup)
+    result.and(fs::remove_dir_all(root))
 }
 
 /// The caller must prove the actual PID, creation time and executable before constructing.

@@ -130,7 +130,8 @@ export class ProgramSceneController {
   }
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
-    if (this.resourceActivationPending) return '官方素材正在激活，请完成后再切换场景。';
+    if (this.resourceActivationPending && id !== 'waiting')
+      return '官方素材正在激活，请完成后再切换场景。';
     if (this.updatePending && id !== 'waiting')
       return 'Mizar 正在准备升级，请完成升级后再开始制作。';
     const { operator, program } = this.projections.getCurrent();

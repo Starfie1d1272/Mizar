@@ -618,15 +618,15 @@ export class ResourceStore {
     if (this.deletingPacks.has(packId)) throw new ResourceStoreError('resource_deleting');
     const requested = rollback ? entry.previous : entry.prepared;
     if (!requested || !this.options.activateWhenSafe) return false;
+    const candidate = await this.cached(
+      packId,
+      requested.id,
+      signal,
+      rollback ? 'rollback' : 'cache',
+    );
     let committed = false;
     const accepted = await this.options.activateWhenSafe(async () => {
       if (committed) throw new ResourceStoreError('resource_activation_invalid');
-      const candidate = await this.cached(
-        packId,
-        requested.id,
-        signal,
-        rollback ? 'rollback' : 'cache',
-      );
       signal.throwIfAborted();
       await this.persist(packId, {
         active: candidate.id,

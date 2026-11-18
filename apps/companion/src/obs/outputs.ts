@@ -97,6 +97,7 @@ export class ObsOutputController {
   private connecting: Promise<void> | undefined;
   private reading: Promise<void> | undefined;
   private retry: ReturnType<typeof setTimeout> | undefined;
+  private reconnectDelay = RETRY_MS;
   private closed = false;
   private ready = false;
   private hasConnected = false;
@@ -275,7 +276,7 @@ export class ObsOutputController {
     this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
   }
 
-  private invalidate(client?: OBSWebSocket): void {
+  private invalidate(client?: OBSWebSocket, retry = true): void {
     if (client && this.client !== client) return;
     this.mediaInputUuids.clear();
     this.mediaInputGeneration++;
@@ -299,17 +300,21 @@ export class ObsOutputController {
     this.reading = undefined;
     for (const kind of kinds) this.update(kind, 'unknown', null);
     if (old) void old.disconnect().catch(() => undefined);
-    if (!this.closed && !this.retry) {
+    if (retry && !this.closed && !this.retry) {
       this.retry = setTimeout(() => {
         this.retry = undefined;
         void this.read().catch(() => undefined);
-      }, RETRY_MS);
+      }, this.reconnectDelay);
       this.retry.unref();
+      this.reconnectDelay = Math.min(15_000, this.reconnectDelay * 2);
     }
   }
 
   reset(): void {
-    this.invalidate();
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    this.reconnectDelay = RETRY_MS;
+    this.invalidate(undefined, false);
   }
 
   async close(): Promise<void> {
@@ -371,8 +376,7 @@ export class ObsOutputController {
     if (this.closed) throw new Error('OBS outputs closed');
     if (this.ready) return;
     if (this.connecting) return this.connecting;
-    clearTimeout(this.retry);
-    this.retry = undefined;
+    if (this.retry) throw new Error('OBS reconnect scheduled');
     const generation = this.generation;
     const client = new OBSWebSocket();
     this.client = client;
@@ -548,6 +552,7 @@ export class ObsOutputController {
         this.programIdentity = identity;
         if (!current()) throw new Error('OBS connection superseded');
         this.ready = true;
+        this.reconnectDelay = RETRY_MS;
         this.outputObservationGeneration++;
         this.hasConnected = true;
       } catch (error) {

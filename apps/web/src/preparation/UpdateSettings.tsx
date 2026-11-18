@@ -15,7 +15,6 @@ export interface UpdateStatus {
     | 'installing'
     | 'manual'
     | 'error';
-  productionRevision: string;
   automatic: boolean;
   notificationPending?: boolean;
   notificationSafe?: boolean;
@@ -46,7 +45,6 @@ export interface UpdateStatus {
   transferStage?: 'downloading' | 'verifying';
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
-  canResumeAutomatic?: boolean;
   lastResult?: 'installed' | 'restored' | 'recovery-required' | 'cancelled' | 'failed' | null;
 }
 const failures: Record<string, string> = {
@@ -88,15 +86,13 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
   const [diagnosticFeedback, setDiagnosticFeedback] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const installing = useRef(false);
-  const resumed = useRef(false);
-  const requestedRevision = useRef<string | null>(null);
   const desktop = Boolean(window.__TAURI_INTERNALS__);
   const applyStatus = useCallback((next: UpdateStatus) => {
     setStatus(next);
     if (
       next.phase === 'error' ||
       next.error === 'update_cancelled' ||
-      (next.phase === 'ready' && next.installBlockedReason && !next.canResumeAutomatic)
+      (next.phase === 'ready' && next.installBlockedReason)
     )
       setRequested(false);
   }, []);
@@ -136,25 +132,14 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
   }, [applyStatus]);
   useEffect(() => {
     if (!requested || !status || installing.current) return;
-    if (status.productionRevision !== requestedRevision.current) {
-      setRequested(false);
-      return;
-    }
     if (status.phase === 'error' || status.error === 'update_cancelled') return;
     if (status.phase !== 'ready') return;
-    if (status.installBlockedReason && (!status.canResumeAutomatic || resumed.current)) {
-      return;
-    }
+    if (status.installBlockedReason) return;
     installing.current = true;
     const complete = async () => {
       try {
-        if (status.installBlockedReason) {
-          resumed.current = true;
-          applyStatus(await sendAction('resume'));
-        } else {
-          await desktopInvoke('install_update');
-          setRequested(false);
-        }
+        await desktopInvoke('install_update');
+        setRequested(false);
       } catch (reason) {
         setRequested(false);
         setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
@@ -163,7 +148,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       }
     };
     void complete();
-  }, [requested, status, applyStatus]);
+  }, [requested, status]);
   const action = async (name: string, enabled?: boolean) => {
     if (busy || installing.current) return;
     if (name === 'cancel') setRequested(false);
@@ -181,8 +166,6 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
   const update = async () => {
     if (busy || !desktop || !status) return;
     setError('');
-    resumed.current = false;
-    requestedRevision.current = status.productionRevision;
     if (status.phase === 'available') {
       setBusy(true);
       try {
@@ -248,7 +231,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
   const phase = status?.phase;
   const waiting = busy || phase === 'checking' || phase === 'installing';
   const downloading = phase === 'downloading';
-  const blocked = status?.installBlockedReason && !status.canResumeAutomatic;
+  const blocked = status?.installBlockedReason;
   const visibleDetails = status?.failureDetails?.filter(
     (detail) =>
       (status.error && status.error !== 'update_cancelled') ||

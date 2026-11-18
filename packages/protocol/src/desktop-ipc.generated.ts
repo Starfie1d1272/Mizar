@@ -397,6 +397,7 @@ export const desktopIpc = {
     args: z.strictObject({ exportId: z.string() }),
     result: z.boolean(),
   },
+  save_local_logs: { args: z.undefined(), result: z.boolean() },
   select_cs2_installation: {
     args: z.strictObject({ executable: z.boolean() }),
     result: z.boolean(),

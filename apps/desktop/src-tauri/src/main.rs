@@ -458,7 +458,7 @@ fn run_desktop(
         .manage(pending_update.clone())
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
+            if !["gsi_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "save_local_logs", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),
@@ -900,6 +900,12 @@ fn run_desktop(
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     updates::recheck(&cleanup_host)?;
+                    let installing = cleanup_host
+                        .state::<updates::PendingUpdate>()
+                        .stage
+                        .lock()
+                        .map_err(|_| "更新状态不可用。")?
+                        .is_some();
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let _operation = observer_workspace::cleanup_operation();
@@ -946,23 +952,55 @@ fn run_desktop(
                             if service_stopped {
                                 cs2.finish_with_service_stopped(service_stopped)
                             } else {
-                                production_exit::finish_managed_game(
+                                let mut native_game_finished = false;
+                                let result = production_exit::finish_managed_game(
                                     &cleanup_host.state::<DesktopLog>(),
                                     |requires_proof| {
                                         cs2.finish_with_service_stopped(false)?;
                                         if requires_proof {
                                             cs2.confirm_game_stopped()?;
                                         }
+                                        native_game_finished = true;
                                         Ok(())
                                     },
-                                )
+                                );
+                                match result {
+                                    Err(error) if native_game_finished => {
+                                        cleanup_host.state::<DesktopLog>().event(
+                                            "managed_source",
+                                            "deferred",
+                                            Some(&error),
+                                        );
+                                        Ok(())
+                                    }
+                                    result => result,
+                                }
                             }
                         },
                     );
                     let production = production_task
                         .join()
                         .unwrap_or_else(|_| Err("制作收尾结果未确认。".into()));
-                    production_exit::cleanup_results(production, cleanup)?;
+                    if let Err(error) = production {
+                        cleanup_host.state::<DesktopLog>().event(
+                            "production_finish",
+                            "deferred",
+                            Some(&error),
+                        );
+                    }
+                    if let Err(error) = cleanup {
+                        if installing {
+                            return Err(error);
+                        }
+                        // Ordinary exit leaves unconfirmed game recovery with the
+                        // native journal. The update path additionally needs to
+                        // ensure it can hand off the program and its resources.
+                        cleanup_host.state::<DesktopLog>().event(
+                            "cs2_exit_recovery",
+                            "deferred",
+                            Some(&error),
+                        );
+                    }
                     updates::recheck(&cleanup_host)
                 })
                 .await
@@ -1150,6 +1188,25 @@ fn start_gui(
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--export-logs") {
+        let result = (|| {
+            let [_, destination] = args.as_slice() else {
+                return Err("用法：Mizar.exe --export-logs <日志包.zip>".into());
+            };
+            let root = host_runtime::bundle_root()?;
+            let state = startup_log::writable_root(
+                &root,
+                std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
+            )
+            .map_err(|error| error.to_string())?;
+            support_export::save_local_logs(&state, Path::new(destination))
+        })();
+        if let Err(error) = result {
+            failure_dialog(&error, None);
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--observer-process") {
         std::process::exit(observer_job::run(&args[1..]).unwrap_or_else(|error| {
             eprintln!("observer_owner: {error}");

@@ -507,6 +507,12 @@ function WorkspaceDockContent() {
       setBusy(false);
     }
   }
+  const navigate = (open: Promise<unknown>) => {
+    void open.catch((error: unknown) => {
+      if (!(error instanceof HostWindowControlError))
+        setErrorMessage(error instanceof Error ? error.message : '工具窗口未能打开。');
+    });
+  };
   const mode = sceneState?.director?.mode;
   const connected = obs?.connection === 'connected';
   const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
@@ -640,9 +646,7 @@ function WorkspaceDockContent() {
           >
             返回游戏
           </Button>
-          <Button disabled={busy} onClick={() => void action(() => openTool('bp'))}>
-            地图资料
-          </Button>
+          <Button onClick={() => navigate(openTool('bp'))}>地图资料</Button>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>
               BP · {bp.revealedCount} / {bp.projection.steps.length}
@@ -667,12 +671,7 @@ function WorkspaceDockContent() {
                   ? 'OBS · 需要密码'
                   : 'OBS · 未连接'}
           </span>
-          <Button
-            disabled={busy}
-            onClick={() => void action(() => openPreparation('/settings?tab=obs'))}
-          >
-            OBS 配置
-          </Button>
+          <Button onClick={() => navigate(openPreparation('/settings?tab=obs'))}>OBS 配置</Button>
         </div>
         <ObsOutputControls onError={setErrorMessage} />
         <RivalHubLiveSourcePanel compact />
@@ -684,13 +683,13 @@ function WorkspaceDockContent() {
       <Dialog open={dockDetail === 'tools'} title="更多工具" onClose={() => setDockDetail(null)}>
         <div className="workspace-tools">
           {showCamera ? (
-            <Button onClick={() => void action(() => openPreparation('/settings?tab=camera'))}>
+            <Button onClick={() => navigate(openPreparation('/settings?tab=camera'))}>
               配置运镜
             </Button>
           ) : null}
           <Button
             onClick={() =>
-              void action(() =>
+              navigate(
                 window.__TAURI_INTERNALS__
                   ? desktopInvoke('open_tool', { tool: 'game-picture' })
                   : openPreparation('/workspace/game-picture'),
@@ -699,9 +698,7 @@ function WorkspaceDockContent() {
           >
             调整游戏画质
           </Button>
-          <Button disabled={busy} onClick={() => void action(() => openTool('hud'))}>
-            HUD 编辑器
-          </Button>
+          <Button onClick={() => navigate(openTool('hud'))}>HUD 编辑器</Button>
           <Button
             onClick={() =>
               void openTool('diagnostics').catch((reason: unknown) =>
@@ -825,9 +822,7 @@ function WorkspaceDockContent() {
           </span>
         ) : null}
         <div className="workspace-footer-actions">
-          <Button disabled={busy} onClick={() => void action(() => openPreparation('/settings'))}>
-            返回设置
-          </Button>
+          <Button onClick={() => navigate(openPreparation('/settings'))}>返回设置</Button>
           <Button
             className="workspace-exit"
             disabled={!production || busy || Boolean(exit?.busy)}

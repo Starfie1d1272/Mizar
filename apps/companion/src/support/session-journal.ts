@@ -262,13 +262,23 @@ export class SessionJournal {
           : {}),
       }) + '\n';
     const event = JSON.parse(line) as Record<string, unknown>;
-    // Protect operation and business evidence; background failures use the same
-    // bounded retention as other observations, even while the process stays open.
+    // Protect user operations and business decisions. Routine runtime and live
+    // observations may rotate without pinning a segment for the whole session.
+    const kind = String(event.kind ?? event.stage);
+    const evidenceStage =
+      kind === 'business_evidence' ? (event.evidence as { stage?: unknown } | null)?.stage : kind;
     const critical = Boolean(
-      event.taskId || String(event.kind ?? event.stage).startsWith('business_'),
+      event.taskId ||
+      (typeof evidenceStage === 'string' &&
+        evidenceStage.startsWith('business_') &&
+        evidenceStage !== 'business_runtime' &&
+        evidenceStage !== 'business_live'),
     );
     const bytes = Buffer.byteLength(line);
-    if (this.pendingBytes + bytes > SESSION_LIMITS.pendingBytes) {
+    const pendingLimit = critical
+      ? SESSION_LIMITS.pendingBytes
+      : SESSION_LIMITS.pendingBytes * 0.75;
+    if (this.pendingBytes + bytes > pendingLimit) {
       this.dropped++;
       receipt?.reject(new Error('session_journal_pending_budget'));
       return;

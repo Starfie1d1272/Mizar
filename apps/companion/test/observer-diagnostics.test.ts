@@ -11,8 +11,43 @@ import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { SessionJournal } from '../src/support/session-journal.js';
 import { SupportExports } from '../src/support/export-job.js';
+import { runArchiveWorker } from '../src/support/archive-worker.js';
 import { technicalProjection } from '../src/support/technical-projection.js';
 import { errorEvidence } from '../src/updates/diagnostics.js';
+
+test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed shards', async (t) => {
+  const output = await mkdtemp(join(tmpdir(), 'mizar-coverage-overflow-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const gaps = Array.from({ length: 3500 }, (_, index) => ({
+    source: `session-${index}.ndjson`,
+    reason: 'source_not_safely_fixed',
+    cause: { stack: 'fixed-source check\n'.repeat(40) },
+  }));
+  assert.ok(Buffer.byteLength(JSON.stringify(gaps)) > 2 * 1024 * 1024);
+  let result: Record<string, unknown> | undefined;
+  runArchiveWorker(
+    { sources: [], gaps, output, exportId: 'test', range: {}, snapshot: {} },
+    (message) => {
+      result = message;
+    },
+  );
+  assert.equal(result?.phase, 'ready');
+  assert.equal(result?.knownGaps, gaps.length);
+  const zip = unzipSync(await readFile(join(output, 'part-1.zip')));
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  assert.equal(coverage.gapCount, gaps.length);
+  const details = coverage.coverageFiles.flatMap(({ name }: { name: string }) =>
+    Buffer.from(zip[name]!)
+      .toString()
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  );
+  assert.deepEqual(
+    details.map((entry: { value: unknown }) => entry.value),
+    gaps,
+  );
+});
 
 test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {
   const source = 'ahead:observer';
@@ -319,7 +354,10 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
   const good = `desktop-${randomUUID()}.ndjson`;
   const missingHost = `desktop-${randomUUID()}.ndjson`;
   const changedHost = `document-${randomUUID()}.ndjson`;
-  const fixedContent = '{"eventId":"safely-fixed-host-event"}\n';
+  const unavailableAtPrepare = `document-${randomUUID()}.ndjson`;
+  const fixedContent =
+    '{"eventId":"safely-fixed-host-event"}\n' +
+    '{"eventId":"reported-host-loss","kind":"native_diagnostic_coverage_gap","evidence":{"dropped":2}}\n';
   const fixed = {
     bytes: Buffer.byteLength(fixedContent),
     sha256: createHash('sha256').update(fixedContent).digest('hex'),
@@ -329,6 +367,7 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     writeFile(join(logs, emptyOld), ''),
     writeFile(join(logs, successor), 'post-cutoff'),
     writeFile(join(logs, unknown), 'unfixed-original'),
+    writeFile(join(logs, unavailableAtPrepare), 'unverified-by-host'),
     writeFile(join(logs, good), fixedContent),
     writeFile(join(logs, changedHost), fixedContent.replace('safely', 'edited')),
     writeFile(
@@ -348,6 +387,9 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
           unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
           emptyAtCutoffSegments: [emptyOld],
           postCutoffSegments: [successor],
+          unavailableSegments: [
+            { name: unavailableAtPrepare, reason: 'host_pin_source_read_failed' },
+          ],
         },
       }),
     ),
@@ -382,7 +424,26 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     .map(([, bytes]) => Buffer.from(bytes).toString())
     .join('');
   assert.match(events, /safely-fixed-host-event/);
-  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original/);
+  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original|unverified-by-host/);
+  const generated = JSON.parse(
+    await readFile(join(exports.directory, job.exportId, 'generated.json'), 'utf8'),
+  );
+  assert.equal(generated.completeKnownSources, false);
+  assert.equal(
+    coverage.gaps.filter(
+      ({ source, phase, reason }: { source: string; phase: string; reason: string }) =>
+        source === unavailableAtPrepare &&
+        phase === 'prepare' &&
+        reason === 'host_pin_source_read_failed',
+    ).length,
+    1,
+  );
+  assert.ok(
+    coverage.gaps.some(
+      (entry: { reason: string; eventId?: string }) =>
+        entry.reason === 'native_event_loss_reported' && entry.eventId === 'reported-host-loss',
+    ),
+  );
   assert.deepEqual(
     coverage.gaps
       .filter((entry: { source: string }) => [missingHost, changedHost].includes(entry.source))

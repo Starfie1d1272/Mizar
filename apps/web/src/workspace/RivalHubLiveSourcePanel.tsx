@@ -245,12 +245,11 @@ export function RivalHubLiveSourcePanel({
     }
   };
   const run = async (selected: SyncAction, target = latest.current) => {
+    const stopping = selected.command === '/operator/rivalhub/source/release';
     if (
       inFlight.current ||
       !target ||
-      readError ||
-      feedback?.uncertain ||
-      latest.current?.sourceCommandPending ||
+      (!stopping && (readError || feedback?.uncertain || latest.current?.sourceCommandPending)) ||
       scope(target) !== scope(latest.current)
     )
       return;
@@ -300,7 +299,7 @@ export function RivalHubLiveSourcePanel({
         message = selected.command.endsWith('/retry-stop')
           ? (body?.message ?? '停止交接重试已提交，请重新检查网站同步状态。')
           : selected.command.endsWith('/release')
-            ? '已停止本机网站同步。'
+            ? (body?.message ?? '已停止本机网站同步。')
             : selected.command.endsWith('/refresh') ||
                 selected.command === '/operator/rivalhub/output/retry'
               ? (body?.message ?? '比赛资料已刷新。')
@@ -382,7 +381,7 @@ export function RivalHubLiveSourcePanel({
       ) : null}
       {isCurrentSource ? (
         <Button
-          disabled={pending || readError}
+          disabled={busy}
           onClick={() =>
             void run({ label: '停止本机网站同步', command: '/operator/rivalhub/source/release' })
           }

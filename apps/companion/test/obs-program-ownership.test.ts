@@ -304,7 +304,7 @@ it('does not replace a deleted original scene by a same-name scene or discard th
   expect(f.writes).not.toContain('SetCurrentProgramScene');
 });
 
-it('production finish restores the original program after the independent website handoff', async () => {
+it('production finish restores the original program while the website handoff awaits retry', async () => {
   const f = await rig();
   const managed = await f.bind();
   await managed.prepareManagedCollection!(true, managed);
@@ -326,7 +326,10 @@ it('production finish restores the original program after the independent websit
     binding: () => undefined,
     waitForBroadcast: async () => {},
     source: {
-      handoffForExit: async () => {},
+      handoffForExit: async () => {
+        throw new Error('rivalhub_source_capture_unconfirmed');
+      },
+      retryExitHandoffs: async () => {},
       clearStats: () => {},
     } as unknown as ProductionDependencies['source'],
     obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
@@ -345,7 +348,16 @@ it('production finish restores the original program after the independent websit
     preparationId: null,
   });
   expect(finished.ok).toBe(true);
+  expect(production.get().mode).toBe('preparation');
+  expect(production.get().releaseHandoffState).toBe('unconfirmed');
   expect(await production.waitForObsExit()).toBe('confirmed');
   expect(f.state.collection).toBe('个人');
   expect(f.state.scene).toBe('personal-program');
+  const retry = await production.change({
+    action: 'retry-handoff',
+    expectedRevision: production.get().revision,
+    preparationId: null,
+  });
+  expect(retry.ok).toBe(true);
+  expect(production.get().releaseHandoffState).toBe('recorded');
 });

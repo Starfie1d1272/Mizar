@@ -4,15 +4,181 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import fastify from 'fastify';
 import { buildApp } from '../src/app.js';
 import type { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { closeWebsiteOutput } from '../src/output/shutdown.js';
 import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
+import { registerProductionReadiness } from '../src/program-scenes/readiness.js';
+import { ObsVideoError } from '../src/obs/video-transaction.js';
+import { registerUpdateRoutes } from '../src/updates/routes.js';
+import { UpdateManager } from '../src/updates/manager.js';
+import { updateManifestSchema } from '../src/updates/contract.js';
 
 const host = '127.0.0.1:3000';
 const origin = `http://${host}`;
+
+test('readiness retains local facts when a concurrent OBS change invalidates its snapshot', async (t) => {
+  const app = fastify();
+  t.after(() => app.close());
+  type Readers = Parameters<typeof registerProductionReadiness>[1];
+  const projection = {
+    operator: {
+      matchContext: { summary: {} },
+      identity: { state: 'matched' },
+      runtime: { telemetryFreshness: 'fresh' },
+    },
+    radar: { telemetryFreshness: 'stale' },
+  } as ReturnType<Readers['projection']>;
+  const scenes = {
+    active: 'waiting',
+    available: ['waiting'],
+    blocked: {},
+  } as ReturnType<Readers['scenes']>;
+  registerProductionReadiness(app, {
+    projection: () => projection,
+    scenes: () => scenes,
+    obs: async () => {
+      throw new ObsVideoError('obs_observation_changed', 'Discard the mixed OBS generation');
+    },
+  });
+  const response = await app.inject('/local/v1/readiness');
+  assert.equal(response.statusCode, 200);
+  const items = response.json<{ id: string; ready: boolean; reason: string }[]>();
+  assert.equal(items.find((item) => item.id === 'match')?.ready, true);
+  assert.equal(items.find((item) => item.id === 'game-data')?.ready, true);
+  assert.equal(items.find((item) => item.id === 'obs')?.ready, false);
+  assert.equal(items.find((item) => item.id === 'obs')?.reason, '正在刷新 OBS 状态');
+});
+
+test('install reuses a recent authenticated candidate, rechecks stale trust and rejects changed bytes', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-install-'));
+  const updates = join(stateRoot, 'updates');
+  const directory = 'download-fixture';
+  const bytes = Buffer.from('fixture bytes');
+  const manifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Fixture',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  const installer = join(updates, directory, manifest.installer.name);
+  await mkdir(join(updates, directory), { recursive: true });
+  await writeFile(installer, bytes);
+  await writeFile(join(updates, 'ready.json'), JSON.stringify({ directory, manifest }));
+  let now = 100_000;
+  let checks = 0;
+  let online = true;
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    now: () => now,
+    source: {
+      latest: async () => {
+        checks++;
+        if (!online) throw new Error('update_network_failed');
+        return manifest;
+      },
+    },
+  });
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  await manager.check();
+  online = false;
+  assert.equal((await manager.prepare()).version, manifest.version);
+  assert.equal(checks, 1);
+  manager.release();
+  now += 60_001;
+  await assert.rejects(
+    manager.prepare(),
+    (error) =>
+      error instanceof Error &&
+      error.message === 'update_recheck_required' &&
+      error.cause instanceof Error &&
+      error.cause.message === 'update_network_failed',
+  );
+  assert.equal(checks, 2);
+  online = true;
+  await manager.check();
+  await writeFile(installer, Buffer.alloc(bytes.length));
+  await assert.rejects(manager.prepare(), /update_download_corrupt/);
+  assert.equal(checks, 3);
+  assert.equal(manager.status().phase, 'available');
+  await assert.rejects(readFile(installer), { code: 'ENOENT' });
+});
+
+test('update staging survives unavailable OBS and only a known active output blocks handoff', async (t) => {
+  const app = fastify();
+  t.after(() => app.close());
+  type Options = Parameters<typeof registerUpdateRoutes>[1];
+  let reserved = false;
+  let active: boolean | null = true;
+  const routes = registerUpdateRoutes(app, {
+    manager: {
+      prepare: async () => ({ version: '1.11.21' }),
+      status: () => ({ phase: 'installing' }),
+      release: () => {},
+      close: () => {},
+    } as unknown as Options['manager'],
+    production: {
+      reserveUpdate: () => {
+        reserved = true;
+        return true;
+      },
+      releaseUpdate: () => {
+        reserved = false;
+      },
+    } as unknown as Options['production'],
+    scenes: { setUpdatePending: () => {} } as unknown as Options['scenes'],
+    controlToken: 'update-test-token',
+    originPolicy: { mode: 'loopback' } as Options['originPolicy'],
+    obs: async () => {
+      const stream = {
+        active,
+        phase: active === true ? 'active' : 'unknown',
+        pending: null,
+        revision: 'stream',
+      } as const;
+      return { stream, record: { ...stream, active: null }, preparation: 'cleanup_pending' };
+    },
+  });
+  const command = (action: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/updates/install-plan',
+      headers: { 'x-runtime-token': 'update-test-token' },
+      payload: { action, attemptId: randomAttempt },
+    });
+  const randomAttempt = randomUUID();
+  assert.equal((await command('prepare')).statusCode, 200);
+  assert.equal(reserved, false);
+  active = null;
+  assert.equal((await command('commit')).statusCode, 200);
+  assert.equal((await command('recheck')).statusCode, 200);
+  assert.equal(await routes.beforeStop(), null);
+  active = true;
+  assert.match((await routes.beforeStop()) ?? '', /推流或录制/);
+  assert.equal(reserved, false);
+});
 
 test('website shutdown cannot acknowledge a failed local source commit', async () => {
   const closed: string[] = [];
@@ -47,7 +213,6 @@ test('Demo recovery retains its marker and remains isolated until output restora
   const requestId = randomUUID();
   const marker = { version: 'mizar.demo-test.v1', requestId, teamAName: 'A', teamBName: 'B' };
   await writeFile(markerPath, JSON.stringify(marker));
-  let obsReady = false;
   let outputQuarantined = true;
   let failFormalRestore = true;
   let failOutputRestore = true;
@@ -63,12 +228,14 @@ test('Demo recovery retains its marker and remains isolated until output restora
       obs: async () => undefined,
       scenes: {
         get: () => ({ revision: 'observed-scene' }),
-        selectWaitingForExit: async () =>
-          obsReady ? { ok: true } : { ok: false, message: 'OBS offline' },
+        selectWaitingForExit: async () => ({ ok: false, message: 'OBS offline' }),
       } as unknown as Options['scenes'],
       production: {
         setTrialPreparation: () => {},
         setTrialPending: () => {},
+        deferTrialObsExit: async () => {
+          stages.push('obs_recovery_handoff');
+        },
         reserveTrialOperation: () => true,
         releaseTrialOperation: () => {},
       } as unknown as Options['production'],
@@ -87,11 +254,10 @@ test('Demo recovery retains its marker and remains isolated until output restora
   assert.equal((await demo.command({ action: 'finish', requestId })).code, 200);
   assert.equal(demo.get().phase, 'recovery');
   assert.equal(demo.canAcceptGsi(), false);
-  assert.equal((await demo.command({ action: 'complete', requestId })).code, 200);
+  assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);
   assert.deepEqual(readDemoTestRecovery(markerPath), { ...marker, localRestored: true });
   assert.equal(demo.get().active, true);
-  obsReady = true;
-  assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);
+  assert.ok(stages.includes('obs_recovery_handoff'));
   assert.ok(stages.includes('formal_restore'));
   failFormalRestore = false;
   assert.equal((await demo.command({ action: 'complete', requestId })).code, 409);

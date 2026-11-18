@@ -60,13 +60,9 @@ import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avat
 import { ProductionGuidanceStore } from './program-scenes/guidance.js';
 import { ProgramDirector } from './program-scenes/director.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
-import { productionReadiness } from './program-scenes/readiness.js';
+import { registerProductionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
-import {
-  createProduction,
-  productionHttpResponse,
-  registerProductionRoutes,
-} from './program-scenes/production.js';
+import { createProduction, registerProductionRoutes } from './program-scenes/production.js';
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
 import { REPLAY_IDS } from '@mizar/resource-pack-contract';
@@ -1116,11 +1112,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       return Promise.resolve();
     });
   }
-  app.get('/local/v1/readiness', async (_request, reply) => {
-    const obs = await obsAdapter?.status();
-    return reply
-      .header('cache-control', 'no-store')
-      .send(productionReadiness(projectionCoordinator.getCurrent(), sceneController.get(), obs));
+  registerProductionReadiness(app, {
+    projection: () => projectionCoordinator.getCurrent(),
+    scenes: () => sceneController.get(),
+    obs: async () => obsAdapter?.status(),
   });
   registerProgramSceneRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -1347,8 +1342,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       controller: matchContextController,
       canReleaseLocalSelection: () => localMatchExit?.canReleaseLocalSelection() ?? false,
       canConfirmLocalExit: () => localMatchExit?.canConfirmLocalExit() ?? false,
-      // The existing production owner serializes preparation mutations with enter/finish/update.
-      withLocalSelectionRelease: (commit) => production.withResourceActivation(commit),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
     registerLocalAssetRoutes(app, {
@@ -1447,8 +1440,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
       production,
       scenes: sceneController,
-      obs: async () => obsAdapter?.status(),
-      obsEpoch: () => obsAdapter?.outputObservationEpoch(),
+      obs: async () => obsAdapter?.outputStatus(false),
       mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
     });
   const guidance = new ProductionGuidanceStore();
@@ -1765,7 +1757,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
         canPrepare: production.canPrepareMulnx,
         canCleanup: production.canCleanupMulnx,
-        withSelection: production.withResourceActivation,
+        withSelection: production.withMulnxSelection,
         reconcileSelection: async () => {
           if (!cameraStore.hasPersistence) return true;
           return runtime.reconcileCameraSelection();
@@ -2165,18 +2157,23 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
       // Host must finish the owned game and configuration transaction while
       // this service is still available to keep the formal boundary isolated.
-      if (demoTest.get().active)
+      const trial = demoTest.get();
+      if (trial.active && !trial.localRestored)
         return reply.code(409).send({
           message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
         });
       // The capability-verified CLI stop uses the same transaction as both UIs.
       const shutdown = await production.shutdown();
-      const result = productionHttpResponse(shutdown.result);
-      if (!shutdown.result.ok) return reply.code(result.code).send(result.value);
       const updateBlocked = await updateExit?.beforeStop();
       if (updateBlocked) {
         await shutdown.cancel();
         return reply.code(409).send({ message: updateBlocked });
+      }
+      if (!shutdown.result.ok) {
+        request.log.warn(
+          { action: 'shutdown', reason: shutdown.result.failure },
+          '制作收尾待恢复，继续关闭本机服务',
+        );
       }
       setImmediate(product.stop);
       return reply.code(202).send({ status: 'stopping' });
@@ -2508,6 +2505,13 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         failures.push(error);
       }
     };
+    const closeDiagnostics = async (action: () => unknown | Promise<unknown>) => {
+      try {
+        await action();
+      } catch (error) {
+        app.log.warn({ err: error }, '诊断收尾未完成，已记录的日志仍可读取');
+      }
+    };
     clearInterval(directorTimer);
     await closeStep(() => runtimeObservation.close());
     await closeStep(() => presentationUnsubscribe());
@@ -2551,7 +2555,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     await closeStep(() => projectionCoordinator.close());
     await closeStep(() => programCueCoordinator.close());
     await closeStep(() => outputService.stopDelivery());
-    await closeStep(() => options.rivalhubConnection?.flushDiagnostics?.());
+    await closeDiagnostics(() => options.rivalhubConnection?.flushDiagnostics?.());
     await closeStep(() => programRuntime.close());
     await closeStep(() => localWebTransport.close());
     await closeStep(async () => {
@@ -2577,9 +2581,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     // Release delivery's source holds before producers need space for their final flush.
     // Final records remain in the journal for recovery on the next startup.
     diagnosticConsentTime = () => null;
-    await closeStep(() => diagnosticDelivery.close());
-    await closeStep(() => nativeSource?.close());
-    await closeStep(async () => {
+    await closeDiagnostics(() => diagnosticDelivery.close());
+    await closeDiagnostics(() => nativeSource?.close());
+    await closeDiagnostics(async () => {
       await performanceContext?.close();
       if (performanceContext) {
         const health = performanceContext.health();
@@ -2587,9 +2591,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           throw new Error('performance_context_close_unconfirmed');
       }
     });
-    await closeStep(() => unsubscribeObserverEvidence?.());
-    await closeStep(renewalObservations.clear);
-    await closeStep(async () => {
+    await closeDiagnostics(() => unsubscribeObserverEvidence?.());
+    await closeDiagnostics(renewalObservations.clear);
+    await closeDiagnostics(async () => {
       await sessionJournal?.close();
       if (sessionJournal) {
         const health = sessionJournal.health();

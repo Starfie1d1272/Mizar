@@ -244,15 +244,28 @@ export function MusicControls({
         <div className="music-player__monitor">
           <Button
             disabled={busy}
-            onClick={() => void send({ action: 'monitor', enabled: status.monitor !== 'enabled' })}
+            onClick={() =>
+              void send({
+                action: 'monitor',
+                enabled: status.monitor !== 'enabled' && !status.monitorDisablePending,
+              })
+            }
           >
-            {status.monitor === 'enabled' ? '关闭本机监听' : '开启本机监听'}
+            {status.monitorDisablePending
+              ? '重试关闭本机监听'
+              : status.monitor === 'enabled'
+                ? '关闭本机监听'
+                : '开启本机监听'}
           </Button>
           <span role="status">监听：{monitorLabel}</span>
         </div>
       </div>
       <p className="music-player__hint">使用 OBS 所在机器的监听设备；桌面采集可能回灌。</p>
-      {status.monitorPending ? (
+      {status.monitorDisablePending ? (
+        <p className="music-player__hint">
+          已保存关闭监听的请求，Mizar 会在可控制 OBS 监听时继续，直到确认关闭。
+        </p>
+      ) : status.monitorPending ? (
         <p className="music-player__hint">
           本机监听暂缓：设备关系无法确认，或当前 OBS 不支持同设备仅监听。音乐保持节目直出；请在 OBS
           选择未被桌面声音采集的监听设备，再开启监听并录制试听。

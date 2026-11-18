@@ -135,9 +135,12 @@ fn stop_inner(log: &DesktopLog, force: bool) -> Result<(), String> {
 
 /// The caller holds the game/observer operation lock.
 pub fn finish_locked(log: &DesktopLog) -> Result<(), String> {
-    let observer = stop_inner(log, false);
-    let hud = crate::observer_hud::restore(log);
-    production_exit::cleanup_results(observer, hud)
+    if let Err(error) = stop_inner(log, false) {
+        // The Host lease is already revoked. An absent response does not
+        // prevent the native HUD owner from restoring its own settings.
+        log.event("workspace_exit_observer", "stop_unconfirmed", Some(&error));
+    }
+    crate::observer_hud::restore(log)
 }
 
 fn verify_session(
@@ -293,7 +296,13 @@ pub async fn observer_command(
                     return Ok(());
                 }
                 let managed = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-                let cs2 = managed.try_lock().map_err(|_| "请等待游戏操作完成后重试。")?;
+                let cs2 = match managed.try_lock() {
+                    Ok(cs2) => cs2,
+                    Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        return Err("游戏状态不可用。".into())
+                    }
+                };
                 let game = crate::mulnx_launch::observer_control_snapshot(&cs2, &log);
                 drop(cs2);
                 automation = Some(game.is_some_and(|game| crate::mulnx_launch::observer_gateway_available(&game, &log)));

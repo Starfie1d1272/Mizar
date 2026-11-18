@@ -81,6 +81,7 @@ struct DeferredLog {
     lost_bytes: AtomicU64,
     first_lost_ms: AtomicU64,
     last_lost_ms: AtomicU64,
+    last_write_failure: Mutex<Option<Value>>,
 }
 fn add_count(counter: &AtomicU64, count: u64) {
     let mut current = counter.load(Ordering::Relaxed);
@@ -102,7 +103,7 @@ struct LogFile {
     sequence: u64,
     segment_name: String,
     document_segment_name: String,
-    active_segments: Vec<String>,
+    critical_segments: std::collections::HashSet<String>,
     // In-flight seal/hash work belongs to this same producer, not another ledger.
     pin_work: std::collections::HashMap<String, Vec<String>>,
     write_poisoned: bool,
@@ -112,6 +113,103 @@ struct LogFile {
 struct PinWork {
     inner: Arc<Mutex<LogFile>>,
     pin_id: String,
+}
+
+#[cfg(test)]
+#[test]
+fn retention_reclaims_ordinary_sealed_segments_in_the_current_run() -> io::Result<()> {
+    let directory = std::env::temp_dir().join(format!(
+        "mizar-host-retention-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::create_dir(&directory)?;
+    let result = (|| -> io::Result<()> {
+        let sealed = reserve_segment(&directory, "document")?;
+        let sealed_path = directory.join(&sealed);
+        fs::write(&sealed_path, [b'x'; 200])?;
+        let critical = reserve_segment(&directory, "desktop")?;
+        let critical_path = directory.join(&critical);
+        fs::write(&critical_path, [b'x'; 100])?;
+        let pinned = reserve_segment(&directory, "document")?;
+        let pinned_path = directory.join(&pinned);
+        fs::write(&pinned_path, [b'x'; 75])?;
+        let mut log = LogFile {
+            directory: directory.clone(),
+            identity: Value::Null,
+            limit: LOG_LIMIT,
+            page_loads: 0,
+            sequence: 0,
+            segment_name: reserve_segment(&directory, "desktop")?,
+            document_segment_name: reserve_segment(&directory, "document")?,
+            critical_segments: [critical].into_iter().collect(),
+            pin_work: [("in-flight".to_owned(), vec![pinned])]
+                .into_iter()
+                .collect(),
+            write_poisoned: false,
+            retention_issue: None,
+        };
+        DesktopLog::collect_segments(&mut log, 100 * 1024 * 1024 - 175)?;
+        assert!(!sealed_path.exists());
+        assert_eq!(fs::metadata(&critical_path)?.len(), 100);
+        assert_eq!(fs::metadata(&pinned_path)?.len(), 75);
+        assert!(fs::read_to_string(directory.join("host-retention.ndjson"))?.contains(&sealed));
+        Ok(())
+    })();
+    result.and(fs::remove_dir_all(directory))
+}
+
+#[cfg(test)]
+#[test]
+fn export_pin_keeps_old_safe_segments_when_one_source_cannot_be_prepared() -> Result<(), String> {
+    let directory = std::env::temp_dir().join(format!(
+        "mizar-host-export-pin-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    let result = (|| -> Result<(), String> {
+        let log = DesktopLog::new(&directory, Some(directory.clone()))
+            .map_err(|error| error.to_string())?;
+        let old = reserve_segment(&log.directory, "document").map_err(|error| error.to_string())?;
+        let unavailable =
+            reserve_segment(&log.directory, "desktop").map_err(|error| error.to_string())?;
+        fs::write(
+            log.directory.join(&old),
+            b"{\"eventId\":\"old-document\"}\n",
+        )
+        .map_err(|error| error.to_string())?;
+        OpenOptions::new()
+            .write(true)
+            .open(log.directory.join(&unavailable))
+            .and_then(|file| file.set_len(2 * LOG_LIMIT + 1))
+            .map_err(|error| error.to_string())?;
+        assert!(log
+            .diagnostic_pin(
+                "prepare",
+                "11111111-1111-4111-8111-111111111111",
+                "incident"
+            )
+            .is_err());
+        let id = "22222222-2222-4222-8222-222222222222";
+        let prepared = log.diagnostic_pin("prepare", id, "export")?;
+        assert!(prepared["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|segment| segment["name"] == old));
+        assert_eq!(
+            prepared["sourceState"]["unavailableSegments"][0],
+            json!({"name":unavailable,"reason":"host_pin_source_oversize"})
+        );
+        let committed = log.diagnostic_pin("commit", id, "export")?;
+        assert_eq!(committed["state"], "committed");
+        assert_eq!(committed["segments"], prepared["segments"]);
+        assert_eq!(committed["sourceState"], prepared["sourceState"]);
+        log.diagnostic_pin("release", id, "export")?;
+        Ok(())
+    })();
+    result.and(fs::remove_dir_all(directory).map_err(|error| error.to_string()))
 }
 impl Drop for PinWork {
     fn drop(&mut self) {
@@ -126,10 +224,20 @@ fn pin_source_name(name: &str) -> bool {
         .and_then(|name| name.strip_suffix(".ndjson"))
         .is_some_and(|id| diagnostic_uuid(Some(id)).is_some())
 }
+fn note_export_pin_failure(failures: &mut Vec<Value>, name: &str, reason: &str, detail: &str) {
+    let mut entry = json!({"name":name,"reason":reason});
+    // Keep the receipt below the existing metadata budget even if thousands
+    // of files are unavailable. Every file retains its stable reason.
+    if failures.len() < 16 {
+        entry["detail"] = json!(detail.chars().take(120).collect::<String>());
+    }
+    failures.push(entry);
+}
 fn hash_pin_sources(
     directory: &Path,
     sources: &[Value],
     verify: bool,
+    mut unavailable: Option<&mut Vec<Value>>,
 ) -> Result<Vec<Value>, String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -146,36 +254,47 @@ fn hash_pin_sources(
             .as_u64()
             .filter(|size| *size <= 2 * 1024 * 1024)
             .ok_or("固定大小无效。")?;
-        let path = directory.join(name);
-        #[cfg(windows)]
-        let _parents =
-            crate::support_export::hold_directories(directory).map_err(|e| e.to_string())?;
-        let (mut file, _) = crate::support_export::checked(&path).map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len() != size {
-            return Err("固定文件已变化。".into());
-        }
-        let mut hash = Sha256::new();
-        let mut buffer = [0u8; 65536];
-        let mut read = 0u64;
-        loop {
-            let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            read += n as u64;
-            if read > size {
+        let fingerprint = (|| -> Result<Value, String> {
+            let path = directory.join(name);
+            #[cfg(windows)]
+            let _parents =
+                crate::support_export::hold_directories(directory).map_err(|e| e.to_string())?;
+            let (mut file, _) = crate::support_export::checked(&path).map_err(|e| e.to_string())?;
+            if file.metadata().map_err(|e| e.to_string())?.len() != size {
                 return Err("固定文件已变化。".into());
             }
-            hash.update(&buffer[..n]);
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            let mut read = 0u64;
+            loop {
+                let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                read += n as u64;
+                if read > size {
+                    return Err("固定文件已变化。".into());
+                }
+                hash.update(&buffer[..n]);
+            }
+            if read != size {
+                return Err("固定文件已变化。".into());
+            }
+            let digest = format!("{:x}", hash.finalize());
+            if verify && segment["sha256"] != digest {
+                return Err("固定文件摘要不匹配。".into());
+            }
+            Ok(json!({"name":name,"bytes":size,"sha256":digest}))
+        })();
+        match fingerprint {
+            Ok(value) => segments.push(value),
+            Err(error) => match unavailable.as_deref_mut() {
+                Some(failures) => {
+                    note_export_pin_failure(failures, name, "host_pin_source_read_failed", &error)
+                }
+                None => return Err(error),
+            },
         }
-        if read != size {
-            return Err("固定文件已变化。".into());
-        }
-        let digest = format!("{:x}", hash.finalize());
-        if verify && segment["sha256"] != digest {
-            return Err("固定文件摘要不匹配。".into());
-        }
-        segments.push(json!({"name":name,"bytes":size,"sha256":digest}));
     }
     Ok(segments)
 }
@@ -473,7 +592,7 @@ impl DesktopLog {
                 sequence: 0,
                 segment_name: reserve_segment(&directory, "desktop")?,
                 document_segment_name: reserve_segment(&directory, "document")?,
-                active_segments: Vec::new(),
+                critical_segments: std::collections::HashSet::new(),
                 pin_work: std::collections::HashMap::new(),
                 write_poisoned: false,
                 retention_issue: None,
@@ -666,16 +785,16 @@ impl DesktopLog {
         let mut current = log.directory.join(&log.segment_name);
         if fs::metadata(&current).map_or(0, |m| m.len()) + bytes.len() as u64 > log.limit {
             Self::collect_segments(log, bytes.len() as u64)?;
-            let sealed = log.segment_name.clone();
-            log.active_segments.push(sealed);
             log.segment_name = reserve_segment(&log.directory, "desktop")?;
             current = log.directory.join(&log.segment_name);
         }
         if fs::metadata(&current)?.len() == 0 {
             Self::collect_segments(log, LOG_LIMIT)?;
         }
-        let _ = durable;
         append_committed(log, &current, &bytes)?;
+        if durable {
+            log.critical_segments.insert(log.segment_name.clone());
+        }
         Ok(())
     }
 
@@ -722,8 +841,6 @@ impl DesktopLog {
         let mut path = self.directory.join(&log.document_segment_name);
         if fs::metadata(&path).map_or(0, |m| m.len()) + bytes.len() as u64 > LOG_LIMIT {
             Self::collect_segments(&mut log, bytes.len() as u64).map_err(|e| e.to_string())?;
-            let current = log.document_segment_name.clone();
-            log.active_segments.push(current);
             log.document_segment_name =
                 reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
             path = self.directory.join(&log.document_segment_name);
@@ -740,7 +857,7 @@ impl DesktopLog {
 
     fn collect_segments(log: &mut LogFile, incoming: u64) -> io::Result<()> {
         use std::collections::HashSet;
-        let mut protected: HashSet<String> = log.active_segments.iter().cloned().collect();
+        let mut protected: HashSet<String> = log.critical_segments.clone();
         protected.insert(log.segment_name.clone());
         protected.insert(log.document_segment_name.clone());
         protected.extend(log.pin_work.values().flatten().cloned());
@@ -844,7 +961,7 @@ impl DesktopLog {
             return Err("诊断固定路径无效。".into());
         }
         let path = directory.join(format!("{pin_id}.json"));
-        let (mut receipt, previous, _work) = {
+        let (mut receipt, previous, mut unavailable, _work) = {
             let mut log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
             if log.pin_work.contains_key(pin_id) || log.pin_work.len() >= 4 {
                 return Err("诊断固定操作进行中。".into());
@@ -880,6 +997,7 @@ impl DesktopLog {
                     return Ok(previous);
                 }
             }
+            let mut unavailable = Vec::new();
             let receipt = if action == "prepare" {
                 let mut segments = Vec::new();
                 let mut empty_segments = Vec::new();
@@ -889,12 +1007,36 @@ impl DesktopLog {
                     if !pin_source_name(&name) {
                         continue;
                     }
-                    let meta = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+                    if segments.len() + empty_segments.len() + unavailable.len() >= 4096 {
+                        return Err("诊断固定源超出预算。".into());
+                    }
+                    let meta = match fs::symlink_metadata(entry.path()) {
+                        Ok(meta) => meta,
+                        Err(error) if kind == "export" => {
+                            note_export_pin_failure(
+                                &mut unavailable,
+                                &name,
+                                "host_pin_source_metadata_failed",
+                                &error.to_string(),
+                            );
+                            continue;
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    };
                     if !meta.is_file() || meta.file_type().is_symlink() {
+                        if kind == "export" {
+                            unavailable
+                                .push(json!({"name":name,"reason":"host_pin_source_unsafe"}));
+                            continue;
+                        }
                         return Err("诊断固定源无效。".into());
                     }
-                    if meta.len() > 2 * 1024 * 1024 || segments.len() + empty_segments.len() >= 4096
-                    {
+                    if meta.len() > 2 * 1024 * 1024 {
+                        if kind == "export" {
+                            unavailable
+                                .push(json!({"name":name,"reason":"host_pin_source_oversize"}));
+                            continue;
+                        }
                         return Err("诊断固定源超出预算。".into());
                     }
                     if meta.len() == 0 {
@@ -909,21 +1051,21 @@ impl DesktopLog {
                 // source names are never reused while background hashing runs.
                 if segments
                     .iter()
+                    .chain(&unavailable)
                     .any(|segment| segment["name"] == log.segment_name)
                 {
                     let next =
                         reserve_segment(&log.directory, "desktop").map_err(|e| e.to_string())?;
-                    let sealed = std::mem::replace(&mut log.segment_name, next);
-                    log.active_segments.push(sealed);
+                    log.segment_name = next;
                 }
                 if segments
                     .iter()
+                    .chain(&unavailable)
                     .any(|segment| segment["name"] == log.document_segment_name)
                 {
                     let next =
                         reserve_segment(&log.directory, "document").map_err(|e| e.to_string())?;
-                    let sealed = std::mem::replace(&mut log.document_segment_name, next);
-                    log.active_segments.push(sealed);
+                    log.document_segment_name = next;
                 }
                 let mut source_state = self.deferred_source_state();
                 source_state["postCutoffSegments"] =
@@ -959,6 +1101,7 @@ impl DesktopLog {
             (
                 receipt,
                 previous,
+                unavailable,
                 PinWork {
                     inner: self.inner.clone(),
                     pin_id: pin_id.to_owned(),
@@ -967,11 +1110,19 @@ impl DesktopLog {
         };
         // No DesktopLog mutex is held across these full-source reads. A slow
         // hash cannot serialize every native command's normal event logging.
-        receipt["segments"] = json!(hash_pin_sources(
-            &self.directory,
-            receipt["segments"].as_array().ok_or("固定范围无效。")?,
-            action == "commit"
-        )?);
+        if action == "prepare" || kind != "export" {
+            receipt["segments"] = json!(hash_pin_sources(
+                &self.directory,
+                receipt["segments"].as_array().ok_or("固定范围无效。")?,
+                action == "commit",
+                (kind == "export").then_some(&mut unavailable),
+            )?);
+        }
+        if !unavailable.is_empty() {
+            receipt["sourceState"]["unavailableSegments"] = json!(unavailable);
+        }
+        // Export commits the prepared inventory. Its reader validates every
+        // promised file, continuing past a changed or missing source.
         let _log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
         if read_pin_json(&path).map_err(|e| e.to_string())? != previous {
             return Err("诊断固定回执已变化。".into());
@@ -1267,6 +1418,7 @@ impl DesktopLog {
                     false,
                     Some((&observed_at, monotonic_ms)),
                 ) {
+                    self.remember_write_failure(stage, &error);
                     self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
                     eprintln!("桌面日志写入失败：{error}");
                 }
@@ -1305,8 +1457,23 @@ impl DesktopLog {
                 });
             }
             Err(TryLockError::Poisoned(_)) => {
+                self.remember_write_failure(
+                    stage,
+                    &io::Error::other("desktop log lock unavailable"),
+                );
                 self.note_deferred_loss(&self.deferred.failed, input_bytes, observed_ms);
             }
+        }
+    }
+
+    fn remember_write_failure(&self, stage: &str, error: &io::Error) {
+        if let Ok(mut last) = self.deferred.last_write_failure.try_lock() {
+            *last = Some(json!({
+                "stage":stage,
+                "kind":format!("{:?}", error.kind()),
+                "osCode":error.raw_os_error(),
+                "message":error.to_string(),
+            }));
         }
     }
 
@@ -1374,12 +1541,17 @@ impl DesktopLog {
             // count/bytes/range are cumulative for this Host run; dropped is the
             // new loss since the previous gap. Use already-approved projection
             // fields so cloud/support evidence cannot silently erase the gap.
-            let detail = json!({"reason":"native_event_loss_cumulative","failureKind":"diagnostic_io","count":self.deferred.total_lost.load(Ordering::Relaxed),"dropped":counts.iter().fold(0u64, |sum,count| sum.saturating_add(*count)),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed)),"bufferOverflow":counts[0],"bufferContended":counts[1],"writeFailed":counts[2]}).to_string();
+            let mut detail = json!({"reason":"native_event_loss_cumulative","failureKind":"diagnostic_io","count":self.deferred.total_lost.load(Ordering::Relaxed),"dropped":counts.iter().fold(0u64, |sum,count| sum.saturating_add(*count)),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed)),"bufferOverflow":counts[0],"bufferContended":counts[1],"writeFailed":counts[2]});
+            if counts[2] > 0 {
+                if let Ok(last) = self.deferred.last_write_failure.try_lock() {
+                    detail["lastWriteFailure"] = json!(*last);
+                }
+            }
             if let Err(error) = Self::write_locked(
                 &mut log,
                 "native_diagnostic_coverage_gap",
                 "unconfirmed",
-                Some(&detail),
+                Some(&detail.to_string()),
                 false,
                 None,
             ) {
