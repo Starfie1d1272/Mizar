@@ -8,7 +8,6 @@ export function mapObserverAssistProjection(projection: ObserverAssistProjection
       ? {
           observer: {
             state: projection.observer.state,
-            effectiveDelaySeconds: projection.observer.effectiveDelaySeconds,
             waitingReason: projection.observer.waitingReason,
             nextWindowSeconds: projection.observer.nextWindowSeconds,
             leadSeconds: projection.observer.leadSeconds,

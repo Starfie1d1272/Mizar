@@ -278,11 +278,11 @@ BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用�
 | `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接和接收恢复意图 |
 | `POST /operator/runtime/observer` | 仅 Host 私有能力的准备、启动、停止与续约，路径/运行时由安装和数据目录推导 |
 
-`prepare` 的修订令牌绑定游戏、Job、启动方式和配置，原样传给 `start-configured`。辅助设置、节目连接和 HUD 命令分别去重；只改提前时间保留缓冲/测量，不重启已接受游戏连接。停止辅助保留本场连接，`resume-receiver` 核对连接 ID 与修订，旧目标拒绝。
+`prepare` 的修订令牌绑定游戏、Job、启动方式和配置，原样传给 `start-configured`。辅助设置、节目连接和 HUD 命令分别去重。只改提前时间保留缓冲，不重启已接受游戏连接。停止辅助保留本场连接，`resume-receiver` 核对连接 ID 与修订，旧目标拒绝。
 
 `configure` 保存名义节目延迟 `delaySeconds`，接受整数 1–600 秒，旧配置缺字段时默认 120 秒。提前时间 `leadSeconds` 独立设置。
 
-`assist` schema 5 返回配置延迟 `effectiveDelaySeconds`、等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和估算倒计时由私有投影提供。
+`assist` schema 5 返回配置延迟 `delaySeconds`、等待原因、下个窗口与最多六条提示。当前节目昵称、观战槽位和估算倒计时由私有投影提供。
 
 ### 观战连接命令
 
@@ -293,6 +293,8 @@ BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用�
 游戏命令提交前按已核实进程和意图持久去重；未知发送不自动重放，标记写入失败保留本机制作并提示人工处理。网关 queued 只证明入队，实际连接和 HUD 值另行核对。
 
 Host 续租绑定当前实例与退出代次，辅助租约失效停止接收。有效同一意图可在有限窗口恢复一次，不重发游戏/HUD；主动暂停、结束或换连接不自动重启。租约与配置修订不同，不进入浏览器或日志正文，私有认证仍由运行时令牌承担。具体期限与失败分类见[观察器实现](../../apps/companion/src/telemetry/)。
+
+随包早源观察器使用 Managed Protocol 2。同一组件进程的 `source` 固定，`session-start` 建立递增的 `channel`，公共 `sequence` 跨连接和世界连续递增。连接断点关闭当前 channel，世界断点切换同一 channel 内的 world，快照断点清除该世界的就绪。只有匹配当前代际的有效 `cursor` 恢复投递。诊断从持续读取的 stderr 提取 v2 健康摘要及终态，普通日志仅保留小段；诊断包可收录既有 v1 与当前 v2 的本机报告。
 
 ## 本机节目音乐
 

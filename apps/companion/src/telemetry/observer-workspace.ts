@@ -168,6 +168,7 @@ export class WorkspaceObserver {
       history: [...this.history],
       active: this.owner !== undefined,
       health: this.health(),
+      componentHealth: this.owner?.health() ?? this.terminal?.supervisor,
       failed: this.failed,
       stopReason: this.stopReason ?? null,
       ...(this.terminal ? { terminal: this.terminal } : {}),
@@ -184,6 +185,7 @@ export class WorkspaceObserver {
     password: string,
     job?: string,
     current: () => boolean = () => true,
+    recoverCrash = true,
   ) {
     const intent = ++this.intent;
     const check = () => {
@@ -217,7 +219,6 @@ export class WorkspaceObserver {
         this.terminal = {
           error: diagnosticValue(error, '', new Set(), [password]),
           attemptId: randomUUID(),
-          attemptCount: 0,
           stage: cancelled
             ? 'cancelled'
             : error instanceof ObserverPreparationError
@@ -250,11 +251,26 @@ export class WorkspaceObserver {
       this.launched = true;
       const owner = this.owner;
       void owner.closed
-        .then(() =>
-          this.serialize(async () => {
+        .then(async (result) => {
+          await this.serialize(async () => {
             if (this.owner === owner) await this.stopCurrent();
-          }),
-        )
+          });
+          // Only an abnormal relay exit can replace the process. Terminal
+          // reports (including exhausted connection backoff) belong to v2.
+          const recover = () =>
+            !this.closing &&
+            !this.stopReason &&
+            current() &&
+            performance.now() - this.lease <= HOST_LEASE_MS;
+          if (
+            recoverCrash &&
+            options.launcher &&
+            result.crashed &&
+            intent === this.intent &&
+            recover()
+          )
+            await this.start(executable, endpoint, password, job, recover, false);
+        })
         .catch(() => console.error('observer_workspace_finalization_failed'));
       this.current = this.owner.source;
       this.lease = performance.now();
@@ -294,9 +310,9 @@ export class WorkspaceObserver {
     this.unsubscribe = [];
     this.listeners.forEach((f) => f());
     if (
-      result.terminal.report === 'received' &&
-      (result.terminal.cleanupCompleted === false ||
-        result.terminal.finalizationFailures.length > 0)
+      (result.terminal.cancelled && result.failed) ||
+      result.terminal.cleanupCompleted === false ||
+      result.terminal.finalizationFailures.length > 0
     )
       throw new Error('observer_component_finalization_failed');
   }
@@ -324,6 +340,9 @@ export function installedWorkspaceObserver(
           componentVersion: z.string(),
           sourceSha: z.string(),
           distribution: z.string(),
+          nativeAbi: z.literal(observerComponent.nativeAbi),
+          parserIpc: z.literal(observerComponent.parserIpc),
+          managedProtocol: z.literal(observerComponent.managedProtocol),
           entrypoints: z.strictObject({
             python: z.literal('runtime/python/python.exe'),
             driver: z.literal('client/driver.py'),
@@ -340,15 +359,6 @@ export function installedWorkspaceObserver(
       )
         throw new Error('observer_component_version');
       for (const entry of Object.values(manifest.entrypoints)) {
-        if (
-          ![
-            'runtime/python/python.exe',
-            'client/driver.py',
-            'client/cs2_observer.dll',
-            'client/parser_worker.mjs',
-          ].includes(entry)
-        )
-          throw new Error('observer_component_entrypoint');
         const path = join(component, entry);
         if (
           (await lstat(path)).isSymbolicLink() ||
@@ -387,12 +397,9 @@ export function installedWorkspaceObserver(
         : undefined;
       const reason =
         error instanceof Error &&
-        [
-          'observer_component_version',
-          'observer_component_entrypoint',
-          'observer_component_hash',
-          'observer_host_version',
-        ].includes(error.message)
+        ['observer_component_version', 'observer_component_hash', 'observer_host_version'].includes(
+          error.message,
+        )
           ? error.message
           : stage === 'output-parent'
             ? 'output-parent-unavailable'

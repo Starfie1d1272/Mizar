@@ -650,7 +650,11 @@ export function runArchiveWorker(
             stages.decodeMs += performance.now() - start;
           } else value = readGzip(source);
           if (source.jsonAttachment) {
-            if (object(value).schema !== 'cs2-observer-report/1')
+            if (
+              !['cs2-observer-report/1', 'cs2-observer-report/2'].includes(
+                String(object(value).schema),
+              )
+            )
               throw Error('observer_report_schema');
             add(source.name, Buffer.from(JSON.stringify(redact(value))));
           } else if (source.rawIndex)

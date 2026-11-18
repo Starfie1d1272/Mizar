@@ -144,7 +144,7 @@ Host 验证受管 CS2 后提交连接意图，Companion 串行管理观察器进
 
 [观察辅助作用域](../../apps/companion/src/telemetry/observer-assist-scope.ts)持有本图确认与等待换图状态，按节目投影中的比赛与地图执行判断何时清除旧确认。观察辅助和运镜读取同一确认结果。
 
-观察器归属独立 Windows Job；正常停止等待组件收尾，宿主异常退出由系统回收子树。Host 持有游戏身份并续约，租约失效或结束制作停止辅助。未知启动、连接和清理结果保留责任，不把命令入队当作实际连接成功。组件版本与来源由[组件配置](../../apps/companion/src/telemetry/observer-component.json)维护，控制契约见[观察器接口](protocol.md#本机观察器控制)。
+观察器归属独立 Windows Job。上游 Session Supervisor 管理连接和退避，Companion 管理进程及私有投递。组件启动交接后由 Supervisor 运行自己的初始化和重试期限。正常停止给组件至少 15 秒收尾，宿主异常退出由系统回收子树。Host 持有游戏身份并续约，租约失效或结束制作停止辅助。已交接的组件意外崩溃只在原意图和租约仍有效时补启一次。组件版本与来源由[组件配置](../../apps/companion/src/telemetry/observer-component.json)维护，控制契约见[观察器接口](protocol.md#本机观察器控制)。
 
 提前提示由 [ObserverHintTimeline](../../packages/core/src/projection/observer-assist.ts) 按固定配置排期，核对同图同执行、当前身份、来源代际和回合。设置由 [ObserverSettingsStore](../../apps/companion/src/telemetry/observer-settings.ts) 原子保存。排期与实机对时见[游戏数据语义](telemetry.md)。
 

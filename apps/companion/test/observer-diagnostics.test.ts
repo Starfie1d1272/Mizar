@@ -8,10 +8,65 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { unzipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
+import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { SessionJournal } from '../src/support/session-journal.js';
 import { SupportExports } from '../src/support/export-job.js';
 import { technicalProjection } from '../src/support/technical-projection.js';
 import { errorEvidence } from '../src/updates/diagnostics.js';
+
+test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {
+  const source = 'ahead:observer';
+  const manager = createObserverSourceManager({
+    role: 'lookahead',
+    identity: { source, role: 'ahead', channel: 0, world: 1 },
+  });
+  const fixture = JSON.parse(
+    await readFile(new URL('./fixtures/observer-event.json', import.meta.url), 'utf8'),
+  );
+  const seen: number[] = [];
+  manager.subscribeLiveGameEvents(({ cursor }) => seen.push(cursor.sequence));
+  manager.start();
+  const write = (sequence: number, row: object, channel = 1, world = 1) =>
+    manager.consumeObserverRecord({ ...row, source, sequence, channel, world });
+  const begin = { kind: 'session-start', protocol: 2 };
+  const cursor = {
+    kind: 'cursor',
+    tick: 100,
+    committedTick: 100,
+    tickInterval: 1 / 64,
+    map: 'de_test',
+  };
+
+  write(1, cursor);
+  assert.equal(manager.getHealth().state, 'connecting');
+  write(1, begin);
+  write(2, { kind: 'future-record' });
+  write(3, cursor);
+  write(4, fixture);
+  write(4, fixture);
+  assert.deepEqual(seen, [4]);
+
+  write(5, { kind: 'discontinuity', scope: 'world' }, 1, 2);
+  write(6, fixture, 1, 2);
+  write(50, cursor);
+  assert.equal(manager.getHealth().state, 'connecting');
+  assert.deepEqual(manager.getRecentGameEvents(), []);
+  write(7, cursor, 1, 2);
+  write(8, fixture, 1, 2);
+  write(9, { kind: 'discontinuity', scope: 'connection' }, 1, 2);
+  write(50, cursor, 1, 2);
+  assert.equal(manager.getHealth().state, 'reconnecting');
+  write(10, begin, 2);
+  write(11, { ...cursor, observedAt: Date.now() - 3000 }, 2);
+  write(12, fixture, 2);
+  assert.equal(manager.getHealth().state, 'connecting');
+  write(13, cursor, 2);
+  write(14, fixture, 2);
+  assert.deepEqual(seen, [4, 8, 14]);
+  await manager.stop();
+  write(15, fixture, 2);
+  assert.deepEqual(seen, [4, 8, 14]);
+});
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-observer-evidence-'));
@@ -155,7 +210,7 @@ test('pre-report and protocol failures survive the real export; overflow retains
   const password = 'diagnostic-stream-private-password';
   const journal = new SessionJournal(logs);
   t.after(() => journal.close());
-  for (const host of [13, 26, 27]) {
+  for (const host of [13, 26, 27, 28]) {
     const owner = startObserverProcess({
       role: 'lookahead',
       python: process.execPath,
@@ -206,6 +261,11 @@ test('pre-report and protocol failures survive the real export; overflow retains
   const overflow = failures.find((failure) => failure.stderr.truncated);
   assert(overflow.stderr.text.startsWith('interpreter-failure-prefix'));
   assert(overflow.stderr.observedBytes > overflow.stderr.retainedBytes);
+  const supervisor = failures.find((failure) => failure.reason === 'reconnect-budget-exhausted');
+  assert.equal(supervisor?.report, 'received');
+  assert.equal(supervisor?.supervisor.state, 'backoff');
+  assert.equal(supervisor?.lastOutputSequence, 1);
+  assert.equal(supervisor?.stderr.truncated, true);
   const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
   assert(coverage.gaps.some((gap: { reason: string }) => gap.reason === 'observer_stderr_budget'));
   assert(!Object.values(entries).some((bytes) => Buffer.from(bytes).includes(password)));

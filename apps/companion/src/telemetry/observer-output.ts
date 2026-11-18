@@ -8,14 +8,10 @@ const MAX_LINE_BYTES = 64 * 1024;
 export async function consumeObserverOutput<R extends GameEventSourceRole>(
   stream: Readable,
   manager: ObserverSourceManager<R>,
-  signal?: AbortSignal,
-): Promise<{ status: 'ended' | 'cancelled' | 'failed'; parsedRecords: number; error?: unknown }> {
+): Promise<{ status: 'ended' | 'failed'; parsedRecords: number; error?: unknown }> {
   let pending = Buffer.alloc(0);
   let parsedRecords = 0;
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const abort = (): void => {
-    stream.destroy();
-  };
   const consume = (line: Uint8Array): void => {
     if (line.byteLength === 0) return;
     if (line.byteLength > MAX_LINE_BYTES) throw new Error('Observer record budget');
@@ -23,12 +19,7 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
     manager.consumeObserverRecord(record);
     parsedRecords += 1;
   };
-  signal?.addEventListener('abort', abort, { once: true });
   try {
-    if (signal?.aborted) {
-      abort();
-      return { status: 'cancelled', parsedRecords };
-    }
     for await (const value of stream) {
       const chunk: unknown = value;
       if (!(chunk instanceof Uint8Array)) throw new Error('Observer input type');
@@ -47,14 +38,12 @@ export async function consumeObserverOutput<R extends GameEventSourceRole>(
         throw new Error('Observer record budget');
       pending = Buffer.concat([pending, tail]);
     }
-    if (signal?.aborted) return { status: 'cancelled', parsedRecords };
     if (pending.length) throw new Error('Observer truncated record');
+    manager.disconnectObserver('ended');
     return { status: 'ended', parsedRecords };
   } catch (error) {
     stream.destroy();
-    return { status: signal?.aborted ? 'cancelled' : 'failed', parsedRecords, error };
-  } finally {
-    signal?.removeEventListener('abort', abort);
-    manager.disconnectObserver(signal?.aborted ? 'cancelled' : 'failed');
+    manager.disconnectObserver('failed');
+    return { status: 'failed', parsedRecords, error };
   }
 }
