@@ -188,6 +188,8 @@ RivalHub 另有业务确认：
 
 Host 私有 `POST /operator/runtime/local-match-exit` 使用 `prepare/settle/confirm/invalidate` 管理一次性退出票据。Host 实际完成受管收尾并确认全机无 CS2 后才能确认，绑定比赛、制作会话和接收游标；新输入/启动/选择使资格失效。票据不持久化、不进普通视图，恢复的当前选择须重新核实；回收最终写盘仍检查引用与退出资格。
 
+Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resume/cancel` 管理本次受管来源，并以 retire 的 `prepare/settle/confirm/abort` 收尾。退休票据只在制作会话与当前来源仍一致时复用。退休期间暂停来源提交，确认退休时清除尚未提交的来源，本地收尾失败时撤销该次票据。重启恢复按本机记录中的 `expectedSourceId` 请求退休，经过确认才清除恢复记录。
+
 ## OBS 控制
 
 [OBS 路由](../../apps/companion/src/obs/routes.ts)统一控制连接、配置、输出与恢复，写操作受本机 Origin、身份、修订和输出状态保护。

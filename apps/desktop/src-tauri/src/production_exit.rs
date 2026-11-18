@@ -113,12 +113,69 @@ impl WorkspaceExit {
     pub fn complete(&self, result: &Result<(), String>) {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         state.busy = false;
-        state.message = result.as_ref().err().cloned();
+        state.message = result
+            .as_ref()
+            .err()
+            .map(|error| user_facing_failure(error));
         if result.is_ok() {
             state.stage = WorkspaceExitStage::Idle;
         }
     }
 }
+
+/// Keep internal ownership/state-machine terms out of operator-facing exit copy.
+/// The raw error remains in the diagnostic log; this is presentation only.
+pub fn user_facing_failure(error: &str) -> String {
+    const MAPPINGS: &[(&str, &str)] = &[
+        (
+            "受管游戏来源",
+            "这次结束制作没有完成。请先退出 CS2，再重试；仍然失败时重新打开 Mizar。",
+        ),
+        (
+            "受管来源",
+            "游戏配置恢复没有完成。请点“重试结束制作”；仍然失败时重新打开 Mizar。",
+        ),
+        (
+            "受管游戏",
+            "当前游戏状态已经变化。请确认 CS2 已退出后重试。",
+        ),
+        (
+            "本场回收资格",
+            "本场收尾还没有确认。请重试；仍然失败时导出诊断。",
+        ),
+        (
+            "退出资格",
+            "本场收尾还没有确认。请重试；仍然失败时导出诊断。",
+        ),
+        ("游戏实例", "CS2 状态已经变化。请重新检查游戏后重试。"),
+        ("本地服务", "Mizar 后台服务连接中断。请重新打开 Mizar。"),
+        (
+            "制播服务启动超时",
+            "Mizar 后台服务启动超时。请重新打开 Mizar；多次失败请导出诊断。",
+        ),
+    ];
+    for &(needle, copy) in MAPPINGS {
+        if error.contains(needle) {
+            return copy.to_string();
+        }
+    }
+    let lower = error.to_ascii_lowercase();
+    if [
+        "companion",
+        "host",
+        "ticket",
+        "qualification",
+        "generation",
+        "journal",
+    ]
+    .iter()
+    .any(|term| lower.contains(*term))
+    {
+        return "Mizar 后台服务没有完成操作。请重试；仍然失败时导出诊断。".into();
+    }
+    error.to_string()
+}
+
 /// Releasing a failed or completed workspace operation must also allow retry.
 pub struct WorkspaceExitGuard<'a>(pub &'a ExitGate);
 impl Drop for WorkspaceExitGuard<'_> {
@@ -187,7 +244,7 @@ fn wire_request(method: &str, path: &str, body: &str, token: Option<&str>) -> St
 
 fn request_failure(token: Option<&str>, production_summary: &'static str) -> &'static str {
     if token.is_some() {
-        "本场回收资格请求未完成。请重试；再次失败时查看诊断。"
+        "本场收尾请求未完成。请重试；再次失败时查看诊断。"
     } else {
         production_summary
     }
@@ -338,7 +395,7 @@ pub(crate) fn request_with_stream(
 }
 const EXIT_ENDPOINT: &str = "/operator/runtime/local-match-exit";
 const EXIT_UNCONFIRMED: &str =
-    "收尾已执行，但游戏退出和本场回收资格未确认。请重试结束游戏；再次失败时查看诊断。";
+    "收尾已执行，但游戏退出和本场收尾未确认。请重试结束游戏；再次失败时查看诊断。";
 
 pub(crate) fn runtime_token(log: &DesktopLog) -> Result<String, String> {
     let failure = "本地服务身份校验失败。请重新打开 Mizar；再次失败时查看诊断。";
@@ -401,33 +458,74 @@ fn exit_request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json:
             "failure",
             Some(&format!("phase=local_match_exit_http; status={status}")),
         );
-        return Err("本场回收资格校验未完成。请重试；再次失败时查看诊断。".into());
+        return Err("本场收尾校验未完成。请重试；再次失败时查看诊断。".into());
     }
     Ok(response)
 }
 
-pub(crate) fn managed_source_request(
+pub(crate) fn managed_source_request_status(
     log: &DesktopLog,
     body: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<(u16, serde_json::Value), String> {
     let token = runtime_token(log)?;
-    let (status, response) = request_with_identity(
+    request_with_identity(
         log,
         "POST",
         "/operator/runtime/managed-source",
         &body.to_string(),
         Instant::now() + Duration::from_secs(5),
         Some(&token),
-    )?;
+    )
+}
+
+pub(crate) fn managed_source_request(
+    log: &DesktopLog,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (status, response) = managed_source_request_status(log, body)?;
     if status != 200 {
         log.event(
             "managed_source",
             "failure",
             Some(&format!("status={status}")),
         );
-        return Err("受管游戏来源未能确认，请重试。".into());
+        return Err(
+            "这次结束制作没有完成。请先退出 CS2，再重试；仍然失败时重新打开 Mizar。".into(),
+        );
     }
     Ok(response)
+}
+
+fn abort_retirement(log: &DesktopLog, ticket: &str) {
+    match managed_source_request_status(
+        log,
+        serde_json::json!({"action":"retire","phase":"abort","ticket":ticket}),
+    ) {
+        Ok((200, _)) => {}
+        Ok((status, _)) => log.event(
+            "managed_source",
+            "failure",
+            Some(&format!("phase=abort; status={status}")),
+        ),
+        Err(_) => {}
+    }
+}
+
+pub(crate) fn confirm_retirement(log: &DesktopLog, ticket: &str) -> Result<(), String> {
+    let result = ["settle", "confirm"].into_iter().try_for_each(|phase| {
+        let response = managed_source_request(
+            log,
+            serde_json::json!({"action":"retire","phase":phase,"ticket":ticket}),
+        )?;
+        if response["ok"] != true {
+            return Err("游戏配置恢复没有确认。请重试。".into());
+        }
+        Ok(())
+    });
+    if result.is_err() {
+        abort_retirement(log, ticket);
+    }
+    result
 }
 
 fn prepare_local_match_exit(
@@ -448,7 +546,7 @@ fn confirm_local_match_exit(
     if response["ok"] == true {
         Ok(())
     } else {
-        Err("本场回收资格响应无效。请重试；再次失败时查看诊断。".into())
+        Err("本场收尾响应无效。请重试；再次失败时查看诊断。".into())
     }
 }
 
@@ -470,12 +568,12 @@ fn settle_local_match_exit(
 pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
     let response =
         exit_request(log, serde_json::json!({"action": "invalidate"})).map_err(|_| {
-            "无法撤销上一场退出资格，CS2 尚未启动。请重试；再次失败时查看诊断。".to_string()
+            "无法撤销上一场收尾确认，CS2 尚未启动。请重试；再次失败时查看诊断。".to_string()
         })?;
     if response["ok"] == true {
         Ok(())
     } else {
-        Err("无法确认退出资格已撤销，CS2 尚未启动。请重试；再次失败时查看诊断。".into())
+        Err("无法确认上一场收尾已撤销，CS2 尚未启动。请重试；再次失败时查看诊断。".into())
     }
 }
 
@@ -519,20 +617,24 @@ pub fn finish_managed_game(
         |qualification| confirm_local_match_exit(log, qualification),
     );
     if !stopped {
+        // Local cleanup failed before the source handshake could finish. Do not
+        // leave the retirement open: a later commit or production session would
+        // make its ticket impossible to settle.
+        if let Some(ticket) = retirement
+            .as_ref()
+            .ok()
+            .and_then(|value| value["ticket"].as_str())
+        {
+            abort_retirement(log, ticket);
+        }
         return local;
     }
     let source = (|| -> Result<(), String> {
-        let retirement = retirement?;
-        let ticket = retirement["ticket"].as_str().ok_or("来源退出资格无效。")?;
-        managed_source_request(
-            log,
-            serde_json::json!({"action":"retire","phase":"settle","ticket":ticket}),
-        )?;
-        managed_source_request(
-            log,
-            serde_json::json!({"action":"retire","phase":"confirm","ticket":ticket}),
-        )?;
-        Ok(())
+        let retirement = retirement.as_ref().map_err(|error| error.to_string())?;
+        let ticket = retirement["ticket"]
+            .as_str()
+            .ok_or("游戏配置恢复没有完成。请重试。")?;
+        confirm_retirement(log, ticket)
     })();
     cleanup_results(local, source)
 }
@@ -836,6 +938,13 @@ pub(crate) async fn finish_workspace(
                 "failure",
                 Some(&format!("phase=workspace_recovery_window; cause={error}")),
             );
+        }
+        if confirm_steam_cancelled != Some(true) {
+            if let Ok(startup) = cs2.startup_recovery_status() {
+                if startup.uncertain && !startup.running {
+                    return Err("CS2 还在启动。请等待启动完成，或先取消启动请求并确认后再结束制作。".into());
+                }
+            }
         }
         feedback.stage(WorkspaceExitStage::Restoration);
         let game = crate::production_exit::restore_then_cleanup(

@@ -247,7 +247,7 @@ test('support export rejects hard-linked or invalid observer reports and records
   );
 });
 
-test('support ZIP reports a missing committed segment even when readdir cannot find it', async (t) => {
+test('support ZIP keeps safe fixed segments and reports each unavailable committed segment', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-pinned-log-gap-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(await realpath(root), 'logs');
@@ -256,11 +256,21 @@ test('support ZIP reports a missing committed segment even when readdir cannot f
   const emptyOld = `desktop-${randomUUID()}.ndjson`;
   const successor = `document-${randomUUID()}.ndjson`;
   const unknown = `document-${randomUUID()}.ndjson`;
+  const good = `desktop-${randomUUID()}.ndjson`;
+  const missingHost = `desktop-${randomUUID()}.ndjson`;
+  const changedHost = `document-${randomUUID()}.ndjson`;
+  const fixedContent = '{"eventId":"safely-fixed-host-event"}\n';
+  const fixed = {
+    bytes: Buffer.byteLength(fixedContent),
+    sha256: createHash('sha256').update(fixedContent).digest('hex'),
+  };
   await mkdir(join(logs, 'host-pins'));
   await Promise.all([
     writeFile(join(logs, emptyOld), ''),
     writeFile(join(logs, successor), 'post-cutoff'),
     writeFile(join(logs, unknown), 'unfixed-original'),
+    writeFile(join(logs, good), fixedContent),
+    writeFile(join(logs, changedHost), fixedContent.replace('safely', 'edited')),
     writeFile(
       join(logs, 'host-pins', `${pinId}.json`),
       JSON.stringify({
@@ -271,7 +281,7 @@ test('support ZIP reports a missing committed segment even when readdir cannot f
         kind: 'export',
         state: 'committed',
         expiresAt: new Date(Date.now() + 60000).toISOString(),
-        segments: [],
+        segments: [missingHost, changedHost, good].map((name) => ({ name, ...fixed })),
         sourceState: {
           asOf: new Date().toISOString(),
           memoryOnly: { events: 0, bytes: 0 },
@@ -307,6 +317,21 @@ test('support ZIP reports a missing committed segment even when readdir cannot f
   assert.equal(status.phase, 'ready', status.error);
   const entries = unzipSync(await readFile(join(exports.directory, job.exportId, 'part-1.zip')));
   const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
+  const events = Object.entries(entries)
+    .filter(([name]) => name.startsWith('events/'))
+    .map(([, bytes]) => Buffer.from(bytes).toString())
+    .join('');
+  assert.match(events, /safely-fixed-host-event/);
+  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original/);
+  assert.deepEqual(
+    coverage.gaps
+      .filter((entry: { source: string }) => [missingHost, changedHost].includes(entry.source))
+      .map(({ source, phase }: { source: string; phase: string }) => [source, phase]),
+    [
+      [missingHost, 'read'],
+      [changedHost, 'read'],
+    ],
+  );
   assert.ok(
     coverage.gaps.some(
       (entry: { source: string; phase: string }) =>

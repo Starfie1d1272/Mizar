@@ -90,13 +90,25 @@ test('automatic music bounds collection probes while telemetry changes and retri
   let collectionRevision = 1;
   let collectionReads = 0;
   let inactive = true;
+  let rpcTimeout = false;
+  let monitorReads = 0;
+  const stinger = 'audition-source';
+  const scope = 'owned-collection';
+  const before = 'OBS_MONITORING_TYPE_NONE';
   const device = createMusicDevice({
+    ownershipScope: async () => scope,
     async call(method) {
       if (method === 'GetSceneCollectionList') {
         collectionReads++;
+        if (rpcTimeout) throw new Error('music_obs_timeout');
         return { currentSceneCollectionName: inactive ? 'Personal' : OBS_COLLECTION };
       }
-      if (method === 'GetInputList') return { inputs: [] };
+      if (method === 'GetInputList')
+        return { inputs: [{ inputUuid: stinger, inputName: '音效', inputKind: 'ffmpeg_source' }] };
+      if (method === 'GetInputAudioMonitorType') {
+        monitorReads++;
+        return { monitorType: before };
+      }
       assert.fail(`Unexpected OBS request: ${method}`);
     },
   });
@@ -133,4 +145,37 @@ test('automatic music bounds collection probes while telemetry changes and retri
   now += 100;
   await director.tick();
   assert.ok(collectionReads > afterRecovery);
+
+  rpcTimeout = true;
+  const beforeTimeout = collectionReads;
+  const started = now;
+  for (; now < started + 60_000; now += 100) await director.tick();
+  assert.ok(collectionReads - beforeTimeout >= 4 && collectionReads - beforeTimeout <= 10);
+  assert.equal(director.get().connection, 'connected');
+  assert.equal(director.get().failure, 'playback_failed');
+
+  // Refresh the automatic cooldown, then allow a readback of an owned preview lease.
+  await director.tick(true);
+  await store.update((state) => {
+    state.sources.stinger = stinger;
+    state.sourceScopes.stinger = scope;
+    state.previewMonitorLeases = [
+      {
+        uuid: stinger,
+        scope,
+        before,
+        applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+        phase: 'restoring',
+      },
+    ];
+  });
+  rpcTimeout = false;
+  now += 2000;
+  await director.tick();
+  assert.equal(monitorReads, 1);
+  assert.deepEqual(store.state.previewMonitorLeases, []);
+  const afterCleanup = collectionReads;
+  now += 100;
+  await director.tick();
+  assert.equal(collectionReads, afterCleanup);
 });

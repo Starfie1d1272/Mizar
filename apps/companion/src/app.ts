@@ -1099,9 +1099,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
             projectObsDisconnectEvidence(evidence, consentAt),
           );
         })
-        .catch((error: unknown) =>
-          sessionJournal.record('obs_native_disconnect', { error: diagnosticValue(error) }),
-        )
+        .catch((error: unknown) => {
+          if (diagnosticConsentTime() === consentAt)
+            app.log.warn({ err: diagnosticValue(error) }, 'OBS 断连诊断采集未完成');
+        })
         .finally(() => {
           obsDisconnectEvidence = undefined;
         });
@@ -2537,7 +2538,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     };
     await waitForObsExit();
     await closeStep(() => obsAdapter?.close());
-    await closeStep(() => obsDisconnectEvidence);
     await waitForObsExit();
     for (const result of await Promise.allSettled([
       Promise.resolve().then(() => cstvSources.program.stop()),
@@ -2576,6 +2576,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     });
     // Release delivery's source holds before producers need space for their final flush.
     // Final records remain in the journal for recovery on the next startup.
+    diagnosticConsentTime = () => null;
     await closeStep(() => diagnosticDelivery.close());
     await closeStep(() => nativeSource?.close());
     await closeStep(async () => {

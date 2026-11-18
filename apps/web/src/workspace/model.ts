@@ -39,7 +39,7 @@ export function workspaceIssues(operator: OperatorPayload | null): WorkspaceIssu
       {
         id: 'service',
         summary: '本地制播服务尚未连接',
-        detail: '请确认 Mizar 本地服务正在运行，连接恢复后会自动重新检查。',
+        detail: '请确认 Mizar 后台服务正在运行，连接恢复后会自动重新检查。',
         action: '检查服务',
         path: '/debug',
       },

@@ -42,7 +42,7 @@ const sourceRequest = z.discriminatedUnion('action', [
   }),
   z.strictObject({
     action: z.literal('retire'),
-    phase: z.enum(['prepare', 'settle', 'confirm']),
+    phase: z.enum(['prepare', 'settle', 'confirm', 'abort']),
     ticket: z.string().uuid().optional(),
     expectedSourceId: z.string().uuid().optional(),
   }),
@@ -169,6 +169,7 @@ export function registerManagedSourceRoutes(
       return { ok: true, executionRestored: execution.restored };
     }
     if (body.action === 'commit') {
+      if (retirement) return reply.code(409).send({ error: 'managed_retirement_in_progress' });
       const item = active?.ticket === body.ticket ? active : pending;
       if (!item || item.ticket !== body.ticket || !sameSelection(item))
         return reply.code(409).send({ error: 'managed_source_selection_changed' });
@@ -191,26 +192,35 @@ export function registerManagedSourceRoutes(
       return { ok: true };
     }
     if (body.phase === 'prepare') {
+      if (
+        body.expectedSourceId &&
+        (active?.sourceId ?? pending?.sourceId ?? body.expectedSourceId) !== body.expectedSourceId
+      )
+        return reply.code(409).send({ error: 'managed_retirement_changed' });
       if (retirement) {
+        const currentSource = active?.sourceId ?? null;
         if (
-          body.expectedSourceId &&
-          (retirement.expectedSourceId ?? retirement.sourceId) !== body.expectedSourceId
-        )
-          return reply.code(409).send({ error: 'managed_retirement_changed' });
-        const current = source();
-        if (current.generation !== retirement.generation)
-          retirement = {
-            ...retirement,
-            generation: current.generation,
-            sequence: current.lastAccepted?.sequence ?? null,
-            settled: false,
-          };
-        return { ticket: retirement.ticket };
+          retirement.productionSession === options.productionSession() &&
+          retirement.sourceId === currentSource
+        ) {
+          if (
+            body.expectedSourceId &&
+            retirement.expectedSourceId &&
+            retirement.expectedSourceId !== body.expectedSourceId
+          )
+            return reply.code(409).send({ error: 'managed_retirement_changed' });
+          const current = source();
+          if (current.generation !== retirement.generation)
+            retirement = {
+              ...retirement,
+              generation: current.generation,
+              sequence: current.lastAccepted?.sequence ?? null,
+              settled: false,
+            };
+          if (body.expectedSourceId) retirement.expectedSourceId ??= body.expectedSourceId;
+          return { ticket: retirement.ticket };
+        }
       }
-      if (body.expectedSourceId && active && active.sourceId !== body.expectedSourceId)
-        return reply.code(409).send({ error: 'managed_retirement_changed' });
-      if (body.expectedSourceId && pending && pending.sourceId !== body.expectedSourceId)
-        return reply.code(409).send({ error: 'managed_retirement_changed' });
       const current = source();
       retirement = {
         ticket: randomUUID(),
@@ -222,6 +232,14 @@ export function registerManagedSourceRoutes(
         ...(body.expectedSourceId ? { expectedSourceId: body.expectedSourceId } : {}),
       };
       return { ticket: retirement.ticket };
+    }
+    if (body.phase === 'abort') {
+      if (!body.ticket) return reply.code(400).send({ error: 'managed_source_invalid' });
+      if (body.ticket === completedRetirement) return { ok: true };
+      if (retirement && retirement.ticket !== body.ticket)
+        return reply.code(409).send({ error: 'managed_retirement_changed' });
+      retirement = undefined;
+      return { ok: true };
     }
     if (body.ticket && body.ticket === completedRetirement) return { ok: true };
     if (

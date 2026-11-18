@@ -1089,8 +1089,13 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     }
     const now = this.now();
     if (this.pendingOpening && this.pendingOpening.expires < now) this.pendingOpening = null;
-    if (!explicit && now < Math.max(this.nextProbeAt, this.provider.nextConnectionAttemptAt ?? 0))
-      return;
+    if (!explicit && now < (this.provider.nextConnectionAttemptAt ?? 0)) return;
+    const probeCooling = !explicit && now < this.nextProbeAt;
+    if (probeCooling) {
+      // Finish owned preview work without resuming automatic playback probes.
+      if (!this.preview.busy && !this.preview.recoveryPending) return;
+      if (now - this.lastPoll < 2000) return;
+    }
     // Facts still invalidate every 100 ms; steady media polling is bounded, fades remain smooth.
     const interval = Object.keys(this.fades).length || this.preview.busy ? 100 : 250;
     if (!changed && !this.pendingOpening && this.now() - this.lastPoll < interval) return;
@@ -1105,16 +1110,17 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.operationFailures.clear('music_operation_recovered');
     };
     try {
-      if (automaticDeferred || this.store.failure || !this.store.ready) {
+      if (probeCooling || automaticDeferred || this.store.failure || !this.store.ready) {
+        const cleanupCurrent = () => !this.closed && currentCollection();
         await this.provider.session(async (obs, epoch) => {
-          await this.reconcilePreview(obs, epoch, valid);
+          await this.reconcilePreview(obs, epoch, cleanupCurrent);
           if (valid()) {
             this.status.connection = 'connected';
             this.status.failure = null;
             this.status.message = null;
           }
         });
-        if (valid()) recovered();
+        if (valid() && !probeCooling) recovered();
         return;
       }
       if (pause && this.store.state.pause?.map !== map)
@@ -1158,7 +1164,13 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         cue &&
         (this.manual || this.store.state.config.groups[cue.group].enabled) &&
         this.store.state.config.groups[cue.group].tracks.length;
-      if (!hasSources && !configured && !opening && !this.preview.busy) {
+      if (
+        !hasSources &&
+        !configured &&
+        !opening &&
+        !this.preview.busy &&
+        !this.preview.recoveryPending
+      ) {
         this.status.connection = 'idle';
         return;
       }
@@ -1270,7 +1282,12 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       )
         return;
       const failure = musicFailure(error);
-      if (failure.code === 'scene_missing') {
+      if (
+        !probeCooling &&
+        (failure.code === 'scene_missing' ||
+          (error instanceof Error &&
+            ['music_obs_timeout', 'music_obs_request_failed'].includes(error.message)))
+      ) {
         this.probeDelayMs = Math.min(10000, Math.max(2000, this.probeDelayMs * 2));
         this.nextProbeAt = this.now() + this.probeDelayMs;
       }

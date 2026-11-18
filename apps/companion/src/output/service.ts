@@ -1877,10 +1877,10 @@ export class OutputService {
       return event.evidence.contextFresh;
     if (
       (event.kind === 'map_player_snapshot' ||
+        (event.kind === 'map_ended' &&
+          bundle.program.cursor.programSourceGeneration !== event.cursor.programSourceGeneration) ||
         (['map_started', 'map_epoch_changed', 'map_ended'].includes(event.kind) &&
-          (bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch ||
-            bundle.program.cursor.programSourceGeneration !==
-              event.cursor.programSourceGeneration))) &&
+          bundle.program.cursor.mapEpoch !== event.cursor.mapEpoch)) &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId
     ) {
       if (event.kind === 'map_epoch_changed') return event.evidence.contextFresh;

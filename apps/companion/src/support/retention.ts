@@ -69,6 +69,7 @@ async function describe(
   if (!immutableName.test(name)) throw new Error('retention_source_not_immutable');
   const path = await safePath(root, name);
   const before = await lstat(path);
+  if (!before.isFile() || before.nlink !== 1) throw new Error('retention_source_unsafe');
   if (before.size > 2 * 1024 * 1024) throw new Error('retention_segment_budget');
   const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -711,6 +712,7 @@ export async function readHostPin(
   root: string,
   pinId: string,
   kind: 'incident' | 'export' | 'delivery' = 'incident',
+  onSegmentFailure?: (name: string, error: unknown) => void,
 ): Promise<PinReceipt> {
   if (!UUID.test(pinId)) throw new Error('host_pin_id_invalid');
   const raw = await boundedJson<{
@@ -742,6 +744,7 @@ export async function readHostPin(
     raw.producerKind !== 'host' ||
     raw.kind !== kind ||
     !['prepared', 'committed'].includes(raw.state) ||
+    (kind === 'export' && raw.state !== 'committed') ||
     !UUID.test(raw.producerRunId) ||
     !Array.isArray(raw.segments) ||
     raw.segments.length > 4096 ||
@@ -749,31 +752,21 @@ export async function readHostPin(
       (!Number.isFinite(Date.parse(raw.expiresAt)) || Date.parse(raw.expiresAt) <= Date.now()))
   )
     throw new Error('host_pin_receipt_invalid');
-  const segments: RetainedSegment[] = [];
+  const fixedNames = new Set<string>();
   for (const value of raw.segments) {
     if (
+      !value ||
+      typeof value.name !== 'string' ||
       !immutableName.test(value.name) ||
       !/^(desktop|document)-/.test(value.name) ||
+      fixedNames.has(value.name) ||
       !Number.isSafeInteger(value.bytes) ||
       value.bytes < 0 ||
       value.bytes > 2 * 1024 * 1024 ||
       !/^[a-f0-9]{64}$/.test(value.sha256)
     )
       throw new Error('host_pin_source_invalid');
-    const actual = await describe(root, value.name);
-    if (actual.bytes !== value.bytes || actual.sha256 !== value.sha256)
-      throw new Error('host_pin_source_changed');
-    segments.push({
-      ...actual,
-      name: value.name,
-      producerRunId: raw.producerRunId,
-      firstSequence: null,
-      lastSequence: null,
-      firstObservedAt: null,
-      lastObservedAt: null,
-      records: 0,
-      sealedAt: 'unknown',
-    });
+    fixedNames.add(value.name);
   }
   let sourceState: PinReceipt['sourceState'];
   if (raw.sourceState) {
@@ -815,21 +808,21 @@ export async function readHostPin(
             typeof name !== 'string' ||
             !immutableName.test(name) ||
             !/^(desktop|document)-/.test(name) ||
-            segments.some((segment) => segment.name === name),
+            fixedNames.has(name),
         ))
     )
       throw new Error('host_pin_cutoff_invalid');
     if (
       emptySegments !== undefined &&
       (!Array.isArray(emptySegments) ||
-        emptySegments.length + segments.length > 4096 ||
+        emptySegments.length + fixedNames.size > 4096 ||
         emptySegments.some(
           (name) =>
             typeof name !== 'string' ||
             !immutableName.test(name) ||
             !/^(desktop|document)-/.test(name) ||
             successors?.includes(name) ||
-            segments.some((segment) => segment.name === name),
+            fixedNames.has(name),
         ))
     )
       throw new Error('host_pin_cutoff_invalid');
@@ -860,6 +853,28 @@ export async function readHostPin(
           }
         : {}),
     };
+  }
+  const segments: RetainedSegment[] = [];
+  for (const value of raw.segments) {
+    try {
+      const actual = await describe(root, value.name);
+      if (actual.bytes !== value.bytes || actual.sha256 !== value.sha256)
+        throw new Error('host_pin_source_changed');
+      segments.push({
+        ...actual,
+        name: value.name,
+        producerRunId: raw.producerRunId,
+        firstSequence: null,
+        lastSequence: null,
+        firstObservedAt: null,
+        lastObservedAt: null,
+        records: 0,
+        sealedAt: 'unknown',
+      });
+    } catch (error) {
+      if (kind !== 'export' || !onSegmentFailure) throw error;
+      onSegmentFailure(value.name, error);
+    }
   }
   return {
     pinId,

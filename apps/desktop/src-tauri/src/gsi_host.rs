@@ -228,7 +228,7 @@ pub(crate) async fn select_installation(
                     )
                 })?;
                 if cs2.status()?.pending {
-                    return Err("请先退出受管理 CS2 并恢复设置，再更改安装位置。".into());
+                    return Err("请先退出 CS2 并恢复设置，再更改安装位置。".into());
                 }
                 let _guard = GSI_OPERATION_LOCK.lock().map_err(|error| {
                     command_log.preserve_error(

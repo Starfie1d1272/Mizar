@@ -302,13 +302,16 @@ export class ObsMusicProvider implements MusicDeviceProvider {
             this.retryAt = Date.now() + 2000;
             throw new Error('music_obs_unavailable', { cause: error });
           }
+          if (error instanceof Error && error.message === 'music_obs_timeout') throw error;
           const code = (error as { code?: unknown } | undefined)?.code;
           const failure =
             code === 600
               ? 'music_source_missing'
               : code === 207
                 ? 'music_obs_not_ready'
-                : 'music_playback_failed';
+                : code === 500
+                  ? 'music_obs_request_failed'
+                  : 'music_playback_failed';
           throw new Error(failure, {
             cause: error,
           });

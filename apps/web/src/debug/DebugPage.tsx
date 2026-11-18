@@ -259,7 +259,7 @@ function DebugContent({
             value={data.latestGsiDiagnostics}
           />
           <DebugEvidencePanel
-            eyebrow="07 / 本地服务"
+            eyebrow="07 / 后台服务"
             title="近期运行诊断"
             tone={data.recentRuntimeDiagnostics.length === 0 ? 'neutral' : 'warning'}
             value={data.recentRuntimeDiagnostics.map((diagnostic) => {
@@ -302,7 +302,7 @@ function DebugContent({
         </section>
 
         <p className="debug-footer-note">
-          运行实例 <code>{data.producerInstanceId ?? '未创建'}</code>
+          后台服务 <code>{data.producerInstanceId ?? '未创建'}</code>
           <span aria-hidden="true"> · </span>
           原始数据、标准化数据与运行状态均只保留当前有界证据；此页面不保存历史快照。
         </p>

@@ -1,4 +1,5 @@
 import { browserErrorEvidence } from '../debug/control-journal';
+import { userFacingError } from '../workspace/error-copy';
 import { ControlTask } from '../debug/control-task';
 import { useRef, useState } from 'react';
 import { Button, Checkbox, StatusBanner } from '../ui';
@@ -108,7 +109,9 @@ export function Cs2Recovery({
             {exit.busy ? '正在结束制作' : '结束制作需要处理'} · {workspaceExitLabel(exit.stage)}
           </strong>
           <p role="status">
-            {exit.busy ? '正在安全收尾，请等待结果。可以打开诊断查看进度。' : exit.message}
+            {exit.busy
+              ? '正在安全收尾，请等待结果。可以打开诊断查看进度。'
+              : userFacingError(exit.message ?? '')}
           </p>
           {!exit.busy ? (
             <p>

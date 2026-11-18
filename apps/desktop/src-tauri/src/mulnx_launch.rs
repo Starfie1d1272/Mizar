@@ -1001,7 +1001,7 @@ fn verify_gateway_owner(log: &DesktopLog, port: u16, pid: u32) -> Result<(), Str
     if gateway_owned(log, port, pid)? {
         Ok(())
     } else {
-        Err("MulNX 网关不属于当前受管的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
+        Err("MulNX 网关不属于当前游戏，已停止发送控制命令。请重新检查游戏。".into())
     }
 }
 
@@ -1026,7 +1026,7 @@ fn gateway_owned(log: &DesktopLog, port: u16, pid: u32) -> Result<bool, String> 
             "failure",
             Some(&json!({"expectedPid":pid,"owners":owners}).to_string()),
         );
-        Err("MulNX 网关不属于当前受管的 CS2，已停止发送控制命令。请重新检查游戏实例。".into())
+        Err("MulNX 网关不属于当前游戏，已停止发送控制命令。请重新检查游戏。".into())
     }
 }
 
@@ -1036,7 +1036,7 @@ fn controlled_game(
 ) -> Result<crate::cs2_process::WorkspaceProcess, String> {
     let (context, game) = cs2
         .console_source()?
-        .ok_or("当前受管游戏已失效或实例不唯一，请重新检查。")?;
+        .ok_or("当前游戏已失效或状态不唯一，请重新检查。")?;
     if !game.is_running() {
         return Err("当前游戏控制归属未确认，未发送停止命令。".into());
     }

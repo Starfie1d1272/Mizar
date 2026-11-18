@@ -995,7 +995,8 @@ fn run_desktop(
                     }
                     host.dialog()
                         .message(format!(
-                            "退出 Mizar 未完成，待恢复记录仍保留。\n{error}\n请修复后重试退出。"
+                            "Mizar 尚未确认安全退出。\n{}\n请处理后重试退出。",
+                            production_exit::user_facing_failure(&error)
                         ))
                         .title("Mizar 退出未完成")
                         .show(|_| {});

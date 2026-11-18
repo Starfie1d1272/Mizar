@@ -478,7 +478,6 @@ impl GameTracker {
     }
     fn confirm_layout(&mut self) {
         self.initial_layout_confirmed = true;
-        self.alignment_deadline = None;
         self.placement_pending = false;
         self.alignment_failure = None;
     }
@@ -560,12 +559,21 @@ impl GameTracker {
         })
     }
     pub fn observe(&mut self, found: Option<Cs2Window>) -> bool {
+        self.observe_at(found, Instant::now())
+    }
+    fn observe_at(&mut self, found: Option<Cs2Window>, now: Instant) -> bool {
         if self.window == found {
             return false;
         }
         self.frame = None;
         self.window = found;
         self.placement_pending = false;
+        if self
+            .alignment_deadline
+            .is_some_and(|deadline| now < deadline)
+        {
+            self.initial_layout_confirmed = false;
+        }
         self.generation += 1;
         self.layout_aligned = false;
         if found.is_some() {
@@ -608,7 +616,14 @@ impl GameTracker {
     pub fn restore_layout(&mut self) -> Option<Layout> {
         let _coordinates = PhysicalCoordinates::enter();
         self.refresh_target();
-        self.alignment_deadline = Some(Instant::now() + ALIGNMENT_WINDOW);
+        let now = Instant::now();
+        if self
+            .alignment_deadline
+            .is_none_or(|deadline| now >= deadline)
+        {
+            self.alignment_deadline = Some(now + ALIGNMENT_WINDOW);
+        }
+        self.initial_layout_confirmed = false;
         self.last_alignment = None;
         self.placement_pending = false;
         self.alignment_failure = None;
@@ -633,7 +648,10 @@ impl GameTracker {
         self.last_dpi = unsafe { GetDpiForWindow(window.hwnd) };
         self.layout_aligned = self.last_client == Some(layout.game);
         if !self.layout_aligned {
-            if let Some(deadline) = self.alignment_deadline {
+            if let Some(deadline) = self
+                .alignment_deadline
+                .filter(|_| !self.initial_layout_confirmed)
+            {
                 if now >= deadline {
                     self.placement_pending = false;
                     self.alignment_failure.get_or_insert(AlignmentFailure {
@@ -705,14 +723,16 @@ impl GameTracker {
             return self.apply_locked_layout();
         }
         let now = Instant::now();
-        if self.alignment_deadline.is_some_and(|deadline| {
-            if now < deadline {
-                self.last_alignment
-                    .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1))
-            } else {
-                self.placement_pending || self.alignment_failure.is_none()
-            }
-        }) {
+        if !self.initial_layout_confirmed
+            && self.alignment_deadline.is_some_and(|deadline| {
+                if now < deadline {
+                    self.last_alignment
+                        .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1))
+                } else {
+                    self.placement_pending || self.alignment_failure.is_none()
+                }
+            })
+        {
             return self.apply_locked_layout();
         }
         None
@@ -821,22 +841,32 @@ mod layout_tests {
     use super::*;
 
     #[test]
-    fn replacement_uses_original_deadline_and_confirmed_layout_does_not_rearm() {
+    fn replacement_after_alignment_uses_original_deadline_and_only_within_budget() {
         let mut tracker = GameTracker::default();
         let start = Instant::now();
         tracker.observe(Some(Cs2Window { hwnd: 1, pid: 10 }));
         tracker.start_initial_layout(start);
+        tracker.confirm_layout();
+        assert!(!tracker.observe_at(tracker.window, start + Duration::from_secs(10)));
+        assert!(tracker.initial_layout_confirmed);
         tracker.placement_pending = true;
-        tracker.observe(None);
-        tracker.observe(Some(Cs2Window { hwnd: 2, pid: 10 }));
+        tracker.observe_at(None, start + Duration::from_secs(19));
+        tracker.observe_at(
+            Some(Cs2Window { hwnd: 2, pid: 10 }),
+            start + Duration::from_secs(20),
+        );
         tracker.start_initial_layout(start + Duration::from_secs(20));
         assert_eq!(tracker.alignment_deadline, Some(start + ALIGNMENT_WINDOW));
         assert!(!tracker.placement_pending);
+        assert!(!tracker.initial_layout_confirmed);
 
         tracker.confirm_layout();
-        tracker.observe(Some(Cs2Window { hwnd: 3, pid: 10 }));
-        tracker.start_initial_layout(start + Duration::from_secs(21));
-        assert_eq!(tracker.alignment_deadline, None);
+        tracker.observe_at(
+            Some(Cs2Window { hwnd: 3, pid: 10 }),
+            start + ALIGNMENT_WINDOW,
+        );
+        assert!(tracker.initial_layout_confirmed);
+        assert_eq!(tracker.alignment_deadline, Some(start + ALIGNMENT_WINDOW));
 
         tracker.reset_initial_layout();
         tracker.start_initial_layout(start + Duration::from_secs(22));

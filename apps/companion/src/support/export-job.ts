@@ -385,10 +385,13 @@ export class SupportExports {
           cause: hostPinCoverage,
           scope: 'client-reported outcome; abandoned or unavailable pin is not used',
         });
+      const failedHostSegments = new Set<string>();
       if (hostPinId && (!hostPinCoverage || hostPinCoverage.status === 'committed')) {
         try {
-          hostPin = await readHostPin(this.logs, hostPinId, 'export');
-          if (hostPin.status !== 'committed') throw new Error('host_pin_uncommitted');
+          hostPin = await readHostPin(this.logs, hostPinId, 'export', (name, error) => {
+            failedHostSegments.add(name);
+            gap(name, 'read', error);
+          });
           const state = hostPin.sourceState as
             | {
                 memoryOnly: { events: number | null };
@@ -446,7 +449,7 @@ export class SupportExports {
           this.assertActive(job);
           if (diagnosticSegmentPattern.test(name)) {
             const pin = name.startsWith('session-') ? companionPin : hostPin;
-            if (fixedLogs.has(name)) continue;
+            if (fixedLogs.has(name) || failedHostSegments.has(name)) continue;
             if (successor(pin, name))
               excludedSources.push({
                 source: name,
