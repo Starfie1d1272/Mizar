@@ -14,12 +14,23 @@ import type { BpSession } from '../bp/controller.js';
 import { ObsExitSafetyError, type ObsSceneSwitchOptions } from '../obs/reconcile.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
+export type ControllerStatus = 'idle' | 'preparing' | 'transitioning' | 'blocked';
+
+interface ControllerState {
+  status: ControllerStatus;
+  active: ProgramSceneId;
+  revision: string;
+}
 export class ProgramSceneController {
-  private updatePending = false;
-  private resourceActivationPending = false;
+  private state: ControllerState = {
+    status: 'idle',
+    active: 'waiting',
+    revision: randomUUID(),
+  };
+
   private deferredResourceScene: ProgramSceneId | undefined;
   setResourceActivationPending(pending: boolean): void {
-    this.resourceActivationPending = pending;
+    this.state.status = pending ? 'blocked' : 'idle';
     if (!pending && this.deferredResourceScene !== undefined) {
       const target = this.deferredResourceScene;
       this.deferredResourceScene = undefined;
@@ -27,7 +38,7 @@ export class ProgramSceneController {
     }
   }
   setUpdatePending(pending: boolean): void {
-    this.updatePending = pending;
+    this.state.status = pending ? 'blocked' : 'idle';
   }
   private director: ProgramDirector | undefined;
   private controlGeneration = 0;
@@ -35,10 +46,10 @@ export class ProgramSceneController {
     this.director = director;
   }
   resumeAutomatic(expectedRevision: string): boolean {
-    if (this.updatePending || this.resourceActivationPending) return false;
-    if (expectedRevision !== this.revision) return false;
+    if (this.state.status === 'blocked') return false;
+    if (expectedRevision !== this.state.revision) return false;
     this.director?.resume();
-    this.revision = randomUUID();
+    this.state.revision = randomUUID();
     return true;
   }
   cancelAutomatic(): void {
@@ -60,23 +71,20 @@ export class ProgramSceneController {
   }
   setWarmupScene(scene: 'waiting' | 'gameplay', expectedRevision: string): boolean {
     if (
-      this.updatePending ||
-      this.resourceActivationPending ||
+      this.state.status === 'blocked' ||
       !this.director ||
-      expectedRevision !== this.revision
+      expectedRevision !== this.state.revision
     )
       return false;
     this.director.setWarmupScene(scene);
     this.automaticSwitch?.abort();
-    this.revision = randomUUID();
+    this.state.revision = randomUUID();
     return true;
   }
-  private active: ProgramSceneId = 'waiting';
   private bpCompact: 'off' | 'on' | 'unknown' = 'off';
   private bpFallbackReason: string | null = null;
   private compactPreparing = false;
   private bpCompactTarget: 'managed' | 'external' = 'managed';
-  private revision = randomUUID();
   private introRevision: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private automaticSwitch: AbortController | undefined;
@@ -116,10 +124,10 @@ export class ProgramSceneController {
       return Promise.resolve();
     const result = this.queue.then(async () => {
       const current = this.controlValid();
-      const revision = this.revision;
-      const valid = () => productionValid() && current() && revision === this.revision;
+      const revision = this.state.revision;
+      const valid = () => productionValid() && current() && revision === this.state.revision;
       if (!valid() || !this.switchObs) return;
-      const target = this.active === 'bp' && this.bpCompact === 'on' ? 'gameplay' : this.active;
+      const target = this.state.active === 'bp' && this.bpCompact === 'on' ? 'gameplay' : this.state.active;
       await this.switchObs(target, {
         transition: programTransition(target, target, true),
         reconcileCollection: true,
@@ -136,9 +144,9 @@ export class ProgramSceneController {
   }
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
-    if (this.resourceActivationPending && id !== 'waiting')
+    if (this.state.status === 'blocked' && id !== 'waiting')
       return '官方素材正在激活，请完成后再切换场景。';
-    if (this.updatePending && id !== 'waiting')
+    if (this.state.status === 'blocked' && id !== 'waiting')
       return 'Mizar 正在准备升级，请完成升级后再开始制作。';
     const { operator, program } = this.projections.getCurrent();
     const series = program.series;
@@ -192,10 +200,10 @@ export class ProgramSceneController {
     );
     return programSceneStateSchema.parse({
       schemaVersion: 'mizar.program-scenes.v1',
-      active: this.active,
+      active: this.state.active,
       bpCompact: this.bpCompact,
       bpCompactTarget: this.bpCompactTarget,
-      revision: this.revision,
+      revision: this.state.revision,
       introRevision:
         this.preparing?.target === 'matchup' ? this.preparing.revision : this.introRevision,
       ...(this.preparing ? { preparing: this.preparing } : {}),
@@ -214,11 +222,11 @@ export class ProgramSceneController {
 
   forceScene(id: ProgramSceneId): void {
     this.holdAutomatic();
-    if (this.resourceActivationPending) {
+    if (this.state.status === 'blocked') {
       this.deferredResourceScene = id;
       return;
     }
-    if (this.bpCompact !== 'off' && id !== this.active) {
+    if (this.bpCompact !== 'off' && id !== this.state.active) {
       this.bpSession.finishSceneExit();
       this.bpCompact = 'unknown';
       const cleanup = this.queue.then(async () => {
@@ -231,17 +239,17 @@ export class ProgramSceneController {
         } catch {
           /* Keep the uncertain state until a confirmed close. */
         }
-        this.revision = randomUUID();
+        this.state.revision = randomUUID();
       });
       this.queue = cleanup.catch(() => undefined);
     }
-    if (id === 'matchup' && this.active !== id) this.introRevision = randomUUID();
-    this.active = id;
-    this.revision = randomUUID();
+    if (id === 'matchup' && this.state.active !== id) this.introRevision = randomUUID();
+    this.state.active = id;
+    this.state.revision = randomUUID();
   }
 
   select(id: ProgramSceneId, expectedRevision: string) {
-    if (expectedRevision === this.revision) {
+    if (expectedRevision === this.state.revision) {
       this.holdAutomatic();
     }
     const current = this.controlValid();
@@ -255,11 +263,11 @@ export class ProgramSceneController {
   compactDisconnected(preservePlayback = false): void {
     if (!this.compactPreparing && (this.bpCompactTarget !== 'managed' || this.bpCompact === 'off'))
       return;
-    if (!preservePlayback || this.active !== 'bp') this.bpSession.finishSceneExit();
+    if (!preservePlayback || this.state.active !== 'bp') this.bpSession.finishSceneExit();
     if (preservePlayback) this.obsReconciliationNeeded = true;
     this.bpCompact = 'unknown';
     this.bpFallbackReason = '紧凑 BP 状态待核对，请检查 OBS。';
-    this.revision = randomUUID();
+    this.state.revision = randomUUID();
   }
 
   setCompact(
@@ -268,7 +276,7 @@ export class ProgramSceneController {
     target: 'managed' | 'external' = 'managed',
   ) {
     const result = this.queue.then(async () => {
-      if (expectedRevision !== this.revision)
+      if (expectedRevision !== this.state.revision)
         return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
       const actualTarget = visible ? target : this.bpCompactTarget;
       if (visible && this.bpCompact !== 'off' && actualTarget !== this.bpCompactTarget)
@@ -278,7 +286,7 @@ export class ProgramSceneController {
       if (
         visible &&
         (this.blockedReason('bp') !== null ||
-          (actualTarget === 'managed' && this.active !== 'gameplay'))
+          (actualTarget === 'managed' && this.state.active !== 'gameplay'))
       )
         return { ok: false as const, message: '请先准备完整 BP；比赛输出需要切到比赛画面。' };
       const bp = this.bpSession.get();
@@ -288,8 +296,8 @@ export class ProgramSceneController {
         this.compactPreparing = actualTarget === 'managed';
         if (actualTarget === 'managed') await this.switchBpCompact!(visible);
         if (
-          expectedRevision !== this.revision ||
-          (visible && actualTarget === 'managed' && this.active !== 'gameplay')
+          expectedRevision !== this.state.revision ||
+          (visible && actualTarget === 'managed' && this.state.active !== 'gameplay')
         ) {
           if (visible && actualTarget === 'managed') await this.switchBpCompact!(false);
           throw new Error('播出状态已变化，请核对后重试。');
@@ -306,12 +314,12 @@ export class ProgramSceneController {
         this.bpCompact = visible ? 'on' : 'off';
         if (visible) this.bpCompactTarget = actualTarget;
         this.director?.hold();
-        this.revision = randomUUID();
+        this.state.revision = randomUUID();
         return { ok: true as const, state: this.get() };
       } catch (error) {
         if (visible) this.bpSession.finishSceneExit();
         this.bpCompact = actualTarget === 'managed' ? 'unknown' : 'off';
-        this.revision = randomUUID();
+        this.state.revision = randomUUID();
         return {
           ok: false as const,
           message: error instanceof Error ? error.message : '状态待确认。',
@@ -373,7 +381,7 @@ export class ProgramSceneController {
         cancelled: automaticValid !== undefined,
         message: '自动编排请求已失效，保持当前场景。',
       };
-    if (expectedRevision !== this.revision)
+    if (expectedRevision !== this.state.revision)
       return {
         ok: false as const,
         cancelled: automaticValid !== undefined,
@@ -381,17 +389,17 @@ export class ProgramSceneController {
       };
     const reason = this.blockedReason(id, automaticValid !== undefined);
     if (reason !== null) return { ok: false as const, message: reason };
-    if (this.active === id && !automaticValid) {
+    if (this.state.active === id && !automaticValid) {
       // A manual Take also restores OBS after an external scene change or reconnect.
       // Preserve presentation identity (including BP / matchup) on the same scene.
       const restoreCurrent = async () => {
         if (!current()) return;
-        const target = this.active;
-        const revision = this.revision;
+        const target = this.state.active;
+        const revision = this.state.revision;
         if (target !== id)
           await switchObs?.(target, {
             transition: programTransition(id, target, true),
-            valid: () => current() && this.active === target && this.revision === revision,
+            valid: () => current() && this.state.active === target && this.state.revision === revision,
           }).catch(() => undefined);
       };
       let restartedBp = false;
@@ -431,26 +439,26 @@ export class ProgramSceneController {
         await switchObs?.(physical, {
           transition: programTransition(id, id, true),
           valid: () =>
-            valid() && expectedRevision === this.revision && this.blockedReason(id) === null,
+            valid() && expectedRevision === this.state.revision && this.blockedReason(id) === null,
         });
         if (physical === 'gameplay' && id === 'bp') {
           this.bpCompact = 'unknown';
           this.compactPreparing = true;
           try {
             await this.switchBpCompact!(true, valid);
-            if (!valid() || expectedRevision !== this.revision) throw new Error('OBS 状态已变化。');
+            if (!valid() || expectedRevision !== this.state.revision) throw new Error('OBS 状态已变化。');
             this.bpCompact = 'on';
             this.bpCompactTarget = 'managed';
           } finally {
             this.compactPreparing = false;
           }
         }
-        if (!valid() || expectedRevision !== this.revision || this.blockedReason(id) !== null) {
+        if (!valid() || expectedRevision !== this.state.revision || this.blockedReason(id) !== null) {
           if (restartedBp) this.bpSession.finishSceneExit();
           await restoreCurrent();
           return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
         }
-        this.revision = randomUUID();
+        this.state.revision = randomUUID();
       } catch (error) {
         if (restartedBp) this.bpSession.finishSceneExit();
         await restoreCurrent();
@@ -463,7 +471,7 @@ export class ProgramSceneController {
         };
       }
     }
-    if (this.active !== id && this.bpCompact !== 'off') {
+    if (this.state.active !== id && this.bpCompact !== 'off') {
       try {
         if (this.bpCompactTarget === 'managed') {
           if (!this.switchBpCompact) throw new Error('OBS 状态待确认。');
@@ -473,14 +481,14 @@ export class ProgramSceneController {
         this.bpSession.finishSceneExit();
       } catch {
         this.bpCompact = 'unknown';
-        this.revision = randomUUID();
+        this.state.revision = randomUUID();
         return { ok: false as const, message: '紧凑 BP 关闭未确认，请检查 OBS 后重试。' };
       }
     }
-    if (this.active !== id) {
+    if (this.state.active !== id) {
       const abort = new AbortController();
       if (automaticValid) this.automaticSwitch = abort;
-      const previous = this.active;
+      const previous = this.state.active;
       const nextRevision = randomUUID();
       let preparedBpRevision: string | undefined;
       const rollback = async () => {
@@ -499,8 +507,8 @@ export class ProgramSceneController {
           }
         }
         // A Cut is not delayed by the obsolete automatic transition or its signal.
-        await switchObs?.(this.active, {
-          transition: programTransition(id, this.active, true),
+        await switchObs?.(this.state.active, {
+          transition: programTransition(id, this.state.active, true),
           valid: current,
         }).catch(() => undefined);
         if (preparedBpRevision && this.bpSession.get().revision === preparedBpRevision)
@@ -535,7 +543,7 @@ export class ProgramSceneController {
           signal: abort.signal,
           valid: () =>
             valid() &&
-            expectedRevision === this.revision &&
+            expectedRevision === this.state.revision &&
             this.blockedReason(id, automaticValid !== undefined) === null,
           ...(id === 'matchup' && this.matchupStarted
             ? {
@@ -583,25 +591,25 @@ export class ProgramSceneController {
           stillBlocked !== null ||
           !valid() ||
           abort.signal.aborted ||
-          expectedRevision !== this.revision
+          expectedRevision !== this.state.revision
         ) {
           await rollback();
           return {
             ok: false as const,
-            cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
+            cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.state.revision,
             message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
           };
         }
         if (previous === 'bp') this.bpSession.finishSceneExit();
         if (id !== 'bp') this.bpFallbackReason = null;
-        this.active = id;
-        this.revision = nextRevision;
+        this.state.active = id;
+        this.state.revision = nextRevision;
         if (id === 'matchup') this.introRevision = nextRevision;
       } catch (error) {
         await rollback();
         return {
           ok: false as const,
-          cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
+          cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.state.revision,
           message:
             error instanceof ObsExitSafetyError
               ? error.message
