@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
@@ -1091,4 +1092,34 @@ export function createProgramRuntime(
   options: Omit<ProgramRuntimeOptions, 'producerInstanceId'> = {},
 ): ProgramRuntime {
   return new ProgramRuntime({ producerInstanceId, ...options });
+}
+
+export function createCompanionProgramRuntime(options: {
+  runtime: ProgramRuntime | undefined;
+  producerInstanceId: string | undefined;
+  seriesProgressCheckpointStore: SeriesProgressCheckpointStore | undefined;
+  onSeriesProgressDiagnostic: ((diagnostic: { readonly code: string }) => void) | undefined;
+  recoveringTrial: boolean;
+}): ProgramRuntime {
+  const programRuntime =
+    options.runtime ??
+    createProgramRuntime(options.producerInstanceId ?? randomUUID(), {
+      liveSession: { kind: 'bound', liveSessionId: randomUUID() },
+      ...(options.seriesProgressCheckpointStore === undefined
+        ? {}
+        : { seriesProgressCheckpointStore: options.seriesProgressCheckpointStore }),
+      ...(options.onSeriesProgressDiagnostic === undefined
+        ? {}
+        : { onSeriesProgressDiagnostic: options.onSeriesProgressDiagnostic }),
+    });
+  if (options.recoveringTrial) programRuntime.resetSession(true);
+  return programRuntime;
+}
+
+export function runtimeProjectionClock(runtime: Pick<ProgramRuntime, 'getSnapshot'>): () => number {
+  return () => {
+    const lastReceived =
+      runtime.getSnapshot().current.programSource.lastAccepted?.receivedMonotonicMs ?? 0;
+    return Math.max(performance.now(), lastReceived);
+  };
 }

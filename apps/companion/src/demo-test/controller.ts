@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -436,4 +437,25 @@ export function registerDemoTestRoutes(
     const result = await controller.command(request.body);
     return reply.code(result.code).send(result.value);
   });
+}
+
+export function demoTelemetryReady(
+  runtime: Pick<ProgramRuntime, 'getCurrentState' | 'getSourceFreshness'>,
+  telemetryFreshness: string,
+  now: () => number,
+): boolean {
+  const { programTelemetry: telemetry } = runtime.getCurrentState();
+  return (
+    telemetryFreshness === 'fresh' &&
+    runtime.getSourceFreshness(now()) === 'fresh' &&
+    telemetry?.coverage.map === 'present' &&
+    telemetry.coverage.allPlayers === 'present' &&
+    (telemetry.telemetry.allPlayers?.length ?? 0) > 0 &&
+    telemetry.telemetry.map?.name !== undefined
+  );
+}
+
+export function readDemoStartup(tournamentPath: string | undefined) {
+  const markerPath = tournamentPath ? join(dirname(tournamentPath), 'demo-test.json') : undefined;
+  return { markerPath, recovery: readDemoTestRecovery(markerPath) };
 }

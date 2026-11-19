@@ -1446,3 +1446,25 @@ export function boundObsNativeEvidence(result: ObsNativeEvidence): ObsNativeEvid
     ...(relatedLogFiles ? { relatedLogFiles } : {}),
   };
 }
+
+export function createObsDisconnectCapture(
+  readConsentTime: () => string | null,
+  record: ((evidence: ReturnType<typeof obsDisconnectEvidence>) => void) | undefined,
+  reportFailure: (error: unknown) => void,
+): () => void {
+  let pending: Promise<void> | undefined;
+  return () => {
+    const consentAt = readConsentTime();
+    if (!record || !consentAt || pending) return;
+    pending = collectObsNativeEvidence()
+      .then((evidence) => {
+        if (readConsentTime() === consentAt) record(obsDisconnectEvidence(evidence, consentAt));
+      })
+      .catch((error: unknown) => {
+        if (readConsentTime() === consentAt) reportFailure(error);
+      })
+      .finally(() => {
+        pending = undefined;
+      });
+  };
+}

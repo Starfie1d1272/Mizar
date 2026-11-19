@@ -294,6 +294,53 @@ it('restores the selected program without manual hold and leaves OBS alone after
   expect(actualProgram).toBe('external');
 });
 
+it('notifies opening media only when the current matchup take starts in OBS', async () => {
+  const projection = {
+    getCurrent: () => ({
+      operator: {
+        runtime: { telemetryFreshness: 'fresh' },
+        matchContext: { freshness: 'fresh', origin: 'fixture' },
+        identity: { state: 'matched' },
+      },
+      program: { map: { name: 'de_dust2' }, match: { matchId: 'match' } },
+    }),
+    getBpAssessment: () => ({ readiness: 'unavailable' }),
+  } as unknown as ConstructorParameters<typeof ProgramSceneController>[0];
+  let eligible = true;
+  let firstStarted: (() => void) | undefined;
+  const opening = vi.fn();
+  const controller = new ProgramSceneController(projection, {} as never, async (id, options) => {
+    if (id !== 'matchup') return;
+    if (!firstStarted) {
+      firstStarted = options.onStarted;
+      eligible = false;
+      options.onStarted?.();
+      return;
+    }
+    firstStarted();
+    expect(opening).not.toHaveBeenCalled();
+    expect(controller.get().active).toBe('waiting');
+    options.onStarted?.();
+  });
+  controller.onMatchupStarted(opening);
+  const cancelled = await controller.selectAutomatic(
+    'matchup',
+    controller.get().revision,
+    () => eligible,
+  );
+  expect(cancelled.ok).toBe(false);
+  expect(opening).not.toHaveBeenCalled();
+
+  eligible = true;
+  const taken = await controller.selectAutomatic(
+    'matchup',
+    controller.get().revision,
+    () => eligible,
+  );
+  expect(taken.ok).toBe(true);
+  expect(opening).toHaveBeenCalledExactlyOnceWith(controller.get().introRevision, 'de_dust2');
+});
+
 it('does not replace a deleted original scene by a same-name scene or discard the return record', async () => {
   const f = await rig();
   const managed = await f.bind();

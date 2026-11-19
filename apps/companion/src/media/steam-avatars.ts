@@ -338,3 +338,19 @@ export function registerSteamAvatarRoutes(
       : reply.code(404).send({ error: 'avatar_unavailable' });
   });
 }
+
+export function registerSteamAvatarRuntime(
+  app: FastifyInstance,
+  avatars: SteamAvatars | undefined,
+  originPolicy: LocalWebOriginPolicy,
+  refresh: () => void,
+): void {
+  if (avatars) {
+    avatars.onChanged(refresh);
+    registerSteamAvatarRoutes(app, avatars, originPolicy);
+    app.addHook('onClose', () => {
+      avatars?.close();
+      return Promise.resolve();
+    });
+  }
+}

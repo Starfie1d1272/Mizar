@@ -1,3 +1,5 @@
+import type { ProgramRuntime } from '../runtime/program-runtime.js';
+import type { RivalHubConnection } from './rivalhub-connection.js';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -396,4 +398,60 @@ export function registerRivalsRehearsalRoutes(
       return reply.code(403).send({ message: '本机页面来源无效。' });
     return options.rehearsal.stop();
   });
+}
+
+export function registerMatchRehearsal(
+  app: FastifyInstance,
+  options: {
+    fixturePath: string | undefined;
+    controller: MatchContextController | null;
+    scenes: ProgramSceneController;
+    dispatchObservation: ConstructorParameters<typeof RivalsRehearsal>[3];
+    runtime: Pick<
+      ProgramRuntime,
+      | 'activateFixtureSeriesProgress'
+      | 'clearFixtureSeriesProgress'
+      | 'flushSeriesProgressCheckpoint'
+    >;
+    refresh: () => void;
+    connection: Pick<RivalHubConnection, 'release'> | undefined;
+    originPolicy: LocalWebOriginPolicy;
+  },
+): RivalsRehearsal | undefined {
+  const {
+    controller: matchContextController,
+    scenes: sceneController,
+    runtime: programRuntime,
+    dispatchObservation,
+    originPolicy,
+  } = options;
+  const rehearsal =
+    options.fixturePath && matchContextController
+      ? new RivalsRehearsal(
+          options.fixturePath,
+          matchContextController,
+          sceneController,
+          dispatchObservation,
+          {
+            activateFixtureSeriesProgress: (context) => {
+              programRuntime.activateFixtureSeriesProgress(context);
+              options.refresh();
+            },
+            clearFixtureSeriesProgress: () => {
+              programRuntime.clearFixtureSeriesProgress();
+              options.refresh();
+            },
+          },
+        )
+      : undefined;
+  if (rehearsal)
+    registerRivalsRehearsalRoutes(app, {
+      rehearsal,
+      originPolicy,
+      beforeLoad: async () => {
+        await programRuntime.flushSeriesProgressCheckpoint();
+        await options.connection?.release();
+      },
+    });
+  return rehearsal;
 }

@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
@@ -62,5 +63,19 @@ export async function registerDesktopOverlayRoutes(
     } finally {
       busy = false;
     }
+  });
+}
+
+export function registerDesktopOverlayRuntime(
+  app: FastifyInstance,
+  tournamentPath: string | undefined,
+  originPolicy: LocalWebOriginPolicy,
+): void {
+  void app.register(async (scope) => {
+    await registerDesktopOverlayRoutes(
+      scope,
+      tournamentPath ? join(dirname(tournamentPath), 'desktop-overlay.json') : undefined,
+      originPolicy,
+    );
   });
 }
