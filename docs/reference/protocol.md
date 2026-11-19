@@ -141,6 +141,8 @@ RivalHub 另有业务确认：
 
 `rivalhub-connection` 的 `sourceReady/sourceBlockedCode/sourceBlockedAction/sourceBlockedReason` 派生自当前输出资格，`sourceCommandPending` 只表示在途命令。`sourceCleanup` 区分待释放、受阻、未决认领及 `coverageUnknown`；查询成功、空队列或来源消失不证明责任已结清。
 
+`matchSourceRecovery` 只描述当前绑定比赛、当前安装下的旧来源责任。它区分本机交接、后台核对、保留待核对及无待办。全局 `sourceCleanup` 供诊断使用。结束制作的本机结果依据制作生命周期和 OBS 的回执。
+
 `syncHealth` 区分未启用、主动停用、他机归属、等待、正在接收和需处理。正式 live、地图与首发就绪后有宽限期；只有当前来源/执行的新 LIVE 接受回执确认恢复。认领、开局 ACK、旧执行回执和人工补分不能替代。
 
 | POST 入口 | 作用与限制 |

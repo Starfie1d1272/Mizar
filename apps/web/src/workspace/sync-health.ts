@@ -52,8 +52,9 @@ export function syncHealthText(health?: SyncHealth): string {
     case 'http_400':
       return '网站未接受本场数据，请导出诊断。';
     case 'network_failed':
+      return '暂时无法连接网站，Mizar 会自动重试。若持续出现，请检查网络连接。';
     case 'timeout':
-      return '网站同步连接未完成，请检查网络后重试';
+      return '网站响应超时，Mizar 会自动重试。';
     case 'input_unavailable':
       return '当前比赛数据不可用，请检查游戏连接与比赛资料';
     default:

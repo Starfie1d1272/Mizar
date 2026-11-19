@@ -1,4 +1,3 @@
-import { sourceCleanupStatusSchema } from '@mizar/protocol/output';
 import {
   productionExitEvidenceSchema,
   type ProductionExitEvidence,
@@ -305,36 +304,22 @@ export async function productionAction(
   try {
     if (window.__TAURI_INTERNALS__ && action === 'finish') {
       await desktopInvoke('finish_workspace', confirmation, task);
-      const [production, source] = await Promise.all([
-        fetch('/local/v1/production', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
-          .then(async (response) =>
-            response.ok ? productionExitEvidenceSchema.parse(await response.json()) : null,
-          )
-          .catch(() => null),
-        fetch('/local/v1/rivalhub-connection', {
-          cache: 'no-store',
-          signal: AbortSignal.timeout(5000),
-        })
-          .then(async (response) =>
-            response.ok ? sourceCleanupStatusSchema.parse(await response.json()) : null,
-          )
-          .catch(() => null),
-      ]);
-      const cleanup = source?.sourceCleanup;
+      const production = await fetch('/local/v1/production', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      })
+        .then(async (response) =>
+          response.ok ? productionExitEvidenceSchema.parse(await response.json()) : null,
+        )
+        .catch(() => null);
       if (
         !production ||
-        !source ||
         production.obsExitState === 'pending' ||
         production.obsExitState === 'unconfirmed' ||
         production.releaseHandoffState === 'pending' ||
-        production.releaseHandoffState === 'unconfirmed' ||
-        !cleanup ||
-        cleanup.pending > 0 ||
-        cleanup.blocked > 0 ||
-        cleanup.claimIntent ||
-        cleanup.handoffPending > 0
+        production.releaseHandoffState === 'unconfirmed'
       ) {
-        task.finish('unconfirmed', { reason: 'local_cleanup_complete_remote_or_obs_pending' });
+        task.finish('unconfirmed', { reason: 'local_cleanup_evidence_pending' });
         return task.result;
       }
     } else if (window.__TAURI_INTERNALS__ && action === 'enter') {

@@ -112,6 +112,8 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const releases: { matchId: string; authority: string | null; authorization: string | null }[] =
     [];
   let failRelease = false;
+  let takenOverSource: Record<string, unknown> | undefined;
+  const statusQueries: URLSearchParams[] = [];
   let retryAfter: string | null = null;
   let liveStatus = 200;
   let reliableStatus = 204;
@@ -177,19 +179,24 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       if (loseClaim) throw new TypeError('lost response');
       return Response.json({ claimed: true, authorityRevision: revision });
     }
-    if (url.pathname.endsWith('/source-status'))
+    if (url.pathname.endsWith('/source-status')) {
+      statusQueries.push(url.searchParams);
+      const source =
+        takenOverSource &&
+        url.searchParams.get('authorityRevision') === String(takenOverSource.authorityRevision)
+          ? takenOverSource
+          : serverClaim;
       return Response.json(
         ambiguous
           ? { status: 'ambiguous' }
-          : serverClaim
+          : source
             ? {
                 status: 'found',
-                source: staleStatus
-                  ? { ...serverClaim, authorityRevision: 1, state: 'closed' }
-                  : serverClaim,
+                source: staleStatus ? { ...source, authorityRevision: 1, state: 'closed' } : source,
               }
             : { status: 'not_found' },
       );
+    }
     if (url.pathname.endsWith('/reliable')) {
       reliableRequests++;
       return new Response(null, { status: reliableStatus });
@@ -210,6 +217,11 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         authorization: headers.get('authorization'),
       });
       await releaseGate?.(init?.signal);
+      if (
+        takenOverSource &&
+        headers.get('x-rivalhub-authority') === String(takenOverSource.authorityRevision)
+      )
+        return new Response(null, { status: 403 });
       if (failRelease)
         return new Response(null, {
           status: 503,
@@ -246,6 +258,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     event,
     path,
     releases,
+    statusQueries,
     claimStarted,
     reliableRequests: () => reliableRequests,
     liveRequests: () => liveRequests,
@@ -263,6 +276,11 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setFail: (v: boolean) => {
       failRelease = v;
+    },
+    closeByTakeover: () => {
+      assert.ok(serverClaim);
+      takenOverSource = { ...serverClaim, state: 'closed', closeReason: 'handover' };
+      serverClaim = takenOverSource;
     },
     setRetryAfter: (v: string) => {
       retryAfter = v;
@@ -332,6 +350,62 @@ test('background maintenance records blocked sync without opening its status pag
   assert.equal(evidence()[1]?.diagnostic?.snapshotAvailable, true);
   await app.inject({ method: 'GET', url: '/local/v1/rivalhub-connection' });
   assert.equal(evidence().length, 2, 'UI reads share the same evidence deduplication');
+});
+
+test('background cleanup confirms an exact old authority after a release 403', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.closeByTakeover();
+  await assert.rejects(h.connection.release(), /待重试或核对/);
+  assert.equal(h.connection.view().sourceCleanup.blocked, 1);
+  assert.equal(h.connection.matchSourceRecovery(h.snapshot.matchId), 'remote_cleanup');
+  assert.equal(h.connection.matchSourceRecovery('another-match'), 'idle');
+
+  const restarted = await h.restart();
+  assert.equal(restarted.matchSourceRecovery(h.snapshot.matchId), 'remote_cleanup');
+  const archived: number[] = [];
+  restarted.setSourceSettlement(
+    async () => true,
+    () => undefined,
+    async (source) => {
+      archived.push(source.authorityRevision);
+    },
+  );
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  h.setAmbiguous(true);
+  restarted.startSourceCleanup();
+  const waitForCleanup = () =>
+    assert.rejects(
+      restarted.resumeSync(h.snapshot, 'revision', () => false),
+      /比赛已变化/,
+    );
+  // The initial automatic probe sees an ambiguous result and leaves the record intact.
+  await waitForCleanup();
+  assert.equal(h.statusQueries.length, 1);
+  assert.equal(restarted.view().sourceCleanup.blocked, 1);
+  assert.deepEqual(archived, []);
+  const next = structuredClone(h.snapshot);
+  next.matchId = 'another-match';
+  next.cursor.liveSessionId = 'another-session';
+  await restarted.claim(next, 'revision', false);
+  h.setAmbiguous(false);
+  t.mock.timers.tick(10_000);
+  await waitForCleanup();
+  assert.equal(h.statusQueries.length, 1, 'the check is rate-limited');
+  t.mock.timers.tick(60_000);
+  await waitForCleanup();
+  assert.equal(restarted.view().sourceCleanup.blocked, 0);
+  assert.equal(restarted.matchSourceRecovery(h.snapshot.matchId), 'idle');
+  assert.equal(restarted.view().activeSourceMatchId, next.matchId);
+  assert.deepEqual(archived, [1]);
+  assert.deepEqual(
+    h.statusQueries.map((query) => [query.get('matchId'), query.get('authorityRevision')]),
+    [
+      [h.snapshot.matchId, '1'],
+      [h.snapshot.matchId, '1'],
+    ],
+  );
+  assert.equal(h.releases.length, 1, 'readback must never send another release');
 });
 
 test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {

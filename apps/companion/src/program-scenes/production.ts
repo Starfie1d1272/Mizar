@@ -105,6 +105,8 @@ export function createProduction(options: ProductionDependencies) {
   let releaseGeneration = 0;
   let handoffStarted = false;
   let handoffPromise: Promise<void> | undefined;
+  let handoffRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let handoffRecoveryStopped = false;
   let obsExitState: ProductionExitEvidence['obsExitState'] = options.obsExit.previousUnconfirmed
     ? 'unconfirmed'
     : 'idle';
@@ -120,10 +122,26 @@ export function createProduction(options: ProductionDependencies) {
         completed: boolean;
       }
     | undefined;
+  function scheduleHandoffRetry(generation: number) {
+    if (handoffRecoveryStopped || !options.source?.retryExitHandoffs || handoffRetryTimer) return;
+    handoffRetryTimer = setTimeout(() => {
+      handoffRetryTimer = undefined;
+      if (generation !== releaseGeneration || releaseHandoffState !== 'unconfirmed') return;
+      if (busy || mode !== 'preparation') {
+        scheduleHandoffRetry(generation);
+        return;
+      }
+      void startHandoff(true).catch(() => {});
+    }, 10_000);
+    handoffRetryTimer.unref();
+  }
+
   function startHandoff(retry = false): Promise<void> {
     if (!options.source?.handoffForExit) return Promise.resolve();
     if (handoffPromise) return handoffPromise;
     if (handoffStarted) return Promise.resolve();
+    clearTimeout(handoffRetryTimer);
+    handoffRetryTimer = undefined;
     handoffStarted = true;
     releaseHandoffState = 'pending';
     const generation = ++releaseGeneration;
@@ -141,6 +159,7 @@ export function createProduction(options: ProductionDependencies) {
             releaseHandoffState = 'unconfirmed';
             handoffStarted = false;
             handoffPromise = undefined;
+            if (!sourceStateUnavailable(error)) scheduleHandoffRetry(generation);
           }
           options.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
           throw error;
@@ -150,6 +169,7 @@ export function createProduction(options: ProductionDependencies) {
     } catch (error) {
       handoffStarted = false;
       releaseHandoffState = 'unconfirmed';
+      if (!sourceStateUnavailable(error)) scheduleHandoffRetry(generation);
       options.warn({ stage: 'production_release', err: error }, 'Source handoff unconfirmed');
       return Promise.reject(error);
     }
@@ -623,6 +643,11 @@ export function createProduction(options: ProductionDependencies) {
     }
   }
   const production = {
+    stopHandoffRecovery() {
+      handoffRecoveryStopped = true;
+      clearTimeout(handoffRetryTimer);
+      handoffRetryTimer = undefined;
+    },
     get: view,
     statsActive: () => statsActive,
     entered: (id: string) => lastEnteredId === id && mode !== 'preparation',
@@ -824,6 +849,7 @@ export function registerProductionRoutes(
   options: { originPolicy: LocalWebOriginPolicy; production: ReturnType<typeof createProduction> },
 ) {
   const { production } = options;
+  app.addHook('onClose', async () => production.stopHandoffRecovery());
   app.get('/local/v1/production', (_request, reply) =>
     reply.header('cache-control', 'no-store').send(production.get()),
   );

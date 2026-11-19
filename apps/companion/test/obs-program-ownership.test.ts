@@ -351,7 +351,7 @@ it('does not replace a deleted original scene by a same-name scene or discard th
   expect(f.writes).not.toContain('SetCurrentProgramScene');
 });
 
-it('production finish restores the original program while the website handoff awaits retry', async () => {
+it('production finish restores the original program and retries the website handoff automatically', async () => {
   const f = await rig();
   const managed = await f.bind();
   await managed.prepareManagedCollection!(true, managed);
@@ -383,12 +383,17 @@ it('production finish restores the original program while the website handoff aw
     warn: () => {},
     error: () => {},
   });
+  cleanups.push(async () => {
+    production.stopHandoffRecovery();
+    vi.useRealTimers();
+  });
   const entered = await production.change({
     action: 'enter',
     expectedRevision: production.get().revision,
     preparationId: null,
   });
   expect(entered.ok).toBe(true);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const finished = await production.change({
     action: 'finish',
     expectedRevision: production.get().revision,
@@ -400,11 +405,6 @@ it('production finish restores the original program while the website handoff aw
   expect(await production.waitForObsExit()).toBe('confirmed');
   expect(f.state.collection).toBe('个人');
   expect(f.state.scene).toBe('personal-program');
-  const retry = await production.change({
-    action: 'retry-handoff',
-    expectedRevision: production.get().revision,
-    preparationId: null,
-  });
-  expect(retry.ok).toBe(true);
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(production.get().releaseHandoffState).toBe('recorded');
 });

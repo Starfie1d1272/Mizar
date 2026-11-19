@@ -2,7 +2,7 @@ import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
+import type { LiveSnapshotV1, MatchSourceRecovery, ReliableEventV1 } from '@mizar/protocol/output';
 import {
   RivalHubAuthorization,
   OFFICIAL_RIVALHUB_URL,
@@ -26,10 +26,21 @@ import { SerialCommitQueue } from './serial-commit.js';
 import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
+  exactKey,
+  matchKey,
+  sameScope,
   type ExactSource,
   type ClaimIntent,
   type SourceScope,
 } from './rivalhub-source-state.js';
+import {
+  canCheckBlockedSource,
+  confirmedSourceStatus,
+  confirmsClosedSource,
+  releaseRetry,
+  serverRetryAt,
+  sourceStatusRequest,
+} from './rivalhub-source-recovery.js';
 
 export { OFFICIAL_RIVALHUB_URL } from './rivalhub-authorization.js';
 export { statsTarget, type StatsTarget } from './rivalhub-read-client.js';
@@ -195,6 +206,8 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
+  private cleanupCursor = 0;
+  private readonly blockedStatusRetryAt = new Map<string, number>();
   private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
   private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
   private readonly exitHandoffs = new Map<
@@ -202,6 +215,7 @@ export class RivalHubConnection {
     { identity: ExactSource; cause: 'finish' | 'switch' | 'recovery' | 'shutdown' }
   >();
   private readonly sourceCommands = new SerialCommitQueue();
+  private readonly handoffCommits = new SerialCommitQueue();
   private automaticClaimAttempts: {
     installation: Installation;
     target: string;
@@ -211,7 +225,9 @@ export class RivalHubConnection {
   private intentReconcileCursor = 0;
   private readonly intentRetry = new Map<string, { attempts: number; nextAt: number }>();
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
+  private cleanupScheduled = false;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
+  private cleanupMatches = new Map<string, 'remote_cleanup' | 'retained'>();
   private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
   private archiveSource:
     ((identity: ExactSource, disposition?: 'revoked') => Promise<void>) | undefined;
@@ -526,9 +542,8 @@ export class RivalHubConnection {
 
   private async confirmedCapture(identity: ExactSource): Promise<CaptureReference | undefined> {
     const state = await this.sourceState.snapshot();
-    return state.records.find(
-      (record) => JSON.stringify(record.identity) === JSON.stringify(identity),
-    )?.captureReference;
+    return state.records.find((record) => exactKey(record.identity) === exactKey(identity))
+      ?.captureReference;
   }
 
   private async restoreConfirmedCapture(identity: ExactSource): Promise<void> {
@@ -614,15 +629,20 @@ export class RivalHubConnection {
 
   startSourceCleanup(): void {
     if (!this.sourceStateAvailable || this.cleanupTimer) return;
-    this.cleanupTimer = setInterval(() => {
-      void this.sourceCommands
-        .run(() => this.cleanup(false))
-        .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
-    }, 10_000);
+    this.cleanupTimer = setInterval(() => this.scheduleSourceCleanup(), 10_000);
     this.cleanupTimer.unref();
+    this.scheduleSourceCleanup();
+  }
+
+  private scheduleSourceCleanup(): void {
+    if (!this.sourceStateAvailable || this.shutdownSignal?.aborted || this.cleanupScheduled) return;
+    this.cleanupScheduled = true;
     void this.sourceCommands
       .run(() => this.cleanup(false))
-      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error))
+      .finally(() => {
+        this.cleanupScheduled = false;
+      });
   }
 
   bindingChanged(matchId: string | null): void {
@@ -672,6 +692,9 @@ export class RivalHubConnection {
 
   async closeSourceState(): Promise<void> {
     this.sourceStateAvailable = false;
+    clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+    await this.handoffCommits.flush();
     this.unavailableLive.clear();
     await this.sourceState.close();
   }
@@ -683,6 +706,17 @@ export class RivalHubConnection {
 
   private async updateCleanupSummary(): Promise<void> {
     const state = await this.sourceState.snapshot();
+    const cleanupMatches = new Map<string, 'remote_cleanup' | 'retained'>();
+    for (const record of state.records) {
+      if (record.state === 'owned') continue;
+      const key = matchKey(record.identity);
+      if (record.state === 'blocked' && !canCheckBlockedSource(record, false)) {
+        if (!cleanupMatches.has(key)) cleanupMatches.set(key, 'retained');
+      } else {
+        cleanupMatches.set(key, 'remote_cleanup');
+      }
+    }
+    for (const { scope } of state.intents) cleanupMatches.set(matchKey(scope), 'remote_cleanup');
     this.cleanupSummary = {
       pending: state.records.filter((item) =>
         ['release_pending', 'archive_pending'].includes(item.state),
@@ -696,9 +730,18 @@ export class RivalHubConnection {
         (record) => this.captureLifecycle?.coverage(record.identity).state === 'unknown',
       ).length,
     };
+    this.cleanupMatches = cleanupMatches;
   }
 
-  private async hasCurrentCleanup(): Promise<boolean> {
+  matchSourceRecovery(matchId: string): MatchSourceRecovery {
+    if (!this.installation) return 'idle';
+    const key = matchKey({ ...this.installation, matchId });
+    if ([...this.exitHandoffs.values()].some(({ identity }) => matchKey(identity) === key))
+      return 'local_handoff';
+    return this.cleanupMatches.get(key) ?? 'idle';
+  }
+
+  private async hasOutstandingReleaseWork(): Promise<boolean> {
     const state = await this.sourceState.snapshot();
     return (
       state.records.some(
@@ -750,24 +793,16 @@ export class RivalHubConnection {
 
   private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
     if (!this.settleSource) return false;
-    const key = JSON.stringify([
-      identity.baseUrl,
-      identity.competitionId,
-      identity.installationId,
-      identity.matchId,
-      identity.producerInstanceId,
-      identity.liveSessionId,
-      identity.authorityRevision,
-    ]);
+    const key = exactKey(identity);
     const drain = async () => {
       const requests = [...this.liveInFlight.entries()]
-        .filter(([source]) => JSON.stringify(this.exactSource(source)) === JSON.stringify(identity))
+        .filter(([source]) => exactKey(this.exactSource(source)) === exactKey(identity))
         .flatMap(([, pending]) => [...pending]);
       // The output owner fences new events synchronously on entry. Only after
       // that fence exists may a paused source deliver its already queued tail.
       const disposition = this.settleSource!(identity).catch(() => false);
       const source = this.source;
-      if (source?.draining && JSON.stringify(this.exactSource(source)) === JSON.stringify(identity))
+      if (source?.draining && exactKey(this.exactSource(source)) === exactKey(identity))
         source.drainReliable = true;
       await Promise.allSettled(requests);
       return disposition;
@@ -853,60 +888,27 @@ export class RivalHubConnection {
     installation: Installation | null,
   ): Promise<void> {
     if (!this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
-    const query = new URLSearchParams({
-      matchId: intent.scope.matchId,
-      producerInstanceId: intent.scope.producerInstanceId,
-      liveSessionId: intent.scope.liveSessionId,
-    });
-    const response = await this.authorization.request(`source-status?${query}`, {
+    const response = await this.authorization.request(sourceStatusRequest(intent.scope), {
       signal: this.cleanupRequestSignal(deadline),
     });
     if (!response.ok) return;
-    const result = (await readReliableBody(response)) as
-      | {
-          status?: unknown;
-          source?: Record<string, unknown>;
-        }
-      | undefined;
+    const body: unknown = await readReliableBody(response);
     this.shutdownSignal?.throwIfAborted();
-    if (result?.status !== 'found' || !result.source) return;
-    const found = result.source;
-    if (
-      found.installationId !== intent.scope.installationId ||
-      found.competitionId !== intent.scope.competitionId ||
-      found.matchId !== intent.scope.matchId ||
-      found.producerInstanceId !== intent.scope.producerInstanceId ||
-      found.liveSessionId !== intent.scope.liveSessionId ||
-      !Number.isSafeInteger(found.authorityRevision) ||
-      (found.authorityRevision as number) <= 0 ||
-      (found.state !== 'open' && found.state !== 'closed')
-    )
-      return;
-    const revision = found.authorityRevision as number;
+    const found = confirmedSourceStatus(body, intent.scope);
+    if (!found) return;
+    const revision = found.authorityRevision;
     const quarantined = await this.sourceState.getQuarantined(intent.scope);
     // An equal revision is conclusive only when this claim started while that
     // exact authority was held. A watermark by itself proves no such thing.
     const legacyHeld = state.records.some(
       ({ identity }) =>
-        identity.baseUrl === intent.scope.baseUrl &&
-        identity.competitionId === intent.scope.competitionId &&
-        identity.installationId === intent.scope.installationId &&
-        identity.matchId === intent.scope.matchId &&
-        identity.producerInstanceId === intent.scope.producerInstanceId &&
-        identity.liveSessionId === intent.scope.liveSessionId &&
+        sameScope(identity, intent.scope) &&
         identity.authorityRevision === revision &&
         !quarantined.some(
           (item) => item.kind === 'watermark' && item.identity.authorityRevision >= revision,
         ) &&
         !state.watermarks.some(
-          (item) =>
-            item.baseUrl === identity.baseUrl &&
-            item.competitionId === identity.competitionId &&
-            item.installationId === identity.installationId &&
-            item.matchId === identity.matchId &&
-            item.producerInstanceId === identity.producerInstanceId &&
-            item.liveSessionId === identity.liveSessionId &&
-            item.authorityRevision >= revision,
+          (item) => sameScope(item, identity) && item.authorityRevision >= revision,
         ),
     );
     if (intent.previousAuthorityRevision !== null && revision <= intent.previousAuthorityRevision) {
@@ -920,18 +922,8 @@ export class RivalHubConnection {
     if (found.state === 'closed') {
       await this.sourceState.clearIntent(intent.id);
     } else {
-      const identity = await this.sourceState.confirmClaim(
-        intent.id,
-        found.authorityRevision as number,
-        'release_pending',
-      );
-      const key = this.trackExitHandoff(identity, 'recovery');
-      await this.restoreConfirmedCapture(identity);
-      this.sealCapture(identity);
-      // A failed write must still leave the original source ready for a later drain.
-      this.freezePreviousClaimSource(identity, claimedFrom, installation);
-      await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
-      this.exitHandoffs.delete(key);
+      const identity = await this.sourceState.confirmClaim(intent.id, revision, 'release_pending');
+      await this.handoffRecoveredClaim(identity, claimedFrom, installation, 'recovery');
     }
   }
 
@@ -946,13 +938,15 @@ export class RivalHubConnection {
     this.requireSourceState();
     ++this.bindingGeneration;
     const source = this.source;
+    let key: string | undefined;
     if (source && (matchId === undefined || source.matchId === matchId)) {
       this.stopSync(source.matchId);
       source.draining = true;
       source.paused = true;
-      this.trackExitHandoff(this.exactSource(source), cause);
+      key = this.trackExitHandoff(this.exactSource(source), cause);
     }
-    await this.persistExitHandoffs();
+    if (matchId === undefined || key !== undefined)
+      await this.persistExitHandoffs(matchId === undefined ? undefined : key);
     await this.updateCleanupSummary();
   }
 
@@ -970,7 +964,7 @@ export class RivalHubConnection {
   private finishExitHandoffs(handoff: Promise<void>): Promise<void> {
     void handoff
       .then(
-        () => this.sourceCommands.run(() => this.cleanup(false)),
+        () => this.scheduleSourceCleanup(),
         () => undefined,
       )
       .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
@@ -981,33 +975,35 @@ export class RivalHubConnection {
     identity: ExactSource,
     cause: 'finish' | 'switch' | 'recovery' | 'shutdown',
   ): string {
-    const key = JSON.stringify(identity);
+    const key = exactKey(identity);
     if (!this.exitHandoffs.has(key)) this.exitHandoffs.set(key, { identity, cause });
     return key;
   }
 
-  private async persistExitHandoffs(): Promise<void> {
+  private persistExitHandoffs(onlyKey?: string): Promise<void> {
+    return this.handoffCommits.run(() => {
+      this.requireSourceState();
+      return this.persistTrackedHandoffs(onlyKey);
+    });
+  }
+
+  private async persistTrackedHandoffs(onlyKey?: string): Promise<void> {
     for (const [key, { identity, cause }] of this.exitHandoffs) {
+      if (onlyKey !== undefined && key !== onlyKey) continue;
       const active = this.source;
-      const current = active?.draining && JSON.stringify(this.exactSource(active)) === key;
+      const current = active?.draining && exactKey(this.exactSource(active)) === key;
       if (current && this.captureLifecycle && !(await this.captureLifecycle.seal(identity))) {
         if (!this.captureLifecycle.coverage(identity).durableUnknown)
           throw new Error('rivalhub_source_capture_unconfirmed');
         this.cleanupEvidence(identity, 'source_capture_coverage_unknown', 0);
       }
       const state = await this.sourceState.snapshot();
-      const record = state.records.find((item) => JSON.stringify(item.identity) === key);
+      const record = state.records.find((item) => exactKey(item.identity) === key);
       if (record) await this.sourceState.handoff(identity, cause);
       else if (
         !state.watermarks.some(
           (item) =>
-            item.baseUrl === identity.baseUrl &&
-            item.competitionId === identity.competitionId &&
-            item.installationId === identity.installationId &&
-            item.matchId === identity.matchId &&
-            item.producerInstanceId === identity.producerInstanceId &&
-            item.liveSessionId === identity.liveSessionId &&
-            item.authorityRevision >= identity.authorityRevision,
+            sameScope(item, identity) && item.authorityRevision >= identity.authorityRevision,
         ) &&
         !(await this.sourceState.hasQuarantinedSource(identity))
       )
@@ -1022,7 +1018,12 @@ export class RivalHubConnection {
 
   private async cleanup(force: boolean, deadline = Date.now() + 7000): Promise<void> {
     this.shutdownSignal?.throwIfAborted();
-    await this.persistExitHandoffs();
+    try {
+      await this.persistExitHandoffs();
+    } catch (error) {
+      if (force) throw error;
+      this.onDiagnostic('source_handoff', error);
+    }
     await this.isolateRevokedSources();
     for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
       if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
@@ -1041,56 +1042,35 @@ export class RivalHubConnection {
       if (record.state !== 'archive_pending') continue;
       await this.archiveConfirmedSource(record.identity);
     }
-    for (const record of state.records) {
-      if (this.shutdownSignal?.aborted || Date.now() >= deadline) break;
-      if (record.state === 'owned' || record.state === 'archive_pending') continue;
-      if (this.confirmedSourcesAwaitingPersistence.has(JSON.stringify(record.identity))) continue;
+    const pending = state.records.filter(
+      (record) => record.state === 'release_pending' || canCheckBlockedSource(record, force),
+    );
+    const pendingKeys = new Set(pending.map(({ identity }) => exactKey(identity)));
+    for (const key of this.blockedStatusRetryAt.keys())
+      if (!pendingKeys.has(key)) this.blockedStatusRetryAt.delete(key);
+    for (const key of this.cleanupAttempts.keys())
+      if (!pendingKeys.has(key)) this.cleanupAttempts.delete(key);
+
+    const start = !force && pending.length ? this.cleanupCursor % pending.length : 0;
+    let examined = 0;
+    while (!this.shutdownSignal?.aborted && Date.now() < deadline && examined < pending.length) {
+      const record = pending[(start + examined++) % pending.length]!;
+      const attemptKey = exactKey(record.identity);
+      if (
+        this.exitHandoffs.has(attemptKey) ||
+        this.confirmedSourcesAwaitingPersistence.has(attemptKey)
+      )
+        continue;
       if (!this.scopeMatches(record.identity)) {
         if (record.state === 'release_pending')
           await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
         continue;
       }
       if (record.state === 'blocked') {
-        if (!force) continue;
-        const identity = record.identity;
-        const query = new URLSearchParams({
-          matchId: identity.matchId,
-          producerInstanceId: identity.producerInstanceId,
-          liveSessionId: identity.liveSessionId,
-          authorityRevision: String(identity.authorityRevision),
-        });
-        try {
-          const response = await this.authorization.request(`source-status?${query}`, {
-            signal: this.cleanupRequestSignal(deadline),
-          });
-          if (!response.ok) continue;
-          const result = (await readReliableBody(response)) as
-            | {
-                status?: unknown;
-                source?: Record<string, unknown>;
-              }
-            | undefined;
-          this.shutdownSignal?.throwIfAborted();
-          const found = result?.source;
-          if (
-            result?.status === 'found' &&
-            found?.state === 'closed' &&
-            found.installationId === identity.installationId &&
-            found.competitionId === identity.competitionId &&
-            found.matchId === identity.matchId &&
-            found.producerInstanceId === identity.producerInstanceId &&
-            found.liveSessionId === identity.liveSessionId &&
-            found.authorityRevision === identity.authorityRevision
-          ) {
-            if (await this.persistConfirmedSource(identity))
-              await this.archiveConfirmedSource(identity);
-          }
-        } catch (error) {
-          this.onDiagnostic('source_status', error);
-        }
+        if ((this.blockedStatusRetryAt.get(attemptKey) ?? 0) <= Date.now())
+          await this.checkBlockedSource(record.identity, record.attempts, deadline);
         continue;
       }
-      const attemptKey = JSON.stringify(record.identity);
       if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
       const cycle = this.cleanupAttempts.get(attemptKey);
       if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
@@ -1105,9 +1085,10 @@ export class RivalHubConnection {
         // A later bounded round probes for network recovery; no identity is discarded.
         nextCycleAt: count >= 8 ? Date.now() + 600_000 : 0,
       });
+      this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
+      let response: Response;
       try {
-        this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
-        const response = await this.authorization.request('release', {
+        response = await this.authorization.request('release', {
           method: 'POST',
           signal: this.cleanupRequestSignal(deadline),
           headers: {
@@ -1120,64 +1101,6 @@ export class RivalHubConnection {
             liveSessionId: identity.liveSessionId,
           }),
         });
-        const result = response.ok ? await readReliableBody(response) : undefined;
-        this.shutdownSignal?.throwIfAborted();
-        if (
-          response.ok &&
-          result &&
-          typeof result === 'object' &&
-          'released' in result &&
-          result.released === true
-        ) {
-          if (
-            this.source &&
-            JSON.stringify(this.exactSource(this.source)) === JSON.stringify(identity)
-          )
-            this.source = null;
-          if (!(await this.persistConfirmedSource(identity))) continue;
-          if (await this.archiveConfirmedSource(identity)) {
-            this.cleanupAttempts.delete(attemptKey);
-            this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
-          }
-          continue;
-        }
-        if (response.ok) {
-          await this.sourceState.failure(
-            identity,
-            'invalid_response',
-            new Date(Date.now() + 5000).toISOString(),
-            false,
-          );
-          this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
-          continue;
-        }
-        const retryable =
-          response.status === 408 || response.status === 429 || response.status >= 500;
-        const delay = Math.floor(
-          Math.max(1000, Math.min(60_000, 1000 * 2 ** Math.min(record.attempts, 6))) *
-            (0.8 + Math.random() * 0.4),
-        );
-        const header = response.headers.get('retry-after');
-        const retryAfter = header
-          ? /^\d+$/.test(header.trim())
-            ? Number(header) * 1000
-            : Date.parse(header) - Date.now()
-          : 0;
-        const serverDelay = Number.isFinite(retryAfter)
-          ? Math.max(0, Math.min(retryAfter, 253_402_300_799_000 - Date.now()))
-          : 0;
-        await this.sourceState.failure(
-          identity,
-          `http_${response.status}`,
-          retryable ? new Date(Date.now() + Math.max(delay, serverDelay)).toISOString() : null,
-          !retryable,
-          retryable && serverDelay > 0 ? new Date(Date.now() + serverDelay).toISOString() : null,
-        );
-        this.cleanupEvidence(
-          identity,
-          retryable ? 'release_pending' : 'release_blocked',
-          record.attempts + 1,
-        );
       } catch (error) {
         if (this.shutdownSignal?.aborted) return;
         this.onDiagnostic('source_release', error);
@@ -1188,9 +1111,84 @@ export class RivalHubConnection {
           false,
         );
         this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
+        continue;
       }
+      const result = response.ok ? await readReliableBody(response) : undefined;
+      if (this.shutdownSignal?.aborted) return;
+      if (
+        result &&
+        typeof result === 'object' &&
+        'released' in result &&
+        result.released === true
+      ) {
+        if (this.source && exactKey(this.source) === attemptKey) this.source = null;
+        if (!(await this.persistConfirmedSource(identity))) continue;
+        if (await this.archiveConfirmedSource(identity)) {
+          this.cleanupAttempts.delete(attemptKey);
+          this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
+        }
+        continue;
+      }
+      if (response.ok) {
+        await this.sourceState.failure(
+          identity,
+          'invalid_response',
+          new Date(Date.now() + 5000).toISOString(),
+          false,
+        );
+        this.cleanupEvidence(identity, 'release_pending', record.attempts + 1);
+        continue;
+      }
+      const retry = releaseRetry(
+        response.status,
+        record.attempts,
+        response.headers.get('retry-after'),
+        Date.now(),
+      );
+      await this.sourceState.failure(
+        identity,
+        `http_${response.status}`,
+        retry.nextAttemptAt,
+        retry.blocked,
+        retry.retryAfterAt,
+      );
+      this.cleanupEvidence(
+        identity,
+        retry.blocked ? 'release_blocked' : 'release_pending',
+        record.attempts + 1,
+      );
     }
+    if (!force) this.cleanupCursor = start + examined;
     if (!this.shutdownSignal?.aborted) await this.updateCleanupSummary();
+  }
+
+  private async checkBlockedSource(
+    identity: ExactSource,
+    attempts: number,
+    deadline: number,
+  ): Promise<void> {
+    const key = exactKey(identity);
+    this.blockedStatusRetryAt.set(key, Date.now() + 60_000);
+    try {
+      const response = await this.authorization.request(
+        sourceStatusRequest(identity, identity.authorityRevision),
+        { signal: this.cleanupRequestSignal(deadline) },
+      );
+      if (!response.ok) {
+        const retryAt = serverRetryAt(response.headers.get('retry-after'), Date.now());
+        if (retryAt) this.blockedStatusRetryAt.set(key, Math.max(Date.now() + 60_000, retryAt));
+        return;
+      }
+      const body: unknown = await readReliableBody(response);
+      this.shutdownSignal?.throwIfAborted();
+      if (!confirmsClosedSource(body, identity)) return;
+      if (await this.persistConfirmedSource(identity)) {
+        this.cleanupEvidence(identity, 'source_status_closed', attempts);
+        await this.archiveConfirmedSource(identity);
+      }
+    } catch (error) {
+      if (!this.shutdownSignal?.aborted) this.onDiagnostic('source_status', error);
+    }
   }
 
   private async isolateRevokedSources(preferred: readonly ExactSource[] = []): Promise<void> {
@@ -1212,10 +1210,9 @@ export class RivalHubConnection {
     } catch (error) {
       this.onDiagnostic('source_revoked_scan', error);
     }
-    for (const identity of [...preferred, ...backlog])
-      candidates.set(JSON.stringify(identity), identity);
+    for (const identity of [...preferred, ...backlog]) candidates.set(exactKey(identity), identity);
     for (const identity of candidates.values()) {
-      const key = JSON.stringify(identity);
+      const key = exactKey(identity);
       if (this.isolatedRevokedSources.has(key)) continue;
       if ((this.revokedIsolationRetry.get(key)?.retryAt ?? 0) > now) continue;
       try {
@@ -1231,7 +1228,7 @@ export class RivalHubConnection {
   }
 
   private async persistConfirmedSource(identity: ExactSource): Promise<boolean> {
-    const key = JSON.stringify(identity);
+    const key = exactKey(identity);
     this.confirmedSourcesAwaitingPersistence.set(key, identity);
     try {
       await this.sourceState.confirmReleased(identity);
@@ -1442,40 +1439,18 @@ export class RivalHubConnection {
       liveSessionId: snapshot.cursor.liveSessionId,
     };
     const hasPendingHandoff = () =>
-      [...this.exitHandoffs.values()].some(
-        ({ identity }) =>
-          identity.baseUrl === scope.baseUrl &&
-          identity.competitionId === scope.competitionId &&
-          identity.installationId === scope.installationId &&
-          identity.matchId === scope.matchId &&
-          identity.producerInstanceId === scope.producerInstanceId &&
-          identity.liveSessionId === scope.liveSessionId,
-      );
-    if (hasPendingHandoff()) throw new Error('原数据源交接未确认，请先重试交接。');
+      [...this.exitHandoffs.values()].some(({ identity }) => sameScope(identity, scope));
+    if (hasPendingHandoff()) throw new Error('原数据源正在完成本地交接。');
     const durableState = await this.sourceState.snapshot();
-    if (hasPendingHandoff()) throw new Error('原数据源交接未确认，请先重试交接。');
-    const matchingRecords = durableState.records.filter(
-      (record) =>
-        record.identity.baseUrl === scope.baseUrl &&
-        record.identity.installationId === scope.installationId &&
-        record.identity.competitionId === scope.competitionId &&
-        record.identity.matchId === scope.matchId &&
-        record.identity.producerInstanceId === scope.producerInstanceId &&
-        record.identity.liveSessionId === scope.liveSessionId,
+    if (hasPendingHandoff()) throw new Error('原数据源正在完成本地交接。');
+    const matchingRecords = durableState.records.filter(({ identity }) =>
+      sameScope(identity, scope),
     );
     if (matchingRecords.some((record) => record.state !== 'owned'))
-      throw new Error('原数据源尚待释放或核对，请处理后重新认领。');
+      throw new Error('正在核对原数据源。');
     const priorRevisions = matchingRecords.map((record) => record.identity.authorityRevision);
     for (const item of durableState.watermarks)
-      if (
-        item.baseUrl === scope.baseUrl &&
-        item.installationId === scope.installationId &&
-        item.competitionId === scope.competitionId &&
-        item.matchId === scope.matchId &&
-        item.producerInstanceId === scope.producerInstanceId &&
-        item.liveSessionId === scope.liveSessionId
-      )
-        priorRevisions.push(item.authorityRevision);
+      if (sameScope(item, scope)) priorRevisions.push(item.authorityRevision);
     if (generation !== this.bindingGeneration || !isCurrent())
       throw new Error('比赛已变化，请重新确认网站同步。');
     const intent = await this.sourceState.beginClaim(
@@ -1553,7 +1528,7 @@ export class RivalHubConnection {
         if (
           claimedFrom &&
           this.source === claimedFrom &&
-          JSON.stringify(this.exactSource(claimedFrom)) !== JSON.stringify(identity)
+          exactKey(this.exactSource(claimedFrom)) !== exactKey(identity)
         ) {
           claimedFrom.draining = true;
           claimedFrom.paused = true;
@@ -1687,19 +1662,26 @@ export class RivalHubConnection {
     claimedFrom: Source | null,
     installation: Installation,
   ): Promise<void> {
-    // Keep the confirmed identity and its cause until the handoff is durable.
-    const key = this.trackExitHandoff(identity, 'switch');
-    this.freezePreviousClaimSource(identity, claimedFrom, installation);
-    await this.restoreConfirmedCapture(identity);
-    this.sealCapture(identity);
-    await this.sourceState.handoff(identity, this.exitHandoffs.get(key)!.cause);
-    // Publish the durable responsibility before returning the stale-claim error.
-    // Keep the in-memory handoff too if refreshing this read-only summary fails.
+    await this.handoffRecoveredClaim(identity, claimedFrom, installation, 'switch');
     await this.updateCleanupSummary();
-    this.exitHandoffs.delete(key);
-    void this.sourceCommands
-      .run(() => this.cleanup(false))
-      .catch((error: unknown) => this.onDiagnostic('source_cleanup', error));
+    this.scheduleSourceCleanup();
+  }
+
+  private handoffRecoveredClaim(
+    identity: ExactSource,
+    claimedFrom: Source | null,
+    installation: Installation | null,
+    cause: 'switch' | 'recovery',
+  ): Promise<void> {
+    // Fence the previous authority before awaiting the local commit queue.
+    this.freezePreviousClaimSource(identity, claimedFrom, installation);
+    return this.handoffCommits.run(async () => {
+      this.requireSourceState();
+      const key = this.trackExitHandoff(identity, cause);
+      await this.restoreConfirmedCapture(identity);
+      this.sealCapture(identity);
+      await this.persistTrackedHandoffs(key);
+    });
   }
 
   async release(): Promise<void> {
@@ -1717,26 +1699,29 @@ export class RivalHubConnection {
   async retryStoppedSource(matchId: string, isCurrent: () => boolean): Promise<void> {
     this.requireSourceState();
     const source = this.source;
-    const identity = source && this.installation ? this.exactSource(source) : undefined;
+    if (!source || !this.installation) throw new Error('rivalhub_stopped_source_changed');
+    const identity = this.exactSource(source);
+    const key = exactKey(identity);
     const generation = this.bindingGeneration;
-    const current = () =>
-      Boolean(
-        source &&
-        identity &&
-        this.source === source &&
-        this.bindingGeneration === generation &&
-        this.stoppedMatchId === matchId &&
-        source.matchId === matchId &&
-        source.draining === true &&
-        this.scopeMatches(identity) &&
-        JSON.stringify(this.exactSource(source)) === JSON.stringify(identity) &&
-        isCurrent(),
-      );
-    if (!current()) throw new Error('rivalhub_stopped_source_changed');
-    return this.sourceCommands.run(async () => {
-      if (!current()) throw new Error('rivalhub_stopped_source_changed');
-      await this.releaseLocked();
-    });
+    await this.finishExitHandoffs(
+      this.handoffCommits.run(async () => {
+        this.requireSourceState();
+        if (
+          this.source !== source ||
+          this.bindingGeneration !== generation ||
+          this.stoppedMatchId !== matchId ||
+          source.matchId !== matchId ||
+          !source.draining ||
+          !this.scopeMatches(identity) ||
+          exactKey(source) !== key ||
+          !this.exitHandoffs.has(key) ||
+          !isCurrent()
+        )
+          throw new Error('rivalhub_stopped_source_changed');
+        await this.persistTrackedHandoffs(key);
+        await this.updateCleanupSummary();
+      }),
+    );
   }
 
   private async releaseLocked(): Promise<void> {
@@ -1744,7 +1729,7 @@ export class RivalHubConnection {
     const deadline = Date.now() + 8000;
     await this.retireCurrent('finish');
     await this.cleanup(true, deadline);
-    if (await this.hasCurrentCleanup()) throw new Error('数据源释放待重试或核对。');
+    if (await this.hasOutstandingReleaseWork()) throw new Error('数据源释放待重试或核对。');
   }
 
   private async upload(
@@ -1768,7 +1753,7 @@ export class RivalHubConnection {
       retainedSource &&
       (!this.source ||
         !this.scopeMatches(retainedSource) ||
-        JSON.stringify(this.exactSource(this.source)) !== JSON.stringify(retainedSource))
+        exactKey(this.exactSource(this.source)) !== exactKey(retainedSource))
         ? retainedSource
         : this.source;
     if (!source) {
@@ -2153,8 +2138,8 @@ export class RivalHubConnection {
       return 'retry';
     const installation = this.installation;
     const state = await this.sourceState.snapshot();
-    const key = JSON.stringify(identity);
-    const record = state.records.find((item) => JSON.stringify(item.identity) === key);
+    const key = exactKey(identity);
+    const record = state.records.find((item) => exactKey(item.identity) === key);
     if (
       !record ||
       !['owned', 'release_pending'].includes(record.state) ||
@@ -2163,7 +2148,7 @@ export class RivalHubConnection {
       this.confirmedSourcesAwaitingPersistence.has(key)
     )
       return 'retry';
-    if (this.source && JSON.stringify(this.exactSource(this.source)) === key)
+    if (this.source && exactKey(this.exactSource(this.source)) === key)
       return this.sendReliable(event, current, signal, retainedLineup, identity);
     const valid = () =>
       this.installation === installation &&

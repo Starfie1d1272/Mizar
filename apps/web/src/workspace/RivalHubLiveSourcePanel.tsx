@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MatchSourceRecovery } from '@mizar/protocol/output';
 import { desktopInvoke } from './client';
 import { Button, Dialog } from '../ui/primitives';
 import { syncHealthText, type SyncHealth } from './sync-health';
@@ -20,13 +21,8 @@ type Connection = {
   activeDeviceName: string | null;
   stoppedMatchId?: string | null;
   sourceState?: 'ready' | 'unavailable';
-  sourceCleanup?: {
-    pending: number;
-    blocked: number;
-    claimIntent: boolean;
-    handoffPending: number;
-    coverageUnknown?: number;
-  } | null;
+  matchSourceRecovery?: MatchSourceRecovery | null;
+  sourceCleanup?: { coverageUnknown?: number } | null;
   lastRefreshAt?: string | null;
   refreshError?: string | null;
   syncHealth?: SyncHealth;
@@ -47,22 +43,14 @@ const scope = (value: Connection | null) =>
 
 function feedbackResolved(feedback: SyncFeedback, connection: Connection): boolean {
   switch (feedback.command) {
-    case '/operator/rivalhub/source/retry-stop':
-    case '/operator/rivalhub/source/release': {
-      const cleanup = connection.sourceCleanup;
+    case '/operator/rivalhub/source/release':
       return Boolean(
-        (feedback.command !== '/operator/rivalhub/source/retry-stop' || !feedback.error) &&
         connection.activeMatchId &&
         connection.stoppedMatchId === connection.activeMatchId &&
         connection.activeSourceMatchId !== connection.activeMatchId &&
         connection.sourceState === 'ready' &&
-        cleanup &&
-        cleanup.pending === 0 &&
-        cleanup.blocked === 0 &&
-        !cleanup.claimIntent &&
-        cleanup.handoffPending === 0,
+        connection.matchSourceRecovery !== 'local_handoff',
       );
-    }
     case '/operator/rivalhub/refresh':
       return Boolean(
         !feedback.confirmationRequired &&
@@ -106,6 +94,12 @@ function nextAction(connection: Connection): SyncAction | null {
   }
   if (connection.sourceReady !== true || !connection.activeMatchId) return null;
   if (connection.activeDeviceName) return { label: '接管本场网站同步', takeover: true };
+  if (
+    connection.activeSourceMatchId !== connection.activeMatchId &&
+    connection.matchSourceRecovery &&
+    connection.matchSourceRecovery !== 'idle'
+  )
+    return null;
   if (connection.stoppedMatchId === connection.activeMatchId)
     return { label: '恢复本场网站同步', command: '/operator/rivalhub/source/resume' };
   if (reason === 'context_stale' || reason === 'context_conflict')
@@ -135,10 +129,10 @@ function nextAction(connection: Connection): SyncAction | null {
   )
     return { label: '查看运行诊断', path: '/debug' };
   if (connection.activeSourceMatchId !== connection.activeMatchId)
-    return connection.sourceCleanup?.claimIntent || connection.sourceCleanup?.pending
-      ? { label: '恢复本场网站同步', command: '/operator/rivalhub/source/resume' }
-      : { label: '开启本场网站同步', command: '/operator/rivalhub/source/claim' };
-  return connection.syncHealth?.status === 'attention'
+    return { label: '开启本场网站同步', command: '/operator/rivalhub/source/claim' };
+  return connection.syncHealth?.status === 'attention' &&
+    !['network_failed', 'timeout', 'http_408', 'http_429'].includes(reason ?? '') &&
+    !/^http_5\d\d$/.test(reason ?? '')
     ? { label: '重试网站同步', command: '/operator/rivalhub/source/retry' }
     : null;
 }
@@ -157,6 +151,18 @@ function statusText(connection: Connection): string {
   if (connection.activeDeviceName) return `当前由 ${connection.activeDeviceName} 提供实时数据。`;
   if (connection.activeMatchId && connection.stoppedMatchId === connection.activeMatchId)
     return '本机网站同步已停止。';
+  if (
+    connection.activeMatchId &&
+    connection.activeSourceMatchId !== connection.activeMatchId &&
+    (connection.matchSourceRecovery === 'local_handoff' ||
+      connection.matchSourceRecovery === 'remote_cleanup')
+  )
+    return '正在后台核对本场网站同步。';
+  if (
+    connection.activeSourceMatchId !== connection.activeMatchId &&
+    connection.matchSourceRecovery === 'retained'
+  )
+    return '本场网站同步待核对，原记录已保留。';
   if (connection.activeSourceMatchId !== connection.activeMatchId || !connection.activeMatchId)
     return connection.syncHealth?.reason && connection.syncHealth.reason !== 'source_unavailable'
       ? syncHealthText(connection.syncHealth)
@@ -296,14 +302,12 @@ export function RivalHubLiveSourcePanel({
           throw new Error(body?.message ?? '网站同步操作未完成，请重试。');
         }
         confirmationRequired = body?.pending === true;
-        message = selected.command.endsWith('/retry-stop')
-          ? (body?.message ?? '停止交接重试已提交，请重新检查网站同步状态。')
-          : selected.command.endsWith('/release')
-            ? (body?.message ?? '已停止本机网站同步。')
-            : selected.command.endsWith('/refresh') ||
-                selected.command === '/operator/rivalhub/output/retry'
-              ? (body?.message ?? '比赛资料已刷新。')
-              : '操作已提交，等待网站接收本场新数据确认。';
+        message = selected.command.endsWith('/release')
+          ? (body?.message ?? '已停止本机网站同步。')
+          : selected.command.endsWith('/refresh') ||
+              selected.command === '/operator/rivalhub/output/retry'
+            ? (body?.message ?? '比赛资料已刷新。')
+            : '操作已提交，等待网站接收本场新数据确认。';
       }
     } catch (error) {
       failed = true;
@@ -340,11 +344,6 @@ export function RivalHubLiveSourcePanel({
     connection.activeSourceMatchId === connection.activeMatchId &&
     connection.stoppedMatchId !== connection.activeMatchId,
   );
-  const hasStoppedSource = Boolean(
-    connection?.activeMatchId &&
-    connection.stoppedMatchId === connection.activeMatchId &&
-    connection.activeSourceMatchId === connection.activeMatchId,
-  );
   const primary = connection ? nextAction(connection) : null;
   const visibleFeedback = feedback?.scope === currentScope ? feedback : null;
   const pending = busy || Boolean(connection?.sourceCommandPending || visibleFeedback?.uncertain);
@@ -362,11 +361,6 @@ export function RivalHubLiveSourcePanel({
               : statusText(connection)
             : '正在读取网站同步状态…'}
       </p>
-      {(connection?.sourceCleanup?.coverageUnknown ?? 0) > 0 ? (
-        <p role="status">
-          部分历史网站数据的完整性待核对，原记录已保留。本机播出不受影响，请导出诊断并核对网站赛果。
-        </p>
-      ) : null}
       {readError || visibleFeedback?.uncertain ? (
         <Button onClick={() => void read()}>重新检查状态</Button>
       ) : primary ? (
@@ -389,21 +383,14 @@ export function RivalHubLiveSourcePanel({
           停止本机网站同步
         </Button>
       ) : null}
-      {hasStoppedSource ? (
-        <Button
-          disabled={pending || readError || connection?.sourceState === 'unavailable'}
-          onClick={() =>
-            void run({ label: '重试停止交接', command: '/operator/rivalhub/source/retry-stop' })
-          }
-        >
-          重试停止交接
-        </Button>
-      ) : null}
       {visibleFeedback ? (
         <p role={visibleFeedback.error ? 'alert' : 'status'}>{visibleFeedback.message}</p>
       ) : null}
       <details>
         <summary>比赛资料与诊断</summary>
+        {(connection?.sourceCleanup?.coverageUnknown ?? 0) > 0 ? (
+          <p>部分网站数据的完整性待核对，原记录已保留。</p>
+        ) : null}
         <RivalHubSyncControls />
         <SupportExport />
       </details>
