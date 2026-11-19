@@ -36,6 +36,7 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly lastEventObservedAt?: string;
   readonly lastErrorCode?: CstvDiagnosticCode;
   readonly lastTerminalStatus?: CstvSessionTerminalStatus;
+  readonly normalDrain?: true;
 }
 
 export interface CstvSourceSnapshot<R extends GameEventSourceRole = GameEventSourceRole> {
@@ -100,6 +101,24 @@ function appendBounded<T>(items: T[], item: T, max: number): void {
   if (overflow > 0) items.splice(0, overflow);
 }
 
+function observerResidenceUs(row: Readonly<Record<string, unknown>>): number | undefined {
+  const stages = [
+    row.sdkQueueAgeUs,
+    row.dequeueToSubmitUs,
+    row.submitToObservedUs,
+    row.supervisorForwardUs ?? 0,
+  ];
+  if (
+    !stages.every(
+      (value): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0,
+    )
+  )
+    return undefined;
+  // resultQueueUs is already included in submitToObservedUs.
+  return stages.reduce((total, duration) => total + duration, 0);
+}
+
 class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSourceManager<R> {
   readonly role: R;
 
@@ -136,6 +155,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private observerChannelOpen = false;
   private observerSequence = 0;
   private observerMap: string | undefined;
+  private normalDrainConfirmed = false;
   private observerTicksPerSecond: number | undefined;
   private started = false;
   private stopRequested = false;
@@ -192,6 +212,12 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     return this.stopPromise;
   }
 
+  confirmObserverDrain(): void {
+    if (this.stopRequested || this.state !== 'ended' || this.observerMap === undefined) return;
+    this.normalDrainConfirmed = true;
+    this.notifySnapshotChanged();
+  }
+
   getHealth(): CstvSourceHealth<R> {
     if (this.refreshTailTick()) this.notifySnapshotChanged();
     const mapName = this.observerMap ?? this.lastSync?.mapName;
@@ -199,6 +225,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       role: this.role,
       state: this.state,
       generation: this.generation,
+      ...(this.normalDrainConfirmed ? { normalDrain: true } : {}),
       reconnectAttempt: this.reconnectAttempt,
       ...(mapName === undefined ? {} : { mapName }),
       ...(this.lastSync === undefined ? {} : { lastSync: { ...this.lastSync } }),
@@ -251,12 +278,14 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
 
   disconnectObserver(reason: 'failed' | 'ended'): void {
     if (this.observerIdentity === undefined || this.stopRequested) return;
+    if (reason === 'ended' && this.state === 'ended' && this.observerMap !== undefined) return;
     this.observerChannelOpen = false;
     this.resetObserverContinuity(reason);
     if (reason === 'failed') this.recordDiagnostic({ code: 'session-run-failed' });
   }
 
   private resetObserverContinuity(state: CstvSourceState = 'connecting'): void {
+    this.normalDrainConfirmed = false;
     this.generation += 1;
     this.observerMap = undefined;
     this.executionHadLive = false;
@@ -321,8 +350,19 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     }
     this.observerSequence = sequence;
     if (kind === 'discontinuity') {
-      if (row.scope === 'connection') this.observerChannelOpen = false;
-      else if (worldChange) this.observerIdentity = { ...owner, world };
+      if (row.scope === 'connection') {
+        this.observerChannelOpen = false;
+        if (
+          row.reason === 'source-hltv-stop' &&
+          this.role === 'lookahead' &&
+          this.state === 'live'
+        ) {
+          // The managed supervisor emits this boundary after parser drain and clean attempt exit.
+          this.state = 'ended';
+          this.notifySnapshotChanged();
+          return;
+        }
+      } else if (worldChange) this.observerIdentity = { ...owner, world };
       else if (row.scope !== 'snapshot') this.observerChannelOpen = false;
       this.resetObserverContinuity(this.observerChannelOpen ? 'connecting' : 'reconnecting');
       return;
@@ -333,8 +373,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       Number.isFinite(row.observedAt) &&
       Date.now() - row.observedAt >= 2000
     ) {
-      // Upstream local queue age only qualifies these private data. It does not
-      // measure broadcast delay or become the event's scheduling clock.
+      // Wall-clock age qualifies private data. It never becomes the scheduling clock.
       if (this.state === 'live') this.resetObserverContinuity();
       return;
     }
@@ -404,6 +443,11 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         return;
     }
     if (!SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === kind)) return;
+    const residenceUs = this.role === 'lookahead' ? observerResidenceUs(row) : undefined;
+    if (residenceUs !== undefined && residenceUs >= 2_000_000) {
+      this.resetObserverContinuity();
+      return;
+    }
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),
@@ -418,6 +462,9 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           tick: observerEventTick(row),
           observedAt: sample.observedAt,
           observedMonotonicMs: sample.observedMonotonicMs,
+          ...(residenceUs !== undefined && sample.observedMonotonicMs >= residenceUs / 1000
+            ? { sourceArrivalMonotonicMs: sample.observedMonotonicMs - residenceUs / 1000 }
+            : {}),
           ...(this.observerMap === undefined ? {} : { mapName: this.observerMap }),
           ...(this.observerTicksPerSecond === undefined
             ? {}
@@ -664,6 +711,7 @@ export function createCstvSourceManagers(options: {
 }
 
 export interface ObserverSourceManager<R extends GameEventSourceRole> extends CstvSourceManager<R> {
+  confirmObserverDrain(): void;
   disconnectObserver(reason: 'failed' | 'ended'): void;
   consumeObserverRecord(input: unknown): void;
 }

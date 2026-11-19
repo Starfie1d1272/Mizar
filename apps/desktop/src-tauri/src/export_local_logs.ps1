@@ -8,6 +8,7 @@ if (!$source.Exists -or ($source.Attributes -band [IO.FileAttributes]::ReparsePo
 
 $temporary = [IO.Path]::Combine([IO.Path]::GetDirectoryName($destination), [Guid]::NewGuid().ToString() + '.partial')
 $omissions = [Collections.Generic.List[string]]::new()
+$buffer = [byte[]]::new(65536)
 $directories = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()
 $directories.Push($source)
 $temporaryCreated = $false
@@ -32,8 +33,19 @@ try {
                         continue
                     }
                     if ($child -is [IO.DirectoryInfo]) {
-                        $directories.Push($child)
+                        if ($name -in @('logs/performance-pending', 'logs/diagnostic-outbox')) {
+                            $directories.Push($child)
+                        }
                         continue
+                    }
+                    # Only producer logs and sealed evidence bodies. Upload state contains
+                    # installation credentials even when it lives next to the logs.
+                    if ($name -notmatch '^logs/(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?|host-retention\.ndjson|performance-pending/[a-f0-9-]{36}\.[a-f0-9]{4}\.gz|diagnostic-outbox/[a-f0-9]{64}\.gz)$') {
+                        continue
+                    }
+                    $compression = [IO.Compression.CompressionLevel]::Fastest
+                    if ($name.EndsWith('.gz', [StringComparison]::OrdinalIgnoreCase)) {
+                        $compression = [IO.Compression.CompressionLevel]::NoCompression
                     }
                     try {
                         $inputFile = [IO.File]::Open($child.FullName, 'Open', 'Read', [IO.FileShare]'ReadWrite, Delete')
@@ -43,9 +55,8 @@ try {
                     }
                     try {
                         $remaining = $inputFile.Length
-                        $entry = $archive.CreateEntry($name).Open()
+                        $entry = $archive.CreateEntry($name, $compression).Open()
                         try {
-                            $buffer = [byte[]]::new(65536)
                             while ($remaining -gt 0) {
                                 try {
                                     $read = $inputFile.Read($buffer, 0, [int][Math]::Min($remaining, $buffer.Length))
@@ -69,7 +80,8 @@ try {
             }
             $report = [IO.StreamWriter]::new($archive.CreateEntry('mizar-export-status.txt').Open())
             try {
-                $report.WriteLine('Direct copy of local logs. Active files are copied up to their observed length.')
+                $report.WriteLine('Mizar local log archive v1. Scope: all retained local logs. Active files are copied up to their observed length.')
+                $report.WriteLine('Archived at: ' + [DateTimeOffset]::UtcNow.ToString('o'))
                 $report.WriteLine('Unavailable or partial entries: ' + $omissions.Count)
                 foreach ($omission in $omissions) { $report.WriteLine($omission) }
             } finally {
