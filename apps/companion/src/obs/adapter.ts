@@ -27,6 +27,7 @@ import {
 import { obsFindingReadiness } from './prepare-readiness.js';
 import { requireSupportedObs } from './version-support.js';
 import { ObsActionError } from './action-error.js';
+import { readLocalObsConnection } from './local-connection.js';
 import { BpOverlayOwner } from './bp-overlay.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -398,18 +399,59 @@ export class ObsAdapter {
   }
 
   configure(config: ObsConfig): Promise<void> {
+    return this.configurationMutation(() => this.commitConnectionConfig(config));
+  }
+
+  useLocalConnection(valid: () => boolean): Promise<void> {
     return this.configurationMutation(async () => {
-      this.bpOwner.invalidate();
-      const bpClient = this.bpClient;
-      this.bpClient = undefined;
-      await bpClient?.disconnect().catch(() => undefined);
-      this.bpDisconnect?.();
-      await this.configStore.save(config);
-      this.audioRouting?.invalidateSelections();
-      this.commentaryChoices.clear();
-      this.outputs.reset();
-      this.observations.reset();
+      const saved = await this.configStore.read();
+      const { config, stillCurrent } = await readLocalObsConnection(saved.executablePath);
+      if (!valid()) throw new Error('local_obs_changed');
+      const client = new OBSWebSocket();
+      const authenticate = async (password: string) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            client.connect(`ws://127.0.0.1:${config.port}`, password, { eventSubscriptions: 0 }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('local_obs_authentication_failed')),
+                TIMEOUT_MS,
+              );
+            }),
+          ]);
+          return true;
+        } catch {
+          return false;
+        } finally {
+          clearTimeout(timer);
+          await client.disconnect().catch(() => undefined);
+        }
+      };
+      const savedVerified =
+        saved.port === config.port &&
+        saved.password !== config.password &&
+        (await authenticate(saved.password));
+      if (!savedVerified && (!valid() || !(await authenticate(config.password))))
+        throw new Error('local_obs_authentication_failed');
+      if (!(await stillCurrent()) || !valid()) throw new Error('local_obs_changed');
+      await this.commitConnectionConfig(
+        savedVerified ? { ...config, password: saved.password } : config,
+      );
     });
+  }
+
+  private async commitConnectionConfig(config: ObsConfig): Promise<void> {
+    this.bpOwner.invalidate();
+    const bpClient = this.bpClient;
+    this.bpClient = undefined;
+    await bpClient?.disconnect().catch(() => undefined);
+    this.bpDisconnect?.();
+    await this.configStore.save(config);
+    this.audioRouting?.invalidateSelections();
+    this.commentaryChoices.clear();
+    this.outputs.reset();
+    this.observations.reset();
   }
 
   pauseAutomatic(): void {

@@ -1,4 +1,3 @@
-import { sourceCoversProjection } from './technical-projection.js';
 import { diagnosticEvidence as redact } from './diagnostic-evidence.js';
 import { diagnosticValue } from './diagnostic-value.js';
 import * as fs from 'node:fs';
@@ -67,11 +66,9 @@ export function runArchiveWorker(
     return Buffer.byteLength(JSON.stringify([gaps, excludedSources])) <= inlineCoverageLimit;
   }
   let carrierRecords = 0,
-    uniqueEvents = 0,
+    retainedRecords = 0,
     aggregatedOccurrences = 0,
-    processedBytes = 0,
-    indexBytes = 0;
-  const indexDirectory = d.output + '/.identity-index';
+    processedBytes = 0;
   const budget = Math.min(d.diskBudgetBytes ?? 256 * 1024 * 1024, 256 * 1024 * 1024);
   const started = performance.now(),
     baseline = process.memoryUsage();
@@ -100,16 +97,6 @@ export function runArchiveWorker(
       position += written;
     }
   }
-  // Gzip is decoded once. Exact comparison facts are kept on disk with the
-  // existing identity index, charged to the shared export budget, not in heap.
-  let factsFd: number | undefined,
-    factsBytes = 0;
-  type Locator = {
-    source: string;
-    offset: number;
-    length?: number;
-    facts?: { offset: number; length: number };
-  };
   function readGzip(source: ArchiveWorkerData['sources'][number]): unknown {
     if (source.bytes > 16 * 1024 * 1024) throw Error('source_decode_budget');
     const raw = Buffer.alloc(source.bytes);
@@ -121,153 +108,6 @@ export function runArchiveWorker(
     stages.decodeMs += performance.now() - start;
     sample();
     return value;
-  }
-  function readCanonical(locator: Locator): ObjectValue {
-    const source = d.sources.find((candidate) => candidate.name === locator.source);
-    if (!source) throw Error('canonical_source_missing');
-    const { offset, length } = locator.facts ?? locator;
-    const handle = locator.facts ? factsFd : source.fd;
-    const bytes = locator.facts ? factsBytes : source.bytes;
-    if (handle === undefined) throw Error('canonical_facts_missing');
-    if (
-      !Number.isSafeInteger(length) ||
-      length! <= 0 ||
-      length! > ENTRY_MAX ||
-      offset < 0 ||
-      offset + length! >= bytes
-    )
-      throw Error('canonical_record_length_invalid');
-    // Include the committed newline, not the next 64 KiB of unrelated records.
-    const raw = Buffer.alloc(length! + 1);
-    let position = 0;
-    while (position < raw.length)
-      position += read(handle, raw.subarray(position), offset + position);
-    if (raw[length!] !== 10) throw Error('canonical_record_uncommitted');
-    const start = performance.now();
-    const value: unknown = JSON.parse(raw.subarray(0, length).toString('utf8'));
-    stages.decodeMs += performance.now() - start;
-    return object(value);
-  }
-  function identity(
-    event: ObjectValue,
-    id: string,
-    bodyHash: string,
-    source: string,
-    offset: number,
-    length?: number,
-    canonicalEvent = event,
-  ): { variant: number; projection: boolean } {
-    return output(() => {
-      const key = hash(id),
-        path = indexDirectory + '/' + key.slice(0, 3);
-      const handle = fs.openSync(
-        path,
-        fs.constants.O_CREAT |
-          fs.constants.O_APPEND |
-          fs.constants.O_RDWR |
-          (fs.constants.O_NOFOLLOW ?? 0),
-        0o600,
-      );
-      try {
-        const size = fs.fstatSync(handle).size;
-        if (size > ENTRY_MAX) throw Error('identity_partition_budget');
-        const raw = Buffer.alloc(size);
-        let read = 0;
-        while (read < size) {
-          const n = fs.readSync(handle, raw, read, size - read, read);
-          if (!n) throw Error('identity_short_read');
-          read += n;
-        }
-        const lines = raw.toString('ascii').split('\n');
-        const tuple = hash(JSON.stringify([id, event.producerRunId, event.sequence]));
-        const hasTuple =
-          typeof event.producerRunId === 'string' && Number.isSafeInteger(event.sequence);
-        if (
-          event.schema === 'mizar-diagnostic-event/2' &&
-          object(event.projection).sourceEventId === id &&
-          [2, 3].includes(Number(object(event.projection).policyVersion)) &&
-          hasTuple
-        ) {
-          const prefix = 'C:' + key + ':' + tuple + ':';
-          for (const line of lines)
-            if (line.startsWith(prefix)) {
-              const locator = JSON.parse(line.slice(prefix.length)) as Locator;
-              try {
-                if (sourceCoversProjection(readCanonical(locator), event))
-                  return { variant: 0, projection: true };
-              } catch (error) {
-                // A failed source re-read cannot prove equivalence. Keep the wire body as a variant.
-                gaps.push({
-                  source: locator.source,
-                  offset: locator.offset,
-                  reason: String(error),
-                  scope: 'projection equivalence unconfirmed',
-                });
-              }
-            }
-        }
-        let variant = 0;
-        for (const line of lines)
-          if (line.startsWith(key + ':')) {
-            if (line === key + ':' + bodyHash) return { variant: -1, projection: false };
-            variant++;
-          }
-        const canonical =
-          event.schema === 'mizar-diagnostic-event/2' && event.projection == null && hasTuple;
-        const locator: Locator = { source, offset, ...(length === undefined ? {} : { length }) };
-        if (canonical && source.endsWith('.gz')) {
-          // Preserve every field consulted by sourceCoversProjection, including
-          // complete evidence/scope. Unknown or differing wire facts stay variants.
-          const fact = Buffer.from(
-            JSON.stringify(
-              Object.fromEntries(
-                [
-                  'schema',
-                  'eventId',
-                  'producerKind',
-                  'producerRunId',
-                  'sequence',
-                  'kind',
-                  'evidence',
-                  'scope',
-                  'phase',
-                  'outcome',
-                  'taskId',
-                  'operationId',
-                  'parentOperationId',
-                  'attemptId',
-                  'monotonicMs',
-                  'sourceInterval',
-                  'appVersion',
-                  'coverage',
-                  'observedAt',
-                  'recordedAt',
-                ].map((key) => [key, canonicalEvent[key]]),
-              ),
-            ) + '\n',
-          );
-          if (fact.length > ENTRY_MAX) throw Error('canonical_fact_budget');
-          if (indexBytes + totalBytes + fact.length > budget) throw Error('export_disk_budget');
-          factsFd ??= fs.openSync(indexDirectory + '/canonical-facts', 'wx+', 0o600);
-          locator.facts = { offset: factsBytes, length: fact.length - 1 };
-          writeAll(factsFd, fact);
-          factsBytes += fact.length;
-          indexBytes += fact.length;
-        }
-        const record =
-          key +
-          ':' +
-          bodyHash +
-          '\n' +
-          (canonical ? 'C:' + key + ':' + tuple + ':' + JSON.stringify(locator) + '\n' : '');
-        if (indexBytes + totalBytes + record.length > budget) throw Error('export_disk_budget');
-        writeAll(handle, Buffer.from(record));
-        indexBytes += record.length;
-        return { variant, projection: false };
-      } finally {
-        fs.closeSync(handle);
-      }
-    });
   }
   function add(name: string, data: Buffer, metadata = false) {
     if (
@@ -309,7 +149,7 @@ export function runArchiveWorker(
     zip = new Zip((error, data) =>
       output(() => {
         if (error) throw error;
-        if (bytes + data.length > MAX || totalBytes + indexBytes + data.length > budget)
+        if (bytes + data.length > MAX || totalBytes + data.length > budget)
           throw Error('export_disk_budget');
         writeAll(fd!, data);
         digest.update(data);
@@ -398,7 +238,7 @@ export function runArchiveWorker(
       Buffer.from(
         JSON.stringify({
           schema: 'mizar-support-coverage/2',
-          uniqueEvents,
+          retainedRecords,
           carrierRecords,
           aggregatedOccurrences,
           gaps: inline ? redact(gaps) : [],
@@ -439,24 +279,11 @@ export function runArchiveWorker(
   let chunk: string[] = [],
     chunkBytes = 0,
     chunkIndex = 0;
-  const journey: ObjectValue[] = [],
-    business: ObjectValue[] = [],
-    carriers: ObjectValue[] = [];
-  const journeyParts: ObjectValue[] = [],
-    businessParts: ObjectValue[] = [],
-    carrierParts: ObjectValue[] = [];
   function flush() {
     if (!chunk.length) return;
     add('events/' + ++chunkIndex + '.ndjson', Buffer.from(chunk.join('')));
     chunk = [];
     chunkBytes = 0;
-  }
-  function index(name: string, records: ObjectValue[], refs: ObjectValue[]) {
-    if (!records.length) return;
-    const file = 'indexes/' + name + '-' + (refs.length + 1) + '.json';
-    add(file, Buffer.from(JSON.stringify(records)));
-    refs.push({ partIndex: part, name: file });
-    records.length = 0;
   }
   function writeCoverageFiles() {
     if (inlineCoverage()) return;
@@ -493,13 +320,7 @@ export function runArchiveWorker(
     }
     flushCoverage();
   }
-  function emit(
-    input: unknown,
-    source: string,
-    offset: number,
-    length?: number,
-    canonicalEvent?: ObjectValue,
-  ): boolean {
+  function emit(input: unknown, source: string, offset: number): boolean {
     carrierRecords++;
     const event =
       input !== null && typeof input === 'object' && !Array.isArray(input)
@@ -561,8 +382,6 @@ export function runArchiveWorker(
           },
           source,
           offset,
-          length,
-          event,
         );
       }
     }
@@ -590,54 +409,31 @@ export function runArchiveWorker(
           : typeof event.startupSessionId === 'string' && Number.isSafeInteger(event.sequence)
             ? event.startupSessionId + ':' + event.sequence
             : 'legacy:' + hash(source + ':' + offset);
-    const { variant, projection } = identity(
-      event,
-      id,
-      hash(JSON.stringify(event)),
-      source,
-      offset,
-      length,
-      canonicalEvent ?? event,
-    );
-    if (projection || variant < 0) {
-      carriers.push({
-        eventId: id,
-        producerRunId: event.producerRunId,
-        sequence: event.sequence,
+    retainedRecords++;
+    const evidence = object(event.evidence);
+    const stderr = object(evidence.stderr);
+    if (event.kind === 'native_diagnostic_coverage_gap' && Number(evidence.dropped) > 0)
+      gaps.push({
         source,
-        offset,
-        role: projection ? 'technical-projection-reference' : 'identical-carrier-reference',
+        eventId: id,
+        reason: 'native_event_loss_reported',
+        dropped: evidence.dropped,
+        scope: 'Host reported missing records in the selected interval',
       });
-      if (carriers.length >= 2000) index('carriers', carriers, carrierParts);
-      return true;
-    }
-    if (!variant) {
-      uniqueEvents++;
-      const evidence = object(event.evidence);
-      const stderr = object(evidence.stderr);
-      if (event.kind === 'native_diagnostic_coverage_gap' && Number(evidence.dropped) > 0)
-        gaps.push({
-          source,
-          eventId: id,
-          reason: 'native_event_loss_reported',
-          dropped: evidence.dropped,
-          scope: 'Host reported missing records in the selected interval',
-        });
-      if (event.kind === 'observer_attempt_terminal' && stderr.truncated === true)
-        gaps.push({
-          source,
-          eventId: id,
-          reason: 'observer_stderr_budget',
-          observedBytes: stderr.observedBytes,
-          retainedBytes: stderr.retainedBytes,
-          scope: 'redacted stderr prefix retained; remaining bytes were not collected',
-        });
-      const occurrences = event.occurrences ?? object(event.coverage).occurrences;
-      aggregatedOccurrences +=
-        typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
-          ? occurrences
-          : 1;
-    }
+    if (event.kind === 'observer_attempt_terminal' && stderr.truncated === true)
+      gaps.push({
+        source,
+        eventId: id,
+        reason: 'observer_stderr_budget',
+        observedBytes: stderr.observedBytes,
+        retainedBytes: stderr.retainedBytes,
+        scope: 'redacted stderr prefix retained; remaining bytes were not collected',
+      });
+    const occurrences = event.occurrences ?? object(event.coverage).occurrences;
+    aggregatedOccurrences +=
+      typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
+        ? occurrences
+        : 1;
     const line =
       JSON.stringify({
         ...object(redact(event)),
@@ -650,24 +446,12 @@ export function runArchiveWorker(
               ? 'technical-copy'
               : 'local-original',
         },
-        ...(variant ? { variant, variantReason: 'nonidentical-carrier-preserved' } : {}),
       }) + '\n';
     const size = Buffer.byteLength(line);
     if (size > ENTRY_MAX) throw Error('record_exceeds_entry_budget');
     if (chunkBytes + size > 1024 * 1024) flush();
     chunk.push(line);
     chunkBytes += size;
-    const ref = {
-      eventId: id,
-      variant,
-      kind: event.kind ?? event.stage ?? null,
-      taskId: event.taskId ?? null,
-      operationId: event.operationId ?? null,
-    };
-    if (ref.taskId || ref.operationId) journey.push(ref);
-    if (String(ref.kind).startsWith('business')) business.push(ref);
-    if (journey.length >= 2000) index('journey', journey, journeyParts);
-    if (business.length >= 2000) index('business', business, businessParts);
     sample();
     return true;
   }
@@ -680,11 +464,8 @@ export function runArchiveWorker(
     return n;
   }
   let failed = false,
-    indexCreated = false,
     primaryError: unknown;
   try {
-    output(() => fs.mkdirSync(indexDirectory, { mode: 0o700 }));
-    indexCreated = true;
     begin();
     for (const source of d.sources) {
       report({ phase: 'encoding', inputBytes: processedBytes, outputBytes: totalBytes });
@@ -778,7 +559,7 @@ export function runArchiveWorker(
                 };
               }
               stages.decodeMs += performance.now() - start;
-              emit(value, source.name, offset, Buffer.byteLength(line));
+              emit(value, source.name, offset);
             }
           };
           while (position < source.bytes) {
@@ -811,17 +592,6 @@ export function runArchiveWorker(
       }
     }
     flush();
-    for (const [name, records, refs] of [
-      ['journey', journey, journeyParts],
-      ['business', business, businessParts],
-      ['carriers', carriers, carrierParts],
-    ] as const)
-      add(
-        'indexes/' + name + '.json',
-        Buffer.from(
-          JSON.stringify({ schema: 'mizar-reference-index/2', parts: refs, tail: records }),
-        ),
-      );
     const snapshot = Buffer.from(JSON.stringify(redact(d.snapshot)));
     if (snapshot.length <= ENTRY_MAX) add('snapshots/current.json', snapshot);
     else
@@ -836,7 +606,7 @@ export function runArchiveWorker(
     failed = true;
     primaryError = error;
   }
-  // A completed archive is independent of temporary-index cleanup. Attempt
+  // A completed archive is independent of output-handle cleanup. Attempt
   // each close/removal even if another fails, without replacing the build error.
   const cleanupFailures: Error[] = [];
   const cleanup = (reason: string, action: () => void) => {
@@ -847,12 +617,6 @@ export function runArchiveWorker(
     }
   };
   if (fd !== undefined) cleanup('export_output_close_failed', () => fs.closeSync(fd!));
-  if (factsFd !== undefined)
-    cleanup('export_identity_facts_close_failed', () => fs.closeSync(factsFd!));
-  if (indexCreated)
-    cleanup('export_identity_index_remove_failed', () =>
-      fs.rmSync(indexDirectory, { recursive: true, force: true }),
-    );
   const secrets = d.sources.flatMap((source) => source.secrets ?? []);
   const diagnostics = {
     cleanupFailures: diagnosticValue(cleanupFailures, '', new Set(), secrets),
@@ -870,7 +634,7 @@ export function runArchiveWorker(
       knownGaps: gaps.length,
       completeKnownSources: gaps.length === 0,
       parts,
-      uniqueEvents,
+      retainedRecords,
       carrierRecords,
       aggregatedOccurrences,
       gaps: inlineCoverage() ? redact(gaps) : [],

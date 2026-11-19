@@ -5,7 +5,7 @@ import {
   flushControlSnapshots,
   sendControlEvidence,
 } from './control-journal';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Field, Button, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
@@ -137,6 +137,7 @@ export function SupportExport() {
     outputBytes?: number;
   } | null>(null);
   const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   const [readyJob, setReadyJob] = useState<ReadyExport | null>(null);
   const hasReadyJob = readyJob !== null;
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
@@ -149,7 +150,14 @@ export function SupportExport() {
     setProgress(null);
     controller.current = new AbortController();
     const signal = controller.current.signal;
-    const deadline = Date.now() + 120_000;
+    let activeExportId: string | undefined;
+    const cancelExport = () => {
+      if (activeExportId)
+        void fetch(`/debug/support-exports/${activeExportId}/cancel`, { method: 'POST' }).catch(
+          () => undefined,
+        );
+    };
+    signal.addEventListener('abort', cancelExport, { once: true });
     let stage: 'collect' | 'generate' | 'save' = 'collect';
     let releaseHostPin: (() => void) | undefined;
     let hostPinId: string | undefined;
@@ -257,7 +265,7 @@ export function SupportExport() {
         body: requestBody,
         cache: 'no-store',
         redirect: 'error',
-        signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       });
       if (!response.ok) {
         const rejection = (await response.json().catch(() => null)) as {
@@ -288,20 +296,25 @@ export function SupportExport() {
         cleanupStatus?: 'unconfirmed';
       };
       if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
+      activeExportId = job.exportId;
+      if (signal.aborted) cancelExport();
       setProgress(job);
+      let unavailable = 0;
       while (!['ready', 'failed', 'cancelled'].includes(job.phase)) {
         if (signal.aborted) throw new Error('export_cancelled');
-        if (Date.now() > deadline) throw new Error('export_deadline');
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        const status = await fetch(`/debug/support-exports/${job.exportId}`, {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await fetch(`/debug/support-exports/${activeExportId}`, {
           signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           cache: 'no-store',
-        });
-        if (!status.ok) throw new Error('export_status_unavailable');
+        }).catch(() => null);
+        if ((!status || status.status >= 500) && !signal.aborted && ++unavailable < 3) continue;
+        if (!status?.ok) throw new Error('export_status_unavailable');
+        unavailable = 0;
         job = await status.json();
-        if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
+        if (job.exportId !== activeExportId) throw new Error('export_identity_mismatch');
         setProgress(job);
       }
+      activeExportId = undefined;
       // A terminal phase may precede cleanup; pin release waits for confirmed settlement.
       if (job.phase === 'cancelled') throw new Error('export_cancelled');
       if (job.phase === 'failed' || !job.parts?.length)
@@ -343,6 +356,7 @@ export function SupportExport() {
                         : '诊断信息收集未完成，请稍后重试。',
       });
     } finally {
+      signal.removeEventListener('abort', cancelExport);
       // A timed-out POST may still have admitted the matching job. Keep its
       // hold rather than releasing sources before Companion has finished.
       // Cleanup cannot make the UI wait on the same unavailable Host writer.
@@ -406,15 +420,7 @@ export function SupportExport() {
         </p>
       ) : null}
       {busy && !['ready', 'saving'].includes(progress?.phase ?? '') ? (
-        <Button
-          onClick={() => {
-            controller.current?.abort();
-            if (progress)
-              void fetch(`/debug/support-exports/${progress.exportId}/cancel`, { method: 'POST' });
-          }}
-        >
-          取消生成
-        </Button>
+        <Button onClick={() => controller.current?.abort()}>取消生成</Button>
       ) : null}
       {!busy && hasReadyJob ? (
         <Button

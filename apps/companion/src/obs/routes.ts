@@ -620,6 +620,33 @@ export function registerObsRoutes(
       return reply.code(400).send({ error: 'obs_config_invalid', message: 'OBS 配置格式有误。' });
     }
   });
+  app.post('/operator/obs/use-local-connection', { bodyLimit: 128 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const body = z
+      .object({ useLocalSettings: z.literal(true) })
+      .strict()
+      .safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'obs_local_settings_invalid' });
+    try {
+      await options.adapter.useLocalConnection(() => !request.raw.aborted && !reply.raw.destroyed);
+      return reply.header('cache-control', 'no-store').send({ ok: true });
+    } catch (error) {
+      if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));
+      const disabled = error instanceof Error && error.message === 'local_obs_websocket_disabled';
+      request.log.info({
+        event: 'obs',
+        stage: 'local_connection',
+        result: disabled ? 'disabled' : 'unconfirmed',
+      });
+      return reply.code(409).send({
+        error: disabled ? 'obs_websocket_disabled' : 'obs_local_connection_unconfirmed',
+        message: disabled
+          ? '请在 OBS「工具 → WebSocket 服务器设置」启用服务器，再使用本机连接设置。'
+          : '本机 OBS 的连接设置未能确认。请核对正在使用的 OBS，或手动填写端口与密码。',
+      });
+    }
+  });
   for (const action of ['video-preflight', 'video-prepare', 'video-restore'] as const) {
     app.post(`/operator/obs/${action}`, { bodyLimit: 2048 }, async (request, reply) => {
       if (!allowed(request.headers.origin))
