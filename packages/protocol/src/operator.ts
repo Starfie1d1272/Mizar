@@ -7,6 +7,8 @@ import {
 } from './shared.js';
 import { OPERATOR_SCHEMA_VERSION } from './version.js';
 
+export type MatchSourceRecovery = 'idle' | 'local_handoff' | 'remote_cleanup' | 'retained';
+
 const nullableString = z.string().nullable();
 const sourceSideSchema = z.enum(['CT', 'T', 'unknown']);
 const activeLineupIssueSchema = z.object({

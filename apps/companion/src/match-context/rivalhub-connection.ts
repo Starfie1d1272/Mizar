@@ -2,7 +2,8 @@ import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import type { LiveSnapshotV1, MatchSourceRecovery, ReliableEventV1 } from '@mizar/protocol/output';
+import type { MatchSourceRecovery } from '@mizar/protocol/operator';
+import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
 import {
   RivalHubAuthorization,
   OFFICIAL_RIVALHUB_URL,

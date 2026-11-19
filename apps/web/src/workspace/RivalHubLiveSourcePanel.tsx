@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MatchSourceRecovery } from '@mizar/protocol/output';
+import type { MatchSourceRecovery } from '@mizar/protocol/operator';
 import { desktopInvoke } from './client';
 import { Button, Dialog } from '../ui/primitives';
 import { syncHealthText, type SyncHealth } from './sync-health';
