@@ -919,6 +919,8 @@ export class RivalHubConnection {
     this.shutdownSignal?.throwIfAborted();
     if (legacyScopeRecovery) {
       const status = body as { status?: unknown; scope?: Omit<SourceScope, 'baseUrl'> } | undefined;
+      // The website keeps the original responsibility; never treat ambiguity as accepted or free.
+      if (status?.status === 'ambiguous') return;
       if (
         status?.status === 'fenced' &&
         status.scope &&

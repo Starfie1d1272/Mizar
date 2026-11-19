@@ -120,6 +120,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let loseClaim = false;
   let claimRecoverySupported = false;
   let legacyClaimRecoverySupported = false;
+  let legacyRecovery: 'fenced' | 'foreign-fence' | 'found' | 'ambiguous' = 'fenced';
   let loseBeforeClaim = false;
   let lastClaimRequestId: string | undefined;
   const recoveredClaimIds: string[] = [];
@@ -163,11 +164,17 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         return Response.json({ version: 1, legacyScope: legacyClaimRecoverySupported });
       const request = JSON.parse(String(init.body)) as Record<string, unknown>;
       if (request.legacy === true) {
+        if (legacyRecovery === 'ambiguous') return Response.json({ status: 'ambiguous' });
+        if (legacyRecovery === 'found')
+          return Response.json({ status: 'found', source: serverClaim });
         return Response.json({
           status: 'fenced',
           scope: {
             ...request,
-            installationId: installation.installationId,
+            installationId:
+              legacyRecovery === 'foreign-fence'
+                ? 'installation-other'
+                : installation.installationId,
             competitionId: installation.competitionId,
           },
         });
@@ -298,6 +305,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     enableLegacyClaimRecovery: () => {
       claimRecoverySupported = true;
       legacyClaimRecoverySupported = true;
+    },
+    setLegacyRecovery: (value: 'fenced' | 'foreign-fence' | 'found' | 'ambiguous') => {
+      legacyRecovery = value;
     },
     loseBeforeClaim: () => {
       loseBeforeClaim = true;
@@ -498,6 +508,61 @@ test('an upgraded installation clears an old unnumbered intent only after a scop
   assert.equal(restarted.view().sourceCleanup.claimIntent, false);
   assert.deepEqual(h.releases, []);
   assert.deepEqual(h.statusQueries, []);
+});
+
+test('recovers a legacy source for cleanup when the website still owns the exact claim', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.lastClaimRequestId(), undefined);
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('found');
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.equal(h.releases.length, 1);
+  assert.equal(h.releases[0]?.authority, '1');
+  assert.deepEqual(h.recoveredClaimIds, []);
+  assert.deepEqual(h.statusQueries, []);
+});
+
+test('keeps a legacy intent when the website reports an ambiguous source', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('ambiguous');
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release());
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  assert.deepEqual(h.releases, []);
+  assert.deepEqual(h.statusQueries, []);
+});
+
+test('keeps a legacy intent when the website fences another installation', async (t) => {
+  const h = await setup(t);
+  h.loseBeforeClaim();
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('foreign-fence');
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release());
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  assert.deepEqual(h.releases, []);
+});
+
+test('falls back to source status when the website has no legacy scope capability', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableClaimRecovery();
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.ok(h.statusQueries.length > 0);
+  assert.equal(h.releases.length, 1);
 });
 
 for (const operation of ['switch', 'backoff', 'exit'] as const) {
