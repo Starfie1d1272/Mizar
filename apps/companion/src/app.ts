@@ -1,21 +1,6 @@
-import { lstat } from 'node:fs/promises';
-import { CameraConfigResolver } from './broadcast-config/camera.js';
-import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
-import {
-  registerBroadcastAssetRoutes,
-  registerMusicPackRoutes,
-} from './broadcast-config/music-pack-routes.js';
-import {
-  createProductionBroadcastDependencies,
-  withOfficialBroadcastResources,
-} from './broadcast-config/production.js';
-import {
-  createBroadcastRuntime,
-  type BroadcastRuntimeDependencies,
-} from './broadcast-config/runtime.js';
-import { createBroadcastResolver } from './broadcast-config/resolver.js';
-import { registerBroadcastConfigRoutes } from './broadcast-config/routes.js';
-import type { ResourceRef } from '@mizar/broadcast-config';
+import { registerSupportRuntime } from './support/runtime.js';
+import { registerBroadcastOwners } from './broadcast-config/live-owners.js';
+import type { BroadcastRuntimeDependencies } from './broadcast-config/runtime.js';
 import { registerBroadcastMigrationStatus } from './broadcast-config/migration-status.js';
 import {
   BpPresentationSettings,
@@ -26,27 +11,13 @@ import {
   type WorkspaceObserver,
 } from './telemetry/observer-workspace.js';
 import { ObserverSettingsStore, registerObserverSettings } from './telemetry/observer-settings.js';
-import { verifyIsolatedPack } from './orchestration/isolated-pack.js';
-import { CameraDirector } from './orchestration/director.js';
-import { MulnxTool } from './orchestration/tool.js';
-import { OrchestrationStore } from './orchestration/store.js';
-import { MulnxProvider } from './orchestration/provider.js';
-import { MulnxProgramClock } from './orchestration/mulnx-clock.js';
-import { registerOrchestrationRoutes } from './orchestration/routes.js';
-import { registerDiagnosticDelivery } from './support/delivery-routes.js';
-import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
 import { registerOperationDiagnostics } from './support/operation-diagnostics.js';
-import { isDocumentDiagnosticEvent } from '@mizar/protocol';
-import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
+import { PerformanceWindow } from './support/performance-window.js';
 import { observeRuntime } from './support/runtime-observation.js';
 import { ProgramChatNativeInput } from './program-chat/native-input.js';
 import { ProgramChat } from './projections/program-chat.js';
-import { MusicStore } from './music/store.js';
-import { MusicDirector } from './music/director.js';
 import { createObserverAssistScope } from './telemetry/observer-assist-scope.js';
-import { ObsMusicProvider } from './obs/music-device.js';
-import { registerMusicRoutes } from './music/routes.js';
 import {
   DemoTestController,
   readDemoTestRecovery,
@@ -56,6 +27,7 @@ import { createDemoMutationGuard } from './demo-test/mutation-guard.js';
 import { registerSteamAvatarRoutes, type SteamAvatars } from './media/steam-avatars.js';
 import { ProductionGuidanceStore, registerProductionGuidance } from './program-scenes/guidance.js';
 import { ProgramDirector } from './program-scenes/director.js';
+import { startProgramAutomation } from './program-scenes/automation.js';
 import { ProgramPresentationStore } from './program-scenes/presentation.js';
 import { registerProductionReadiness } from './program-scenes/readiness.js';
 import { registerDesktopOverlayRoutes } from './program-scenes/desktop-overlay.js';
@@ -63,13 +35,9 @@ import { createProduction, registerProductionRoutes } from './program-scenes/pro
 import { registerUpdateRoutes } from './updates/routes.js';
 import type { UpdateManager } from './updates/manager.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
-import { ResourceStore } from './resource-store/store.js';
-import {
-  createRuntimeVerifier,
-  isOfficialWebResource,
-  PACK_ID,
-} from './resource-store/runtime-adapter.js';
-import { registerResourceLibrary, registerResourceRoutes } from './resource-store/routes.js';
+import { isOfficialWebResource, PACK_ID } from './resource-store/runtime-adapter.js';
+import { registerResourceLibrary } from './resource-store/routes.js';
+import { registerResourceRuntime } from './resource-store/runtime.js';
 import { MatchContextController, MatchManifestLkgStore } from './match-context/index.js';
 import { LocalTournamentStore } from './match-context/local-tournament-store.js';
 import { registerLocalTournamentRoutes } from './match-context/local-tournament-routes.js';
@@ -77,8 +45,7 @@ import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.j
 import { registerManagedSourceRoutes } from './match-context/managed-source.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
 import { dirname, join } from 'node:path';
-import { toMatchDocumentV1 } from '@mizar/rivalhub';
-import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
+import { restoreMatchSelection } from './match-context/restore-selection.js';
 import type { OutputServiceOptions } from './output/service.js';
 import { registerOutputRoutes } from './output/routes.js';
 import {
@@ -94,7 +61,11 @@ import {
   registerHistoricalStatsPresentationRoute,
   registerRivalHubConnectionRoutes,
 } from './match-context/rivalhub-routes.js';
-import { statsTarget, type RivalHubConnection } from './match-context/rivalhub-connection.js';
+import type { RivalHubConnection } from './match-context/rivalhub-connection.js';
+import {
+  registerMatchDocument,
+  subscribeRuntimeMatchBinding,
+} from './match-context/runtime-binding.js';
 import {
   RivalsRehearsal,
   registerRivalsRehearsalRoutes,
@@ -104,13 +75,10 @@ import { registerBpDemoRoute } from './bp/demo-controller.js';
 import { getBpDemoProjection } from './bp/demo-projection.js';
 import { BpDemoStateController } from './bp/demo-state.js';
 import { registerBpWorkspaceRoutes } from './bp/workspace-controller.js';
-import { obsErrorEvidence } from './obs/adapter.js';
 import { createObsExitStatus } from './obs/exit-status.js';
-import { gameAudioTruth } from './obs/audio-policy-truth.js';
 import { createObsDisconnectCapture, type ObsNativeEvidence } from './obs/native-evidence.js';
 import { registerObsRoutes } from './obs/routes.js';
 import { createObsRuntime } from './obs/runtime.js';
-import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -118,19 +86,18 @@ import { performance } from 'node:perf_hooks';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
-import { registerSupportRoutes } from './support/routes.js';
 import { BusinessJournal } from './support/business-journal.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createObservationCommit } from './runtime/observation-commit.js';
+import { createObservationDriver } from './runtime/observation-driver.js';
 import {
   registerProductStop,
   registerRuntimeHealth,
-  writeRuntimeFlushReceipt,
   type ProductRuntime,
 } from './runtime/product-runtime.js';
+import { registerCompanionShutdown } from './runtime/shutdown.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
-import type { TelemetryObservation } from '@mizar/core/telemetry';
 import {
   createProjectionCoordinator,
   type ProjectionCoordinator,
@@ -148,13 +115,13 @@ import {
 } from './telemetry/cstv-source-manager.js';
 import {
   GSI_REQUEST_TIMEOUT_MS,
-  registerGsiIngress,
   type AcceptedRawSink,
   type GsiClock,
   type GsiDiagnosticsSink,
   type GsiSequenceSource,
   type ObservationSink,
 } from './telemetry/gsi-ingress.js';
+import { registerProgramIngress } from './telemetry/program-ingress.js';
 import { registerLocalWebAccess } from './local-web/access-policy.js';
 import { defaultWebRoot, registerStaticHost } from './local-web/static-host.js';
 import { registerOperatorCommandRoutes } from './operator/controller.js';
@@ -246,9 +213,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     : undefined;
   const demoRecovery = readDemoTestRecovery(demoMarkerPath);
   const demoMutationGuard = createDemoMutationGuard();
-  let resources: ResourceStore | undefined;
-  let broadcastConfig = options.broadcastConfig;
-  let broadcastRuntime: ReturnType<typeof createBroadcastRuntime> | undefined;
   let recorder = options.recorder ?? createDisabledRecorder('recorder_not_configured');
   const currentRecorder = (): CaptureRecorder => recorder;
   const programRuntime =
@@ -468,6 +432,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
     qualificationMode: options.qualificationMode ?? false,
     readResource: async (path, range, signal) => {
+      const resources = readResources();
       if (!resources || !isOfficialWebResource(path) || !resources.getStatus(PACK_ID).activeVersion)
         return undefined;
       return resources.read(PACK_ID, path, range, signal);
@@ -581,7 +546,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   registerBroadcastMigrationStatus(
     app,
     localWebTransport.getOriginPolicy(),
-    () => broadcastRuntime?.status ?? { state: 'pending', reason: 'owner_unavailable' },
+    () => media?.broadcast?.status ?? { state: 'pending', reason: 'owner_unavailable' },
   );
   if (!options.obsConfigPath)
     app.get('/local/v1/broadcast-display-config', (_request, reply) =>
@@ -589,11 +554,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     );
   registerHudConfigRoutes(app, {
     store: hudConfigStore,
-    getBroadcastDocument: () => broadcastRuntime?.appliedDocument(),
+    getBroadcastDocument: () => media?.broadcast?.appliedDocument(),
     webRoot: options.webRoot ?? defaultWebRoot(),
     waitForBroadcast: async () => {
-      await broadcastRuntime?.waitForApply();
-      if (options.obsConfigPath && !broadcastRuntime?.ready)
+      await media?.broadcast?.waitForApply();
+      if (options.obsConfigPath && !media?.broadcast?.ready)
         throw new Error('broadcast_config_unavailable');
     },
     originPolicy: localWebTransport.getOriginPolicy(),
@@ -629,13 +594,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     httpOrigin: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
     appVersion: options.productRuntime?.appVersion ?? 'development',
   });
-  let musicDirector: MusicDirector | undefined;
-  let musicProvider: ObsMusicProvider | undefined;
-  let cameraDirector: CameraDirector | undefined;
-  let catalogTool: MulnxTool | undefined;
-  let catalogToolLoaded = false;
-  let mulnxClock: MulnxProgramClock | undefined;
-  let mulnxClockState = '';
   const bpPresentationSettings = new BpPresentationSettings(
     options.obsConfigPath
       ? join(dirname(options.obsConfigPath), 'bp-presentation.json')
@@ -658,11 +616,11 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
                 preparing?.target === 'matchup' &&
                 options.valid?.() !== false
               ) {
-                const sound = cameraDirector?.store.map(
+                const sound = media?.camera.store.map(
                   projectionCoordinator.getCurrent().program.map.name,
                 )?.openingSound;
-                musicDirector?.opening(`opening:${preparing.revision}`, sound ?? undefined);
-                cameraDirector?.opening();
+                media?.music.opening(`opening:${preparing.revision}`, sound ?? undefined);
+                media?.camera.opening();
               }
             },
           }),
@@ -676,9 +634,8 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   obsAdapter?.onBpDisconnect(() =>
     sceneController.compactDisconnected(production.automaticAllowed()),
   );
-  let diagnosticConsentTime: () => string | null = () => null;
   const captureObsDisconnect = createObsDisconnectCapture(
-    () => diagnosticConsentTime(),
+    () => support.consentTime(),
     sessionJournal && ((evidence) => sessionJournal.record('obs_native_disconnect', evidence)),
     (error) => app.log.warn({ err: diagnosticValue(error) }, 'OBS 断连诊断采集未完成'),
   );
@@ -708,7 +665,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   if (obsConfigStore !== undefined && obsAdapter !== undefined) {
     app.addHook('onListen', () => {
-      obsAdapter.startCommentaryRecovery(musicDirector, () => production.automaticAllowed());
+      obsAdapter.startCommentaryRecovery(media?.music, () => production.automaticAllowed());
       return Promise.resolve();
     });
     registerObsRoutes(app, {
@@ -716,10 +673,9 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       configStore: obsConfigStore,
       adapter: obsAdapter,
       ...(gameAudio ? { gameAudio } : {}),
-      musicAudio: () => musicDirector,
+      musicAudio: () => media?.music,
       prepareMusic: async (valid, guard) => {
-        if (musicProvider)
-          await musicDirector?.prepare(valid, (run) => musicProvider!.session(run, guard));
+        await media?.prepareMusic(valid, guard);
       },
       ...(options.readObsCaptureEvidence
         ? { readCaptureEvidence: options.readObsCaptureEvidence }
@@ -732,10 +688,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : {}),
     });
   }
-  let previousBindingOrigin: string | undefined = options.matchContextBinding?.origin;
-  // The binding listener must retire fixture state on the way out, but it is created
-  // before the rehearsal exists; this slot carries the later-constructed instance.
-  const fixtureLifecycle: { rehearsal: RivalsRehearsal | undefined } = { rehearsal: undefined };
   const matchContextController =
     options.matchManifestPath === undefined
       ? null
@@ -744,30 +696,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           ...(options.matchContextBinding === undefined
             ? {}
             : { initialBinding: options.matchContextBinding }),
-          onBindingChanged: (binding) => {
-            options.rivalhubConnection?.bindingChanged?.(binding?.context.matchId ?? null);
-            const previousOrigin = previousBindingOrigin;
-            previousBindingOrigin = binding?.origin;
-            // Retire fixture state before committing the new binding.
-            if (previousOrigin === 'fixture' && binding?.origin !== 'fixture') {
-              fixtureLifecycle.rehearsal?.exitFixtureRuntimeState();
-            }
-            outputBinding = binding;
-            outputService.setBinding(binding);
-            const committed = programRuntime.bindContext(binding?.context, binding?.origin);
-            projectionCoordinator.setMatchContextBinding(binding, committed);
-            if (
-              production.statsActive() &&
-              (binding?.origin === 'online' ||
-                (binding?.origin === 'cache' && binding.cachedFrom === 'online'))
-            )
-              void options.rivalhubConnection?.stats(statsTarget(binding.context));
-            else options.rivalhubConnection?.clearStats();
-
-            programCueCoordinator.afterRuntimeMutation();
-          },
         });
-  let latestInput: TelemetryObservation['receive'] | null = null;
   const publishRuntimeCommit = (
     result: Parameters<typeof projectionCoordinator.afterRuntimeMutation>[0],
   ) => {
@@ -787,39 +716,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         disposition,
       }),
   });
-  const dispatchObservation = (
-    observation: TelemetryObservation,
-    sampleStageBinding?: { mapOrder: number },
-    managedSourceId?: string,
-    managedOwner?: { matchId: string },
-  ): boolean => {
-    const processingStarted = performance.now();
-    latestInput = observation.receive;
-    try {
-      const accepted = commitObservation(
-        observation,
-        sampleStageBinding,
-        managedSourceId,
-        managedOwner,
-      );
-      debugEvidenceStore.recordNormalizedObservation(observation);
-      debugEvidenceStore.recordRuntime(programRuntime.getSnapshot());
-      demoTest?.observationAccepted();
-      return accepted;
-    } catch (error) {
-      sessionJournal?.record('observation_failure', { error, receive: observation.receive });
-      performanceContext?.trigger('observation_failure', {
-        receive: observation.receive,
-        error: diagnosticValue(error),
-      });
-      throw error;
-    } finally {
-      runtimeObservation.observation(
-        observation.receive.sequence,
-        performance.now() - processingStarted,
-      );
-    }
-  };
+  const { dispatch: dispatchObservation, latestInput } = createObservationDriver({
+    commit: commitObservation,
+    debugEvidenceStore,
+    programRuntime,
+    notifyDemo: () => demoTest?.observationAccepted(),
+    sessionJournal,
+    performanceContext,
+    observe: (sequence, elapsedMs) => runtimeObservation.observation(sequence, elapsedMs),
+  });
 
   const rehearsal =
     options.rehearsalFixturePath && matchContextController
@@ -840,7 +745,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           },
         )
       : undefined;
-  fixtureLifecycle.rehearsal = rehearsal;
   if (rehearsal)
     registerRivalsRehearsalRoutes(app, {
       rehearsal,
@@ -854,22 +758,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     options.localTournamentPath === undefined
       ? null
       : new LocalTournamentStore(options.localTournamentPath);
-  if (matchContextController !== null) {
-    app.get('/local/v1/match-document', (_request, reply) => {
-      const envelope = matchContextController.getActiveDocumentEnvelope();
-      return envelope === null
-        ? reply
-            .code(404)
-            .header('cache-control', 'no-store')
-            .send({ error: 'match_document_unavailable' })
-        : reply.header('cache-control', 'no-store').send(envelope);
-    });
-  }
+  if (matchContextController) registerMatchDocument(app, matchContextController);
   const production = createProduction({
     scenes: sceneController,
     obs: obsAdapter,
-    music: () => musicDirector,
-    camera: () => cameraDirector,
+    music: () => media?.music,
+    camera: () => media?.camera,
     demo: () => demoTest,
     observer: observerSettings,
     binding: () => matchContextController?.getActiveBinding() ?? options.matchContextBinding,
@@ -886,7 +780,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       stats: (target) => options.rivalhubConnection?.stats(target),
       clearStats: () => options.rivalhubConnection?.clearStats(),
     },
-    waitForBroadcast: () => broadcastRuntime?.waitForApply() ?? Promise.resolve(),
+    waitForBroadcast: () => media?.broadcast?.waitForApply() ?? Promise.resolve(),
     obsExit: createObsExitStatus(options.obsConfigPath, (error) => {
       app.log.warn({ err: error }, 'OBS exit status not saved');
     }),
@@ -932,89 +826,35 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       originPolicy: localWebTransport.getOriginPolicy(),
     });
   }
-  if (options.resources) {
-    app.decorate('getResourceStore', () => resources);
-    registerResourceRoutes(
-      app,
-      () => resources,
-      options.productRuntime?.appVersion
-        ? {
-            core: {
-              appVersion: options.productRuntime.appVersion,
-              gitSha: options.productRuntime.gitSha,
-            },
-            root: options.resources.root,
-            originPolicy: () => localWebTransport.getOriginPolicy(),
-          }
-        : undefined,
-    );
-    app.addHook('onReady', async () => {
-      try {
-        resources = await ResourceStore.open({
-          root: options.resources!.root,
-          diagnostic: (packId, error) =>
-            app.log.warn(
-              {
-                event: 'resource',
-                stage: 'resource_cache_verify',
-                result: 'failure',
-                packId,
-                diagnostic: { error: diagnosticValue(error) },
-              },
-              '官方素材缓存验证失败。',
-            ),
-          verifyTrustedPack: createRuntimeVerifier(
-            options.resources!.policy,
-            options.resources!.cacheHistory,
-            options.productRuntime?.appVersion
-              ? {
-                  appVersion: options.productRuntime.appVersion,
-                  gitSha: options.productRuntime.gitSha,
-                }
-              : undefined,
-          ),
-          activateWhenSafe: (commit) => production.withResourceActivation(commit),
-          ...(options.obsConfigPath
-            ? {
-                references: {
-                  run: <T>(operation: () => Promise<T>) =>
-                    broadcastConfig!.references.run(operation),
-                  isReferenced: (ref: ResourceRef) => {
-                    if (!broadcastRuntime) throw new Error('broadcast_config_unavailable');
-                    return Promise.resolve(
-                      broadcastRuntime
-                        .referencedResources()
-                        .some(
-                          (used) =>
-                            used.id === ref.id &&
-                            used.version === ref.version &&
-                            used.digest === ref.digest,
-                        ),
-                    );
-                  },
+  const readResources: ReturnType<typeof registerResourceRuntime> = options.resources
+    ? registerResourceRuntime(app, {
+        config: options.resources,
+        product: options.productRuntime,
+        originPolicy: () => localWebTransport.getOriginPolicy(),
+        activateWhenSafe: production.withResourceActivation,
+        ...(options.obsConfigPath
+          ? {
+              references: {
+                run: (operation) =>
+                  (media?.config ?? options.broadcastConfig)!.references.run(operation),
+                isReferenced: (ref) => {
+                  if (!media) throw new Error('broadcast_config_unavailable');
+                  return Promise.resolve(
+                    media.broadcast
+                      .referencedResources()
+                      .some(
+                        (used) =>
+                          used.id === ref.id &&
+                          used.version === ref.version &&
+                          used.digest === ref.digest,
+                      ),
+                  );
                 },
-              }
-            : {}),
-        });
-      } catch (error) {
-        app.log.warn(
-          {
-            event: 'resource',
-            stage: 'resource_store_open',
-            result: 'failure',
-            diagnostic: { error: diagnosticValue(error) },
-          },
-          '官方素材缓存不可用；保留原 Full 资源路径。',
-        );
-        if (options.resources?.required) {
-          throw new Error('resource_store_open_failed', { cause: error });
-        }
-      }
-    });
-    app.addHook('onClose', async () => {
-      await resources?.shutdown();
-    });
-  }
+              },
+            }
+          : {}),
+      })
+    : () => undefined;
   let updateExit: ReturnType<typeof registerUpdateRoutes> | undefined;
   if (options.updates && options.productRuntime)
     updateExit = registerUpdateRoutes(app, {
@@ -1024,7 +864,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       production,
       scenes: sceneController,
       obs: async () => obsAdapter?.outputStatus(false),
-      mulnx: () => (catalogToolLoaded ? catalogTool : undefined),
+      mulnx: () => media?.getCatalogTool(),
     });
   const guidance = new ProductionGuidanceStore();
   registerProductionGuidance(app, guidance, {
@@ -1087,253 +927,51 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     undefined,
     () => presentation.get(),
   );
-  if (obsConfigStore && options.obsConfigPath) {
-    const musicStore = new MusicStore(
-      join(dirname(options.obsConfigPath), 'music'),
-      (stage, evidence) => sessionJournal?.record(stage, evidence),
-      options.builtinMusicPack,
-    );
-    musicProvider = new ObsMusicProvider(
-      obsConfigStore,
-      (stage, evidence) => sessionJournal?.record(stage, evidence),
-      () => musicDirector?.noteMonitorSettingsChanged(),
-      {
-        routing: obsAudioRouting,
-        sources: () => musicStore.state.sources,
-        baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
-      },
-    );
-    musicDirector = new MusicDirector(
-      musicStore,
-      musicProvider,
-      () => ({
-        program: projectionCoordinator.getCurrent().program,
-        active: sceneController.get().active,
-        presentation: presentation.get(),
-        production:
-          production.automaticAllowed() &&
-          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-      }),
-      Date.now,
-      Math.random,
-      () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
-    );
-    registerMusicRoutes(app, musicStore, musicDirector, localWebTransport.getOriginPolicy());
-    if (obsAdapter)
-      registerMixerRoutes(
-        app,
-        obsAdapter,
-        musicDirector,
-        gameAudio,
-        localWebTransport.getOriginPolicy(),
-      );
-    const cameraStore = new OrchestrationStore(
-      join(dirname(options.obsConfigPath), 'orchestration'),
-      (stage, evidence) => sessionJournal?.record(stage, evidence),
-    );
-    const cameraEvidence = (stage: string, evidence: unknown) =>
-      sessionJournal?.record(stage, evidence);
-    const mulnxTool = options.mulnxBundle
-      ? new MulnxTool(
-          join(dirname(options.obsConfigPath), 'mulnx'),
-          options.mulnxBundle,
-          cameraEvidence,
-        )
+  const media =
+    obsConfigStore && options.obsConfigPath
+      ? registerBroadcastOwners(app, {
+          configPath: options.obsConfigPath,
+          hudConfigPath: options.hudConfigPath,
+          builtinMusicPack: options.builtinMusicPack,
+          mulnxBundle: options.mulnxBundle,
+          mulnxCamPacksRoot: options.mulnxCamPacksRoot,
+          controlToken: options.productRuntime?.controlToken,
+          productMode: options.productRuntime !== undefined,
+          originPolicy: localWebTransport.getOriginPolicy(),
+          baseUrl: `http://${options.host ?? '127.0.0.1'}:${options.port ?? 3000}`,
+          obsConfigStore,
+          obsAudioRouting,
+          obsAdapter,
+          gameAudio,
+          hudConfigStore,
+          broadcastConfig: options.broadcastConfig,
+          readResources,
+          projectionCoordinator,
+          sceneController,
+          presentation,
+          production,
+          readMapConfirmed: () => observerAssist.mapConfirmed,
+          readDemo: () => demoTest,
+          updates: options.updates,
+          record: (stage, evidence) => sessionJournal?.record(stage, evidence),
+        })
       : undefined;
-    // This checks the fixed upstream adapter, not whether a game is connected.
-    // Actual PackStatus readiness is checked by the existing camera director.
-    const cameraResolver = mulnxTool
-      ? new CameraConfigResolver(mulnxTool, musicStore, (tool) =>
-          Promise.resolve(
-            tool.kind === 'upstream' && tool.release.repository === 'Co1Swet/MulNX_CS2',
-          ),
-        )
-      : undefined;
-    const supportsMusicPacks = !broadcastConfig;
-    const musicPacks = new MusicPackResources(join(dirname(options.obsConfigPath), 'music-packs'));
-    registerBroadcastAssetRoutes(app, musicPacks);
-    broadcastConfig ??= createProductionBroadcastDependencies(
-      dirname(options.obsConfigPath),
-      musicStore,
-      async (ref) => {
-        if (ref.resource.id !== PACK_ID || !resources) throw new Error('dependency_missing');
-        await resources.readExact(ref.resource, ref.fileId);
-      },
-      musicPacks,
-      cameraResolver,
-    );
-    const runtime = createBroadcastRuntime({
-      hud: hudConfigStore,
-      music: musicStore,
-      camera: cameraStore,
-      dependencies: withOfficialBroadcastResources(
-        broadcastConfig,
-        () => resources,
-        options.hudConfigPath,
-      ),
-      withApplyGuard: (operation) => production.configureBroadcast(operation),
-      canApplyCamera: () => cameraDirector?.canChangeConfiguration() ?? true,
-      diagnostic: (error) =>
-        app.log.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败'),
-    });
-    broadcastRuntime = runtime;
-    if (supportsMusicPacks)
-      registerMusicPackRoutes(
-        app,
-        runtime.store,
-        musicStore,
-        musicPacks,
-        localWebTransport.getOriginPolicy(),
-        () => runtime.ready,
-        async (module, source) => {
-          const resolver = createBroadcastResolver({
-            ...broadcastConfig!.resolve,
-            asset: (ref) =>
-              ref.resource.id === source.id &&
-              ref.resource.version === source.version &&
-              ref.resource.digest === source.digest
-                ? Promise.resolve()
-                : broadcastConfig!.resolve.asset(ref),
-          });
-          await resolver.resolveModule(module);
-        },
-      );
-    registerBroadcastConfigRoutes(
-      app,
-      runtime.store,
-      localWebTransport.getOriginPolicy(),
-      () => runtime.ready,
-      () => runtime.restoreLegacyCamera(),
-      (module) => runtime.moduleAvailability(module),
-      () => runtime.displayAvailable,
-      () => runtime.ensureBuiltinMusic(),
-    );
-    catalogTool = mulnxTool;
-    const mulnxProvider = new MulnxProvider(cameraEvidence);
-    mulnxClock = new MulnxProgramClock(mulnxProvider);
-    app.addHook('onClose', () => mulnxClock?.close());
-    cameraDirector = new CameraDirector(
-      cameraStore,
-      mulnxProvider,
-      () => ({
-        program: projectionCoordinator.getCurrent().program,
-        active: sceneController.get().active,
-        production:
-          production.sessionAllowed() &&
-          observerAssist.mapConfirmed &&
-          projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-        mapConfirmed: observerAssist.mapConfirmed,
-        demoAudition: demoTest.get().active ? demoTest.canUseCamera('audition') : undefined,
-      }),
-      cameraEvidence,
-      undefined,
-      undefined,
-      (pack) => verifyIsolatedPack(options.mulnxCamPacksRoot ?? mulnxTool?.camPacksRoot, pack),
-      options.productRuntime !== undefined,
-      (map, pack) => {
-        if (!cameraStore.hasPersistence) return Promise.resolve(true);
-        return runtime.verifyCameraPack(map, pack);
-      },
-    );
-    app.addHook('onReady', async () => {
-      if (mulnxTool) {
-        try {
-          await mulnxTool.load();
-          catalogToolLoaded = true;
-          options.updates?.registerCompanionCheck(async (force) => {
-            if (force) mulnxTool.resetNotification();
-            if (mulnxTool.view().busy) return mulnxTool.view().phase === 'checking';
-            await mulnxTool.check().catch(() => undefined);
-            return true;
-          });
-        } catch (error) {
-          app.log.error({ stage: 'mulnx_load', err: error }, 'MulNX 加载失败');
-        }
-      }
-      const broadcastStoreExists =
-        broadcastConfig &&
-        (await lstat(broadcastConfig.path).then(
-          () => true,
-          (error: NodeJS.ErrnoException) => error.code !== 'ENOENT',
-        ));
-      if (!broadcastStoreExists)
-        await cameraStore
-          .load()
-          .catch((error) =>
-            app.log.error(
-              { stage: 'camera_load', err: error, result: 'failure' },
-              '运镜预设加载失败',
-            ),
-          );
-    });
-    app.addHook('onReady', () => runtime.initialize());
-    registerOrchestrationRoutes(
-      app,
-      cameraDirector,
-      musicStore,
-      localWebTransport.getOriginPolicy(),
-      {
-        controlToken: options.productRuntime?.controlToken,
-        configure: production.configureCameraSession,
-        configureDemo: (requestId, commit) => demoTest.configureCameraSession(requestId, commit),
-        canPrepare: production.canPrepareMulnx,
-        canCleanup: production.canCleanupMulnx,
-        withSelection: production.withMulnxSelection,
-        reconcileSelection: async () => {
-          if (!cameraStore.hasPersistence) return true;
-          return runtime.reconcileCameraSelection();
-        },
-      },
-      mulnxTool,
-    );
-  }
   registerResourceLibrary(app, {
     originPolicy: () => localWebTransport.getOriginPolicy(),
-    resources: () => resources,
-    tool: () => (catalogToolLoaded ? catalogTool?.view() : undefined),
-    resourceRecoveryAvailable: () => Boolean(resources && options.productRuntime?.appVersion),
+    resources: readResources,
+    tool: () => media?.getCatalogTool()?.view(),
+    resourceRecoveryAvailable: () => Boolean(readResources() && options.productRuntime?.appVersion),
     webRoot: () => options.webRoot ?? defaultWebRoot(),
   });
-  sceneController.attachDirector(director);
-  const directorTimer = setInterval(() => {
-    const sessionValid = production.sessionValid();
-    void sceneController
-      .reconcileObs(() => sessionValid() && production.automaticAllowed())
-      .catch(async (error: unknown) => {
-        app.log.warn(
-          {
-            event: 'obs',
-            stage: 'program_reconciliation',
-            diagnostic: {
-              error: obsErrorEvidence(
-                error,
-                (await obsConfigStore?.read().catch(() => undefined))?.password,
-              ),
-            },
-          },
-          'OBS program reconciliation pending',
-        );
-      });
-    void director.tick().catch(() => director.hold());
-    void musicDirector?.tick();
-    cameraDirector?.tick();
-    const clockState = mulnxClock?.current(performance.now()).state;
-    if (clockState && clockState !== mulnxClockState) {
-      mulnxClockState = clockState;
-      sessionJournal?.record('program_clock', { state: clockState });
-    }
-    if (gameAudio) {
-      const projection = projectionCoordinator.getCurrent();
-      gameAudio.tick(
-        gameAudioTruth(
-          projection.program,
-          sceneController.get().active,
-          production.automaticAllowed() && projection.operator.matchContext.origin !== 'fixture',
-        ),
-      );
-    }
-  }, 100);
-  directorTimer.unref();
+  const stopProgramAutomation = startProgramAutomation(app.log, {
+    director,
+    sceneController,
+    production,
+    obsConfigStore,
+    projectionCoordinator,
+    gameAudio,
+    tickMedia: () => media?.tick(),
+  });
   registerBpWorkspaceRoutes(app, {
     originPolicy: localWebTransport.getOriginPolicy(),
     controller: matchContextController,
@@ -1366,45 +1004,16 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy: localWebTransport.getOriginPolicy(),
     });
-  const restoreFormal = async (trial = false) => {
-    if (matchContextController === null) return;
-    try {
-      await localTournamentStore?.load();
-    } catch (error) {
-      app.log.warn(
-        { event: 'local-tournament-unavailable', error: diagnosticValue(error) },
-        'Local tournament library could not be loaded',
-      );
-    }
-    const restored = trial
-      ? await matchContextController.restoreTemporaryBinding()
-      : await matchContextController.restoreLatest();
-    if (localTournamentStore === null || !localTournamentStore.getAvailability().available) return;
-    const selected = localTournamentStore
-      .getSnapshot()
-      .matches.find(
-        (match) => match.matchId === localTournamentStore.getSnapshot().selectedMatchId,
-      );
-    const localSelectedAt = localTournamentStore.getSnapshot().selectedAt;
-    const localWasSelectedLast =
-      localSelectedAt !== null &&
-      Date.parse(localSelectedAt) >= Date.parse(restored?.storedAt ?? '1970-01-01T00:00:00.000Z');
-    if (
-      selected !== undefined &&
-      (restored === undefined || isStandaloneLocalMatch(restored) || localWasSelectedLast)
-    ) {
-      if (!trial) localMatchExit?.requireHostConfirmation();
-      if (trial) matchContextController.restoreTemporaryLocalDocument(selected);
-      else matchContextController.activateLocalDocument(selected);
-    } else if (restored !== undefined && isStandaloneLocalMatch(restored)) {
-      const migrated = await localTournamentStore.importLegacyMatch(
-        toMatchDocumentV1(restored.manifest),
-      );
-      if (!trial) localMatchExit?.requireHostConfirmation();
-      if (trial) matchContextController.restoreTemporaryLocalDocument(migrated);
-      else matchContextController.activateLocalDocument(migrated);
-    }
-  };
+  const restoreFormal = (trial = false) =>
+    restoreMatchSelection(
+      app.log,
+      {
+        matchContextController,
+        localTournamentStore,
+        requireHostConfirmation: () => localMatchExit?.requireHostConfirmation(),
+      },
+      trial,
+    );
   const demoTest = new DemoTestController({
     canBegin: demoMutationGuard.canBegin,
     dataReady: () => {
@@ -1458,7 +1067,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     refreshAssist: () => projectionCoordinator.refreshAssist(),
     resetAssist: () => projectionCoordinator.resetObserverAssist(),
     mapConnectionChanged: () =>
-      cameraDirector?.invalidatePreparation('本图连接已变更，正在准备运镜。'),
+      media?.camera.invalidatePreparation('本图连接已变更，正在准备运镜。'),
   });
   app.addHook('onClose', () => {
     observerSettingsUnsubscribe();
@@ -1472,6 +1081,18 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       observerSettings,
       () => matchContextController?.getActiveBinding() ?? undefined,
     );
+  const unsubscribeMatchBinding = subscribeRuntimeMatchBinding(matchContextController, {
+    rehearseEnded: () => rehearsal?.exitFixtureRuntimeState(),
+    connection: options.rivalhubConnection,
+    readStatsActive: production.statsActive,
+    publishBinding: (binding) => {
+      outputBinding = binding;
+      outputService.setBinding(binding);
+      const committed = programRuntime.bindContext(binding?.context, binding?.origin);
+      projectionCoordinator.setMatchContextBinding(binding, committed);
+    },
+    refreshCues: () => programCueCoordinator.afterRuntimeMutation(),
+  });
   demoMutationGuard.register(app, demoTest, production.isTrialPending);
   app.addHook('onReady', async () => {
     if (demoTest.get().active) await demoTest.recover();
@@ -1541,14 +1162,15 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     monotonicNow: () => debugClock.nowMonotonicMs(),
     snapshot: () => {
       const now = debugClock.nowMonotonicMs();
+      const normalized = latestInput();
       return {
         input: {
           raw: runtimeObservation.latestRaw,
-          normalized: latestInput,
-          ageMs: latestInput ? Math.max(0, now - latestInput.receivedMonotonicMs) : null,
+          normalized,
+          ageMs: normalized ? Math.max(0, now - normalized.receivedMonotonicMs) : null,
         },
         outbox: outbox?.takePersistenceTiming() ?? null,
-        resources: resources?.takeRangeTiming() ?? null,
+        resources: readResources()?.takeRangeTiming() ?? null,
         runtime: debugEvidenceStore.getSupportSummary(now),
         recorder: currentRecorder().getHealth(),
         delivery: deliveryConsumers.map((consumer) => consumer.getHealth()),
@@ -1573,86 +1195,21 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
   });
   app.get('/debug/hosts', () => localWebTransport.getHostDiagnostics());
 
-  app.post('/debug/control-event', { bodyLimit: 32 * 1024 }, async (request, reply) => {
-    if (
-      !checkLocalWebOrigin(localWebTransport.getOriginPolicy(), request.headers.origin).allowed ||
-      localWebTransport.getOriginPolicy().mode !== 'loopback'
-    )
-      return reply.code(403).send({ error: 'operator_origin_forbidden' });
-    const body = request.body;
-    if (!isDocumentDiagnosticEvent(body))
-      return reply.code(400).send({ error: 'document_event_invalid' });
-    if (!sessionJournal) return reply.code(503).send({ error: 'diagnostic_writer_unavailable' });
-    await sessionJournal.recordDocumentCommitted(body);
-    if (
-      ['browser_error', 'browser_unhandled_rejection', 'browser_performance'].includes(body.kind) &&
-      (body.kind !== 'browser_performance' ||
-        (body.evidence as { anomalyCount?: number } | null)?.anomalyCount)
-    )
-      performanceContext?.trigger('browser_anomaly', {
-        operation: body.kind,
-        observedAt: body.observedAt,
-        browserDocumentId: body.producerRunId,
-        contextCapturedAt: new Date().toISOString(),
-        originalEvidence: body.evidence,
-      });
-    return reply.code(204).send();
-  });
-  const diagnosticDelivery = registerDiagnosticDelivery(app, {
-    ...(options.supportLogsDirectory ? { directory: options.supportLogsDirectory } : {}),
-    ...(sessionJournal ? { journal: sessionJournal } : {}),
+  const support = registerSupportRuntime(app, {
+    supportLogsDirectory: options.supportLogsDirectory,
+    product: options.productRuntime,
+    endpoint: options.diagnosticsEndpoint,
+    endpointSource: options.diagnosticsEndpointSource,
+    fetch: options.diagnosticsFetch,
+    workspaceObserver: options.workspaceObserver,
     originPolicy: localWebTransport.getOriginPolicy(),
-    ...(options.diagnosticsEndpoint ? { endpoint: options.diagnosticsEndpoint } : {}),
-    ...(options.diagnosticsEndpointSource
-      ? { endpointSource: options.diagnosticsEndpointSource }
-      : {}),
-    ...(options.diagnosticsFetch ? { fetch: options.diagnosticsFetch } : {}),
-    onConsent: async () => {
-      // The delivery owner invokes this only after durable consent. Do not let
-      // a stable pre-consent group carry its old interval/count into this scope.
-      flushOperationDiagnostics();
-      await recordConfiguration();
-    },
-    deliveryParticipants: () => [
-      ...(sessionJournal ? [sessionJournal.deliveryParticipant()] : []),
-      ...(performanceContext ? [performanceContext.deliveryParticipant()] : []),
-    ],
-    incidentParticipants: () => [
-      ...(sessionJournal ? [sessionJournal.incidentParticipant()] : []),
-      ...(performanceContext ? [performanceContext.incidentParticipant()] : []),
-    ],
-    onReport: () => {
-      runtimeObservation.record('problem_report');
-      performanceContext?.trigger('problem_report', {
-        interpretation:
-          'context begins at report receipt; past untriggered buffers are unavailable',
-      });
-    },
-  });
-  diagnosticConsentTime = () => {
-    const status = diagnosticDelivery.snapshotStatus().delivery;
-    return status?.consent ? status.consentAt : null;
-  };
-  const unsubscribeObserverEvidence = options.workspaceObserver?.subscribeEvidence((evidence) =>
-    sessionJournal?.record('observer_attempt_terminal', evidence),
-  );
-  registerSupportRoutes(app, {
-    originPolicy: localWebTransport.getOriginPolicy(),
-    ...(options.supportLogsDirectory === undefined
-      ? {}
-      : { logsDirectory: options.supportLogsDirectory }),
-    ...(options.productRuntime === undefined ? {} : { artifact: options.productRuntime }),
-    observer: () => options.workspaceObserver?.view() ?? null,
+    sessionJournal,
+    performanceContext,
+    runtimeObservation,
+    flushOperationDiagnostics,
+    recordConfiguration,
+    nativeSource,
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
-    exportParticipants: () => {
-      // Enqueue completed observations before the journal freezes its export watermark.
-      flushOperationDiagnostics();
-      return [
-        ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
-        ...(performanceContext ? [performanceContext.exportParticipant()] : []),
-      ];
-    },
-    diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
     businessLogStatus: () => businessJournal?.getStatus() ?? 'not_configured',
     recorder: () => currentRecorder().getHealth(),
     delivery: () => deliveryConsumers.map((consumer) => consumer.getHealth()),
@@ -1660,79 +1217,32 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     obs: async () => obsAdapter?.status(),
     obsAudioDiagnostics: async () => obsAdapter?.readAudioDeviceDiagnostics(),
     program: () => sceneController.get(),
-    programContext: () => {
-      const { operator, program } = projectionCoordinator.getCurrent();
-      return {
-        contextFreshness: operator.matchContext.freshness,
-        identity: operator.identity.state,
-        binding: program.series?.bindingState ?? null,
-      };
-    },
+    projection: () => projectionCoordinator.getCurrent(),
     gsiConfigured: options.gsiToken !== undefined,
   });
 
-  if (options.gsiToken !== undefined) {
-    registerGsiIngress(app, {
-      gsiToken: options.gsiToken,
-      classifySource: (sourceId) => managedSource.classify(sourceId),
-      canAccept: () => demoTest?.canAcceptGsi() ?? true,
-      canRecord: () => demoTest?.get().active !== true,
-      recorder: currentRecorder,
-      ...(options.gsiSequenceSource === undefined
-        ? {}
-        : { sequenceSource: options.gsiSequenceSource }),
-      onAcceptedRaw: (input) => {
-        runtimeObservation.acceptRaw(input);
-        if (performanceContext?.shouldSample(input.receivedMonotonicMs))
-          performanceContext.sample({
-            time: input.receivedAt,
-            monotonicMs: input.receivedMonotonicMs,
-            sequence: input.sequence,
-            evidence: {
-              input: selectedGsiContext(input.payload),
-              normalizedBeforeCurrentRaw: latestInput,
-              runtimeBeforeCurrentRaw: programRuntime.getCurrentState().programSource,
-              publicationBeforeCurrentRaw: (['program', 'radar'] as const).map((channel) => {
-                const current = projectionCoordinator.getPublisher(channel).getCurrent();
-                return { channel, channelSeq: current?.channelSeq, cursor: current?.cursor };
-              }),
-            },
-          });
-        debugEvidenceStore.recordAcceptedRaw(input);
-        options.onAcceptedRaw?.(input);
-      },
-      ...(options.clock === undefined ? {} : { clock: options.clock }),
-      onObservation: (observation, sourceId) => {
-        if (
-          (sourceId &&
-            !managedSource.sourceMatchesSelection(sourceId) &&
-            (!outputBinding ||
-              !programRuntime.isExplicitSourceOwner(sourceId, outputBinding.context.matchId))) ||
-          (!sourceId && managedSource.unverifiedExternal())
-        )
-          programRuntime.markSourceUnverified();
-        const owner = observation.telemetry.map?.name
-          ? managedSource.ownerForFirstObservation(sourceId)
-          : undefined;
-        if (dispatchObservation(observation, undefined, sourceId, owner) && owner && sourceId)
-          managedSource.confirmFirstObservation(sourceId);
-        options.onObservation?.(observation);
-      },
-      onGsiDiagnostics: (diagnostics) => {
-        debugEvidenceStore.recordGsiDiagnostics(diagnostics);
-        options.onGsiDiagnostics?.(diagnostics);
-      },
-      onRuntimeDiagnostic: (code, failure) => {
-        sessionJournal?.record('telemetry_failure', { code, ...failure });
-        performanceContext?.trigger('telemetry_diagnostic', {
-          code,
-          receive: failure.receive,
-          error: diagnosticValue(failure.error),
-        });
-        recordRuntimeDiagnostic(code, 'telemetry');
-      },
+  if (options.gsiToken !== undefined)
+    registerProgramIngress(app, {
+      token: options.gsiToken,
+      clock: options.clock,
+      sequenceSource: options.gsiSequenceSource,
+      onAcceptedRaw: options.onAcceptedRaw,
+      onObservation: options.onObservation,
+      onGsiDiagnostics: options.onGsiDiagnostics,
+      managedSource,
+      readDemo: () => demoTest,
+      currentRecorder,
+      runtimeObservation,
+      performanceContext,
+      debugEvidenceStore,
+      programRuntime,
+      projectionCoordinator,
+      sessionJournal,
+      latestInput,
+      dispatchObservation,
+      readBinding: () => outputBinding,
+      recordDiagnostic: (code) => recordRuntimeDiagnostic(code, 'telemetry'),
     });
-  }
 
   if (options.qualificationMode)
     registerQualification(app, options, {
@@ -1769,118 +1279,35 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : null,
   });
 
-  app.addHook('onClose', async () => {
-    const failures: unknown[] = [];
-    const closeStep = async (action: () => unknown | Promise<unknown>) => {
-      try {
-        await action();
-      } catch (error) {
-        failures.push(error);
-      }
-    };
-    const closeDiagnostics = async (action: () => unknown | Promise<unknown>) => {
-      try {
-        await action();
-      } catch (error) {
-        app.log.warn({ err: error }, '诊断收尾未完成，已记录的日志仍可读取');
-      }
-    };
-    clearInterval(directorTimer);
-    await closeStep(() => runtimeObservation.close());
-    await closeStep(() => presentationUnsubscribe());
-    await closeStep(() => objectiveReferenceUnsubscribe?.());
-    await closeStep(() => cameraDirector?.close());
-    await closeStep(() => musicDirector?.close());
-    await closeStep(() => gameAudio?.close());
-    // Both waits share one deadline; adapter closure may itself enqueue a new
-    // unconfirmed status after the first wait has already finished.
-    const obsExitDeadline = performance.now() + 4000;
-    const waitForObsExit = async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          production.waitForObsExit(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error('OBS 收尾尚未确认')),
-              Math.max(0, obsExitDeadline - performance.now()),
-            );
-          }),
-        ]);
-      } catch (error) {
-        app.log.warn({ err: error }, 'OBS 收尾未确认');
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    };
-    await waitForObsExit();
-    await closeStep(() => obsAdapter?.close());
-    await waitForObsExit();
-    for (const result of await Promise.allSettled([
-      Promise.resolve().then(() => cstvSources.program.stop()),
-      Promise.resolve().then(() => cstvSources.lookahead.stop()),
-      ...deliveryConsumers.map((consumer) => Promise.resolve().then(() => consumer.close())),
-    ])) {
-      if (result.status === 'rejected') failures.push(result.reason);
-    }
-    // Stop producers before flushing each local owner. One failed close must
-    // not prevent the remaining owners from attempting their own flush.
-    await closeStep(() => projectionCoordinator.close());
-    await closeStep(() => programCueCoordinator.close());
-    await closeStep(() => outputService.stopDelivery());
-    await closeDiagnostics(() => options.rivalhubConnection?.flushDiagnostics?.());
-    await closeStep(() => programRuntime.close());
-    await closeStep(() => localWebTransport.close());
-    await closeStep(async () => {
-      await hudConfigStore.flush();
-      if (hudConfigStore.getState().persistenceError)
-        throw new Error('hud_config_close_unconfirmed');
-    });
-    await closeStep(() => broadcastRuntime?.flushConsumerReceipts());
-    await closeStep(async () => {
-      const recorder = currentRecorder();
-      await recorder.finalize();
-      recorder.assertDurableFinalized?.();
-    });
-    await closeStep(async () => {
-      await businessJournal?.close();
-      if (
-        businessJournal &&
-        (businessJournal.getStatus() === 'write_failed' ||
-          businessJournal.getHealth().uncommittedChanges)
-      )
-        throw new Error('business_journal_close_unconfirmed');
-    });
-    // Release delivery's source holds before producers need space for their final flush.
-    // Final records remain in the journal for recovery on the next startup.
-    diagnosticConsentTime = () => null;
-    await closeDiagnostics(() => diagnosticDelivery.close());
-    await closeDiagnostics(() => nativeSource?.close());
-    await closeDiagnostics(async () => {
-      await performanceContext?.close();
-      if (performanceContext) {
-        const health = performanceContext.health();
-        if (health.pendingRecords > 0 || health.writeError !== null)
-          throw new Error('performance_context_close_unconfirmed');
-      }
-    });
-    await closeDiagnostics(() => unsubscribeObserverEvidence?.());
-    await closeDiagnostics(flushOperationDiagnostics);
-    await closeDiagnostics(async () => {
-      await sessionJournal?.close();
-      if (sessionJournal) {
-        const health = sessionJournal.health();
-        if (health.pendingRecords > 0 || health.writeError !== null)
-          throw new Error('session_journal_close_unconfirmed');
-      }
-    });
-    await closeStep(() =>
+  registerCompanionShutdown(app, {
+    stopDirector: stopProgramAutomation,
+    stopObservation: () => runtimeObservation.close(),
+    unsubscribePresentation: presentationUnsubscribe,
+    unsubscribeObjectiveReference: objectiveReferenceUnsubscribe,
+    closeCamera: () => media?.camera.close(),
+    closeMusic: () => media?.music.close(),
+    closeGameAudio: () => gameAudio?.close(),
+    closeObs: () => obsAdapter?.close(),
+    waitForObsExit: production.waitForObsExit,
+    stopCstv: [() => cstvSources.program.stop(), () => cstvSources.lookahead.stop()],
+    closeDeliveryConsumers: deliveryConsumers.map((consumer) => () => consumer.close()),
+    closeProjection: () => projectionCoordinator.close(),
+    closeCues: () => programCueCoordinator.close(),
+    stopWebsiteDelivery: () => outputService.stopDelivery(),
+    flushWebsiteDiagnostics: () => options.rivalhubConnection?.flushDiagnostics?.(),
+    closeRuntime: () => programRuntime.close(),
+    closeTransport: () => localWebTransport.close(),
+    hudConfigStore,
+    flushBroadcastReceipts: () => media?.broadcast?.flushConsumerReceipts(),
+    currentRecorder,
+    readBusinessJournal: () => businessJournal,
+    closeSupport: support.close,
+    closeWebsiteOutput: () =>
       closeWebsiteOutput(options.rivalhubConnection, outputService, (error) =>
         app.log.warn({ err: error }, '远端数据源收尾待重试'),
       ),
-    );
-    if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
-    await writeRuntimeFlushReceipt(options.productRuntime);
+    unsubscribeMatchBinding,
+    product: options.productRuntime,
   });
 
   return app;

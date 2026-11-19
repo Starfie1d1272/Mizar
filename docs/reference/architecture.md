@@ -52,7 +52,7 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) | 提交输入与命令、解析身份、推进系列事实，发布同版本快照与转换 |
 | [输入提交](../../apps/companion/src/runtime/observation-commit.ts) | 统一现场与重放的遥测提交，协调来源代际、投影发布与可靠输出捕获 |
 | [ProjectionCoordinator](../../apps/companion/src/projections/projection-coordinator.ts) | 从运行时快照发布 Program、Operator、Radar 和观察辅助。接口与播出页面消费对应投影 |
-| [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交 |
+| [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交。[运行时订阅](../../apps/companion/src/match-context/runtime-binding.ts) 先退役旧试播，再发布新绑定 |
 | [制作生命周期](../../apps/companion/src/program-scenes/production.ts) | 制作会话、进入/退出、试播及资源/更新互斥 |
 | [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序 |
 | [节目呈现](../../apps/companion/src/program-scenes/presentation.ts) | 提供当前节目内容和已冻结结果，供场景、音乐和运镜消费 |
@@ -66,7 +66,7 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 
 | 场景 | 从哪里跟踪 |
 | --- | --- |
-| 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再组装运行时、投影和输出。输入走统一提交入口，Program 供场景和网站分别消费。[产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求，本机写者收尾后写入退出回执 |
+| 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再装配领域实例与回调。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 复用同一提交链。[产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求，[关停编排](../../apps/companion/src/runtime/shutdown.ts) 在本机写者收尾后写入退出回执 |
 | 同图重开和来源切换 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核 |
 | OBS 断连与恢复 | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供 |
 | 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。后台通过原请求身份获取确认，重启从同一记录恢复 |

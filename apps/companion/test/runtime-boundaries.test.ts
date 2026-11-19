@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test, type TestContext } from 'node:test';
 import fastify from 'fastify';
 import { buildApp } from '../src/app.js';
@@ -274,6 +275,44 @@ test('Demo recovery retains its marker and remains isolated until output restora
   assert.equal(demo.canAcceptGsi(), true);
 });
 
+test('rehearsal binding reaches production projections, retires, and can be loaded again', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-rehearsal-binding-'));
+  const app = buildApp({
+    matchManifestPath: join(directory, 'match.json'),
+    obsConfigPath: join(directory, 'obs.json'),
+    rehearsalFixturePath: fileURLToPath(
+      new URL('../../../fixtures/epl-s24/rehearsal.generated.json', import.meta.url),
+    ),
+  });
+  t.after(async () => {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const command = (path: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/operator/rivals-rehearsal/${path}`,
+      headers: { host, origin },
+    });
+  const document = () => app.inject('/local/v1/match-document');
+  assert.equal((await document()).statusCode, 404);
+  for (let run = 0; run < 2; run++) {
+    const loaded = await command('load');
+    assert.equal(loaded.statusCode, 200, loaded.body);
+    assert.equal(loaded.json().loaded, true);
+    const selected = await document();
+    assert.equal(selected.statusCode, 200);
+    assert.equal(selected.json().source, 'fixture');
+    const presentation = await app.inject('/local/v1/program-presentation');
+    assert.equal(presentation.json().match?.matchId, loaded.json().selectedMatchId);
+    const stopped = await command('stop');
+    assert.equal(stopped.statusCode, 200, stopped.body);
+    assert.equal(stopped.json().loaded, false);
+    assert.equal((await document()).statusCode, 404);
+    assert.equal((await app.inject('/local/v1/program-presentation')).json().match, null);
+  }
+});
+
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-runtime-boundaries-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -388,6 +427,66 @@ test('image retry replaces a corrupt asset and concurrent retries publish the sa
   const reply = await reopened.inject(url);
   assert.equal(reply.statusCode, 200);
   assert.deepEqual(reply.rawPayload, image);
+});
+
+test('a failed consumer close still releases the local writer and withholds the receipt', async (t) => {
+  const { directory, options } = await fixture(t);
+  const instanceId = randomUUID();
+  const outboxPath = join(directory, 'outbox.json');
+  for (const [key, value] of Object.entries({
+    MIZAR_STATE_ROOT: directory,
+    MIZAR_PRODUCT_INSTANCE: instanceId,
+  })) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+  const failure = new Error('consumer could not close');
+  const app = buildApp({
+    ...options,
+    reliableOutboxPath: outboxPath,
+    deliveryConsumers: [
+      {
+        getHealth: () => ({
+          id: 'test-consumer',
+          state: 'idle',
+          inFlight: false,
+          hasPendingLatest: false,
+          offered: 0,
+          sent: 0,
+          coalesced: 0,
+          failed: 0,
+        }),
+        close: async () => {
+          throw failure;
+        },
+      },
+    ],
+    productRuntime: {
+      instanceId,
+      artifactSha256: 'a'.repeat(64),
+      gitSha: 'a'.repeat(40),
+      controlToken: randomUUID(),
+      stop: () => {},
+    },
+  });
+  await app.ready();
+  await assert.rejects(
+    app.close(),
+    (error) => error instanceof AggregateError && error.errors.includes(failure),
+  );
+  await assert.rejects(readFile(join(directory, 'data', `runtime-flush-${instanceId}.json`)), {
+    code: 'ENOENT',
+  });
+  const restarted = new ReliableOutbox(outboxPath);
+  try {
+    await restarted.load();
+  } finally {
+    await restarted.close();
+  }
 });
 
 test('an overdue website shutdown releases the real SQLite writer before the local receipt', async (t) => {

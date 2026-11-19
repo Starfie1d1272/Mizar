@@ -76,7 +76,6 @@ export type MatchContextSelectionResult =
 export interface MatchContextControllerOptions {
   readonly lkgStore: MatchManifestLkgStore;
   readonly initialBinding?: MatchContextBinding;
-  readonly onBindingChanged?: (binding: MatchContextBinding | undefined) => void;
 }
 
 export interface PendingOnlineMatchCandidate {
@@ -139,8 +138,9 @@ function preservesBoundMatch(current: MatchContextBinding, candidate: BroadcastM
 
 export class MatchContextController {
   private readonly lkgStore: MatchManifestLkgStore;
-  private readonly onBindingChanged:
-    ((binding: MatchContextBinding | undefined) => void) | undefined;
+  private readonly bindingListeners = new Set<
+    (binding: MatchContextBinding | undefined, previous: MatchContextBinding | undefined) => void
+  >();
   private readonly commitQueue = new SerialCommitQueue();
   private activeBinding: MatchContextBinding | undefined;
   private activeAcquiredAt = new Date().toISOString();
@@ -153,7 +153,6 @@ export class MatchContextController {
 
   constructor(options: MatchContextControllerOptions) {
     this.lkgStore = options.lkgStore;
-    this.onBindingChanged = options.onBindingChanged;
     this.activeBinding = options.initialBinding;
     this.bindingRevision = options.initialBinding === undefined ? 0 : 1;
   }
@@ -448,6 +447,23 @@ export class MatchContextController {
     this.clearActiveBinding();
   }
 
+  subscribeBinding(
+    listener: (
+      binding: MatchContextBinding | undefined,
+      previous: MatchContextBinding | undefined,
+    ) => void,
+  ): () => void {
+    this.bindingListeners.add(listener);
+    return () => {
+      this.bindingListeners.delete(listener);
+    };
+  }
+
+  private notifyBinding(previous: MatchContextBinding | undefined): void {
+    const binding = this.activeBinding;
+    for (const listener of this.bindingListeners) listener(binding, previous);
+  }
+
   private clearActiveBinding(): void {
     if (this.activeBinding === undefined) return;
     if (isLocalBinding(this.activeBinding)) {
@@ -455,9 +471,10 @@ export class MatchContextController {
       this.onlineCandidateAcquisition = undefined;
       this.pendingOnlineCandidate = undefined;
     }
+    const previous = this.activeBinding;
     this.activeBinding = undefined;
     this.bindingRevision += 1;
-    this.onBindingChanged?.(undefined);
+    this.notifyBinding(previous);
   }
 
   private setActive(binding: MatchContextBinding): void {
@@ -466,10 +483,11 @@ export class MatchContextController {
       this.onlineCandidateAcquisition = undefined;
       this.pendingOnlineCandidate = undefined;
     }
+    const previous = this.activeBinding;
     this.activeBinding = binding;
     this.activeAcquiredAt = new Date().toISOString();
     this.bindingRevision += 1;
-    this.onBindingChanged?.(binding);
+    this.notifyBinding(previous);
   }
 
   async selectMatch(
