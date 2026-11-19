@@ -821,7 +821,10 @@ export function createProduction(options: ProductionDependencies) {
         busy = false;
       }
     },
-    canStartObsOutput: () => !updatePending,
+    outputStartValidity: () => {
+      const generation = sessionGeneration;
+      return () => generation === sessionGeneration && !busy && !shuttingDown && !updatePending;
+    },
     reserveUpdate: () => {
       if (shuttingDown || updatePending) return false;
       updatePending = true;

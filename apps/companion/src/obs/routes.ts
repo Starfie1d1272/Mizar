@@ -58,7 +58,7 @@ export function registerObsRoutes(
     readonly originPolicy: LocalWebOriginPolicy;
     readonly activeScene: () => ProgramSceneId;
     readonly preparationValid: (revision: unknown) => () => boolean;
-    readonly canStartOutput?: () => boolean;
+    readonly outputStartValidity?: () => () => boolean;
     readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
     readonly musicAudio?: () => MusicAudioMode | undefined;
@@ -434,20 +434,18 @@ export function registerObsRoutes(
     const parsed = obsOutputCommandSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: 'obs_output_invalid', message: 'OBS 操作格式有误。' });
-    if (parsed.data.action === 'start' && options.canStartOutput?.() === false)
+    const canStart = parsed.data.action === 'start' ? options.outputStartValidity?.() : undefined;
+    if (canStart?.() === false)
       return reply.code(409).send({
         error: 'obs_output_busy',
-        message: '更新正在退出，请等待更新完成或取消后开始 OBS 输出。',
+        message: '制作状态正在变化，请稍候再开始 OBS 输出。',
       });
     try {
       return {
         ok: true,
         outputs: await options.adapter.outputCommand(
           parsed.data,
-          () =>
-            !request.raw.aborted &&
-            !reply.raw.destroyed &&
-            (parsed.data.action !== 'start' || options.canStartOutput?.() !== false),
+          () => !request.raw.aborted && !reply.raw.destroyed && canStart?.() !== false,
         ),
       };
     } catch (error) {
