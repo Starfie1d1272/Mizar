@@ -80,7 +80,36 @@ it('finishes the verified map tail after normal drain and fences a new map execu
   expect(
     timeline.project(program(117000, 2), settings, 117000, nextSource, 1, true).observer?.hints,
   ).toEqual([]);
-  expect(timeline.getDiagnostics().acceptedDeaths).toBe(1);
+  expect(timeline.getDiagnostics()).toMatchObject({ acceptedDeaths: 1, staged: 1 });
+  // The kill enters the display window only after Program confirms the new map execution.
+  expect(
+    timeline.project(program(117100, 2), settings, 117100, nextSource, 1).observer?.hints,
+  ).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 2,
+    staged: 0,
+    stagedReleased: 1,
+  });
+  expect(
+    timeline.project(program(232000, 2), settings, 232000, nextSource, 1).observer?.hints,
+  ).toMatchObject([{ id: '2:1' }]);
+});
+
+it('discards staged next-map kills when Program confirms another execution', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  const ended = { ...early, connected: false, fresh: false, normalDrain: true };
+  timeline.project(program(116000), settings, 116000, ended, 1);
+  const nextSource = { ...early, generation: 2 };
+  timeline.project(program(116000), settings, 116000, nextSource, 1, true);
+  timeline.consume(death(2, 1, 116600));
+  const other = { ...program(117000, 2), map: { name: 'de_other', roundNumber: 1 } };
+  timeline.project(other, settings, 117000, nextSource, 1, false);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 0,
+    staged: 0,
+    discarded: { 'staged-map-mismatch': 1 },
+  });
 });
 
 it('schedules from receive time and preserves the due time of a shown event', () => {
