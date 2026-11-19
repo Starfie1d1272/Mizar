@@ -71,6 +71,10 @@ function unknown(): ObsOutputStatus {
   return { phase: 'unknown', active: null, pending: null, revision: randomUUID() };
 }
 
+function nonnegative(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 async function bounded<T>(task: Promise<T>, ms = REQUEST_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -94,6 +98,7 @@ export class ObsOutputController {
   private unconfirmedStart = { stream: false, record: false };
   private transitionAt = { stream: 0, record: 0 };
   private streamBytes: number | undefined;
+  private streamSample: { bytes: number; at: number; durationMs: number } | undefined;
   private connecting: Promise<void> | undefined;
   private reading: Promise<void> | undefined;
   private retry: ReturnType<typeof setTimeout> | undefined;
@@ -273,7 +278,12 @@ export class ObsOutputController {
     this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
-    this.values[kind] = { ...previous, phase, active, revision: randomUUID() };
+    const next = { ...previous, phase, active, revision: randomUUID() };
+    if (kind === 'stream' && phase !== 'active') {
+      this.streamSample = undefined;
+      delete next.health;
+    }
+    this.values[kind] = next;
   }
 
   private invalidate(client?: OBSWebSocket, retry = true): void {
@@ -677,6 +687,32 @@ export class ObsOutputController {
         this.update(kind, 'unknown', null);
       else {
         this.update(kind, phase, value.outputActive);
+        if (kind === 'stream' && phase === 'active' && stream) {
+          const at = performance.now();
+          const durationMs = nonnegative(stream.outputDuration);
+          const prior = this.streamSample;
+          const interval = prior ? at - prior.at : 0;
+          const bitrateKbps =
+            prior &&
+            bytes !== undefined &&
+            bytes >= prior.bytes &&
+            durationMs !== null &&
+            durationMs >= prior.durationMs &&
+            interval > 0 &&
+            interval <= 10_000
+              ? Math.round(((bytes - prior.bytes) * 8) / interval)
+              : null;
+          this.streamSample =
+            bytes === undefined || durationMs === null ? undefined : { bytes, at, durationMs };
+          this.values.stream = {
+            ...this.values.stream,
+            health: {
+              durationMs,
+              bitrateKbps,
+              droppedFrames: nonnegative(stream.outputSkippedFrames),
+            },
+          };
+        }
         if (this.unconfirmedStart[kind] && phase === 'active') {
           this.unconfirmedStart[kind] = false;
           this.result(kind, { action: 'start', state: 'started' });
