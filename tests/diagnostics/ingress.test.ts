@@ -145,6 +145,10 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
       .bind('ready')
       .first();
     assert.equal(stored?.count, 1, 'the first upload was actually persisted despite its lost ACK');
+    await journal.recordCommitted('during_transport_backoff', { result: 'retained locally' });
+    await delivery.tick();
+    assert.deepEqual((await manifest()).queue, before.queue);
+    assert.equal(uploads.length, 1);
     await delivery.close();
     now = Math.max(now, delivery.status().nextAttemptAt) + 1000;
     delivery = await new DiagnosticDelivery(client, journal, {
@@ -159,6 +163,14 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     assert(replay);
     assert.deepEqual(replay.bytes, uploads[0]!.bytes);
     assert(delivery.status().acknowledged >= 1);
+    await delivery.tick(false);
+    assert(
+      uploads.some(({ bytes }) =>
+        JSON.parse(gunzipSync(bytes).toString()).events.some(
+          ({ kind }: { kind: string }) => kind === 'during_transport_backoff',
+        ),
+      ),
+    );
     assert(before.credentials.installationId);
     assert.equal((await manifest()).credentials.installationId, before.credentials.installationId);
     assert.equal(

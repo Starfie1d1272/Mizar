@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +76,37 @@ test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed s
     details.map((entry: { value: unknown }) => entry.value),
     gaps,
   );
+});
+
+test('manual ZIP retains both copies of an event without a temporary identity index', async (t) => {
+  const output = await mkdtemp(join(tmpdir(), 'mizar-archive-carriers-'));
+  const name = 'session.ndjson';
+  const row = JSON.stringify({ eventId: 'same-event', evidence: { code: 'first' } }) + '\n';
+  await writeFile(join(output, name), row + row);
+  const source = await open(join(output, name), 'r');
+  t.after(async () => {
+    await source.close();
+    await rm(output, { recursive: true, force: true });
+  });
+  runArchiveWorker(
+    {
+      sources: [{ name, fd: source.fd, bytes: Buffer.byteLength(row + row) }],
+      gaps: [],
+      output,
+      exportId: 'test',
+      range: {},
+      snapshot: {},
+    },
+    () => undefined,
+  );
+  const zip = unzipSync(await readFile(join(output, 'part-1.zip')));
+  const lines = Buffer.from(zip['events/1.ndjson']!).toString().trimEnd().split('\n');
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line).eventId),
+    ['same-event', 'same-event'],
+  );
+  assert.equal(JSON.parse(Buffer.from(zip['coverage.json']!).toString()).retainedRecords, 2);
+  assert(!zip['indexes/carriers.json']);
 });
 
 test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {

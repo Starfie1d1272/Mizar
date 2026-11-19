@@ -160,6 +160,7 @@ export function createRuntimeDiagnostics(
         diagnostics.acceptedDeaths,
         diagnostics.enteredWindow,
         diagnostics.generatedHints,
+        diagnostics.publishedHints,
         diagnostics.endedAfterGeneration,
         diagnostics.discarded,
       ]);
