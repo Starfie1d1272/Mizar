@@ -40,7 +40,7 @@ try {
                     }
                     # Only producer logs and sealed evidence bodies. Upload state contains
                     # installation credentials even when it lives next to the logs.
-                    if ($name -notmatch '^logs/(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?|host-retention\.ndjson|performance-pending/[a-f0-9-]{36}\.[a-f0-9]{4}\.gz|diagnostic-outbox/[a-f0-9]{64}\.gz)$') {
+                    if ($name -notmatch '^logs/(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?|host-retention\.ndjson|performance-pending/[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz|diagnostic-outbox/[a-f0-9]{64}\.gz)$') {
                         continue
                     }
                     $compression = [IO.Compression.CompressionLevel]::Fastest

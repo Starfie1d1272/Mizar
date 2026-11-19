@@ -6,7 +6,7 @@ import { atomicJson, safePath } from '../resource-store/files.js';
 
 const UUID = /^[a-f0-9-]{36}$/;
 const immutableName =
-  /^(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|performance-pending\/[a-f0-9-]{36}\.[a-f0-9]{4}\.gz)$/;
+  /^(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|performance-pending\/[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz)$/;
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 const META_LIMIT = 4 * 1024 * 1024;
 export interface SegmentMetadata {
