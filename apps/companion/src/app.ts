@@ -1,6 +1,5 @@
 import { lstat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { replaceDurableJson } from './match-context/durable-json.js';
 import { CameraConfigResolver } from './broadcast-config/camera.js';
 import { MusicPackResources } from './broadcast-config/music-pack-resources.js';
 import {
@@ -39,7 +38,7 @@ import { registerOrchestrationRoutes } from './orchestration/routes.js';
 import { registerDiagnosticDelivery } from './support/delivery-routes.js';
 import { checkLocalWebOrigin } from './local-web/origin-policy.js';
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
-import { renewalDiagnostics } from './support/repeated-diagnostic.js';
+import { registerOperationDiagnostics } from './support/operation-diagnostics.js';
 import { isDocumentDiagnosticEvent } from '@mizar/protocol';
 import { PerformanceWindow, selectedGsiContext } from './support/performance-window.js';
 import { observeRuntime } from './support/runtime-observation.js';
@@ -80,7 +79,7 @@ import { registerLocalTournamentRoutes } from './match-context/local-tournament-
 import { registerLocalMatchExitRoutes } from './match-context/local-match-exit.js';
 import { registerManagedSourceRoutes } from './match-context/managed-source.js';
 import { registerLocalAssetRoutes } from './match-context/local-assets.js';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { toMatchDocumentV1 } from '@mizar/rivalhub';
 import { isStandaloneLocalMatch } from './match-context/lkg-store.js';
 import { OutputService, type OutputServiceOptions } from './output/service.js';
@@ -119,16 +118,21 @@ import {
 import { registerObsRoutes } from './obs/routes.js';
 import { registerMixerRoutes } from './obs/mixer-routes.js';
 import { ProgramSceneController, registerProgramSceneRoutes } from './program-scenes/controller.js';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 
 import { DebugEvidenceStore, type DebugRuntimeClock } from './runtime/debug-state.js';
 import { registerSupportRoutes } from './support/routes.js';
 import { BusinessJournal } from './support/business-journal.js';
 import type { LatestWinsConsumerHealth } from './runtime/latest-wins.js';
 import { createObservationCommit } from './runtime/observation-commit.js';
+import {
+  registerProductStop,
+  writeRuntimeFlushReceipt,
+  type ProductRuntime,
+} from './runtime/product-stop.js';
 import { createProgramRuntime, type ProgramRuntime } from './runtime/program-runtime.js';
 import type { SeriesProgressCheckpointStore } from '@mizar/core/series-progress';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
@@ -188,14 +192,7 @@ export interface CompanionAppOptions {
   readonly steamAvatars?: SteamAvatars;
   readonly supportLogsDirectory?: string;
   readonly supportJournal?: SessionJournal;
-  readonly productRuntime?: {
-    readonly appVersion?: string;
-    readonly artifactSha256: string;
-    readonly gitSha: string;
-    readonly instanceId: string;
-    readonly controlToken: string;
-    readonly stop: () => void;
-  };
+  readonly productRuntime?: ProductRuntime;
   readonly logger?: boolean;
   readonly gsiToken?: string;
   readonly recorder?: CaptureRecorder;
@@ -579,33 +576,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       (entry) => sessionJournal?.record('business_evidence', entry),
     );
   }
-  const browserOperationId = (value: unknown): string | null =>
-    typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
-      ? value
-      : null;
-  app.addHook('onRequest', (request, _reply, done) => {
-    if (sessionJournal)
-      sessionJournal.withRequest(
-        {
-          requestId: request.id,
-          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-          taskId: browserOperationId(request.headers['x-mizar-task-id']),
-          parentOperationId: browserOperationId(request.headers['x-mizar-parent-operation-id']),
-          attemptId: browserOperationId(request.headers['x-mizar-attempt-id']),
-          trigger:
-            request.headers['x-mizar-trigger'] === 'user'
-              ? 'user'
-              : request.headers['x-mizar-trigger'] === 'system'
-                ? 'system'
-                : 'unattributed',
-        },
-        done,
-      );
-    else done();
-  });
-  const isControl = (request: FastifyRequest) =>
-    request.method !== 'GET' &&
-    /^(?:\/operator\/|\/runtime\/)/.test(request.routeOptions.url ?? '');
   const controlState = () => ({
     production: production.get(),
     program: sceneController.get(),
@@ -613,172 +583,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     hud: hudConfigStore.getState().document,
     match: matchContextController?.getActiveBinding() ?? null,
   });
-  const renewalRoutes = ['/operator/runtime/observer', '/operator/runtime/camera-session'];
-  const renewalRoute = (request: FastifyRequest) =>
-    request.method === 'POST' && renewalRoutes.includes(request.routeOptions.url ?? '');
-  const isRenewal = (request: FastifyRequest) =>
-    renewalRoute(request) && (request.body as { action?: unknown } | null)?.action === 'pulse';
-  // Body parsing happens after onRequest. Keep the original state in memory so
-  // rejected commands and failed renewals retain their complete before/after evidence.
-  const renewalRequests = new WeakMap<
-    FastifyRequest,
-    {
-      before: ReturnType<typeof controlState>;
-      startedAt: number;
-      receivedAt: string;
-      compact: boolean;
-      beforeRecorded: boolean;
-      handlerStartedAt: string | null;
-      identity?: string;
-    }
-  >();
-  const renewalContext = (state: ReturnType<typeof controlState>) =>
-    JSON.stringify({
-      production: state.production,
-      program: state.program,
-      hud: state.hud,
-      match: state.match,
-    });
-  const renewalObservations = renewalDiagnostics(renewalRoutes, sessionJournal);
-  const recordRenewalStart = (request: FastifyRequest, deferredUntilResult = false) => {
-    const renewal = renewalRequests.get(request);
-    if (!renewal || renewal.beforeRecorded) return;
-    sessionJournal?.record('operation_received', {
-      requestId: request.id,
-      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-      method: request.method,
-      route: request.routeOptions.url,
-      before: renewal.before,
-      receivedAt: renewal.receivedAt,
-      ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
-    });
-    if (renewal.handlerStartedAt)
-      sessionJournal?.record('operation_begin', {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
-        parameters: diagnosticValue(request.body),
-        startedAt: renewal.handlerStartedAt,
-        ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
-      });
-    renewal.beforeRecorded = true;
-  };
-  app.addHook('onRequest', (request, _reply, done) => {
-    if (sessionJournal && isControl(request)) {
-      const before = controlState();
-      if (renewalRoute(request))
-        renewalRequests.set(request, {
-          before: structuredClone(before),
-          startedAt: performance.now(),
-          receivedAt: new Date().toISOString(),
-          compact: false,
-          beforeRecorded: false,
-          handlerStartedAt: null,
-        });
-      else
-        sessionJournal?.record('operation_received', {
-          requestId: request.id,
-          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-          method: request.method,
-          route: request.routeOptions.url,
-          before,
-        });
-    }
-    done();
-  });
-  app.addHook('preHandler', (request, _reply, done) => {
-    if (isControl(request)) {
-      const renewal = renewalRequests.get(request);
-      if (renewal) {
-        renewal.handlerStartedAt = new Date().toISOString();
-        // Only uncorrelated system pulses are observations. User/task commands,
-        // new identities and changed control contexts keep the full start chain.
-        if (
-          isRenewal(request) &&
-          !['operation-id', 'task-id', 'parent-operation-id', 'attempt-id', 'trigger'].some(
-            (field) => request.headers[`x-mizar-${field}`] !== undefined,
-          )
-        ) {
-          renewal.identity = createHash('sha256')
-            .update(JSON.stringify([request.body, renewalContext(renewal.before)]))
-            .digest('hex');
-          if (renewalObservations.get(request.routeOptions.url!)?.identity === renewal.identity)
-            return done();
-        }
-        recordRenewalStart(request);
-        return done();
-      }
-      sessionJournal?.record('operation_begin', {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
-        parameters: diagnosticValue(request.body),
-        filename: request.headers['x-mizar-filename'],
-      });
-    }
-    done();
-  });
-  app.addHook('onSend', (request, reply, payload, done) => {
-    if (sessionJournal && isControl(request)) {
-      let result: unknown = payload;
-      if (typeof payload === 'string') {
-        try {
-          result = JSON.parse(payload);
-        } catch {
-          result = { bytes: Buffer.byteLength(payload) };
-        }
-      }
-      const renewal = renewalRequests.get(request);
-      const after = controlState();
-      const outcome = result as { ok?: unknown; failed?: unknown } | null;
-      const compact = Boolean(
-        renewal &&
-        renewal.identity &&
-        reply.statusCode >= 200 &&
-        reply.statusCode < 300 &&
-        outcome?.ok === true &&
-        outcome.failed !== true &&
-        renewalContext(renewal.before) === renewalContext(after),
-      );
-      if (renewal) renewal.compact = compact;
-      const evidence = {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
-        httpStatus: reply.statusCode,
-        result,
-        ...(renewal ? { durationMs: performance.now() - renewal.startedAt } : {}),
-        ...(compact
-          ? { renewal: true, controlContextUnchanged: true }
-          : { ...(renewal && !renewal.beforeRecorded ? { before: renewal.before } : {}) }),
-        after,
-      };
-      const observation = renewalObservations.get(request.routeOptions.url ?? '');
-      if (compact && observation) {
-        const key = createHash('sha256')
-          .update(JSON.stringify([renewal!.identity, result]))
-          .digest('hex');
-        if (observation.key !== key) recordRenewalStart(request, true);
-        observation.identity = renewal!.identity!;
-        observation.key = key;
-        observation.repeated.record('runtime_renewal', key, {
-          ...evidence,
-          parameters: diagnosticValue(request.body),
-          renewalIdentity: renewal!.identity,
-        });
-      } else {
-        if (observation) {
-          observation.clear();
-          recordRenewalStart(request, true);
-        }
-        sessionJournal.record('operation_result', evidence);
-      }
-    }
-    done(null, payload);
-  });
+  const flushOperationDiagnostics = registerOperationDiagnostics(app, sessionJournal, controlState);
   options.rivalhubConnection?.setBusinessEvidenceHandler?.((stage, evidence) => {
     // Pre-network guards contain only canonical business fields. Do not write
     // the same observation under a second event ID; response evidence stays raw.
@@ -793,32 +598,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         evidence,
       );
     businessJournal?.write(stage, evidence);
-  });
-  app.addHook('onResponse', async (request, reply) => {
-    if (
-      reply.statusCode >= 400 ||
-      (request.method !== 'GET' &&
-        request.routeOptions.url?.startsWith('/operator/') &&
-        !renewalRequests.get(request)?.compact)
-    )
-      request.log.info(
-        {
-          method: request.method,
-          route: request.routeOptions.url,
-          res: { statusCode: reply.statusCode },
-        },
-        'Local operation completed',
-      );
-  });
-  app.addHook('onError', async (request, _reply, error) => {
-    sessionJournal?.record('request_error', {
-      requestId: request.id,
-      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-      method: request.method,
-      route: request.routeOptions.url,
-      error,
-    });
-    request.log.error({ err: error, route: request.routeOptions.url }, 'Local operation failed');
   });
   registerStaticHost(app, {
     ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
@@ -2140,45 +1919,12 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     };
   });
 
-  if (options.productRuntime !== undefined) {
-    const product = options.productRuntime;
-    app.post('/operator/runtime/stop', async (request, reply) => {
-      const token = request.headers['x-runtime-token'];
-      const expected = Buffer.from(product.controlToken);
-      const supplied = Buffer.from(typeof token === 'string' ? token : '');
-      // Only the local supervisor holds this per-launch capability. Browsers cannot stop it.
-      if (
-        request.headers.origin !== undefined ||
-        supplied.length !== expected.length ||
-        expected.length === 0 ||
-        !timingSafeEqual(supplied, expected)
-      ) {
-        return reply.code(403).send({ error: 'runtime-control-denied' });
-      }
-      // Host must finish the owned game and configuration transaction while
-      // this service is still available to keep the formal boundary isolated.
-      const trial = demoTest.get();
-      if (trial.active && !trial.localRestored)
-        return reply.code(409).send({
-          message: '请先在桌面结束 Demo 试播并恢复游戏配置，再停止服务。',
-        });
-      // The capability-verified CLI stop uses the same transaction as both UIs.
-      const shutdown = await production.shutdown();
-      const updateBlocked = await updateExit?.beforeStop();
-      if (updateBlocked) {
-        await shutdown.cancel();
-        return reply.code(409).send({ message: updateBlocked });
-      }
-      if (!shutdown.result.ok) {
-        request.log.warn(
-          { action: 'shutdown', reason: shutdown.result.failure },
-          '制作收尾待恢复，继续关闭本机服务',
-        );
-      }
-      setImmediate(product.stop);
-      return reply.code(202).send({ status: 'stopping' });
+  if (options.productRuntime)
+    registerProductStop(app, options.productRuntime, {
+      readTrial: () => demoTest.get(),
+      shutdown: production.shutdown,
+      beforeStop: () => updateExit?.beforeStop(),
     });
-  }
 
   app.get('/debug/runtime', () =>
     debugEvidenceStore.getResponse({
@@ -2267,7 +2013,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     onConsent: async () => {
       // The delivery owner invokes this only after durable consent. Do not let
       // a stable pre-consent group carry its old interval/count into this scope.
-      renewalObservations.clear();
+      flushOperationDiagnostics();
       await recordConfiguration();
     },
     deliveryParticipants: () => [
@@ -2303,7 +2049,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     runtimeSummary: () => debugEvidenceStore.getSupportSummary(debugClock.nowMonotonicMs()),
     exportParticipants: () => {
       // Enqueue completed observations before the journal freezes its export watermark.
-      renewalObservations.clear();
+      flushOperationDiagnostics();
       return [
         ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
         ...(performanceContext ? [performanceContext.exportParticipant()] : []),
@@ -2592,7 +2338,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       }
     });
     await closeDiagnostics(() => unsubscribeObserverEvidence?.());
-    await closeDiagnostics(renewalObservations.clear);
+    await closeDiagnostics(flushOperationDiagnostics);
     await closeDiagnostics(async () => {
       await sessionJournal?.close();
       if (sessionJournal) {
@@ -2607,22 +2353,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       ),
     );
     if (failures.length > 0) throw new AggregateError(failures, 'Companion 本地收尾未全部完成');
-    if (options.productRuntime && process.env.MIZAR_PRODUCT_INSTANCE) {
-      const stateRoot = process.env.MIZAR_STATE_ROOT;
-      const { instanceId, artifactSha256 } = options.productRuntime;
-      if (
-        !stateRoot ||
-        !isAbsolute(stateRoot) ||
-        !/^[a-f0-9-]{36}$/.test(instanceId) ||
-        process.env.MIZAR_PRODUCT_INSTANCE !== instanceId
-      )
-        throw new Error('本地收尾实例身份无效');
-      await replaceDurableJson(join(stateRoot, 'data', `runtime-flush-${instanceId}.json`), {
-        instanceId,
-        artifactSha256,
-        pid: process.pid,
-      });
-    }
+    await writeRuntimeFlushReceipt(options.productRuntime);
   });
 
   return app;
