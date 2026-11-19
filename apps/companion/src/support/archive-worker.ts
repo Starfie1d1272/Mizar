@@ -289,7 +289,7 @@ export function runArchiveWorker(
       throw new OutputFailure('export_expanded_part_budget');
     const start = performance.now();
     output(() => {
-      const file = new ZipDeflate(name, { level: 6 });
+      const file = new ZipDeflate(name, { level: 1 });
       zip.add(file);
       file.push(data, true);
     });
