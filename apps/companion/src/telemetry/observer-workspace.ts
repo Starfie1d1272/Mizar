@@ -444,7 +444,6 @@ export function registerWorkspaceObserver(
   let gameCommand:
     | { game: string; intent: string; state: 'not-sent' | 'unknown' | 'queued' | 'unavailable' }
     | undefined;
-  let seamlessGame = '';
   let hiddenGame = '';
   let appliedPolicy = '';
   let epoch = 0;
@@ -546,8 +545,6 @@ export function registerWorkspaceObserver(
     if (kind === 'timing' || kind === 'name' || kind === 'game' || kind === 'scope') return;
 
     const attempt = ++epoch;
-    if (kind === 'map')
-      seamlessGame = settings.mapConnection?.mode === 'seamless' && host ? keys(host).game : '';
     if (kind === 'connection' || (kind === 'map' && settings.mapConnection?.mode === 'connect'))
       host = undefined;
     if (!host || kind === 'map') lease = undefined;
@@ -722,7 +719,6 @@ export function registerWorkspaceObserver(
           (!gameControl ||
             ((!gameControl.autoConnect ||
               settings.mapConnection?.mode === 'register-current' ||
-              (settings.mapConnection?.mode === 'seamless' && seamlessGame === activeKeys.game) ||
               connectedGame === activeKeys.connect) &&
               (body.nativeHudToggle || !gameControl.hideGameHud || hiddenGame === activeKeys.hud)));
         // Even a paused/game-only reuse needs a fresh Host lease. It must not
@@ -776,7 +772,6 @@ export function registerWorkspaceObserver(
             throw new Error('observer_configuration_changed');
           const value: Host = body;
           const key = keys(value);
-          if (settings.mapConnection?.mode === 'seamless' && !seamlessGame) seamlessGame = key.game;
           const connect = Boolean(
             gameControl?.autoConnect &&
             settings.mapConnection?.mode === 'connect' &&
