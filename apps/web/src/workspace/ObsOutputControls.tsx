@@ -41,9 +41,19 @@ function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
 }
 
 export function ObsOutputControls({ onError }: { onError: (message: string) => void }) {
-  const { outputs, pending, recovering, recoveryError, execute, recoverCapture } = useObsOutputs();
+  const {
+    outputs,
+    pending,
+    recovering,
+    recoveryError,
+    execute,
+    recoverCapture,
+    cancelStreamStart,
+  } = useObsOutputs();
   const [confirmation, setConfirmation] = useState<ObsOutputCommand | null>(null);
   const cleanupPending = outputs?.preparation === 'cleanup_pending';
+  const preparingStream =
+    pending.stream?.action === 'start' && Boolean(outputs?.preparation) && !outputs?.stream.pending;
   const outputsIdle = Boolean(
     outputs &&
     [outputs.stream, outputs.record].every(
@@ -81,8 +91,14 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
             state?.phase === 'starting' ||
             state?.phase === 'stopping',
           );
-          const preparation = !state?.active && outputs?.preparation;
-          const text = label(kind, state, commandPending);
+          const preparation =
+            !state?.active &&
+            outputs?.preparation &&
+            !(kind === 'stream' && cleanupPending && outputsIdle);
+          const text =
+            kind === 'stream' && preparingStream
+              ? '正在检查开播画面…'
+              : label(kind, state, commandPending);
           return (
             <Button
               key={kind}
@@ -112,8 +128,14 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
           );
         })}
       </div>
+      {preparingStream ? (
+        <StatusBanner tone="info">
+          正在检查游戏画面，检查完成后会开始直播。
+          <Button onClick={cancelStreamStart}>取消开播</Button>
+        </StatusBanner>
+      ) : null}
       {outputs?.stream.phase === 'active' ? <StreamHealth stream={outputs.stream} /> : null}
-      {cleanupPending ? (
+      {cleanupPending && !preparingStream ? (
         <StatusBanner tone="warning">
           {recoveryError ||
             (outputsIdle

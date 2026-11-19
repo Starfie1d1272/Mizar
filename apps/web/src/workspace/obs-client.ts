@@ -233,6 +233,7 @@ export function useObsOutputs() {
   const revision = useRef(0);
   const inFlight = useRef(new Set<ObsOutputCommand['output']>());
   const captureInFlight = useRef(false);
+  const streamStart = useRef<AbortController | null>(null);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -259,6 +260,7 @@ export function useObsOutputs() {
     return () => {
       active = false;
       clearTimeout(timer);
+      streamStart.current?.abort();
     };
   }, []);
   async function execute(command: ObsOutputCommand) {
@@ -266,19 +268,30 @@ export function useObsOutputs() {
     inFlight.current.add(command.output);
     revision.current++;
     setPending((current) => ({ ...current, [command.output]: command }));
+    const starting = command.output === 'stream' && command.action === 'start';
+    const controller = starting ? new AbortController() : null;
+    if (controller) streamStart.current = controller;
     try {
       const response = await fetch('/operator/obs/output', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(command),
-        signal: AbortSignal.timeout(25_000),
+        signal: controller
+          ? AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)])
+          : AbortSignal.timeout(25_000),
       });
       const result = (await response.json()) as { outputs?: ObsOutputsStatus; message?: string };
       const observed = result.outputs;
       if (observed) {
         revision.current++;
         setOutputs((current) =>
-          current ? { ...current, [command.output]: observed[command.output] } : observed,
+          current
+            ? {
+                ...current,
+                preparation: observed.preparation ?? null,
+                [command.output]: observed[command.output],
+              }
+            : observed,
         );
       }
       if (!response.ok || !result.outputs)
@@ -289,6 +302,7 @@ export function useObsOutputs() {
         );
     } catch (error) {
       revision.current++;
+      if (controller?.signal.aborted) return;
       if (error instanceof ObsOutputCommandError) throw error;
       throw new Error(
         error instanceof Error && error.name !== 'TimeoutError'
@@ -297,6 +311,7 @@ export function useObsOutputs() {
         { cause: error },
       );
     } finally {
+      if (controller) streamStart.current = null;
       inFlight.current.delete(command.output);
       setPending((current) => ({ ...current, [command.output]: undefined }));
     }
@@ -336,5 +351,13 @@ export function useObsOutputs() {
       setRecovering(false);
     }
   }
-  return { outputs, pending, recovering, recoveryError, execute, recoverCapture };
+  return {
+    outputs,
+    pending,
+    recovering,
+    recoveryError,
+    execute,
+    recoverCapture,
+    cancelStreamStart: () => streamStart.current?.abort(),
+  };
 }

@@ -245,7 +245,14 @@ export function createProduction(options: ProductionDependencies) {
   }
   function invalidateObsExit() {
     const task = obsExitTask;
-    if (!task || task.valid() || !task.sceneRequired || obsExitState === 'unconfirmed') return;
+    if (
+      !task ||
+      task.completed ||
+      task.valid() ||
+      !task.sceneRequired ||
+      obsExitState === 'unconfirmed'
+    )
+      return;
     obsExitState = 'unconfirmed';
     const pending = Promise.resolve(
       options.obsExit.record('unconfirmed', () => task.generation === obsExitGeneration),
@@ -424,7 +431,7 @@ export function createProduction(options: ProductionDependencies) {
           void localHandoff.catch(() => {});
         }
         if (!trialPending && options.source?.handoffForExit) {
-          if (obsExitTask && !obsExitTask.valid()) {
+          if (obsExitTask && !obsExitTask.completed && !obsExitTask.valid()) {
             if (body?.action === 'finish') {
               const required = obsExitTask.sceneRequired;
               obsExitGeneration++;
@@ -614,17 +621,20 @@ export function createProduction(options: ProductionDependencies) {
       busy = false;
     }
   }
-  let activeExitChange: Promise<Awaited<ReturnType<typeof change>>> | undefined;
+  let activeExitChange:
+    | { action: 'finish' | 'shutdown'; result: Promise<Awaited<ReturnType<typeof change>>> }
+    | undefined;
   async function dispatchChange(
     body: Parameters<typeof change>[0],
     onShutdownCommit?: Parameters<typeof change>[1],
   ) {
-    const isExit = body?.action === 'finish' || body?.action === 'shutdown';
-    if (!isExit) return change(body, onShutdownCommit);
+    if (body.action !== 'finish' && body.action !== 'shutdown')
+      return change(body, onShutdownCommit);
     if (activeExitChange) {
       if (body?.expectedRevision !== revision) return change(body, onShutdownCommit);
       const originalSession = sessionId;
-      const prior = await activeExitChange;
+      const active = activeExitChange;
+      const prior = await active.result;
       if (!prior.ok) return prior;
       if (sessionId !== originalSession)
         return {
@@ -632,12 +642,13 @@ export function createProduction(options: ProductionDependencies) {
           failure: 'productionConflict' as const,
           message: '制作状态已变化，请刷新后重试。',
         };
+      if (active.action === 'finish' && body.action === 'finish') return prior;
       return dispatchChange({ ...body, expectedRevision: revision }, onShutdownCommit);
     }
-    const pending = change(body, onShutdownCommit);
+    const pending = { action: body.action, result: change(body, onShutdownCommit) };
     activeExitChange = pending;
     try {
-      return await pending;
+      return await pending.result;
     } finally {
       if (activeExitChange === pending) activeExitChange = undefined;
     }
@@ -810,7 +821,10 @@ export function createProduction(options: ProductionDependencies) {
         busy = false;
       }
     },
-    canStartObsOutput: () => !updatePending,
+    outputStartValidity: () => {
+      const generation = sessionGeneration;
+      return () => generation === sessionGeneration && !busy && !shuttingDown && !updatePending;
+    },
     reserveUpdate: () => {
       if (shuttingDown || updatePending) return false;
       updatePending = true;
