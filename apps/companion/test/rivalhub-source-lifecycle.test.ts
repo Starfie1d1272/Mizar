@@ -119,6 +119,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let reliableStatus = 204;
   let loseClaim = false;
   let claimRecoverySupported = false;
+  let legacyClaimRecoverySupported = false;
   let loseBeforeClaim = false;
   let lastClaimRequestId: string | undefined;
   const recoveredClaimIds: string[] = [];
@@ -158,7 +159,19 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     if (url.pathname.endsWith('/disconnect')) return Response.json({ revoked: true });
     if (url.pathname.endsWith('/claim-recovery')) {
       if (!claimRecoverySupported) return new Response(null, { status: 404 });
-      if (init?.method !== 'POST') return Response.json({ version: 1 });
+      if (init?.method !== 'POST')
+        return Response.json({ version: 1, legacyScope: legacyClaimRecoverySupported });
+      const request = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if (request.legacy === true) {
+        return Response.json({
+          status: 'fenced',
+          scope: {
+            ...request,
+            installationId: installation.installationId,
+            competitionId: installation.competitionId,
+          },
+        });
+      }
       const { claimRequestId } = JSON.parse(String(init.body)) as { claimRequestId: string };
       recoveredClaimIds.push(claimRequestId);
       return Response.json(
@@ -281,6 +294,10 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     lastClaimRequestId: () => lastClaimRequestId,
     enableClaimRecovery: () => {
       claimRecoverySupported = true;
+    },
+    enableLegacyClaimRecovery: () => {
+      claimRecoverySupported = true;
+      legacyClaimRecoverySupported = true;
     },
     loseBeforeClaim: () => {
       loseBeforeClaim = true;
@@ -466,6 +483,21 @@ test('an unconfirmed claim error remains durable rather than assuming not_found'
   const restarted = await h.restart();
   await assert.rejects(restarted.release());
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+});
+
+test('an upgraded installation clears an old unnumbered intent only after a scoped website fence', async (t) => {
+  const h = await setup(t);
+  h.loseBeforeClaim();
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.lastClaimRequestId(), undefined);
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+
+  h.enableLegacyClaimRecovery();
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.deepEqual(h.releases, []);
+  assert.deepEqual(h.statusQueries, []);
 });
 
 for (const operation of ['switch', 'backoff', 'exit'] as const) {

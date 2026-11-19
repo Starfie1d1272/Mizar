@@ -890,22 +890,44 @@ export class RivalHubConnection {
   ): Promise<void> {
     if (!this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
     const signal = this.cleanupRequestSignal(deadline);
-    const response = intent.claimRecoveryVersion
-      ? await this.authorization.request('claim-recovery', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            matchId: intent.scope.matchId,
-            producerInstanceId: intent.scope.producerInstanceId,
-            liveSessionId: intent.scope.liveSessionId,
-            claimRequestId: intent.id,
-          }),
-          signal,
-        })
-      : await this.authorization.request(sourceStatusRequest(intent.scope), { signal });
+    let legacyScopeRecovery = false;
+    if (!intent.claimRecoveryVersion) {
+      const capability = await this.authorization.request('claim-recovery', { signal });
+      if (!capability.ok && capability.status !== 404) return;
+      if (capability.ok) {
+        const support = (await readReliableBody(capability)) as
+          { legacyScope?: unknown } | undefined;
+        legacyScopeRecovery = support?.legacyScope === true;
+      }
+    }
+    const response =
+      intent.claimRecoveryVersion || legacyScopeRecovery
+        ? await this.authorization.request('claim-recovery', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              matchId: intent.scope.matchId,
+              producerInstanceId: intent.scope.producerInstanceId,
+              liveSessionId: intent.scope.liveSessionId,
+              ...(intent.claimRecoveryVersion ? { claimRequestId: intent.id } : { legacy: true }),
+            }),
+            signal,
+          })
+        : await this.authorization.request(sourceStatusRequest(intent.scope), { signal });
     if (!response.ok) return;
     const body: unknown = await readReliableBody(response);
     this.shutdownSignal?.throwIfAborted();
+    if (legacyScopeRecovery) {
+      const status = body as { status?: unknown; scope?: Omit<SourceScope, 'baseUrl'> } | undefined;
+      if (
+        status?.status === 'fenced' &&
+        status.scope &&
+        sameScope({ ...status.scope, baseUrl: intent.scope.baseUrl }, intent.scope)
+      ) {
+        await this.sourceState.clearIntent(intent.id);
+        return;
+      }
+    }
     if (intent.claimRecoveryVersion) {
       const receipt = body as { claimRequestId?: unknown; status?: unknown } | undefined;
       if (receipt?.claimRequestId !== intent.id) return;
