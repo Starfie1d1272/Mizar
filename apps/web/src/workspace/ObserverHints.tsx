@@ -25,11 +25,14 @@ export function ObserverHints() {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const observer = state.state === 'live' ? state.current?.payload.observer : undefined;
   const draining = observer?.waitingReason === 'normal-drain';
+  const awaitingProgramMap = observer?.waitingReason === 'waiting-next-map';
   const awaitingTooLong = Boolean(
     configuration?.settings.enabled &&
     configuration.mapConnection &&
     configuration?.connectionRequestedAt &&
     !configuration.receiverPaused &&
+    !draining &&
+    !awaitingProgramMap &&
     runtime?.active &&
     !runtime.pending &&
     now - configuration.connectionRequestedAt > 60_000 &&
@@ -58,9 +61,7 @@ export function ObserverHints() {
   const pending = enabled && runtime?.pending;
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
-  const waitingNextMap =
-    observer?.waitingReason === 'waiting-next-map' ||
-    runtime?.terminal?.reason === 'source-hltv-stop';
+  const waitingNextMap = awaitingProgramMap || runtime?.terminal?.reason === 'source-hltv-stop';
   if (!enabled || !configuration?.connection || !configuration.mapConnection) return null;
   if (
     runtime &&
@@ -162,7 +163,11 @@ export function ObserverHints() {
           ) : null}
         </>
       ) : waitingNextMap ? (
-        <StatusPill tone="info">等待下一图的 GoTV 连接</StatusPill>
+        <StatusPill tone="info">
+          {awaitingProgramMap && runtime?.health?.state === 'live'
+            ? '已接收下一图数据，等待节目切图'
+            : '等待下一图的 GoTV 连接'}
+        </StatusPill>
       ) : reconnecting || connecting || !observer || observer.state !== 'ready' ? (
         <StatusPill tone="info">
           {reconnecting

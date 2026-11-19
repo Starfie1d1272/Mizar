@@ -1,5 +1,5 @@
 import type { ProgramProjection } from '@mizar/core/projection';
-import { observerMapScope } from '../scope/identities.js';
+import { observerMapScope, sameSourceSession } from '../scope/identities.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 
 export function createObserverAssistScope(
@@ -7,12 +7,9 @@ export function createObserverAssistScope(
   eligible: () => boolean,
 ) {
   let matchId: string | null | undefined;
-  let waitingMap: { name: string; epoch: number; order: number | null | undefined } | undefined;
+  let waitingMap: { cursor: ProgramProjection['cursor']; order: number | null } | undefined;
 
   return {
-    get mapConfirmed() {
-      return !waitingMap;
-    },
     projectionSettings: () => ({
       ...settings.settings,
       enabled: settings.settings.enabled && !settings.receiverPaused && eligible(),
@@ -30,10 +27,10 @@ export function createObserverAssistScope(
         waitingMap &&
         program.map.name &&
         program.status.telemetry === 'fresh' &&
-        program.cursor.mapEpoch !== waitingMap.epoch &&
-        (typeof waitingMap.order === 'number'
-          ? order === waitingMap.order + 1
-          : program.map.name !== waitingMap.name)
+        sameSourceSession(program.cursor, waitingMap.cursor) &&
+        program.cursor.mapEpoch > waitingMap.cursor.mapEpoch &&
+        waitingMap.order !== null &&
+        order === waitingMap.order + 1
       ) {
         waitingMap = undefined;
         settings.waitingForMap = false;
@@ -57,9 +54,8 @@ export function createObserverAssistScope(
           waitingMap =
             settings.mapConnection?.nextMap && program.map.name
               ? {
-                  name: program.map.name,
-                  epoch: program.cursor.mapEpoch,
-                  order: program.series?.currentMapOrder,
+                  cursor: program.cursor,
+                  order: program.series?.currentMapOrder ?? null,
                 }
               : undefined;
           settings.waitingForMap = Boolean(waitingMap);

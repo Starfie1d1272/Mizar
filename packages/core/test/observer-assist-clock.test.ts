@@ -42,6 +42,7 @@ function death(generation: number, sequence: number, now: number): PlayerDeathGa
       tick: sequence,
       observedAt: '2026-10-30T00:00:00Z',
       observedMonotonicMs: now,
+      sourceMapExecution: 1,
       mapName: 'de_test',
       ticksPerSecond: 64,
       roundsCompleted: 6,
@@ -109,6 +110,22 @@ it('discards staged next-map kills when Program confirms another execution', () 
     acceptedDeaths: 0,
     staged: 0,
     discarded: { 'staged-map-mismatch': 1 },
+  });
+});
+
+it('discards staged kills from an earlier execution of the same source and map', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  const ended = { ...early, connected: false, fresh: false, normalDrain: true };
+  timeline.project(program(1000), settings, 1000, ended, 1);
+  const nextSource = { ...early, generation: 2 };
+  timeline.project(program(2000), settings, 2000, nextSource, 1, true);
+  timeline.consume(death(2, 1, 2100));
+  timeline.project(program(3000, 2), settings, 3000, nextSource, 2);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 0,
+    staged: 0,
+    discarded: { 'staged-source-mismatch': 1 },
   });
 });
 
