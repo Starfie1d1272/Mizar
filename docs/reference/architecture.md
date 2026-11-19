@@ -67,6 +67,7 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 | 场景 | 从哪里跟踪 |
 | --- | --- |
 | 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再装配领域实例与回调。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 复用同一提交链。[产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求，[关停编排](../../apps/companion/src/runtime/shutdown.ts) 在本机写者收尾后写入退出回执 |
+| Companion 领域接线 | [赛事控制](../../apps/companion/src/match-context/runtime.ts) 注册本地与线上赛事入口。[网站输出](../../apps/companion/src/output/website-lifecycle.ts) 在恢复前接入赛事与制作状态，并核对投递资格及连续性。[节目呈现](../../apps/companion/src/program-scenes/presentation-routes.ts) 选择赛程来源，[场景联动](../../apps/companion/src/program-scenes/obs-scenes.ts) 在 OBS 确认当前对阵切入开始时通知音乐和运镜。[运行诊断](../../apps/companion/src/support/runtime-evidence.ts) 从各领域读出诊断快照。 |
 | 同图重开和来源切换 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核 |
 | OBS 断连与恢复 | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供 |
 | 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。后台通过原请求身份获取确认，重启从同一记录恢复 |

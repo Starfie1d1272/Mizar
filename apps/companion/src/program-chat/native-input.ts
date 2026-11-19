@@ -1,3 +1,5 @@
+import type { FastifyInstance } from 'fastify';
+import type { ProgramChat } from '../projections/program-chat.js';
 import { constants } from 'node:fs';
 import { lstat, open, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -464,4 +466,23 @@ export class ProgramChatNativeInput {
     this.closed = true;
     this.journal.record('native_source_health', this.health());
   }
+}
+
+export function registerNativeProgramChat(
+  app: FastifyInstance,
+  options: {
+    directory: string | undefined;
+    journal: ConstructorParameters<typeof ProgramChatNativeInput>[1] | undefined;
+    chat: Pick<ProgramChat, 'ingest'>;
+    refresh: () => void;
+  },
+): ProgramChatNativeInput | undefined {
+  if (!options.directory || !options.journal) return undefined;
+  const source = new ProgramChatNativeInput(options.directory, options.journal, (record) => {
+    if (options.chat.ingest(record)) options.refresh();
+  });
+  app.addHook('onReady', () => {
+    source.start();
+  });
+  return source;
 }

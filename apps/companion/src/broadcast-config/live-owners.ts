@@ -1,3 +1,4 @@
+import type { registerResourceRuntime } from '../resource-store/runtime.js';
 import { lstat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -285,6 +286,28 @@ export function registerBroadcastOwners(
         clockState = state;
         options.record('program_clock', { state });
       }
+    },
+  };
+}
+
+export function broadcastResourceReferences(
+  readMedia: () =>
+    Pick<ReturnType<typeof registerBroadcastOwners>, 'config' | 'broadcast'> | undefined,
+  fallbackConfig: Parameters<typeof registerBroadcastOwners>[1]['broadcastConfig'],
+): NonNullable<Parameters<typeof registerResourceRuntime>[1]['references']> {
+  return {
+    run: (operation) => (readMedia()?.config ?? fallbackConfig)!.references.run(operation),
+    isReferenced: (ref) => {
+      const media = readMedia();
+      if (!media) throw new Error('broadcast_config_unavailable');
+      return Promise.resolve(
+        media.broadcast
+          .referencedResources()
+          .some(
+            (used) =>
+              used.id === ref.id && used.version === ref.version && used.digest === ref.digest,
+          ),
+      );
     },
   };
 }

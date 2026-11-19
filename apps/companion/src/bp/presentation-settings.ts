@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { copyFile, readFile } from 'node:fs/promises';
@@ -95,4 +96,17 @@ export function registerBpPresentationSettings(
       return reply.code(503).send({ message: 'BP 样式未保存，请检查存储空间和文件权限后重试。' });
     }
   });
+}
+
+export function registerBpPresentationRuntime(
+  app: FastifyInstance,
+  obsConfigPath: string | undefined,
+  originPolicy: LocalWebOriginPolicy,
+): BpPresentationSettings {
+  const bpPresentationSettings = new BpPresentationSettings(
+    obsConfigPath ? join(dirname(obsConfigPath), 'bp-presentation.json') : undefined,
+  );
+  app.addHook('onReady', () => bpPresentationSettings.load(app.log));
+  registerBpPresentationSettings(app, bpPresentationSettings, originPolicy);
+  return bpPresentationSettings;
 }

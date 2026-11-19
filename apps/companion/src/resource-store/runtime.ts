@@ -1,10 +1,11 @@
+import { registerStaticHost } from '../local-web/static-host.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
 import type { FastifyInstance } from 'fastify';
 import type { LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ProductRuntime } from '../runtime/product-runtime.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import { registerResourceRoutes } from './routes.js';
-import { createRuntimeVerifier } from './runtime-adapter.js';
+import { createRuntimeVerifier, isOfficialWebResource, PACK_ID } from './runtime-adapter.js';
 import { ResourceStore } from './store.js';
 
 type StoreOptions = Parameters<typeof ResourceStore.open>[0];
@@ -87,4 +88,22 @@ export function registerResourceRuntime(
     await resources?.shutdown();
   });
   return () => resources;
+}
+
+export function registerCompanionStaticWeb(
+  app: FastifyInstance,
+  webRoot: string | undefined,
+  qualificationMode: boolean,
+  readResources: () => ResourceStore | undefined,
+): void {
+  registerStaticHost(app, {
+    ...(webRoot === undefined ? {} : { webRoot }),
+    qualificationMode,
+    readResource: async (path, range, signal) => {
+      const resources = readResources();
+      if (!resources || !isOfficialWebResource(path) || !resources.getStatus(PACK_ID).activeVersion)
+        return undefined;
+      return resources.read(PACK_ID, path, range, signal);
+    },
+  });
 }

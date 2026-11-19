@@ -85,6 +85,12 @@ export class ProgramSceneController {
   private nextObsReconciliation = 0;
   private preparing: { target: ProgramSceneId; revision: string } | undefined;
 
+  private matchupStarted?: (revision: string, mapName: string | null) => void;
+
+  onMatchupStarted(listener: (revision: string, mapName: string | null) => void): void {
+    this.matchupStarted = listener;
+  }
+
   constructor(
     private readonly projections: ProjectionCoordinator,
     private readonly bpSession: BpSession,
@@ -531,6 +537,18 @@ export class ProgramSceneController {
             valid() &&
             expectedRevision === this.revision &&
             this.blockedReason(id, automaticValid !== undefined) === null,
+          ...(id === 'matchup' && this.matchupStarted
+            ? {
+                onStarted: () => {
+                  if (this.preparing?.revision === nextRevision && options.valid?.()) {
+                    this.matchupStarted?.(
+                      nextRevision,
+                      this.projections.getCurrent().program.map.name,
+                    );
+                  }
+                },
+              }
+            : {}),
         };
         let compactTaken = false;
         this.bpFallbackReason = null;

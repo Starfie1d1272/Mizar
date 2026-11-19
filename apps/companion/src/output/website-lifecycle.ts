@@ -1,6 +1,11 @@
-import type { FastifyBaseLogger } from 'fastify';
-import type { MatchContextBinding } from '../match-context/index.js';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
+import type { MatchContextBinding, MatchContextController } from '../match-context/index.js';
+import type { ProgramRuntime } from '../runtime/program-runtime.js';
+import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
+import type { createProduction } from '../program-scenes/production.js';
+import { diagnosticValue, type SessionJournal } from '../support/session-journal.js';
 import type { BusinessJournal } from '../support/business-journal.js';
+import { registerOutputRoutes } from './routes.js';
 import { ReliableOutbox, outboxLocalError } from './reliable-outbox.js';
 import type { RivalHubConnection } from '../match-context/rivalhub-connection.js';
 import { OutputService, type OutputServiceOptions } from './service.js';
@@ -90,22 +95,30 @@ export async function startWebsiteOutput(
 export function createWebsiteOutput({
   connection,
   ...options
-}: Required<
-  Pick<
-    OutputServiceOptions,
-    'restoreContinuity' | 'isExecutionOwnedBy' | 'managedSourceId' | 'isActiveOnlineBinding'
-  >
-> & {
+}: {
   connection: RivalHubConnection | undefined;
   reliableOutboxPath: string | undefined;
   reliableSink: OutputServiceOptions['sink'];
   liveSink: OutputServiceOptions['liveSink'];
   readBinding: () => MatchContextBinding | undefined;
-  readLog: () => FastifyBaseLogger;
-  readJournal: () => BusinessJournal | undefined;
+  logger: FastifyBaseLogger;
+  journal: BusinessJournal | undefined;
   recordDiagnostic: (code: string) => void;
+  runtime: Pick<
+    ProgramRuntime,
+    'getCurrentState' | 'restoreDeliveryContinuity' | 'isExecutionOwnedBy' | 'getManagedSourceId'
+  >;
 }) {
-  const { restoreContinuity, isExecutionOwnedBy, managedSourceId, isActiveOnlineBinding } = options;
+  const { runtime, logger, journal } = options;
+  type RuntimePeers = {
+    projections: Pick<ProjectionCoordinator, 'refresh'>;
+    context: Pick<
+      MatchContextController,
+      'getActiveBinding' | 'getPendingOnlineCandidate' | 'isOnlineCandidateLoading'
+    > | null;
+    production: Pick<ReturnType<typeof createProduction>, 'isTrialPending' | 'get'>;
+  };
+  let peers: RuntimePeers | undefined;
   const isCurrentOnlineMatch = (matchId: string) => {
     const binding = options.readBinding();
     return binding?.origin === 'online' && binding.context.matchId === matchId;
@@ -133,29 +146,61 @@ export function createWebsiteOutput({
                     : 'unconfirmed',
             };
             if (recovery === undefined)
-              options.readLog().error(evidence, '网站可靠输出操作未确认；原始文件保留。');
+              logger.error(evidence, '网站可靠输出操作未确认；原始文件保留。');
             else {
-              options.readLog().warn(evidence, recovery.message);
+              logger.warn(evidence, recovery.message);
               options.recordDiagnostic(recovery.code);
             }
           },
-          (record, reason) => options.readJournal()?.reliable(record, reason),
+          (record, reason) => journal?.reliable(record, reason),
           (error) => {
-            options
-              .readLog()
-              .error(
-                { event: 'outbox', stage: 'worker', err: outboxLocalError(error) },
-                '网站发送队列已停止，重启后将按原提交和回执核对。',
-              );
+            logger.error(
+              { event: 'outbox', stage: 'worker', err: outboxLocalError(error) },
+              '网站发送队列已停止，重启后将按原提交和回执核对。',
+            );
             options.recordDiagnostic('outbox_worker_restart_required');
           },
         );
   const outputService: OutputService = new OutputService({
     ...(outbox ? { outbox } : {}),
-    restoreContinuity,
-    isExecutionOwnedBy,
-    managedSourceId,
-    isActiveOnlineBinding,
+    restoreContinuity: (checkpoint) => {
+      const binding = options.readBinding();
+      if (
+        !peers ||
+        binding?.context.matchId !== checkpoint.matchId ||
+        binding.manifest.revision !== checkpoint.contextRevision ||
+        runtime.getCurrentState().runtimeSeq !== 0
+      )
+        return undefined;
+      const committed = runtime.restoreDeliveryContinuity({
+        ...checkpoint.cursor,
+        mapName: checkpoint.mapName,
+        ...(checkpoint.managedSourceId ? { managedSourceId: checkpoint.managedSourceId } : {}),
+      });
+      return peers.projections.refresh(false, committed);
+    },
+    isExecutionOwnedBy: (binding) =>
+      runtime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
+    managedSourceId: () => runtime.getManagedSourceId(),
+    isActiveOnlineBinding: (binding) => {
+      const context = peers?.context;
+      if (
+        !peers ||
+        !context ||
+        context.getActiveBinding() !== binding ||
+        context.getPendingOnlineCandidate() ||
+        context.isOnlineCandidateLoading() ||
+        peers.production.isTrialPending() ||
+        peers.production.get().mode !== 'live'
+      )
+        return false;
+      const source = connection?.view();
+      return (
+        source?.activeSourceMatchId === binding.context.matchId &&
+        source.stoppedMatchId !== binding.context.matchId &&
+        !source.activeDeviceName
+      );
+    },
     ...(connection !== undefined
       ? {
           authorityScope: () => connection.reliableAuthorityScope(),
@@ -193,14 +238,12 @@ export function createWebsiteOutput({
         }),
     onDiagnostic: options.recordDiagnostic,
     onOutboxLoadError: (error) =>
-      options
-        .readLog()
-        .error(
-          { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
-          '发送队列无法打开，网站同步不可用；原始数据保留。',
-        ),
+      logger.error(
+        { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
+        '发送队列无法打开，网站同步不可用；原始数据保留。',
+      ),
     onBoundaryCaptureError: (error, evidence) =>
-      options.readLog().error(
+      logger.error(
         {
           event: 'outbox',
           operation: 'boundary_capture',
@@ -209,12 +252,74 @@ export function createWebsiteOutput({
         },
         '网站同步边界尚未确认保存，保留原请求重试；本机画面继续。',
       ),
-    onBusinessEvidence: (stage, evidence) => options.readJournal()?.write(stage, evidence),
+    onBusinessEvidence: (stage, evidence) => journal?.write(stage, evidence),
     onRecoveryProgress: (event, state) => {
       const authority = connection?.reliableAuthorityScope();
       if (authority) connection?.setContextRecoveryProgress(event, authority, state);
     },
   });
   connection?.setBoundaryStatusProvider?.(() => outputService.getBoundaryStatus());
-  return { outbox, outputService };
+  return {
+    outbox,
+    outputService,
+    connectRuntime(runtimePeers: RuntimePeers) {
+      peers = runtimePeers;
+    },
+  };
+}
+
+export function quarantineRecoveredTrial(
+  log: FastifyBaseLogger,
+  output: Pick<OutputService, 'setQuarantined'>,
+): void {
+  void output.setQuarantined(true).catch((error: unknown) =>
+    log.error(
+      {
+        event: 'demo-test',
+        stage: 'recovery_output_quarantine',
+        diagnostic: diagnosticValue(error),
+      },
+      'Demo test quarantine failed',
+    ),
+  );
+}
+
+export function registerWebsiteOutputRuntime(
+  app: FastifyInstance,
+  options: {
+    connection: RivalHubConnection | undefined;
+    outputService: OutputService;
+    outbox: ReliableOutbox | undefined;
+    businessJournal: BusinessJournal | undefined;
+    sessionJournal: SessionJournal | undefined;
+    readBinding: () => MatchContextBinding | undefined;
+    readProjection: () => ReturnType<ProjectionCoordinator['getCurrent']>;
+    readTelemetry: () => ReturnType<ProgramRuntime['getCurrentState']>['programTelemetry'];
+    recordConfiguration: () => Promise<void>;
+  },
+): void {
+  const { outputService, outbox, businessJournal, sessionJournal } = options;
+  app.addHook('onReady', async () => {
+    outputService.setCurrent(options.readProjection(), options.readBinding());
+    await startWebsiteOutput(options.connection, outputService, (error) =>
+      app.log.error({ err: error }, '网站启动所有权清理未确认，本机制作继续；修复后重启。'),
+    );
+    businessJournal?.runtime(
+      options.readProjection(),
+      options.readBinding(),
+      options.readTelemetry(),
+    );
+    for (const record of outputService.getReliableRecords())
+      businessJournal?.reliable(record, 'restored');
+    await businessJournal?.flush();
+    await options.recordConfiguration().catch((error: unknown) => {
+      sessionJournal?.record('diagnostic_delivery_failure', {
+        phase: 'configuration_snapshot',
+        error: diagnosticValue(error),
+      });
+    });
+  });
+  registerOutputRoutes(app, outputService, outbox, () =>
+    outputService.setCurrent(options.readProjection(), options.readBinding()),
+  );
 }

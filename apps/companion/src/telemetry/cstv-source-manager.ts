@@ -699,3 +699,11 @@ export function createObserverSourceManager<R extends GameEventSourceRole>(optio
     ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
 }
+
+export function selectCstvSources(
+  injected: CstvSourceManagers | undefined,
+  lookahead: CstvSourceManagers['lookahead'] | undefined,
+): CstvSourceManagers {
+  const sources = injected ?? createCstvSourceManagers({});
+  return { ...sources, ...(lookahead ? { lookahead } : {}) };
+}

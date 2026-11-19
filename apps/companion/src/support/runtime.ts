@@ -7,7 +7,8 @@ import type { ProductRuntime } from '../runtime/product-runtime.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import { registerDiagnosticDelivery } from './delivery-routes.js';
 import type { PerformanceWindow } from './performance-window.js';
-import type { observeRuntime } from './runtime-observation.js';
+import { registerRuntimeEvidence } from './runtime-evidence.js';
+import type { BusinessJournal } from './business-journal.js';
 import { registerSupportRoutes } from './routes.js';
 import type { SessionJournal } from './session-journal.js';
 import { closeSupportEvidence } from './shutdown.js';
@@ -18,19 +19,13 @@ type DeliveryRoutes = Parameters<typeof registerDiagnosticDelivery>[1];
 export function registerSupportRuntime(
   app: FastifyInstance,
   options: Required<
-    Pick<
-      SupportRoutes,
-      | 'runtimeSummary'
-      | 'businessLogStatus'
-      | 'recorder'
-      | 'delivery'
-      | 'hosts'
-      | 'obs'
-      | 'obsAudioDiagnostics'
-      | 'program'
-      | 'gsiConfigured'
-    >
+    Pick<SupportRoutes, 'obs' | 'obsAudioDiagnostics' | 'program' | 'gsiConfigured'>
   > & {
+    evidence: Omit<
+      Parameters<typeof registerRuntimeEvidence>[1],
+      'sessionJournal' | 'performanceContext' | 'readNativeHealth'
+    >;
+    businessJournal: BusinessJournal | undefined;
     supportLogsDirectory: string | undefined;
     product: ProductRuntime | undefined;
     endpoint: DeliveryRoutes['endpoint'];
@@ -40,20 +35,21 @@ export function registerSupportRuntime(
     originPolicy: LocalWebOriginPolicy;
     sessionJournal: SessionJournal | undefined;
     performanceContext: PerformanceWindow | undefined;
-    runtimeObservation: ReturnType<typeof observeRuntime>;
     flushOperationDiagnostics: () => void;
     recordConfiguration: () => Promise<void>;
     nativeSource: ProgramChatNativeInput | undefined;
     projection: () => ProjectionBundle;
   },
 ) {
-  const {
-    sessionJournal,
-    performanceContext,
-    runtimeObservation,
-    flushOperationDiagnostics,
-    recordConfiguration,
-  } = options;
+  const { sessionJournal, performanceContext, flushOperationDiagnostics, recordConfiguration } =
+    options;
+  const { runtimeObservation, getDebugResponse, runtimeSummary, recorder, delivery, readHosts } =
+    registerRuntimeEvidence(app, {
+      ...options.evidence,
+      sessionJournal,
+      performanceContext,
+      readNativeHealth: () => options.nativeSource?.health() ?? null,
+    });
   app.post('/debug/control-event', { bodyLimit: 32 * 1024 }, async (request, reply) => {
     if (
       !checkLocalWebOrigin(options.originPolicy, request.headers.origin).allowed ||
@@ -124,7 +120,7 @@ export function registerSupportRuntime(
       : { logsDirectory: options.supportLogsDirectory }),
     ...(options.product === undefined ? {} : { artifact: options.product }),
     observer: () => options.workspaceObserver?.view() ?? null,
-    runtimeSummary: options.runtimeSummary,
+    runtimeSummary,
     exportParticipants: () => {
       // Enqueue completed observations before the journal freezes its export watermark.
       flushOperationDiagnostics();
@@ -134,10 +130,10 @@ export function registerSupportRuntime(
       ];
     },
     diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
-    businessLogStatus: options.businessLogStatus,
-    recorder: options.recorder,
-    delivery: options.delivery,
-    hosts: options.hosts,
+    businessLogStatus: () => options.businessJournal?.getStatus() ?? 'not_configured',
+    recorder,
+    delivery,
+    hosts: readHosts,
     obs: options.obs,
     obsAudioDiagnostics: options.obsAudioDiagnostics,
     program: options.program,
@@ -154,6 +150,8 @@ export function registerSupportRuntime(
 
   return {
     consentTime,
+    runtimeObservation,
+    getDebugResponse,
     close: (closeDiagnostic: Parameters<typeof closeSupportEvidence>[1]) =>
       closeSupportEvidence(
         {

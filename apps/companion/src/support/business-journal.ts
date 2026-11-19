@@ -1,3 +1,5 @@
+import type { RivalHubConnection } from '../match-context/rivalhub-connection.js';
+import type { FastifyBaseLogger } from 'fastify';
 import { SessionJournal } from './session-journal.js';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 import type { MatchContextBinding } from '../match-context/index.js';
@@ -225,4 +227,45 @@ export class BusinessJournal {
   getStatus(): 'available' | 'write_failed' {
     return this.failures ? 'write_failed' : 'available';
   }
+}
+
+export function createBusinessJournal(
+  log: FastifyBaseLogger,
+  directory: string | undefined,
+  appVersion: string | undefined,
+  sessionJournal: SessionJournal | undefined,
+): BusinessJournal | undefined {
+  if (directory === undefined) return undefined;
+  return new BusinessJournal(
+    directory,
+    () =>
+      log.warn(
+        { event: 'business', stage: 'business_log_write_failed', result: 'failure' },
+        '业务诊断日志写入失败',
+      ),
+    appVersion,
+    (entry) => sessionJournal?.record('business_evidence', entry),
+  );
+}
+
+export function connectWebsiteBusinessEvidence(
+  connection: Pick<RivalHubConnection, 'setBusinessEvidenceHandler'> | undefined,
+  businessJournal: BusinessJournal | undefined,
+  sessionJournal: SessionJournal | undefined,
+): void {
+  connection?.setBusinessEvidenceHandler?.((stage, evidence) => {
+    // Pre-network guards contain only canonical business fields. Do not write
+    // the same observation under a second event ID; response evidence stays raw.
+    const reason =
+      evidence && typeof evidence === 'object' && 'reason' in evidence ? evidence.reason : null;
+    const guard =
+      stage === 'business_live' &&
+      (reason === 'source_unavailable' || reason === 'map_start_pending');
+    if ((stage === 'business_live' && (!guard || !businessJournal)) || stage === 'original_error')
+      sessionJournal?.record(
+        stage === 'business_live' ? 'website_live_evidence' : 'website_original_error',
+        evidence,
+      );
+    businessJournal?.write(stage, evidence);
+  });
 }
