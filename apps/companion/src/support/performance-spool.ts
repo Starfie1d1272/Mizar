@@ -1,4 +1,5 @@
 import { ProducerRetention, type IncidentParticipant } from './retention.js';
+import { performanceSegmentPattern } from './segments.js';
 import { constants } from 'node:fs';
 import { mkdir, open, opendir, lstat, unlink, link, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -61,7 +62,6 @@ type Entry = {
   part: number;
   firstTime: string;
 };
-const filePattern = /^([a-f0-9-]{36})\.([a-f0-9]{4}|[a-f0-9]{8})\.gz$/i;
 const partialPattern =
   /^([a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz)(?:\.[a-f0-9-]{36})?\.partial$/i;
 
@@ -204,7 +204,7 @@ export class PerformanceSpool {
             ),
           })),
         );
-      const match = filePattern.exec(name)!;
+      const match = performanceSegmentPattern.exec(name)!;
       const segmentId = match[1]!;
       const run = records[0]!.source.sessionId;
       if (
@@ -283,7 +283,10 @@ export class PerformanceSpool {
       }
     }
     for await (const file of await opendir(this.directory)) {
-      if (!filePattern.test(file.name) || entries.some((entry) => entry.name === file.name))
+      if (
+        !performanceSegmentPattern.test(file.name) ||
+        entries.some((entry) => entry.name === file.name)
+      )
         continue;
       try {
         const value = await this.read(file.name);

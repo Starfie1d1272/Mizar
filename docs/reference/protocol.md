@@ -302,6 +302,8 @@ Host 续租绑定当前实例与退出代次，辅助租约失效停止接收。
 
 随包早源观察器使用 Managed Protocol 2。同一组件进程的 `source` 固定，`session-start` 建立递增的 `channel`，公共 `sequence` 跨连接和世界连续递增。连接断点关闭当前 channel，世界断点切换同一 channel 内的 world，快照断点清除该世界的就绪。只有匹配当前代际的有效 `cursor` 恢复投递。诊断从持续读取的 stderr 提取 v2 健康摘要及终态，普通日志仅保留小段；诊断包可收录既有 v1 与当前 v2 的本机报告。
 
+`POST /operator/obs/use-local-connection` 需要本机操作来源及显式的 `useLocalSettings: true`。先核对正在运行的同用户 OBS 与监听进程，再以本机设置完成认证并保存至 Mizar。响应只确认操作结果，不返回读取到的端口文件或密码。
+
 ## 本机节目音乐
 
 `GET /local/v1/music` 提供曲库配置和播放摘要；`POST /operator/music` 管理配置、人工播放/暂停/继续/停止/下一首/恢复自动。`play` 优先使用组内 `entryId`，旧 `trackId` 仅唯一匹配时有效，同时提供须指同一条目。
