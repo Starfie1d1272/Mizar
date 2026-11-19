@@ -22,6 +22,7 @@ test('closing music monitor during route migration survives restart and applies 
     state.monitorPreference = true;
   });
   let migrating = true;
+  let reconnecting = false;
   let sessions = 0;
   let mode: MusicMonitorMode = 'monitor-and-output';
   const device = {
@@ -51,6 +52,7 @@ test('closing music monitor during route migration survives restart and applies 
       Date.now,
       Math.random,
       async () => migrating,
+      () => reconnecting,
     );
   await director(store).monitor(false);
   assert.equal(sessions, 0);
@@ -60,6 +62,11 @@ test('closing music monitor during route migration survives restart and applies 
   assert.equal(reopened.state.monitorPreference, false);
   assert.equal(resumed.get().monitorDisablePending, true);
   migrating = false;
+  reconnecting = true;
+  await resumed.tick();
+  assert.equal(sessions, 0);
+  assert.equal(resumed.get().monitorDisablePending, true);
+  reconnecting = false;
   await resumed.tick();
   assert.equal(mode, 'off');
   assert.equal(resumed.get().monitor, 'disabled');
