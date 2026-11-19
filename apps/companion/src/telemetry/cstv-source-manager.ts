@@ -100,6 +100,24 @@ function appendBounded<T>(items: T[], item: T, max: number): void {
   if (overflow > 0) items.splice(0, overflow);
 }
 
+function observerResidenceUs(row: Readonly<Record<string, unknown>>): number | undefined {
+  const stages = [
+    row.sdkQueueAgeUs,
+    row.dequeueToSubmitUs,
+    row.submitToObservedUs,
+    row.supervisorForwardUs ?? 0,
+  ];
+  if (
+    !stages.every(
+      (value): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0,
+    )
+  )
+    return undefined;
+  // resultQueueUs is already included in submitToObservedUs.
+  return stages.reduce((total, duration) => total + duration, 0);
+}
+
 class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSourceManager<R> {
   readonly role: R;
 
@@ -333,8 +351,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       Number.isFinite(row.observedAt) &&
       Date.now() - row.observedAt >= 2000
     ) {
-      // Upstream local queue age only qualifies these private data. It does not
-      // measure broadcast delay or become the event's scheduling clock.
+      // Wall-clock age qualifies private data. It never becomes the scheduling clock.
       if (this.state === 'live') this.resetObserverContinuity();
       return;
     }
@@ -404,6 +421,11 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
         return;
     }
     if (!SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === kind)) return;
+    const residenceUs = this.role === 'lookahead' ? observerResidenceUs(row) : undefined;
+    if (residenceUs !== undefined && residenceUs >= 2_000_000) {
+      this.resetObserverContinuity();
+      return;
+    }
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),
@@ -418,6 +440,9 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           tick: observerEventTick(row),
           observedAt: sample.observedAt,
           observedMonotonicMs: sample.observedMonotonicMs,
+          ...(residenceUs !== undefined && sample.observedMonotonicMs >= residenceUs / 1000
+            ? { sourceArrivalMonotonicMs: sample.observedMonotonicMs - residenceUs / 1000 }
+            : {}),
           ...(this.observerMap === undefined ? {} : { mapName: this.observerMap }),
           ...(this.observerTicksPerSecond === undefined
             ? {}

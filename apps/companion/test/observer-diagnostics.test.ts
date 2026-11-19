@@ -54,6 +54,7 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   const manager = createObserverSourceManager({
     role: 'lookahead',
     identity: { source, role: 'ahead', channel: 0, world: 1 },
+    clock: { now: () => ({ observedAt: new Date().toISOString(), observedMonotonicMs: 1000 }) },
   });
   const fixture = JSON.parse(
     await readFile(new URL('./fixtures/observer-event.json', import.meta.url), 'utf8'),
@@ -77,9 +78,17 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(1, begin);
   write(2, { kind: 'future-record' });
   write(3, cursor);
-  write(4, fixture);
+  write(4, {
+    ...fixture,
+    sdkQueueAgeUs: 700,
+    dequeueToSubmitUs: 100,
+    submitToObservedUs: 1000,
+    resultQueueUs: 300,
+    supervisorForwardUs: 200,
+  });
   write(4, fixture);
   assert.deepEqual(seen, [4]);
+  assert.equal(manager.getRecentGameEvents()[0]?.cursor.sourceArrivalMonotonicMs, 998);
 
   write(5, { kind: 'discontinuity', scope: 'world' }, 1, 2);
   write(6, fixture, 1, 2);
@@ -98,6 +107,7 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(13, cursor, 2);
   write(14, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);
+  assert.equal(manager.getRecentGameEvents().at(-1)?.cursor.sourceArrivalMonotonicMs, undefined);
   await manager.stop();
   write(15, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);

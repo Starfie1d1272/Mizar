@@ -13,6 +13,8 @@ export interface GameEventSourceCursor {
   readonly tick: number;
   readonly observedAt: string;
   readonly observedMonotonicMs: number;
+  /** Lookahead only. Local receipt adjusted by measured, non-overlapping residency. */
+  readonly sourceArrivalMonotonicMs?: number;
   readonly mapName?: string;
   readonly ticksPerSecond?: number;
   /** Raw completed-round count from the same source record, when supplied. */

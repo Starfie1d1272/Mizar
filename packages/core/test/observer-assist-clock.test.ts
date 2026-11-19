@@ -109,6 +109,18 @@ it('retires a death before its window and does not replay it after a respawn', (
   });
 });
 
+it('adjusts the fixed deadline by measured local residence without moving the receipt boundary', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  const event = death(1, 1, 1000);
+  timeline.consume({ ...event, cursor: { ...event.cursor, sourceArrivalMonotonicMs: 500 } });
+  expect(timeline.project(program(115499), settings, 115499, early, 1).observer?.hints).toEqual([]);
+  expect(
+    timeline.project(program(115500), settings, 115500, early, 1).observer?.hints[0],
+  ).toMatchObject({ remainingSeconds: 5 });
+  expect(timeline.getDiagnostics().timingBasis).toEqual({ localResidence: 1, receipt: 0 });
+});
+
 it('fences a same-map restart until Program advances its map epoch', () => {
   const timeline = new ObserverHintTimeline();
   timeline.project(program(0), settings, 0, early, 1);

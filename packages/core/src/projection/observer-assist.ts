@@ -73,6 +73,7 @@ export class ObserverHintTimeline {
   private acceptedDeaths = 0;
   private enteredWindow = 0;
   private generatedHints = 0;
+  private compensatedDeaths = 0;
   private endedAfterGeneration: Record<string, number> = {};
   private lastReceivedMs: number | null = null;
   private nextDueMs: number | null = null;
@@ -100,6 +101,10 @@ export class ObserverHintTimeline {
       acceptedDeaths: this.acceptedDeaths,
       enteredWindow: this.enteredWindow,
       generatedHints: this.generatedHints,
+      timingBasis: {
+        localResidence: this.compensatedDeaths,
+        receipt: this.acceptedDeaths - this.compensatedDeaths,
+      },
       endedAfterGeneration: { ...this.endedAfterGeneration },
       discarded: { ...this.discarded },
       buffered: this.kills.length,
@@ -171,9 +176,10 @@ export class ObserverHintTimeline {
     }
     this.lastDeathSequence = event.cursor.sequence;
     this.acceptedDeaths++;
+    if (event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
     this.kills.push({
       event,
-      sourceMs: event.cursor.observedMonotonicMs,
+      sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
       retired: false,
       enteredWindow: false,
       shownDueMs: null,
@@ -274,7 +280,8 @@ export class ObserverHintTimeline {
         !pendingConflict
           ? this.kills.filter(
               (k) =>
-                k.event.cursor.mapName === program.map.name && k.sourceMs >= this.pendingMap!.since,
+                k.event.cursor.mapName === program.map.name &&
+                k.event.cursor.observedMonotonicMs >= this.pendingMap!.since,
             )
           : [];
       this.reset('program-context', now);
