@@ -10,6 +10,9 @@ export function createObserverAssistScope(
   let waitingMap: { cursor: ProgramProjection['cursor']; order: number | null } | undefined;
 
   return {
+    get mapConfirmed() {
+      return !waitingMap;
+    },
     projectionSettings: () => ({
       ...settings.settings,
       enabled: settings.settings.enabled && !settings.receiverPaused && eligible(),
