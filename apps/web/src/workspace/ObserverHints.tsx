@@ -10,6 +10,7 @@ import {
   type ConnectionPreparationView,
 } from '../preparation/observer-preparation';
 import { observerHotkeyLabel } from '@mizar/hud-view';
+import { useObserverHintEvidence } from './observer-hint-evidence';
 
 export function ObserverHints() {
   const runtime = useLocalRead<ObserverRuntimeView>('/local/v1/observer');
@@ -62,18 +63,37 @@ export function ObserverHints() {
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
   const waitingNextMap = awaitingProgramMap || runtime?.terminal?.reason === 'source-hltv-stop';
-  if (!enabled || !configuration?.connection || !configuration.mapConnection) return null;
-  if (
-    runtime &&
-    !runtime.active &&
-    !pending &&
+  const showPanel =
+    enabled &&
+    configuration?.connection &&
+    configuration.mapConnection &&
+    (!runtime ||
+      runtime.active ||
+      pending ||
+      paused ||
+      needsRecovery ||
+      error ||
+      draining ||
+      waitingNextMap);
+  const visibleHints =
+    showPanel &&
     !paused &&
-    !needsRecovery &&
-    !error &&
-    !draining &&
-    !waitingNextMap
-  )
-    return null;
+    (draining || (!pending && !needsRecovery && !reconnecting && !connecting))
+      ? hints
+      : [];
+  const cursor = state.state === 'live' ? state.current?.cursor : undefined;
+  useObserverHintEvidence(
+    cursor
+      ? JSON.stringify([cursor.producerInstanceId, cursor.liveSessionId, cursor.mapEpoch])
+      : '',
+    visibleHints.map(({ id }) => id).join(','),
+    paused
+      ? 'receiver_paused'
+      : observer && hints.length < observer.hints.length
+        ? 'local_countdown_elapsed'
+        : (observer?.waitingReason ?? 'presentation_ended'),
+  );
+  if (!showPanel) return null;
   return (
     <section className="workspace-observer-assist" aria-label="私有提前提示">
       {awaitingTooLong && !needsRecovery && !reconnecting ? (
@@ -180,11 +200,9 @@ export function ObserverHints() {
         </StatusPill>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
-      {hints.length &&
-      !paused &&
-      (draining || (!pending && !needsRecovery && !reconnecting && !connecting)) ? (
+      {visibleHints.length ? (
         <ol className="observer-hints">
-          {hints.map((hint) => (
+          {visibleHints.map((hint) => (
             <li key={hint.id}>
               <span className="observer-hints__time">{Math.ceil(hint.remainingSeconds)} 秒后</span>
               <span className="observer-hints__players">
