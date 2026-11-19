@@ -755,9 +755,11 @@ export class ObsOutputController {
     };
     try {
       await this.read();
-      if (generation !== this.generation || this.values[output].revision !== revision)
+      if (generation !== this.generation)
         throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
       if (reached()) return this.snapshot();
+      if (this.values[output].revision !== revision)
+        throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
       if (action === 'start' && this.values[output].active !== false)
         throw new ObsOutputError(
           'obs_output_unconfirmed',
