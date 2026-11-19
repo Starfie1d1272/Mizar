@@ -1005,6 +1005,18 @@ impl SessionStore {
                 None => absent.push(name.to_string_lossy().to_string()),
             }
         }
+        let original_keys = if self.spectator_pending() || self.full_spectator_pending() {
+            Err("上次观战配置尚未恢复，未将当前键位记为原值。".into())
+        } else {
+            crate::cs2_spectator::read_original_keys(&target)
+        };
+        match original_keys {
+            Ok(keys) => atomic_write(
+                &snapshot.join(crate::cs2_spectator::KEYS_NAME),
+                keys.as_bytes(),
+            )?,
+            Err(reason) => atomic_write(&snapshot.join("keys-unavailable.txt"), reason.as_bytes())?,
+        }
         atomic_write(
             &snapshot.join("absent.json"),
             &serde_json::to_vec(&absent).map_err(|_| "无法记录原始配置缺失状态。")?,
@@ -1066,6 +1078,23 @@ impl SessionStore {
         self.save_locked(guard, &SessionRecord::from_value(record.clone())?)?;
         self.restore_selected_backup_locked(guard, &record)
     }
+    pub(crate) fn import_selected_hud(
+        &self,
+        video: &Path,
+        executable: &Path,
+        backup: &str,
+    ) -> Result<(), String> {
+        let guard = self.acquire_write_guard()?;
+        self.check_start_recovery()?;
+        let original = crate::cs2_spectator::read_keys(video)?;
+        let restored = crate::cs2_spectator::restore_original_hud(backup, &original)?;
+        let video = fs::canonicalize(video).map_err(|e| io_error("恢复目标无法确认。", &e))?;
+        let record = json!({"version":4, "video":video, "executable":executable,
+            "launchAttempted":false, "files":[{"name":crate::cs2_spectator::KEYS_NAME,
+                "original":original, "restored":restored, "backup":backup}]});
+        self.save_locked(&guard, &SessionRecord::from_value(record.clone())?)?;
+        self.restore_selected_backup_locked(&guard, &record)
+    }
     fn restore_selected_backup_locked(
         &self,
         _guard: &StoreGuard,
@@ -1082,9 +1111,12 @@ impl SessionStore {
         if !(1..=2).contains(&entries.len()) {
             return Err("恢复文件范围无效。".into());
         }
+        let hud_only = entries.len() == 1 && entries[0]["name"] == crate::cs2_spectator::KEYS_NAME;
         let mut plan = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
-            let name = if index == 0 {
+            let name = if hud_only {
+                crate::cs2_spectator::KEYS_NAME
+            } else if index == 0 {
                 "cs2_video.txt"
             } else {
                 "cs2_machine_convars.vcfg"
@@ -1101,7 +1133,9 @@ impl SessionStore {
             {
                 return Err("恢复记录过大。".into());
             }
-            let expected = if index == 0 {
+            let expected = if hud_only {
+                crate::cs2_spectator::restore_original_hud(backup, original)?
+            } else if index == 0 {
                 cs2_video::compatible_restore(backup, original)?
             } else {
                 cs2_frame_rate::compatible_restore(backup, original)?
@@ -1118,7 +1152,11 @@ impl SessionStore {
             {
                 return Err("恢复文件类型或大小发生变化。".into());
             }
-            let current = fs::read(&path).map_err(|e| io_error("恢复文件无法读取。", &e))?;
+            let current = if hud_only {
+                crate::cs2_spectator::read_keys(video)?.into_bytes()
+            } else {
+                fs::read(&path).map_err(|e| io_error("恢复文件无法读取。", &e))?
+            };
             if current != original.as_bytes() && current != restored.as_bytes() {
                 return Err("配置已被其他程序修改，请检查后重试；原件仍保留。".into());
             }
@@ -1133,6 +1171,7 @@ impl SessionStore {
             unchanged(&path, &current)?;
             if current != restored.as_bytes() {
                 atomic_write(&path, restored.as_bytes())?;
+                unchanged(&path, restored.as_bytes())?;
             }
         }
         atomic_write(

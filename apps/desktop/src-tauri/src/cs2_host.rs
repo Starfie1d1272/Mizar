@@ -640,10 +640,13 @@ pub(crate) async fn manage_backup(
         let mut cs2 = state.lock().map_err(|_| "恢复状态不可用。")?;
         match action {
             BackupAction::Cancel => cs2.cancel_selected_backup(),
-            BackupAction::Apply => {
+            BackupAction::Apply | BackupAction::ApplyHud => {
                 let activity = app.state::<cs2_activity::Activity>();
                 let _activity = activity.begin(2);
-                cs2.apply_selected_backup(selection_id.as_deref().ok_or("请先核对备份。")?)?;
+                cs2.apply_selected_backup(
+                    selection_id.as_deref().ok_or("请先核对备份。")?,
+                    action == BackupAction::ApplyHud,
+                )?;
             }
             BackupAction::Select => unreachable!("selection handled before the backup lock"),
         }

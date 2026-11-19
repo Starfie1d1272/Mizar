@@ -41,11 +41,31 @@ interface BufferedKill {
   event: PlayerDeathGameEvent;
   sourceMs: number;
   retired: boolean;
+  enteredWindow: boolean;
   shownDueMs: number | null;
 }
+/** A next-map kill held outside the single scheduling buffer until Program confirms its execution. */
+interface StagedKill {
+  event: PlayerDeathGameEvent;
+  sourceMs: number;
+  observedMonotonicMs: number;
+}
+interface StagedExecution {
+  match: string;
+  session: string | null;
+  generation: number;
+  mapName: string;
+  since: number;
+  lastSequence: number;
+  kills: StagedKill[];
+}
+const STAGED_CAPACITY = 512;
+const STAGED_MAX_AGE_MS = 15 * 60_000;
 
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
+  private staged: StagedExecution | null = null;
+  private stagedReleased = 0;
   private pendingMap: {
     name: string;
     since: number;
@@ -54,6 +74,14 @@ export class ObserverHintTimeline {
     conflicted: boolean;
   } | null = null;
   private context = '';
+  private lastReadyScope: string | undefined;
+  private awaitingNextMap = false;
+  private sealedSource:
+    | {
+        health: ObserverHintTimeline['sourceHealth'];
+        execution: number | undefined;
+      }
+    | undefined;
   private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
   private lastDeathSequence = -1;
@@ -70,6 +98,10 @@ export class ObserverHintTimeline {
   private recentEventKinds: GameEventObservation['kind'][] = [];
   private discarded: Record<string, number> = {};
   private acceptedDeaths = 0;
+  private enteredWindow = 0;
+  private generatedHints = 0;
+  private compensatedDeaths = 0;
+  private endedAfterGeneration: Record<string, number> = {};
   private lastReceivedMs: number | null = null;
   private nextDueMs: number | null = null;
   private nextWindowMs: number | null = null;
@@ -81,6 +113,7 @@ export class ObserverHintTimeline {
     lastReceiveMonotonicMs?: number | null;
     receiveAgeMs?: number | null;
     sameMap?: boolean;
+    normalDrain?: boolean;
     mapName?: string;
     state?: string;
     lastErrorCode?: string;
@@ -94,7 +127,16 @@ export class ObserverHintTimeline {
       lastEventReceivedMonotonicMs: this.lastReceivedMs,
       eventCounts: { ...this.eventCounts },
       acceptedDeaths: this.acceptedDeaths,
+      enteredWindow: this.enteredWindow,
+      generatedHints: this.generatedHints,
+      timingBasis: {
+        localResidence: this.compensatedDeaths,
+        receipt: this.acceptedDeaths - this.compensatedDeaths,
+      },
+      endedAfterGeneration: { ...this.endedAfterGeneration },
       discarded: { ...this.discarded },
+      staged: this.staged?.kills.length ?? 0,
+      stagedReleased: this.stagedReleased,
       buffered: this.kills.length,
       pending: this.kills.filter((k) => !k.retired).length,
       nextDueMonotonicMs: this.nextDueMs,
@@ -106,6 +148,12 @@ export class ObserverHintTimeline {
   }
   private discard(reason: string) {
     this.discarded[reason] = (this.discarded[reason] ?? 0) + 1;
+  }
+  private finish(kill: BufferedKill, reason: string) {
+    this.discard(reason);
+    if (kill.shownDueMs !== null)
+      this.endedAfterGeneration[reason] = (this.endedAfterGeneration[reason] ?? 0) + 1;
+    kill.retired = true;
   }
   private reset(reason: string, now: number) {
     if (this.lastReset.reason !== reason || this.kills.length)
@@ -120,6 +168,8 @@ export class ObserverHintTimeline {
 
   clear() {
     this.kills = [];
+    this.lastReadyScope = undefined;
+    this.sealedSource = undefined;
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
     this.sourceExecutionChanged = false;
@@ -128,14 +178,8 @@ export class ObserverHintTimeline {
   }
   consume(event: GameEventObservation) {
     if (event.cursor.role !== 'lookahead') return;
-    this.lastReceivedMs = event.cursor.observedMonotonicMs;
-    this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
-    this.recentEventKinds.push(event.kind);
-    if (this.recentEventKinds.length > 64) {
-      const oldest = this.recentEventKinds.shift()!;
-      this.eventCounts[oldest]!--;
-      if (this.eventCounts[oldest] === 0) delete this.eventCounts[oldest];
-    }
+    if (this.awaitingNextMap && this.stage(event)) return;
+    this.countReceived(event);
     if (this.generation !== undefined && event.cursor.generation < this.generation) {
       this.discard('old-generation');
       return;
@@ -158,21 +202,144 @@ export class ObserverHintTimeline {
     }
     this.lastDeathSequence = event.cursor.sequence;
     this.acceptedDeaths++;
+    if (event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
     this.kills.push({
       event,
-      sourceMs: event.cursor.observedMonotonicMs,
+      sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
       retired: false,
+      enteredWindow: false,
       shownDueMs: null,
     });
     if (this.kills.length > 4096) {
-      this.kills.shift();
-      this.discard('capacity');
+      const oldest = this.kills.shift()!;
+      if (!oldest.retired) this.finish(oldest, 'capacity');
     }
   }
   private advanceGeneration(generation: number) {
     this.generation = generation;
     this.lastDeathSequence = -1;
     this.kills = [];
+  }
+
+  private countReceived(event: GameEventObservation) {
+    this.lastReceivedMs = event.cursor.observedMonotonicMs;
+    this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
+    this.recentEventKinds.push(event.kind);
+    if (this.recentEventKinds.length > 64) {
+      const oldest = this.recentEventKinds.shift()!;
+      this.eventCounts[oldest]!--;
+      if (this.eventCounts[oldest] === 0) delete this.eventCounts[oldest];
+    }
+  }
+
+  /**
+   * Hold an event that can only belong to the execution Program has not confirmed yet.
+   * Returning false leaves the verified tail of the current map on the normal path.
+   */
+  private stage(event: GameEventObservation): boolean {
+    const context = this.contextIdentity;
+    if (!context) {
+      this.discard('staged-context-missing');
+      return true;
+    }
+    if (event.cursor.mapName === context.map && event.cursor.generation === this.generation)
+      return false;
+    this.countReceived(event);
+    if (event.kind !== 'player-death') return true;
+    if (!event.cursor.mapName) {
+      this.discard('staged-map-missing');
+      return true;
+    }
+    if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) {
+      this.discard('staged-missing-identity');
+      return true;
+    }
+    if (!event.cursor.ticksPerSecond) {
+      this.discard('staged-invalid-cursor');
+      return true;
+    }
+    if (
+      this.staged &&
+      (this.staged.generation !== event.cursor.generation ||
+        this.staged.mapName !== event.cursor.mapName)
+    ) {
+      this.discardStaged('staged-superseded');
+    }
+    if (!this.staged) {
+      this.staged = {
+        match: context.match,
+        session: context.session,
+        generation: event.cursor.generation,
+        mapName: event.cursor.mapName,
+        since: event.cursor.observedMonotonicMs,
+        lastSequence: -1,
+        kills: [],
+      };
+    }
+    if (event.cursor.sequence <= this.staged.lastSequence) {
+      this.discard('staged-duplicate');
+      return true;
+    }
+    if (this.staged.kills.length >= STAGED_CAPACITY) {
+      this.discard('staged-capacity');
+      return true;
+    }
+    this.staged.lastSequence = event.cursor.sequence;
+    this.staged.kills.push({
+      event,
+      sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
+      observedMonotonicMs: event.cursor.observedMonotonicMs,
+    });
+    return true;
+  }
+
+  private discardStaged(reason: string) {
+    const count = this.staged?.kills.length ?? 0;
+    if (count) this.discarded[reason] = (this.discarded[reason] ?? 0) + count;
+    this.staged = null;
+  }
+
+  private expireStaged(now: number) {
+    if (!this.staged) return;
+    const kept = this.staged.kills.filter((kill) => {
+      if (now - kill.observedMonotonicMs <= STAGED_MAX_AGE_MS) return true;
+      this.discard('staged-expired');
+      return false;
+    });
+    if (!kept.length) this.staged = null;
+    else this.staged.kills = kept;
+  }
+
+  /**
+   * Hand staged kills to the single scheduling buffer only once Program names the same
+   * match, session, map and source generation. The event objects keep their own cursor,
+   * channel and world evidence.
+   */
+  private releaseStaged(program: ObserverProgramView, sourceGeneration: number) {
+    const staged = this.staged;
+    if (!staged) return;
+    if (
+      program.match?.matchId !== staged.match ||
+      program.cursor.liveSessionId !== staged.session
+    ) {
+      this.discardStaged('staged-context-changed');
+      return;
+    }
+    if (program.map.name !== staged.mapName) {
+      this.discardStaged('staged-map-mismatch');
+      return;
+    }
+    if (sourceGeneration !== staged.generation) {
+      this.discardStaged('staged-source-mismatch');
+      return;
+    }
+    for (const kill of staged.kills) {
+      this.acceptedDeaths++;
+      if (kill.event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
+      this.kills.push({ ...kill, retired: false, enteredWindow: false, shownDueMs: null });
+    }
+    this.stagedReleased += staged.kills.length;
+    this.staged = null;
   }
 
   private observeExecution(execution: number | undefined, generation: number) {
@@ -195,14 +362,17 @@ export class ObserverHintTimeline {
     now: number,
     source: typeof this.sourceHealth,
     sourceExecution?: number,
+    waitingForNextMap = false,
   ): ObserverAssistProjection {
+    this.awaitingNextMap = waitingForNextMap;
     this.lastNow = now;
+    this.expireStaged(now);
     const delayMs = settings.delaySeconds * 1000;
     const previousDelayMs = (this.configuration?.delaySeconds ?? settings.delaySeconds) * 1000;
     this.kills = this.kills.filter((kill) => {
       const due = kill.shownDueMs ?? kill.sourceMs + Math.min(previousDelayMs, delayMs);
       if (kill.retired || now < due) return !kill.retired;
-      this.discard('expired');
+      this.finish(kill, 'expired');
       return false;
     });
     this.nextDueMs = null;
@@ -213,7 +383,13 @@ export class ObserverHintTimeline {
       mapEpoch: program.cursor.mapEpoch,
       receiveSequence: program.cursor.programReceiveSequence,
     };
+    if (!waitingForNextMap && this.sealedSource && !source.normalDrain)
+      this.reset('drain-ended', now);
     this.sourceHealth = { ...source };
+    if (waitingForNextMap && this.sealedSource) {
+      source = this.sealedSource.health;
+      sourceExecution = this.sealedSource.execution;
+    }
     const empty = (
       state: NonNullable<ObserverAssistProjection['observer']>['state'],
     ): ObserverAssistProjection => ({
@@ -229,6 +405,7 @@ export class ObserverHintTimeline {
     });
     if (!settings.enabled) {
       if (this.blocked !== 'disabled') this.reset('disabled', now);
+      this.discardStaged('staged-disabled');
       this.blocked = 'disabled';
       return { cursor: program.cursor, availability: 'unavailable' };
     }
@@ -260,7 +437,8 @@ export class ObserverHintTimeline {
         !pendingConflict
           ? this.kills.filter(
               (k) =>
-                k.event.cursor.mapName === program.map.name && k.sourceMs >= this.pendingMap!.since,
+                k.event.cursor.mapName === program.map.name &&
+                k.event.cursor.observedMonotonicMs >= this.pendingMap!.since,
             )
           : [];
       this.reset('program-context', now);
@@ -285,13 +463,27 @@ export class ObserverHintTimeline {
       this.blocked = 'source-generation-mismatch';
       return empty('unavailable');
     }
+    if (!waitingForNextMap) this.releaseStaged(program, source.generation);
     if (source.sameMap === true) this.observeExecution(sourceExecution, source.generation);
-    if (!source.connected) {
+    const scope = JSON.stringify([
+      context,
+      program.cursor.programSourceGeneration,
+      source.generation,
+      sourceExecution,
+    ]);
+    const draining =
+      source.normalDrain === true && source.sameMap === true && this.lastReadyScope === scope;
+    if (waitingForNextMap && !draining) {
+      this.blocked = 'waiting-next-map';
+      return empty('connecting');
+    }
+    if (draining) this.sealedSource ??= { health: source, execution: sourceExecution };
+    if (!source.connected && !draining) {
       this.blocked = 'source-disconnected';
       return empty('connecting');
     }
     if (
-      !source.fresh ||
+      (!source.fresh && !draining) ||
       source.sameMap === false ||
       program.status.telemetry !== 'fresh' ||
       program.coverage.allPlayers !== 'present' ||
@@ -299,15 +491,16 @@ export class ObserverHintTimeline {
       !program.match ||
       program.status.identity === 'mismatch'
     ) {
-      this.blocked = !source.fresh
-        ? 'source-stale'
-        : source.sameMap === false
-          ? 'source-map-mismatch'
-          : program.status.telemetry !== 'fresh'
-            ? 'program-stale'
-            : !program.map.name
-              ? 'map-missing'
-              : 'identity-unavailable';
+      this.blocked =
+        !source.fresh && !draining
+          ? 'source-stale'
+          : source.sameMap === false
+            ? 'source-map-mismatch'
+            : program.status.telemetry !== 'fresh'
+              ? 'program-stale'
+              : !program.map.name
+                ? 'map-missing'
+                : 'identity-unavailable';
       if (source.sameMap === false && source.mapName) {
         if (this.pendingMap?.name !== source.mapName) {
           this.pendingMap = {
@@ -338,6 +531,13 @@ export class ObserverHintTimeline {
       this.blocked = 'source-execution-ahead';
       return empty('unavailable');
     }
+    if (
+      source.connected &&
+      source.fresh &&
+      source.sameMap === true &&
+      sourceExecution !== undefined
+    )
+      this.lastReadyScope = scope;
     const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(program.clock?.phase ?? '');
     const leadMs = settings.leadSeconds * 1000;
     const ref = (player: ObserverProgramView['players'][number]) => ({
@@ -354,10 +554,9 @@ export class ObserverHintTimeline {
     const hints: ObserverHint[] = [];
     for (const kill of this.kills) {
       const due = kill.shownDueMs ?? kill.sourceMs + delayMs;
-      const window = Math.max(kill.sourceMs, due - leadMs);
+      const window = Math.max(kill.event.cursor.observedMonotonicMs, due - leadMs);
       if (kill.event.cursor.mapName !== program.map.name) {
-        kill.retired = true;
-        this.discard('map-mismatch');
+        this.finish(kill, 'map-mismatch');
         continue;
       }
       const attacker = players.find(
@@ -365,8 +564,7 @@ export class ObserverHintTimeline {
       );
       const victim = players.find((p) => p.sourcePlayerId === kill.event.victim.sourcePlayerId);
       if (!attacker || !victim) {
-        kill.retired = true;
-        this.discard('event-identity');
+        this.finish(kill, 'event-identity');
         continue;
       }
       const eventRound = kill.event.cursor.roundsCompleted;
@@ -376,8 +574,7 @@ export class ObserverHintTimeline {
         eventRound < programRound ||
         (eventRound === programRound && victim.lifeState === 'dead')
       ) {
-        kill.retired = true;
-        this.discard('program-already-past-event');
+        this.finish(kill, 'program-already-past-event');
         continue;
       }
       if (paused || eventRound !== programRound || victim.lifeState !== 'alive') continue;
@@ -386,7 +583,12 @@ export class ObserverHintTimeline {
         this.nextWindowMs = window;
       }
       if (now < window) continue;
+      if (!kill.enteredWindow) {
+        kill.enteredWindow = true;
+        this.enteredWindow++;
+      }
       if (hints.length >= 6) continue;
+      if (kill.shownDueMs === null) this.generatedHints++;
       kill.shownDueMs = due;
       hints.push({
         id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
@@ -399,14 +601,23 @@ export class ObserverHintTimeline {
       this.blocked = 'program-paused';
       return empty('paused');
     }
+    if (draining && this.nextDueMs === null && !this.kills.some((kill) => !kill.retired)) {
+      this.blocked = 'waiting-next-map';
+      return empty('connecting');
+    }
     return {
       cursor: program.cursor,
       availability: 'available',
       observer: {
         ...settings,
         state: 'ready',
-        waitingReason:
-          this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
+        waitingReason: draining
+          ? 'normal-drain'
+          : this.nextDueMs === null
+            ? 'waiting-event'
+            : hints.length
+              ? null
+              : 'buffering',
         nextWindowSeconds:
           this.nextWindowMs === null ? null : Math.max(0, (this.nextWindowMs - now) / 1000),
         hints,

@@ -215,7 +215,11 @@ export function MatchConnectionDialog() {
           autoComplete="off"
           disabled={busy || saved}
           placeholder="connect IP:27025; password 密码"
-          message="粘贴赛事方提供的 GoTV 命令；两个地址中请选择 27025。"
+          message={
+            currentTarget
+              ? '粘贴赛事方为下一图提供的新 GoTV 命令。'
+              : '粘贴赛事方提供的 GoTV 命令；两个地址中请选择 27025。'
+          }
           onChange={(event) => {
             if (!revision) setRevision(view?.revision);
             if (registerCurrent === null) setRegisterCurrent(currentMode === 'register-current');

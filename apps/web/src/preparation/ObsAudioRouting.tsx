@@ -221,8 +221,37 @@ export function ObsAudioRouting({ active = true }: { active?: boolean }) {
                 : '已切换独立分路。请录制试听。',
     );
   }
+  const currentMode = status?.desktop
+    ? 'desktop'
+    : Object.values(status?.bindings ?? {}).some((binding) => binding?.valid)
+      ? 'independent'
+      : 'unknown';
   return (
     <div>
+      {active && !busy && !status?.transition && (
+        <ObsAudioMeter
+          key={`meter:${status?.revision ?? 'unavailable'}`}
+          mode={currentMode}
+          sourceNames={{
+            桌面声音: status?.candidates.find(
+              (candidate) => candidate.uuid === status.desktop?.inputUuid,
+            )?.name,
+            游戏声音: status?.bindings.game?.valid
+              ? (status.bindings.game.name ?? undefined)
+              : undefined,
+            其他解说: status?.bindings.remoteCommentary?.valid
+              ? (status.bindings.remoteCommentary.name ?? undefined)
+              : undefined,
+            麦克风: status?.desktop
+              ? status.desktopMicrophone?.valid
+                ? (status.desktopMicrophone.name ?? undefined)
+                : undefined
+              : status?.bindings.microphone?.valid
+                ? (status.bindings.microphone.name ?? undefined)
+                : undefined,
+          }}
+        />
+      )}
       <h3>音频模式</h3>
       <p>
         桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制。 OBS
@@ -255,22 +284,13 @@ export function ObsAudioRouting({ active = true }: { active?: boolean }) {
       </Button>
       {status && (
         <>
-          <p>
-            当前模式：
-            {status.transition
-              ? '上次切换待核对'
-              : status.waitingIndependent
-                ? status.desktop
-                  ? '桌面混音，等待解说来源（就绪后需手动切回）'
-                  : '独立分路，等待解说来源（就绪后需手动启用）'
-                : status.desktop
-                  ? '桌面混音'
-                  : !status.bindings.game &&
-                      !status.bindings.remoteCommentary &&
-                      !status.bindings.microphone
-                    ? '未确认，请检查 OBS'
-                    : '独立分路'}
-          </p>
+          {status.waitingIndependent ? (
+            <p>
+              {status.desktop
+                ? '正在等候解说来源，就绪后可切回独立分路。'
+                : '正在等候解说来源，就绪后可启用。'}
+            </p>
+          ) : null}
           {status.desktop && (
             <p>
               当前 OBS 桌面来源：
@@ -447,9 +467,6 @@ export function ObsAudioRouting({ active = true }: { active?: boolean }) {
         </p>
       )}
       {message && <p role="alert">{message}</p>}
-      {active && !busy && !status?.transition && (
-        <ObsAudioMeter key={`meter:${status?.revision ?? 'unavailable'}`} />
-      )}
       <ObsAudioDevices
         key={`devices:${status?.revision ?? 'unavailable'}`}
         disabled={busy || Boolean(status?.transition || status?.waitingIndependent)}
