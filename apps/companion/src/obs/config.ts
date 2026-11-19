@@ -1,8 +1,9 @@
 import { ManagedObsResources } from './managed-resources.js';
 import { randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { ObsActionError } from './action-error.js';
 
 /** A failed WebSocket connection does not prove the local OBS process is absent. */
 export async function isObsProcessRunning(): Promise<boolean> {
@@ -99,60 +100,103 @@ export class ObsConfigStore {
   }
 }
 
-export async function discoverObsExecutable(savedPath: string | null): Promise<string | null> {
-  if (savedPath !== null && basename(savedPath).toLowerCase() === 'obs64.exe') {
-    try {
-      await access(savedPath);
-      return savedPath;
-    } catch {
-      /* discover the running process */
-    }
+const windowsInstallations = String.raw`
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$uninstall = @(
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+$installed = @(Get-ItemProperty -Path $uninstall -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -match '^OBS Studio(\s|$)' } |
+  Select-Object -First 16 InstallLocation, DisplayIcon, UninstallString)
+$running = @(Get-CimInstance Win32_Process -Filter "Name='obs64.exe'" -ErrorAction SilentlyContinue |
+  Select-Object -First 8 -ExpandProperty ExecutablePath)
+[pscustomobject]@{ installed = $installed; running = $running } | ConvertTo-Json -Compress -Depth 3
+`;
+
+type ObsRegistration = {
+  InstallLocation?: unknown;
+  DisplayIcon?: unknown;
+  UninstallString?: unknown;
+};
+
+function registeredPaths(entry: ObsRegistration): string[] {
+  const paths: string[] = [];
+  for (const command of [entry.DisplayIcon, entry.UninstallString]) {
+    if (typeof command !== 'string') continue;
+    const executable = /^"([^"]+)"|^(.+?\.exe)(?=$|\s|,)/i.exec(command.trim());
+    const path = executable?.[1] ?? executable?.[2];
+    if (!path || !isAbsolute(path)) continue;
+    if (basename(path).toLowerCase() === 'obs64.exe') paths.push(path);
+    else paths.push(join(dirname(path), 'bin', '64bit', 'obs64.exe'));
   }
-  const running =
-    process.platform === 'win32'
-      ? await new Promise<string | null>((resolve) => {
-          execFile(
-            'powershell.exe',
-            [
-              '-NoProfile',
-              '-NonInteractive',
-              '-Command',
-              'Get-CimInstance Win32_Process -Filter "Name = \'obs64.exe\'" | Select-Object -First 1 -ExpandProperty ExecutablePath',
-            ],
-            { timeout: 2000, windowsHide: true },
-            (error, stdout) => resolve(error ? null : stdout.trim().split(/\r?\n/)[0] || null),
-          );
-        })
-      : null;
-  const candidates = [
-    running,
-    ...(process.platform === 'win32'
-      ? [
-          join(
-            process.env.ProgramFiles ?? 'C:\\Program Files',
-            'obs-studio',
-            'bin',
-            '64bit',
-            'obs64.exe',
-          ),
-          join(
-            process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)',
-            'obs-studio',
-            'bin',
-            '64bit',
-            'obs64.exe',
-          ),
-        ]
-      : []),
-  ];
-  for (const path of candidates) {
-    if (path === null || basename(path).toLowerCase() !== 'obs64.exe') continue;
-    try {
-      await access(path);
-      return path;
-    } catch {
-      /* try the next installed path */
-    }
+  if (typeof entry.InstallLocation === 'string') {
+    const directory = entry.InstallLocation.trim().replace(/^"([^"]+)"$/, '$1');
+    if (isAbsolute(directory))
+      paths.push(join(directory, 'bin', '64bit', 'obs64.exe'), join(directory, 'obs64.exe'));
+  }
+  return paths;
+}
+
+async function existingExecutable(path: string | null): Promise<string | null> {
+  if (!path || !isAbsolute(path) || basename(path).toLowerCase() !== 'obs64.exe') return null;
+  try {
+    const normalized = await realpath(path);
+    if (basename(normalized).toLowerCase() === 'obs64.exe' && (await stat(normalized)).isFile())
+      return normalized;
+  } catch {
+    // Try another registered or standard installation.
   }
   return null;
+}
+
+async function uniqueInstallation(paths: readonly string[]): Promise<string | null> {
+  const locations = new Map<string, string>();
+  for (const path of new Set(paths)) {
+    if (!/^[a-z]:[\\/]/i.test(path)) continue;
+    const found = await existingExecutable(path);
+    if (found) locations.set(found.toLowerCase(), found);
+  }
+  if (locations.size > 1) throw new ObsActionError('executable_ambiguous');
+  return locations.values().next().value ?? null;
+}
+
+export async function discoverObsExecutable(savedPath: string | null): Promise<string | null> {
+  const saved = await existingExecutable(savedPath);
+  if (saved || process.platform !== 'win32') return saved;
+  const windows = await new Promise<{ running?: unknown; installed?: unknown }>((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', windowsInstallations],
+      { timeout: 2500, windowsHide: true, maxBuffer: 64 * 1024, encoding: 'utf8' },
+      (error, stdout) => {
+        try {
+          resolve(error ? {} : (JSON.parse(stdout) ?? {}));
+        } catch {
+          resolve({});
+        }
+      },
+    );
+  });
+  const running = Array.isArray(windows.running)
+    ? await uniqueInstallation(
+        windows.running.filter((path): path is string => typeof path === 'string'),
+      )
+    : null;
+  if (running) return running;
+  const registered = Array.isArray(windows.installed)
+    ? windows.installed.filter(
+        (item): item is ObsRegistration => item !== null && typeof item === 'object',
+      )
+    : [];
+  return uniqueInstallation([
+    ...registered.flatMap(registeredPaths),
+    ...[process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
+      .filter((path): path is string => Boolean(path))
+      .map((path) => join(path, 'obs-studio', 'bin', '64bit', 'obs64.exe')),
+    ...(process.env.PATH ?? '')
+      .split(delimiter)
+      .map((path) => join(path.trim().replace(/^"([^"]+)"$/, '$1'), 'obs64.exe')),
+  ]);
 }
