@@ -1111,6 +1111,20 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.generation++;
     }
     if (this.inFlight) return;
+    const { bgm, stinger } = this.store.state;
+    if (
+      !explicit &&
+      !truth.production &&
+      !this.manual &&
+      !this.unknownControl &&
+      (!bgm || bgm.finished) &&
+      (!stinger || stinger.finished) &&
+      !this.preview.busy &&
+      !this.preview.recoveryPending
+    ) {
+      this.status.connection = 'idle';
+      return;
+    }
     if (waitingForObs && !this.preview.busy) {
       this.status.connection = this.status.connection === 'idle' ? 'idle' : 'unavailable';
       if (this.status.connection === 'unavailable') this.status.playback = 'unknown';

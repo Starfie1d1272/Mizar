@@ -180,9 +180,10 @@ test('automatic music bounds collection probes while telemetry changes and retri
     session: (run) => run(device, 1),
     close: async () => {},
   };
+  let production = false;
   const truth = (): MusicTruth => ({
     active: 'waiting',
-    production: false,
+    production,
     program: {
       map: { name: 'de_test', phase: null },
       cursor: { mapEpoch: now / 100 },
@@ -192,6 +193,9 @@ test('automatic music bounds collection probes while telemetry changes and retri
     } as MusicTruth['program'],
   });
   const director = new MusicDirector(store, provider, truth, () => now);
+  await director.tick();
+  assert.equal(collectionReads, 0);
+  production = true;
   for (; now < 60000; now += 100) await director.tick();
   assert.ok(collectionReads >= 4 && collectionReads <= 10, `got ${collectionReads} probes`);
   const beforeExplicit = collectionReads;
