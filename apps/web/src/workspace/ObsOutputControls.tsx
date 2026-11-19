@@ -40,7 +40,13 @@ function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
   );
 }
 
-export function ObsOutputControls({ onError }: { onError: (message: string) => void }) {
+export function ObsOutputControls({
+  onError,
+  startWarning,
+}: {
+  onError: (message: string) => void;
+  startWarning: string | null;
+}) {
   const {
     outputs,
     pending,
@@ -54,6 +60,9 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
   const cleanupPending = outputs?.preparation === 'cleanup_pending';
   const preparingStream =
     pending.stream?.action === 'start' && Boolean(outputs?.preparation) && !outputs?.stream.pending;
+  const showStartWarning = Boolean(
+    startWarning && outputs?.stream.phase === 'idle' && !pending.stream && !outputs.stream.pending,
+  );
   const outputsIdle = Boolean(
     outputs &&
     [outputs.stream, outputs.record].every(
@@ -80,6 +89,7 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
     !pending[confirmation.output];
   return (
     <>
+      {showStartWarning ? <StatusBanner tone="warning">{startWarning}</StatusBanner> : null}
       <div className="workspace-obs-controls" aria-label="OBS 输出控制">
         {(['stream', 'record'] as const).map((kind) => {
           const state = outputs?.[kind];
@@ -98,7 +108,9 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
           const text =
             kind === 'stream' && preparingStream
               ? '正在检查开播画面…'
-              : label(kind, state, commandPending);
+              : kind === 'stream' && showStartWarning
+                ? '继续直播'
+                : label(kind, state, commandPending);
           return (
             <Button
               key={kind}

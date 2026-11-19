@@ -673,7 +673,16 @@ function WorkspaceDockContent() {
           </span>
           <Button onClick={() => navigate(openPreparation('/settings?tab=obs'))}>OBS 配置</Button>
         </div>
-        <ObsOutputControls onError={setErrorMessage} />
+        <ObsOutputControls
+          onError={setErrorMessage}
+          startWarning={
+            connected
+              ? obs.captureDiagnostic?.state === 'needs_attention'
+                ? '游戏画面可能需要检查，请核对 OBS 预览。'
+                : (obs.readiness?.warnings?.[0]?.message ?? null)
+              : null
+          }
+        />
         <RivalHubLiveSourcePanel compact />
         {entryNotice ? (
           <Button onClick={() => setDockDetail('notices')}>启动准备 · 查看状态</Button>
