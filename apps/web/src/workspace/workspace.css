@@ -564,6 +564,14 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: calc(var(--mizar-layout-compact) / 2);
 }
+.workspace-stream-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--mizar-layout-compact) / 2);
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+  font-variant-numeric: tabular-nums;
+}
 .workspace-production {
   container-type: size;
 }

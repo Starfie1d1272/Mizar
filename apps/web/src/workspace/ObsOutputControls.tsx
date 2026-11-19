@@ -21,6 +21,25 @@ function label(
   return `${state.active ? '停止' : '开始'}${name}`;
 }
 
+function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
+  const health = stream.health;
+  const duration = health?.durationMs;
+  const seconds = duration == null ? null : Math.floor(duration / 1000);
+  const time =
+    seconds === null
+      ? '—'
+      : [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+          .map((value) => String(value).padStart(2, '0'))
+          .join(':');
+  return (
+    <div className="workspace-stream-health" aria-label="直播状态">
+      <span>时长 {time}</span>
+      <span>码率 {health?.bitrateKbps == null ? '—' : `${health.bitrateKbps} kb/s`}</span>
+      <span>推流丢帧 {health?.droppedFrames ?? '—'}</span>
+    </div>
+  );
+}
+
 export function ObsOutputControls({ onError }: { onError: (message: string) => void }) {
   const { outputs, pending, recovering, recoveryError, execute, recoverCapture } = useObsOutputs();
   const [confirmation, setConfirmation] = useState<ObsOutputCommand | null>(null);
@@ -93,6 +112,7 @@ export function ObsOutputControls({ onError }: { onError: (message: string) => v
           );
         })}
       </div>
+      {outputs?.stream.phase === 'active' ? <StreamHealth stream={outputs.stream} /> : null}
       {cleanupPending ? (
         <StatusBanner tone="warning">
           {recoveryError ||
