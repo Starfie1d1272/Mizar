@@ -571,16 +571,7 @@ export class ProjectionCoordinator {
       }),
     );
     this.publishOperator(operator);
-    this.publishChannel('assist', () =>
-      this.publishers.assist.publish({
-        type: 'snapshot',
-        protocolVersion: LOCAL_PROTOCOL_VERSION,
-        channel: 'assist',
-        schemaVersion: ASSIST_SCHEMA_VERSION,
-        cursor: assist.cursor,
-        payload: mapObserverAssistProjection(assist),
-      }),
-    );
+    this.publishAssist(assist);
   }
 
   private assistance(program: ProgramProjection, now: number): ObserverAssistProjection {
@@ -597,7 +588,7 @@ export class ProjectionCoordinator {
         : receiveAgeMs <= snapshot.continuityPolicy.staleAfterMs
           ? 'fresh'
           : 'stale';
-    const result = this.observerTimeline.project(
+    return this.observerTimeline.project(
       program,
       settings,
       now,
@@ -617,19 +608,17 @@ export class ProjectionCoordinator {
       health.mapExecution,
       settings.waitingForNextMap,
     );
-    try {
-      this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
-    } catch {
-      // Diagnostic sinks cannot interrupt assist or Program projection.
-      report(this.onDiagnostic, 'observer-assist-diagnostic-sink-failed');
-    }
-    return result;
   }
   refreshAssist(): void {
     if (this.closed || !this.current) return;
     const assist = this.assistance(this.current.program, this.nowMonotonicMs());
     this.current = { ...this.current, assist };
-    this.publishChannel('assist', () =>
+    this.publishAssist(assist);
+  }
+
+  private publishAssist(assist: ObserverAssistProjection): void {
+    const previous = this.publishers.assist.getCurrent()?.channelSeq;
+    this.publishChannel('assist', () => {
       this.publishers.assist.publish({
         type: 'snapshot',
         protocolVersion: LOCAL_PROTOCOL_VERSION,
@@ -637,8 +626,17 @@ export class ProjectionCoordinator {
         schemaVersion: ASSIST_SCHEMA_VERSION,
         cursor: assist.cursor,
         payload: mapObserverAssistProjection(assist),
-      }),
-    );
+      });
+      const current = this.publishers.assist.getCurrent();
+      if (current && current.channelSeq !== previous && assist.observer?.hints.length)
+        this.observerTimeline.recordPublished(assist.observer.hints);
+    });
+    if (!this.observerSettings) return;
+    try {
+      this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
+    } catch {
+      report(this.onDiagnostic, 'observer-assist-diagnostic-sink-failed');
+    }
   }
   resetObserverAssist(): void {
     this.observerTimeline.resetForMap(this.nowMonotonicMs());

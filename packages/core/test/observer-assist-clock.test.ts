@@ -141,11 +141,15 @@ it('schedules from receive time and preserves the due time of a shown event', ()
     ['1:1', 5],
   ]);
   expect(project(117000, 108)?.hints[0]?.remainingSeconds).toBe(4);
+  const published = project(117000, 108)?.hints ?? [];
+  timeline.recordPublished(published);
+  timeline.recordPublished(published);
   expect(project(121000, 120)?.hints).toEqual([]);
   expect(timeline.getDiagnostics()).toMatchObject({
     acceptedDeaths: 1,
     enteredWindow: 1,
     generatedHints: 1,
+    publishedHints: 1,
     discarded: { duplicate: 1, expired: 1 },
     endedAfterGeneration: { expired: 1 },
   });
