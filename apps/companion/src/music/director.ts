@@ -147,7 +147,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     private readonly now = Date.now,
     private readonly random = Math.random,
     private readonly audioModePending: () => Promise<boolean> = () => Promise.resolve(false),
-    private readonly obsConnectionRetryPending: () => boolean = () => false,
+    private readonly waitForObsConnection: () => boolean = () => false,
   ) {
     this.preview = new MusicPreview(store, now, async (obs) => {
       if (await this.audioModePending().catch(() => true)) return null;
@@ -1054,7 +1054,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   async tick(explicit = false): Promise<void> {
     if (this.closed) return;
     const modePending = await this.audioModePending().catch(() => true);
-    const waitingForObs = !explicit && this.obsConnectionRetryPending() && !this.manual;
+    const waitingForObs = () => !explicit && !this.manual && this.waitForObsConnection();
     if (
       !modePending &&
       !this.closed &&
@@ -1064,7 +1064,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.store.state.monitorDisablePending &&
       this.now() >= this.nextMonitorDisableAttempt
     ) {
-      if (waitingForObs) return;
+      if (waitingForObs()) return;
       this.nextMonitorDisableAttempt = this.now() + 5_000;
       await this.monitor(false).catch(() => undefined);
       return;
@@ -1125,11 +1125,6 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.status.connection = 'idle';
       return;
     }
-    if (waitingForObs && !this.preview.busy) {
-      this.status.connection = this.status.connection === 'idle' ? 'idle' : 'unavailable';
-      if (this.status.connection === 'unavailable') this.status.playback = 'unknown';
-      return;
-    }
     const collectionRevision = this.provider.collectionRevision;
     if (collectionRevision !== this.collectionRevision) {
       this.collectionRevision = collectionRevision;
@@ -1158,8 +1153,15 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.probeDelayMs = 0;
       this.operationFailures.clear('music_operation_recovered');
     };
+    const waitForAutomaticAudio = () => {
+      if (this.preview.busy || !waitingForObs()) return false;
+      this.status.connection = this.status.connection === 'idle' ? 'idle' : 'unavailable';
+      if (this.status.connection === 'unavailable') this.status.playback = 'unknown';
+      return true;
+    };
     try {
       if (probeCooling || automaticDeferred || this.store.failure || !this.store.ready) {
+        if (waitForAutomaticAudio()) return;
         const cleanupCurrent = () => !this.closed && currentCollection();
         await this.provider.session(async (obs, epoch) => {
           await this.reconcilePreview(obs, epoch, cleanupCurrent);
@@ -1223,6 +1225,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.status.connection = 'idle';
         return;
       }
+      if (waitForAutomaticAudio()) return;
       await this.provider.session(async (obs, epoch) => {
         const reconnect = this.epoch !== epoch;
         if (this.manual && this.manual.epoch !== null && this.manual.epoch !== epoch) {

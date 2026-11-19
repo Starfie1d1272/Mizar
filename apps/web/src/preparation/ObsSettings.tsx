@@ -106,7 +106,7 @@ export function ObsSettings() {
       : processStopped
         ? 'OBS 尚未运行，请先打开 OBS。'
         : authenticationRequired
-          ? 'OBS 已响应，需要核对密码。在「工具 → WebSocket 服务器设置」复制密码后粘贴到下方。'
+          ? 'OBS 需要验证密码。可以使用本机连接设置，也可以手动填写。'
           : listenerRefused
             ? '此端口尚未监听。请在 OBS「工具 → WebSocket 服务器设置」启用服务器，并核对端口。'
             : obs?.connectionFailure === 'timeout'
@@ -249,6 +249,22 @@ export function ObsSettings() {
                   </Button>
                 ) : null}
               </StatusBanner>
+            ) : null}
+
+            {!connected && !chooseExecutable && !processStopped && window.__TAURI_INTERNALS__ ? (
+              <Button
+                disabled={busy || preparing}
+                onClick={() =>
+                  void action(async () => {
+                    await obsCommand('use-local-connection', { useLocalSettings: true });
+                    setPortOverride(null);
+                    setPassword('');
+                    setMessage('已通过本机设置连接 OBS。');
+                  })
+                }
+              >
+                使用本机 OBS 连接设置
+              </Button>
             ) : null}
 
             <details key={String(authenticationRequired)} open={authenticationRequired}>

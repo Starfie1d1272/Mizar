@@ -14,7 +14,7 @@ import { Worker } from 'node:worker_threads';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { atomicJson, safePath } from '../resource-store/files.js';
-import { diagnosticSegmentPattern } from './segments.js';
+import { diagnosticSegmentPattern, performanceSegmentPattern } from './segments.js';
 import { diagnosticValue } from './session-journal.js';
 import type { ArchiveWorkerData } from './archive-worker.js';
 const currentProcessLogs = /^(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?$/;
@@ -491,7 +491,7 @@ export class SupportExports {
         gap('logs', 'enumerate', error);
       }
       for (const [folder, pattern] of [
-        ['performance-pending', /^[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz$/],
+        ['performance-pending', performanceSegmentPattern],
         ['diagnostic-outbox', /^[a-f0-9]{64}\.gz$/],
       ] as const) {
         try {
