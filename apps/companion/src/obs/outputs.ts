@@ -263,6 +263,10 @@ export class ObsOutputController {
     return { stream: { ...this.values.stream }, record: { ...this.values.record } };
   }
 
+  connectionRetryPending(): boolean {
+    return !this.ready && (this.retry !== undefined || this.connecting !== undefined);
+  }
+
   private result(kind: ObsOutputKind, result: ObsOutputResult): void {
     this.values[kind] = { ...this.values[kind], result };
   }
