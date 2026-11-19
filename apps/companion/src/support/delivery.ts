@@ -1,6 +1,6 @@
 import { hostDeliveryParticipant } from './host-delivery-pin.js';
 import { type IncidentParticipant, type PinReceipt } from './retention.js';
-import { diagnosticSegmentNames } from './segments.js';
+import { diagnosticSegmentNames, performanceSegmentPattern } from './segments.js';
 import { technicalProjection, sourceCoversProjection } from './technical-projection.js';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
@@ -1342,7 +1342,7 @@ export class DiagnosticDelivery {
     try {
       await safePath(performanceDirectory);
       const files = (await readdir(performanceDirectory)).filter((name) =>
-        /^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz$/.test(name),
+        performanceSegmentPattern.test(name),
       );
       const ordered: { name: string; run: string; sequence: number }[] = [];
       const read = async (name: string) => {

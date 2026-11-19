@@ -6,10 +6,26 @@ import { randomUUID } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { test } from 'node:test';
 import { PerformanceSpool, performanceRecordEvent } from '../src/support/performance-spool.js';
+import { DiagnosticDelivery } from '../src/support/delivery.js';
+import { SessionJournal } from '../src/support/session-journal.js';
 
 test('stores multiple windows in one producer segment and recovers older per-window files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-performance-segments-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const journal = new SessionJournal(root);
+  const delivery = new DiagnosticDelivery(root, journal, {
+    endpoint: 'https://diagnostics.invalid',
+    fetch: async () => {
+      throw new Error('delivery is paused');
+    },
+  });
+  t.after(async () => {
+    await delivery.close();
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await delivery.initialize(false);
+  await delivery.consent(true);
+  await delivery.pause(true);
   const directory = join(root, 'performance-pending');
   await mkdir(directory);
   const sessionId = randomUUID();
@@ -51,4 +67,9 @@ test('stores multiple windows in one producer segment and recovers older per-win
   const reopened = new PerformanceSpool(root);
   await reopened.initialize();
   assert.equal(reopened.health().unreadableFiles, 0);
+  await delivery.tick();
+  const manifest = JSON.parse(
+    await readFile(join(root, 'diagnostic-outbox', 'state.json'), 'utf8'),
+  );
+  assert.equal(manifest.sessions[`performance:${sessionId}`]?.queued, 3);
 });
