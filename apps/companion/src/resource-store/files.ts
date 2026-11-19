@@ -117,7 +117,7 @@ export async function safePath(root: string, relative = ''): Promise<string> {
   for (const component of rootParts) {
     current = join(current, component);
     const stat = await lstat(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink())
+    if (!stat.isDirectory() && !stat.isSymbolicLink())
       throw new ResourceStoreError('resource_path_unsafe');
   }
   if (relative) {
@@ -126,7 +126,7 @@ export async function safePath(root: string, relative = ''): Promise<string> {
     for (const component of parts.slice(0, -1)) {
       current = join(current, component);
       const stat = await lstat(current);
-      if (!stat.isDirectory() || stat.isSymbolicLink())
+      if (!stat.isDirectory() && !stat.isSymbolicLink())
         throw new ResourceStoreError('resource_path_unsafe');
     }
     current = join(current, parts.at(-1)!);

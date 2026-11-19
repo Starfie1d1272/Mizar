@@ -661,8 +661,7 @@ export class ObsOutputController {
       const transmitting =
         stream?.outputReconnecting === false &&
         bytes !== undefined &&
-        this.streamBytes !== undefined &&
-        bytes > this.streamBytes;
+        (this.streamBytes === undefined || bytes >= this.streamBytes);
       if (kind === 'stream') this.streamBytes = value.outputActive ? bytes : undefined;
       const phase = !value.outputActive
         ? 'idle'
