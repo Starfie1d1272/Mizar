@@ -27,6 +27,10 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   const calls: string[] = [];
   const visibleWrites: string[] = [];
   let valid = true;
+  let streaming = false;
+  let streamBytes = 0;
+  let allowOutput = true;
+  let cancelOnCleanup = false;
   let item: {
     sceneItemId: number;
     sourceUuid: string;
@@ -77,7 +81,12 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
             'GetVirtualCamStatus',
           ].includes(type)
         )
-          responseData = { outputActive: false };
+          responseData = {
+            outputActive: type === 'GetStreamStatus' && streaming,
+            outputReconnecting: false,
+            outputBytes: streaming ? ++streamBytes : 0,
+          };
+        else if (type === 'StartStream') streaming = true;
         else if (type === 'GetPersistentData')
           responseData = {
             slotValue: '3df5e4c3-569c-4a52-9c24-f409e9c57eb1',
@@ -156,7 +165,10 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
             notify('CurrentProgramSceneChanged', { sceneName: '用户场景' }, 4);
           if (scenario === 'starting' || scenario === 'takeover')
             await new Promise((resolve) => setTimeout(resolve, 50));
-        } else if (type === 'RemoveSceneItem') item = null;
+        } else if (type === 'RemoveSceneItem') {
+          item = null;
+          if (cancelOnCleanup) allowOutput = false;
+        }
         if (
           ['CreateSceneItem', 'SetSceneItemTransform', 'SetSceneItemEnabled'].includes(type) &&
           item?.sceneItemEnabled &&
@@ -215,6 +227,7 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
     originPolicy: { mode: 'loopback', bindHost: '127.0.0.1', allowedOrigins: [] },
     activeScene: () => 'waiting',
     preparationValid: (revision) => () => valid && revision === 'revision',
+    outputStartValidity: () => () => allowOutput,
     readCaptureEvidence: async () =>
       diagnosticFailure
         ? ({
@@ -251,6 +264,11 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
     app.inject({ method: 'POST', url: `/operator/obs/${path}`, headers: { origin }, payload });
   return {
     config,
+    cancelWarmup: () => adapter.pauseAutomatic(),
+    cancelStartOnCleanup: () => {
+      cancelOnCleanup = true;
+    },
+    outputStatus: () => adapter.outputStatus(),
     stopObs: () => obsServer.close(),
     post,
     calls,
@@ -309,6 +327,30 @@ it('uses actual HTTP routes and OBS WebSocket for disabled → zero → enabled 
   expect((await r.post('capture-warmup-release', { transactionId })).statusCode).toBe(200);
   expect(r.item()).toBeNull();
 });
+
+it.each([false, true])(
+  'resolves pending capture before starting stream (cancelled: %s)',
+  async (cancelled) => {
+    const r = await rig();
+    expect(
+      (await r.post('capture-warmup', { expectedRevision: 'revision', preparationId: prep }))
+        .statusCode,
+    ).toBe(200);
+    r.cancelWarmup();
+    if (cancelled) r.cancelStartOnCleanup();
+    const before = await r.outputStatus();
+    expect(before.preparation).toBe('cleanup_pending');
+    const response = await r.post('output', {
+      output: 'stream',
+      action: 'start',
+      expectedRevision: before.stream.revision,
+    });
+    expect(response.statusCode, response.body).toBe(cancelled ? 409 : 200);
+    expect(r.calls.filter((call) => call === 'StartStream')).toHaveLength(cancelled ? 0 : 1);
+    if (!cancelled)
+      expect(r.calls.indexOf('RemoveSceneItem')).toBeLessThan(r.calls.indexOf('StartStream'));
+  },
+);
 
 it.each(['starting', 'takeover'] as const)(
   'keeps the recovery journal on %s instead of removing the item',

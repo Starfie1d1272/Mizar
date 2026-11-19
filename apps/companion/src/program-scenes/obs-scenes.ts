@@ -88,7 +88,7 @@ export function connectProgramScenes(
       : {}),
     activeScene: () => sceneController.get().active,
     preparationValid: (revision) => production.preparationValid(revision),
-    canStartOutput: () => production.canStartObsOutput(),
+    outputStartValidity: production.outputStartValidity,
     ...(options.runtimeControlToken !== undefined
       ? { runtimeControlToken: options.runtimeControlToken }
       : {}),

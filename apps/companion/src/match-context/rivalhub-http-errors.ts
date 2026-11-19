@@ -121,3 +121,35 @@ export function networkError(error: unknown): Error {
     },
   );
 }
+
+// Read only a small, time-limited classified rejection. Never retain raw body text.
+export async function readReliableBody(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const timeout = AbortSignal.timeout(1000);
+  const deadline = new Promise<never>((_, reject) =>
+    timeout.addEventListener('abort', () => reject(new Error('timeout')), { once: true }),
+  );
+  try {
+    for (;;) {
+      const part = await Promise.race([reader.read(), deadline]);
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 4096) return undefined;
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
