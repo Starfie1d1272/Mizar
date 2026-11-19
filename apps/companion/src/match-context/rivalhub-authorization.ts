@@ -166,7 +166,8 @@ export class RivalHubAuthorization {
       });
       if (!response.ok && response.status !== 304) {
         if (operation !== 'reliable' && operation !== 'claim') await response.body?.cancel();
-        this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
+        if (operation !== 'claim-recovery' || init.method === 'POST' || response.status !== 404)
+          this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }
       return response;
     } catch (error) {

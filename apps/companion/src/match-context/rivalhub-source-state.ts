@@ -71,6 +71,7 @@ const recordSchema = z
 const intentSchema = z
   .object({
     id: z.string().uuid(),
+    claimRecoveryVersion: z.literal(1).optional(),
     scope: scopeSchema,
     captureReference: captureReferenceSchema.optional(),
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
@@ -538,6 +539,7 @@ export class RivalHubSourceState {
     scope: SourceScope,
     previousAuthorityRevision: number | null,
     captureReference?: CaptureReference,
+    claimRecoveryVersion?: 1,
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
       await this.reconcileQuarantine(state);
@@ -600,6 +602,7 @@ export class RivalHubSourceState {
       if (previousAuthorityRevision !== null) known.push(previousAuthorityRevision);
       const intent = intentSchema.parse({
         id: randomUUID(),
+        ...(claimRecoveryVersion ? { claimRecoveryVersion } : {}),
         scope: validScope,
         ...(captureReference ? { captureReference } : {}),
         previousAuthorityRevision: known.length ? Math.max(...known) : null,

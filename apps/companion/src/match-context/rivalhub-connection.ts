@@ -888,12 +888,31 @@ export class RivalHubConnection {
     installation: Installation | null,
   ): Promise<void> {
     if (!this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
-    const response = await this.authorization.request(sourceStatusRequest(intent.scope), {
-      signal: this.cleanupRequestSignal(deadline),
-    });
+    const signal = this.cleanupRequestSignal(deadline);
+    const response = intent.claimRecoveryVersion
+      ? await this.authorization.request('claim-recovery', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            matchId: intent.scope.matchId,
+            producerInstanceId: intent.scope.producerInstanceId,
+            liveSessionId: intent.scope.liveSessionId,
+            claimRequestId: intent.id,
+          }),
+          signal,
+        })
+      : await this.authorization.request(sourceStatusRequest(intent.scope), { signal });
     if (!response.ok) return;
     const body: unknown = await readReliableBody(response);
     this.shutdownSignal?.throwIfAborted();
+    if (intent.claimRecoveryVersion) {
+      const receipt = body as { claimRequestId?: unknown; status?: unknown } | undefined;
+      if (receipt?.claimRequestId !== intent.id) return;
+      if (receipt.status === 'cancelled') {
+        await this.sourceState.clearIntent(intent.id);
+        return;
+      }
+    }
     const found = confirmedSourceStatus(body, intent.scope);
     if (!found) return;
     const revision = found.authorityRevision;
@@ -911,7 +930,11 @@ export class RivalHubConnection {
           (item) => sameScope(item, identity) && item.authorityRevision >= revision,
         ),
     );
-    if (intent.previousAuthorityRevision !== null && revision <= intent.previousAuthorityRevision) {
+    if (
+      !intent.claimRecoveryVersion &&
+      intent.previousAuthorityRevision !== null &&
+      revision <= intent.previousAuthorityRevision
+    ) {
       if (
         revision !== intent.previousAuthorityRevision ||
         (intent.idempotentAuthorityRevision !== revision &&
@@ -1451,12 +1474,24 @@ export class RivalHubConnection {
     const priorRevisions = matchingRecords.map((record) => record.identity.authorityRevision);
     for (const item of durableState.watermarks)
       if (sameScope(item, scope)) priorRevisions.push(item.authorityRevision);
+    const capability = await this.authorization.request('claim-recovery', {
+      signal: AbortSignal.timeout(4000),
+    });
+    let claimRecoveryVersion: 1 | undefined;
+    if (capability.ok) {
+      const support = (await readReliableBody(capability)) as { version?: unknown } | undefined;
+      if (support?.version !== 1) throw new Error('网站认领恢复协议无法确认。');
+      claimRecoveryVersion = 1;
+    } else if (capability.status !== 404) {
+      throw new Error('暂时无法核对网站同步接口。');
+    }
     if (generation !== this.bindingGeneration || !isCurrent())
       throw new Error('比赛已变化，请重新确认网站同步。');
     const intent = await this.sourceState.beginClaim(
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,
       this.captureLifecycle?.createReference(snapshot.cursor),
+      claimRecoveryVersion,
     );
     this.business('business_claim', snapshot, {
       contextRevision,
@@ -1481,6 +1516,7 @@ export class RivalHubConnection {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          ...(claimRecoveryVersion ? { claimRequestId: intent.id } : {}),
           matchId: snapshot.matchId,
           producerInstanceId: snapshot.cursor.producerInstanceId,
           liveSessionId: snapshot.cursor.liveSessionId,
@@ -1501,7 +1537,7 @@ export class RivalHubConnection {
       });
       if (!response.ok) {
         const refusal = await readReliableBody(response);
-        if (definitiveClaimRejection(response, refusal)) {
+        if (!claimRecoveryVersion && definitiveClaimRejection(response, refusal)) {
           await this.sourceState.clearIntent(intent.id);
           await this.updateCleanupSummary();
         }

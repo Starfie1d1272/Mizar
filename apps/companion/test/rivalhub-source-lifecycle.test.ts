@@ -118,6 +118,10 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   let liveStatus = 200;
   let reliableStatus = 204;
   let loseClaim = false;
+  let claimRecoverySupported = false;
+  let loseBeforeClaim = false;
+  let lastClaimRequestId: string | undefined;
+  const recoveredClaimIds: string[] = [];
   let idempotentClaim = false;
   let claimRefusal: (() => Response) | undefined;
   let reliableRequests = 0;
@@ -152,9 +156,22 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         competitionId: installation.competitionId,
       });
     if (url.pathname.endsWith('/disconnect')) return Response.json({ revoked: true });
+    if (url.pathname.endsWith('/claim-recovery')) {
+      if (!claimRecoverySupported) return new Response(null, { status: 404 });
+      if (init?.method !== 'POST') return Response.json({ version: 1 });
+      const { claimRequestId } = JSON.parse(String(init.body)) as { claimRequestId: string };
+      recoveredClaimIds.push(claimRequestId);
+      return Response.json(
+        serverClaim?.claimRequestId === claimRequestId
+          ? { status: 'found', claimRequestId, source: serverClaim }
+          : { status: 'cancelled', claimRequestId },
+      );
+    }
     if (url.pathname.endsWith('/claim')) {
       if (claimRefusal) return claimRefusal();
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      lastClaimRequestId = body.claimRequestId as string | undefined;
+      if (loseBeforeClaim) throw new TypeError('request not received');
       if (
         !idempotentClaim ||
         !serverClaim ||
@@ -260,6 +277,14 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     releases,
     statusQueries,
     claimStarted,
+    recoveredClaimIds,
+    lastClaimRequestId: () => lastClaimRequestId,
+    enableClaimRecovery: () => {
+      claimRecoverySupported = true;
+    },
+    loseBeforeClaim: () => {
+      loseBeforeClaim = true;
+    },
     reliableRequests: () => reliableRequests,
     liveRequests: () => liveRequests,
     restart: async () => {
@@ -407,6 +432,26 @@ test('background cleanup confirms an exact old authority after a release 403', a
   );
   assert.equal(h.releases.length, 1, 'readback must never send another release');
 });
+
+for (const committed of [false, true]) {
+  test(`request receipts settle a lost claim after restart (committed=${committed})`, async (t) => {
+    const h = await setup(t);
+    h.enableClaimRecovery();
+    if (committed) h.setLose(true);
+    else h.loseBeforeClaim();
+    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+    const requestId = h.lastClaimRequestId();
+    assert.ok(requestId);
+    const restarted = await h.restart();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+    await restarted.release();
+    assert.deepEqual(h.recoveredClaimIds, [requestId]);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.equal(restarted.view().activeSourceMatchId, null);
+    assert.equal(h.releases.length, committed ? 1 : 0);
+    assert.deepEqual(h.statusQueries, []);
+  });
+}
 
 test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
   const h = await setup(t);
