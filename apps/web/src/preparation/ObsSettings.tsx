@@ -93,19 +93,25 @@ export function ObsSettings() {
   const authenticationRequired =
     obs?.facts?.authentication === 'required' || obs?.facts?.authentication === 'rejected';
   const executableMissing = obs?.facts?.executable === 'not_found';
+  const executableAmbiguous = obs?.findings.some(
+    (finding) => finding.code === 'executable_ambiguous',
+  );
+  const chooseExecutable = Boolean(executableMissing || executableAmbiguous);
   const processStopped = obs?.facts?.process === 'stopped';
   const listenerRefused = obs?.facts?.listener === 'refused';
-  const connectionGuidance = executableMissing
-    ? '未找到 OBS。请选择已安装的 OBS 程序；尚未安装时请先安装 OBS。'
-    : processStopped
-      ? 'OBS 尚未运行，请先打开 OBS。'
-      : authenticationRequired
-        ? 'OBS 已响应，需要核对密码。在「工具 → WebSocket 服务器设置」复制密码后粘贴到下方。'
-        : listenerRefused
-          ? '此端口尚未监听。请在 OBS「工具 → WebSocket 服务器设置」启用服务器，并核对端口。'
-          : obs?.connectionFailure === 'timeout'
-            ? '等待 OBS 响应超时。请确认 OBS 能正常操作，再重新检查连接。'
-            : '正在确认 OBS 连接。请确认 OBS 已打开，并启用 WebSocket 服务器。';
+  const connectionGuidance = executableAmbiguous
+    ? '找到多个 OBS 安装。请选择用于制播的 OBS 程序。'
+    : executableMissing
+      ? '未找到 OBS。请选择已安装的 OBS 程序；尚未安装时请先安装 OBS。'
+      : processStopped
+        ? 'OBS 尚未运行，请先打开 OBS。'
+        : authenticationRequired
+          ? 'OBS 已响应，需要核对密码。在「工具 → WebSocket 服务器设置」复制密码后粘贴到下方。'
+          : listenerRefused
+            ? '此端口尚未监听。请在 OBS「工具 → WebSocket 服务器设置」启用服务器，并核对端口。'
+            : obs?.connectionFailure === 'timeout'
+              ? '等待 OBS 响应超时。请确认 OBS 能正常操作，再重新检查连接。'
+              : '正在确认 OBS 连接。请确认 OBS 已打开，并启用 WebSocket 服务器。';
   async function selectExecutable() {
     const path = await desktopInvoke('select_obs_executable');
     if (path) await obsCommand('configure', { executablePath: path });
@@ -214,7 +220,7 @@ export function ObsSettings() {
             <h2>OBS 控制连接</h2>
             <p>连接后，Mizar 可以自动切换节目并读取直播与录制状态。</p>
             {!connected ? (
-              <StatusBanner tone={authenticationRequired || executableMissing ? 'warning' : 'info'}>
+              <StatusBanner tone={authenticationRequired || chooseExecutable ? 'warning' : 'info'}>
                 {connectionGuidance}
                 {executableMissing ? (
                   <a href="https://obsproject.com/download" target="_blank" rel="noreferrer">
@@ -227,7 +233,7 @@ export function ObsSettings() {
                     disabled={busy || preparing}
                     onClick={() =>
                       void action(
-                        executableMissing && window.__TAURI_INTERNALS__
+                        chooseExecutable && window.__TAURI_INTERNALS__
                           ? selectExecutable
                           : processStopped
                             ? () => obsCommand('open')
@@ -235,7 +241,7 @@ export function ObsSettings() {
                       )
                     }
                   >
-                    {executableMissing && window.__TAURI_INTERNALS__
+                    {chooseExecutable && window.__TAURI_INTERNALS__
                       ? '选择 OBS 程序'
                       : processStopped
                         ? '打开 OBS'

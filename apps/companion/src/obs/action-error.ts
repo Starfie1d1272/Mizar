@@ -6,6 +6,7 @@ const messages = {
   output_active_repair: 'OBS 正在输出；结束输出后可修复制播配置。',
   output_active_switch: 'OBS 正在输出，暂不切换节目。',
   executable_missing: '未找到 OBS，请在设置中选择 obs64.exe。',
+  executable_ambiguous: '找到多个 OBS 安装，请选择用于制播的 obs64.exe。',
   executable_failed: 'OBS 程序未能打开。',
 } as const;
 
