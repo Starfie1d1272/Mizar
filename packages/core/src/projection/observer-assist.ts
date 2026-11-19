@@ -56,6 +56,13 @@ export class ObserverHintTimeline {
   } | null = null;
   private context = '';
   private lastReadyScope: string | undefined;
+  private awaitingNextMap = false;
+  private sealedSource:
+    | {
+        health: ObserverHintTimeline['sourceHealth'];
+        execution: number | undefined;
+      }
+    | undefined;
   private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
   private lastDeathSequence = -1;
@@ -141,6 +148,7 @@ export class ObserverHintTimeline {
   clear() {
     this.kills = [];
     this.lastReadyScope = undefined;
+    this.sealedSource = undefined;
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
     this.sourceExecutionChanged = false;
@@ -148,7 +156,7 @@ export class ObserverHintTimeline {
     this.nextWindowMs = null;
   }
   consume(event: GameEventObservation) {
-    if (event.cursor.role !== 'lookahead') return;
+    if (event.cursor.role !== 'lookahead' || this.awaitingNextMap) return;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
     this.eventCounts[event.kind] = (this.eventCounts[event.kind] ?? 0) + 1;
     this.recentEventKinds.push(event.kind);
@@ -218,7 +226,9 @@ export class ObserverHintTimeline {
     now: number,
     source: typeof this.sourceHealth,
     sourceExecution?: number,
+    waitingForNextMap = false,
   ): ObserverAssistProjection {
+    this.awaitingNextMap = waitingForNextMap;
     this.lastNow = now;
     const delayMs = settings.delaySeconds * 1000;
     const previousDelayMs = (this.configuration?.delaySeconds ?? settings.delaySeconds) * 1000;
@@ -236,8 +246,13 @@ export class ObserverHintTimeline {
       mapEpoch: program.cursor.mapEpoch,
       receiveSequence: program.cursor.programReceiveSequence,
     };
-    if (this.sourceHealth.normalDrain && !source.normalDrain) this.reset('drain-ended', now);
+    if (!waitingForNextMap && this.sealedSource && !source.normalDrain)
+      this.reset('drain-ended', now);
     this.sourceHealth = { ...source };
+    if (waitingForNextMap && this.sealedSource) {
+      source = this.sealedSource.health;
+      sourceExecution = this.sealedSource.execution;
+    }
     const empty = (
       state: NonNullable<ObserverAssistProjection['observer']>['state'],
     ): ObserverAssistProjection => ({
@@ -319,6 +334,11 @@ export class ObserverHintTimeline {
     ]);
     const draining =
       source.normalDrain === true && source.sameMap === true && this.lastReadyScope === scope;
+    if (waitingForNextMap && !draining) {
+      this.blocked = 'waiting-next-map';
+      return empty('connecting');
+    }
+    if (draining) this.sealedSource ??= { health: source, execution: sourceExecution };
     if (!source.connected && !draining) {
       this.blocked = 'source-disconnected';
       return empty('connecting');

@@ -69,9 +69,18 @@ it('finishes the verified map tail after normal drain and fences a new map execu
     waitingReason: 'normal-drain',
     hints: [{ id: '1:1', remainingSeconds: 5 }],
   });
-  expect(timeline.project(program(117000, 2), settings, 117000, ended, 1).observer?.hints).toEqual(
-    [],
-  );
+  const nextSource = { ...early, generation: 2 };
+  expect(
+    timeline.project(program(116500), settings, 116500, nextSource, 1, true).observer,
+  ).toMatchObject({
+    waitingReason: 'normal-drain',
+    hints: [{ id: '1:1', remainingSeconds: 4.5 }],
+  });
+  timeline.consume(death(2, 1, 116600));
+  expect(
+    timeline.project(program(117000, 2), settings, 117000, nextSource, 1, true).observer?.hints,
+  ).toEqual([]);
+  expect(timeline.getDiagnostics().acceptedDeaths).toBe(1);
 });
 
 it('schedules from receive time and preserves the due time of a shown event', () => {

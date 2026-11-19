@@ -1,5 +1,5 @@
 import type { ProgramProjection } from '@mizar/core/projection';
-import { observerMapScope, type ObserverMapScope } from '../scope/identities.js';
+import { observerMapScope } from '../scope/identities.js';
 import type { ObserverSettingsStore } from './observer-settings.js';
 
 export function createObserverAssistScope(
@@ -7,8 +7,7 @@ export function createObserverAssistScope(
   eligible: () => boolean,
 ) {
   let matchId: string | null | undefined;
-  let confirmedMap: ObserverMapScope | undefined;
-  let waitingMap: ObserverMapScope | undefined;
+  let waitingMap: { name: string; epoch: number; order: number | null | undefined } | undefined;
 
   return {
     get mapConfirmed() {
@@ -16,23 +15,32 @@ export function createObserverAssistScope(
     },
     projectionSettings: () => ({
       ...settings.settings,
-      enabled: settings.settings.enabled && eligible() && !waitingMap,
+      enabled: settings.settings.enabled && !settings.receiverPaused && eligible(),
+      waitingForNextMap: Boolean(waitingMap),
     }),
     observe(program: ProgramProjection, resetAssist: () => void) {
       const map = observerMapScope(program);
-      if (waitingMap && program.map.name && map !== waitingMap) {
-        waitingMap = undefined;
-        confirmedMap = map;
-        settings.waitingForMap = false;
-        resetAssist();
-      }
       const nextMatch = program.match?.matchId ?? null;
       if (matchId !== undefined && matchId !== nextMatch) {
         settings.clearConnection();
-        confirmedMap = waitingMap = undefined;
+        waitingMap = undefined;
+      }
+      const order = program.series?.currentMapOrder;
+      if (
+        waitingMap &&
+        program.map.name &&
+        program.status.telemetry === 'fresh' &&
+        program.cursor.mapEpoch !== waitingMap.epoch &&
+        (typeof waitingMap.order === 'number'
+          ? order === waitingMap.order + 1
+          : program.map.name !== waitingMap.name)
+      ) {
+        waitingMap = undefined;
+        settings.waitingForMap = false;
+        resetAssist();
       }
       matchId = nextMatch;
-      settings.observeScope(JSON.stringify([matchId, map]));
+      settings.observeScope(JSON.stringify([matchId, map]), Boolean(waitingMap));
     },
     subscribe(input: {
       program(): ProgramProjection;
@@ -46,19 +54,20 @@ export function createObserverAssistScope(
           input.refresh();
         } else if (kind === 'map') {
           const program = input.program();
-          const map = program.map.name ? observerMapScope(program) : undefined;
           waitingMap =
-            settings.mapConnection?.nextMap &&
-            map &&
-            (map === confirmedMap || program.map.phase === 'gameover')
-              ? map
+            settings.mapConnection?.nextMap && program.map.name
+              ? {
+                  name: program.map.name,
+                  epoch: program.cursor.mapEpoch,
+                  order: program.series?.currentMapOrder,
+                }
               : undefined;
-          confirmedMap = map;
           settings.waitingForMap = Boolean(waitingMap);
           input.mapConnectionChanged();
-          input.resetAssist();
+          if (waitingMap) input.refreshAssist();
+          else input.resetAssist();
         } else if (kind !== 'game') {
-          if (kind === 'connection') confirmedMap = waitingMap = undefined;
+          if (kind === 'connection') waitingMap = undefined;
           input.refreshAssist();
         }
       });

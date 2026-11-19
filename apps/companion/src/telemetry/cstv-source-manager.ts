@@ -155,6 +155,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   private observerChannelOpen = false;
   private observerSequence = 0;
   private observerMap: string | undefined;
+  private normalDrainConfirmed = false;
   private observerTicksPerSecond: number | undefined;
   private started = false;
   private stopRequested = false;
@@ -211,6 +212,12 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     return this.stopPromise;
   }
 
+  confirmObserverDrain(): void {
+    if (this.stopRequested || this.state !== 'ended' || this.observerMap === undefined) return;
+    this.normalDrainConfirmed = true;
+    this.notifySnapshotChanged();
+  }
+
   getHealth(): CstvSourceHealth<R> {
     if (this.refreshTailTick()) this.notifySnapshotChanged();
     const mapName = this.observerMap ?? this.lastSync?.mapName;
@@ -218,7 +225,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       role: this.role,
       state: this.state,
       generation: this.generation,
-      ...(this.state === 'ended' && this.observerMap !== undefined ? { normalDrain: true } : {}),
+      ...(this.normalDrainConfirmed ? { normalDrain: true } : {}),
       reconnectAttempt: this.reconnectAttempt,
       ...(mapName === undefined ? {} : { mapName }),
       ...(this.lastSync === undefined ? {} : { lastSync: { ...this.lastSync } }),
@@ -278,6 +285,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
   }
 
   private resetObserverContinuity(state: CstvSourceState = 'connecting'): void {
+    this.normalDrainConfirmed = false;
     this.generation += 1;
     this.observerMap = undefined;
     this.executionHadLive = false;
@@ -703,6 +711,7 @@ export function createCstvSourceManagers(options: {
 }
 
 export interface ObserverSourceManager<R extends GameEventSourceRole> extends CstvSourceManager<R> {
+  confirmObserverDrain(): void;
   disconnectObserver(reason: 'failed' | 'ended'): void;
   consumeObserverRecord(input: unknown): void;
 }

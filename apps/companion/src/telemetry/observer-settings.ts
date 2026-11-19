@@ -163,13 +163,14 @@ export class ObserverSettingsStore {
     this.changed('map');
   }
   /** Scope changes invalidate drafts; migration never issues another game connect. */
-  observeScope(scope: string) {
+  observeScope(scope: string, waitingForMap = false) {
     if (scope === this.scope) return;
     const previous = this.scope;
     this.scope = scope;
     if (previous === undefined) return;
-    if (this.mapConnection?.nextMap) this.mapConnection = { ...this.mapConnection, nextMap: false };
-    this.waitingForMap = false;
+    if (!waitingForMap && this.mapConnection?.nextMap)
+      this.mapConnection = { ...this.mapConnection, nextMap: false };
+    this.waitingForMap = waitingForMap;
     this.changed('scope');
   }
   clearConnection() {

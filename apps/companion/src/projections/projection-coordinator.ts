@@ -68,6 +68,7 @@ export interface ProjectionCoordinatorOptions {
     nicknameSource?: 'game' | 'website';
     leadSeconds: number;
     delaySeconds: number;
+    waitingForNextMap?: boolean;
   };
   readonly onObserverDiagnostics?: (
     diagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']>,
@@ -614,6 +615,7 @@ export class ProjectionCoordinator {
         receiveAgeMs,
       },
       health.mapExecution,
+      settings.waitingForNextMap,
     );
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());

@@ -109,6 +109,8 @@ export function ObserverHints() {
             </Button>
           ) : null}
         </>
+      ) : draining ? (
+        <StatusPill tone="info">继续显示本图提前提示</StatusPill>
       ) : pending ? (
         <StatusPill tone="info">
           {runtime?.recovering ? '正在恢复提前提示' : '正在准备提前提示'}
@@ -159,10 +161,8 @@ export function ObserverHints() {
             </Button>
           ) : null}
         </>
-      ) : draining || waitingNextMap ? (
-        <StatusPill tone="info">
-          {draining ? '继续显示本图提前提示' : '等待下一图的 GoTV 连接'}
-        </StatusPill>
+      ) : waitingNextMap ? (
+        <StatusPill tone="info">等待下一图的 GoTV 连接</StatusPill>
       ) : reconnecting || connecting || !observer || observer.state !== 'ready' ? (
         <StatusPill tone="info">
           {reconnecting
@@ -175,7 +175,9 @@ export function ObserverHints() {
         </StatusPill>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
-      {hints.length && !paused && !pending && !needsRecovery && !reconnecting && !connecting ? (
+      {hints.length &&
+      !paused &&
+      (draining || (!pending && !needsRecovery && !reconnecting && !connecting)) ? (
         <ol className="observer-hints">
           {hints.map((hint) => (
             <li key={hint.id}>
