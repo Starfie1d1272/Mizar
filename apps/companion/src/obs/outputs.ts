@@ -27,7 +27,8 @@ export class ObsOutputError extends Error {
       | 'obs_output_unavailable'
       | 'obs_output_disabled'
       | 'obs_output_failed'
-      | 'obs_output_unconfirmed',
+      | 'obs_output_unconfirmed'
+      | 'obs_output_conflict',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -38,6 +39,12 @@ export class ObsOutputError extends Error {
 /** OBS request-status codes, not arbitrary server comments, choose operator guidance. */
 function rejectedOutput(failure: unknown): ObsOutputError {
   const code = (failure as { code: number }).code;
+  if (code === 409)
+    return new ObsOutputError(
+      'obs_output_conflict',
+      'OBS 拒绝了当前输出请求（资源冲突或操作冲突），请等待片刻后重试。',
+      { cause: failure },
+    );
   if (code === 207 || code === 500)
     return new ObsOutputError(
       'obs_output_busy',

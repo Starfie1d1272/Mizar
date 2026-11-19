@@ -42,6 +42,7 @@ const outputMessages: Record<ObsOutputError['code'], string> = {
   obs_output_disabled: 'OBS 输出未启用，请先在 OBS 完成相应直播或录像配置。',
   obs_output_failed: 'OBS 操作未完成，请检查 OBS 配置与版本，再查看诊断。',
   obs_output_unconfirmed: '操作结果尚未确认，请等待 OBS 重新连接后核对，勿重复操作。',
+  obs_output_conflict: 'OBS 拒绝了当前输出请求，可能与其他输出存在冲突或操作被占用，请稍后重试。',
 };
 const commentaryRecoveryMessage =
   '上次解说来源切换结果未确认，Mizar 暂不能更改解说选择。请在 OBS 核对音源和电平、录制试听，并保存诊断包排查。';

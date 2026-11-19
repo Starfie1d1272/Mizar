@@ -8,6 +8,7 @@ const messages = {
   executable_missing: '未找到 OBS，请在设置中选择 obs64.exe。',
   executable_ambiguous: '找到多个 OBS 安装，请选择用于制播的 obs64.exe。',
   executable_failed: 'OBS 程序未能打开。',
+  output_conflict: 'OBS 拒绝了当前输出操作，可能与其他输出存在冲突或操作已被占用。',
 } as const;
 
 export class ObsActionError extends Error {
