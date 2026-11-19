@@ -71,6 +71,7 @@ const recordSchema = z
 const intentSchema = z
   .object({
     id: z.string().uuid(),
+    claimRecoveryVersion: z.literal(1).optional(),
     scope: scopeSchema,
     captureReference: captureReferenceSchema.optional(),
     previousAuthorityRevision: z.number().int().positive().safe().nullable(),
@@ -137,7 +138,7 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function exactKey(identity: ExactSource): string {
+export function exactKey(identity: ExactSource): string {
   return JSON.stringify([
     identity.baseUrl,
     identity.competitionId,
@@ -148,11 +149,13 @@ function exactKey(identity: ExactSource): string {
     identity.authorityRevision,
   ]);
 }
-function matchKey(scope: SourceScope): string {
+export function matchKey(
+  scope: Pick<SourceScope, 'baseUrl' | 'competitionId' | 'installationId' | 'matchId'>,
+): string {
   return JSON.stringify([scope.baseUrl, scope.competitionId, scope.installationId, scope.matchId]);
 }
 
-function sameScope(a: SourceScope, b: SourceScope): boolean {
+export function sameScope(a: SourceScope, b: SourceScope): boolean {
   return (
     a.baseUrl === b.baseUrl &&
     a.competitionId === b.competitionId &&
@@ -536,6 +539,7 @@ export class RivalHubSourceState {
     scope: SourceScope,
     previousAuthorityRevision: number | null,
     captureReference?: CaptureReference,
+    claimRecoveryVersion?: 1,
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
       await this.reconcileQuarantine(state);
@@ -598,6 +602,7 @@ export class RivalHubSourceState {
       if (previousAuthorityRevision !== null) known.push(previousAuthorityRevision);
       const intent = intentSchema.parse({
         id: randomUUID(),
+        ...(claimRecoveryVersion ? { claimRecoveryVersion } : {}),
         scope: validScope,
         ...(captureReference ? { captureReference } : {}),
         previousAuthorityRevision: known.length ? Math.max(...known) : null,
