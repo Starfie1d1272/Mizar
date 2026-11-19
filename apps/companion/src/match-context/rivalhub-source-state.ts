@@ -155,15 +155,27 @@ export function matchKey(
   return JSON.stringify([scope.baseUrl, scope.competitionId, scope.installationId, scope.matchId]);
 }
 
-export function sameScope(a: SourceScope, b: SourceScope): boolean {
+type InstallationScope = Pick<SourceScope, 'baseUrl' | 'installationId' | 'competitionId'>;
+
+export function sameInstallationScope(a: InstallationScope, b: InstallationScope): boolean {
   return (
     a.baseUrl === b.baseUrl &&
     a.competitionId === b.competitionId &&
-    a.installationId === b.installationId &&
+    a.installationId === b.installationId
+  );
+}
+
+export function sameScope(a: SourceScope, b: SourceScope): boolean {
+  return (
+    sameInstallationScope(a, b) &&
     a.matchId === b.matchId &&
     a.producerInstanceId === b.producerInstanceId &&
     a.liveSessionId === b.liveSessionId
   );
+}
+
+export function sameExactSource(a: ExactSource, b: ExactSource): boolean {
+  return a.authorityRevision === b.authorityRevision && sameScope(a, b);
 }
 
 /** Durable control identities only. The caller owns transport and operation serialization. */
