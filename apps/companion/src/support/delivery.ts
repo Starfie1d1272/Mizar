@@ -1434,7 +1434,7 @@ export class DiagnosticDelivery {
           while (group.length) {
             let size = group.length;
             let raw: Buffer;
-            let compressed: Buffer;
+            let compressed: Buffer | null;
             let events: ReturnType<typeof cloudRecord>[];
             for (;;) {
               events = group
@@ -1452,11 +1452,12 @@ export class DiagnosticDelivery {
                   events,
                 }),
               );
-              compressed = Buffer.from(
-                stampDiagnosticGzip(await compress(raw, { level: 9 }), this.now()),
-              );
+              compressed =
+                raw.length <= DELIVERY_LIMITS.expandedBytes
+                  ? Buffer.from(stampDiagnosticGzip(await compress(raw, { level: 3 }), this.now()))
+                  : null;
               if (
-                raw.length <= DELIVERY_LIMITS.expandedBytes &&
+                compressed &&
                 compressed.length <= DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES
               )
                 break;
@@ -1464,7 +1465,7 @@ export class DiagnosticDelivery {
               size = Math.ceil(size / 2);
             }
             if (
-              raw.length > DELIVERY_LIMITS.expandedBytes ||
+              !compressed ||
               compressed.length > DELIVERY_LIMITS.compressedBytes - DIAGNOSTIC_PERMIT_BYTES
             ) {
               skipped++;
