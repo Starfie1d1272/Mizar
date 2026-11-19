@@ -14,7 +14,7 @@ macro_rules! desktop_ipc {
         $string_enum!(QualityPreset {
             VeryHigh = "very-high", High = "high", Medium = "medium", Preserve = "preserve",
         });
-        $string_enum!(BackupAction { Select = "select", Apply = "apply", Cancel = "cancel" });
+        $string_enum!(BackupAction { Select = "select", Apply = "apply", ApplyHud = "apply-hud", Cancel = "cancel" });
         $number_enum!(FrameRateLimit(u16) { Unlimited = 0, Fps30 = 30, Fps60 = 60 });
         $literal!(Busy, bool, true);
         $literal!(Ready, bool, false);
@@ -73,6 +73,7 @@ macro_rules! desktop_ipc {
             source_name: String,
             target_path: String,
             includes_frame_rate: bool,
+            includes_hud_key: bool,
         });
 
 

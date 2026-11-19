@@ -148,7 +148,7 @@ Host 验证受管 CS2 后提交连接意图，Companion 串行管理观察器进
 
 观察器归属独立 Windows Job。上游 Session Supervisor 管理连接和退避，Companion 管理进程及私有投递。组件启动交接后由 Supervisor 运行自己的初始化和重试期限。正常停止给组件至少 15 秒收尾，宿主异常退出由系统回收子树。Host 持有游戏身份并续约，租约失效或结束制作停止辅助。已交接的组件意外崩溃只在原意图和租约仍有效时补启一次。组件版本与来源由[组件配置](../../apps/companion/src/telemetry/observer-component.json)维护，控制契约见[观察器接口](protocol.md#本机观察器控制)。
 
-提前提示由 [ObserverHintTimeline](../../packages/core/src/projection/observer-assist.ts) 按固定配置排期，核对同图同执行、当前身份、来源代际和回合。设置由 [ObserverSettingsStore](../../apps/companion/src/telemetry/observer-settings.ts) 原子保存。排期与实机对时见[游戏数据语义](telemetry.md)。
+提前提示由 [ObserverHintTimeline](../../packages/core/src/projection/observer-assist.ts) 按固定配置排期，核对同图同执行、当前身份、来源代际和回合。诊断分别汇总接纳事件、首次进入合格窗口、首次生成提示，以及生成后的已知结束原因。生成表示进入私有投影，界面可见情况仍未知。设置由 [ObserverSettingsStore](../../apps/companion/src/telemetry/observer-settings.ts) 原子保存。排期与实机对时见[游戏数据语义](telemetry.md)。
 
 人工选择 Gameplay 不要求新鲜遥测，包括未绑定的 Demo；切画面不建立赛事归属。身份不符时播出使用中立身份，自动编排和外部输出继续执行各自严格门槛。
 
@@ -245,6 +245,8 @@ Steam 和 MulNX 的未知启动结果都保留待确认记录，不自动重发�
 恢复只对已核实目标和仍为原值/应用值的受管字段写回，用户新值让出；未知文件、重复冲突、链接和未完成事务保留。已核实的受管游戏进程先于窗口出现时，Host 在同一次退出内最多等待 10 秒再发送正常关闭请求。游戏退出用实际进程证据确认，正常关闭失败由用户在游戏内退出后重试，不自动强杀。Companion 离线时，Host 的恢复入口可完成同一原生事务，但不确认制作结束或资料回收资格。配置事务与 Steam Cloud 不构成跨进程原子操作。
 
 现场帧率、手动旧备份恢复、MulNX 启动项及本机 HUD 自动隐藏分别沿各自有限事务持有身份与原值，不创建通用游戏命令入口。相关实现见[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)、[配置会话](../../apps/desktop/src-tauri/src/cs2_session.rs)和[启动恢复](../../apps/desktop/src-tauri/src/startup_recovery.rs)。
+
+配置会话的原始备份按已核实的画面配置路径关联 Steam 账号，保存画质、机器帧率配置和可核实的键位文件。有观战恢复待完成或文件仍含 Mizar HUD 绑定时，备份只记录键位缺口。观战事务退出时恢复本次管理的按键与启动脚本，GSI 原配置由配置会话独立保留和恢复。手动选择备份后可恢复画面字段，或从同账号快照单独恢复仍由 Mizar 占用的 H 键，两者共用配置会话记录和写回核验。
 
 ### 窗口与本地 HUD
 
