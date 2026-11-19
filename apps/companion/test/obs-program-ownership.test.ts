@@ -373,11 +373,12 @@ it('production finish restores the original program and retries the website hand
   await managed.prepareManagedCollection!(true, managed);
   const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
   cleanups.push(() => adapter.close());
+  let obsCurrent = true;
   const production = createProduction({
     scenes: {
       get: () => ({ active: 'waiting', revision: 'scene' }),
       holdAutomatic: () => {},
-      controlValid: () => () => true,
+      controlValid: () => () => obsCurrent,
       selectWaitingForExit: async () => ({ ok: true }),
       setResourceActivationPending: () => {},
     } as unknown as ProductionDependencies['scenes'],
@@ -410,17 +411,24 @@ it('production finish restores the original program and retries the website hand
   });
   expect(entered.ok).toBe(true);
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-  const finished = await production.change({
-    action: 'finish',
+  const finish = {
+    action: 'finish' as const,
     expectedRevision: production.get().revision,
     preparationId: null,
-  });
+  };
+  const [finished, repeated] = await Promise.all([
+    production.change(finish),
+    production.change(finish),
+  ]);
   expect(finished.ok).toBe(true);
+  expect(repeated).toEqual(finished);
   expect(production.get().mode).toBe('preparation');
   expect(production.get().releaseHandoffState).toBe('unconfirmed');
   expect(await production.waitForObsExit()).toBe('confirmed');
   expect(f.state.collection).toBe('个人');
   expect(f.state.scene).toBe('personal-program');
+  obsCurrent = false;
+  expect(production.get().obsExitState).toBe('confirmed');
   await vi.advanceTimersByTimeAsync(10_000);
   expect(production.get().releaseHandoffState).toBe('recorded');
 });
