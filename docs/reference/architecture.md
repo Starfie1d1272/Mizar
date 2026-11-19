@@ -52,13 +52,13 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) | 提交输入与命令、解析身份、推进系列事实，发布同版本快照与转换 |
 | [输入提交](../../apps/companion/src/runtime/observation-commit.ts) | 统一现场与重放的遥测提交，协调来源代际、投影发布与可靠输出捕获 |
 | [ProjectionCoordinator](../../apps/companion/src/projections/projection-coordinator.ts) | 从运行时快照发布 Program、Operator、Radar 和观察辅助。接口与播出页面消费对应投影 |
-| [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交。[运行时订阅](../../apps/companion/src/match-context/runtime-binding.ts) 先退役旧试播，再发布新绑定 |
+| [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交。[运行时订阅](../../apps/companion/src/match-context/runtime-binding.ts) 离开重放样例时先清理样例状态，再发布新绑定 |
 | [制作生命周期](../../apps/companion/src/program-scenes/production.ts) | 制作会话、进入/退出、试播及资源/更新互斥 |
 | [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序 |
 | [节目呈现](../../apps/companion/src/program-scenes/presentation.ts) | 提供当前节目内容和已冻结结果，供场景、音乐和运镜消费 |
 | [OBS](../../apps/companion/src/obs/) | [适配器装配与启动恢复](../../apps/companion/src/obs/runtime.ts)、连接、受管来源、配置准备、音频及 OBS 事务 |
 | [音乐](../../apps/companion/src/music/)与[运镜](../../apps/companion/src/orchestration/) | 各自的配置、意图、控制资格和播放恢复 |
-| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts) | 可靠交付与本地存储；远端来源认领、交接和释放。[网站输出的启停](../../apps/companion/src/output/website-lifecycle.ts) 接入来源恢复和退出责任 |
+| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts) | 网站输出负责投递资格、连续性与本地存储。来源状态负责远端认领、交接和释放 |
 | [网站资料读取](../../apps/companion/src/match-context/rivalhub-read-client.ts) | 在当前授权范围内合并赛程与比赛资料读取。自动比赛资料读取按失败间隔退避，人工刷新遵守网站限频。来源认领和可靠赛果沿自己的队列恢复 |
 | [诊断](../../apps/companion/src/support/) | 日志、覆盖证据、导出和经同意的回传 |
 
@@ -66,11 +66,12 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 
 | 场景 | 从哪里跟踪 |
 | --- | --- |
-| 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再装配领域实例与回调。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 复用同一提交链。[产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求，[关停编排](../../apps/companion/src/runtime/shutdown.ts) 在本机写者收尾后写入退出回执 |
-| Companion 领域接线 | [赛事控制](../../apps/companion/src/match-context/runtime.ts) 注册本地与线上赛事入口。[网站输出](../../apps/companion/src/output/website-lifecycle.ts) 在恢复前接入赛事与制作状态，并核对投递资格及连续性。[节目呈现](../../apps/companion/src/program-scenes/presentation-routes.ts) 选择赛程来源，[场景联动](../../apps/companion/src/program-scenes/obs-scenes.ts) 在 OBS 确认当前对阵切入开始时通知音乐和运镜。[运行诊断](../../apps/companion/src/support/runtime-evidence.ts) 从各领域读出诊断快照。 |
+| 启动与遥测 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再连接各领域。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 让正式输入和重放复用同一提交链 |
+| 赛事与节目 | [赛事控制](../../apps/companion/src/match-context/runtime.ts) 注册本地与线上入口。[节目呈现](../../apps/companion/src/program-scenes/presentation-routes.ts) 选择赛程来源。[场景联动](../../apps/companion/src/program-scenes/obs-scenes.ts) 在 OBS 确认对阵切入开始时通知音乐和运镜 |
+| 正常退出 | [产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求。[关停顺序](../../apps/companion/src/runtime/shutdown.ts) 先停止生产者，再等待本机必要写入确认，最后写退出回执 |
 | 同图重开和来源切换 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核 |
 | OBS 断连与恢复 | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供 |
-| 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。后台通过原请求身份获取确认，重启从同一记录恢复 |
+| 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。[网站输出的启停](../../apps/companion/src/output/website-lifecycle.ts) 接入来源恢复与交接，后台通过原请求身份获取确认 |
 | 进入、取消和结束制作 | [制作生命周期](#进入隐藏与退出)校验准备身份和修订。Host 恢复游戏配置，Companion 分别核验 OBS 与网站责任。试播沿[标记与临时资料](#demo-与采集)恢复 |
 
 验证依赖方向用 `pnpm architecture:check`，其检查入口包括 Companion 领域导入、Program 投影依赖、工作区和包内循环以及设计例外。与当前需求相关的收敛候选从 [AGENTS.md](../../AGENTS.md#推进澄清与批准) 查找。
@@ -287,7 +288,7 @@ Host 可离线写入，文档向 Host 交接后收到原事件的持久回执才
 
 资源诊断每十五秒记录 Companion 自身内存、Host 自身内存和 Windows 全机提交内存；页面文件不足和本机 HUD 浏览器进程失败时另取快照。WebView2 失败同时保留可用的原因枚举与退出码。Host 数值不包含 WebView2、CS2 或 OBS 的独立进程，缺少这些进程的采样时不能把全机内存压力归因于某个程序。
 
-[操作诊断](../../apps/companion/src/support/operation-diagnostics.ts) 负责 HTTP 请求关联、控制操作前后证据及重复续约聚合。装配层提供当前状态读取入口，在改动回传同意、导出截点和关闭日志前刷新聚合记录。
+[运行诊断](../../apps/companion/src/support/runtime-evidence.ts) 从各领域读出快照。[操作诊断](../../apps/companion/src/support/operation-diagnostics.ts) 负责 HTTP 请求关联、控制操作前后证据及重复续约聚合。装配层提供当前状态读取入口，在回传同意已持久保存后，以及冻结导出截点和关闭日志前刷新聚合记录。
 
 各生产者保留预算与 pin 状态独立，云端 ACK 不删除仍被活动会话引用的唯一证据。Companion 的活动保护用于带任务身份的操作和业务记录；普通后台观察及连接失败按现有预算轮转，失败本身不建立进程存续期间的永久保留。显式问题标记、导出和正在读取的回传仍沿用各自固定责任。当前导出只处理新版 ZIP，旧日志和旧包保留原位，不自动迁移或删除。诊断回传的同意、撤回及接收器契约见[技术诊断回传](diagnostics-delivery.md)；完整性审查见[开发验证](../development/development-validation.md#操作记录与失败可诊断性审查)。日志、就绪和命令成功都不能证明实际像素与声音正常。
 
