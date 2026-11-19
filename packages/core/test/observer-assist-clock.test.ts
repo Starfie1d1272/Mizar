@@ -73,6 +73,13 @@ it('schedules from receive time and preserves the due time of a shown event', ()
   ]);
   expect(project(117000, 108)?.hints[0]?.remainingSeconds).toBe(4);
   expect(project(121000, 120)?.hints).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 1,
+    enteredWindow: 1,
+    generatedHints: 1,
+    discarded: { duplicate: 1, expired: 1 },
+    endedAfterGeneration: { expired: 1 },
+  });
   timeline.consume(death(1, 2, 122000));
   expect(project(224999, 108)?.hints).toEqual([]);
   expect(project(225000, 108)?.hints[0]?.remainingSeconds).toBe(5);
@@ -93,6 +100,13 @@ it('retires a death before its window and does not replay it after a respawn', (
   expect(timeline.project(program(116000), settings, 116000, early, 1).observer?.hints).toEqual([]);
   const nextRound = { ...program(118000), map: { name: 'de_test', roundNumber: 7 } };
   expect(timeline.project(nextRound, settings, 118000, early, 1).observer?.hints).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 1,
+    enteredWindow: 0,
+    generatedHints: 0,
+    discarded: { 'program-already-past-event': 1 },
+    endedAfterGeneration: {},
+  });
 });
 
 it('fences a same-map restart until Program advances its map epoch', () => {

@@ -41,6 +41,7 @@ interface BufferedKill {
   event: PlayerDeathGameEvent;
   sourceMs: number;
   retired: boolean;
+  enteredWindow: boolean;
   shownDueMs: number | null;
 }
 
@@ -70,6 +71,9 @@ export class ObserverHintTimeline {
   private recentEventKinds: GameEventObservation['kind'][] = [];
   private discarded: Record<string, number> = {};
   private acceptedDeaths = 0;
+  private enteredWindow = 0;
+  private generatedHints = 0;
+  private endedAfterGeneration: Record<string, number> = {};
   private lastReceivedMs: number | null = null;
   private nextDueMs: number | null = null;
   private nextWindowMs: number | null = null;
@@ -94,6 +98,9 @@ export class ObserverHintTimeline {
       lastEventReceivedMonotonicMs: this.lastReceivedMs,
       eventCounts: { ...this.eventCounts },
       acceptedDeaths: this.acceptedDeaths,
+      enteredWindow: this.enteredWindow,
+      generatedHints: this.generatedHints,
+      endedAfterGeneration: { ...this.endedAfterGeneration },
       discarded: { ...this.discarded },
       buffered: this.kills.length,
       pending: this.kills.filter((k) => !k.retired).length,
@@ -106,6 +113,12 @@ export class ObserverHintTimeline {
   }
   private discard(reason: string) {
     this.discarded[reason] = (this.discarded[reason] ?? 0) + 1;
+  }
+  private finish(kill: BufferedKill, reason: string) {
+    this.discard(reason);
+    if (kill.shownDueMs !== null)
+      this.endedAfterGeneration[reason] = (this.endedAfterGeneration[reason] ?? 0) + 1;
+    kill.retired = true;
   }
   private reset(reason: string, now: number) {
     if (this.lastReset.reason !== reason || this.kills.length)
@@ -162,11 +175,12 @@ export class ObserverHintTimeline {
       event,
       sourceMs: event.cursor.observedMonotonicMs,
       retired: false,
+      enteredWindow: false,
       shownDueMs: null,
     });
     if (this.kills.length > 4096) {
-      this.kills.shift();
-      this.discard('capacity');
+      const oldest = this.kills.shift()!;
+      if (!oldest.retired) this.finish(oldest, 'capacity');
     }
   }
   private advanceGeneration(generation: number) {
@@ -202,7 +216,7 @@ export class ObserverHintTimeline {
     this.kills = this.kills.filter((kill) => {
       const due = kill.shownDueMs ?? kill.sourceMs + Math.min(previousDelayMs, delayMs);
       if (kill.retired || now < due) return !kill.retired;
-      this.discard('expired');
+      this.finish(kill, 'expired');
       return false;
     });
     this.nextDueMs = null;
@@ -356,8 +370,7 @@ export class ObserverHintTimeline {
       const due = kill.shownDueMs ?? kill.sourceMs + delayMs;
       const window = Math.max(kill.sourceMs, due - leadMs);
       if (kill.event.cursor.mapName !== program.map.name) {
-        kill.retired = true;
-        this.discard('map-mismatch');
+        this.finish(kill, 'map-mismatch');
         continue;
       }
       const attacker = players.find(
@@ -365,8 +378,7 @@ export class ObserverHintTimeline {
       );
       const victim = players.find((p) => p.sourcePlayerId === kill.event.victim.sourcePlayerId);
       if (!attacker || !victim) {
-        kill.retired = true;
-        this.discard('event-identity');
+        this.finish(kill, 'event-identity');
         continue;
       }
       const eventRound = kill.event.cursor.roundsCompleted;
@@ -376,8 +388,7 @@ export class ObserverHintTimeline {
         eventRound < programRound ||
         (eventRound === programRound && victim.lifeState === 'dead')
       ) {
-        kill.retired = true;
-        this.discard('program-already-past-event');
+        this.finish(kill, 'program-already-past-event');
         continue;
       }
       if (paused || eventRound !== programRound || victim.lifeState !== 'alive') continue;
@@ -386,7 +397,12 @@ export class ObserverHintTimeline {
         this.nextWindowMs = window;
       }
       if (now < window) continue;
+      if (!kill.enteredWindow) {
+        kill.enteredWindow = true;
+        this.enteredWindow++;
+      }
       if (hints.length >= 6) continue;
+      if (kill.shownDueMs === null) this.generatedHints++;
       kill.shownDueMs = due;
       hints.push({
         id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
