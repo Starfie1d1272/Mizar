@@ -15,6 +15,8 @@ export interface GameEventSourceCursor {
   readonly observedMonotonicMs: number;
   /** Lookahead only. Local receipt adjusted by measured, non-overlapping residency. */
   readonly sourceArrivalMonotonicMs?: number;
+  /** Source-local map execution at receipt, independent of the Program map epoch. */
+  readonly sourceMapExecution?: number;
   readonly mapName?: string;
   readonly ticksPerSecond?: number;
   /** Raw completed-round count from the same source record, when supplied. */
