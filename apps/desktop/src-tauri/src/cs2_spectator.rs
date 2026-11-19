@@ -209,7 +209,7 @@ fn keys_path(video: &Path) -> Result<PathBuf, String> {
     Ok(video.parent().ok_or("按键配置目录缺失。")?.join(KEYS_NAME))
 }
 
-fn read_keys(video: &Path) -> Result<String, String> {
+pub(crate) fn read_keys(video: &Path) -> Result<String, String> {
     let path = keys_path(video)?;
     let local = path.parent().ok_or("按键配置目录缺失。")?;
     let account_app = local
@@ -426,6 +426,30 @@ fn restore_hud(saved: &Value, current: &str) -> Result<String, String> {
         None => result.replace_range(key.start..value.end, ""),
     }
     Ok(result)
+}
+
+pub(crate) fn restore_original_hud(backup: &str, current: &str) -> Result<String, String> {
+    if binding_entries(backup)?
+        .iter()
+        .any(|(_, value)| value.value == HUD_COMMAND)
+    {
+        return Err("备份仍包含 Mizar 的 HUD 绑定。".into());
+    }
+    restore_hud(&backup_hud(backup)?, current)
+}
+
+#[cfg(test)]
+#[test]
+fn selected_backup_restores_only_the_mizar_hud_binding() {
+    let backup = r#""config" { "bindings" { "h" "switchhands" "1" "slot1" } }"#;
+    let current =
+        r#""config" { "bindings" { "h" "toggle cl_draw_only_deathnotices 0 1" "1" "slot2" } }"#;
+    let restored = restore_original_hud(backup, current).unwrap();
+    assert_eq!(
+        restored,
+        r#""config" { "bindings" { "h" "switchhands" "1" "slot2" } }"#
+    );
+    assert!(restore_original_hud(backup, &current.replace(HUD_COMMAND, "say custom")).is_err());
 }
 
 pub fn validate_hud(video: &Path, saved: &Value) -> Result<(), String> {

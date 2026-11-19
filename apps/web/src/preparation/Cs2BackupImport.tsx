@@ -11,8 +11,9 @@ export function Cs2BackupImport() {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  async function run(action: 'select' | 'apply' | 'cancel') {
-    if (busy || (action === 'apply' && (!confirmed || !selection))) return;
+  async function run(action: 'select' | 'apply' | 'apply-hud' | 'cancel') {
+    const applying = action === 'apply' || action === 'apply-hud';
+    if (busy || (applying && (!confirmed || !selection))) return;
     setBusy(true);
     setMessage('');
     const task = new ControlTask('backup_import', 'user', {
@@ -25,12 +26,16 @@ export function Cs2BackupImport() {
         { action, selectionId: selection?.selectionId ?? null },
         task,
       );
-      if (action === 'apply') {
+      if (applying) {
         const after = await desktopInvoke('cs2_config_status', undefined, task);
         const complete = !after.busy && !after.pending && !after.running;
         task.finish(complete ? 'confirmed' : 'unconfirmed', { after });
         setMessage(
-          complete ? '设置已恢复，恢复前的原件已保存。' : '恢复尚未结束，请查看上方恢复状态。',
+          complete
+            ? action === 'apply-hud'
+              ? '已写回原 H 键。请打开 CS2 确认。'
+              : '设置已恢复，恢复前的原件已保存。'
+            : '恢复尚未结束，请查看上方恢复状态。',
         );
       } else {
         task.finish(next ? 'confirmed' : 'cancelled', { selectionId: next?.selectionId ?? null });
@@ -62,7 +67,11 @@ export function Cs2BackupImport() {
           <p>
             {selection.sourceName} · {selection.includesFrameRate ? '画质与帧率' : '画质设置'}
           </p>
-          <p>键位请在 CS2 设置中核对。旧画面备份不含键位。</p>
+          <p>
+            {selection.includesHudKey
+              ? '包含本账号的原 H 键，可单独恢复。'
+              : '此备份没有可核实的原 H 键，请在 CS2 键位设置中核对。'}
+          </p>
           <p className="settings-conflict-files">{selection.targetPath}</p>
           <Checkbox
             label={`恢复到 ${selection.nickname} 的上述配置`}
@@ -73,8 +82,13 @@ export function Cs2BackupImport() {
           />
           <div className="settings-actions">
             <Button disabled={busy || !confirmed} onClick={() => void run('apply')}>
-              恢复所选设置
+              恢复画面设置
             </Button>
+            {selection.includesHudKey ? (
+              <Button disabled={busy || !confirmed} onClick={() => void run('apply-hud')}>
+                恢复原 H 键
+              </Button>
+            ) : null}
             <Button disabled={busy} onClick={() => void run('cancel')}>
               取消
             </Button>
