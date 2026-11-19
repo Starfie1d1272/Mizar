@@ -69,7 +69,7 @@ fn config_for(identity: Option<&str>, numbers: bool) -> Result<Vec<u8>, String> 
 }
 
 const LEGACY_CFG: &[u8] = b"// Mizar managed spectator session; personal bindings remain unchanged.\nspec_usenumberkeys_nobinds 1\necho MIZAR_OBSERVER_CFG_LOADED\n";
-const KEYS_NAME: &str = "cs2_user_keys_0_slot0.vcfg";
+pub(crate) const KEYS_NAME: &str = "cs2_user_keys_0_slot0.vcfg";
 const NUMBER_BINDINGS: [(&str, &str); 10] = [
     ("1", "slot1"),
     ("2", "slot2"),
@@ -243,6 +243,18 @@ fn read_keys(video: &Path) -> Result<String, String> {
         return Err("数字键配置过大，备份仍保留。".into());
     }
     Ok(text)
+}
+
+pub(crate) fn read_original_keys(video: &Path) -> Result<String, String> {
+    let keys = read_keys(video)?;
+    backup_hud(&keys)?;
+    if binding_entries(&keys)?
+        .iter()
+        .any(|(_, value)| value.value == HUD_COMMAND)
+    {
+        return Err("当前键位仍包含 Mizar 的 HUD 绑定，未将它记为原始键位。".into());
+    }
+    Ok(keys)
 }
 
 type Entry = (crate::cs2_frame_rate::Token, crate::cs2_frame_rate::Token);

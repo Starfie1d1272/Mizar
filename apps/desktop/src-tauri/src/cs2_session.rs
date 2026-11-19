@@ -1005,6 +1005,18 @@ impl SessionStore {
                 None => absent.push(name.to_string_lossy().to_string()),
             }
         }
+        let original_keys = if self.spectator_pending() || self.full_spectator_pending() {
+            Err("上次观战配置尚未恢复，未将当前键位记为原值。".into())
+        } else {
+            crate::cs2_spectator::read_original_keys(&target)
+        };
+        match original_keys {
+            Ok(keys) => atomic_write(
+                &snapshot.join(crate::cs2_spectator::KEYS_NAME),
+                keys.as_bytes(),
+            )?,
+            Err(reason) => atomic_write(&snapshot.join("keys-unavailable.txt"), reason.as_bytes())?,
+        }
         atomic_write(
             &snapshot.join("absent.json"),
             &serde_json::to_vec(&absent).map_err(|_| "无法记录原始配置缺失状态。")?,

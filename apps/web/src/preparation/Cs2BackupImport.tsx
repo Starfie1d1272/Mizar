@@ -47,7 +47,7 @@ export function Cs2BackupImport() {
   return (
     <div className="cs2-backup-import" aria-busy={busy}>
       <Button disabled={busy} onClick={() => void run('select')}>
-        {busy ? '正在处理…' : '选择备份恢复'}
+        {busy ? '正在处理…' : '选择画面备份'}
       </Button>
       {selection ? (
         <div className="cs2-backup-preview">
@@ -62,6 +62,7 @@ export function Cs2BackupImport() {
           <p>
             {selection.sourceName} · {selection.includesFrameRate ? '画质与帧率' : '画质设置'}
           </p>
+          <p>键位请在 CS2 设置中核对。旧画面备份不含键位。</p>
           <p className="settings-conflict-files">{selection.targetPath}</p>
           <Checkbox
             label={`恢复到 ${selection.nickname} 的上述配置`}
