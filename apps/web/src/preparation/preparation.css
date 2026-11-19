@@ -1262,6 +1262,14 @@
   object-fit: cover;
   border-radius: var(--mizar-shape-control);
 }
+.obs-program-audio-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+  overflow-wrap: anywhere;
+}
+
 .obs-audio-application-choice select {
   display: block;
   max-width: 100%;
