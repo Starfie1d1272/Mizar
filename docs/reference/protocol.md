@@ -199,7 +199,7 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 | `GET /local/v1/obs` | 实际/预期节目、findings、有限节目与捕获证据 |
 | `GET /local/v1/obs/confidence` | 当前场景缩略图，请求中切场返回空 |
 | `GET /local/v1/obs/outputs` | 直播/录像的 `phase/active/pending/revision` 与捕获准备状态 |
-| `POST /operator/obs/output` | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`，不接受 Toggle 或任意 RPC |
+| `POST /operator/obs/output` | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`。写入前，同一连接已回读到目标状态时直接确认；实际写入要求修订仍有效。不接受 Toggle 或任意 RPC |
 | `POST /operator/obs/ensure`、`repair`、`check` | 显式准备/修复与只读检查分开，返回当前 findings |
 | `POST /operator/obs/capture-recover` | 依原事务核对/回收已有项目并刷新证据，不新建、不重启游戏、不切当前节目 |
 | `POST /operator/obs/video-preflight`、`video-prepare`、`video-restore` | 制作修订与事务 ID 绑定的视频设置准备/恢复 |
