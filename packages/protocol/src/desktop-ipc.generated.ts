@@ -13,7 +13,7 @@ const WorkspaceExitStage = z.enum([
 const Cs2ActivityPhase = z.enum(['idle', 'starting', 'checking', 'restoring']);
 const Cs2ConfigPhase = z.enum(['idle', 'uncertain', 'running', 'pending']);
 const QualityPreset = z.enum(['very-high', 'high', 'medium', 'preserve']);
-const BackupAction = z.enum(['select', 'apply', 'cancel']);
+const BackupAction = z.enum(['select', 'apply', 'apply-hud', 'cancel']);
 const FrameRateLimit = z.union([z.literal(0), z.literal(30), z.literal(60)]);
 const Busy = z.literal(true);
 const Ready = z.literal(false);
@@ -72,6 +72,7 @@ const BackupSelection = z.object({
   sourceName: z.string(),
   targetPath: z.string(),
   includesFrameRate: z.boolean(),
+  includesHudKey: z.boolean(),
 });
 const FrameRateAction = z.enum(['inspect', 'apply', 'restore']);
 const PinAction = z.enum(['prepare', 'commit', 'release']);
