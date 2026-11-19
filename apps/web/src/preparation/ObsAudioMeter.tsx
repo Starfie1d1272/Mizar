@@ -5,12 +5,20 @@ type Reading = {
   durationMs: number;
   channels: {
     name: string;
+    bound: boolean;
+    muted: boolean | null;
     samples: number;
     peakDb: number | null;
     status: 'unavailable' | 'silent' | 'signal';
   }[];
 };
-export function ObsAudioMeter() {
+export function ObsAudioMeter({
+  mode,
+  sourceNames,
+}: {
+  mode: 'desktop' | 'independent' | 'unknown';
+  sourceNames: Readonly<Record<string, string | undefined>>;
+}) {
   const [reading, setReading] = useState<Reading | null>(null);
   const [sampledAt, setSampledAt] = useState('');
   const [message, setMessage] = useState('');
@@ -47,7 +55,11 @@ export function ObsAudioMeter() {
   }
   return (
     <section>
-      <h3>短时输入检查</h3>
+      <h3>节目声音</h3>
+      <p>
+        当前模式 ·{' '}
+        {mode === 'desktop' ? '桌面混音' : mode === 'independent' ? '独立分路' : '未确认'}
+      </p>
       <p>点击后采样约两秒，请同时说话或播放声音。只检查专用集合的固定音源，不改变音频配置。</p>
       <Button disabled={busy} aria-busy={busy} onClick={() => void sample()}>
         {busy ? '正在采样…' : '检查两秒输入电平'}
@@ -59,22 +71,44 @@ export function ObsAudioMeter() {
             本次检测峰值 · {sampledAt} · {(reading.durationMs / 1000).toFixed(1)} 秒（非实时电平）
           </p>
           <ul>
-            {reading.channels.map((channel) => (
-              <li key={channel.name}>
-                {channel.name}：
-                {channel.status === 'unavailable'
-                  ? '没有收到电平数据，无法判断'
-                  : channel.status === 'silent'
-                    ? '本次采样没有输入信号'
-                    : `${channel.peakDb!.toFixed(1)} dBFS`}
-              </li>
-            ))}
+            {reading.channels
+              .filter(({ name, bound }) =>
+                mode === 'desktop'
+                  ? name !== '游戏声音' && name !== '其他解说'
+                  : mode === 'independent'
+                    ? name !== '桌面声音'
+                    : bound,
+              )
+              .map((channel) => {
+                const state = !channel.bound
+                  ? '未找到受管来源'
+                  : channel.muted === true
+                    ? 'OBS 已静音'
+                    : channel.status === 'unavailable'
+                      ? '未收到电平数据'
+                      : channel.status === 'silent'
+                        ? '本次没有输入信号'
+                        : `${channel.peakDb!.toFixed(1)} dBFS`;
+                return (
+                  <li key={channel.name} className="obs-program-audio-row">
+                    <strong>{channel.name}</strong>
+                    {sourceNames[channel.name] && <span>{sourceNames[channel.name]}</span>}
+                    {channel.status !== 'unavailable' && channel.muted !== true ? (
+                      <meter
+                        min={-60}
+                        max={0}
+                        value={Math.max(-60, Math.min(0, channel.peakDb ?? -60))}
+                        aria-label={`${channel.name}的采样峰值`}
+                      />
+                    ) : null}
+                    <span>{state}</span>
+                  </li>
+                );
+              })}
           </ul>
         </div>
       )}
-      <p>
-        显示静音和音量调整前的输入峰值，不代表已进入播出音轨或平台有声；最终声音仍需录制或平台监听确认。
-      </p>
+      <p>峰值取自音量调整前的输入。请录制试听或监听平台，确认实际节目声音。</p>
     </section>
   );
 }
