@@ -315,29 +315,44 @@ pub fn validate_bindings(video: &Path, saved: &Value) -> Result<(), String> {
 }
 
 /// Patch only number keys in the current file, preserving all other game edits.
-fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
+fn restored_bindings(
+    saved: &Value,
+    current: &str,
+    conflicts: &mut Vec<String>,
+) -> Result<String, String> {
     if saved
         .as_object()
         .is_none_or(|object| object.len() != NUMBER_BINDINGS.len())
     {
         return Err("数字键备份格式无法核实。".into());
     }
-    let entries = number_entries(current)?;
+    let originals = NUMBER_BINDINGS
+        .iter()
+        .map(|(digit, _)| saved_binding(saved, digit))
+        .collect::<Result<Vec<_>, _>>()?;
+    let entries = binding_entries(current)?;
     let mut edits = Vec::new();
-    for (digit, applied) in NUMBER_BINDINGS {
-        let original = saved_binding(saved, digit)?;
+    for ((digit, applied), original) in NUMBER_BINDINGS.into_iter().zip(originals) {
         let matches: Vec<_> = entries
             .iter()
             .filter(|(key, _)| key.value == digit)
             .collect();
         let now = matches.first().map(|(_, value)| value.value.as_str());
+        if matches
+            .iter()
+            .any(|(_, value)| Some(value.value.as_str()) != now)
+        {
+            conflicts.push(format!("数字键 {digit} 有多个不同绑定，原绑定备份仍保留。"));
+            continue;
+        }
         if now == original.as_ref().map(|(_, value)| value.as_str()) {
             continue; // Already restored, or +exec was never applied.
         }
         if now != Some(applied) {
-            return Err(format!(
+            conflicts.push(format!(
                 "数字键 {digit} 已被外部修改，未覆盖该修改；原绑定备份仍保留。"
             ));
+            continue;
         }
         for (key, value) in matches {
             edits.push(match &original {
@@ -352,6 +367,27 @@ fn restored_bindings(saved: &Value, current: &str) -> Result<String, String> {
         restored.replace_range(start..end, &replacement);
     }
     Ok(restored)
+}
+
+#[test]
+fn restores_other_number_keys_when_a_user_binding_has_changed() {
+    let before = r#""config" { "bindings" { "1" "say original" "2" "say second" } }"#;
+    let saved = backup_bindings(before).unwrap();
+    let (_, managed) = NUMBER_BINDINGS[1];
+    let current = format!(
+        r#""config" {{ "bindings" {{ "1" "say user edit" "2" "{managed}" "h" "switchhands" }} }}"#
+    );
+    let mut conflicts = Vec::new();
+    let restored = restored_bindings(&saved, &current, &mut conflicts).unwrap();
+    assert_eq!(restored, current.replace(managed, "say second"));
+    assert_eq!(conflicts.len(), 1);
+    assert!(conflicts[0].contains("数字键 1"));
+    conflicts.clear();
+    assert_eq!(
+        restored_bindings(&saved, &restored, &mut conflicts).unwrap(),
+        restored
+    );
+    assert_eq!(conflicts.len(), 1);
 }
 
 /// A missing explicit binding uses the standard physical H scancode; aliases are never inferred.
@@ -478,7 +514,7 @@ pub fn restore_keys(
     let mut restored = current.clone();
     let mut errors = Vec::new();
     if let Some(bindings) = bindings {
-        match restored_bindings(bindings, &restored) {
+        match restored_bindings(bindings, &restored, &mut errors) {
             Ok(value) => restored = value,
             Err(error) => errors.push(error),
         }
@@ -494,6 +530,9 @@ pub fn restore_keys(
             return Err("按键配置在恢复期间发生变化，备份仍保留。".into());
         }
         crate::cs2_session::atomic_write(&keys_path(video)?, restored.as_bytes())?;
+        if read_keys(video)? != restored {
+            errors.push("写回后未能确认按键配置，备份仍保留。".into());
+        }
     }
     if errors.is_empty() {
         Ok(())
