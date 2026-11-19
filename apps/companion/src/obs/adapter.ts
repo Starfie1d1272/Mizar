@@ -329,8 +329,8 @@ export class ObsAdapter {
     return this.outputs.outputObservationEpoch();
   }
 
-  connectionRetryPending(): boolean {
-    return this.outputs.connectionRetryPending();
+  waitForAutomaticAudioConnection(): boolean {
+    return this.outputs.waitForAutomaticAudioConnection();
   }
 
   async outputStatus(includePreparation = true): Promise<ObsOutputsStatus> {
@@ -1362,6 +1362,7 @@ export class ObsAdapter {
       initial.cancelledCommentaryRevision === preference.revision
     )
       return;
+    if (this.waitForAutomaticAudioConnection()) return;
     await this.configurationMutation(() =>
       this.audioConfiguration.run(async (connection, endpoint) => {
         const obs = guardedObs(connection, valid);

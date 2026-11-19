@@ -268,8 +268,10 @@ export class ObsOutputController {
     return { stream: { ...this.values.stream }, record: { ...this.values.record } };
   }
 
-  connectionRetryPending(): boolean {
-    return !this.ready && (this.retry !== undefined || this.connecting !== undefined);
+  waitForAutomaticAudioConnection(): boolean {
+    if (this.ready) return false;
+    if (!this.closed && !this.retry && !this.connecting) void this.connect().catch(() => undefined);
+    return true;
   }
 
   private result(kind: ObsOutputKind, result: ObsOutputResult): void {
