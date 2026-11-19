@@ -20,6 +20,12 @@ export function registerOperationDiagnostics(
     typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
       ? value
       : null;
+  const requestEvidence = (request: FastifyRequest) => ({
+    requestId: request.id,
+    browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
+    method: request.method,
+    route: request.routeOptions.url,
+  });
   app.addHook('onRequest', (request, _reply, done) => {
     if (sessionJournal)
       sessionJournal.withRequest(
@@ -46,8 +52,6 @@ export function registerOperationDiagnostics(
   const renewalRoutes = ['/operator/runtime/observer', '/operator/runtime/camera-session'];
   const renewalRoute = (request: FastifyRequest) =>
     request.method === 'POST' && renewalRoutes.includes(request.routeOptions.url ?? '');
-  const isRenewal = (request: FastifyRequest) =>
-    renewalRoute(request) && (request.body as { action?: unknown } | null)?.action === 'pulse';
   // Body parsing happens after onRequest. Keep the original state in memory so
   // rejected commands and failed renewals retain their complete before/after evidence.
   const renewalRequests = new WeakMap<
@@ -74,20 +78,14 @@ export function registerOperationDiagnostics(
     const renewal = renewalRequests.get(request);
     if (!renewal || renewal.beforeRecorded) return;
     sessionJournal?.record('operation_received', {
-      requestId: request.id,
-      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-      method: request.method,
-      route: request.routeOptions.url,
+      ...requestEvidence(request),
       before: renewal.before,
       receivedAt: renewal.receivedAt,
       ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
     });
     if (renewal.handlerStartedAt)
       sessionJournal?.record('operation_begin', {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
+        ...requestEvidence(request),
         parameters: diagnosticValue(request.body),
         startedAt: renewal.handlerStartedAt,
         ...(deferredUntilResult ? { deferredUntilResult: true } : {}),
@@ -108,10 +106,7 @@ export function registerOperationDiagnostics(
         });
       else
         sessionJournal?.record('operation_received', {
-          requestId: request.id,
-          browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-          method: request.method,
-          route: request.routeOptions.url,
+          ...requestEvidence(request),
           before,
         });
     }
@@ -125,7 +120,7 @@ export function registerOperationDiagnostics(
         // Only uncorrelated system pulses are observations. User/task commands,
         // new identities and changed control contexts keep the full start chain.
         if (
-          isRenewal(request) &&
+          (request.body as { action?: unknown } | null)?.action === 'pulse' &&
           !['operation-id', 'task-id', 'parent-operation-id', 'attempt-id', 'trigger'].some(
             (field) => request.headers[`x-mizar-${field}`] !== undefined,
           )
@@ -140,10 +135,7 @@ export function registerOperationDiagnostics(
         return done();
       }
       sessionJournal?.record('operation_begin', {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
+        ...requestEvidence(request),
         parameters: diagnosticValue(request.body),
         filename: request.headers['x-mizar-filename'],
       });
@@ -174,10 +166,7 @@ export function registerOperationDiagnostics(
       );
       if (renewal) renewal.compact = compact;
       const evidence = {
-        requestId: request.id,
-        browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-        method: request.method,
-        route: request.routeOptions.url,
+        ...requestEvidence(request),
         httpStatus: reply.statusCode,
         result,
         ...(renewal ? { durationMs: performance.now() - renewal.startedAt } : {}),
@@ -227,10 +216,7 @@ export function registerOperationDiagnostics(
   });
   app.addHook('onError', async (request, _reply, error) => {
     sessionJournal?.record('request_error', {
-      requestId: request.id,
-      browserOperationId: browserOperationId(request.headers['x-mizar-operation-id']),
-      method: request.method,
-      route: request.routeOptions.url,
+      ...requestEvidence(request),
       error,
     });
     request.log.error({ err: error, route: request.routeOptions.url }, 'Local operation failed');

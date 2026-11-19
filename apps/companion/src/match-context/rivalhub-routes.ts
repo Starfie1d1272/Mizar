@@ -1,3 +1,4 @@
+import type { MatchContextBinding } from './index.js';
 import { bindHistoricalStats, projectHistoricalStats } from '../projections/historical-stats.js';
 import { projectHistoricalProgram } from '../projections/historical-program.js';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
@@ -888,5 +889,72 @@ export function registerHistoricalStatsProgramRoute(
     return reply
       .header('cache-control', 'no-store')
       .send(projectHistoricalProgram(binding, snapshot, options.getProgram(), options.getScene()));
+  });
+}
+
+export function registerBroadcastStatsRoutes(
+  app: FastifyInstance,
+  {
+    connection,
+    getBinding,
+  }: {
+    connection: RivalHubConnection | undefined;
+    getBinding: () => MatchContextBinding | undefined;
+  },
+): void {
+  app.get('/local/v1/broadcast-stats', async (_request, reply) => {
+    const binding = getBinding();
+    if (
+      !binding ||
+      (binding.origin !== 'online' &&
+        !(binding.origin === 'cache' && binding.cachedFrom === 'online')) ||
+      !connection
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const value = await connection.getStats(statsTarget(binding.context));
+    const current = getBinding();
+    const ids = [binding.manifest.entrants.a.entryId, binding.manifest.entrants.b.entryId];
+    if (
+      current !== binding ||
+      !value ||
+      value.competitionId !== binding.context.competition?.competitionId ||
+      value.entrants.length !== 2 ||
+      new Set(value.entrants.map((entry) => entry.entryId)).size !== 2 ||
+      !ids.every((id) => value.entrants.some((entry) => entry.entryId === id))
+    )
+      return reply.header('cache-control', 'no-store').send(null);
+    const entrants = [binding.manifest.entrants.a, binding.manifest.entrants.b].map((canonical) => {
+      const entry = value.entrants.find((candidate) => candidate.entryId === canonical.entryId)!;
+      const ids = new Set(
+        canonical.roster.players
+          .filter((player) => player.isStarter)
+          .map((player) => player.playerId),
+      );
+      return {
+        ...entry,
+        ...(entry.facts
+          ? {
+              facts: {
+                ...entry.facts,
+                players: entry.facts.players.filter((player) => ids.has(player.userId)),
+              },
+            }
+          : {}),
+        starters: entry.starters.filter((player) => ids.has(player.userId)),
+        playerPerformance: {
+          ...entry.playerPerformance,
+          players: entry.playerPerformance.players.filter((player) => ids.has(player.userId)),
+        },
+      };
+    });
+    return reply.header('cache-control', 'no-store').send({ ...value, entrants });
+  });
+  app.get('/local/v1/broadcast-stats-status', (_request, reply) => {
+    const binding = getBinding();
+    return reply.header('cache-control', 'no-store').send({
+      fetchedAt: binding
+        ? (connection?.statsFetchedAt(statsTarget(binding.context)) ?? null)
+        : null,
+    });
   });
 }

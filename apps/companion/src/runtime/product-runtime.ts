@@ -1,3 +1,5 @@
+import type { CaptureRecorder } from '../telemetry/capture-recorder.js';
+import type { CstvSourceManagers } from '../telemetry/cstv-source-manager.js';
 import { timingSafeEqual } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -79,4 +81,44 @@ export async function writeRuntimeFlushReceipt(
       pid: process.pid,
     });
   }
+}
+
+export function registerRuntimeHealth(
+  app: FastifyInstance,
+  options: {
+    currentRecorder: () => CaptureRecorder;
+    cstvSources: Pick<CstvSourceManagers, 'program' | 'lookahead'>;
+    runtimeDegraded: () => boolean;
+    product: ProductRuntime | undefined;
+  },
+): void {
+  app.get('/health', () => {
+    const recorderHealth = options.currentRecorder().getHealth();
+    const recorderDegraded =
+      recorderHealth.state === 'degraded' || recorderHealth.state === 'failed';
+    const cstvHealth = {
+      program: options.cstvSources.program.getHealth(),
+      lookahead: options.cstvSources.lookahead.getHealth(),
+    };
+    const cstvDegraded = [cstvHealth.program, cstvHealth.lookahead].some(
+      (health) => health.state === 'reconnecting' || health.state === 'failed',
+    );
+    return {
+      status: options.runtimeDegraded() || recorderDegraded || cstvDegraded ? 'degraded' : 'ok',
+      recorder: recorderHealth,
+      cstv: cstvHealth,
+      ...(options.product === undefined
+        ? {}
+        : {
+            product: {
+              repository: 'Starfie1d1272/Mizar',
+              appVersion: options.product.appVersion,
+              artifactSha256: options.product.artifactSha256,
+              gitSha: options.product.gitSha,
+              instanceId: options.product.instanceId,
+              mode: 'product',
+            },
+          }),
+    };
+  });
 }

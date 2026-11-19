@@ -1,3 +1,5 @@
+import type { FastifyInstance } from 'fastify';
+import { BilibiliStatus } from '../platform/bilibili.js';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import type { ProjectionBundle } from '../projections/projection-coordinator.js';
 import type { MatchContextBinding } from '../match-context/index.js';
@@ -167,4 +169,32 @@ export class ProductionGuidanceStore {
       bilibili: 'unconfigured',
     };
   }
+}
+
+export function registerProductionGuidance(
+  app: FastifyInstance,
+  guidance: ProductionGuidanceStore,
+  {
+    getBinding,
+    getProjection,
+  }: {
+    getBinding: () => MatchContextBinding | undefined;
+    getProjection: () => ProjectionBundle;
+  },
+): void {
+  const bilibili = new BilibiliStatus();
+  app.get('/local/v1/production-guidance', async (_request, reply) => {
+    const binding = getBinding();
+    const view = guidance.get(getProjection(), binding);
+    const state = await bilibili.read(
+      binding?.origin === 'fixture'
+        ? []
+        : (binding?.context.commentators.map((person) => person.liveStreamUrl) ?? []),
+    );
+    const current = getBinding();
+    return reply.header('cache-control', 'no-store').send({
+      ...(current === binding ? view : guidance.get(getProjection(), current)),
+      bilibili: current === binding ? state : 'unknown',
+    });
+  });
 }

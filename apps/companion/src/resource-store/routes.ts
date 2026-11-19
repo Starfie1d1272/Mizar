@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { REPLAY_IDS } from '@mizar/resource-pack-contract';
+import type { MulnxTool } from '../orchestration/tool.js';
 import { diagnosticValue } from '../support/session-journal.js';
 import type { FastifyInstance } from 'fastify';
 import { ResourceStoreError } from './contract.js';
@@ -153,4 +157,38 @@ export function registerResourceRoutes(
       }
     },
   );
+}
+
+export function registerResourceLibrary(
+  app: FastifyInstance,
+  options: {
+    originPolicy: () => LocalWebOriginPolicy;
+    resources: () => ResourceStore | undefined;
+    tool: () => ReturnType<MulnxTool['view']> | undefined;
+    resourceRecoveryAvailable: () => boolean;
+    webRoot: () => string;
+  },
+): void {
+  app.get('/local/v1/resource-library', (request, reply) => {
+    const policy = options.originPolicy();
+    if (
+      request.headers['sec-fetch-site'] === 'cross-site' ||
+      (request.headers.origin && !checkLocalWebOrigin(policy, request.headers.origin).allowed)
+    )
+      return reply.code(403).send({ error: 'operator_origin_forbidden' });
+    const tool = options.tool();
+    return reply.header('cache-control', 'no-store').send({
+      resources: options.resources()?.list() ?? null,
+      resourceRecoveryAvailable: options.resourceRecoveryAvailable(),
+      bundledEplAvailable: REPLAY_IDS.every((id) =>
+        existsSync(join(options.webRoot(), 'fixtures', id, 'replay/manifest.json')),
+      ),
+      tool: tool
+        ? {
+            ...tool,
+            packs: tool.packs.map((pack) => pack.sourceName),
+          }
+        : null,
+    });
+  });
 }

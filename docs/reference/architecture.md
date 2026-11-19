@@ -56,9 +56,9 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 | [制作生命周期](../../apps/companion/src/program-scenes/production.ts) | 制作会话、进入/退出、试播及资源/更新互斥 |
 | [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序 |
 | [节目呈现](../../apps/companion/src/program-scenes/presentation.ts) | 提供当前节目内容和已冻结结果，供场景、音乐和运镜消费 |
-| [OBS](../../apps/companion/src/obs/) | 连接、受管来源、配置准备、音频及 OBS 事务 |
+| [OBS](../../apps/companion/src/obs/) | [适配器装配与启动恢复](../../apps/companion/src/obs/runtime.ts)、连接、受管来源、配置准备、音频及 OBS 事务 |
 | [音乐](../../apps/companion/src/music/)与[运镜](../../apps/companion/src/orchestration/) | 各自的配置、意图、控制资格和播放恢复 |
-| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts) | 可靠交付与本地存储；远端来源认领、交接和释放 |
+| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts) | 可靠交付与本地存储；远端来源认领、交接和释放。[网站输出的启停](../../apps/companion/src/output/website-lifecycle.ts) 接入来源恢复和退出责任 |
 | [网站资料读取](../../apps/companion/src/match-context/rivalhub-read-client.ts) | 在当前授权范围内合并赛程与比赛资料读取。自动比赛资料读取按失败间隔退避，人工刷新遵守网站限频。来源认领和可靠赛果沿自己的队列恢复 |
 | [诊断](../../apps/companion/src/support/) | 日志、覆盖证据、导出和经同意的回传 |
 
@@ -66,7 +66,7 @@ Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校�
 
 | 场景 | 从哪里跟踪 |
 | --- | --- |
-| 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再组装运行时、投影和输出。输入走统一提交入口，Program 供场景和网站分别消费。[产品运行时](../../apps/companion/src/runtime/product-stop.ts) 核验 Host 停止请求，本机写者收尾后写入退出回执 |
+| 启动、正常遥测与退出 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再组装运行时、投影和输出。输入走统一提交入口，Program 供场景和网站分别消费。[产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求，本机写者收尾后写入退出回执 |
 | 同图重开和来源切换 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核 |
 | OBS 断连与恢复 | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供 |
 | 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。后台通过原请求身份获取确认，重启从同一记录恢复 |

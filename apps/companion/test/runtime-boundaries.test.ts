@@ -8,7 +8,7 @@ import fastify from 'fastify';
 import { buildApp } from '../src/app.js';
 import type { RivalHubConnection } from '../src/match-context/rivalhub-connection.js';
 import { ReliableOutbox } from '../src/output/reliable-outbox.js';
-import { closeWebsiteOutput } from '../src/output/shutdown.js';
+import { closeWebsiteOutput } from '../src/output/website-lifecycle.js';
 import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { registerProductionReadiness } from '../src/program-scenes/readiness.js';
