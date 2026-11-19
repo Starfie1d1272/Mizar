@@ -647,7 +647,7 @@ for (const operation of ['switch', 'backoff', 'exit'] as const) {
     if (operation === 'exit') {
       const source = h.connection.reliableExactSource();
       assert.ok(source);
-      h.setReliable(503);
+      h.setReliable(502);
       await assert.rejects(h.connection.handoffForExit(), /source_capture_unconfirmed/);
       assert.equal(h.releases.length, 0);
       allowSeal = true;
@@ -663,6 +663,20 @@ for (const operation of ['switch', 'backoff', 'exit'] as const) {
         outbox.getRecords().find(({ event }) => event.idempotencyKey === tail.idempotencyKey)
           ?.status,
         'pending',
+      );
+      await output.retry();
+      const attempted = outbox
+        .getRecords()
+        .find(({ event }) => event.idempotencyKey === tail.idempotencyKey);
+      assert.equal(attempted?.status, 'pending');
+      assert.ok(attempted && attempted.attempts >= 1);
+      h.setReliable(204);
+      now = new Date(Date.parse(attempted.nextAttemptAt) + 1);
+      await output.retry();
+      assert.equal(
+        outbox.getRecords().find(({ event }) => event.idempotencyKey === tail.idempotencyKey)
+          ?.status,
+        'accepted',
       );
       return;
     }
