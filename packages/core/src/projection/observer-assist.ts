@@ -38,10 +38,12 @@ export type ObserverProgramView = Pick<ProgramProjection, 'cursor' | 'status'> &
   >[];
 };
 interface BufferedKill {
+  id: string;
   event: PlayerDeathGameEvent;
   sourceMs: number;
   retired: boolean;
   enteredWindow: boolean;
+  published: boolean;
   shownDueMs: number | null;
 }
 /** A next-map kill held outside the single scheduling buffer until Program confirms its execution. */
@@ -100,6 +102,7 @@ export class ObserverHintTimeline {
   private acceptedDeaths = 0;
   private enteredWindow = 0;
   private generatedHints = 0;
+  private publishedHints = 0;
   private compensatedDeaths = 0;
   private endedAfterGeneration: Record<string, number> = {};
   private lastReceivedMs: number | null = null;
@@ -129,6 +132,7 @@ export class ObserverHintTimeline {
       acceptedDeaths: this.acceptedDeaths,
       enteredWindow: this.enteredWindow,
       generatedHints: this.generatedHints,
+      publishedHints: this.publishedHints,
       timingBasis: {
         localResidence: this.compensatedDeaths,
         receipt: this.acceptedDeaths - this.compensatedDeaths,
@@ -145,6 +149,14 @@ export class ObserverHintTimeline {
       lastReset: { ...this.lastReset },
       blocked: this.blocked,
     };
+  }
+  recordPublished(hints: readonly ObserverHint[]) {
+    for (const hint of hints) {
+      const kill = this.kills.find(({ id }) => id === hint.id);
+      if (!kill || kill.published) continue;
+      kill.published = true;
+      this.publishedHints++;
+    }
   }
   private discard(reason: string) {
     this.discarded[reason] = (this.discarded[reason] ?? 0) + 1;
@@ -204,10 +216,12 @@ export class ObserverHintTimeline {
     this.acceptedDeaths++;
     if (event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
     this.kills.push({
+      id: `${event.cursor.generation}:${event.cursor.sequence}`,
       event,
       sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
       retired: false,
       enteredWindow: false,
+      published: false,
       shownDueMs: null,
     });
     if (this.kills.length > 4096) {
@@ -354,7 +368,14 @@ export class ObserverHintTimeline {
       this.acceptedDeaths++;
       this.stagedReleased++;
       if (kill.event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
-      this.kills.push({ ...kill, retired: false, enteredWindow: false, shownDueMs: null });
+      this.kills.push({
+        ...kill,
+        id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
+        retired: false,
+        enteredWindow: false,
+        published: false,
+        shownDueMs: null,
+      });
     }
     this.staged = null;
   }
@@ -608,7 +629,7 @@ export class ObserverHintTimeline {
       if (kill.shownDueMs === null) this.generatedHints++;
       kill.shownDueMs = due;
       hints.push({
-        id: `${kill.event.cursor.generation}:${kill.event.cursor.sequence}`,
+        id: kill.id,
         remainingSeconds: Math.max(0, (due - now) / 1000),
         attacker: ref(attacker),
         victim: ref(victim),
