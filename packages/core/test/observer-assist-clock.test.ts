@@ -60,6 +60,20 @@ function death(generation: number, sequence: number, now: number): PlayerDeathGa
 }
 const early = { connected: true, fresh: true, sameMap: true, generation: 1 };
 
+it('finishes the verified map tail after normal drain and fences a new map execution', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  timeline.consume(death(1, 1, 1000));
+  const ended = { ...early, connected: false, fresh: false, normalDrain: true };
+  expect(timeline.project(program(116000), settings, 116000, ended, 1).observer).toMatchObject({
+    waitingReason: 'normal-drain',
+    hints: [{ id: '1:1', remainingSeconds: 5 }],
+  });
+  expect(timeline.project(program(117000, 2), settings, 117000, ended, 1).observer?.hints).toEqual(
+    [],
+  );
+});
+
 it('schedules from receive time and preserves the due time of a shown event', () => {
   const timeline = new ObserverHintTimeline();
   const project = (now: number, delaySeconds = 120) =>

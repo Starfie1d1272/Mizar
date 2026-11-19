@@ -622,6 +622,8 @@ export function startObserverProcess<R extends GameEventSourceRole>(
       inputFailed ||
       startupTimedOut ||
       (code !== 0 && code !== 2);
+    if (manager.getHealth().normalDrain && (failed || terminal.reason !== 'source-hltv-stop'))
+      manager.disconnectObserver('failed');
     return {
       terminal,
       failed,

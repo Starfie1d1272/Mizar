@@ -113,9 +113,10 @@ export class WorkspaceObserver {
     };
   }
   private health() {
-    const health = this.current.getHealth();
+    const { normalDrain, ...health } = this.current.getHealth();
     return {
       ...health,
+      ...(normalDrain ? (this.stopReason ? { state: 'stopped' as const } : { normalDrain }) : {}),
       generation: health.generation + this.generationBase,
     };
   }
@@ -253,7 +254,7 @@ export class WorkspaceObserver {
       void owner.closed
         .then(async (result) => {
           await this.serialize(async () => {
-            if (this.owner === owner) await this.stopCurrent();
+            if (this.owner === owner) await this.stopCurrent(result);
           });
           // Only an abnormal relay exit can replace the process. Terminal
           // reports (including exhausted connection backoff) belong to v2.
@@ -294,15 +295,18 @@ export class WorkspaceObserver {
     if (this.owner) this.ownerStopReason ??= reason;
     return this.serialize(() => this.stopCurrent());
   }
-  private async stopCurrent() {
+  private async stopCurrent(completed?: Awaited<Owner['closed']>) {
     const owner = this.owner;
     if (!owner) {
       if (!this.launched) await this.current.stop();
+      this.listeners.forEach((f) => f());
       return;
     }
-    const stopped = await owner.stop();
-    if (!stopped.exited) throw new Error('observer_process_stop_timeout');
-    const result = await owner.closed;
+    if (!completed) {
+      const stopped = await owner.stop();
+      if (!stopped.exited) throw new Error('observer_process_stop_timeout');
+    }
+    const result = completed ?? (await owner.closed);
     this.terminal = result.terminal;
     this.failed = result.failed;
     this.owner = undefined;

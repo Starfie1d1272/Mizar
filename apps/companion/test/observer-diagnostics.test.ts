@@ -108,8 +108,16 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(14, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);
   assert.equal(manager.getRecentGameEvents().at(-1)?.cursor.sourceArrivalMonotonicMs, undefined);
+  const live = manager.getHealth();
+  write(15, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
+  write(16, fixture, 2);
+  manager.disconnectObserver('ended');
+  assert.equal(manager.getHealth().normalDrain, true);
+  assert.equal(manager.getHealth().generation, live.generation);
+  assert.deepEqual(seen, [4, 8, 14]);
   await manager.stop();
-  write(15, fixture, 2);
+  assert.equal(manager.getHealth().normalDrain, undefined);
+  write(17, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);
 });
 

@@ -24,6 +24,7 @@ export function ObserverHints() {
   const client = useLocalChannelClient('assist');
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const observer = state.state === 'live' ? state.current?.payload.observer : undefined;
+  const draining = observer?.waitingReason === 'normal-drain';
   const awaitingTooLong = Boolean(
     configuration?.settings.enabled &&
     configuration.mapConnection &&
@@ -57,8 +58,21 @@ export function ObserverHints() {
   const pending = enabled && runtime?.pending;
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
+  const waitingNextMap =
+    observer?.waitingReason === 'waiting-next-map' ||
+    runtime?.terminal?.reason === 'source-hltv-stop';
   if (!enabled || !configuration?.connection || !configuration.mapConnection) return null;
-  if (runtime && !runtime.active && !pending && !paused && !needsRecovery && !error) return null;
+  if (
+    runtime &&
+    !runtime.active &&
+    !pending &&
+    !paused &&
+    !needsRecovery &&
+    !error &&
+    !draining &&
+    !waitingNextMap
+  )
+    return null;
   return (
     <section className="workspace-observer-assist" aria-label="私有提前提示">
       {awaitingTooLong && !needsRecovery && !reconnecting ? (
@@ -145,6 +159,10 @@ export function ObserverHints() {
             </Button>
           ) : null}
         </>
+      ) : draining || waitingNextMap ? (
+        <StatusPill tone="info">
+          {draining ? '继续显示本图提前提示' : '等待下一图的 GoTV 连接'}
+        </StatusPill>
       ) : reconnecting || connecting || !observer || observer.state !== 'ready' ? (
         <StatusPill tone="info">
           {reconnecting

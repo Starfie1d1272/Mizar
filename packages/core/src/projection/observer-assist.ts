@@ -55,6 +55,7 @@ export class ObserverHintTimeline {
     conflicted: boolean;
   } | null = null;
   private context = '';
+  private lastReadyScope: string | undefined;
   private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
   private lastDeathSequence = -1;
@@ -86,6 +87,7 @@ export class ObserverHintTimeline {
     lastReceiveMonotonicMs?: number | null;
     receiveAgeMs?: number | null;
     sameMap?: boolean;
+    normalDrain?: boolean;
     mapName?: string;
     state?: string;
     lastErrorCode?: string;
@@ -138,6 +140,7 @@ export class ObserverHintTimeline {
 
   clear() {
     this.kills = [];
+    this.lastReadyScope = undefined;
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
     this.sourceExecutionChanged = false;
@@ -233,6 +236,7 @@ export class ObserverHintTimeline {
       mapEpoch: program.cursor.mapEpoch,
       receiveSequence: program.cursor.programReceiveSequence,
     };
+    if (this.sourceHealth.normalDrain && !source.normalDrain) this.reset('drain-ended', now);
     this.sourceHealth = { ...source };
     const empty = (
       state: NonNullable<ObserverAssistProjection['observer']>['state'],
@@ -307,12 +311,20 @@ export class ObserverHintTimeline {
       return empty('unavailable');
     }
     if (source.sameMap === true) this.observeExecution(sourceExecution, source.generation);
-    if (!source.connected) {
+    const scope = JSON.stringify([
+      context,
+      program.cursor.programSourceGeneration,
+      source.generation,
+      sourceExecution,
+    ]);
+    const draining =
+      source.normalDrain === true && source.sameMap === true && this.lastReadyScope === scope;
+    if (!source.connected && !draining) {
       this.blocked = 'source-disconnected';
       return empty('connecting');
     }
     if (
-      !source.fresh ||
+      (!source.fresh && !draining) ||
       source.sameMap === false ||
       program.status.telemetry !== 'fresh' ||
       program.coverage.allPlayers !== 'present' ||
@@ -320,15 +332,16 @@ export class ObserverHintTimeline {
       !program.match ||
       program.status.identity === 'mismatch'
     ) {
-      this.blocked = !source.fresh
-        ? 'source-stale'
-        : source.sameMap === false
-          ? 'source-map-mismatch'
-          : program.status.telemetry !== 'fresh'
-            ? 'program-stale'
-            : !program.map.name
-              ? 'map-missing'
-              : 'identity-unavailable';
+      this.blocked =
+        !source.fresh && !draining
+          ? 'source-stale'
+          : source.sameMap === false
+            ? 'source-map-mismatch'
+            : program.status.telemetry !== 'fresh'
+              ? 'program-stale'
+              : !program.map.name
+                ? 'map-missing'
+                : 'identity-unavailable';
       if (source.sameMap === false && source.mapName) {
         if (this.pendingMap?.name !== source.mapName) {
           this.pendingMap = {
@@ -359,6 +372,13 @@ export class ObserverHintTimeline {
       this.blocked = 'source-execution-ahead';
       return empty('unavailable');
     }
+    if (
+      source.connected &&
+      source.fresh &&
+      source.sameMap === true &&
+      sourceExecution !== undefined
+    )
+      this.lastReadyScope = scope;
     const paused = ['paused', 'timeout_ct', 'timeout_t'].includes(program.clock?.phase ?? '');
     const leadMs = settings.leadSeconds * 1000;
     const ref = (player: ObserverProgramView['players'][number]) => ({
@@ -375,7 +395,7 @@ export class ObserverHintTimeline {
     const hints: ObserverHint[] = [];
     for (const kill of this.kills) {
       const due = kill.shownDueMs ?? kill.sourceMs + delayMs;
-      const window = Math.max(kill.sourceMs, due - leadMs);
+      const window = Math.max(kill.event.cursor.observedMonotonicMs, due - leadMs);
       if (kill.event.cursor.mapName !== program.map.name) {
         this.finish(kill, 'map-mismatch');
         continue;
@@ -422,14 +442,23 @@ export class ObserverHintTimeline {
       this.blocked = 'program-paused';
       return empty('paused');
     }
+    if (draining && this.nextDueMs === null && !this.kills.some((kill) => !kill.retired)) {
+      this.blocked = 'waiting-next-map';
+      return empty('connecting');
+    }
     return {
       cursor: program.cursor,
       availability: 'available',
       observer: {
         ...settings,
         state: 'ready',
-        waitingReason:
-          this.nextDueMs === null ? 'waiting-event' : hints.length ? null : 'buffering',
+        waitingReason: draining
+          ? 'normal-drain'
+          : this.nextDueMs === null
+            ? 'waiting-event'
+            : hints.length
+              ? null
+              : 'buffering',
         nextWindowSeconds:
           this.nextWindowMs === null ? null : Math.max(0, (this.nextWindowMs - now) / 1000),
         hints,

@@ -603,6 +603,7 @@ export class ProjectionCoordinator {
       {
         connected: health.state === 'live',
         state: health.state,
+        ...(health.normalDrain ? { normalDrain: true } : {}),
         ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
         generation: health.generation,
         sameMap: sourceMapName !== undefined && sourceMapName === program.map.name,
