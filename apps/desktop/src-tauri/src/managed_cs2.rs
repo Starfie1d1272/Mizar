@@ -1710,6 +1710,23 @@ impl ManagedCs2 {
         require_playback_cleanup: bool,
     ) -> Result<(), String> {
         let result = self.recover(confirm_steam_cancelled).and_then(|_| {
+            // One recovery action shares the Steam writeback wait. Each write
+            // still rechecks that no CS2 process has appeared since that wait.
+            let mut waited_for_writeback = false;
+            let log = &self.log;
+            let mut require_quiet_game = |message: &str| -> Result<(), String> {
+                if any_cs2_running(log)? {
+                    return Err(message.into());
+                }
+                if !waited_for_writeback {
+                    thread::sleep(Duration::from_millis(1500));
+                    if any_cs2_running(log)? {
+                        return Err(message.into());
+                    }
+                    waited_for_writeback = true;
+                }
+                Ok(())
+            };
             if self.store.load()?.is_none() && self.store.spectator_pending() {
                 if self.store.mulnx_observer_unconfirmed()? {
                     if !confirm_steam_cancelled {
@@ -1722,19 +1739,11 @@ impl ManagedCs2 {
                         return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
                     }
                 }
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再恢复观战原值。".into());
-                }
-                thread::sleep(Duration::from_millis(1500));
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再恢复观战原值。".into());
-                }
-                if self.store.mulnx_observer_target()?.is_some()
-                    && !process_pids("CS2Injector.exe", &self.log)?.is_empty()
-                {
-                    return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
-                }
+                require_quiet_game("请先退出 CS2 再恢复观战原值。")?;
                 if let Some((video, executable, account)) = self.store.mulnx_observer_target()? {
+                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                        return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
+                    }
                     let (current_exe, current_video, current_account) = self.recovery_identity()?;
                     let saved_video = fs::canonicalize(&video)
                         .map_err(|e| crate::cs2_session::io_error("观战恢复目标无法确认。", &e))?;
@@ -1774,13 +1783,7 @@ impl ManagedCs2 {
                 self.message = Some("观战原值已恢复。".into());
             }
             if self.store.load()?.is_none() && self.store.full_spectator_pending() {
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再恢复观战原值。".into());
-                }
-                thread::sleep(Duration::from_millis(1500));
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再恢复观战原值。".into());
-                }
+                require_quiet_game("请先退出 CS2 再恢复观战原值。")?;
                 let (executable, video, account) = self.recovery_identity()?;
                 if any_cs2_running(&self.log)? {
                     return Err("请先退出 CS2 再恢复观战原值。".into());
@@ -1795,13 +1798,7 @@ impl ManagedCs2 {
                 self.message = Some("本地观战原值已恢复。".into());
             }
             if self.store.load()?.is_none() && self.store.playback_cleanup_pending() {
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再清理试播文件。".into());
-                }
-                thread::sleep(Duration::from_millis(1500));
-                if any_cs2_running(&self.log)? {
-                    return Err("请先退出 CS2 再清理试播文件。".into());
-                }
+                require_quiet_game("请先退出 CS2 再清理试播文件。")?;
                 match self.store.restore_playback_cleanup() {
                     Ok(()) => self.message = Some("原设置已恢复，试播文件已清理。".into()),
                     Err(error) => {
