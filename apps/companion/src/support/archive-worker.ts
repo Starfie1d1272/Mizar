@@ -55,12 +55,11 @@ export function runArchiveWorker(
     part = 0;
   let digest = createHash('sha256');
   type Entry = { name: string; bytes: number; sha256: string };
-  let entries: Entry[] = [];
   const parts: Entry[] = [],
     gaps = [...d.gaps];
   const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
   const coverageFiles: { partIndex: number; name: string }[] = [];
-  // Keep space for the entry index and other final metadata even with a large inventory.
+  // Keep the inline coverage summary within the final metadata budget.
   const inlineCoverageLimit = ENTRY_MAX / 4;
   function inlineCoverage() {
     return Buffer.byteLength(JSON.stringify([gaps, excludedSources])) <= inlineCoverageLimit;
@@ -135,7 +134,6 @@ export function runArchiveWorker(
     });
     stages.encodeMs += performance.now() - start;
     expandedBytes += data.length;
-    entries.push({ name, bytes: data.length, sha256: hash(data) });
     sample();
   }
   function begin() {
@@ -143,7 +141,6 @@ export function runArchiveWorker(
     part++;
     bytes = 0;
     expandedBytes = 0;
-    entries = [];
     digest = createHash('sha256');
     fd = output(() => fs.openSync(d.output + '/part-' + part + '.zip.partial', 'wx', 0o600));
     zip = new Zip((error, data) =>
@@ -237,7 +234,7 @@ export function runArchiveWorker(
       'coverage.json',
       Buffer.from(
         JSON.stringify({
-          schema: 'mizar-support-coverage/2',
+          schema: 'mizar-support-coverage/3',
           retainedRecords,
           carrierRecords,
           aggregatedOccurrences,
@@ -257,7 +254,6 @@ export function runArchiveWorker(
             excludedSources:
               'Outside the current schema or declared collection scope; producer-declared-post-cutoff-segment identifies a writer-owned successor after the pinned boundary. Not counted as current evidence; originals remain at their source.',
           },
-          entries,
           scope: final ? 'final cumulative coverage' : 'cumulative through this part',
         }),
       ),

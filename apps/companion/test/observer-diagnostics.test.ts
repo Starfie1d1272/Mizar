@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, open, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
@@ -64,6 +65,8 @@ test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed s
   assert.equal(result?.knownGaps, gaps.length);
   const zip = unzipSync(await readFile(join(output, 'part-1.zip')));
   const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  assert.equal(coverage.schema, 'mizar-support-coverage/3');
+  assert.ok(!Object.hasOwn(coverage, 'entries'));
   assert.equal(coverage.gapCount, gaps.length);
   const details = coverage.coverageFiles.flatMap(({ name }: { name: string }) =>
     Buffer.from(zip[name]!)
@@ -107,6 +110,25 @@ test('manual ZIP retains both copies of an event without a temporary identity in
   );
   assert.equal(JSON.parse(Buffer.from(zip['coverage.json']!).toString()).retainedRecords, 2);
   assert(!zip['indexes/carriers.json']);
+  const reader = fileURLToPath(
+    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+  );
+  const readTimeline = (name: string) =>
+    execFileSync(process.execPath, [reader, join(output, name)], { stdio: 'pipe' });
+  const current = readTimeline('part-1.zip');
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  const entries = Object.entries(zip)
+    .filter(([entry]) => entry !== 'coverage.json')
+    .map(([name, bytes]) => ({
+      name,
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }));
+  zip['coverage.json'] = Buffer.from(
+    JSON.stringify({ ...coverage, schema: 'mizar-support-coverage/2', entries }),
+  );
+  await writeFile(join(output, 'legacy.zip'), zipSync(zip));
+  assert.deepEqual(readTimeline('legacy.zip'), current);
 });
 
 test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {
