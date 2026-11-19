@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { readdir, lstat } from 'node:fs/promises';
 /** Immutable segment names are never recycled. Previous-format sources are outside the current pipeline and remain untouched. */
 export const diagnosticSegmentPattern = /^(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson$/;
+export const performanceSegmentPattern = /^([a-f0-9-]{36})\.([a-f0-9]{4}|[a-f0-9]{8})\.gz$/;
 export async function diagnosticSegmentNames(directory: string): Promise<string[]> {
   const entries = await Promise.all(
     (await readdir(directory))

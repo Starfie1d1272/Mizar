@@ -3,10 +3,14 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicJson, safePath } from '../resource-store/files.js';
+import { diagnosticSegmentPattern, performanceSegmentPattern } from './segments.js';
 
 const UUID = /^[a-f0-9-]{36}$/;
-const immutableName =
-  /^(?:(?:session|desktop|document)-[a-f0-9-]{36}\.ndjson|performance-pending\/[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz)$/;
+const performancePrefix = 'performance-pending/';
+const immutableName = (name: string) =>
+  diagnosticSegmentPattern.test(name) ||
+  (name.startsWith(performancePrefix) &&
+    performanceSegmentPattern.test(name.slice(performancePrefix.length)));
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 const META_LIMIT = 4 * 1024 * 1024;
 export interface SegmentMetadata {
@@ -66,7 +70,7 @@ async function describe(
   root: string,
   name: string,
 ): Promise<Pick<RetainedSegment, 'physicalId' | 'bytes' | 'sha256'>> {
-  if (!immutableName.test(name)) throw new Error('retention_source_not_immutable');
+  if (!immutableName(name)) throw new Error('retention_source_not_immutable');
   const path = await safePath(root, name);
   const before = await lstat(path);
   if (!before.isFile() || before.nlink !== 1) throw new Error('retention_source_unsafe');
@@ -153,7 +157,7 @@ export class ProducerRetention {
         !Array.isArray(stored.deleting) ||
         stored.segments.some(
           (value) =>
-            !immutableName.test(value.name) ||
+            !immutableName(value.name) ||
             !Number.isSafeInteger(value.bytes) ||
             value.bytes < 0 ||
             !/^[a-f0-9]{64}$/.test(value.sha256),
@@ -758,7 +762,7 @@ export async function readHostPin(
     if (
       !value ||
       typeof value.name !== 'string' ||
-      !immutableName.test(value.name) ||
+      !immutableName(value.name) ||
       !/^(desktop|document)-/.test(value.name) ||
       fixedNames.has(value.name) ||
       !Number.isSafeInteger(value.bytes) ||
@@ -808,7 +812,7 @@ export async function readHostPin(
         successors.some(
           (name) =>
             typeof name !== 'string' ||
-            !immutableName.test(name) ||
+            !immutableName(name) ||
             !/^(desktop|document)-/.test(name) ||
             fixedNames.has(name),
         ))
@@ -821,7 +825,7 @@ export async function readHostPin(
         emptySegments.some(
           (name) =>
             typeof name !== 'string' ||
-            !immutableName.test(name) ||
+            !immutableName(name) ||
             !/^(desktop|document)-/.test(name) ||
             successors?.includes(name) ||
             fixedNames.has(name),
@@ -840,7 +844,7 @@ export async function readHostPin(
         if (
           !entry ||
           typeof entry.name !== 'string' ||
-          !immutableName.test(entry.name) ||
+          !immutableName(entry.name) ||
           !/^(desktop|document)-/.test(entry.name) ||
           known.has(entry.name) ||
           ![
