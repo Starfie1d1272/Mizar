@@ -1261,8 +1261,7 @@ export class DiagnosticDelivery {
     ) {
       this.collectionScheduled = true;
       void this.transaction(async () => {
-        await this.persist();
-        this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
+        if (await this.persist()) this.nextCollectionAt = this.now() + DELIVERY_LIMITS.collectMs;
       })
         .catch(() => {
           this.error = 'queue_write_unconfirmed';
@@ -1272,8 +1271,22 @@ export class DiagnosticDelivery {
         });
     }
   }
+  private nextUpload(): Batch | undefined {
+    return this.state.queue.find(
+      (batch) =>
+        !batch.serverExpired && !batch.acknowledgedAt && batch.index.eventSchemaVersion === 2,
+    );
+  }
+  private waitForTransportRecovery(): boolean {
+    if (this.requestedPause || this.state.consecutiveFailures === 0 || !this.nextUpload())
+      return false;
+    this.recoveryNeeded = true;
+    // The next normal pump after a confirmed recovery collects the retained tail.
+    this.nextCollectionAt = Math.min(this.nextCollectionAt, this.now());
+    return true;
+  }
   private async recover(flush = true) {
-    if (!this.consentActive() || this.closed) return;
+    if (!this.consentActive() || this.closed || this.waitForTransportRecovery()) return;
     // A live commit must not overtake an older record in the disk snapshot.
     // Keep live notifications behind recovery until a complete scan is stable.
     this.recoveryNeeded = true;
@@ -1412,6 +1425,7 @@ export class DiagnosticDelivery {
   }
   private async persist(): Promise<boolean> {
     if (!this.consentActive()) return false;
+    if (!this.closed && this.waitForTransportRecovery()) return false;
     const epoch = this.epoch;
     // Freeze a contiguous carrier prefix. Group its events for transport, then
     // commit every resulting file and its source cursors in one manifest write.
@@ -2035,6 +2049,7 @@ export class DiagnosticDelivery {
       await this.collectAcknowledged();
       await this.transaction(async () => {
         await this.renewExpiredInstallation();
+        if (this.waitForTransportRecovery()) return;
         const collecting = forceCollection || this.now() >= this.nextCollectionAt;
         if (collecting) {
           await this.recover();
@@ -2186,10 +2201,7 @@ export class DiagnosticDelivery {
         }
         if (recovered && !this.error?.includes('budget')) this.error = null;
       });
-      const selectedBatch = this.state.queue.find(
-        (value) =>
-          !value.serverExpired && !value.acknowledgedAt && value.index.eventSchemaVersion === 2,
-      );
+      const selectedBatch = this.nextUpload();
       if (!selectedBatch) return;
       let batch: Batch = selectedBatch;
       let bytes = await secureRead(
