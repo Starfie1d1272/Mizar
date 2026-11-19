@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { gzipSync } from 'node:zlib';
 import { unzipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
@@ -259,7 +260,7 @@ test('component failure survives local journal and actual support ZIP without cr
       cleanupCompleted: true,
     }),
   );
-  const exports = new SupportExports(logs, () => [journal.exportParticipant()]);
+  const exports = new SupportExports(logs);
   const job = await exports.begin({}, {});
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
@@ -343,7 +344,7 @@ test('pre-report and protocol failures survive the real export; overflow retains
     const { terminal } = await owner.closed;
     await journal.recordCommitted('observer_attempt_terminal', terminal);
   }
-  const exports = new SupportExports(logs, () => [journal.exportParticipant()]);
+  const exports = new SupportExports(logs);
   const job = await exports.begin({}, {});
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
@@ -477,20 +478,19 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
   const journal = new SessionJournal(logs);
   t.after(() => journal.close());
   await journal.recordCommitted('before_cutoff', { recorded: true });
-  const participant = journal.exportParticipant();
-  let missing: string | undefined;
-  const exports = new SupportExports(logs, () => [
-    {
-      ...participant,
-      async commit(pinId) {
-        const receipt = await participant.commit(pinId);
-        missing = receipt.segments[0]?.name;
-        assert.ok(missing);
-        await rm(join(logs, missing));
-        return receipt;
-      },
-    },
-  ]);
+  const performance = join(logs, 'performance-pending');
+  await mkdir(performance);
+  const segment = join(performance, `${randomUUID()}.00000001.gz`);
+  const compressed = gzipSync(
+    JSON.stringify([{ schema: 'mizar-diagnostic-event/2', kind: 'unpinned_performance' }]),
+  );
+  await writeFile(segment, compressed);
+  const missing = `session-${randomUUID()}.ndjson`;
+  const exports = new SupportExports(logs, async () => ({
+    sessionSegments: [missing],
+    session: { pendingRecords: 0 },
+    performance: null,
+  }));
   const job = await exports.begin({}, {}, pinId);
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
@@ -504,6 +504,9 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     .map(([, bytes]) => Buffer.from(bytes).toString())
     .join('');
   assert.match(events, /safely-fixed-host-event/);
+  assert.match(events, /before_cutoff/);
+  assert.match(events, /unpinned_performance/);
+  assert.deepEqual(await readFile(segment), compressed);
   assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original|unverified-by-host/);
   const generated = JSON.parse(
     await readFile(join(exports.directory, job.exportId, 'generated.json'), 'utf8'),

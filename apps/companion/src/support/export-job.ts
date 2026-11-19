@@ -1,10 +1,5 @@
 import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
-import {
-  readHostPin,
-  type IncidentParticipant,
-  type PinReceipt,
-  type RetainedSegment,
-} from './retention.js';
+import { readHostPin, type PinReceipt, type RetainedSegment } from './retention.js';
 import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants, lstatSync, unlinkSync, utimesSync, type Stats } from 'node:fs';
 import { mkdir, open, lstat, readdir, rm, rmdir, type FileHandle } from 'node:fs/promises';
@@ -93,6 +88,11 @@ export interface ExportJob {
   downloadName?: string;
   cleanupStatus?: 'unconfirmed';
 }
+export interface LocalExportEvidence {
+  sessionSegments: readonly string[];
+  session: { pendingRecords: number } | null;
+  performance: { pendingRecords: number } | null;
+}
 /** One bounded build. HTTP carries only status and trusted binary attachment routes. */
 export class SupportExports {
   private readonly jobs = new Map<string, ExportJob>();
@@ -101,7 +101,7 @@ export class SupportExports {
   readonly directory: string;
   constructor(
     private readonly logs: string,
-    private readonly participants: () => IncidentParticipant[] = () => [],
+    private readonly flushLocalEvidence?: () => Promise<LocalExportEvidence>,
     private readonly onDiagnostic?: (
       error: unknown,
       exportId: string,
@@ -252,9 +252,6 @@ export class SupportExports {
   ) {
     const collectionStarted = performance.now();
     const handles: FileHandle[] = [];
-    const participants = this.participants();
-    const receipts: PinReceipt[] = [];
-    const fixedByName = new Map<string, RetainedSegment>();
     let hostPin: Awaited<ReturnType<typeof readHostPin>> | null = null;
     const sources: {
       name: string;
@@ -322,7 +319,7 @@ export class SupportExports {
         const actual = await handle.stat();
         if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
           throw new Error('source_changed');
-        const expected = fixedByName.get(prefix + name);
+        const expected = hostSegments.get(prefix + name);
         if (expected) {
           if (expected.physicalId !== `${actual.dev}:${actual.ino}:${expected.sha256}`)
             throw new Error('pin_source_identity_changed');
@@ -359,25 +356,19 @@ export class SupportExports {
     let failed = false;
     let primaryError: unknown;
     const cleanupFailures: unknown[] = [];
+    const hostSegments = new Map<string, RetainedSegment>();
     try {
-      for (const participant of participants) {
-        this.assertActive(job);
-        let phase = 'prepare';
-        try {
-          const prepared = await participant.prepare(job.exportId);
-          phase = 'commit';
-          const committed = await participant.commit(job.exportId);
-          if (
-            committed.pinId !== job.exportId ||
-            committed.producerId !== participant.producerId ||
-            committed.kind !== 'export' ||
-            committed.status !== 'committed' ||
-            JSON.stringify(committed.segments) !== JSON.stringify(prepared.segments)
-          )
-            throw new Error('export_pin_receipt_invalid');
-          receipts.push({ ...committed, sourceState: prepared.sourceState });
-        } catch (error) {
-          gap(participant.producerId, phase, error);
+      const local = await this.flushLocalEvidence?.().catch((error: unknown) => {
+        gap('companion', 'flush', error);
+        return undefined;
+      });
+      this.assertActive(job);
+      for (const [source, health] of [
+        ['companion', local?.session],
+        ['performance', local?.performance],
+      ] as const) {
+        if (health && health.pendingRecords > 0) {
+          gaps.push({ source, phase: 'flush', reason: 'not_durably_committed', cause: health });
         }
       }
       if (hostPinCoverage && (hostPinCoverage.status !== 'committed' || !hostPinId))
@@ -424,17 +415,12 @@ export class SupportExports {
           gap('host', 'pin', error);
         }
       }
-      const companionPin = receipts.find((receipt) => receipt.producerId === 'companion');
-      const performancePin = receipts.find((receipt) => receipt.producerId === 'performance');
-      for (const receipt of [...receipts, ...(hostPin ? [hostPin] : [])])
-        for (const segment of receipt.segments)
-          if (!fixedByName.has(segment.name)) fixedByName.set(segment.name, segment);
+      for (const segment of hostPin?.segments ?? []) hostSegments.set(segment.name, segment);
       const emptyHostSegments = new Set(
         (hostPin?.sourceState as { emptyAtCutoffSegments?: string[] } | undefined)
           ?.emptyAtCutoffSegments,
       );
-      const pinnedPerformance = new Set(performancePin?.segments.map(({ name }) => name));
-      const successor = (receipt: PinReceipt | null | undefined, name: string): boolean => {
+      const successor = (receipt: PinReceipt | null, name: string): boolean => {
         if (!receipt || receipt.status !== 'committed') return false;
         const state = receipt.sourceState as { postCutoffSegments?: unknown } | undefined;
         const names = state?.postCutoffSegments;
@@ -450,7 +436,7 @@ export class SupportExports {
       try {
         await safePath(this.logs);
         const fixedLogs = new Set(
-          [...(companionPin?.segments ?? []), ...(hostPin?.segments ?? [])]
+          (hostPin?.segments ?? [])
             .map((segment) => segment.name)
             .filter((name) => diagnosticSegmentPattern.test(name)),
         );
@@ -460,13 +446,15 @@ export class SupportExports {
           this.assertActive(job);
           await capture(this.logs, name);
         }
-        const names = (await readdir(this.logs)).sort();
+        const names = [
+          ...new Set([...(await readdir(this.logs)), ...(local?.sessionSegments ?? [])]),
+        ].sort();
         for (const name of names) {
           this.assertActive(job);
           if (diagnosticSegmentPattern.test(name)) {
-            const pin = name.startsWith('session-') ? companionPin : hostPin;
             if (fixedLogs.has(name) || failedHostSegments.has(name)) continue;
-            if (successor(pin, name))
+            if (name.startsWith('session-')) await capture(this.logs, name);
+            else if (successor(hostPin, name))
               excludedSources.push({
                 source: name,
                 reason: 'producer-declared-post-cutoff-segment',
@@ -498,10 +486,7 @@ export class SupportExports {
           const directory = await safePath(join(this.logs, folder));
           for (const name of (await readdir(directory)).sort()) {
             if (!pattern.test(name)) continue;
-            if (folder === 'performance-pending' && !pinnedPerformance.has(folder + '/' + name)) {
-              gap(folder + '/' + name, 'pin', new Error('source_not_safely_fixed'));
-              continue;
-            }
+            this.assertActive(job);
             await capture(directory, name, folder + '/');
           }
         } catch (error) {
@@ -566,7 +551,7 @@ export class SupportExports {
       const vector = {
         asOf,
         atomic: false,
-        producerPins: receipts,
+        producers: { companion: local?.session ?? null, performance: local?.performance ?? null },
         documentHandoff: {
           clientReported: true,
           coverage: documentHandoff ?? null,
@@ -699,29 +684,10 @@ export class SupportExports {
       const closed = await Promise.allSettled(
         handles.map((handle) => Promise.resolve().then(() => handle.close())),
       );
-      const released = await Promise.allSettled(
-        participants.map((participant) =>
-          Promise.resolve().then(() => participant.release(job.exportId)),
-        ),
-      );
       cleanupFailures.push(
         ...closed.flatMap((result) =>
           result.status === 'rejected'
             ? [new Error('export_input_close_failed', { cause: result.reason })]
-            : [],
-        ),
-        ...released.flatMap((result, index) =>
-          result.status === 'rejected'
-            ? [
-                Object.assign(
-                  new Error('export_participant_release_failed', {
-                    cause: result.reason,
-                  }),
-                  {
-                    producerId: participants[index]!.producerId,
-                  },
-                ),
-              ]
             : [],
         ),
       );

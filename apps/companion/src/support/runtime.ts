@@ -121,13 +121,36 @@ export function registerSupportRuntime(
     ...(options.product === undefined ? {} : { artifact: options.product }),
     observer: () => options.workspaceObserver?.view() ?? null,
     runtimeSummary,
-    exportParticipants: () => {
-      // Enqueue completed observations before the journal freezes its export watermark.
+    flushLocalExportEvidence: async () => {
       flushOperationDiagnostics();
-      return [
-        ...(sessionJournal ? [sessionJournal.exportParticipant()] : []),
-        ...(performanceContext ? [performanceContext.exportParticipant()] : []),
-      ];
+      await performanceContext?.flush();
+      await sessionJournal?.flush();
+      const journal = sessionJournal?.health();
+      const performance = performanceContext?.health() ?? null;
+      if (!journal) return { sessionSegments: [], session: null, performance };
+      const { retention, ...session } = journal;
+      const { segments, ...rotation } = retention;
+      return {
+        sessionSegments: segments.segments.map(({ name }) => name),
+        session: {
+          ...session,
+          retention: {
+            ...rotation,
+            removed: segments.removed,
+            removedSegments: segments.removedSegments?.map(
+              ({ name, firstObservedAt, lastObservedAt, records, removedAt, reason }) => ({
+                name,
+                firstObservedAt,
+                lastObservedAt,
+                records,
+                removedAt,
+                reason,
+              }),
+            ),
+          },
+        },
+        performance,
+      };
     },
     diagnosticDelivery: () => diagnosticDelivery.snapshotStatus(),
     businessLogStatus: () => options.businessJournal?.getStatus() ?? 'not_configured',

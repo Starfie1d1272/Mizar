@@ -1,6 +1,5 @@
 import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
-import type { IncidentParticipant } from './retention.js';
-import { SupportExports } from './export-job.js';
+import { SupportExports, type LocalExportEvidence } from './export-job.js';
 import { diagnosticValue } from './session-journal.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { registerDiagnosticDelivery } from './delivery-routes.js';
@@ -190,7 +189,7 @@ export function registerSupportRoutes(
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
     readonly logsDirectory?: string;
-    readonly exportParticipants?: () => IncidentParticipant[];
+    readonly flushLocalExportEvidence?: () => Promise<LocalExportEvidence>;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly observer?: () => ReturnType<WorkspaceObserver['view']> | null;
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
@@ -429,7 +428,7 @@ export function registerSupportRoutes(
   const exports = options.logsDirectory
     ? new SupportExports(
         options.logsDirectory,
-        options.exportParticipants,
+        options.flushLocalExportEvidence,
         (error, exportId, stage = 'build') => {
           const evidence = {
             event: 'support_export',
