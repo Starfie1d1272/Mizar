@@ -348,11 +348,26 @@ export class ObsAdapter {
       try {
         if (!valid())
           throw new ObsOutputError('obs_output_stale', '输出请求已取消，未发送到 OBS。');
+        let current = valid;
         if (command.action === 'start') {
           if (this.configurationPending)
             throw new ObsOutputError('obs_output_busy', 'OBS 正在准备配置，请等待状态确认。');
           const preparation = await this.preparationStatus();
-          if (preparation)
+          if (preparation === 'cleanup_pending' && command.output === 'stream') {
+            const stream = (await this.outputs.read()).stream;
+            if (command.expectedRevision !== stream.revision)
+              throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
+            const generation = this.programGeneration;
+            current = () => valid() && generation === this.programGeneration;
+            try {
+              await this.recoverCaptureWarmup(current, false);
+            } catch (error) {
+              if (error instanceof ObsCaptureWarmupError || error instanceof ObsVideoError)
+                throw new ObsOutputError('obs_output_busy', error.message, { cause: error });
+              throw error;
+            }
+          }
+          if (preparation && (await this.preparationStatus()))
             throw new ObsOutputError(
               'obs_output_busy',
               preparation === 'checking'
@@ -360,7 +375,7 @@ export class ObsAdapter {
                 : 'OBS 游戏画面检查未完成，请重新检查后开始输出。',
             );
         }
-        await this.outputs.command(command, valid);
+        await this.outputs.command(command, current);
       } catch (error) {
         const config = await this.configStore.read();
         this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
@@ -1206,7 +1221,7 @@ export class ObsAdapter {
       return findings;
     });
   }
-  recoverCaptureWarmup(valid: () => boolean): Promise<readonly ObsFinding[]> {
+  recoverCaptureWarmup(valid: () => boolean, serialize = true): Promise<readonly ObsFinding[]> {
     return this.configurationMutation(async () => {
       if (!valid())
         throw new ObsCaptureWarmupError('capture_warmup_changed', '制作状态已变化，请重新检查。');
@@ -1224,7 +1239,7 @@ export class ObsAdapter {
         return this.configurationFindings(guardedObs(obs, valid), endpoint);
       }, 12_000);
       return this.findings;
-    });
+    }, serialize);
   }
   sampleAudioMeters(valid: () => boolean) {
     const generation = this.programGeneration;
