@@ -329,6 +329,10 @@ export class ObsAdapter {
     return this.outputs.outputObservationEpoch();
   }
 
+  connectionRetryPending(): boolean {
+    return this.outputs.connectionRetryPending();
+  }
+
   async outputStatus(includePreparation = true): Promise<ObsOutputsStatus> {
     const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
     return includePreparation
@@ -1108,7 +1112,15 @@ export class ObsAdapter {
               facts = { ...facts, process: running ? 'running' : 'stopped' };
             }),
             query('executable_query_failed', 'OBS 程序位置尚未确认。', async () => {
-              const path = await discoverObsExecutable(config.executablePath);
+              const path = await discoverObsExecutable(config.executablePath).catch(
+                (error: unknown) => {
+                  if (!(error instanceof ObsActionError) || error.code !== 'executable_ambiguous')
+                    throw error;
+                  findings.push({ code: error.code, message: error.message });
+                  return undefined;
+                },
+              );
+              if (path === undefined) return;
               facts = { ...facts, executable: path ? 'found' : 'not_found' };
             }),
           ]);

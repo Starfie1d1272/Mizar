@@ -70,6 +70,11 @@ export interface ObsOutputStatus {
   readonly active: boolean | null;
   readonly pending: 'start' | 'stop' | null;
   readonly revision: string;
+  readonly health?: {
+    readonly durationMs: number | null;
+    readonly bitrateKbps: number | null;
+    readonly droppedFrames: number | null;
+  };
 }
 export interface ObsOutputsStatus {
   readonly preparation?: 'checking' | 'cleanup_pending' | null;

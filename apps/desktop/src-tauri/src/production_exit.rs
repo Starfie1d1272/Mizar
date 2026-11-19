@@ -952,28 +952,23 @@ pub(crate) async fn finish_workspace(
         || log.step("workspace_exit_observer", || observer_workspace::finish_locked(&log)),
         || -> Result<(), String> {
         // Host-owned recovery evidence determines local work even when Companion is offline.
-        if cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None) {
-            feedback.stage(WorkspaceExitStage::Restoration);
+        let restoring_demo = cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None);
+        let mut finish_game = |requires_proof| -> Result<(), String> {
             let _activity = activity.begin(2);
             if confirm_steam_cancelled == Some(true) {
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
             log.step("workspace_exit_game_finish", || cs2.finish())?;
+            if requires_proof {
+                log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
+            }
             native_game_finished = true;
+            Ok(())
+        };
+        if restoring_demo {
+            finish_game(false)?;
         } else {
-            feedback.stage(WorkspaceExitStage::Restoration);
-            let _activity = activity.begin(2);
-            let result = crate::production_exit::finish_managed_game(&log, |requires_proof| {
-                if confirm_steam_cancelled == Some(true) {
-                    log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
-                }
-                log.step("workspace_exit_game_finish", || cs2.finish())?;
-                if requires_proof {
-                    log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
-                }
-                native_game_finished = true;
-                Ok(())
-            });
+            let result = crate::production_exit::finish_managed_game(&log, finish_game);
             if let Err(error) = result {
                 if !native_game_finished {
                     return Err(error);

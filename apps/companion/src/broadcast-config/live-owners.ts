@@ -111,6 +111,7 @@ export function registerBroadcastOwners(
     Date.now,
     Math.random,
     () => obsAudioRouting?.modePending() ?? Promise.resolve(false),
+    () => obsAdapter?.connectionRetryPending() ?? false,
   );
   registerMusicRoutes(app, musicStore, music, options.originPolicy);
   if (obsAdapter) registerMixerRoutes(app, obsAdapter, music, gameAudio, options.originPolicy);

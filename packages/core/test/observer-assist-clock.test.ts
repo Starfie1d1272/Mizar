@@ -60,6 +60,58 @@ function death(generation: number, sequence: number, now: number): PlayerDeathGa
 }
 const early = { connected: true, fresh: true, sameMap: true, generation: 1 };
 
+it('finishes the verified map tail after normal drain and fences a new map execution', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  timeline.consume(death(1, 1, 1000));
+  const ended = { ...early, connected: false, fresh: false, normalDrain: true };
+  expect(timeline.project(program(116000), settings, 116000, ended, 1).observer).toMatchObject({
+    waitingReason: 'normal-drain',
+    hints: [{ id: '1:1', remainingSeconds: 5 }],
+  });
+  const nextSource = { ...early, generation: 2 };
+  expect(
+    timeline.project(program(116500), settings, 116500, nextSource, 1, true).observer,
+  ).toMatchObject({
+    waitingReason: 'normal-drain',
+    hints: [{ id: '1:1', remainingSeconds: 4.5 }],
+  });
+  timeline.consume(death(2, 1, 116600));
+  expect(
+    timeline.project(program(117000, 2), settings, 117000, nextSource, 1, true).observer?.hints,
+  ).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({ acceptedDeaths: 1, staged: 1 });
+  // The kill enters the display window only after Program confirms the new map execution.
+  expect(
+    timeline.project(program(117100, 2), settings, 117100, nextSource, 1).observer?.hints,
+  ).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 2,
+    staged: 0,
+    stagedReleased: 1,
+  });
+  expect(
+    timeline.project(program(232000, 2), settings, 232000, nextSource, 1).observer?.hints,
+  ).toMatchObject([{ id: '2:1' }]);
+});
+
+it('discards staged next-map kills when Program confirms another execution', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  const ended = { ...early, connected: false, fresh: false, normalDrain: true };
+  timeline.project(program(116000), settings, 116000, ended, 1);
+  const nextSource = { ...early, generation: 2 };
+  timeline.project(program(116000), settings, 116000, nextSource, 1, true);
+  timeline.consume(death(2, 1, 116600));
+  const other = { ...program(117000, 2), map: { name: 'de_other', roundNumber: 1 } };
+  timeline.project(other, settings, 117000, nextSource, 1, false);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 0,
+    staged: 0,
+    discarded: { 'staged-map-mismatch': 1 },
+  });
+});
+
 it('schedules from receive time and preserves the due time of a shown event', () => {
   const timeline = new ObserverHintTimeline();
   const project = (now: number, delaySeconds = 120) =>
@@ -73,6 +125,13 @@ it('schedules from receive time and preserves the due time of a shown event', ()
   ]);
   expect(project(117000, 108)?.hints[0]?.remainingSeconds).toBe(4);
   expect(project(121000, 120)?.hints).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 1,
+    enteredWindow: 1,
+    generatedHints: 1,
+    discarded: { duplicate: 1, expired: 1 },
+    endedAfterGeneration: { expired: 1 },
+  });
   timeline.consume(death(1, 2, 122000));
   expect(project(224999, 108)?.hints).toEqual([]);
   expect(project(225000, 108)?.hints[0]?.remainingSeconds).toBe(5);
@@ -93,6 +152,25 @@ it('retires a death before its window and does not replay it after a respawn', (
   expect(timeline.project(program(116000), settings, 116000, early, 1).observer?.hints).toEqual([]);
   const nextRound = { ...program(118000), map: { name: 'de_test', roundNumber: 7 } };
   expect(timeline.project(nextRound, settings, 118000, early, 1).observer?.hints).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    acceptedDeaths: 1,
+    enteredWindow: 0,
+    generatedHints: 0,
+    discarded: { 'program-already-past-event': 1 },
+    endedAfterGeneration: {},
+  });
+});
+
+it('adjusts the fixed deadline by measured local residence without moving the receipt boundary', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  const event = death(1, 1, 1000);
+  timeline.consume({ ...event, cursor: { ...event.cursor, sourceArrivalMonotonicMs: 500 } });
+  expect(timeline.project(program(115499), settings, 115499, early, 1).observer?.hints).toEqual([]);
+  expect(
+    timeline.project(program(115500), settings, 115500, early, 1).observer?.hints[0],
+  ).toMatchObject({ remainingSeconds: 5 });
+  expect(timeline.getDiagnostics().timingBasis).toEqual({ localResidence: 1, receipt: 0 });
 });
 
 it('fences a same-map restart until Program advances its map epoch', () => {
