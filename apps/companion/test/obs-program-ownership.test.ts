@@ -45,7 +45,7 @@ async function rig() {
   let notify: (type: string, data: object) => void = () => {};
   const rpc: ObsRpc = {
     call: async (type, data) => {
-      if (/^(Set|Create|Stop)/.test(type)) writes.push(type);
+      if (/^(Set|Create|Start|Stop)/.test(type)) writes.push(type);
       if (type === 'GetVersion') {
         if (state.versionReadFailed) throw new Error('version unavailable');
         return { obsVersion: state.version };
@@ -152,6 +152,22 @@ async function rig() {
     new ManagedObsResources(path + '.collection.json').bind(rpc, endpoint, 'http://127.0.0.1:3000');
   return { path, state, scenes, writes, bind, store };
 }
+
+it('confirms an output already started on the observed connection without a second start', async () => {
+  const f = await rig();
+  const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
+  cleanups.push(() => adapter.close());
+  const before = await adapter.outputStatus();
+  expect(before.record.phase).toBe('idle');
+  f.state.output = true;
+  const after = await adapter.outputCommand({
+    output: 'record',
+    action: 'start',
+    expectedRevision: before.record.revision,
+  });
+  expect(after.record).toMatchObject({ phase: 'active', active: true, pending: null });
+  expect(f.writes).toEqual([]);
+});
 
 it('reports unsupported or unknown OBS versions and blocks preparation before configuration writes', async () => {
   const f = await rig();
