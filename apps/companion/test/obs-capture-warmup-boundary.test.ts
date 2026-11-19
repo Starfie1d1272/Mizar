@@ -25,6 +25,9 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   await obsServer.register(websocket);
   const clients = new Set<{ send: (data: string) => void }>();
   const calls: string[] = [];
+  let connections = 0;
+  let identify = true;
+  let resumeIdentification: (() => void) | undefined;
   const visibleWrites: string[] = [];
   let valid = true;
   let streaming = false;
@@ -53,6 +56,7 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
       socket.send(JSON.stringify({ op: 5, d: { eventType, eventIntent, eventData } }));
   };
   obsServer.get('/', { websocket: true }, (socket) => {
+    connections++;
     clients.add(socket);
     socket.on('close', () => clients.delete(socket));
     socket.send(JSON.stringify({ op: 0, d: { obsWebSocketVersion: '5.6.3', rpcVersion: 1 } }));
@@ -62,7 +66,10 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
         d: { requestType: string; requestId: string; requestData: Record<string, unknown> };
       };
       if (request.op === 1) {
-        socket.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
+        const acknowledge = () =>
+          socket.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
+        if (identify) acknowledge();
+        else resumeIdentification = acknowledge;
         return;
       }
       if (request.op !== 6) return;
@@ -269,6 +276,19 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
       cancelOnCleanup = true;
     },
     outputStatus: () => adapter.outputStatus(),
+    connectionCount: () => connections,
+    identificationPending: () => resumeIdentification !== undefined,
+    delayIdentification: () => {
+      identify = false;
+    },
+    acknowledgeIdentification: () => {
+      identify = true;
+      resumeIdentification?.();
+      resumeIdentification = undefined;
+    },
+    disconnectObs: () => {
+      for (const socket of obsServer.websocketServer.clients) socket.terminate();
+    },
     stopObs: () => obsServer.close(),
     post,
     calls,
@@ -295,6 +315,42 @@ it('keeps disconnected observations valid across failed reconnects, but revokes 
     outputs.reset();
     expect(outputs.preparationConfigurationEpoch()).not.toBe(epoch);
   } finally {
+    await outputs.close();
+  }
+});
+
+it('shares one OBS connection during slow identification and reconnects without extra RPCs', async () => {
+  const r = await rig();
+  const lost = vi.fn();
+  const outputs = new ObsOutputController(r.config, () => {}, lost);
+  const askForAutomaticAudio = () => {
+    for (let i = 0; i < 50; i++) expect(outputs.waitForAutomaticAudioConnection()).toBe(true);
+  };
+  try {
+    r.delayIdentification();
+    askForAutomaticAudio();
+    await vi.waitFor(() => expect(r.identificationPending()).toBe(true));
+    askForAutomaticAudio();
+    expect(r.connectionCount()).toBe(1);
+    expect(r.calls).toEqual([]);
+    r.acknowledgeIdentification();
+    await vi.waitFor(() => expect(outputs.waitForAutomaticAudioConnection()).toBe(false));
+    expect(r.calls).toContain('GetStreamStatus');
+
+    r.delayIdentification();
+    r.disconnectObs();
+    await vi.waitFor(() => expect(lost).toHaveBeenCalledWith('disconnected'));
+    const countBeforeRecovery = r.calls.length;
+    askForAutomaticAudio();
+    await vi.waitFor(() => expect(r.identificationPending()).toBe(true), { timeout: 3500 });
+    askForAutomaticAudio();
+    expect(r.connectionCount()).toBe(2);
+    expect(r.calls).toHaveLength(countBeforeRecovery);
+    r.acknowledgeIdentification();
+    await vi.waitFor(() => expect(outputs.waitForAutomaticAudioConnection()).toBe(false));
+    expect(r.calls.slice(countBeforeRecovery)).toContain('GetStreamStatus');
+  } finally {
+    r.acknowledgeIdentification();
     await outputs.close();
   }
 });
