@@ -462,6 +462,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
           tick: observerEventTick(row),
           observedAt: sample.observedAt,
           observedMonotonicMs: sample.observedMonotonicMs,
+          sourceMapExecution: this.mapExecution,
           ...(residenceUs !== undefined && sample.observedMonotonicMs >= residenceUs / 1000
             ? { sourceArrivalMonotonicMs: sample.observedMonotonicMs - residenceUs / 1000 }
             : {}),

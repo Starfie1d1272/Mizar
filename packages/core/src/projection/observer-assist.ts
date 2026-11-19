@@ -55,7 +55,7 @@ interface StagedExecution {
   session: string | null;
   generation: number;
   mapName: string;
-  since: number;
+  execution: number;
   lastSequence: number;
   kills: StagedKill[];
 }
@@ -246,7 +246,8 @@ export class ObserverHintTimeline {
       return false;
     this.countReceived(event);
     if (event.kind !== 'player-death') return true;
-    if (!event.cursor.mapName) {
+    const execution = event.cursor.sourceMapExecution;
+    if (!event.cursor.mapName || execution === undefined) {
       this.discard('staged-map-missing');
       return true;
     }
@@ -261,6 +262,7 @@ export class ObserverHintTimeline {
     if (
       this.staged &&
       (this.staged.generation !== event.cursor.generation ||
+        this.staged.execution !== execution ||
         this.staged.mapName !== event.cursor.mapName)
     ) {
       this.discardStaged('staged-superseded');
@@ -271,7 +273,7 @@ export class ObserverHintTimeline {
         session: context.session,
         generation: event.cursor.generation,
         mapName: event.cursor.mapName,
-        since: event.cursor.observedMonotonicMs,
+        execution,
         lastSequence: -1,
         kills: [],
       };
@@ -315,7 +317,11 @@ export class ObserverHintTimeline {
    * match, session, map and source generation. The event objects keep their own cursor,
    * channel and world evidence.
    */
-  private releaseStaged(program: ObserverProgramView, sourceGeneration: number) {
+  private releaseStaged(
+    program: ObserverProgramView,
+    source: typeof this.sourceHealth,
+    execution: number | undefined,
+  ) {
     const staged = this.staged;
     if (!staged) return;
     if (
@@ -329,16 +335,27 @@ export class ObserverHintTimeline {
       this.discardStaged('staged-map-mismatch');
       return;
     }
-    if (sourceGeneration !== staged.generation) {
+    if (
+      source.generation !== staged.generation ||
+      execution !== staged.execution ||
+      !source.connected ||
+      !source.fresh ||
+      source.sameMap !== true
+    ) {
       this.discardStaged('staged-source-mismatch');
       return;
     }
     for (const kill of staged.kills) {
+      if (kill.event.cursor.sequence <= this.lastDeathSequence) {
+        this.discard('duplicate');
+        continue;
+      }
+      this.lastDeathSequence = kill.event.cursor.sequence;
       this.acceptedDeaths++;
+      this.stagedReleased++;
       if (kill.event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
       this.kills.push({ ...kill, retired: false, enteredWindow: false, shownDueMs: null });
     }
-    this.stagedReleased += staged.kills.length;
     this.staged = null;
   }
 
@@ -463,7 +480,7 @@ export class ObserverHintTimeline {
       this.blocked = 'source-generation-mismatch';
       return empty('unavailable');
     }
-    if (!waitingForNextMap) this.releaseStaged(program, source.generation);
+    if (!waitingForNextMap) this.releaseStaged(program, source, sourceExecution);
     if (source.sameMap === true) this.observeExecution(sourceExecution, source.generation);
     const scope = JSON.stringify([
       context,
