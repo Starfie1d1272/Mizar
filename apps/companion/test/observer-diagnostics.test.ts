@@ -9,11 +9,40 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { unzipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
+import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { SessionJournal } from '../src/support/session-journal.js';
 import { SupportExports } from '../src/support/export-job.js';
 import { runArchiveWorker } from '../src/support/archive-worker.js';
 import { technicalProjection } from '../src/support/technical-projection.js';
 import { errorEvidence } from '../src/updates/diagnostics.js';
+
+test('next-map connect requires new GoTV endpoints and reuses the accepted request on retry', () => {
+  const settings = new ObserverSettingsStore();
+  const original = {
+    earlyEndpoint: '127.0.0.25:27025',
+    programEndpoint: '127.0.0.25:27026',
+    password: 'first-map',
+  };
+  const next = {
+    earlyEndpoint: '127.0.0.26:27025',
+    programEndpoint: '127.0.0.26:27026',
+    password: 'second-map',
+  };
+  settings.setMapConnection('first', 'connect', original);
+  assert.throws(
+    () => settings.setMapConnection('next', 'connect', undefined, true),
+    /next_map_connection_required/,
+  );
+  assert.throws(
+    () => settings.setMapConnection('next', 'connect', original, true),
+    /next_map_connection_required/,
+  );
+  settings.setMapConnection('next', 'connect', next, true);
+  const revision = settings.revision;
+  settings.setMapConnection('next', 'connect', next, true);
+  assert.equal(settings.revision, revision);
+  assert.deepEqual(settings.configured(), next);
+});
 
 test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed shards', async (t) => {
   const output = await mkdtemp(join(tmpdir(), 'mizar-coverage-overflow-'));
@@ -54,6 +83,7 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   const manager = createObserverSourceManager({
     role: 'lookahead',
     identity: { source, role: 'ahead', channel: 0, world: 1 },
+    clock: { now: () => ({ observedAt: new Date().toISOString(), observedMonotonicMs: 1000 }) },
   });
   const fixture = JSON.parse(
     await readFile(new URL('./fixtures/observer-event.json', import.meta.url), 'utf8'),
@@ -77,9 +107,17 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(1, begin);
   write(2, { kind: 'future-record' });
   write(3, cursor);
-  write(4, fixture);
+  write(4, {
+    ...fixture,
+    sdkQueueAgeUs: 700,
+    dequeueToSubmitUs: 100,
+    submitToObservedUs: 1000,
+    resultQueueUs: 300,
+    supervisorForwardUs: 200,
+  });
   write(4, fixture);
   assert.deepEqual(seen, [4]);
+  assert.equal(manager.getRecentGameEvents()[0]?.cursor.sourceArrivalMonotonicMs, 998);
 
   write(5, { kind: 'discontinuity', scope: 'world' }, 1, 2);
   write(6, fixture, 1, 2);
@@ -98,8 +136,19 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(13, cursor, 2);
   write(14, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);
+  assert.equal(manager.getRecentGameEvents().at(-1)?.cursor.sourceArrivalMonotonicMs, undefined);
+  const live = manager.getHealth();
+  write(15, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
+  write(16, fixture, 2);
+  manager.disconnectObserver('ended');
+  assert.equal(manager.getHealth().normalDrain, undefined);
+  manager.confirmObserverDrain();
+  assert.equal(manager.getHealth().normalDrain, true);
+  assert.equal(manager.getHealth().generation, live.generation);
+  assert.deepEqual(seen, [4, 8, 14]);
   await manager.stop();
-  write(15, fixture, 2);
+  assert.equal(manager.getHealth().normalDrain, undefined);
+  write(17, fixture, 2);
   assert.deepEqual(seen, [4, 8, 14]);
 });
 

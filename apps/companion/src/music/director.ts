@@ -147,6 +147,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     private readonly now = Date.now,
     private readonly random = Math.random,
     private readonly audioModePending: () => Promise<boolean> = () => Promise.resolve(false),
+    private readonly obsConnectionRetryPending: () => boolean = () => false,
   ) {
     this.preview = new MusicPreview(store, now, async (obs) => {
       if (await this.audioModePending().catch(() => true)) return null;
@@ -1053,6 +1054,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   async tick(explicit = false): Promise<void> {
     if (this.closed) return;
     const modePending = await this.audioModePending().catch(() => true);
+    const waitingForObs = !explicit && this.obsConnectionRetryPending() && !this.manual;
     if (
       !modePending &&
       !this.closed &&
@@ -1062,6 +1064,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.store.state.monitorDisablePending &&
       this.now() >= this.nextMonitorDisableAttempt
     ) {
+      if (waitingForObs) return;
       this.nextMonitorDisableAttempt = this.now() + 5_000;
       await this.monitor(false).catch(() => undefined);
       return;
@@ -1108,6 +1111,25 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       this.generation++;
     }
     if (this.inFlight) return;
+    const { bgm, stinger } = this.store.state;
+    if (
+      !explicit &&
+      !truth.production &&
+      !this.manual &&
+      !this.unknownControl &&
+      (!bgm || bgm.finished) &&
+      (!stinger || stinger.finished) &&
+      !this.preview.busy &&
+      !this.preview.recoveryPending
+    ) {
+      this.status.connection = 'idle';
+      return;
+    }
+    if (waitingForObs && !this.preview.busy) {
+      this.status.connection = this.status.connection === 'idle' ? 'idle' : 'unavailable';
+      if (this.status.connection === 'unavailable') this.status.playback = 'unknown';
+      return;
+    }
     const collectionRevision = this.provider.collectionRevision;
     if (collectionRevision !== this.collectionRevision) {
       this.collectionRevision = collectionRevision;

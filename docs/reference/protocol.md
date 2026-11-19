@@ -141,6 +141,8 @@ RivalHub 另有业务确认：
 
 `rivalhub-connection` 的 `sourceReady/sourceBlockedCode/sourceBlockedAction/sourceBlockedReason` 派生自当前输出资格，`sourceCommandPending` 只表示在途命令。`sourceCleanup` 区分待释放、受阻、未决认领及 `coverageUnknown`；查询成功、空队列或来源消失不证明责任已结清。
 
+`matchSourceRecovery` 只描述当前绑定比赛、当前安装下的旧来源责任。它区分本机交接、后台核对、保留待核对及无待办。全局 `sourceCleanup` 供诊断使用。结束制作的本机结果依据制作生命周期和 OBS 的回执。
+
 `syncHealth` 区分未启用、主动停用、他机归属、等待、正在接收和需处理。正式 live、地图与首发就绪后有宽限期；只有当前来源/执行的新 LIVE 接受回执确认恢复。认领、开局 ACK、旧执行回执和人工补分不能替代。
 
 | POST 入口 | 作用与限制 |
@@ -154,6 +156,10 @@ RivalHub 另有业务确认：
 | `/operator/rivalhub/output/retry` | 只恢复原边界/待写事件的本机持久化，不认领、不恢复远端授权、不主动发送 |
 
 来源动作固定 `matchId/contextRevision`，执行及异步返回后复核目标；过期认领若已被网站接受，保留原精确身份清理责任，不启用或暂停后来来源。认领意图在请求前按网站、赛事、安装与比赛持久保存，未知结果阻止同场重复认领，不阻断其他合格场次。明确业务拒绝才清除，丢响应/未知查询不能当作未提交；有界轮转对账的迟到确认直接进入原场 `release_pending`，不退役后来来源。清理先核对原范围可靠交付再释放；关闭确认后只补本地归档，不重复释放。
+
+网站支持申请回执时，Companion 先保存认领意图和协议版本，再将其 UUID 作为 `claimRequestId` 发送。丢失回执通过原单号核对，网站返回原来源或原子作废未受理申请。该命令不取得发送资格。旧网站的能力入口返回 404 时使用原认领格式。
+
+对升级前留下的无单号意图，仅在网站声明 `legacyScope` 能力后按原安装、比赛、生产者和运行会话核对。网站在持有同一比赛锁时阻止该范围内迟到的无单号认领，并返回经核实的当前来源或确认该范围没有仍开放的旧认领。已有来源仍按原权威版本和本机证据处理，有歧义时保留记录。未声明该能力的网站继续走原 `source-status` 查询。
 
 首次自动认领与同步资格诊断由 Companion 后台维护，不依赖页面轮询；前置条件、阻断原因或接收健康变化时记录一次诊断，页面查询复用同一去重状态。本场已有来源、主动停止、同场他机或同场旧责任未决时不自动恢复。重复自动尝试有预算，条件变化重新核对；显式命令仍受完整资格约束。进入或返回工作台不等于 `resume`。
 
@@ -199,7 +205,7 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 | `GET /local/v1/obs` | 实际/预期节目、findings、有限节目与捕获证据 |
 | `GET /local/v1/obs/confidence` | 当前场景缩略图，请求中切场返回空 |
 | `GET /local/v1/obs/outputs` | 直播/录像的 `phase/active/pending/revision` 与捕获准备状态 |
-| `POST /operator/obs/output` | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`，不接受 Toggle 或任意 RPC |
+| `POST /operator/obs/output` | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`。写入前，同一连接已回读到目标状态时直接确认；实际写入要求修订仍有效。不接受 Toggle 或任意 RPC |
 | `POST /operator/obs/ensure`、`repair`、`check` | 显式准备/修复与只读检查分开，返回当前 findings |
 | `POST /operator/obs/capture-recover` | 依原事务核对/回收已有项目并刷新证据，不新建、不重启游戏、不切当前节目 |
 | `POST /operator/obs/video-preflight`、`video-prepare`、`video-restore` | 制作修订与事务 ID 绑定的视频设置准备/恢复 |
@@ -288,7 +294,7 @@ BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用�
 
 端点为规范十进制 IPv4 与有效端口，不接受分段前导零。输入可为裸 `IPv4:port` 或只含一次 `connect` 和可选一次 `password` 的受限命令；拒绝额外命令、重复、危险字符，不执行用户任意控制台文本。格式化统一由 `formatObserverConnection` 完成，明确区分节目与早源端点，高级配置往返保持原值。
 
-每次连接带唯一确认 ID 与方式，同 ID 不得改目标。新图显式新意图，重试保留原 ID；无缝换图沿用连接，不发送游戏 connect。标准游戏可用带修订的 `copy-connection` 取得禁止缓存的复制命令，普通状态仍不回密码。
+每次连接带唯一确认 ID 与方式，同 ID 不得改目标。新图显式新意图，重试保留原 ID；赛事每张图分配独立的 GoTV 地址与授权，下一图必须提交该图的新端点，沿用上一图地址的请求被拒绝，也不跨图自动重连。已在目标图观战时可只登记当前连接，不重复发送游戏 connect。标准游戏可用带修订的 `copy-connection` 取得禁止缓存的复制命令，普通状态仍不回密码。
 
 游戏命令提交前按已核实进程和意图持久去重；未知发送不自动重放，标记写入失败保留本机制作并提示人工处理。网关 queued 只证明入队，实际连接和 HUD 值另行核对。
 
@@ -348,7 +354,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 | `POST /debug/support-exports/:id/cancel` | 请求取消，不证明 worker 已退出或输入已释放 |
 | `GET /debug/support-exports/:id/files/:name` | 受控附件下载，校验本机同源请求 |
 | `save_support_bundle(exportId)` | 原生选择目标并保存既有 ZIP，不接收任意源路径或前端摘要 |
-| `save_local_logs()` | 原生选择目标后直接归档本机日志目录，ZIP 中列出读取缺口。桌面界面不可用时可从命令行执行 `Mizar.exe --export-logs <日志包.zip>` |
+| `save_local_logs()` | 原生选择目标后直接归档保留的本机日志和封存诊断正文。ZIP 中列出读取缺口，上传状态和其他配置不包含在内。桌面界面不可用时可从命令行执行 `Mizar.exe --export-logs <日志包.zip>` |
 
 `settled` 表示输入使用结束且已尝试收尾，要等待 worker 实际退出；单个终态消息不够。有效 ZIP 的临时清理失败仍可 ready，另报 `cleanupStatus:unconfirmed`，不删除有效包、不伪造正文缺口，也不声称资源全释放。
 

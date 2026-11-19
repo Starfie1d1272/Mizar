@@ -112,10 +112,18 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const releases: { matchId: string; authority: string | null; authorization: string | null }[] =
     [];
   let failRelease = false;
+  let takenOverSource: Record<string, unknown> | undefined;
+  const statusQueries: URLSearchParams[] = [];
   let retryAfter: string | null = null;
   let liveStatus = 200;
   let reliableStatus = 204;
   let loseClaim = false;
+  let claimRecoverySupported = false;
+  let legacyClaimRecoverySupported = false;
+  let legacyRecovery: 'fenced' | 'foreign-fence' | 'found' | 'ambiguous' = 'fenced';
+  let loseBeforeClaim = false;
+  let lastClaimRequestId: string | undefined;
+  const recoveredClaimIds: string[] = [];
   let idempotentClaim = false;
   let claimRefusal: (() => Response) | undefined;
   let reliableRequests = 0;
@@ -150,9 +158,40 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         competitionId: installation.competitionId,
       });
     if (url.pathname.endsWith('/disconnect')) return Response.json({ revoked: true });
+    if (url.pathname.endsWith('/claim-recovery')) {
+      if (!claimRecoverySupported) return new Response(null, { status: 404 });
+      if (init?.method !== 'POST')
+        return Response.json({ version: 1, legacyScope: legacyClaimRecoverySupported });
+      const request = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if (request.legacy === true) {
+        if (legacyRecovery === 'ambiguous') return Response.json({ status: 'ambiguous' });
+        if (legacyRecovery === 'found')
+          return Response.json({ status: 'found', source: serverClaim });
+        return Response.json({
+          status: 'fenced',
+          scope: {
+            ...request,
+            installationId:
+              legacyRecovery === 'foreign-fence'
+                ? 'installation-other'
+                : installation.installationId,
+            competitionId: installation.competitionId,
+          },
+        });
+      }
+      const { claimRequestId } = JSON.parse(String(init.body)) as { claimRequestId: string };
+      recoveredClaimIds.push(claimRequestId);
+      return Response.json(
+        serverClaim?.claimRequestId === claimRequestId
+          ? { status: 'found', claimRequestId, source: serverClaim }
+          : { status: 'cancelled', claimRequestId },
+      );
+    }
     if (url.pathname.endsWith('/claim')) {
       if (claimRefusal) return claimRefusal();
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      lastClaimRequestId = body.claimRequestId as string | undefined;
+      if (loseBeforeClaim) throw new TypeError('request not received');
       if (
         !idempotentClaim ||
         !serverClaim ||
@@ -177,19 +216,24 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       if (loseClaim) throw new TypeError('lost response');
       return Response.json({ claimed: true, authorityRevision: revision });
     }
-    if (url.pathname.endsWith('/source-status'))
+    if (url.pathname.endsWith('/source-status')) {
+      statusQueries.push(url.searchParams);
+      const source =
+        takenOverSource &&
+        url.searchParams.get('authorityRevision') === String(takenOverSource.authorityRevision)
+          ? takenOverSource
+          : serverClaim;
       return Response.json(
         ambiguous
           ? { status: 'ambiguous' }
-          : serverClaim
+          : source
             ? {
                 status: 'found',
-                source: staleStatus
-                  ? { ...serverClaim, authorityRevision: 1, state: 'closed' }
-                  : serverClaim,
+                source: staleStatus ? { ...source, authorityRevision: 1, state: 'closed' } : source,
               }
             : { status: 'not_found' },
       );
+    }
     if (url.pathname.endsWith('/reliable')) {
       reliableRequests++;
       return new Response(null, { status: reliableStatus });
@@ -210,6 +254,11 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
         authorization: headers.get('authorization'),
       });
       await releaseGate?.(init?.signal);
+      if (
+        takenOverSource &&
+        headers.get('x-rivalhub-authority') === String(takenOverSource.authorityRevision)
+      )
+        return new Response(null, { status: 403 });
       if (failRelease)
         return new Response(null, {
           status: 503,
@@ -246,7 +295,23 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     event,
     path,
     releases,
+    statusQueries,
     claimStarted,
+    recoveredClaimIds,
+    lastClaimRequestId: () => lastClaimRequestId,
+    enableClaimRecovery: () => {
+      claimRecoverySupported = true;
+    },
+    enableLegacyClaimRecovery: () => {
+      claimRecoverySupported = true;
+      legacyClaimRecoverySupported = true;
+    },
+    setLegacyRecovery: (value: 'fenced' | 'foreign-fence' | 'found' | 'ambiguous') => {
+      legacyRecovery = value;
+    },
+    loseBeforeClaim: () => {
+      loseBeforeClaim = true;
+    },
     reliableRequests: () => reliableRequests,
     liveRequests: () => liveRequests,
     restart: async () => {
@@ -263,6 +328,11 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
     setFail: (v: boolean) => {
       failRelease = v;
+    },
+    closeByTakeover: () => {
+      assert.ok(serverClaim);
+      takenOverSource = { ...serverClaim, state: 'closed', closeReason: 'handover' };
+      serverClaim = takenOverSource;
     },
     setRetryAfter: (v: string) => {
       retryAfter = v;
@@ -334,6 +404,82 @@ test('background maintenance records blocked sync without opening its status pag
   assert.equal(evidence().length, 2, 'UI reads share the same evidence deduplication');
 });
 
+test('background cleanup confirms an exact old authority after a release 403', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  h.closeByTakeover();
+  await assert.rejects(h.connection.release(), /待重试或核对/);
+  assert.equal(h.connection.view().sourceCleanup.blocked, 1);
+  assert.equal(h.connection.matchSourceRecovery(h.snapshot.matchId), 'remote_cleanup');
+  assert.equal(h.connection.matchSourceRecovery('another-match'), 'idle');
+
+  const restarted = await h.restart();
+  assert.equal(restarted.matchSourceRecovery(h.snapshot.matchId), 'remote_cleanup');
+  const archived: number[] = [];
+  restarted.setSourceSettlement(
+    async () => true,
+    () => undefined,
+    async (source) => {
+      archived.push(source.authorityRevision);
+    },
+  );
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  h.setAmbiguous(true);
+  restarted.startSourceCleanup();
+  const waitForCleanup = () =>
+    assert.rejects(
+      restarted.resumeSync(h.snapshot, 'revision', () => false),
+      /比赛已变化/,
+    );
+  // The initial automatic probe sees an ambiguous result and leaves the record intact.
+  await waitForCleanup();
+  assert.equal(h.statusQueries.length, 1);
+  assert.equal(restarted.view().sourceCleanup.blocked, 1);
+  assert.deepEqual(archived, []);
+  const next = structuredClone(h.snapshot);
+  next.matchId = 'another-match';
+  next.cursor.liveSessionId = 'another-session';
+  await restarted.claim(next, 'revision', false);
+  h.setAmbiguous(false);
+  t.mock.timers.tick(10_000);
+  await waitForCleanup();
+  assert.equal(h.statusQueries.length, 1, 'the check is rate-limited');
+  t.mock.timers.tick(60_000);
+  await waitForCleanup();
+  assert.equal(restarted.view().sourceCleanup.blocked, 0);
+  assert.equal(restarted.matchSourceRecovery(h.snapshot.matchId), 'idle');
+  assert.equal(restarted.view().activeSourceMatchId, next.matchId);
+  assert.deepEqual(archived, [1]);
+  assert.deepEqual(
+    h.statusQueries.map((query) => [query.get('matchId'), query.get('authorityRevision')]),
+    [
+      [h.snapshot.matchId, '1'],
+      [h.snapshot.matchId, '1'],
+    ],
+  );
+  assert.equal(h.releases.length, 1, 'readback must never send another release');
+});
+
+for (const committed of [false, true]) {
+  test(`request receipts settle a lost claim after restart (committed=${committed})`, async (t) => {
+    const h = await setup(t);
+    h.enableClaimRecovery();
+    if (committed) h.setLose(true);
+    else h.loseBeforeClaim();
+    await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+    const requestId = h.lastClaimRequestId();
+    assert.ok(requestId);
+    const restarted = await h.restart();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+    await restarted.release();
+    assert.deepEqual(h.recoveredClaimIds, [requestId]);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.equal(restarted.view().activeSourceMatchId, null);
+    assert.equal(h.releases.length, committed ? 1 : 0);
+    assert.deepEqual(h.statusQueries, []);
+  });
+}
+
 test('an unconfirmed claim error remains durable rather than assuming not_found', async (t) => {
   const h = await setup(t);
   h.setClaimRefusal(() =>
@@ -347,6 +493,76 @@ test('an unconfirmed claim error remains durable rather than assuming not_found'
   const restarted = await h.restart();
   await assert.rejects(restarted.release());
   assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+});
+
+test('an upgraded installation clears an old unnumbered intent only after a scoped website fence', async (t) => {
+  const h = await setup(t);
+  h.loseBeforeClaim();
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.lastClaimRequestId(), undefined);
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+
+  h.enableLegacyClaimRecovery();
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.deepEqual(h.releases, []);
+  assert.deepEqual(h.statusQueries, []);
+});
+
+test('recovers a legacy source for cleanup when the website still owns the exact claim', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.lastClaimRequestId(), undefined);
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('found');
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.equal(h.releases.length, 1);
+  assert.equal(h.releases[0]?.authority, '1');
+  assert.deepEqual(h.recoveredClaimIds, []);
+  assert.deepEqual(h.statusQueries, []);
+});
+
+test('keeps a legacy intent when the website reports an ambiguous source', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('ambiguous');
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release());
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  assert.deepEqual(h.releases, []);
+  assert.deepEqual(h.statusQueries, []);
+});
+
+test('keeps a legacy intent when the website fences another installation', async (t) => {
+  const h = await setup(t);
+  h.loseBeforeClaim();
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableLegacyClaimRecovery();
+  h.setLegacyRecovery('foreign-fence');
+  const restarted = await h.restart();
+  await assert.rejects(restarted.release());
+  assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  assert.deepEqual(h.releases, []);
+});
+
+test('falls back to source status when the website has no legacy scope capability', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  h.enableClaimRecovery();
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.ok(h.statusQueries.length > 0);
+  assert.equal(h.releases.length, 1);
 });
 
 for (const operation of ['switch', 'backoff', 'exit'] as const) {

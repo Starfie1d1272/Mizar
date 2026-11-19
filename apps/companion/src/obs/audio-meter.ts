@@ -78,6 +78,7 @@ export class AudioMeter {
       'InputRemoved',
       'InputNameChanged',
       'InputSettingsChanged',
+      'InputMuteStateChanged',
     ];
     for (const event of changes) client.on(event, invalidate);
     client.on('InputVolumeMeters', onMeters);
@@ -116,7 +117,17 @@ export class AudioMeter {
       const obs = await this.config.managedResources.bind(rpc, endpoint, 'http://127.0.0.1:3000');
       const scope = await obs.ownershipScope!();
       const identities = await Promise.all(
-        roles.map(async (name) => ({ name, identity: await obs.managedInputIdentity!(name) })),
+        roles.map(async (name) => {
+          const identity = await obs.managedInputIdentity!(name);
+          const mute = identity
+            ? await rpc.call('GetInputMute', { inputUuid: identity.uuid }).catch(() => null)
+            : null;
+          return {
+            name,
+            identity,
+            muted: typeof mute?.inputMuted === 'boolean' ? mute.inputMuted : null,
+          };
+        }),
       );
       for (const { identity } of identities)
         if (identity) peaks.set(identity.uuid, { peak: 0, samples: 0 });
@@ -138,10 +149,12 @@ export class AudioMeter {
       check();
       return {
         durationMs,
-        channels: identities.map(({ name, identity }) => {
+        channels: identities.map(({ name, identity, muted }) => {
           const sample = identity ? peaks.get(identity.uuid) : undefined;
           return {
             name,
+            bound: identity !== null,
+            muted,
             samples: sample?.samples ?? 0,
             peakDb: sample?.samples && sample.peak > 0 ? 20 * Math.log10(sample.peak) : null,
             status: !sample?.samples

@@ -476,11 +476,14 @@ export function registerRivalHubConnectionRoutes(
   };
   app.get('/local/v1/rivalhub-connection', (_request, reply) => {
     const { state, syncHealth } = observeSyncHealth();
+    const connection = options.connection.view();
+    const linkedMatchId = linkedBinding()?.context.matchId;
     return reply.header('cache-control', 'no-store').send({
-      ...options.connection.view(),
-      sourceCleanup:
-        options.connection.view().sourceState === 'ready'
-          ? options.connection.view().sourceCleanup
+      ...connection,
+      sourceCleanup: connection.sourceState === 'ready' ? connection.sourceCleanup : null,
+      matchSourceRecovery:
+        linkedMatchId && connection.sourceState === 'ready'
+          ? options.connection.matchSourceRecovery(linkedMatchId)
           : null,
       syncHealth,
       activeMatchId: state.binding?.context.matchId ?? null,
@@ -489,9 +492,7 @@ export function registerRivalHubConnectionRoutes(
         : null,
       contextRevision: state.binding?.manifest.revision ?? null,
       activeDeviceName:
-        options.connection.view().activeDeviceMatchId === linkedBinding()?.context.matchId
-          ? options.connection.view().activeDeviceName
-          : null,
+        connection.activeDeviceMatchId === linkedMatchId ? connection.activeDeviceName : null,
       sourceReady: state.blocked === null,
       sourceCommandPending: sourceCommand !== null,
       sourceBlockedCode: state.blocked?.code ?? null,
@@ -801,7 +802,7 @@ export function registerRivalHubConnectionRoutes(
         targetMatches(target, linkedBinding()),
       );
       await sourceCommand;
-      return { message: '原数据源停止交接已完成，请核对网站同步状态。' };
+      return { message: '已停止本机网站同步，网站释放将在后台核对。' };
     } catch (error) {
       request.log.error({ err: error }, 'RivalHub stopped source retry failed');
       if (error instanceof Error && error.message === 'rivalhub_stopped_source_changed')

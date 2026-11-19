@@ -1,6 +1,6 @@
 [package]
 name = "mizar-desktop"
-version = "1.11.21"
+version = "1.11.23"
 edition = "2021"
 build = "build.rs"
 

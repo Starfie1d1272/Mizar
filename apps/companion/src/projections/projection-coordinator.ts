@@ -68,6 +68,7 @@ export interface ProjectionCoordinatorOptions {
     nicknameSource?: 'game' | 'website';
     leadSeconds: number;
     delaySeconds: number;
+    waitingForNextMap?: boolean;
   };
   readonly onObserverDiagnostics?: (
     diagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']>,
@@ -603,6 +604,7 @@ export class ProjectionCoordinator {
       {
         connected: health.state === 'live',
         state: health.state,
+        ...(health.normalDrain ? { normalDrain: true } : {}),
         ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
         generation: health.generation,
         sameMap: sourceMapName !== undefined && sourceMapName === program.map.name,
@@ -613,6 +615,7 @@ export class ProjectionCoordinator {
         receiveAgeMs,
       },
       health.mapExecution,
+      settings.waitingForNextMap,
     );
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());

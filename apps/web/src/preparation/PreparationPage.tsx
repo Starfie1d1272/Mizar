@@ -121,17 +121,10 @@ export function PreparationPage() {
   const rivalhub = useLocalRead<{
     paired: boolean;
     displayName?: string | null;
-    sourceCleanup?: {
-      pending: number;
-      blocked: number;
-      claimIntent: boolean;
-      handoffPending?: number;
-    };
+    sourceState?: 'ready' | 'unavailable';
   }>('/local/v1/rivalhub-connection');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [handoffRetrying, setHandoffRetrying] = useState(false);
-  const [handoffError, setHandoffError] = useState('');
   const [obsRetrying, setObsRetrying] = useState(false);
   const [obsRetryMessage, setObsRetryMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
@@ -265,60 +258,10 @@ export function PreparationPage() {
           </StatusBanner>
         ) : null}
         {production?.mode === 'preparation' &&
-        (production.releaseHandoffState === 'pending' ||
-          production.releaseHandoffState === 'unconfirmed' ||
-          (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ||
-          (rivalhub?.sourceCleanup?.pending ?? 0) > 0 ||
-          (rivalhub?.sourceCleanup?.blocked ?? 0) > 0 ||
-          rivalhub?.sourceCleanup?.claimIntent) ? (
+        production.releaseHandoffState === 'unconfirmed' &&
+        rivalhub?.sourceState === 'unavailable' ? (
           <StatusBanner tone="warning">
-            {handoffError || '网站数据源收尾尚未确认，请查看连接状态。'}
-            {production.releaseHandoffState === 'unconfirmed' ||
-            (rivalhub?.sourceCleanup?.handoffPending ?? 0) > 0 ? (
-              <Button
-                disabled={
-                  handoffRetrying ||
-                  Boolean(exit?.busy) ||
-                  production.releaseHandoffState === 'pending'
-                }
-                onClick={() => {
-                  setHandoffRetrying(true);
-                  setHandoffError('');
-                  const retryFrozenOnly = production.releaseHandoffState !== 'unconfirmed';
-                  void fetch(
-                    retryFrozenOnly
-                      ? '/operator/rivalhub/source/retry-handoff'
-                      : '/operator/production',
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(
-                        retryFrozenOnly
-                          ? {}
-                          : { action: 'retry-handoff', expectedRevision: production.revision },
-                      ),
-                      signal: AbortSignal.timeout(10000),
-                    },
-                  )
-                    .then(async (response) => {
-                      if (!response.ok) {
-                        const body = (await response.json().catch(() => ({}))) as {
-                          message?: string;
-                        };
-                        throw new Error(body.message ?? '数据源交接重试未完成。');
-                      }
-                    })
-                    .catch((error: unknown) =>
-                      setHandoffError(
-                        error instanceof Error ? error.message : '数据源交接重试未完成。',
-                      ),
-                    )
-                    .finally(() => setHandoffRetrying(false));
-                }}
-              >
-                {handoffRetrying ? '正在重试…' : '重试数据源交接'}
-              </Button>
-            ) : null}
+            网站同步记录无法读取。请重启 Mizar 后再检查网站同步。
           </StatusBanner>
         ) : null}
         <header className="preparation-heading">
