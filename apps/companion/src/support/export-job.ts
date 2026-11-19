@@ -491,7 +491,7 @@ export class SupportExports {
         gap('logs', 'enumerate', error);
       }
       for (const [folder, pattern] of [
-        ['performance-pending', /^[a-f0-9-]{36}\.[a-f0-9]{4}\.gz$/],
+        ['performance-pending', /^[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz$/],
         ['diagnostic-outbox', /^[a-f0-9]{64}\.gz$/],
       ] as const) {
         try {

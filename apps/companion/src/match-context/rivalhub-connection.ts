@@ -15,6 +15,7 @@ import {
   liveTimeout,
   requestFailureReason,
   requestFailureCode,
+  readReliableBody,
   rootNetworkCode,
   type LiveErrorEvidence,
 } from './rivalhub-http-errors.js';
@@ -24,11 +25,14 @@ import {
   type ReliableDeliveryResult,
 } from '../output/reliable-delivery.js';
 import { SerialCommitQueue } from './serial-commit.js';
+import { sameSourceSession } from '../scope/identities.js';
 import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
   exactKey,
   matchKey,
+  sameExactSource,
+  sameInstallationScope,
   sameScope,
   type ExactSource,
   type ClaimIntent,
@@ -50,38 +54,6 @@ type LiveFailure = {
   stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
   error: LiveErrorEvidence;
 };
-
-// Read only a small, time-limited classified rejection. Never retain raw body text.
-async function readReliableBody(response: Response): Promise<unknown> {
-  const reader = response.body?.getReader();
-  if (!reader) return undefined;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const timeout = AbortSignal.timeout(1000);
-  const deadline = new Promise<never>((_, reject) =>
-    timeout.addEventListener('abort', () => reject(new Error('timeout')), { once: true }),
-  );
-  try {
-    for (;;) {
-      const part = await Promise.race([reader.read(), deadline]);
-      if (part.done) break;
-      size += part.value.byteLength;
-      if (size > 4096) return undefined;
-      chunks.push(part.value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch {
-    return undefined;
-  } finally {
-    void reader.cancel().catch(() => undefined);
-  }
-}
 
 export interface SourceCaptureLifecycle {
   createReference(cursor: ReliableEventV1['cursor']): CaptureReference;
@@ -772,12 +744,7 @@ export class RivalHubConnection {
   }
 
   private scopeMatches(scope: SourceScope): boolean {
-    return (
-      this.installation !== null &&
-      scope.baseUrl === this.installation.baseUrl &&
-      scope.competitionId === this.installation.competitionId &&
-      scope.installationId === this.installation.installationId
-    );
+    return this.installation !== null && sameInstallationScope(scope, this.installation);
   }
 
   private exactSource(source: Source): ExactSource {
@@ -797,14 +764,13 @@ export class RivalHubConnection {
     const key = exactKey(identity);
     const drain = async () => {
       const requests = [...this.liveInFlight.entries()]
-        .filter(([source]) => exactKey(this.exactSource(source)) === exactKey(identity))
+        .filter(([source]) => sameExactSource(source, identity))
         .flatMap(([, pending]) => [...pending]);
       // The output owner fences new events synchronously on entry. Only after
       // that fence exists may a paused source deliver its already queued tail.
       const disposition = this.settleSource!(identity).catch(() => false);
       const source = this.source;
-      if (source?.draining && exactKey(this.exactSource(source)) === exactKey(identity))
-        source.drainReliable = true;
+      if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
       await Promise.allSettled(requests);
       return disposition;
     };
@@ -1793,15 +1759,13 @@ export class RivalHubConnection {
     if (await this.hasOutstandingReleaseWork()) throw new Error('数据源释放待重试或核对。');
   }
 
-  private async upload(
-    operation: 'reliable',
-    body: unknown,
-    matchId: string,
+  private async uploadReliable(
+    event: ReliableEventV1,
+    lineupSteam64: readonly string[],
     signal?: AbortSignal,
     isCurrent: () => boolean = () => true,
     retainedSource?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
-    const event = (body as { event: ReliableEventV1 }).event;
     const evidence = (fields: Record<string, unknown>) =>
       this.business('business_reliable', event, {
         idempotencyKey: event.idempotencyKey,
@@ -1814,25 +1778,25 @@ export class RivalHubConnection {
       retainedSource &&
       (!this.source ||
         !this.scopeMatches(retainedSource) ||
-        exactKey(this.exactSource(this.source)) !== exactKey(retainedSource))
+        !sameExactSource(this.source, retainedSource))
         ? retainedSource
         : this.source;
     if (!source) {
       evidence({ reason: 'source_unavailable' });
       return 'retry';
     }
-    if (source.matchId !== matchId) return 'retry';
+    if (source.matchId !== event.matchId) return 'retry';
     try {
       if (signal?.aborted || !isCurrent()) return 'retry';
       evidence({ reason: 'request_started', sentAt: new Date().toISOString() });
-      const response = await this.authorization.request(operation, {
+      const response = await this.authorization.request('reliable', {
         ...(signal ? { signal } : {}),
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'x-rivalhub-authority': String(source.authorityRevision),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ event, lineupSteam64 }),
       });
       const readBody =
         response.ok ||
@@ -2192,8 +2156,7 @@ export class RivalHubConnection {
     if (
       identity.matchId !== event.matchId ||
       identity.competitionId !== event.competitionId ||
-      identity.producerInstanceId !== event.cursor.producerInstanceId ||
-      identity.liveSessionId !== event.cursor.liveSessionId ||
+      !sameSourceSession(identity, event.cursor) ||
       !this.scopeMatches(identity)
     )
       return 'retry';
@@ -2209,7 +2172,7 @@ export class RivalHubConnection {
       this.confirmedSourcesAwaitingPersistence.has(key)
     )
       return 'retry';
-    if (this.source && exactKey(this.exactSource(this.source)) === key)
+    if (this.source && sameExactSource(this.source, identity))
       return this.sendReliable(event, current, signal, retainedLineup, identity);
     const valid = () =>
       this.installation === installation &&
@@ -2217,14 +2180,7 @@ export class RivalHubConnection {
       !this.isolatedRevokedSources.has(key) &&
       !this.confirmedSourcesAwaitingPersistence.has(key);
     if (!valid()) return 'retry';
-    return this.upload(
-      'reliable',
-      { event, lineupSteam64: retainedLineup ?? [] },
-      event.matchId,
-      signal,
-      valid,
-      identity,
-    );
+    return this.uploadReliable(event, retainedLineup ?? [], signal, valid, identity);
   }
 
   async sendReliable(
@@ -2243,11 +2199,7 @@ export class RivalHubConnection {
     const source = this.source;
     // Durable recovery keeps the original producer evidence. A new claim cannot
     // authorize that old producer, even when the live session was restored.
-    if (
-      source &&
-      (source.producerInstanceId !== event.cursor.producerInstanceId ||
-        source.liveSessionId !== event.cursor.liveSessionId)
-    ) {
+    if (source && !sameSourceSession(source, event.cursor)) {
       this.business('business_reliable', event, {
         idempotencyKey: event.idempotencyKey,
         reason: 'producer_mismatch',
@@ -2280,10 +2232,9 @@ export class RivalHubConnection {
       (this.stoppedMatchId !== event.matchId || source?.drainReliable === true) &&
       this.source === source &&
       (attempt === undefined || source?.mapStartAttempt === attempt);
-    const result = await this.upload(
-      'reliable',
-      { event, lineupSteam64: observed.length === 10 ? observed : [] },
-      event.matchId,
+    const result = await this.uploadReliable(
+      event,
+      observed.length === 10 ? observed : [],
       signal,
       isCurrent,
       retainedIdentity,
