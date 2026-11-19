@@ -1278,7 +1278,13 @@ export class DiagnosticDelivery {
     );
   }
   private waitForTransportRecovery(): boolean {
-    if (this.requestedPause || this.state.consecutiveFailures === 0 || !this.nextUpload())
+    const failure = this.state.transportFailure;
+    if (
+      this.requestedPause ||
+      !failure ||
+      (failure.status !== null && failure.status < 500) ||
+      !this.nextUpload()
+    )
       return false;
     this.recoveryNeeded = true;
     // The next normal pump after a confirmed recovery collects the retained tail.
