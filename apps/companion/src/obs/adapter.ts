@@ -329,6 +329,10 @@ export class ObsAdapter {
     return this.outputs.outputObservationEpoch();
   }
 
+  connectionRetryPending(): boolean {
+    return this.outputs.connectionRetryPending();
+  }
+
   async outputStatus(includePreparation = true): Promise<ObsOutputsStatus> {
     const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
     return includePreparation

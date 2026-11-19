@@ -132,6 +132,7 @@ export function createRuntimeDiagnostics(
   };
   let observerDiagnosticKey = '';
   let observerDiagnosticLoggedAt = -Infinity;
+  let observerDiagnosticCounts = '';
   return {
     get degraded() {
       return runtimeDegraded;
@@ -153,11 +154,20 @@ export function createRuntimeDiagnostics(
         diagnostics.pending > 0,
       ]);
       const now = debugClock.nowMonotonicMs();
-      if (key !== observerDiagnosticKey && now - observerDiagnosticLoggedAt >= 5000) {
-        observerDiagnosticKey = key;
-        observerDiagnosticLoggedAt = now;
-        sessionJournal?.record('observer_assist_state', diagnostics);
-      }
+      const sinceLast = now - observerDiagnosticLoggedAt;
+      if (sinceLast < 5000 || (key === observerDiagnosticKey && sinceLast < 30_000)) return;
+      const counts = JSON.stringify([
+        diagnostics.acceptedDeaths,
+        diagnostics.enteredWindow,
+        diagnostics.generatedHints,
+        diagnostics.endedAfterGeneration,
+        diagnostics.discarded,
+      ]);
+      if (key === observerDiagnosticKey && counts === observerDiagnosticCounts) return;
+      observerDiagnosticKey = key;
+      observerDiagnosticCounts = counts;
+      observerDiagnosticLoggedAt = now;
+      sessionJournal?.record('observer_assist_state', diagnostics);
     },
   };
 }

@@ -1541,6 +1541,30 @@ impl ManagedCs2 {
     pub fn cancel_selected_backup(&mut self) {
         self.selected_backup = None;
     }
+    fn selected_hud_backup(
+        &self,
+        source: &std::path::Path,
+        video: &std::path::Path,
+    ) -> Option<String> {
+        let snapshot = source.parent()?;
+        let root = std::fs::canonicalize(self.store.backup_directory()).ok()?;
+        let snapshot_id = snapshot.file_name()?.to_str()?.strip_prefix("original-")?;
+        if source.file_name()? != "cs2_video.txt"
+            || snapshot.parent()? != root
+            || snapshot_id.is_empty()
+            || !snapshot_id.bytes().all(|value| value.is_ascii_digit())
+        {
+            return None;
+        }
+        let identity: Value =
+            serde_json::from_str(&backup_text(&snapshot.join("identity.json"), 4096).ok()?).ok()?;
+        if identity["version"] != 1
+            || identity["video"] != json!(std::fs::canonicalize(video).ok()?)
+        {
+            return None;
+        }
+        backup_text(&snapshot.join(crate::cs2_spectator::KEYS_NAME), 256 * 1024).ok()
+    }
     pub fn select_backup(&mut self, source: &std::path::Path) -> Result<BackupSelection, String> {
         self.selected_backup = None;
         self.require_backup_idle()?;
@@ -1585,6 +1609,7 @@ impl ManagedCs2 {
             }
         }
         steam.validate(&self.log)?;
+        let hud = self.selected_hud_backup(&source, &video);
         let id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| "系统时间不可用。")?
@@ -1601,14 +1626,15 @@ impl ManagedCs2 {
                 .into_owned(),
             target_path: video.to_str().ok_or("配置路径无法读取。")?.to_owned(),
             includes_frame_rate: frame.is_some(),
+            includes_hud_key: hud.is_some(),
         };
         self.selected_backup = Some(
             json!({"id":id,"source":source,"backup":backup,"original":original,
-            "video":video,"executable":executable,"account":steam.account,"frame":frame}),
+            "video":video,"executable":executable,"account":steam.account,"frame":frame,"hud":hud}),
         );
         Ok(preview)
     }
-    pub fn apply_selected_backup(&mut self, id: &str) -> Result<(), String> {
+    pub fn apply_selected_backup(&mut self, id: &str, restore_hud: bool) -> Result<(), String> {
         self.require_backup_idle()?;
         let selection = self
             .selected_backup
@@ -1630,7 +1656,7 @@ impl ManagedCs2 {
         if backup_text(source, 128 * 1024)? != backup {
             return Err("所选备份已变化，请重新选择。".into());
         }
-        let frame = if selection["frame"].is_object() {
+        let frame = if !restore_hud && selection["frame"].is_object() {
             let v = &selection["frame"];
             let selected = v["backup"].as_str().ok_or("帧率备份缺失。")?;
             if backup_text(
@@ -1647,12 +1673,27 @@ impl ManagedCs2 {
         } else {
             None
         };
+        let hud = if restore_hud {
+            let selected = selection["hud"]
+                .as_str()
+                .ok_or("所选备份没有本账号的原始 H 键。")?;
+            if self.selected_hud_backup(source, &video).as_deref() != Some(selected) {
+                return Err("键位备份已变化，请重新选择。".into());
+            }
+            Some(selected)
+        } else {
+            None
+        };
         steam.validate(&self.log)?;
         if any_cs2_running(&self.log)? {
             return Err("CS2 已启动，请退出游戏后重试。".into());
         }
-        self.store
-            .import_selected_backup(&video, &executable, backup, original, frame)?;
+        if let Some(hud) = hud {
+            self.store.import_selected_hud(&video, &executable, hud)?;
+        } else {
+            self.store
+                .import_selected_backup(&video, &executable, backup, original, frame)?;
+        }
         self.selected_backup = None;
         self.message = Some("所选设置已恢复，恢复前的原件已保存。".into());
         Ok(())

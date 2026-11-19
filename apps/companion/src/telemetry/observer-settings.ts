@@ -23,8 +23,7 @@ export class ObserverSettingsStore {
   settings: ObserverSettings = { ...DEFAULT_OBSERVER_SETTINGS };
   gameAutomation: GameAutomationSettings = { ...DEFAULT_GAME_AUTOMATION_SETTINGS };
   private connection: ObserverConnection | undefined;
-  mapConnection:
-    { id: string; mode: 'connect' | 'seamless' | 'register-current'; nextMap: boolean } | undefined;
+  mapConnection: { id: string; mode: 'connect' | 'register-current'; nextMap: boolean } | undefined;
   private scope: string | undefined;
   private connectionRequestedAt: number | null = null;
   waitingForMap = false;
@@ -128,7 +127,7 @@ export class ObserverSettingsStore {
   }
   setMapConnection(
     id: string,
-    mode: 'connect' | 'seamless' | 'register-current',
+    mode: 'connect' | 'register-current',
     value?: ObserverConnection,
     nextMap = false,
   ) {
@@ -138,28 +137,40 @@ export class ObserverSettingsStore {
     if (this.mapConnection?.id === id) {
       if (
         this.mapConnection.mode !== mode ||
-        this.mapConnection.nextMap !== (nextMap || mode === 'seamless') ||
+        this.mapConnection.nextMap !== nextMap ||
         JSON.stringify(connection) !== JSON.stringify(this.connection)
       )
         throw new Error('map_intent_conflict');
       return;
     }
-    if (mode === 'seamless' && JSON.stringify(connection) !== JSON.stringify(this.connection))
-      throw new Error('seamless_connection_changed');
+    if (nextMap) {
+      const previous = this.connection;
+      const previousEndpoints = [previous?.earlyEndpoint, previous?.programEndpoint];
+      if (
+        !value ||
+        previousEndpoints.some(
+          (endpoint) =>
+            endpoint === connection.earlyEndpoint || endpoint === connection.programEndpoint,
+        )
+      ) {
+        throw new Error('next_map_connection_required');
+      }
+    }
     this.connection = connection;
     this.setReceiverPaused(false);
     this.connectionRequestedAt = Date.now();
-    this.mapConnection = { id, mode, nextMap: nextMap || mode === 'seamless' };
+    this.mapConnection = { id, mode, nextMap };
     this.changed('map');
   }
   /** Scope changes invalidate drafts; migration never issues another game connect. */
-  observeScope(scope: string) {
+  observeScope(scope: string, waitingForMap = false) {
     if (scope === this.scope) return;
     const previous = this.scope;
     this.scope = scope;
     if (previous === undefined) return;
-    if (this.mapConnection?.nextMap) this.mapConnection = { ...this.mapConnection, nextMap: false };
-    this.waitingForMap = false;
+    if (!waitingForMap && this.mapConnection?.nextMap)
+      this.mapConnection = { ...this.mapConnection, nextMap: false };
+    this.waitingForMap = waitingForMap;
     this.changed('scope');
   }
   clearConnection() {
@@ -218,7 +229,7 @@ export function registerObserverSettings(
     z.strictObject({
       action: z.literal('map-connection'),
       id: z.uuid(),
-      mode: z.enum(['connect', 'seamless', 'register-current']),
+      mode: z.enum(['connect', 'register-current']),
       nextMap: z.boolean().default(false),
       connection: observerConnectionSchema.optional(),
       expectedRevision: z.uuid(),
@@ -276,7 +287,11 @@ export function registerObserverSettings(
         } catch (error) {
           if (error instanceof Error && error.message === 'map_intent_conflict')
             return reply.code(409).send({ message: '本图连接意图已变化，请重新确认。' });
-          return reply.code(400).send({ message: '请填写本图连接；无缝换图只能沿用已有连接。' });
+          if (error instanceof Error && error.message === 'next_map_connection_required')
+            return reply
+              .code(400)
+              .send({ message: '请填写赛事方为下一图提供的新 GoTV 地址和授权信息。' });
+          return reply.code(400).send({ message: '请填写本图 GoTV 连接。' });
         }
       } else store.setConnection(parsed.data.connection);
     }

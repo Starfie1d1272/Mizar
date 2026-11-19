@@ -10,7 +10,7 @@ export type ConnectionPreparationView = {
   connection: { earlyEndpoint: string; programEndpoint: string } | null;
   mapConnection?: {
     id: string;
-    mode: 'connect' | 'seamless' | 'register-current';
+    mode: 'connect' | 'register-current';
     nextMap: boolean;
   } | null;
   waitingForMap?: boolean;
