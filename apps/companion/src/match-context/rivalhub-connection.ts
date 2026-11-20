@@ -40,7 +40,7 @@ import {
 } from './rivalhub-source-state.js';
 import {
   canCheckBlockedSource,
-  confirmedSourceStatus,
+  claimRecoveryProof,
   confirmsClosedSource,
   releaseRetry,
   serverRetryAt,
@@ -886,57 +886,40 @@ export class RivalHubConnection {
     if (!response.ok) return;
     const body: unknown = await readReliableBody(response);
     this.shutdownSignal?.throwIfAborted();
-    if (legacyScopeRecovery) {
-      const status = body as { status?: unknown; scope?: Omit<SourceScope, 'baseUrl'> } | undefined;
-      // The website keeps the original responsibility; never treat ambiguity as accepted or free.
-      if (status?.status === 'ambiguous') return;
-      if (
-        status?.status === 'fenced' &&
-        status.scope &&
-        sameScope({ ...status.scope, baseUrl: intent.scope.baseUrl }, intent.scope)
-      ) {
-        await this.sourceState.clearIntent(intent.id);
-        return;
-      }
+    const proof = claimRecoveryProof(body, intent, legacyScopeRecovery);
+    if (!proof) return;
+    if (proof.kind === 'clear') {
+      await this.sourceState.clearIntent(intent.id);
+      return;
     }
-    if (intent.claimRecoveryVersion) {
-      const receipt = body as { claimRequestId?: unknown; status?: unknown } | undefined;
-      if (receipt?.claimRequestId !== intent.id) return;
-      if (receipt.status === 'cancelled') {
-        await this.sourceState.clearIntent(intent.id);
-        return;
-      }
-    }
-    const found = confirmedSourceStatus(body, intent.scope);
-    if (!found) return;
-    const revision = found.authorityRevision;
-    const quarantined = await this.sourceState.getQuarantined(intent.scope);
-    // An equal revision is conclusive only when this claim started while that
-    // exact authority was held. A watermark by itself proves no such thing.
-    const legacyHeld = state.records.some(
-      ({ identity }) =>
-        sameScope(identity, intent.scope) &&
-        identity.authorityRevision === revision &&
-        !quarantined.some(
-          (item) => item.kind === 'watermark' && item.identity.authorityRevision >= revision,
-        ) &&
-        !state.watermarks.some(
-          (item) => sameScope(item, identity) && item.authorityRevision >= revision,
-        ),
-    );
+    const revision = proof.authorityRevision;
     if (
       !intent.claimRecoveryVersion &&
       intent.previousAuthorityRevision !== null &&
       revision <= intent.previousAuthorityRevision
     ) {
-      if (
-        revision !== intent.previousAuthorityRevision ||
-        (intent.idempotentAuthorityRevision !== revision &&
-          !(intent.idempotentAuthorityRevision === undefined && legacyHeld))
-      )
-        return;
+      if (revision !== intent.previousAuthorityRevision) return;
+      if (intent.idempotentAuthorityRevision !== revision) {
+        if (intent.idempotentAuthorityRevision !== undefined) return;
+        // Historical requests without a receipt need evidence of the exact prior authority.
+        const identity = { ...intent.scope, authorityRevision: revision };
+        if (!state.records.some((record) => sameExactSource(record.identity, identity))) return;
+        if (
+          state.watermarks.some(
+            (item) => sameScope(item, identity) && item.authorityRevision >= revision,
+          )
+        )
+          return;
+        const quarantined = await this.sourceState.getQuarantined(intent.scope);
+        if (
+          quarantined.some(
+            (item) => item.kind === 'watermark' && item.identity.authorityRevision >= revision,
+          )
+        )
+          return;
+      }
     }
-    if (found.state === 'closed') {
+    if (proof.state === 'closed') {
       await this.sourceState.clearIntent(intent.id);
     } else {
       const identity = await this.sourceState.confirmClaim(intent.id, revision, 'release_pending');

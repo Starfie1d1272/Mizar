@@ -1,4 +1,10 @@
-import type { ExactSource, SourceRecord, SourceScope } from './rivalhub-source-state.js';
+import {
+  sameScope,
+  type ClaimIntent,
+  type ExactSource,
+  type SourceRecord,
+  type SourceScope,
+} from './rivalhub-source-state.js';
 
 export function sourceStatusRequest(scope: SourceScope, authorityRevision?: number): string {
   const query = new URLSearchParams({
@@ -34,6 +40,30 @@ export function confirmedSourceStatus(body: unknown, scope: SourceScope) {
 export function confirmsClosedSource(body: unknown, identity: ExactSource): boolean {
   const status = confirmedSourceStatus(body, identity);
   return status?.state === 'closed' && status.authorityRevision === identity.authorityRevision;
+}
+
+/** Match a receipt to the durable request before using any authority it reports. */
+export function claimRecoveryProof(
+  body: unknown,
+  intent: ClaimIntent,
+  legacyScopeRecovery: boolean,
+) {
+  const receipt = body as
+    | { status?: unknown; claimRequestId?: unknown; scope?: Omit<SourceScope, 'baseUrl'> }
+    | undefined;
+  if (intent.claimRecoveryVersion) {
+    if (receipt?.claimRequestId !== intent.id) return;
+    if (receipt.status === 'cancelled') return { kind: 'clear' } as const;
+  } else if (
+    legacyScopeRecovery &&
+    receipt?.status === 'fenced' &&
+    receipt.scope &&
+    sameScope({ ...receipt.scope, baseUrl: intent.scope.baseUrl }, intent.scope)
+  ) {
+    return { kind: 'clear' } as const;
+  }
+  const status = confirmedSourceStatus(body, intent.scope);
+  if (status) return { kind: 'authority', ...status } as const;
 }
 
 export function canCheckBlockedSource(record: SourceRecord, force: boolean): boolean {
