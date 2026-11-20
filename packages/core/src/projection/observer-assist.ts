@@ -104,6 +104,8 @@ export class ObserverHintTimeline {
   private generatedHints = 0;
   private publishedHints = 0;
   private compensatedDeaths = 0;
+  private ended: Record<string, number> = {};
+  private expiredBeforeWindow = 0;
   private endedAfterGeneration: Record<string, number> = {};
   private lastReceivedMs: number | null = null;
   private nextDueMs: number | null = null;
@@ -137,6 +139,8 @@ export class ObserverHintTimeline {
         localResidence: this.compensatedDeaths,
         receipt: this.acceptedDeaths - this.compensatedDeaths,
       },
+      ended: { ...this.ended },
+      expiredBeforeWindow: this.expiredBeforeWindow,
       endedAfterGeneration: { ...this.endedAfterGeneration },
       discarded: { ...this.discarded },
       staged: this.staged?.kills.length ?? 0,
@@ -163,23 +167,25 @@ export class ObserverHintTimeline {
   }
   private finish(kill: BufferedKill, reason: string) {
     this.discard(reason);
+    this.ended[reason] = (this.ended[reason] ?? 0) + 1;
+    if (reason === 'expired' && !kill.enteredWindow) this.expiredBeforeWindow++;
     if (kill.shownDueMs !== null)
       this.endedAfterGeneration[reason] = (this.endedAfterGeneration[reason] ?? 0) + 1;
     kill.retired = true;
   }
-  private reset(reason: string, now: number) {
+  private replaceBuffered(reason: string, retained: BufferedKill[] = []) {
+    const keep = retained.length ? new Set(retained) : undefined;
+    for (const kill of this.kills) {
+      if (!kill.retired && !keep?.has(kill)) this.finish(kill, reason);
+    }
+    this.kills = retained;
+  }
+
+  private reset(reason: string, now: number, retained?: BufferedKill[]) {
     if (this.lastReset.reason !== reason || this.kills.length)
       this.lastReset = { reason, atMonotonicMs: now };
-    this.clear();
     this.earliest = now;
-  }
-
-  resetForMap(now: number) {
-    this.reset('map-connection', now);
-  }
-
-  clear() {
-    this.kills = [];
+    this.replaceBuffered(reason, retained);
     this.lastReadyScope = undefined;
     this.sealedSource = undefined;
     this.sourceExecution = undefined;
@@ -187,6 +193,10 @@ export class ObserverHintTimeline {
     this.sourceExecutionChanged = false;
     this.nextDueMs = null;
     this.nextWindowMs = null;
+  }
+
+  resetForMap(now: number) {
+    this.reset('map-connection', now);
   }
   consume(event: GameEventObservation) {
     if (event.cursor.role !== 'lookahead') return;
@@ -232,7 +242,7 @@ export class ObserverHintTimeline {
   private advanceGeneration(generation: number) {
     this.generation = generation;
     this.lastDeathSequence = -1;
-    this.kills = [];
+    this.replaceBuffered('source-generation');
   }
 
   private countReceived(event: GameEventObservation) {
@@ -388,7 +398,7 @@ export class ObserverHintTimeline {
       execution !== this.sourceExecution
     ) {
       this.sourceExecutionChanged = true;
-      this.kills = [];
+      this.replaceBuffered('source-execution');
     }
     this.sourceExecution = execution;
     this.sourceExecutionGeneration = generation;
@@ -479,14 +489,13 @@ export class ObserverHintTimeline {
                 k.event.cursor.observedMonotonicMs >= this.pendingMap!.since,
             )
           : [];
-      this.reset('program-context', now);
+      this.reset('program-context', now, pending);
       if (pendingConflict) {
         this.sourceExecution = sourceExecution;
         this.sourceExecutionGeneration = source.generation;
         this.sourceExecutionChanged = true;
       }
       this.pendingMap = null;
-      this.kills = pending;
       this.context = context;
       this.contextIdentity = {
         match: program.match.matchId,

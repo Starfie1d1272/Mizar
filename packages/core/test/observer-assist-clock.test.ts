@@ -90,6 +90,9 @@ it('finishes the verified map tail after normal drain and fences a new map execu
     acceptedDeaths: 2,
     staged: 0,
     stagedReleased: 1,
+    pending: 1,
+    ended: { 'program-context': 1 },
+    endedAfterGeneration: { 'program-context': 1 },
   });
   expect(
     timeline.project(program(232000, 2), settings, 232000, nextSource, 1).observer?.hints,
@@ -150,12 +153,22 @@ it('schedules from receive time and preserves the due time of a shown event', ()
     enteredWindow: 1,
     generatedHints: 1,
     publishedHints: 1,
+    ended: { expired: 1 },
+    expiredBeforeWindow: 0,
     discarded: { duplicate: 1, expired: 1 },
     endedAfterGeneration: { expired: 1 },
   });
   timeline.consume(death(1, 2, 122000));
   expect(project(224999, 108)?.hints).toEqual([]);
   expect(project(225000, 108)?.hints[0]?.remainingSeconds).toBe(5);
+  timeline.consume(death(1, 3, 226000));
+  expect(project(335000, 108)?.hints).toEqual([]);
+  expect(timeline.getDiagnostics()).toMatchObject({
+    ended: { expired: 3 },
+    expiredBeforeWindow: 1,
+    endedAfterGeneration: { expired: 2 },
+    pending: 0,
+  });
 });
 
 it('retires a death before its window and does not replay it after a respawn', () => {

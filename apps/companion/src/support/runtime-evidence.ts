@@ -161,6 +161,8 @@ export function createRuntimeDiagnostics(
         diagnostics.enteredWindow,
         diagnostics.generatedHints,
         diagnostics.publishedHints,
+        diagnostics.ended,
+        diagnostics.expiredBeforeWindow,
         diagnostics.endedAfterGeneration,
         diagnostics.discarded,
       ]);
