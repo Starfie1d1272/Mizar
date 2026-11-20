@@ -52,6 +52,9 @@ export function runArchiveWorker(
     totalBytes = 0;
   const digest = createHash('sha256');
   const gaps = [...d.gaps];
+  const rangeStart = timestamp(d.range.from);
+  const rangeEnd = timestamp(d.range.to);
+  const scratch = Buffer.allocUnsafe(65_536);
   const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
   const coverageFiles: { partIndex: number; name: string }[] = [];
   // Keep the inline coverage summary within the final metadata budget.
@@ -353,22 +356,21 @@ export function runArchiveWorker(
         );
       }
     }
-    const stamp = event.observedAt ?? event.time ?? event.recordedAt;
-    let interval = event.sourceInterval;
-    if (!interval && Array.isArray(object(event.evidence).samples)) {
-      const times = (object(event.evidence).samples as unknown[])
-        .map((sample) => object(sample).time)
-        .filter((time): time is string => Number.isFinite(timestamp(time)))
-        .sort((a, b) => timestamp(a) - timestamp(b));
-      if (times.length) interval = { from: times[0], to: times.at(-1) };
+    if (Number.isFinite(rangeStart) || Number.isFinite(rangeEnd)) {
+      const stamp = event.observedAt ?? event.time ?? event.recordedAt;
+      let interval = event.sourceInterval;
+      if (!interval && Array.isArray(object(event.evidence).samples)) {
+        const times = (object(event.evidence).samples as unknown[])
+          .map((sample) => object(sample).time)
+          .filter((time): time is string => Number.isFinite(timestamp(time)))
+          .sort((a, b) => timestamp(a) - timestamp(b));
+        if (times.length) interval = { from: times[0], to: times.at(-1) };
+      }
+      const from = timestamp(interval ? object(interval).from : stamp),
+        to = timestamp(interval ? object(interval).to : stamp);
+      if ((Number.isFinite(to) && to < rangeStart) || (Number.isFinite(from) && from > rangeEnd))
+        return false;
     }
-    const from = timestamp(interval ? object(interval).from : stamp),
-      to = timestamp(interval ? object(interval).to : stamp);
-    if (
-      (d.range.from && Number.isFinite(to) && to < timestamp(d.range.from)) ||
-      (d.range.to && Number.isFinite(from) && from > timestamp(d.range.to))
-    )
-      return false;
     const id =
       typeof event.eventId === 'string'
         ? event.eventId
@@ -420,7 +422,6 @@ export function runArchiveWorker(
     if (chunkBytes + size > 1024 * 1024) flush();
     chunk.push(line);
     chunkBytes += size;
-    sample();
     return true;
   }
   function read(handle: number, raw: Buffer, position: number) {
@@ -531,7 +532,7 @@ export function runArchiveWorker(
             }
           };
           while (position < source.bytes) {
-            const raw = Buffer.alloc(Math.min(65536, source.bytes - position));
+            const raw = scratch.subarray(0, Math.min(scratch.length, source.bytes - position));
             const n = read(source.fd, raw, position);
             position += n;
             const lines = (tail + decoder.write(raw.subarray(0, n))).split('\n');

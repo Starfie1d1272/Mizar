@@ -79,7 +79,7 @@ macro_rules! desktop_ipc {
 
         $string_enum!(FrameRateAction { Inspect = "inspect", Apply = "apply", Restore = "restore" });
         $string_enum!(PinAction { Prepare = "prepare", Commit = "commit", Release = "release" });
-        $string_enum!(PinKind { Incident = "incident", Export = "export", Delivery = "delivery", Active = "active" });
+        $string_enum!(PinKind { Incident = "incident", Delivery = "delivery", Active = "active" });
         $string_enum!(ObserverAction { ConnectionMode = "connection-mode", StartConfigured = "start-configured", Stop = "stop", RestoreHud = "restore-hud", Preflight = "preflight", Start = "start" });
         $string_enum!(MulnxAction { Update = "update" });
         $object!(Cs2HostStatus {

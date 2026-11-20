@@ -76,7 +76,7 @@ const BackupSelection = z.object({
 });
 const FrameRateAction = z.enum(['inspect', 'apply', 'restore']);
 const PinAction = z.enum(['prepare', 'commit', 'release']);
-const PinKind = z.enum(['incident', 'export', 'delivery', 'active']);
+const PinKind = z.enum(['incident', 'delivery', 'active']);
 const ObserverAction = z.enum([
   'connection-mode',
   'start-configured',

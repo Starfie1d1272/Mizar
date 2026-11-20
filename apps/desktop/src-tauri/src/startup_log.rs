@@ -159,58 +159,6 @@ fn retention_reclaims_ordinary_sealed_segments_in_the_current_run() -> io::Resul
     result.and(fs::remove_dir_all(directory))
 }
 
-#[cfg(test)]
-#[test]
-fn export_pin_keeps_old_safe_segments_when_one_source_cannot_be_prepared() -> Result<(), String> {
-    let directory = std::env::temp_dir().join(format!(
-        "mizar-host-export-pin-{}-{}",
-        std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    fs::create_dir(&directory).map_err(|error| error.to_string())?;
-    let result = (|| -> Result<(), String> {
-        let log = DesktopLog::new(&directory, Some(directory.clone()))
-            .map_err(|error| error.to_string())?;
-        let old = reserve_segment(&log.directory, "document").map_err(|error| error.to_string())?;
-        let unavailable =
-            reserve_segment(&log.directory, "desktop").map_err(|error| error.to_string())?;
-        fs::write(
-            log.directory.join(&old),
-            b"{\"eventId\":\"old-document\"}\n",
-        )
-        .map_err(|error| error.to_string())?;
-        OpenOptions::new()
-            .write(true)
-            .open(log.directory.join(&unavailable))
-            .and_then(|file| file.set_len(2 * LOG_LIMIT + 1))
-            .map_err(|error| error.to_string())?;
-        assert!(log
-            .diagnostic_pin(
-                "prepare",
-                "11111111-1111-4111-8111-111111111111",
-                "incident"
-            )
-            .is_err());
-        let id = "22222222-2222-4222-8222-222222222222";
-        let prepared = log.diagnostic_pin("prepare", id, "export")?;
-        assert!(prepared["segments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|segment| segment["name"] == old));
-        assert_eq!(
-            prepared["sourceState"]["unavailableSegments"][0],
-            json!({"name":unavailable,"reason":"host_pin_source_oversize"})
-        );
-        let committed = log.diagnostic_pin("commit", id, "export")?;
-        assert_eq!(committed["state"], "committed");
-        assert_eq!(committed["segments"], prepared["segments"]);
-        assert_eq!(committed["sourceState"], prepared["sourceState"]);
-        log.diagnostic_pin("release", id, "export")?;
-        Ok(())
-    })();
-    result.and(fs::remove_dir_all(directory).map_err(|error| error.to_string()))
-}
 impl Drop for PinWork {
     fn drop(&mut self) {
         if let Ok(mut log) = self.inner.lock() {
@@ -224,20 +172,10 @@ fn pin_source_name(name: &str) -> bool {
         .and_then(|name| name.strip_suffix(".ndjson"))
         .is_some_and(|id| diagnostic_uuid(Some(id)).is_some())
 }
-fn note_export_pin_failure(failures: &mut Vec<Value>, name: &str, reason: &str, detail: &str) {
-    let mut entry = json!({"name":name,"reason":reason});
-    // Keep the receipt below the existing metadata budget even if thousands
-    // of files are unavailable. Every file retains its stable reason.
-    if failures.len() < 16 {
-        entry["detail"] = json!(detail.chars().take(120).collect::<String>());
-    }
-    failures.push(entry);
-}
 fn hash_pin_sources(
     directory: &Path,
     sources: &[Value],
     verify: bool,
-    mut unavailable: Option<&mut Vec<Value>>,
 ) -> Result<Vec<Value>, String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -254,47 +192,36 @@ fn hash_pin_sources(
             .as_u64()
             .filter(|size| *size <= 2 * 1024 * 1024)
             .ok_or("固定大小无效。")?;
-        let fingerprint = (|| -> Result<Value, String> {
-            let path = directory.join(name);
-            #[cfg(windows)]
-            let _parents =
-                crate::support_export::hold_directories(directory).map_err(|e| e.to_string())?;
-            let (mut file, _) = crate::support_export::checked(&path).map_err(|e| e.to_string())?;
-            if file.metadata().map_err(|e| e.to_string())?.len() != size {
-                return Err("固定文件已变化。".into());
-            }
-            let mut hash = Sha256::new();
-            let mut buffer = [0u8; 65536];
-            let mut read = 0u64;
-            loop {
-                let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                read += n as u64;
-                if read > size {
-                    return Err("固定文件已变化。".into());
-                }
-                hash.update(&buffer[..n]);
-            }
-            if read != size {
-                return Err("固定文件已变化。".into());
-            }
-            let digest = format!("{:x}", hash.finalize());
-            if verify && segment["sha256"] != digest {
-                return Err("固定文件摘要不匹配。".into());
-            }
-            Ok(json!({"name":name,"bytes":size,"sha256":digest}))
-        })();
-        match fingerprint {
-            Ok(value) => segments.push(value),
-            Err(error) => match unavailable.as_deref_mut() {
-                Some(failures) => {
-                    note_export_pin_failure(failures, name, "host_pin_source_read_failed", &error)
-                }
-                None => return Err(error),
-            },
+        let path = directory.join(name);
+        #[cfg(windows)]
+        let _parents =
+            crate::support_export::hold_directories(directory).map_err(|e| e.to_string())?;
+        let (mut file, _) = crate::support_export::checked(&path).map_err(|e| e.to_string())?;
+        if file.metadata().map_err(|e| e.to_string())?.len() != size {
+            return Err("固定文件已变化。".into());
         }
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        let mut read = 0u64;
+        loop {
+            let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            if read > size {
+                return Err("固定文件已变化。".into());
+            }
+            hash.update(&buffer[..n]);
+        }
+        if read != size {
+            return Err("固定文件已变化。".into());
+        }
+        let digest = format!("{:x}", hash.finalize());
+        if verify && segment["sha256"] != digest {
+            return Err("固定文件摘要不匹配。".into());
+        }
+        segments.push(json!({"name":name,"bytes":size,"sha256":digest}));
     }
     Ok(segments)
 }
@@ -949,7 +876,7 @@ impl DesktopLog {
         delivery_owner: Option<Value>,
     ) -> Result<Value, String> {
         if diagnostic_uuid(Some(pin_id)).is_none()
-            || !["incident", "export", "delivery", "active"].contains(&kind)
+            || !["incident", "delivery", "active"].contains(&kind)
             || !["prepare", "commit", "release"].contains(&action)
         {
             return Err("诊断固定请求无效。".into());
@@ -961,7 +888,7 @@ impl DesktopLog {
             return Err("诊断固定路径无效。".into());
         }
         let path = directory.join(format!("{pin_id}.json"));
-        let (mut receipt, previous, mut unavailable, _work) = {
+        let (mut receipt, previous, _work) = {
             let mut log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
             if log.pin_work.contains_key(pin_id) || log.pin_work.len() >= 4 {
                 return Err("诊断固定操作进行中。".into());
@@ -997,7 +924,6 @@ impl DesktopLog {
                     return Ok(previous);
                 }
             }
-            let mut unavailable = Vec::new();
             let receipt = if action == "prepare" {
                 let mut segments = Vec::new();
                 let mut empty_segments = Vec::new();
@@ -1007,36 +933,15 @@ impl DesktopLog {
                     if !pin_source_name(&name) {
                         continue;
                     }
-                    if segments.len() + empty_segments.len() + unavailable.len() >= 4096 {
+                    if segments.len() + empty_segments.len() >= 4096 {
                         return Err("诊断固定源超出预算。".into());
                     }
-                    let meta = match fs::symlink_metadata(entry.path()) {
-                        Ok(meta) => meta,
-                        Err(error) if kind == "export" => {
-                            note_export_pin_failure(
-                                &mut unavailable,
-                                &name,
-                                "host_pin_source_metadata_failed",
-                                &error.to_string(),
-                            );
-                            continue;
-                        }
-                        Err(error) => return Err(error.to_string()),
-                    };
+                    let meta =
+                        fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
                     if !meta.is_file() || meta.file_type().is_symlink() {
-                        if kind == "export" {
-                            unavailable
-                                .push(json!({"name":name,"reason":"host_pin_source_unsafe"}));
-                            continue;
-                        }
                         return Err("诊断固定源无效。".into());
                     }
                     if meta.len() > 2 * 1024 * 1024 {
-                        if kind == "export" {
-                            unavailable
-                                .push(json!({"name":name,"reason":"host_pin_source_oversize"}));
-                            continue;
-                        }
                         return Err("诊断固定源超出预算。".into());
                     }
                     if meta.len() == 0 {
@@ -1051,7 +956,6 @@ impl DesktopLog {
                 // source names are never reused while background hashing runs.
                 if segments
                     .iter()
-                    .chain(&unavailable)
                     .any(|segment| segment["name"] == log.segment_name)
                 {
                     let next =
@@ -1060,7 +964,6 @@ impl DesktopLog {
                 }
                 if segments
                     .iter()
-                    .chain(&unavailable)
                     .any(|segment| segment["name"] == log.document_segment_name)
                 {
                     let next =
@@ -1101,7 +1004,6 @@ impl DesktopLog {
             (
                 receipt,
                 previous,
-                unavailable,
                 PinWork {
                     inner: self.inner.clone(),
                     pin_id: pin_id.to_owned(),
@@ -1110,19 +1012,11 @@ impl DesktopLog {
         };
         // No DesktopLog mutex is held across these full-source reads. A slow
         // hash cannot serialize every native command's normal event logging.
-        if action == "prepare" || kind != "export" {
-            receipt["segments"] = json!(hash_pin_sources(
-                &self.directory,
-                receipt["segments"].as_array().ok_or("固定范围无效。")?,
-                action == "commit",
-                (kind == "export").then_some(&mut unavailable),
-            )?);
-        }
-        if !unavailable.is_empty() {
-            receipt["sourceState"]["unavailableSegments"] = json!(unavailable);
-        }
-        // Export commits the prepared inventory. Its reader validates every
-        // promised file, continuing past a changed or missing source.
+        receipt["segments"] = json!(hash_pin_sources(
+            &self.directory,
+            receipt["segments"].as_array().ok_or("固定范围无效。")?,
+            action == "commit",
+        )?);
         let _log = self.inner.lock().map_err(|_| "诊断写入锁不可用。")?;
         if read_pin_json(&path).map_err(|e| e.to_string())? != previous {
             return Err("诊断固定回执已变化。".into());
@@ -1168,7 +1062,7 @@ impl DesktopLog {
         }
         if action == "commit" {
             receipt["state"] = json!("committed");
-            if kind != "export" && kind != "delivery" {
+            if kind != "delivery" {
                 receipt["expiresAt"] = Value::Null;
             }
         }
