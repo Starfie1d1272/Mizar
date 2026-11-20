@@ -56,7 +56,7 @@ const attrLabels: Record<string, string> = {
 };
 const titles: Record<Page['kind'], readonly [string, string]> = {
   match: ['对阵', 'MATCH'],
-  'current-map': ['单图数据', 'MAP RESULT'],
+  'current-map': ['MAP STATS', 'MAP RESULT'],
   series: ['地图顺序', 'SERIES'],
   bp: ['本场选禁', 'MAP VETO'],
   lineup: ['本场阵容', 'LINEUPS'],
@@ -208,10 +208,7 @@ export function statsProgramInserts(
       ].includes(page.kind)
         ? `${names[visible[0]!]} · `
         : '';
-    const title =
-      page.kind === 'current-map' && bundle.phase === 'halftime'
-        ? '半场数据'
-        : `${topicPrefix}${defaultTitle}`;
+    const title = `${topicPrefix}${defaultTitle}`;
     const chosen = byPage(page);
     const teamScoped = [
       'lineup',
@@ -620,19 +617,20 @@ export function statsProgramInserts(
         break;
       case 'current-map': {
         const m = bundle.selectedMap;
+        rail = ['', ''];
         if (m)
           content = {
             kind: 'current-map',
             map: mapPhoto(m.mapName),
             score: `${number(m.score.a)} : ${number(m.score.b)}`,
-            columns: bundle.summaryHasKAD ? ['K', 'A', 'D'] : [],
+            columns: bundle.summaryHasKAD ? ['K', 'D', 'A'] : [],
             sides: sides.map((side) => ({
               name: names[side],
               players: (side === 0 ? m.players.a : m.players.b).map((p) => ({
                 name: p.name ?? '—',
                 avatar: p.avatarUrl,
                 ...(bundle.summaryHasKAD
-                  ? { values: [number(p.kills), number(p.assists), number(p.deaths)] }
+                  ? { values: [number(p.kills), number(p.deaths), number(p.assists)] }
                   : {}),
               })),
             })),

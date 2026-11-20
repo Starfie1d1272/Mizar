@@ -386,6 +386,22 @@
 .hud-widget-design.hud-redraw .focused-player__ammo > strong {
   font-size: 36px;
 }
+.hud-widget-design.hud-redraw:is([data-hud-design='ewc'], [data-hud-design='iem'])
+  .focused-player[data-dead='false'][data-has-ammo='false'] {
+  width: min(100%, 282px);
+  margin-inline: auto;
+
+  .focused-player__ammo {
+    display: none;
+  }
+  .focused-player__active {
+    right: 12px;
+    width: auto;
+  }
+  &[data-has-active-item='false'] {
+    width: min(100%, 208px);
+  }
+}
 .hud-widget-design.hud-redraw .focused-player__vitals {
   position: absolute;
   top: 42px;

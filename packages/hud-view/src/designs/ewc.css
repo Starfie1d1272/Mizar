@@ -64,7 +64,7 @@
   background: color-mix(in srgb, var(--mizar-hud-text-muted) 55%, transparent);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
-  background: color-mix(in srgb, var(--mizar-hud-text-muted) 38%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 76%, transparent);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-status-effects,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-combat-transition,
@@ -379,6 +379,15 @@
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__name {
   color: var(--mizar-hud-text-primary);
+  max-width: 120px;
+  grid-column: 1 / 3;
+}
+.hud-widget-design[data-hud-design='ewc']
+  .player-rail--right
+  .player-rail__card--dead
+  .player-rail__name {
+  grid-column: 2 / 4;
+  justify-self: end;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__life-state,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__dead-stats {
@@ -387,17 +396,17 @@
 .hud-widget-design[data-hud-design='ewc'] .player-rail__death-watermark {
   position: absolute;
   display: block;
-  top: 0;
-  left: 96px;
-  width: 88px;
-  height: 76px;
+  top: 6px;
+  left: 132px;
+  width: 60px;
+  height: 64px;
   fill: var(--mizar-hud-text-primary);
-  opacity: 0.25;
+  opacity: 0.22;
   pointer-events: none;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__death-watermark {
   left: auto;
-  right: 96px;
+  right: 132px;
 }
 .hud-widget-design[data-hud-design='ewc'] .match-header__round-meta {
   margin-top: 10px;
@@ -454,6 +463,46 @@
   .objective-center[data-objective-mode='defusing']
   .objective-center__caption {
   display: none;
+}
+/* Invert planting C4 artwork & progress bar on EWC's white center field. */
+.hud-widget-design[data-hud-design='ewc']
+  .objective-center[data-objective-mode='planting']
+  .objective-center__icon {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__plant-progress {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 24%, transparent);
+}
+.hud-widget-design[data-hud-design='ewc'] .objective-center__plant-progress span {
+  background: var(--mizar-hud-surface-strong);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .objective-center[data-objective-mode='planting']
+  .objective-center__led {
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 45%, transparent);
+}
+.hud-widget-design[data-hud-design='ewc']
+  .objective-center[data-objective-mode='planting']
+  .objective-center__caption {
+  color: var(--mizar-hud-surface-strong);
+}
+/* Fail-closed team name fallback only when logo is absent or fails to decode. */
+.hud-widget-design[data-hud-design='ewc']
+  .match-header__score-zone--logo[data-show-team-logo='true']:not(:has(.match-header__team-logo))
+  .match-header__team-name {
+  display: block;
+  max-width: 68px;
+  padding: 0 4px;
+  overflow: hidden;
+  color: var(--mizar-hud-text-primary);
+  font-family: var(--mizar-type-family-display);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 /* Timeout panels share the outer edges of the logo wings. */
 .hud-widget-design[data-hud-design='ewc'] .match-header__timeout-panel--a {

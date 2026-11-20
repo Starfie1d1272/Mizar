@@ -109,7 +109,7 @@
   .player-rail__card[data-side='T']
   .player-rail__health-bar
   > span:not(.combat-damage-ghost) {
-  background: var(--mizar-side-t);
+  background: color-mix(in srgb, var(--mizar-side-t) 55%, var(--mizar-hud-surface-strong));
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
   position: absolute;
@@ -118,6 +118,13 @@
   left: 0;
   font-size: 22px;
   line-height: 28px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card.is-low-health
+  .player-rail__health-value {
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.78);
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__money {
   color: var(--mizar-hud-state-success);
@@ -264,7 +271,7 @@
   position: absolute;
   bottom: 6px;
   left: 0;
-  width: 166px;
+  width: 196px;
   height: 60px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--mizar-hud-surface-primary) 94%, transparent);
@@ -308,12 +315,16 @@
 }
 .shanghai-summary__utility {
   display: flex;
+  flex: 1;
   align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 10px;
 }
 .shanghai-summary__utility > span {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 3px;
 }
 .shanghai-summary__utility .player-rail__icon {
   width: 12px;

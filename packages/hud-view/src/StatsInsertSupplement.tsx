@@ -529,10 +529,14 @@ export function StatsInsertSupplementView({
           {content.sides.map((side, i) => (
             <section className={`stats-roster ${i ? 'right' : ''}`} key={i}>
               <div className="stats-summary-columns">
-                <span>{side.name}</span>
-                {content.columns.map((column, j) => (
-                  <span key={j}>{column}</span>
-                ))}
+                <span className="stats-summary-team">{side.name}</span>
+                {content.columns.length > 0 && (
+                  <div className="stats-summary-stat-group">
+                    {content.columns.map((column, j) => (
+                      <span key={j}>{column}</span>
+                    ))}
+                  </div>
+                )}
               </div>
               {side.players.map((player, j) => (
                 <div className="stats-roster-row" key={j}>
@@ -544,11 +548,15 @@ export function StatsInsertSupplementView({
                   <div className="stats-roster-person">
                     <strong>{player.name}</strong>
                   </div>
-                  {player.values?.map((value, k) => (
-                    <div className="stats-summary-stat" key={k}>
-                      {value}
+                  {player.values && player.values.length > 0 && (
+                    <div className="stats-summary-stat-group">
+                      {player.values.map((value, k) => (
+                        <div className="stats-summary-stat" key={k}>
+                          {value}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               ))}
             </section>
