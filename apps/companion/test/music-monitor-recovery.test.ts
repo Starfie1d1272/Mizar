@@ -244,3 +244,133 @@ test('automatic music bounds collection probes while telemetry changes and retri
   await director.tick();
   assert.equal(collectionReads, afterCleanup);
 });
+
+test('offline OBS produces zero automatic RPCs or failure diagnostics, aggregates disconnect retries, and preserves explicit operations', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-offline-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  await store.update((state) => {
+    state.sources.bgm = 'owned-source';
+    state.sourceScopes.bgm = 'owned-collection';
+  });
+  let now = 0;
+  let waitingForObs = true;
+  let obsOffline = true;
+  let sessionAttempts = 0;
+  let rpcCalls = 0;
+  let nextConnectionAttemptAt = 0;
+  const diagnostics: { stage: string; evidence: unknown }[] = [];
+
+  const device = createMusicDevice({
+    ownershipScope: async () => 'owned-collection',
+    async call(method) {
+      rpcCalls++;
+      if (method === 'GetSceneCollectionList') {
+        return { currentSceneCollectionName: OBS_COLLECTION };
+      }
+      if (method === 'GetSceneList') {
+        return { scenes: [] };
+      }
+      if (method === 'GetSceneItemList') {
+        return { sceneItems: [] };
+      }
+      if (method === 'GetInputSettings') {
+        return { inputSettings: {} };
+      }
+      if (method === 'GetInputList') {
+        return {
+          inputs: [{ inputUuid: 'owned-source', inputName: 'BGM', inputKind: 'ffmpeg_source' }],
+        };
+      }
+      if (method === 'GetInputAudioMonitorType') {
+        return { monitorType: 'OBS_MONITORING_TYPE_NONE' };
+      }
+      if (method === 'GetInputVolume') {
+        return { inputVolumeDb: -6, inputVolumeMul: 0.5 };
+      }
+      if (method === 'GetInputMute') {
+        return { inputMuted: false };
+      }
+      if (method === 'GetMediaInputStatus') {
+        return { mediaState: 'OBS_MEDIA_STATE_STOPPED', mediaDuration: 0, mediaCursor: 0 };
+      }
+      throw new Error(`Unexpected OBS request: ${method}`);
+    },
+  });
+  const provider: MusicDeviceProvider = {
+    collectionRevision: 1,
+    get nextConnectionAttemptAt() {
+      return nextConnectionAttemptAt;
+    },
+    session: async (run) => {
+      sessionAttempts++;
+      if (obsOffline) {
+        nextConnectionAttemptAt = now + 2000;
+        throw new Error('music_obs_unavailable');
+      }
+      return run(device, 1);
+    },
+    close: async () => {},
+  };
+  const truth = (): MusicTruth => ({
+    active: 'waiting',
+    production: true,
+    program: {
+      map: { name: 'de_test', phase: null },
+      cursor: { mapEpoch: 1 },
+      match: null,
+      clock: null,
+      status: { telemetry: 'fresh' },
+    } as MusicTruth['program'],
+  });
+
+  const director = new MusicDirector(
+    store,
+    provider,
+    truth,
+    () => now,
+    Math.random,
+    async () => false,
+    () => waitingForObs,
+  );
+  const originalPreviewEvent = store.previewEvent.bind(store);
+  store.previewEvent = (stage, evidence) => {
+    diagnostics.push({ stage, evidence });
+    originalPreviewEvent(stage, evidence);
+  };
+
+  // 1. OBS not started: waitingForObs = true -> 0 session attempts, 0 RPCs, 0 failure diagnostics
+  for (let i = 0; i < 20; i++) {
+    now += 250;
+    await director.tick();
+  }
+  assert.equal(sessionAttempts, 0);
+  assert.equal(rpcCalls, 0);
+  assert.equal(diagnostics.length, 0);
+
+  // 2. Explicit tick(true) bypasses waitingForObs and surfaces real unavailable error
+  now += 250;
+  await director.tick(true);
+  assert.equal(sessionAttempts, 1);
+  assert.equal(rpcCalls, 0);
+  assert.equal(diagnostics.filter((d) => d.stage === 'music_operation_failed').length, 1);
+
+  // 3. Disconnect / slow start while waitingForObs = false: backoff bounds session attempts & RepeatedDiagnostic suppresses duplicates
+  waitingForObs = false;
+  for (let i = 0; i < 20; i++) {
+    now += 250;
+    await director.tick();
+  }
+  assert.ok(sessionAttempts <= 4, `expected bounded reconnect attempts, got ${sessionAttempts}`);
+  assert.equal(diagnostics.filter((d) => d.stage === 'music_operation_failed').length, 1);
+
+  // 4. Reconnect: clears failure and emits music_operation_recovered
+  obsOffline = false;
+  nextConnectionAttemptAt = 0;
+  now += 5000;
+  await director.tick();
+  assert.equal(director.get().connection, 'connected');
+  assert.equal(director.get().failure, null);
+  assert.equal(diagnostics.filter((d) => d.stage === 'music_operation_recovered').length, 1);
+});
