@@ -11,21 +11,16 @@ import {
 } from './rivalhub-authorization.js';
 import { RivalHubReadClient, type StatsTarget } from './rivalhub-read-client.js';
 import {
-  liveErrorEvidence,
-  liveTimeout,
   requestFailureReason,
   requestFailureCode,
   readReliableBody,
-  rootNetworkCode,
-  type LiveErrorEvidence,
 } from './rivalhub-http-errors.js';
-import {
-  RELIABLE_SEND_TIMEOUT_MS,
-  parseReliableRejection,
-  type ReliableDeliveryResult,
-} from '../output/reliable-delivery.js';
+import type { ReliableDeliveryResult } from '../output/reliable-delivery.js';
 import { SerialCommitQueue } from './serial-commit.js';
-import { sameSourceSession } from '../scope/identities.js';
+import {
+  RivalHubEventTransport,
+  type RivalHubTransportSource,
+} from './rivalhub-event-transport.js';
 import type { CaptureReference } from '../output/capture-interval.js';
 import {
   RivalHubSourceState,
@@ -52,11 +47,6 @@ import {
 export { OFFICIAL_RIVALHUB_URL } from './rivalhub-authorization.js';
 export { statsTarget, type StatsTarget } from './rivalhub-read-client.js';
 
-type LiveFailure = {
-  stage: 'fetch' | 'read' | 'parse' | 'validate' | 'cancel';
-  error: LiveErrorEvidence;
-};
-
 export interface SourceCaptureLifecycle {
   createReference(cursor: ReliableEventV1['cursor']): CaptureReference;
   arm(identity: ExactSource, reference: CaptureReference): Promise<void>;
@@ -69,14 +59,7 @@ export interface SourceCaptureLifecycle {
   };
 }
 
-type Source = ExactSource & {
-  acknowledgedExecution?: string;
-  mapStartAttempt?: symbol;
-  deliveryExecution?: string;
-  paused?: boolean;
-  draining?: boolean;
-  drainReliable?: boolean;
-};
+type Source = RivalHubTransportSource;
 
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {
@@ -191,24 +174,57 @@ export class RivalHubConnection {
   private activeDeviceMatchId: string | null = null;
   private claimRevision = 0;
   private stoppedMatchId: string | null = null;
-  private controlFailure: string | null = null;
-  private controlFailureKey: string | null = null;
+  private readonly eventTransport = new RivalHubEventTransport(
+    {
+      authorization: {
+        request: (path, init) => this.authorization.request(path, init),
+      },
+      fetchImpl: (...args) => this.fetchImpl(...args),
+      sourceState: () => this.sourceState,
+      liveInFlight: () => this.liveInFlight,
+      isolatedRevokedSources: () => this.isolatedRevokedSources,
+      confirmedSourcesAwaitingPersistence: () => this.confirmedSourcesAwaitingPersistence,
+      installation: () => this.installation,
+      source: () => this.source,
+      stoppedMatchId: () => this.stoppedMatchId,
+      monotonicNow: () => this.monotonicNow(),
+      requireSourceState: () => this.requireSourceState(),
+      isCurrentInstallation: (scope) => this.isCurrentInstallation(scope),
+      business: (stage, payload, fields) => this.business(stage, payload, fields),
+      onDiagnostic: (operation, error) => this.onDiagnostic(operation, error),
+      originalError: (operation, error) => this.originalError(operation, error),
+      retryLive: () => this.retryLive(),
+      failureExecutionKey: (payload) => this.failureExecutionKey(payload),
+    },
+    {
+      controlFailure: null,
+      controlFailureKey: null,
+      nextLiveAt: 0,
+      liveFailures: 0,
+      liveFailureKind: null,
+      lastAcceptedAt: 0,
+      liveDelivery: {
+        cursor: null,
+        status: 'idle',
+        reason: null,
+        consecutiveUnaccepted: 0,
+        since: null,
+        notified: false,
+      },
+    },
+  );
   private failureExecutionKey(snapshot: {
     matchId: string;
     cursor: LiveSnapshotV1['cursor'];
   }): string {
     return JSON.stringify([snapshot.matchId, executionKey(snapshot.cursor), this.claimRevision]);
   }
-  private nextLiveAt = 0;
-  private liveFailures = 0;
-  private liveFailureKind: 'transport' | 'receiver' | null = null;
   private syncWatch: {
     key: string;
     matchId: string;
     since: number;
     incidentId: string | null;
   } | null = null;
-  private lastAcceptedAt = 0;
   private boundaryStatus:
     (() => 'continuity_chain_missing' | 'continuity_waiting' | null) | undefined;
   setBoundaryStatusProvider(
@@ -241,8 +257,8 @@ export class RivalHubConnection {
     if (this.activeDeviceName && this.activeDeviceMatchId === matchId)
       return result('other_device');
     const controlFailure =
-      snapshot && this.controlFailureKey === this.failureExecutionKey(snapshot)
-        ? this.controlFailure
+      snapshot && this.eventTransport.state.controlFailureKey === this.failureExecutionKey(snapshot)
+        ? this.eventTransport.state.controlFailure
         : null;
     // Only a current, bound formal execution can start a watch. Warmup and
     // unbound practice/demo inputs never establish an expected website stream.
@@ -272,15 +288,15 @@ export class RivalHubConnection {
       snapshot &&
       this.source?.matchId === snapshot.matchId &&
       this.source.deliveryExecution === executionKey(snapshot.cursor) &&
-      this.liveDelivery.cursor &&
-      executionKey(this.liveDelivery.cursor) === executionKey(snapshot.cursor);
+      this.eventTransport.state.liveDelivery.cursor &&
+      executionKey(this.eventTransport.state.liveDelivery.cursor) === executionKey(snapshot.cursor);
     const now = this.monotonicNow();
     const boundaryStatus = this.boundaryStatus?.() ?? null;
     if (
       !boundaryStatus &&
       current &&
-      this.liveDelivery.status === 'accepted' &&
-      now - this.lastAcceptedAt < 15_000
+      this.eventTransport.state.liveDelivery.status === 'accepted' &&
+      now - this.eventTransport.state.lastAcceptedAt < 15_000
     ) {
       watch.since = now;
       watch.incidentId = null;
@@ -294,7 +310,7 @@ export class RivalHubConnection {
         : !this.source
           ? 'source_unavailable'
           : current
-            ? (this.liveDelivery.reason ?? 'reception_unconfirmed')
+            ? (this.eventTransport.state.liveDelivery.reason ?? 'reception_unconfirmed')
             : 'map_start_pending');
     if (now - watch.since < 15_000 && !watch.incidentId) return result('waiting', reason);
     watch.incidentId ??= randomUUID();
@@ -313,14 +329,14 @@ export class RivalHubConnection {
   ): void {
     if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
       return;
-    this.controlFailureKey = this.failureExecutionKey(event);
-    this.controlFailure = state;
+    this.eventTransport.state.controlFailureKey = this.failureExecutionKey(event);
+    this.eventTransport.state.controlFailure = state;
   }
 
   retryLive(): void {
-    this.nextLiveAt = 0;
-    this.liveFailures = 0;
-    this.liveFailureKind = null;
+    this.eventTransport.state.nextLiveAt = 0;
+    this.eventTransport.state.liveFailures = 0;
+    this.eventTransport.state.liveFailureKind = null;
   }
 
   hasCurrentStart(snapshot: LiveSnapshotV1): boolean {
@@ -340,22 +356,6 @@ export class RivalHubConnection {
       this.sealCapture(this.sourceIdentity(this.source));
     }
   }
-  private liveDelivery: {
-    cursor: LiveSnapshotV1['cursor'] | null;
-    status: 'idle' | 'accepted' | 'dropped' | 'failing';
-    reason: string | null;
-    consecutiveUnaccepted: number;
-    since: number | null;
-    notified: boolean;
-    failure?: LiveFailure;
-  } = {
-    cursor: null,
-    status: 'idle',
-    reason: null,
-    consecutiveUnaccepted: 0,
-    since: null,
-    notified: false,
-  };
 
   /** Local delivery identity only; never includes installation credentials. */
   reliableAuthorityScope(): string | null {
@@ -553,15 +553,15 @@ export class RivalHubConnection {
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
           : {
-              status: this.liveDelivery.status,
-              cursor: this.liveDelivery.cursor,
-              reason: this.liveDelivery.reason,
-              failure: this.liveDelivery.failure ?? null,
-              consecutiveUnaccepted: this.liveDelivery.consecutiveUnaccepted,
+              status: this.eventTransport.state.liveDelivery.status,
+              cursor: this.eventTransport.state.liveDelivery.cursor,
+              reason: this.eventTransport.state.liveDelivery.reason,
+              failure: this.eventTransport.state.liveDelivery.failure ?? null,
+              consecutiveUnaccepted: this.eventTransport.state.liveDelivery.consecutiveUnaccepted,
               durationMs:
-                this.liveDelivery.since === null
+                this.eventTransport.state.liveDelivery.since === null
                   ? 0
-                  : Math.max(0, this.monotonicNow() - this.liveDelivery.since),
+                  : Math.max(0, this.monotonicNow() - this.eventTransport.state.liveDelivery.since),
             },
     };
   }
@@ -1493,8 +1493,8 @@ export class RivalHubConnection {
           await this.sourceState.clearIntent(intent.id);
           await this.updateCleanupSummary();
         }
-        this.controlFailureKey = this.failureExecutionKey(snapshot);
-        this.controlFailure =
+        this.eventTransport.state.controlFailureKey = this.failureExecutionKey(snapshot);
+        this.eventTransport.state.controlFailure =
           response.status === 401
             ? 'authorization_expired'
             : response.status === 403
@@ -1578,9 +1578,9 @@ export class RivalHubConnection {
         }
         this.resumeSource?.(scope);
         this.stoppedMatchId = null;
-        this.controlFailure = null;
+        this.eventTransport.state.controlFailure = null;
         this.retryLive();
-        this.liveDelivery = {
+        this.eventTransport.state.liveDelivery = {
           cursor: null,
           status: 'idle',
           reason: null,
@@ -1610,8 +1610,8 @@ export class RivalHubConnection {
       return this.view();
     } catch (error) {
       if (requestFailureReason(error) !== 'unknown') {
-        this.controlFailureKey = this.failureExecutionKey(snapshot);
-        this.controlFailure = requestFailureReason(error);
+        this.eventTransport.state.controlFailureKey = this.failureExecutionKey(snapshot);
+        this.eventTransport.state.controlFailure = requestFailureReason(error);
       }
       throw error;
     }
@@ -1716,539 +1716,40 @@ export class RivalHubConnection {
     if (await this.hasOutstandingReleaseWork()) throw new Error('数据源释放待重试或核对。');
   }
 
-  private async uploadReliable(
-    event: ReliableEventV1,
-    lineupSteam64: readonly string[],
-    signal?: AbortSignal,
-    isCurrent: () => boolean = () => true,
-    retainedSource?: ExactSource,
-  ): Promise<ReliableDeliveryResult> {
-    const evidence = (fields: Record<string, unknown>) =>
-      this.business('business_reliable', event, {
-        idempotencyKey: event.idempotencyKey,
-        eventKind: event.kind,
-        originalObservedAt: event.observedAt,
-        authorityRevision: source?.authorityRevision,
-        ...fields,
-      });
-    const source =
-      retainedSource &&
-      (!this.source ||
-        !this.isCurrentInstallation(retainedSource) ||
-        !sameExactSource(this.source, retainedSource))
-        ? retainedSource
-        : this.source;
-    if (!source) {
-      evidence({ reason: 'source_unavailable' });
-      return 'retry';
-    }
-    if (source.matchId !== event.matchId) return 'retry';
-    try {
-      if (signal?.aborted || !isCurrent()) return 'retry';
-      evidence({ reason: 'request_started', sentAt: new Date().toISOString() });
-      const response = await this.authorization.request('reliable', {
-        ...(signal ? { signal } : {}),
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-rivalhub-authority': String(source.authorityRevision),
-        },
-        body: JSON.stringify({ event, lineupSteam64 }),
-      });
-      const readBody =
-        response.ok ||
-        (response.status !== 408 && response.status !== 429 && response.status < 500);
-      const responseData = readBody ? await readReliableBody(response) : undefined;
-      const rejection = !response.ok ? parseReliableRejection(responseData) : undefined;
-      const needsAttention =
-        response.ok &&
-        responseData !== null &&
-        typeof responseData === 'object' &&
-        !Array.isArray(responseData) &&
-        (responseData as Record<string, unknown>).outcome === 'needs_attention';
-      if (!readBody) await response.body?.cancel().catch(() => undefined);
-      if (signal?.aborted || !isCurrent()) return 'retry';
-      evidence({
-        receiverOutcome: needsAttention ? 'needs_attention' : undefined,
-        rejectionReason: rejection?.reason,
-        requestId: rejection?.requestId,
-        recovery: rejection?.recovery,
-        reason: response.ok ? 'receiver_accepted' : `http_${response.status}`,
-        httpStatus: response.status,
-        acknowledgedAt: response.ok ? new Date().toISOString() : null,
-      });
-      if (response.ok)
-        return needsAttention ? { status: 'accepted', outcome: 'needs_attention' } : 'accepted';
-      if (
-        event.kind === 'map_started' &&
-        this.source === source &&
-        this.source?.deliveryExecution === executionKey(event.cursor)
-      ) {
-        this.controlFailureKey = this.failureExecutionKey(event);
-        this.controlFailure =
-          rejection?.reason ??
-          (response.status === 401
-            ? 'authorization_expired'
-            : response.status === 403
-              ? 'permission_denied'
-              : response.status === 409
-                ? 'context_conflict'
-                : `http_${response.status}`);
-      }
-      if (retainedSource && response.status === 401) return 'retry';
-      if (response.status === 403) {
-        if (this.source === source && this.source) this.source.paused = true;
-        return retainedSource ? 'retry' : 'rejected';
-      }
-      return response.status === 408 || response.status === 429 || response.status >= 500
-        ? 'retry'
-        : (rejection ?? 'rejected');
-    } catch (error) {
-      if (
-        isCurrent() &&
-        !signal?.aborted &&
-        event.kind === 'map_started' &&
-        this.source === source &&
-        this.source?.deliveryExecution === executionKey(event.cursor)
-      ) {
-        this.controlFailureKey = this.failureExecutionKey(event);
-        this.controlFailure = requestFailureReason(error);
-      }
-      evidence({
-        reason: signal?.aborted
-          ? requestFailureReason(signal.reason) === 'timeout'
-            ? 'timeout'
-            : 'request_aborted'
-          : requestFailureReason(error),
-        causeCode: requestFailureCode(error),
-      });
-      return 'retry';
-    }
-  }
-
-  private beginDeliveryExecution(source: Source, cursor: LiveSnapshotV1['cursor']): void {
-    const execution = executionKey(cursor);
-    if (source.deliveryExecution === execution) return;
-    source.deliveryExecution = execution;
-    this.retryLive();
-    this.liveDelivery = {
-      cursor,
-      status: 'idle',
-      reason: 'map_start_pending',
-      consecutiveUnaccepted: 0,
-      since: null,
-      notified: false,
-    };
-  }
-
-  async sendLive(snapshot: LiveSnapshotV1): Promise<void> {
-    this.requireSourceState();
-    const source = this.source;
-    const pending = this.sendLiveOnce(snapshot);
-    if (!source) return pending;
-    const inFlight = this.liveInFlight.get(source) ?? new Set<Promise<void>>();
-    inFlight.add(pending);
-    this.liveInFlight.set(source, inFlight);
-    try {
-      await pending;
-    } finally {
-      inFlight.delete(pending);
-      if (!inFlight.size) this.liveInFlight.delete(source);
-    }
-  }
-
-  private async sendLiveOnce(snapshot: LiveSnapshotV1): Promise<void> {
-    // Claiming a source does not establish the website's map/identity evidence.
-    // Keep the disposable lane behind the reliable start acknowledgement, also
-    // after re-claim, generation advance and map change. No old snapshot is queued.
-    const source = this.source;
-    if (this.stoppedMatchId === snapshot.matchId || source?.paused || source?.draining) return;
-    if (
-      !source ||
-      source.matchId !== snapshot.matchId ||
-      source.producerInstanceId !== snapshot.cursor.producerInstanceId ||
-      source.liveSessionId !== snapshot.cursor.liveSessionId
-    ) {
-      this.business('business_live', snapshot, {
-        reason: 'source_unavailable',
-        sourceUnavailableReason: !source
-          ? 'source_missing'
-          : source.matchId !== snapshot.matchId
-            ? 'match_mismatch'
-            : source.producerInstanceId !== snapshot.cursor.producerInstanceId
-              ? 'producer_mismatch'
-              : 'session_mismatch',
-      });
-      throw new Error('rivalhub_live_unavailable');
-    }
-    this.beginDeliveryExecution(source, snapshot.cursor);
-    const execution = executionKey(snapshot.cursor);
-    if (source.acknowledgedExecution !== execution) {
-      this.business('business_live', snapshot, { reason: 'map_start_pending' });
-      throw new Error('rivalhub_map_start_pending');
-    }
-    if (this.monotonicNow() < this.nextLiveAt) return;
-    let reason: string;
-    let accepted = false;
-    let dropped = false;
-    let lostAuthority = false;
-    let stage: LiveFailure['stage'] = 'fetch';
-    let failure: LiveFailure | undefined;
-    const signal = AbortSignal.timeout(4000);
-    const sentAt = new Date().toISOString();
-    let httpStatus: number | null = null;
-    let serverDate: string | null = null;
-    try {
-      // LIVE is disposable: one bounded request, no retries and no response payload logging.
-      const response = await this.fetchImpl(`${this.installation!.baseUrl}/api/mizar/live`, {
-        method: 'POST',
-        redirect: 'manual',
-        signal,
-        headers: {
-          authorization: `Bearer ${this.installation!.credential}`,
-          'content-type': 'application/json',
-          'x-rivalhub-authority': String(source.authorityRevision),
-        },
-        body: JSON.stringify(snapshot),
-      });
-      httpStatus = response.status;
-      const dateHeader = response.headers.get('date');
-      if (dateHeader && Number.isFinite(Date.parse(dateHeader)))
-        serverDate = new Date(dateHeader).toISOString();
-      if (response.ok || response.status === 429) {
-        // Bounded response consumption; remote details/URLs are never diagnostics.
-        stage = 'read';
-        const reader = (response.body as ReadableStream<Uint8Array> | null)?.getReader();
-        let text = '';
-        let bytes = 0;
-        let readFailed = false;
-        let readError: unknown;
-        try {
-          if (reader)
-            for (;;) {
-              const chunk = await reader.read();
-              if (chunk.done) break;
-              bytes += chunk.value.byteLength;
-              if (bytes > 4096)
-                throw Object.assign(new Error(''), {
-                  name: 'LiveResponseLimitError',
-                  code: 'LIVE_RESPONSE_TOO_LARGE',
-                });
-              text += new TextDecoder().decode(chunk.value);
-            }
-        } catch (error) {
-          readFailed = true;
-          readError = error;
-        }
-        try {
-          await reader?.cancel();
-        } catch (error) {
-          if (!readFailed) {
-            stage = 'cancel';
-            readFailed = true;
-            readError = error;
-          }
-        }
-        reader?.releaseLock();
-        if (readFailed) throw readError;
-        stage = 'parse';
-        const parsed: unknown = JSON.parse(text);
-        stage = 'validate';
-        if (
-          typeof parsed !== 'object' ||
-          parsed === null ||
-          Array.isArray(parsed) ||
-          (response.ok && !('accepted' in parsed && typeof parsed.accepted === 'boolean'))
-        )
-          throw Object.assign(new Error(''), {
-            name: 'LiveResponseShapeError',
-            code: 'LIVE_RESPONSE_INVALID',
-          });
-        const result = parsed as { accepted?: unknown; reason?: unknown };
-        accepted = response.ok && result.accepted === true;
-        const normal = ['frame_expired', 'contended', 'delivery_dropped'];
-        dropped =
-          (response.ok && result.accepted === false && normal.includes(String(result.reason))) ||
-          (response.status === 429 && result.reason === 'capacity');
-        reason = dropped
-          ? String(result.reason)
-          : result.reason === 'broadcast_unavailable'
-            ? 'broadcast_unavailable'
-            : response.ok
-              ? 'unknown_rejection'
-              : 'http_429';
-      } else {
-        reason = `http_${response.status}`;
-        lostAuthority = response.status === 403;
-        stage = 'cancel';
-        await response.body?.cancel();
-      }
-    } catch (error) {
-      this.originalError('live', error);
-      const evidence = liveErrorEvidence(error);
-      failure = { stage, error: evidence };
-      reason =
-        liveTimeout(evidence) || (signal.aborted && evidence.name === 'AbortError')
-          ? 'timeout'
-          : evidence.code === 'LIVE_RESPONSE_TOO_LARGE'
-            ? 'response_too_large'
-            : stage === 'parse' || stage === 'validate'
-              ? 'invalid_response'
-              : stage === 'fetch'
-                ? 'network_failed'
-                : stage === 'cancel'
-                  ? 'response_cancel_failed'
-                  : 'response_read_failed';
-      // Keep only bounded evidence. A newer frame may recover; never resend this frame.
-    }
-    if (this.source !== source || source.deliveryExecution !== execution)
-      throw new Error('rivalhub_live_unavailable');
-    if (lostAuthority) {
-      source.paused = true;
-    }
-    this.business('business_live', snapshot, {
-      reason: accepted ? 'receiver_accepted' : reason,
-      failureStage: failure?.stage,
-      causeCode: failure?.error.cause?.code ?? failure?.error.code,
-      sentAt,
-      producedAt: snapshot.producedAt,
-      cursor: snapshot.cursor,
-      map: snapshot.map,
-      capability: snapshot.capability,
-      httpStatus,
-      serverDate,
-      receiptScope: 'ingestion acceptance only; website viewer validation/render is not observed',
-      acknowledgedAt: accepted ? new Date().toISOString() : null,
-    });
-    const previous = this.liveDelivery;
-    if (accepted) {
-      this.controlFailure = null;
-      this.lastAcceptedAt = this.monotonicNow();
-      this.retryLive();
-      if (previous.notified)
-        this.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
-      this.liveDelivery = {
-        cursor: snapshot.cursor,
-        status: 'accepted',
-        reason: null,
-        consecutiveUnaccepted: 0,
-        since: null,
-        notified: false,
-      };
-      return;
-    }
-    if (!dropped) {
-      // Only pre-response, transient transport failures use the fast recovery lane.
-      // Receiver failures keep the longer budget; a new frame is always sent.
-      const code = failure ? rootNetworkCode(failure.error) : undefined;
-      const transientNetwork =
-        httpStatus === null &&
-        (reason === 'timeout' ||
-          (reason === 'network_failed' &&
-            [
-              'ECONNRESET',
-              'ECONNREFUSED',
-              'ENETUNREACH',
-              'EHOSTUNREACH',
-              'EAI_AGAIN',
-              'ETIMEDOUT',
-              'UND_ERR_SOCKET',
-              'UND_ERR_CONNECT_TIMEOUT',
-            ].includes(code ?? '')));
-      const kind = transientNetwork ? 'transport' : 'receiver';
-      this.liveFailures = this.liveFailureKind === kind ? this.liveFailures + 1 : 1;
-      this.liveFailureKind = kind;
-      this.nextLiveAt =
-        this.monotonicNow() +
-        Math.min(transientNetwork ? 2_000 : 8_000, 500 * 2 ** Math.min(this.liveFailures, 4));
-      this.controlFailureKey = this.failureExecutionKey(snapshot);
-      this.controlFailure =
-        reason === 'http_401'
-          ? 'authorization_expired'
-          : reason === 'http_403'
-            ? 'permission_denied'
-            : reason === 'http_409'
-              ? 'context_conflict'
-              : reason;
-    }
-    this.liveDelivery = {
-      cursor: snapshot.cursor,
-      status: dropped && previous.status !== 'failing' ? 'dropped' : 'failing',
-      reason,
-      consecutiveUnaccepted: previous.consecutiveUnaccepted + 1,
-      since: previous.since ?? this.monotonicNow(),
-      notified: previous.notified,
-      ...(failure ? { failure } : previous.failure ? { failure: previous.failure } : {}),
-    };
-    const duration = this.monotonicNow() - this.liveDelivery.since!;
-    let newlyNotified = false;
-    if (
-      !this.liveDelivery.notified &&
-      this.liveDelivery.consecutiveUnaccepted >= 5 &&
-      duration >= 10_000
-    ) {
-      this.liveDelivery.status = 'failing';
-      this.liveDelivery.notified = true;
-      newlyNotified = true;
-      this.onDiagnostic(
-        'live',
-        new Error(
-          `RivalHub LIVE 持续未接收：${reason}；count=${this.liveDelivery.consecutiveUnaccepted}；durationMs=${Math.round(duration)}；stage=${this.liveDelivery.failure?.stage ?? 'acceptance'}`,
-          { cause: this.liveDelivery.failure },
-        ),
-      );
-    }
-    if (lostAuthority || newlyNotified) throw new Error('rivalhub_live_unavailable');
+  sendLive(snapshot: LiveSnapshotV1): Promise<void> {
+    return this.eventTransport.sendLive(snapshot);
   }
 
   /** Deliver accepted work with its original durable authority, independent of the selected match. */
-  async sendRetainedReliable(
+  sendRetainedReliable(
     event: ReliableEventV1,
     identity: ExactSource,
     current: LiveSnapshotV1 | null,
     signal?: AbortSignal,
     retainedLineup?: readonly string[],
   ): Promise<ReliableDeliveryResult> {
-    this.requireSourceState();
-    if (
-      identity.matchId !== event.matchId ||
-      identity.competitionId !== event.competitionId ||
-      !sameSourceSession(identity, event.cursor) ||
-      !this.isCurrentInstallation(identity)
-    )
-      return 'retry';
-    const installation = this.installation;
-    const state = await this.sourceState.snapshot();
-    const key = exactKey(identity);
-    const record = state.records.find((item) => sameExactSource(item.identity, identity));
-    if (
-      !record ||
-      !['owned', 'release_pending'].includes(record.state) ||
-      record.installationRevoked ||
-      record.quarantineUncertain ||
-      this.confirmedSourcesAwaitingPersistence.has(key)
-    )
-      return 'retry';
-    if (this.source && sameExactSource(this.source, identity))
-      return this.sendReliable(event, current, signal, retainedLineup, identity);
-    const valid = () =>
-      this.installation === installation &&
-      this.isCurrentInstallation(identity) &&
-      !this.isolatedRevokedSources.has(key) &&
-      !this.confirmedSourcesAwaitingPersistence.has(key);
-    if (!valid()) return 'retry';
-    return this.uploadReliable(event, retainedLineup ?? [], signal, valid, identity);
+    return this.eventTransport.sendRetainedReliable(
+      event,
+      identity,
+      current,
+      signal,
+      retainedLineup,
+    );
   }
 
-  async sendReliable(
+  sendReliable(
     event: ReliableEventV1,
     current: LiveSnapshotV1 | null,
-    signal: AbortSignal = AbortSignal.timeout(RELIABLE_SEND_TIMEOUT_MS),
+    signal?: AbortSignal,
     retainedLineup?: readonly string[],
     retainedIdentity?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
-    this.requireSourceState();
-    if (
-      (this.stoppedMatchId === event.matchId || this.source?.paused) &&
-      !this.source?.drainReliable
-    )
-      return 'retry';
-    const source = this.source;
-    // Durable recovery keeps the original producer evidence. A new claim cannot
-    // authorize that old producer, even when the live session was restored.
-    if (source && !sameSourceSession(source, event.cursor)) {
-      this.business('business_reliable', event, {
-        idempotencyKey: event.idempotencyKey,
-        reason: 'producer_mismatch',
-      });
-      return 'rejected';
-    }
-    const sameExecution =
-      current?.matchId === event.matchId &&
-      current.cursor.producerInstanceId === event.cursor.producerInstanceId &&
-      current.cursor.liveSessionId === event.cursor.liveSessionId &&
-      current.cursor.programSourceGeneration === event.cursor.programSourceGeneration &&
-      current.cursor.mapEpoch === event.cursor.mapEpoch;
-    const observed =
-      retainedLineup ??
-      (sameExecution
-        ? current.players
-            .filter(
-              (player) =>
-                player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
-            )
-            .map((player) => player.sourcePlayerId)
-        : []);
-    if (signal.aborted) return 'retry';
-    const attempt = event.kind === 'map_started' ? Symbol('map_start') : undefined;
-    if (source && attempt) {
-      source.mapStartAttempt = attempt;
-      if (sameExecution) this.beginDeliveryExecution(source, event.cursor);
-    }
-    const isCurrent = () =>
-      (this.stoppedMatchId !== event.matchId || source?.drainReliable === true) &&
-      this.source === source &&
-      (attempt === undefined || source?.mapStartAttempt === attempt);
-    const result = await this.uploadReliable(
+    return this.eventTransport.sendReliable(
       event,
-      observed.length === 10 ? observed : [],
+      current,
       signal,
-      isCurrent,
+      retainedLineup,
       retainedIdentity,
     );
-    if (
-      typeof result === 'object' &&
-      result.status === 'accepted' &&
-      sameExecution &&
-      isCurrent() &&
-      !signal.aborted
-    ) {
-      this.controlFailureKey = this.failureExecutionKey(event);
-      this.controlFailure = 'reliable_needs_attention';
-      this.liveDelivery = {
-        ...this.liveDelivery,
-        cursor: event.cursor,
-        status: 'failing',
-        reason: 'reliable_needs_attention',
-        since: this.monotonicNow(),
-      };
-    }
-    if (
-      typeof result === 'object' &&
-      result.status === 'rejected' &&
-      sameExecution &&
-      isCurrent() &&
-      !signal.aborted &&
-      (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed')
-    ) {
-      this.controlFailureKey = this.failureExecutionKey(event);
-      this.controlFailure = result.reason;
-    }
-    if (attempt && source && isCurrent() && !signal.aborted) {
-      if (result === 'accepted' || (typeof result === 'object' && result.status === 'accepted')) {
-        source.acknowledgedExecution = executionKey(event.cursor);
-        this.business('business_reliable', event, {
-          idempotencyKey: event.idempotencyKey,
-          eventKind: event.kind,
-          reason: 'map_start_acknowledged',
-          acknowledgedAt: new Date().toISOString(),
-        });
-        if (source.deliveryExecution === executionKey(event.cursor)) {
-          if (typeof result === 'object' && result.status === 'accepted')
-            this.controlFailure = 'reliable_needs_attention';
-          else if (this.controlFailure !== 'context_reconfirming') this.controlFailure = null;
-        }
-      } else if (
-        (result === 'rejected' || (typeof result === 'object' && result.status === 'rejected')) &&
-        sameExecution &&
-        source.deliveryExecution === executionKey(event.cursor)
-      )
-        this.liveDelivery = {
-          ...this.liveDelivery,
-          status: 'failing',
-          reason: 'map_start_rejected',
-        };
-    }
-    return result;
   }
 }
