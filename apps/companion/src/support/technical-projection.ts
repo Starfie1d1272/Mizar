@@ -1,4 +1,4 @@
-import { diagnosticEvidence } from './diagnostic-evidence.js';
+import { diagnosticEvidence } from './diagnostic-value.js';
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

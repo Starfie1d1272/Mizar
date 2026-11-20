@@ -540,6 +540,11 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
         evidence: {
           password: 'fixture-performance-secret',
           nested: { kind: 'program_all_chat', evidence: { body: 'fixture-performance-chat' } },
+          serialized: JSON.stringify({
+            stage: 'program_all_chat_reset',
+            eventId: 'fixture-chat-reset',
+            evidence: { body: 'fixture-serialized-chat' },
+          }),
         },
       },
     ]),
@@ -580,7 +585,11 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   assert.match(events, /unpinned_performance/);
   assert.match(events, /\[redacted\]/);
   assert.match(events, /raw-chat-body/);
-  assert.doesNotMatch(events, /fixture-performance-secret|fixture-performance-chat/);
+  assert.match(events, /fixture-chat-reset/);
+  assert.doesNotMatch(
+    events,
+    /fixture-performance-secret|fixture-performance-chat|fixture-serialized-chat/,
+  );
   assert.deepEqual(await readFile(segment), compressed);
   assert.doesNotMatch(events, /uncommitted-partial-line|excluded-private-marker/);
   const generated = JSON.parse(

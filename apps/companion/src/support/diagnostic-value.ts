@@ -3,12 +3,47 @@ import { BOX_READ_TOKEN } from '../updates/contract.js';
 
 const credential =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|ticket)$/i;
+const chatIdentity = new Set([
+  'schema',
+  'eventId',
+  'producerKind',
+  'producerRunId',
+  'sequence',
+  'kind',
+  'stage',
+  'phase',
+  'outcome',
+  'time',
+  'observedAt',
+  'recordedAt',
+  'startupSessionId',
+  'taskId',
+  'operationId',
+  'parentOperationId',
+  'attemptId',
+  'sourceInterval',
+]);
+
+export function diagnosticEvidence(value: unknown): unknown {
+  return sanitize(value, '', new Set(), [], true);
+}
+
 /** Preserve technical context; replace credential values, never whole events. */
 export function diagnosticValue(
   value: unknown,
   key = '',
   seen = new Set<object>(),
   secrets: readonly string[] = [],
+): unknown {
+  return sanitize(value, key, seen, secrets, false);
+}
+
+function sanitize(
+  value: unknown,
+  key: string,
+  seen: Set<object>,
+  secrets: readonly string[],
+  excludeChat: boolean,
 ): unknown {
   if (
     key === 'ticket' &&
@@ -33,11 +68,12 @@ export function diagnosticValue(
         (value as unknown as Record<string, unknown>)[name],
       ]),
     );
-    const result = diagnosticValue(
+    const result = sanitize(
       { ...fields, name: value.name, message: value.message, stack: value.stack },
       key,
       seen,
       secrets,
+      excludeChat,
     );
     seen.delete(value);
     return result;
@@ -60,7 +96,7 @@ export function diagnosticValue(
       if (secret) cleanText = cleanText.replaceAll(secret, '[redacted]');
     if (/^\s*[{[]/.test(cleanText)) {
       try {
-        return JSON.stringify(diagnosticValue(JSON.parse(cleanText), key, seen, secrets));
+        return JSON.stringify(sanitize(JSON.parse(cleanText), key, seen, secrets, excludeChat));
       } catch {
         /* A plain error or partial record remains text. */
       }
@@ -98,14 +134,29 @@ export function diagnosticValue(
   if (typeof value !== 'object' || value === null) return value;
   if (seen.has(value)) return '[circular]';
   seen.add(value);
-  const result = Array.isArray(value)
-    ? value.map((v) => diagnosticValue(v, '', seen, secrets))
-    : Object.fromEntries(
-        Object.entries(value).map(([k, v]) => [
-          k,
-          diagnosticValue(v, k === 'key' && /stream/i.test(key) ? 'streamKey' : k, seen, secrets),
-        ]),
+  let result: unknown;
+  if (Array.isArray(value)) {
+    result = value.map((item) => sanitize(item, '', seen, secrets, excludeChat));
+  } else {
+    const record = value as Record<string, unknown>;
+    const kind = excludeChat ? String(record.kind ?? record.stage) : '';
+    const chat = kind === 'program_all_chat' || kind === 'program_all_chat_reset';
+    const entries = chat
+      ? Object.entries(record).filter(([name]) => chatIdentity.has(name))
+      : Object.entries(record);
+    for (const entry of entries) {
+      const [name, item] = entry;
+      const field = name === 'key' && /stream/i.test(key) ? 'streamKey' : name;
+      entry[1] = sanitize(item, field, seen, secrets, excludeChat);
+    }
+    if (chat) {
+      entries.push(
+        ['evidence', { excluded: 'raw-chat-body', scope: 'identity and source interval only' }],
+        ['coverage', { excluded: ['raw-chat-body'], unknown: [] }],
       );
+    }
+    result = Object.fromEntries(entries);
+  }
   seen.delete(value);
   return result;
 }
