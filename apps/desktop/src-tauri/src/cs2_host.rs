@@ -93,7 +93,7 @@ pub(crate) async fn begin_camera(
             gate.commit(Some(&preparation_id), || {
                 exit.commit(ticket, || {
                     submitted = true;
-                    let value = production_exit::camera_session(
+                    let value = crate::cs2_camera::camera_session(
                         &log,
                         "begin",
                         None,
@@ -105,7 +105,7 @@ pub(crate) async fn begin_camera(
                         .to_owned();
                     if let Err(error) = cs2.bind_managed_camera(game, lease.clone()) {
                         let _ =
-                            production_exit::camera_session(&log, "invalidate", Some(&lease), None);
+                            crate::cs2_camera::camera_session(&log, "invalidate", Some(&lease), None);
                         return Err(error);
                     }
                     Ok(())
@@ -128,10 +128,10 @@ pub(crate) async fn begin_camera(
 pub(crate) async fn cancel_camera(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<managed_cs2::ManagedCs2>>();
-        let mut cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
+        let cs2 = state.lock().map_err(|_| "CS2 状态不可用。")?;
         if let Some((lease, _)) = cs2.managed_camera_lease() {
             cs2.invalidate_managed_camera();
-            production_exit::camera_session(
+            crate::cs2_camera::camera_session(
                 &app.state::<DesktopLog>(),
                 "invalidate",
                 Some(&lease),
@@ -422,14 +422,8 @@ pub(crate) async fn finish_managed_cs2(
                         let _activity = activity.begin(2);
                         production_exit::finish_managed_game(
                             &app.state::<DesktopLog>(),
-                            |requires_proof| {
-                                cs2.finish()?;
-                                if requires_proof {
-                                    cs2.confirm_game_stopped()?;
-                                }
-                                Ok(())
-                            },
-                        )?;
+                            || cs2.finish_for_production(),
+                        )?.confirm()?;
                         workspace_presentation::refresh_finished_window_feedback(&app, &cs2);
                         Ok(())
                     },

@@ -64,6 +64,7 @@ export function registerOperationDiagnostics(
       beforeRecorded: boolean;
       handlerStartedAt: string | null;
       identity?: string;
+      beforeContext?: string;
     }
   >();
   const renewalContext = (state: ReturnType<typeof readState>) =>
@@ -125,8 +126,9 @@ export function registerOperationDiagnostics(
             (field) => request.headers[`x-mizar-${field}`] !== undefined,
           )
         ) {
+          renewal.beforeContext = renewalContext(renewal.before);
           renewal.identity = createHash('sha256')
-            .update(JSON.stringify([request.body, renewalContext(renewal.before)]))
+            .update(JSON.stringify([request.body, renewal.beforeContext]))
             .digest('hex');
           if (renewalObservations.get(request.routeOptions.url!)?.identity === renewal.identity)
             return done();
@@ -162,7 +164,7 @@ export function registerOperationDiagnostics(
         reply.statusCode < 300 &&
         outcome?.ok === true &&
         outcome.failed !== true &&
-        renewalContext(renewal.before) === renewalContext(after),
+        renewal.beforeContext === renewalContext(after),
       );
       if (renewal) renewal.compact = compact;
       const evidence = {

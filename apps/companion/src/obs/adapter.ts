@@ -120,10 +120,8 @@ export class ObsAdapter {
   onProgramChanged(callback: (kind: 'disconnected' | 'changed') => void): void {
     this.programChanged = callback;
   }
-  private bpClient: OBSWebSocket | undefined;
-  private bpDisconnect: (() => void) | undefined;
   onBpDisconnect(callback: () => void): void {
-    this.bpDisconnect = callback;
+    this.bpOwner.onDisconnect(callback);
   }
   private configurationPending = false;
   private preparationController: AbortController | undefined;
@@ -364,11 +362,7 @@ export class ObsAdapter {
   }
 
   private async commitConnectionConfig(config: ObsConfig): Promise<void> {
-    this.bpOwner.invalidate();
-    const bpClient = this.bpClient;
-    this.bpClient = undefined;
-    await bpClient?.disconnect().catch(() => undefined);
-    this.bpDisconnect?.();
+    await this.bpOwner.close(true);
     await this.configStore.save(config);
     this.audioRouting?.invalidateSelections();
     this.audioCoordinator.clearCommentaryChoices();
@@ -544,9 +538,7 @@ export class ObsAdapter {
     await this.commentaryTask;
     await this.outputs.close();
     await this.observations.close();
-    const bpClient = this.bpClient;
-    this.bpClient = undefined;
-    await bpClient?.disconnect().catch(() => undefined);
+    await this.bpOwner.close();
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
@@ -1816,100 +1808,23 @@ export class ObsAdapter {
   }
   setBpCompactVisible(visible: boolean, valid: () => boolean = () => true): Promise<void> {
     return this.serial(async () => {
-      if (!valid()) throw new Error('OBS 切场请求已失效。');
+      if (!valid() || this.recoveryClosed) throw new Error('OBS 切场请求已失效。');
       await this.outputs.read();
-      if (!valid()) throw new Error('OBS 切场请求已失效。');
-      let client = this.bpClient;
-      if (!client) {
-        const config = await this.configStore.read();
-        client = new OBSWebSocket();
-        const current = client;
-        const invalidate = () => {
-          if (this.bpClient !== current) return;
-          this.bpOwner.invalidate();
-          this.bpClient = undefined;
-          this.bpDisconnect?.();
-        };
-        client.on('ConnectionClosed', invalidate);
-        client.on('CurrentSceneCollectionChanging', () => {
-          this.bpOwner.invalidate();
-          this.bpDisconnect?.();
-        });
-        client.on('SceneItemEnableStateChanged', (event) => {
-          if (this.bpOwner.observeItem(event.sceneUuid, event.sceneItemId, event.sceneItemEnabled))
-            this.bpDisconnect?.();
-        });
-        client.on('SceneItemRemoved', (event) => {
-          if (this.bpOwner.observeRemoval(event.sceneUuid, event.sceneItemId))
-            this.bpDisconnect?.();
-        });
-        client.on('SceneRemoved', (event) => {
-          if (this.bpOwner.observeSceneRemoval(event.sceneUuid)) this.bpDisconnect?.();
-        });
-        let connectTimer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            client.connect(`ws://${config.host}:${config.port}`, config.password),
-            new Promise<never>((_, reject) => {
-              connectTimer = setTimeout(() => reject(new Error('OBS 连接超时。')), TIMEOUT_MS);
-            }),
-          ]);
-          this.bpClient = client;
-        } catch (error) {
-          await client.disconnect().catch(() => undefined);
-          throw error;
-        } finally {
-          if (connectTimer) clearTimeout(connectTimer);
-        }
-      }
-      const rpc: ObsRpc = {
-        reportsDispatch: true,
-        call: (type, data, onDispatch) => {
-          if (!valid()) throw new Error('OBS 切场请求已失效。');
-          onDispatch?.();
-          return (
-            client.call as (
-              name: string,
-              args?: Record<string, unknown>,
-            ) => Promise<Record<string, unknown>>
-          )(type, data);
-        },
-      };
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      const config = await this.configStore.read();
+      const endpoint = `ws://${config.host}:${config.port}`;
       try {
-        await Promise.race([
-          this.configStore
-            .read()
-            .then(async (config) =>
-              this.bpOwner.set(
-                this.bpOwner.preparationRpc(
-                  await this.configStore.managedResources.bind(
-                    rpc,
-                    `ws://${config.host}:${config.port}`,
-                    this.browserBaseUrl,
-                  ),
-                  this.browserBaseUrl,
-                ),
-                this.browserBaseUrl,
-                visible,
-              ),
-            ),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error('OBS 操作超时，请检查连接。')), TIMEOUT_MS);
-          }),
-        ]);
-        if (!visible && this.bpClient === client) {
-          this.bpClient = undefined;
-          await client.disconnect().catch(() => undefined);
-        }
+        await this.bpOwner.setConnected(
+          endpoint,
+          config.password,
+          this.browserBaseUrl,
+          visible,
+          () => valid() && !this.recoveryClosed,
+          (rpc) => this.configStore.managedResources.bind(rpc, endpoint, this.browserBaseUrl),
+          TIMEOUT_MS,
+        );
       } catch (error) {
         this.entryPermit = undefined;
-        this.bpOwner.invalidate();
-        if (this.bpClient === client) this.bpClient = undefined;
-        await client.disconnect().catch(() => undefined);
         throw error;
-      } finally {
-        if (timer) clearTimeout(timer);
       }
     });
   }

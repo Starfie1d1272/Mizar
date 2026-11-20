@@ -36,6 +36,32 @@ export const DELIVERY_LIMITS = {
   sendPerTick: 4,
 };
 export const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
+export const sendableBatch = (batch: Batch) =>
+  !batch.serverExpired && !batch.acknowledgedAt && batch.index.eventSchemaVersion === 2;
+
+export function queuedWireBytes(batch: Batch) {
+  return batch.bytes + (batch.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES);
+}
+
+/** Reclaim terminal metadata first. The manual exporter reads the wire files independently. */
+export function queueWithHistoryBudget(state: State, queue: Batch[]): Batch[] {
+  let bytes = queue.reduce((total, batch) => total + queuedWireBytes(batch), 0);
+  let count = queue.length;
+  let manifest = Buffer.byteLength(JSON.stringify({ ...state, queue }));
+  return queue.filter((batch) => {
+    if (
+      sendableBatch(batch) ||
+      (count <= LEGACY_QUEUE_LIMITS.batches &&
+        bytes <= LEGACY_QUEUE_LIMITS.queueBytes &&
+        manifest <= DELIVERY_LIMITS.manifestBytes)
+    )
+      return true;
+    bytes -= queuedWireBytes(batch);
+    manifest -= Buffer.byteLength(JSON.stringify(batch)) + (count > 1 ? 1 : 0);
+    count--;
+    return false;
+  });
+}
 export const diagnosticKind = /^[a-z][a-z0-9_.-]{0,63}$/;
 export const retryDelay = (failures: number) =>
   Math.ceil(
@@ -446,7 +472,7 @@ export async function recoverSealedBatch(directory: string, name: string, expect
   }
 }
 /** Fixed-length safe traversal of current producer segments; no full log buffer. */
-async function* sourceLines(directory: string, name: string): AsyncGenerator<string> {
+export async function* sourceLines(directory: string, name: string): AsyncGenerator<string> {
   const path = await safePath(directory, name);
   const before = await lstat(path);
   if (

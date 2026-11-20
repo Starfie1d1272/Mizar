@@ -302,7 +302,7 @@ fn entered(app: &tauri::AppHandle, id: &str) -> Result<bool, String> {
     crate::lifecycle_contract::cancellation_entered(&status)
 }
 fn request(app: &tauri::AppHandle, method: &str, path: &str, body: Value) -> Result<Value, String> {
-    let (status, value) = production_exit::request_with_identity(
+    let (status, value) = crate::companion_http::request_with_identity(
         &app.state::<DesktopLog>(),
         method,
         path,
@@ -398,7 +398,7 @@ async fn controlled_post(
     let id = id.to_owned();
     let body = body.to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = production_exit::request_with_stream(
+        let result = crate::companion_http::request_with_stream(
             &app.state::<DesktopLog>(),
             "POST",
             path,

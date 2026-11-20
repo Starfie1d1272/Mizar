@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod companion_http;
 mod cs2_activity;
+mod cs2_camera;
 mod cs2_config_identity;
 mod cs2_console;
 mod cs2_diagnostics;
@@ -405,7 +407,7 @@ fn run_desktop(
     let activation = windows_startup::ActivationSignal::new()
         .map_err(|_| "无法建立桌面窗口恢复信号。".to_string())?;
     // A retained Companion must revoke the previous Host before any UI can reconnect.
-    production_exit::camera_session(&log, "host-start", None, None)?;
+    crate::cs2_camera::camera_session(&log, "host-start", None, None)?;
     let managed = managed_cs2::ManagedCs2::new(log.clone());
     let camera_state = managed.camera_state();
     let mut tracker = GameTracker::default();
@@ -573,7 +575,7 @@ fn run_desktop(
             let camera_log = setup_log.clone();
             thread::spawn(move || {
                 while camera_running.load(Ordering::Acquire) {
-                    managed_cs2::pulse_camera(&camera_state, &camera_log);
+                    camera_state.pulse(&camera_log);
                     thread::sleep(Duration::from_secs(2));
                 }
             });
@@ -952,29 +954,11 @@ fn run_desktop(
                             if service_stopped {
                                 cs2.finish_with_service_stopped(service_stopped)
                             } else {
-                                let mut native_game_finished = false;
-                                let result = production_exit::finish_managed_game(
+                                production_exit::finish_managed_game(
                                     &cleanup_host.state::<DesktopLog>(),
-                                    |requires_proof| {
-                                        cs2.finish_with_service_stopped(false)?;
-                                        if requires_proof {
-                                            cs2.confirm_game_stopped()?;
-                                        }
-                                        native_game_finished = true;
-                                        Ok(())
-                                    },
-                                );
-                                match result {
-                                    Err(error) if native_game_finished => {
-                                        cleanup_host.state::<DesktopLog>().event(
-                                            "managed_source",
-                                            "deferred",
-                                            Some(&error),
-                                        );
-                                        Ok(())
-                                    }
-                                    result => result,
-                                }
+                                    || cs2.finish_for_production(),
+                                )?.record_deferred(&cleanup_host.state::<DesktopLog>(), "managed_source");
+                                Ok(())
                             }
                         },
                     );
