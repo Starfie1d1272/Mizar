@@ -510,6 +510,7 @@ export async function checkObsConfiguration(
   obs: ObsRpc,
   baseUrl: string,
   hiddenHud: { sceneUuid: string; inputUuid: string; itemId: number } | null = null,
+  observeInputs?: (inputs: unknown) => void,
 ): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const findings: ObsFinding[] = [];
@@ -559,6 +560,7 @@ export async function checkObsConfiguration(
     });
   const scenes = await obs.call('GetSceneList');
   const inputs = await obs.call('GetInputList');
+  observeInputs?.(inputs.inputs);
   const conflicts = new Set((await obs.managedResourceConflicts?.()) ?? []);
   for (const scene of desired)
     findings.push(...(await checkSceneVisual(obs, scene, scenes, inputs, conflicts, hiddenHud)));
