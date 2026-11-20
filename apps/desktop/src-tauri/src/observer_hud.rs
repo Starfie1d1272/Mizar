@@ -124,7 +124,7 @@ pub fn preflight(log: &DesktopLog, use_mulnx: bool) -> Result<bool, String> {
     if !use_mulnx {
         return Ok(false);
     }
-    let (code, value) = crate::production_exit::request_with_identity(
+    let (code, value) = crate::companion_http::request_with_identity(
         log,
         "GET",
         "/local/v1/observer-assist",

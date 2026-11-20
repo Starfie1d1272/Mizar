@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 export const SESSION_LIMITS = {
   segmentBytes: 1024 * 1024,
+  ordinarySegmentBytes: 2 * 1024 * 1024,
   segments: 64,
   retentionDays: 14,
   pendingBytes: 2 * 1024 * 1024,
@@ -396,20 +397,19 @@ export class SessionJournal {
   }
   private async append(line: string, bytes: number, segment: JournalSegment) {
     await this.initialize();
-    if (segment.size + bytes > SESSION_LIMITS.segmentBytes) await this.seal(segment);
+    const segmentBudget = (value: JournalSegment) =>
+      value.critical ? SESSION_LIMITS.segmentBytes : SESSION_LIMITS.ordinarySegmentBytes;
+    if (segment.size + bytes > segmentBudget(segment)) await this.seal(segment);
     // A failed collect after sealing must be retried before the empty successor accepts bytes.
     if (
       !segment.size &&
       !(
         await this.retained.collect({
           incomingBytes:
-            Math.max(SESSION_LIMITS.segmentBytes, bytes) +
+            Math.max(segmentBudget(segment), bytes) +
             this.segments
               .filter((other) => other !== segment && other.size > 0)
-              .reduce(
-                (total, other) => total + Math.max(SESSION_LIMITS.segmentBytes, other.size),
-                0,
-              ),
+              .reduce((total, other) => total + Math.max(segmentBudget(other), other.size), 0),
         })
       ).writable
     )

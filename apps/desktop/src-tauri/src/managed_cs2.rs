@@ -1,3 +1,4 @@
+use crate::cs2_camera::CameraLeaseState;
 use crate::cs2_process::{
     any_cs2_running, close_owned_process, cs2_pids, discover, identity, launch_timestamp, open,
     process_pids, read_identity, same_executable, submit_steam, Process, WorkspaceProcess,
@@ -78,58 +79,11 @@ pub struct ManagedCs2 {
     message: Option<String>,
     launch_observation: Option<Value>,
     selected_backup: Option<Value>,
-    camera: Arc<Mutex<Option<CameraLease>>>,
+    camera: CameraLeaseState,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
     source_resume: Mutex<Option<(String, std::time::Instant, bool)>>,
 }
 
-pub(crate) struct CameraLease {
-    process: WorkspaceProcess,
-    lease: String,
-    invalidated: bool,
-}
-impl CameraLease {
-    fn matches_running_game(&self, log: &crate::startup_log::DesktopLog) -> bool {
-        self.process.is_running()
-            && cs2_pids(log).is_ok_and(|pids| pids.as_slice() == [self.process.pid])
-    }
-}
-/// Serialize renewal with revocation. This lock never acquires ManagedCs2.
-pub(crate) fn pulse_camera(
-    state: &Mutex<Option<CameraLease>>,
-    log: &crate::startup_log::DesktopLog,
-) {
-    let mut state = match state.lock() {
-        Ok(state) => state,
-        Err(error) => {
-            if let Some(camera) = error.into_inner().as_mut() {
-                camera.invalidated = true;
-            }
-            return;
-        }
-    };
-    let Some(camera) = state.as_mut() else {
-        return;
-    };
-    if camera.invalidated {
-        return;
-    }
-    let result = if camera.matches_running_game(log) {
-        crate::production_exit::camera_session(log, "pulse", Some(&camera.lease), None)
-    } else {
-        Err("当前游戏状态已经变化。请重新检查游戏后重试。".into())
-    };
-    if let Err(error) = result {
-        camera.invalidated = true;
-        let retired =
-            crate::production_exit::camera_session(log, "invalidate", Some(&camera.lease), None)
-                .is_ok();
-        if retired {
-            *state = None;
-        }
-        log.event("managed_camera_isolation", "failure", Some(&error));
-    }
-}
 struct ReplacementTarget {
     process: Process,
     pid: u32,
@@ -167,7 +121,7 @@ impl ManagedCs2 {
             message: None,
             launch_observation: None,
             selected_backup: None,
-            camera: Arc::new(Mutex::new(None)),
+            camera: CameraLeaseState::default(),
             mulnx_launcher: None,
             source_resume: Mutex::new(None),
         }
@@ -324,14 +278,12 @@ impl ManagedCs2 {
             return Err("已有游戏配置恢复尚未完成，未关闭外部游戏。".into());
         }
         if target.as_ref().is_some_and(|target| target.managed) {
-            crate::production_exit::finish_managed_game(&self.log.clone(), |requires_proof| {
+            crate::production_exit::finish_managed_game(&self.log.clone(), || {
                 guard.check()?;
                 self.finish_with_guard(false, guard)?;
-                if requires_proof {
-                    self.confirm_game_stopped()?;
-                }
-                Ok(())
-            })?;
+                self.confirm_game_stopped()
+            })?
+            .confirm()?;
         } else {
             if let Some(target) = target {
                 let (created, actual) = identity(&target.process, &self.log)?;
@@ -535,11 +487,7 @@ impl ManagedCs2 {
             preserve_settings: pending.as_ref().is_some_and(|v| v.preserve_settings),
             pending: pending.is_some(),
             mulnx_launch_resumable,
-            camera_lease_ready: self.camera.lock().is_ok_and(|state| {
-                state.as_ref().is_some_and(|camera| {
-                    !camera.invalidated && camera.matches_running_game(&self.log)
-                })
-            }),
+            camera_lease_ready: self.camera.ready(&self.log),
             running,
             message: self.message.clone(),
         })
@@ -701,7 +649,7 @@ impl ManagedCs2 {
                 .preparation_id
                 .as_deref()
                 .and_then(|id| crate::preparation_task::mulnx_context(id).ok());
-            crate::production_exit::cleanup_mulnx(&self.log, Path::new(executable), preparation)?;
+            crate::mulnx_launch::cleanup_mulnx(&self.log, Path::new(executable), preparation)?;
             std::fs::remove_file(self.log.state_root.join("data/mulnx-launch/pending.json"))
                 .map_err(|_| "MulNX 启动记录无法清理，原备份仍保留。")?;
         }
@@ -848,17 +796,9 @@ impl ManagedCs2 {
         process: WorkspaceProcess,
         lease: String,
     ) -> Result<(), String> {
-        if !process.is_running() || cs2_pids(&self.log)? != vec![process.pid] {
-            return Err("游戏状态已经变化，运镜连接没有绑定。请重试。".into());
-        }
-        *self.camera.lock().map_err(|_| "运镜会话状态不可用。")? = Some(CameraLease {
-            process,
-            lease,
-            invalidated: false,
-        });
-        Ok(())
+        self.camera.bind(process, lease, &self.log)
     }
-    pub(crate) fn camera_state(&self) -> Arc<Mutex<Option<CameraLease>>> {
+    pub(crate) fn camera_state(&self) -> CameraLeaseState {
         self.camera.clone()
     }
     pub(crate) fn control_live_frame_rate(
@@ -901,31 +841,14 @@ impl ManagedCs2 {
         })
     }
 
-    pub fn managed_camera_lease(&mut self) -> Option<(String, bool)> {
-        let mut state = self
-            .camera
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let camera = state.as_mut()?;
-        if !camera.invalidated && !camera.matches_running_game(&self.log) {
-            camera.invalidated = true;
-        }
-        Some((camera.lease.clone(), camera.invalidated))
+    pub fn managed_camera_lease(&self) -> Option<(String, bool)> {
+        self.camera.current(&self.log)
     }
-    pub fn invalidate_managed_camera(&mut self) {
-        let mut state = self
-            .camera
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(camera) = state.as_mut() {
-            camera.invalidated = true;
-        }
+    pub fn invalidate_managed_camera(&self) {
+        self.camera.invalidate();
     }
-    pub fn clear_managed_camera(&mut self) {
-        *self
-            .camera
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
+    pub fn clear_managed_camera(&self) {
+        self.camera.clear();
     }
     pub fn start_preparation(
         &mut self,
@@ -1753,7 +1676,7 @@ impl ManagedCs2 {
                     }
                     // A crash can leave +exec in MulNX even after a game PID was recorded.
                     // Reconcile the owned launch option before clearing the key backup.
-                    crate::production_exit::cleanup_mulnx(&self.log, &executable, None)
+                    crate::mulnx_launch::cleanup_mulnx(&self.log, &executable, None)
                         .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
                     self.store.mark_mulnx_options_clean()?;
                     if any_cs2_running(&self.log)?
@@ -1845,6 +1768,12 @@ impl ManagedCs2 {
     pub fn finish(&mut self) -> Result<(), String> {
         self.finish_with_service_stopped(false)
     }
+
+    pub fn finish_for_production(&mut self) -> Result<(), String> {
+        self.finish()?;
+        self.log
+            .step("workspace_exit_stop_proof", || self.confirm_game_stopped())
+    }
     /// Only the verified service-stop path can skip the lease expiry wait.
     pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
         self.finish_with_guard(
@@ -1875,7 +1804,7 @@ impl ManagedCs2 {
             }
             // Read-only migration of an old external Demo marker. No new external
             // session can be created, and this marker never grants game ownership.
-            crate::production_exit::disconnect_camera(&self.log)?;
+            crate::cs2_camera::disconnect_camera(&self.log)?;
             let trial = crate::demo_test::quarantine(&self.log)?;
             crate::demo_test::complete(&self.log, trial.as_deref())?;
             self.message = Some("试播已结束，游戏保持运行。".into());
@@ -1896,13 +1825,8 @@ impl ManagedCs2 {
             let outcome = retire_camera_before_cleanup(
                 service_stopped,
                 || {
-                    crate::production_exit::camera_session(
-                        &self.log,
-                        "invalidate",
-                        Some(&lease),
-                        None,
-                    )
-                    .map(|_| ())
+                    crate::cs2_camera::camera_session(&self.log, "invalidate", Some(&lease), None)
+                        .map(|_| ())
                 },
                 || thread::sleep(Duration::from_millis(12100)),
             );

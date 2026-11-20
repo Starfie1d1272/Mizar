@@ -6,6 +6,7 @@ import {
   obsSceneName,
 } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
+import { OBSWebSocket } from 'obs-websocket-js';
 
 export const BP_COMPACT_INPUT = '禁选紧凑底栏';
 export const BP_COMPACT_PATH = '/program/bp-compact';
@@ -189,8 +190,24 @@ type PreparationReceipt = {
   onReceived?: (data: Record<string, unknown>) => void;
 };
 
-/** Tracks only the managed gameplay HUD scene item for one compact playback. */
+async function beforeDeadline<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Owns the compact playback lease and the connection observing its scene items. */
 export class BpOverlayOwner {
+  private connection: { client: OBSWebSocket; endpoint: string } | undefined;
+  private disconnected: (() => void) | undefined;
   private preparationReceipts: PreparationReceipt[] = [];
   private compactTransform: {
     sceneUuid: string;
@@ -198,6 +215,93 @@ export class BpOverlayOwner {
     itemId: number;
     fields: Record<string, unknown>;
   } | null = null;
+
+  onDisconnect(callback: () => void): void {
+    this.disconnected = callback;
+  }
+
+  async close(notify = false): Promise<void> {
+    this.invalidate();
+    await this.disconnect();
+    if (notify) this.disconnected?.();
+  }
+
+  private async disconnect(): Promise<void> {
+    const connection = this.connection;
+    this.connection = undefined;
+    await connection?.client.disconnect().catch(() => undefined);
+  }
+
+  async setConnected(
+    endpoint: string,
+    password: string,
+    baseUrl: string,
+    visible: boolean,
+    valid: () => boolean,
+    bind: (rpc: ObsRpc) => Promise<ObsRpc>,
+    timeoutMs: number,
+  ): Promise<void> {
+    if (this.connection && this.connection.endpoint !== endpoint) await this.close(true);
+    if (!valid()) throw new Error('OBS 切场请求已失效。');
+    const existing = this.connection;
+    const connection = existing ?? { endpoint, client: new OBSWebSocket() };
+    const { client } = connection;
+    const assertCurrent = () => {
+      if (!valid() || this.connection !== connection) throw new Error('OBS 切场请求已失效。');
+    };
+    try {
+      if (!existing) {
+        this.connection = connection;
+        const invalidate = () => {
+          if (this.connection === connection) void this.close(true);
+        };
+        client.on('ConnectionClosed', invalidate);
+        client.on('CurrentSceneCollectionChanging', invalidate);
+        client.on('SceneItemEnableStateChanged', (event) => {
+          if (
+            this.connection === connection &&
+            this.observeItem(event.sceneUuid, event.sceneItemId, event.sceneItemEnabled)
+          )
+            this.disconnected?.();
+        });
+        client.on('SceneItemRemoved', (event) => {
+          if (
+            this.connection === connection &&
+            this.observeRemoval(event.sceneUuid, event.sceneItemId)
+          )
+            this.disconnected?.();
+        });
+        client.on('SceneRemoved', (event) => {
+          if (this.connection === connection && this.observeSceneRemoval(event.sceneUuid))
+            this.disconnected?.();
+        });
+        await beforeDeadline(client.connect(endpoint, password), timeoutMs, 'OBS 连接超时。');
+      }
+      assertCurrent();
+      const rpc: ObsRpc = {
+        reportsDispatch: true,
+        async call(type, data, onDispatch) {
+          assertCurrent();
+          onDispatch?.();
+          return (await client.call(type as Parameters<OBSWebSocket['call']>[0], data)) as Record<
+            string,
+            unknown
+          >;
+        },
+      };
+      const operation = async () => {
+        const managed = await bind(rpc);
+        assertCurrent();
+        await this.set(this.preparationRpc(managed, baseUrl), baseUrl, visible);
+        assertCurrent();
+      };
+      await beforeDeadline(operation(), timeoutMs, 'OBS 操作超时，请检查连接。');
+      if (!visible) await this.disconnect();
+    } catch (error) {
+      if (this.connection === connection) await this.close();
+      throw error;
+    }
+  }
 
   /** Consume only one exact receipt of a submitted compact-owner write. */
   observePreparationEvent(event: string, data: Record<string, unknown>): boolean {

@@ -1,4 +1,5 @@
 import { performanceSegmentPattern } from './segments.js';
+import { findSourceEvidence, readPerformanceSource } from './delivery-source-evidence.js';
 import { isDiagnosticEvent } from '@mizar/protocol';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
@@ -23,7 +24,6 @@ import { diagnosticSourceUtc } from './envelope.js';
 import { diagnosticValue, type SessionJournal } from './session-journal.js';
 import {
   DELIVERY_LIMITS,
-  LEGACY_QUEUE_LIMITS,
   CONSENT,
   diagnosticKind,
   retryDelay,
@@ -44,7 +44,9 @@ import {
   orderedSources,
   mergedSourceLines,
   compress,
-  decompress,
+  queueWithHistoryBudget,
+  queuedWireBytes,
+  sendableBatch,
   type Batch,
   type Credentials,
   type Withdrawal,
@@ -189,7 +191,8 @@ export class DiagnosticDelivery {
       this.state.sessions = {};
       if (preserveCopies) {
         for (const batch of this.state.queue) {
-          if (!batch.serverExpired) this.omitted('consent_policy_changed', batch.index.events);
+          if (!sendableBatch(batch)) continue;
+          this.omitted('consent_policy_changed', batch.index.events);
           batch.serverExpired = true;
           batch.unavailableReason = 'consent_policy_changed';
         }
@@ -218,10 +221,9 @@ export class DiagnosticDelivery {
       this.observe(line);
     });
     if (this.state.consent) {
-      await this.recover();
       this.registerSession(0);
-      await this.save();
       await this.recover();
+      await this.save();
     }
     if (startTimer) {
       this.timer = setInterval(() => {
@@ -233,18 +235,12 @@ export class DiagnosticDelivery {
     }
     return this;
   }
-  /** Drop legacy event/1 or already-acknowledged wire references from queue accounting. */
+  /** Legacy event/1 bodies remain on disk for format classification by export. */
   private async isolateRetiredQueue() {
     const previous = this.state.queue;
     const current: Batch[] = [];
     let isolated = 0;
     for (const batch of previous) {
-      if (batch.acknowledgedAt) {
-        await unlink(join(this.queueDirectory, `${batch.id}.gz`)).catch((error) => {
-          if (!missing(error)) throw error;
-        });
-        continue;
-      }
       if (batch.index.eventSchemaVersion !== 2) {
         isolated++;
         continue;
@@ -269,6 +265,10 @@ export class DiagnosticDelivery {
     this.state.sessions[this.journal.sessionId] ??= { from, queued: from };
   }
   status() {
+    const active = this.state.queue.filter(sendableBatch);
+    const blocked = this.state.queue.filter(
+      (batch) => !batch.acknowledgedAt && batch.serverExpired,
+    );
     return {
       configured: Boolean(this.endpoint),
       consent: this.consentActive(),
@@ -278,21 +278,21 @@ export class DiagnosticDelivery {
       lastAttemptAt: this.state.lastAttemptAt,
       lastConfirmedAt: this.state.lastConfirmedAt,
       transportFailure: this.state.transportFailure,
-      queuedBatches: this.state.queue.length,
-      retainedAcknowledgedBatches: 0,
-      blockedBatches: this.state.queue.filter((value) => value.serverExpired).length,
-      queuedBytes: this.state.queue.reduce((n, v) => n + v.bytes, 0),
+      queuedBatches: active.length,
+      retainedAcknowledgedBatches: this.state.queue.filter((batch) => batch.acknowledgedAt).length,
+      blockedBatches: blocked.length,
+      queuedBytes: active.reduce((n, v) => n + v.bytes, 0),
       pendingBytes: this.pendingBytes,
       omitted: this.state.omitted,
       omissionReasons: this.state.omissionReasons,
       acknowledged: this.state.acknowledged,
       deletionPending: this.state.withdrawals.length,
-      retiredIdentityCount: 0,
+      retiredIdentityCount: this.state.retiredIdentities.length,
       nextAttemptAt: this.state.nextAttemptAt,
       failures: this.state.failures,
       consecutiveFailures: this.state.consecutiveFailures,
-      sendableBatches: this.state.queue.filter((value) => !value.serverExpired).length,
-      manualOnlyBatches: this.state.queue.filter((value) => value.serverExpired).length,
+      sendableBatches: active.length,
+      manualOnlyBatches: this.state.queue.length - active.length,
       error: this.error,
       scope:
         'technical diagnostics; not anonymous; cloud completeness is bounded by explicitly reported local and server budgets',
@@ -308,6 +308,14 @@ export class DiagnosticDelivery {
   }
   private async save() {
     await safePath(this.queueDirectory);
+    let queue = this.state.queue;
+    let text = JSON.stringify(this.state);
+    if (Buffer.byteLength(text) > DELIVERY_LIMITS.manifestBytes) {
+      queue = queueWithHistoryBudget(this.state, queue);
+      text = JSON.stringify({ ...this.state, queue });
+      if (Buffer.byteLength(text) > DELIVERY_LIMITS.manifestBytes)
+        throw new Error('manifest_budget');
+    }
     const temporary = join(this.queueDirectory, 'state.json.tmp');
     await unlink(temporary).catch((error) => {
       if (!missing(error)) throw error;
@@ -318,9 +326,6 @@ export class DiagnosticDelivery {
       0o600,
     );
     try {
-      const text = JSON.stringify(this.state);
-      if (Buffer.byteLength(text) > DELIVERY_LIMITS.manifestBytes)
-        throw new Error('manifest_budget');
       await fd.writeFile(text);
       await fd.sync();
     } finally {
@@ -330,6 +335,7 @@ export class DiagnosticDelivery {
       if (!missing(error)) throw error;
     });
     await rename(temporary, join(this.queueDirectory, 'state.json'));
+    this.state.queue = queue;
   }
   private consentActive() {
     return this.state.consent && this.requestedConsent && !this.revocationFenced;
@@ -585,23 +591,8 @@ export class DiagnosticDelivery {
         });
     }
   }
-  private async canonicalSourceExists(sessionId: string | undefined): Promise<boolean> {
-    if (!sessionId) return false;
-    if (sessionId === this.journal.sessionId) return true;
-    try {
-      const names = await readdir(this.directory);
-      if (names.some((name) => name.includes(sessionId))) return true;
-      const perf = await readdir(join(this.directory, 'performance-pending')).catch(() => []);
-      return perf.some((name) => name.includes(sessionId));
-    } catch {
-      return false;
-    }
-  }
   private nextUpload(): Batch | undefined {
-    return this.state.queue.find(
-      (batch) =>
-        !batch.serverExpired && !batch.acknowledgedAt && batch.index.eventSchemaVersion === 2,
-    );
+    return this.state.queue.find(sendableBatch);
   }
   private waitForTransportRecovery(): boolean {
     const failure = this.state.transportFailure;
@@ -622,6 +613,10 @@ export class DiagnosticDelivery {
     // A live commit must not overtake an older record in the disk snapshot.
     // Keep live notifications behind recovery until a complete scan is stable.
     this.recoveryNeeded = true;
+    if (this.state.queue.filter(sendableBatch).length >= DELIVERY_LIMITS.batches) {
+      this.error = 'queue_budget_local_journal_retained';
+      return;
+    }
     const startedRevision = this.sourceRevision;
     const sourceHealth = this.journal.health();
     const startedSequence = sourceHealth.sequence;
@@ -662,15 +657,8 @@ export class DiagnosticDelivery {
           if (++count % 32 === 0) await yieldIO();
           if (this.pendingBytes > DELIVERY_LIMITS.pendingBytes / 2 && !(await this.persist()))
             return;
-          if (
-            this.state.queue.filter((batch) => !batch.serverExpired && !batch.acknowledgedAt)
-              .length >= DELIVERY_LIMITS.batches
-          ) {
+          if (this.state.queue.filter(sendableBatch).length >= DELIVERY_LIMITS.batches) {
             this.error = 'queue_budget_local_journal_retained';
-            // Capacity may stop recovery before reaching the unqueued tail in a
-            // later segment. Keep scanning eligible source records after ACKs
-            // release space, including when this process has just restarted.
-            this.recoveryNeeded = true;
             return;
           }
         }
@@ -690,21 +678,9 @@ export class DiagnosticDelivery {
         performanceSegmentPattern.test(name),
       );
       const ordered: { name: string; run: string; sequence: number }[] = [];
-      const read = async (name: string) => {
-        const bytes = await secureRead(performanceDirectory, name, 1536 * 1024);
-        const raw = await decompress(bytes, { maxOutputLength: 1024 * 1024 });
-        const records = JSON.parse(raw.toString('utf8')) as Record<string, unknown>[];
-        if (
-          !Array.isArray(records) ||
-          records.length > DELIVERY_LIMITS.events ||
-          records.some((event) => event.schema !== 'mizar-diagnostic-event/2')
-        )
-          throw new Error('performance_source_format');
-        return records;
-      };
       for (const name of files) {
         try {
-          const records = await read(name);
+          const records = await readPerformanceSource(performanceDirectory, name);
           const first = records[0];
           if (!first) continue;
           const run = String(first.producerRunId);
@@ -730,7 +706,7 @@ export class DiagnosticDelivery {
       ordered.sort((a, b) => a.run.localeCompare(b.run) || a.sequence - b.sequence);
       for (const source of ordered) {
         try {
-          for (const event of await read(source.name)) {
+          for (const event of await readPerformanceSource(performanceDirectory, source.name)) {
             const admitted = this.observe(JSON.stringify(event) + '\n', true, 'performance:');
             if (admitted === false) {
               await this.persist();
@@ -777,6 +753,7 @@ export class DiagnosticDelivery {
     while (remaining > 0) {
       let count = Math.min(remaining, DELIVERY_LIMITS.events);
       let packets: { batch: Batch; compressed: Buffer }[];
+      let queue: Batch[];
       let skipped: number;
       for (;;) {
         packets = [];
@@ -849,15 +826,14 @@ export class DiagnosticDelivery {
             offset += size;
           }
         }
-        const queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
-        const active = queue.filter((batch) => !batch.serverExpired && !batch.acknowledgedAt);
+        queue = queueWithHistoryBudget(this.state, [
+          ...this.state.queue,
+          ...packets.map(({ batch }) => batch),
+        ]);
+        const active = queue.filter(sendableBatch);
         const capacity =
           active.length <= DELIVERY_LIMITS.batches &&
-          active.reduce((n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES), 0) <=
-            DELIVERY_LIMITS.queueBytes &&
-          queue.filter((batch) => !batch.acknowledgedAt).length <= LEGACY_QUEUE_LIMITS.batches &&
-          queue.reduce((n, v) => n + v.bytes + (v.sealed ? 0 : DIAGNOSTIC_PERMIT_BYTES), 0) <=
-            LEGACY_QUEUE_LIMITS.queueBytes;
+          active.reduce((n, batch) => n + queuedWireBytes(batch), 0) <= DELIVERY_LIMITS.queueBytes;
         const manifest =
           Buffer.byteLength(JSON.stringify({ ...this.state, queue })) <=
           DELIVERY_LIMITS.manifestBytes;
@@ -867,7 +843,7 @@ export class DiagnosticDelivery {
         const prefix = packets.map(({ batch }) => batch);
         const fitsEmptyQueue =
           prefix.length <= DELIVERY_LIMITS.batches &&
-          prefix.reduce((n, v) => n + v.bytes + DIAGNOSTIC_PERMIT_BYTES, 0) <=
+          prefix.reduce((n, batch) => n + queuedWireBytes(batch), 0) <=
             DELIVERY_LIMITS.queueBytes &&
           Buffer.byteLength(JSON.stringify({ ...this.state, queue: prefix })) <=
             DELIVERY_LIMITS.manifestBytes;
@@ -925,7 +901,7 @@ export class DiagnosticDelivery {
           omitted: this.state.omitted,
           omissionReasons: { ...this.state.omissionReasons },
         };
-        this.state.queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
+        this.state.queue = queue;
         for (const item of selected) {
           const cursor = this.state.sessions[item.cursorId];
           if (cursor) {
@@ -1154,7 +1130,7 @@ export class DiagnosticDelivery {
     if (identity.enrollmentAttempted || identity.token) this.state.retiredIdentities.push(identity);
     let retained = 0;
     for (const batch of this.state.queue)
-      if (!batch.serverExpired) {
+      if (sendableBatch(batch)) {
         batch.serverExpired = true;
         batch.unavailableReason = 'installation_lease_closed';
         this.omitted('installation_lease_closed', batch.index.events);
@@ -1500,12 +1476,13 @@ export class DiagnosticDelivery {
         throw transportReceiptError('upload', response.status, ack);
       await this.transaction(async () => {
         if (epoch !== this.epoch || !this.consentActive()) return;
-        const keepLocalCopy = !(await this.canonicalSourceExists(batch.index.sessionId));
+        const sourceEvidence = await findSourceEvidence(this.directory, bytes);
+        if (epoch !== this.epoch || !this.consentActive()) return;
+        const resumeCollection = this.error?.endsWith('_budget_local_journal_retained');
         const previous = structuredClone(this.state);
-        if (keepLocalCopy) {
+        if (!sourceEvidence) {
           const retained = this.state.queue.find((value) => value.id === batch.id)!;
           retained.acknowledgedAt = new Date(this.now()).toISOString();
-          retained.serverExpired = true;
           retained.unavailableReason = 'acknowledged_local_history';
         } else {
           this.state.queue = this.state.queue.filter((value) => value.id !== batch.id);
@@ -1522,12 +1499,16 @@ export class DiagnosticDelivery {
           this.state = previous;
           throw error;
         }
-        if (!keepLocalCopy) {
+        if (resumeCollection) this.nextCollectionAt = this.now();
+        if (sourceEvidence && (await sourceEvidence())) {
           await unlink(join(this.queueDirectory, `${batch.id}.gz`)).catch((error) => {
-            if (!missing(error)) throw error;
+            if (!missing(error))
+              this.journal.record('diagnostic_acknowledged_wire_cleanup_failed', {
+                batchId: batch.id,
+                error: diagnosticValue(error),
+              });
           });
         }
-        this.recoveryNeeded = true;
       });
     } catch (error) {
       if (epoch !== this.epoch || this.requestedPause) {

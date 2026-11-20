@@ -1,11 +1,11 @@
 //! Host exit and managed CS2 cleanup preserve Companion production safety boundaries.
+use crate::companion_http::{request, request_with_identity, runtime_token};
+use crate::cs2_camera::disconnect_camera;
 use crate::desktop_types::{WorkspaceExitStage, WorkspaceExitStatus};
 use crate::{
     cs2_activity, demo_test, managed_cs2, observer_workspace, startup_log::DesktopLog,
     workspace_presentation,
 };
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -213,233 +213,9 @@ pub fn cleanup_results(
     }
 }
 
-fn io_failure(log: &DesktopLog, phase: &str, error: &std::io::Error, summary: &str) -> String {
-    log.event(
-        "production_finish",
-        "failure",
-        Some(&format!(
-            "phase={phase}; os_code={:?}; cause={error:?}",
-            error.raw_os_error()
-        )),
-    );
-    summary.into()
-}
-fn request(
-    log: &DesktopLog,
-    method: &str,
-    path: &str,
-    body: &str,
-    deadline: Instant,
-) -> Result<(u16, serde_json::Value), String> {
-    request_with_identity(log, method, path, body, deadline, None)
-}
-
-fn wire_request(method: &str, path: &str, body: &str, token: Option<&str>) -> String {
-    let identity = match token {
-        Some(token) => format!("x-runtime-token: {token}\r\n"),
-        None => "Origin: http://127.0.0.1:3000\r\n".into(),
-    };
-    format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n{identity}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
-}
-
-fn request_failure(token: Option<&str>, production_summary: &'static str) -> &'static str {
-    if token.is_some() {
-        "本场收尾请求未完成。请重试；再次失败时查看诊断。"
-    } else {
-        production_summary
-    }
-}
-
-pub(crate) fn request_with_identity(
-    log: &DesktopLog,
-    method: &str,
-    path: &str,
-    body: &str,
-    deadline: Instant,
-    token: Option<&str>,
-) -> Result<(u16, serde_json::Value), String> {
-    request_with_stream(log, method, path, body, deadline, token, |_| Ok(()))
-}
-
-pub(crate) fn request_with_stream(
-    log: &DesktopLog,
-    method: &str,
-    path: &str,
-    body: &str,
-    deadline: Instant,
-    token: Option<&str>,
-    connected: impl FnOnce(&TcpStream) -> Result<(), String>,
-) -> Result<(u16, serde_json::Value), String> {
-    let timeout = deadline
-        .checked_duration_since(Instant::now())
-        .ok_or(request_failure(token, "制作收尾超时，请重试。"))?;
-    let address: SocketAddr = "127.0.0.1:3000".parse().unwrap();
-    let mut stream = TcpStream::connect_timeout(&address, timeout.min(Duration::from_secs(1)))
-        .map_err(|error| {
-            io_failure(
-                log,
-                "tcp_connect",
-                &error,
-                request_failure(token, "无法连接制作服务，游戏与备份仍保留。"),
-            )
-        })?;
-    connected(&stream)?;
-    stream.set_write_timeout(Some(timeout)).map_err(|error| {
-        io_failure(
-            log,
-            "tcp_write_timeout",
-            &error,
-            request_failure(
-                token,
-                "收尾请求通信设置失败，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-            ),
-        )
-    })?;
-    stream
-        .write_all(wire_request(method, path, body, token).as_bytes())
-        .map_err(|error| {
-            io_failure(
-                log,
-                "tcp_write",
-                &error,
-                request_failure(
-                    token,
-                    "收尾请求发送失败，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-                ),
-            )
-        })?;
-    let mut bytes = Vec::new();
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or(request_failure(token, "制作收尾超时，请重试。"))?;
-        stream.set_read_timeout(Some(remaining)).map_err(|error| {
-            io_failure(
-                log,
-                "tcp_read_timeout",
-                &error,
-                request_failure(
-                    token,
-                    "收尾请求通信设置失败，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-                ),
-            )
-        })?;
-        let mut buffer = [0; 4096];
-        let count = stream.read(&mut buffer).map_err(|error| {
-            io_failure(
-                log,
-                "tcp_read",
-                &error,
-                request_failure(
-                    token,
-                    "收尾服务响应读取失败，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-                ),
-            )
-        })?;
-        if count == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..count]);
-        if bytes.len() > 64 * 1024 {
-            return Err(request_failure(
-                token,
-                "收尾服务响应无法解析，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-            )
-            .into());
-        }
-    }
-    let response = std::str::from_utf8(&bytes).map_err(|error| {
-        log.event(
-            "production_finish",
-            "failure",
-            Some(&format!("phase=response_utf8; cause={error}")),
-        );
-        request_failure(
-            token,
-            "收尾服务响应无法解析，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-        )
-    })?;
-    let (headers, payload) = response.split_once("\r\n\r\n").ok_or(request_failure(
-        token,
-        "收尾服务响应无法解析，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-    ))?;
-    let status = headers
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or(request_failure(
-            token,
-            "收尾服务响应无法解析，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-        ))?;
-    // Fastify's JSON responses have Content-Length. Fail closed on other framing.
-    if headers.to_ascii_lowercase().contains("transfer-encoding:") {
-        return Err(request_failure(token, "制作收尾响应格式不支持。").into());
-    }
-    let value = serde_json::from_str(payload).map_err(|error: serde_json::Error| {
-        log.event(
-            "production_finish",
-            "failure",
-            Some(&format!(
-                "phase=response_json; category={:?}; line={}; column={}",
-                error.classify(),
-                error.line(),
-                error.column()
-            )),
-        );
-        request_failure(
-            token,
-            "收尾服务响应无法解析，游戏和备份仍保留。请查看诊断，处理后再次退出。",
-        )
-    })?;
-    Ok((status, value))
-}
 const EXIT_ENDPOINT: &str = "/operator/runtime/local-match-exit";
 const EXIT_UNCONFIRMED: &str =
     "收尾已执行，但游戏退出和本场收尾未确认。请重试结束游戏；再次失败时查看诊断。";
-
-pub(crate) fn runtime_token(log: &DesktopLog) -> Result<String, String> {
-    let failure = "本地服务身份校验失败。请重新打开 Mizar；再次失败时查看诊断。";
-    let file = std::fs::File::open(log.state_root.join("data/runtime.json"))
-        .map_err(|error| io_failure(log, "runtime_read", &error, failure))?;
-    let mut bytes = Vec::new();
-    file.take(64 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| io_failure(log, "runtime_read", &error, failure))?;
-    if bytes.len() > 64 * 1024 {
-        log.event(
-            "production_finish",
-            "failure",
-            Some("phase=runtime_read; size_limit_exceeded"),
-        );
-        return Err(failure.into());
-    }
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
-        // Never format JSON errors with input values or include the private state.
-        log.event(
-            "production_finish",
-            "failure",
-            Some(&format!(
-                "phase=runtime_json; category={:?}; line={}; column={}",
-                error.classify(),
-                error.line(),
-                error.column()
-            )),
-        );
-        failure
-    })?;
-    value["controlToken"]
-        .as_str()
-        .filter(|token| token.len() == 64 && token.bytes().all(|c| c.is_ascii_hexdigit()))
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            log.event(
-                "production_finish",
-                "failure",
-                Some("phase=runtime_identity; invalid_token_shape"),
-            );
-            failure.into()
-        })
-}
 
 fn exit_request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = runtime_token(log)?;
@@ -577,46 +353,32 @@ pub fn invalidate_local_match_exit(log: &DesktopLog) -> Result<(), String> {
     }
 }
 
-fn finish_with_qualification(
-    prepare: impl FnOnce() -> Result<Option<crate::lifecycle_contract::Qualification>, String>,
-    finish: impl FnOnce(bool) -> Result<(), String>,
-    settle: impl FnOnce(&crate::lifecycle_contract::Qualification) -> Result<(), String>,
-    confirm: impl FnOnce(crate::lifecycle_contract::Qualification) -> Result<(), String>,
-) -> Result<(), String> {
-    let qualification = prepare();
-    // Cleanup is required even if the private Companion handshake is unavailable.
-    finish(matches!(&qualification, Ok(Some(_))))?;
-    match qualification {
-        Ok(Some(qualification)) => {
-            settle(&qualification).map_err(|_| EXIT_UNCONFIRMED.to_string())?;
-            confirm(qualification).map_err(|_| EXIT_UNCONFIRMED.into())
+#[must_use]
+pub struct ManagedGameHandoff(Result<(), String>);
+
+impl ManagedGameHandoff {
+    pub fn confirm(self) -> Result<(), String> {
+        self.0
+    }
+
+    pub fn record_deferred(self, log: &DesktopLog, stage: &str) {
+        if let Err(error) = self.0 {
+            log.event(stage, "deferred", Some(&error));
         }
-        Ok(None) => Ok(()),
-        Err(_) => Err(EXIT_UNCONFIRMED.into()),
     }
 }
 
 /// Caller holds the managed CS2 mutex across prepare, native cleanup and confirmation.
 pub fn finish_managed_game(
     log: &DesktopLog,
-    finish: impl FnOnce(bool) -> Result<(), String>,
-) -> Result<(), String> {
+    finish_and_verify: impl FnOnce() -> Result<(), String>,
+) -> Result<ManagedGameHandoff, String> {
     let retirement = managed_source_request(
         log,
         serde_json::json!({"action":"retire","phase":"prepare"}),
     );
-    let mut stopped = false;
-    let local = finish_with_qualification(
-        || prepare_local_match_exit(log),
-        |_| {
-            let result = finish(true);
-            stopped = result.is_ok();
-            result
-        },
-        |qualification| settle_local_match_exit(log, qualification),
-        |qualification| confirm_local_match_exit(log, qualification),
-    );
-    if !stopped {
+    let qualification = prepare_local_match_exit(log);
+    if let Err(error) = finish_and_verify() {
         // Local cleanup failed before the source handshake could finish. Do not
         // leave the retirement open: a later commit or production session would
         // make its ticket impossible to settle.
@@ -627,8 +389,15 @@ pub fn finish_managed_game(
         {
             abort_retirement(log, ticket);
         }
-        return local;
+        return Err(error);
     }
+    let local = match qualification {
+        Ok(Some(qualification)) => settle_local_match_exit(log, &qualification)
+            .and_then(|()| confirm_local_match_exit(log, qualification))
+            .map_err(|_| EXIT_UNCONFIRMED.to_string()),
+        Ok(None) => Ok(()),
+        Err(_) => Err(EXIT_UNCONFIRMED.into()),
+    };
     let source = (|| -> Result<(), String> {
         let retirement = retirement.as_ref().map_err(|error| error.to_string())?;
         let ticket = retirement["ticket"]
@@ -636,7 +405,7 @@ pub fn finish_managed_game(
             .ok_or("游戏配置恢复没有完成。请重试。")?;
         confirm_retirement(log, ticket)
     })();
-    cleanup_results(local, source)
+    Ok(ManagedGameHandoff(cleanup_results(local, source)))
 }
 
 /// Replacement belongs to this preparation task, even after its workspace session opens.
@@ -665,151 +434,6 @@ pub fn prepare_external_entry(
     }
     disconnect_camera(log)?;
     invalidate_local_match_exit(log)
-}
-
-/// Existing private runtime identity; browsers cannot renew a native lease.
-pub fn cleanup_mulnx(
-    log: &DesktopLog,
-    cs2: &std::path::Path,
-    preparation: Option<serde_json::Value>,
-) -> Result<serde_json::Value, String> {
-    prepare_mulnx_with_demo(
-        log,
-        cs2,
-        false,
-        false,
-        None,
-        false,
-        preparation,
-        true,
-        None,
-        None,
-    )
-}
-
-pub fn prepare_mulnx_with_demo(
-    log: &DesktopLog,
-    cs2: &std::path::Path,
-    update: bool,
-    spectator_cfg: bool,
-    demo_cfg: Option<&str>,
-    capture_compatibility: bool,
-    preparation: Option<serde_json::Value>,
-    cleanup: bool,
-    window_geometry: Option<crate::cs2_video::VideoSize>,
-    console_journal: Option<&serde_json::Value>,
-) -> Result<serde_json::Value, String> {
-    let token = runtime_token(log)?;
-    // Prewarming/cleanup never enables capture. Only this prepared launch can,
-    // and a changed or unreadable consent setting degrades capture alone.
-    let console_capture = console_journal.is_some_and(|journal| {
-        if journal["consoleDiagnostics"]["version"] != 1 {
-            return false;
-        }
-        match crate::cs2_console::settings(log) {
-            Ok(config)
-                if config["enabled"] == true
-                    && config["generation"] == journal["consoleDiagnostics"]["generation"] =>
-            {
-                true
-            }
-            result => {
-                log.event(
-                    "cs2_console_prepare",
-                    "interrupted",
-                    Some(
-                        &serde_json::json!({
-                            "reason":"consent_changed_before_mulnx_launch",
-                            "current":format!("{result:?}"),"condebugRequested":false
-                        })
-                        .to_string(),
-                    ),
-                );
-                false
-            }
-        }
-    });
-    let protect_previous_console =
-        console_journal.is_some_and(|journal| !journal["consoleDiagnosticsWarning"].is_null());
-    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
-    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
-    if let Some(size) = window_geometry {
-        body["windowGeometry"] = serde_json::json!({"width":size.width,"height":size.height});
-    }
-    if let Some(preparation) = preparation {
-        body["preparation"] = preparation;
-    }
-    let body = body.to_string();
-    let (code, value) = request_with_identity(
-        log,
-        "POST",
-        "/operator/runtime/mulnx-prepare",
-        &body,
-        Instant::now() + Duration::from_secs(240),
-        Some(&token),
-    )?;
-    if code != 200 {
-        log.event(
-            "mulnx_prepare",
-            "failure",
-            Some(&format!("http={code}; response={value}")),
-        );
-        return Err(value["message"]
-            .as_str()
-            .unwrap_or("MulNX 准备失败，请重试。")
-            .into());
-    }
-    Ok(value)
-}
-
-pub fn camera_session(
-    log: &DesktopLog,
-    action: &str,
-    lease: Option<&str>,
-    revision: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    let token = runtime_token(log)?;
-    let mut body = serde_json::json!({"action": action, "host": log.session_id});
-    if let Some(lease) = lease {
-        body["lease"] = lease.into();
-    }
-    if let Some(revision) = revision {
-        body[if action == "begin-demo" {
-            "requestId"
-        } else {
-            "expectedRevision"
-        }] = revision.into();
-    }
-    let (code, value) = request_with_identity(
-        log,
-        "POST",
-        "/operator/runtime/camera-session",
-        &body.to_string(),
-        Instant::now() + Duration::from_secs(2),
-        Some(&token),
-    )?;
-    if code != 200 || value["ok"] != true {
-        if action == "begin" && code == 409 && value["notStarted"] == true {
-            return Err("camera_not_started:运镜准备条件已变化，请重试。".into());
-        }
-        return Err("原生运镜会话已失效；请结束制作后重新借用。".into());
-    }
-    Ok(value)
-}
-
-pub fn disconnect_camera(log: &DesktopLog) -> Result<(), String> {
-    let (code, camera) = request(
-        log,
-        "POST",
-        "/operator/orchestration",
-        r#"{"action":"disconnect"}"#,
-        Instant::now() + Duration::from_secs(2),
-    )?;
-    // held is the operator's automatic/manual choice; disconnect preserves it.
-    if code != 200 || camera["status"]["connected"] != false {
-        return Err("旧运镜连接未能隔离，请检查本地服务；执行及停止均未确认。".into());
-    }
-    Ok(())
 }
 
 pub fn finish_companion(log: &DesktopLog) -> Result<(), String> {
@@ -953,29 +577,22 @@ pub(crate) async fn finish_workspace(
         || -> Result<(), String> {
         // Host-owned recovery evidence determines local work even when Companion is offline.
         let restoring_demo = cs2.has_demo_journal()? || demo_test::requires_recovery(&log, None);
-        let mut finish_game = |requires_proof| -> Result<(), String> {
+        let mut finish_game = || -> Result<(), String> {
             let _activity = activity.begin(2);
             if confirm_steam_cancelled == Some(true) {
                 log.step("workspace_exit_restore_backup", || cs2.restore_backup(true))?;
             }
-            log.step("workspace_exit_game_finish", || cs2.finish())?;
-            if requires_proof {
-                log.step("workspace_exit_stop_proof", || cs2.confirm_game_stopped())?;
-            }
-            native_game_finished = true;
-            Ok(())
+            log.step("workspace_exit_game_finish", || {
+                if restoring_demo { cs2.finish() } else { cs2.finish_for_production() }
+            })
         };
         if restoring_demo {
-            finish_game(false)?;
+            finish_game()?;
         } else {
-            let result = crate::production_exit::finish_managed_game(&log, finish_game);
-            if let Err(error) = result {
-                if !native_game_finished {
-                    return Err(error);
-                }
-                log.event("workspace_exit_managed_source", "deferred", Some(&error));
-            }
+            finish_managed_game(&log, finish_game)?
+                .record_deferred(&log, "workspace_exit_managed_source");
         }
+        native_game_finished = true;
         Ok(())
         });
         workspace_presentation::refresh_finished_window_feedback(&host, &cs2);

@@ -1,4 +1,5 @@
 //! The native host selects the installation and opens the managed upstream launcher.
+use crate::companion_http::{request_with_identity, runtime_token};
 use crate::{
     cs2_activity, gsi_host::gsi_script, managed_cs2, powershell, production_exit,
     startup_log::DesktopLog, updates,
@@ -14,6 +15,100 @@ use std::{
 };
 use tauri::Manager;
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
+
+pub fn cleanup_mulnx(
+    log: &DesktopLog,
+    cs2: &std::path::Path,
+    preparation: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    prepare_mulnx_with_demo(
+        log,
+        cs2,
+        false,
+        false,
+        None,
+        false,
+        preparation,
+        true,
+        None,
+        None,
+    )
+}
+
+pub fn prepare_mulnx_with_demo(
+    log: &DesktopLog,
+    cs2: &std::path::Path,
+    update: bool,
+    spectator_cfg: bool,
+    demo_cfg: Option<&str>,
+    capture_compatibility: bool,
+    preparation: Option<serde_json::Value>,
+    cleanup: bool,
+    window_geometry: Option<crate::cs2_video::VideoSize>,
+    console_journal: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let token = runtime_token(log)?;
+    // Prewarming/cleanup never enables capture. Only this prepared launch can,
+    // and a changed or unreadable consent setting degrades capture alone.
+    let console_capture = console_journal.is_some_and(|journal| {
+        if journal["consoleDiagnostics"]["version"] != 1 {
+            return false;
+        }
+        match crate::cs2_console::settings(log) {
+            Ok(config)
+                if config["enabled"] == true
+                    && config["generation"] == journal["consoleDiagnostics"]["generation"] =>
+            {
+                true
+            }
+            result => {
+                log.event(
+                    "cs2_console_prepare",
+                    "interrupted",
+                    Some(
+                        &serde_json::json!({
+                            "reason":"consent_changed_before_mulnx_launch",
+                            "current":format!("{result:?}"),"condebugRequested":false
+                        })
+                        .to_string(),
+                    ),
+                );
+                false
+            }
+        }
+    });
+    let protect_previous_console =
+        console_journal.is_some_and(|journal| !journal["consoleDiagnosticsWarning"].is_null());
+    log.event("mulnx_prepare_request", "begin", Some(&serde_json::json!({"cs2Path":cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup}).to_string()));
+    let mut body = serde_json::json!({"cs2Path": cs2.to_string_lossy(),"consoleCapture":console_capture,"protectPreviousConsole":protect_previous_console,"update":update,"spectatorCfg":spectator_cfg,"demoCfg":demo_cfg,"captureCompatibility":capture_compatibility,"cleanup":cleanup});
+    if let Some(size) = window_geometry {
+        body["windowGeometry"] = serde_json::json!({"width":size.width,"height":size.height});
+    }
+    if let Some(preparation) = preparation {
+        body["preparation"] = preparation;
+    }
+    let body = body.to_string();
+    let (code, value) = request_with_identity(
+        log,
+        "POST",
+        "/operator/runtime/mulnx-prepare",
+        &body,
+        Instant::now() + Duration::from_secs(240),
+        Some(&token),
+    )?;
+    if code != 200 {
+        log.event(
+            "mulnx_prepare",
+            "failure",
+            Some(&format!("http={code}; response={value}")),
+        );
+        return Err(value["message"]
+            .as_str()
+            .unwrap_or("MulNX 准备失败，请重试。")
+            .into());
+    }
+    Ok(value)
+}
 
 // Once submitted, transient readers must not abort observation of the same launch.
 // Never resend the launch request while waiting for this process-local state.
@@ -310,7 +405,7 @@ fn prepare_launcher(
     let preparation = preparation_id
         .map(crate::preparation_task::mulnx_context)
         .transpose()?;
-    production_exit::prepare_mulnx_with_demo(
+    prepare_mulnx_with_demo(
         log,
         executable,
         update,
@@ -468,7 +563,7 @@ fn launch_operation(
                     validate_observer_reuse(status.spectator_recovery_pending, matched, || {
                         cleanup_then_mark(
                             || {
-                                production_exit::cleanup_mulnx(
+                                cleanup_mulnx(
                                     log,
                                     &executable,
                                     preparation_id.and_then(|id| {
@@ -824,7 +919,7 @@ fn launch_operation(
         );
         return outcome;
     }
-    let cleanup = production_exit::cleanup_mulnx(
+    let cleanup = cleanup_mulnx(
         log,
         &executable,
         preparation_id.and_then(|id| crate::preparation_task::mulnx_context(id).ok()),
@@ -919,7 +1014,7 @@ fn resume_pending_launch(
             &results.join("current.json"),
             result.to_string().as_bytes(),
         )?;
-        production_exit::cleanup_mulnx(
+        cleanup_mulnx(
             log,
             &executable,
             preparation_id.and_then(|id| crate::preparation_task::mulnx_context(id).ok()),

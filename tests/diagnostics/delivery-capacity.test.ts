@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { SessionJournal } from '../../apps/companion/src/support/session-journal.js';
 import {
   DiagnosticDelivery,
@@ -12,6 +13,129 @@ import {
 } from '../../apps/companion/src/support/delivery.js';
 import { meteredRuntime } from '../../scripts/diagnostics/capacity-runtime.mjs';
 import { migrate } from './fixture.js';
+
+test('partial producer coverage survives ACK and restart; legacy history yields manifest space', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-wire-history-'));
+  const client = join(root, 'client');
+  const outbox = join(client, 'diagnostic-outbox');
+  const manifest = join(outbox, 'state.json');
+  const receiver = meteredRuntime(root, 100);
+  await migrate(await receiver.getD1Database('DIAGNOSTICS_DB'));
+  let now = Date.now();
+  await receiver.dispatchFetch('https://diagnostics.invalid/__test/control', {
+    method: 'POST',
+    body: JSON.stringify({ now, accepting: true }),
+  });
+  const received = new Set<string>();
+  const options = {
+    endpoint: 'https://diagnostics.invalid',
+    now: () => now,
+    fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      headers.set('cf-connecting-ip', '192.0.2.10');
+      const response = await receiver.dispatchFetch(String(input), { ...init, headers });
+      if (response.ok && init?.method === 'PUT' && init.body instanceof Uint8Array) {
+        const { events } = await decodeDiagnosticBatch(Buffer.from(init.body));
+        for (const event of events ?? []) received.add((event as { kind: string }).kind);
+      }
+      return response;
+    },
+  };
+  const readState = async () => JSON.parse(await readFile(manifest, 'utf8'));
+  let journal = new SessionJournal(client);
+  let delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+  try {
+    await delivery.consent(true);
+    await delivery.pause(true);
+    await journal.recordCommitted('rotation_first', { marker: 'only-in-wire' });
+    await journal.recordCommitted('rotation_second', { marker: 'still-in-source' });
+    await delivery.tick();
+    assert.equal(delivery.status().queuedBatches, 1);
+    await delivery.close();
+    await journal.close();
+    for (const name of (await readdir(client)).filter((value) => value.startsWith('session-'))) {
+      const file = join(client, name);
+      const source = await readFile(file, 'utf8');
+      if (source.includes('only-in-wire'))
+        await writeFile(
+          file,
+          source
+            .split('\n')
+            .filter((line) => !line.includes('only-in-wire'))
+            .join('\n'),
+        );
+    }
+
+    journal = new SessionJournal(client);
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    await delivery.pause(false);
+    await delivery.tick(false);
+    const before = delivery.status().acknowledged;
+    assert(before > 0);
+    assert.equal(delivery.status().queuedBatches, 0);
+    assert.equal(delivery.status().retainedAcknowledgedBatches, 1);
+    await delivery.close();
+    const state = await readState();
+    const [confirmed] = state.queue;
+    const confirmedBody = await readFile(join(outbox, `${confirmed.id}.gz`));
+    assert(JSON.stringify(await decodeDiagnosticBatch(confirmedBody)).includes('only-in-wire'));
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    assert.equal(delivery.status().retainedAcknowledgedBatches, 1);
+    assert.deepEqual(await readFile(join(outbox, `${confirmed.id}.gz`)), confirmedBody);
+    await delivery.close();
+
+    const body = await decodeDiagnosticBatch(confirmedBody);
+    const historical = (index: number) =>
+      gzipSync(JSON.stringify({ ...body, coverage: { index } }));
+    state.queue = [
+      confirmed,
+      ...Array.from({ length: 2048 }, (_, index) => {
+        const bytes = historical(index);
+        return {
+          id: createHash('sha256').update(bytes).digest('hex'),
+          bytes: bytes.length,
+          index: confirmed.index,
+          serverExpired: true,
+          unavailableReason: 'server_retention_expired',
+        };
+      }),
+    ];
+    const [oldestExpired] = state.queue.slice(1);
+    await writeFile(join(outbox, `${oldestExpired.id}.gz`), historical(0));
+    await writeFile(manifest, JSON.stringify(state));
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    assert.equal(delivery.status().blockedBatches, 2048);
+    await journal.recordCommitted('history_at_capacity', {});
+    await delivery.tick();
+    assert(delivery.status().acknowledged > before);
+    assert.deepEqual(await readFile(join(outbox, `${confirmed.id}.gz`)), confirmedBody);
+    assert.deepEqual(await readFile(join(outbox, `${oldestExpired.id}.gz`)), historical(0));
+    assert((await readState()).queue.length <= 2048);
+
+    await delivery.pause(true);
+    for (let index = 0; index < DELIVERY_LIMITS.batches; index++) {
+      await journal.recordCommitted('fill_window', { index });
+      await delivery.tick();
+    }
+    assert.equal(delivery.status().queuedBatches, DELIVERY_LIMITS.batches);
+    await journal.recordCommitted('tail_after_full_window', {});
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    await delivery.pause(false);
+    for (let tick = 0; tick < 12; tick++) {
+      now += DELIVERY_LIMITS.pollMs;
+      await delivery.tick(false);
+    }
+    assert(received.has('tail_after_full_window'));
+    assert.equal(delivery.status().queuedBatches, 0);
+    assert.equal(delivery.status().pendingBytes, 0);
+  } finally {
+    await delivery.close();
+    await journal.close();
+    await receiver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('large retained history survives rotation, preserves operations, and closes across restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mizar-retention-index-'));

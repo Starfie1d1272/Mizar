@@ -68,7 +68,7 @@ pub(crate) async fn enter(
                                             .workspace_process()?
                                             .filter(|game| game.is_running())
                                             .ok_or("试播游戏身份已变化。")?;
-                                        let value = production_exit::camera_session(
+                                        let value = crate::cs2_camera::camera_session(
                                             &log,
                                             "begin-demo",
                                             None,
@@ -81,7 +81,7 @@ pub(crate) async fn enter(
                                         if let Err(error) =
                                             cs2.bind_managed_camera(game, lease.clone())
                                         {
-                                            let _ = production_exit::camera_session(
+                                            let _ = crate::cs2_camera::camera_session(
                                                 &log,
                                                 "invalidate",
                                                 Some(&lease),
