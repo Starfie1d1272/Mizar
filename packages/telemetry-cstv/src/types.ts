@@ -41,6 +41,7 @@ export interface CstvObservationClock {
 export type CstvDiagnosticCode =
   | 'invalid-sync'
   | 'normalization-failed'
+  | 'observer-residence-limit'
   | 'event-sink-failed'
   | 'sync-sink-failed'
   | 'session-start-failed'
