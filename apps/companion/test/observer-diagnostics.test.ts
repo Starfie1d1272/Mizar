@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, open, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -108,6 +109,41 @@ test('manual ZIP retains both copies of an event without a temporary identity in
   );
   assert.equal(JSON.parse(Buffer.from(zip['coverage.json']!).toString()).retainedRecords, 2);
   assert(!zip['indexes/carriers.json']);
+});
+
+test('large manual exports retain a single ZIP readable by the offline tool', async (t) => {
+  const output = await mkdtemp(join(tmpdir(), 'mizar-large-single-zip-'));
+  const name = 'companion.log';
+  const rowBytes = 640 * 1024;
+  const rows = Array.from({ length: 32 }, () => randomBytes(rowBytes).toString('base64'));
+  const body = rows.join('\n') + '\n';
+  await writeFile(join(output, name), body);
+  const file = await open(join(output, name));
+  t.after(async () => {
+    await file.close();
+    await rm(output, { recursive: true, force: true });
+  });
+  let result: Record<string, unknown> | undefined;
+  runArchiveWorker(
+    {
+      sources: [{ name, fd: file.fd, bytes: Buffer.byteLength(body), rawAttachment: true }],
+      gaps: [],
+      output,
+      exportId: 'large-archive',
+      range: {},
+      snapshot: {},
+    },
+    (message) => {
+      result = message;
+    },
+  );
+  assert.equal(result?.phase, 'ready', String(result?.error));
+  assert((result?.outputBytes as number) > 18_874_368);
+  assert.equal((result?.parts as unknown[]).length, 1);
+  const reader = fileURLToPath(
+    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+  );
+  execFileSync(process.execPath, [reader, join(output, 'part-1.zip')], { stdio: 'pipe' });
 });
 
 test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {

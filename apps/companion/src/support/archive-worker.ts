@@ -34,12 +34,10 @@ const object = (value: unknown): ObjectValue =>
     ? (value as ObjectValue)
     : {};
 const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
-const MAX = 18_874_368;
 const ENTRY_MAX = 2 * 1024 * 1024;
-// The offline reader enforces the same expanded per-part ceiling. Reserve space
-// for all three final metadata entries before accepting another ordinary entry.
-const EXPANDED_MAX = 256 * 1024 * 1024;
-const FINAL_METADATA_RESERVE = 3 * ENTRY_MAX;
+// Same aggregate expanded budget as the former 32-part archive.
+const EXPANDED_MAX = 8 * 1024 * 1024 * 1024;
+const MAX_ENTRIES = 65_534;
 const timestamp = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
 class OutputFailure extends Error {}
 /** Synchronous, bounded work in one finite-lifetime worker; descriptors are pinned by the owner. */
@@ -49,15 +47,12 @@ export function runArchiveWorker(
 ): void {
   let zip: Zip,
     fd: number | undefined,
-    bytes = 0,
+    entryCount = 0,
     expandedBytes = 0,
-    totalBytes = 0,
-    part = 0;
-  let digest = createHash('sha256');
-  type Entry = { name: string; bytes: number; sha256: string };
-  let entries: Entry[] = [];
-  const parts: Entry[] = [],
-    gaps = [...d.gaps];
+    totalBytes = 0;
+  const digest = createHash('sha256');
+  const entries: { name: string; bytes: number; sha256: string }[] = [];
+  const gaps = [...d.gaps];
   const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
   const coverageFiles: { partIndex: number; name: string }[] = [];
   // Keep space for the entry index and other final metadata even with a large inventory.
@@ -109,7 +104,7 @@ export function runArchiveWorker(
     sample();
     return value;
   }
-  function add(name: string, data: Buffer, metadata = false) {
+  function add(name: string, data: Buffer) {
     if (
       !/^[-a-zA-Z0-9_/.]+$/.test(name) ||
       name.startsWith('/') ||
@@ -117,16 +112,8 @@ export function runArchiveWorker(
     )
       throw new OutputFailure('unsafe_entry_name');
     if (data.length > ENTRY_MAX) throw new OutputFailure('export_entry_budget');
-    if (
-      !metadata &&
-      (bytes + data.length * 1.02 + 262144 > MAX ||
-        expandedBytes + data.length + FINAL_METADATA_RESERVE > EXPANDED_MAX)
-    ) {
-      finish(false);
-      begin();
-    }
-    if (expandedBytes + data.length > EXPANDED_MAX)
-      throw new OutputFailure('export_expanded_part_budget');
+    if (expandedBytes + data.length > EXPANDED_MAX || entryCount >= MAX_ENTRIES)
+      throw new OutputFailure('export_zip_budget');
     const start = performance.now();
     output(() => {
       const file = new ZipDeflate(name, { level: 1 });
@@ -135,25 +122,18 @@ export function runArchiveWorker(
     });
     stages.encodeMs += performance.now() - start;
     expandedBytes += data.length;
+    entryCount++;
     entries.push({ name, bytes: data.length, sha256: hash(data) });
     sample();
   }
   function begin() {
-    if (part >= 32) throw new OutputFailure('export_part_count_budget');
-    part++;
-    bytes = 0;
-    expandedBytes = 0;
-    entries = [];
-    digest = createHash('sha256');
-    fd = output(() => fs.openSync(d.output + '/part-' + part + '.zip.partial', 'wx', 0o600));
+    fd = output(() => fs.openSync(d.output + '/part-1.zip.partial', 'wx', 0o600));
     zip = new Zip((error, data) =>
       output(() => {
         if (error) throw error;
-        if (bytes + data.length > MAX || totalBytes + data.length > budget)
-          throw Error('export_disk_budget');
+        if (totalBytes + data.length > budget) throw Error('export_disk_budget');
         writeAll(fd!, data);
         digest.update(data);
-        bytes += data.length;
         totalBytes += data.length;
       }),
     );
@@ -181,7 +161,7 @@ export function runArchiveWorker(
       },
     };
   }
-  function finish(final: boolean) {
+  function finish() {
     const start = performance.now(),
       encodedBefore = stages.encodeMs;
     // Final facts are written once, at the end. No circular digest and no recompression.
@@ -189,12 +169,12 @@ export function runArchiveWorker(
       'bundle.json',
       Buffer.from(
         JSON.stringify({
-          schema: 'mizar-support-bundle/2',
+          schema: 'mizar-support-bundle/3',
           bundleId: d.exportId,
-          partIndex: part,
-          partCount: final ? part : null,
-          complete: final,
-          completenessScope: 'archive parts only; source coverage is declared in coverage.json',
+          partIndex: 1,
+          partCount: 1,
+          complete: true,
+          completenessScope: 'archive file only; source coverage is declared in coverage.json',
           range: d.range,
           snapshot: redact({
             asOf: object(d.snapshot).asOf,
@@ -204,7 +184,6 @@ export function runArchiveWorker(
           }),
         }),
       ),
-      true,
     );
     add(
       'measurements.json',
@@ -212,14 +191,14 @@ export function runArchiveWorker(
         JSON.stringify({
           schema: 'mizar-support-measurements/1',
           exportId: d.exportId,
-          partIndex: part,
+          partIndex: 1,
           cutoff: {
             at: new Date().toISOString(),
-            phase: 'before-measurements-coverage-and-part-close',
-            scope: final ? 'all sources processed' : 'cumulative through this part',
+            phase: 'before-measurements-coverage-and-archive-close',
+            scope: 'all sources processed',
             excluded: [
               'this measurement and coverage encoding',
-              'this part close and fsync',
+              'ZIP close and fsync',
               'save dialog and file copy',
             ],
             laterEvidence:
@@ -230,7 +209,6 @@ export function runArchiveWorker(
           ...measurements(),
         }),
       ),
-      true,
     );
     const inline = inlineCoverage();
     add(
@@ -256,23 +234,17 @@ export function runArchiveWorker(
               'Outside the supported schema or requested range; originals remain at their source.',
           },
           entries,
-          scope: final ? 'final cumulative coverage' : 'cumulative through this part',
+          scope: 'final cumulative coverage',
         }),
       ),
-      true,
     );
     output(() => {
       zip.end();
       fs.fsyncSync(fd!);
       fs.closeSync(fd!);
       fd = undefined;
-      fs.renameSync(
-        d.output + '/part-' + part + '.zip.partial',
-        d.output + '/part-' + part + '.zip',
-      );
+      fs.renameSync(d.output + '/part-1.zip.partial', d.output + '/part-1.zip');
     });
-    parts.push({ name: 'part-' + part + '.zip', bytes, sha256: digest.digest('hex') });
-    stages.finalizeMs += performance.now() - start - (stages.encodeMs - encodedBefore);
   }
   let chunk: string[] = [],
     chunkBytes = 0,
@@ -291,7 +263,7 @@ export function runArchiveWorker(
       if (!lines.length) return;
       const name = 'coverage/details-' + (coverageFiles.length + 1) + '.ndjson';
       add(name, Buffer.from(lines.join('')));
-      coverageFiles.push({ partIndex: part, name });
+      coverageFiles.push({ partIndex: 1, name });
       lines = [];
       bytes = 0;
     };
@@ -599,7 +571,7 @@ export function runArchiveWorker(
         bytes: snapshot.length,
       });
     writeCoverageFiles();
-    finish(true);
+    finish();
   } catch (error) {
     failed = true;
     primaryError = error;
@@ -631,7 +603,7 @@ export function runArchiveWorker(
       phase: 'ready',
       knownGaps: gaps.length,
       completeKnownSources: gaps.length === 0,
-      parts,
+      parts: [{ name: 'part-1.zip', bytes: totalBytes, sha256: digest.digest('hex') }],
       retainedRecords,
       carrierRecords,
       aggregatedOccurrences,

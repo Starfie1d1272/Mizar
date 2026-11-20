@@ -103,7 +103,6 @@ function supportGsi(value: unknown) {
 type ReadyExport = {
   exportId: string;
   expiresAt: string;
-  parts: { name: string }[];
   knownGaps?: number;
   downloadName?: string;
   cleanupStatus?: 'unconfirmed';
@@ -113,11 +112,10 @@ const gapNotice = (job: ReadyExport) =>
   (job.cleanupStatus === 'unconfirmed'
     ? ' 诊断包可用，但临时资源清理未确认，可能仍占用本机存储。'
     : '');
-function download(job: ReadyExport, name: string) {
+function download(job: ReadyExport) {
   const link = document.createElement('a');
-  link.href = `/debug/support-exports/${job.exportId}/files/${name}`;
-  link.download =
-    job.parts.length === 1 && name.endsWith('.zip') ? (job.downloadName ?? name) : name;
+  link.href = `/debug/support-exports/${job.exportId}/files/part-1.zip`;
+  link.download = job.downloadName ?? 'mizar-support.zip';
   document.body.append(link);
   link.click();
   link.remove();
@@ -177,24 +175,14 @@ export function SupportExport() {
             error: false,
             message:
               (saved
-                ? job.parts.length === 1
-                  ? '诊断包已保存，请私下交付维护者。'
-                  : `诊断包已保存，请一并交付 ${job.parts.length} 份 ZIP 和总清单。`
+                ? '诊断包已保存，请私下交付维护者。'
                 : '已取消保存，可重新保存同一份诊断包。') + gapNotice(job),
           });
         } else {
-          for (const name of [
-            ...job.parts.map((part) => part.name),
-            ...(job.parts.length > 1 ? ['generated.json'] : []),
-          ])
-            download(job, name);
+          download(job);
           setResult({
             error: false,
-            message:
-              (job.parts.length === 1
-                ? '已发起诊断包下载，请在浏览器中确认文件。'
-                : `已发起 ${job.parts.length} 份 ZIP 和总清单的下载，请在浏览器中确认全部文件。`) +
-              gapNotice(job),
+            message: '已发起诊断包下载，请在浏览器中确认文件。' + gapNotice(job),
           });
         }
       };
@@ -291,12 +279,11 @@ export function SupportExport() {
       activeExportId = undefined;
       // A terminal phase may precede cleanup; pin release waits for confirmed settlement.
       if (job.phase === 'cancelled') throw new Error('export_cancelled');
-      if (job.phase === 'failed' || !job.parts?.length)
+      if (job.phase === 'failed' || job.parts?.length !== 1 || job.parts[0]?.name !== 'part-1.zip')
         throw new Error(job.error ?? 'invalid_bundle');
       if (!job.expiresAt) throw new Error('invalid_bundle');
       const ready: ReadyExport = {
         exportId: job.exportId,
-        parts: job.parts,
         expiresAt: job.expiresAt,
         ...(job.knownGaps === undefined ? {} : { knownGaps: job.knownGaps }),
         ...(job.downloadName === undefined ? {} : { downloadName: job.downloadName }),
@@ -439,24 +426,6 @@ export function SupportExport() {
         >
           保存本机日志
         </Button>
-      ) : null}
-      {!busy &&
-      hasReadyJob &&
-      !window.__TAURI_INTERNALS__ &&
-      readyJob &&
-      readyJob.parts.length > 1 ? (
-        <div aria-label="重新下载文件">
-          {[...readyJob.parts.map((part) => part.name), 'generated.json'].map((name) => (
-            <Button
-              key={name}
-              onClick={() => {
-                if (readyJob) download(readyJob, name);
-              }}
-            >
-              重新下载 {name}
-            </Button>
-          ))}
-        </div>
       ) : null}
       {result === null ? null : (
         <StatusBanner tone={result.error ? 'danger' : 'info'}>{result.message}</StatusBanner>

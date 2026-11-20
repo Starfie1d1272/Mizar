@@ -8,7 +8,6 @@ use std::{
 
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MANIFEST_LIMIT: u64 = 1024 * 1024;
-const PART_LIMIT: u64 = 18_874_368;
 
 pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(), String> {
     let logs = state_root.join("logs");
@@ -506,13 +505,13 @@ fn transfer(
     Ok(())
 }
 
-/// Holds the source and lease across the native folder dialog, including cancellation.
+/// Holds the source and lease across the native save dialog, including cancellation.
 /// Admission checks expiry once; an admitted save may finish after that deadline.
 pub struct PreparedExport {
-    export_id: String,
-    files: Vec<(String, u64, String, File)>,
-    manifest_bytes: Vec<u8>,
-    single_file_name: Option<String>,
+    input: File,
+    bytes: u64,
+    digest: String,
+    filename: String,
     _manifest: File,
     _lease: Pending,
     _directories: Vec<File>,
@@ -579,150 +578,81 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
             "export has expired or has an invalid lifetime",
         ));
     }
-    let parts = manifest["parts"]
+    let part = manifest["parts"]
         .as_array()
-        .filter(|parts| !parts.is_empty() && parts.len() <= 32)
-        .ok_or_else(|| io::Error::other("invalid export part list"))?;
-    // Validate the entire list and open every source before touching the selected destination.
-    let mut files = Vec::new();
-    let mut total = 0;
-    for (index, part) in parts.iter().enumerate() {
-        let name = format!("part-{}.zip", index + 1);
-        let bytes = part["bytes"]
-            .as_u64()
-            .filter(|bytes| *bytes > 0 && *bytes <= PART_LIMIT)
-            .ok_or_else(|| io::Error::other("invalid export part size"))?;
-        let digest = part["sha256"]
-            .as_str()
-            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or_else(|| io::Error::other("invalid export digest"))?;
-        total += bytes;
-        if part["name"] != name || total > MAX_BYTES {
-            return Err(io::Error::other("invalid export name or total budget"));
-        }
-        let (input, _) = checked(&source.join(&name))?;
-        if input.metadata()?.len() != bytes {
-            return Err(io::Error::other("export source size changed"));
-        }
-        files.push((name, bytes, digest.to_owned(), input));
+        .filter(|parts| parts.len() == 1)
+        .map(|parts| &parts[0])
+        .ok_or_else(|| io::Error::other("invalid export archive list"))?;
+    let bytes = part["bytes"]
+        .as_u64()
+        .filter(|bytes| *bytes > 0 && *bytes <= MAX_BYTES)
+        .ok_or_else(|| io::Error::other("invalid export archive size"))?;
+    if part["name"] != "part-1.zip" || manifest["outputBytes"].as_u64() != Some(bytes) {
+        return Err(io::Error::other("invalid export archive identity"));
     }
-    if manifest["outputBytes"].as_u64() != Some(total) {
-        return Err(io::Error::other("export total does not match its parts"));
+    let digest = part["sha256"]
+        .as_str()
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| io::Error::other("invalid export digest"))?;
+    let (input, _) = checked(&source.join("part-1.zip"))?;
+    if input.metadata()?.len() != bytes {
+        return Err(io::Error::other("export source size changed"));
     }
-    let single_file_name = if files.len() == 1 {
-        Some(format!(
-            "mizar-support-{}.zip",
-            chrono::DateTime::from_timestamp_millis(created)
-                .ok_or_else(|| io::Error::other("invalid export creation time"))?
-                .format("%Y-%m-%dT%H-%M-%SZ")
-        ))
-    } else {
-        None
-    };
+    let filename = format!(
+        "mizar-support-{}.zip",
+        chrono::DateTime::from_timestamp_millis(created)
+            .ok_or_else(|| io::Error::other("invalid export creation time"))?
+            .format("%Y-%m-%dT%H-%M-%SZ")
+    );
     Ok(PreparedExport {
-        single_file_name,
-        export_id: export_id.to_owned(),
-        files,
-        manifest_bytes,
+        input,
+        bytes,
+        digest: digest.to_owned(),
+        filename,
         _manifest: manifest_file,
         _lease,
         _directories: _source_guard,
     })
 }
 impl PreparedExport {
-    pub fn suggested_filename(&self) -> Option<&str> {
-        self.single_file_name.as_deref()
+    pub fn suggested_filename(&self) -> &str {
+        &self.filename
     }
     /// Destination must come exclusively from the native dialog.
-    pub fn save(self, destination: &Path) -> Result<(), String> {
+    pub fn save(mut self, destination: &Path) -> Result<(), String> {
         self.save_inner(destination).map_err(save_error)
     }
-    fn save_inner(self, destination: &Path) -> io::Result<()> {
+    fn save_inner(&mut self, destination: &Path) -> io::Result<()> {
         absolute(destination)?;
-        let Self {
-            export_id,
-            files,
-            manifest_bytes,
-            single_file_name,
-            _manifest,
-            _lease,
-            _directories,
-        } = self;
-        let single = single_file_name.is_some();
-        let target = if single {
-            destination
-                .parent()
-                .ok_or_else(|| io::Error::other("save destination has no parent"))?
-                .to_path_buf()
-        } else {
-            destination.join(format!("mizar-support-{export_id}"))
-        };
-        let parent = if single {
-            target.as_path()
-        } else {
-            destination
-        };
-        let _destination_guard = hold_directories(parent)?;
-        if !single {
-            match fs::create_dir(&target) {
-                Ok(()) => (),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-                Err(error) => return Err(error),
-            }
-        }
-        let _target_guard = hold_directories(&target)?;
-        for (name, bytes, digest, mut input) in files {
-            let final_path = if single {
-                destination.to_path_buf()
-            } else {
-                target.join(&name)
-            };
-            match fs::symlink_metadata(&final_path) {
-                Ok(_) => {
-                    let (mut existing, _) = checked(&final_path)?;
-                    transfer(&mut existing, None, bytes, &digest)?;
-                    continue;
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error),
-            }
-            let unique = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(io::Error::other)?
-                .as_nanos();
-            let mut pending =
-                create_pending(&target.join(format!("{name}.{unique}.partial")), false)?;
-            transfer(&mut input, Some(&mut pending.0), bytes, &digest)?;
-            pending.0.sync_all()?;
-            publish(pending, &final_path)?;
-        }
-        // A single ZIP already contains final coverage and indexes. The trusted source
-        // manifest stays private in the cache and is needed only for multi-volume delivery.
-        if single {
-            return Ok(());
-        }
-        // The manifest is the completion marker; publish only after every part succeeds.
-        let final_path = target.join("generated.json");
-        match fs::symlink_metadata(&final_path) {
+        let target = destination
+            .parent()
+            .ok_or_else(|| io::Error::other("save destination has no parent"))?;
+        let _destination_guard = hold_directories(target)?;
+        match fs::symlink_metadata(destination) {
             Ok(_) => {
-                let (mut existing, _) = checked(&final_path)?;
-                if bounded_read(&mut existing, MANIFEST_LIMIT)? != manifest_bytes {
-                    return Err(io::Error::other("destination has a different manifest"));
-                }
+                let (mut existing, _) = checked(destination)?;
+                transfer(&mut existing, None, self.bytes, &self.digest)?;
+                return Ok(());
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let unique = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(io::Error::other)?
-                    .as_nanos();
-                let mut pending =
-                    create_pending(&target.join(format!("generated.{unique}.partial")), false)?;
-                pending.0.write_all(&manifest_bytes)?;
-                pending.0.sync_all()?;
-                publish(pending, &final_path)?;
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
             Err(error) => return Err(error),
         }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos();
+        let mut pending = create_pending(
+            &target.join(format!("mizar-support.{unique}.partial")),
+            false,
+        )?;
+        transfer(
+            &mut self.input,
+            Some(&mut pending.0),
+            self.bytes,
+            &self.digest,
+        )?;
+        pending.0.sync_all()?;
+        publish(pending, destination)?;
         Ok(())
     }
 }

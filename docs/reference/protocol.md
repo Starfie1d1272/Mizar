@@ -361,7 +361,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 `settled` 表示输入使用结束且已尝试收尾，要等待 worker 实际退出；单个终态消息不够。有效 ZIP 的临时清理失败仍可 ready，另报 `cleanupStatus:unconfirmed`，不删除有效包、不伪造正文缺口，也不声称资源全释放。
 
-人工包为 `mizar-support-bundle/2`。覆盖、分卷、保存租约和容量见[诊断架构](architecture.md#诊断证据历史与导出)。旧 `/debug/support-bundle` 不注册；旧包/日志留原位，使用对应版本工具，不自动迁移删除。人工保存不自动公开上传，云回传另遵循[同意与撤回契约](diagnostics-delivery.md)。
+人工包为单份 ZIP `mizar-support-bundle/3`，离线工具仍可读取旧版分卷。覆盖、保存租约和容量见[诊断架构](architecture.md#诊断证据历史与导出)。旧 `/debug/support-bundle` 不注册，旧包和日志保留原位。人工保存由使用者决定如何交付，云回传遵循[同意与撤回契约](diagnostics-delivery.md)。
 
 ## Program 统计与装备事实
 
