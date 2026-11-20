@@ -306,16 +306,29 @@ export class SupportExports {
         const actual = await handle.stat();
         if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
           throw new Error('source_changed');
-        sources.push({
+        return {
           name: prefix + name,
           fd: handle.fd,
           bytes: actual.size,
           rawIndex,
           rawAttachment,
           jsonAttachment,
-        });
+        };
       } catch (error) {
         gap(prefix + name, 'read', error);
+      }
+    };
+    const addSource = (source: (typeof sources)[number] | undefined) => {
+      if (source) sources.push(source);
+    };
+    const captureBatch = async (
+      names: readonly string[],
+      captureSource: (name: string) => ReturnType<typeof capture>,
+    ) => {
+      for (let index = 0; index < names.length; index += 16) {
+        this.assertActive(job);
+        const batch = await Promise.all(names.slice(index, index + 16).map(captureSource));
+        batch.forEach(addSource);
       }
     };
     let readyResult: (ExportJob & Record<string, unknown>) | undefined;
@@ -357,15 +370,24 @@ export class SupportExports {
             reason: 'host_memory_only_or_unreported_loss',
             cause: host,
           });
-        for (const name of names) {
-          this.assertActive(job);
-          if (diagnosticSegmentPattern.test(name)) await capture(this.logs, name);
-          else if (currentProcessLogs.test(name)) await capture(this.logs, name, '', false, true);
-        }
+        await captureBatch(
+          names.filter(
+            (name) => diagnosticSegmentPattern.test(name) || currentProcessLogs.test(name),
+          ),
+          (name) => capture(this.logs, name, '', false, currentProcessLogs.test(name)),
+        );
         if (names.includes('host-retention.ndjson'))
-          await capture(this.logs, 'host-retention.ndjson', 'attachments/retention/', false, true);
+          addSource(
+            await capture(
+              this.logs,
+              'host-retention.ndjson',
+              'attachments/retention/',
+              false,
+              true,
+            ),
+          );
         if (names.includes('incident-pins.json'))
-          await capture(this.logs, 'incident-pins.json', 'retention/', true);
+          addSource(await capture(this.logs, 'incident-pins.json', 'retention/', true));
       } catch (error) {
         gap('logs', 'enumerate', error);
       }
@@ -375,11 +397,10 @@ export class SupportExports {
       ] as const) {
         try {
           const directory = await safePath(join(this.logs, folder));
-          for (const name of (await readdir(directory)).sort()) {
-            if (!pattern.test(name)) continue;
-            this.assertActive(job);
-            await capture(directory, name, folder + '/');
-          }
+          await captureBatch(
+            (await readdir(directory)).filter((name) => pattern.test(name)).sort(),
+            (name) => capture(directory, name, folder + '/'),
+          );
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap(folder, 'enumerate', error);
         }
@@ -406,13 +427,15 @@ export class SupportExports {
               (range.to && stat.mtimeMs > Date.parse(range.to))
             )
               continue;
-            await capture(
-              parent,
-              'report.json',
-              `attachments/observer/${name}/`,
-              false,
-              false,
-              true,
+            addSource(
+              await capture(
+                parent,
+                'report.json',
+                `attachments/observer/${name}/`,
+                false,
+                false,
+                true,
+              ),
             );
           } catch (error) {
             gap(`observer/${name}/report.json`, 'collect', error);
