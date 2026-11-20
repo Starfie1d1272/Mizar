@@ -31,8 +31,10 @@ function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
       : [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
           .map((value) => String(value).padStart(2, '0'))
           .join(':');
+  const connection = stream.phase === 'reconnecting' ? '正在重连' : '已连接';
   return (
     <div className="workspace-stream-health" aria-label="直播状态">
+      <span>连接 {connection}</span>
       <span>时长 {time}</span>
       <span>码率 {health?.bitrateKbps == null ? '—' : `${health.bitrateKbps} kb/s`}</span>
       <span>推流丢帧 {health?.droppedFrames ?? '—'}</span>
@@ -146,7 +148,9 @@ export function ObsOutputControls({
           <Button onClick={cancelStreamStart}>取消开播</Button>
         </StatusBanner>
       ) : null}
-      {outputs?.stream.phase === 'active' ? <StreamHealth stream={outputs.stream} /> : null}
+      {outputs?.stream.phase === 'active' || outputs?.stream.phase === 'reconnecting' ? (
+        <StreamHealth stream={outputs.stream} />
+      ) : null}
       {cleanupPending && !preparingStream ? (
         <StatusBanner tone="warning">
           {recoveryError ||
