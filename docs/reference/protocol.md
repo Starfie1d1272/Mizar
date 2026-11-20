@@ -172,7 +172,7 @@ RivalHub 另有业务确认：
 | 入口 | 语义 |
 | --- | --- |
 | `GET /local/v1/readiness` | 当前数据、场景、OBS 就绪摘要 |
-| `GET /local/v1/production`、`POST /operator/production` | 制作状态及带修订的 `enter/hide/finish/shutdown/begin-exit/cancel-exit/retry-handoff` |
+| `GET /local/v1/production`、`POST /operator/production` | 制作状态及带修订的 `enter/hide/finish/shutdown/begin-exit/cancel-exit/retry-handoff`。同一次已提交的 `finish` 可用原请求修订重取当前回执，制作修订推进后须重新读取 |
 | `GET /local/v1/preparation-status`、`POST /operator/preparation-cancel` | 按准备任务身份查询/取消，不重发未知进入请求 |
 | `GET /local/v1/program-scenes` | 场景、修订、候选、阻断及编排状态 |
 | `POST /operator/program-scene` | 带预期修订的人工切场 |

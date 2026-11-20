@@ -395,6 +395,7 @@ it('production finish restores the original program and retries the website hand
   const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
   cleanups.push(() => adapter.close());
   let obsCurrent = true;
+  const clearStats = vi.fn();
   const production = createProduction({
     scenes: {
       get: () => ({ active: 'waiting', revision: 'scene' }),
@@ -415,7 +416,7 @@ it('production finish restores the original program and retries the website hand
         throw new Error('rivalhub_source_capture_unconfirmed');
       },
       retryExitHandoffs: async () => {},
-      clearStats: () => {},
+      clearStats,
     } as unknown as ProductionDependencies['source'],
     obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
     warn: () => {},
@@ -445,6 +446,8 @@ it('production finish restores the original program and retries the website hand
   expect(repeated).toEqual(finished);
   expect(production.get().mode).toBe('preparation');
   expect(production.get().releaseHandoffState).toBe('unconfirmed');
+  expect(await production.change(finish)).toEqual({ ok: true, value: production.get() });
+  expect(clearStats).toHaveBeenCalledTimes(1);
   expect(await production.waitForObsExit()).toBe('confirmed');
   expect(f.state.collection).toBe('个人');
   expect(f.state.scene).toBe('personal-program');
@@ -452,4 +455,17 @@ it('production finish restores the original program and retries the website hand
   expect(production.get().obsExitState).toBe('confirmed');
   await vi.advanceTimersByTimeAsync(10_000);
   expect(production.get().releaseHandoffState).toBe('recorded');
+  vi.useRealTimers();
+  expect(
+    await production.change({
+      action: 'enter',
+      expectedRevision: production.get().revision,
+      preparationId: null,
+    }),
+  ).toMatchObject({ ok: true });
+  expect(await production.change(finish)).toMatchObject({
+    ok: false,
+    failure: 'productionConflict',
+  });
+  expect(production.get().mode).toBe('live');
 });
