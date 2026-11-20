@@ -16,13 +16,7 @@ import {
   type LiveErrorEvidence,
 } from './rivalhub-http-errors.js';
 import { executionKey } from './rivalhub-source-recovery.js';
-import {
-  exactKey,
-  sameExactSource,
-  type ExactSource,
-  type RivalHubSourceState,
-  type SourceScope,
-} from './rivalhub-source-state.js';
+import { sameExactSource, type ExactSource, type SourceScope } from './rivalhub-source-state.js';
 
 export type LiveFailure = {
   stage: 'fetch' | 'response' | 'read' | 'validate' | 'cancel' | 'parse' | 'acceptance';
@@ -65,10 +59,8 @@ export type RivalHubTransportSource = ExactSource & {
 export interface RivalHubEventTransportHost {
   readonly authorization: Pick<RivalHubAuthorization, 'request'>;
   readonly fetchImpl: typeof fetch;
-  sourceState: () => RivalHubSourceState;
-  liveInFlight: () => Map<RivalHubTransportSource, Set<Promise<void>>>;
-  isolatedRevokedSources: () => Map<string, ExactSource>;
-  confirmedSourcesAwaitingPersistence: () => Map<string, ExactSource>;
+  canSendRetainedReliable: (identity: ExactSource) => Promise<boolean>;
+  isRetainedSourceActive: (identity: ExactSource) => boolean;
   installation: () => { baseUrl: string; credential: string; installationId: string } | null;
   source: () => RivalHubTransportSource | null;
   stoppedMatchId: () => string | null;
@@ -82,16 +74,93 @@ export interface RivalHubEventTransportHost {
   ) => void;
   onDiagnostic: (operation: string, error: unknown) => void;
   originalError: (operation: string, error: unknown) => void;
-  retryLive: () => void;
   failureExecutionKey: (payload: LiveSnapshotV1 | ReliableEventV1) => string;
 }
 
 /** Owns HTTP LIVE and reliable event delivery for an active or retained RivalHub source. */
 export class RivalHubEventTransport {
-  constructor(
-    private readonly host: RivalHubEventTransportHost,
-    readonly state: RivalHubDeliveryState,
-  ) {}
+  private readonly liveInFlight = new Map<RivalHubTransportSource, Set<Promise<void>>>();
+  private readonly state: RivalHubDeliveryState = {
+    controlFailure: null,
+    controlFailureKey: null,
+    nextLiveAt: 0,
+    liveFailures: 0,
+    liveFailureKind: null,
+    lastAcceptedAt: 0,
+    liveDelivery: {
+      cursor: null,
+      status: 'idle',
+      reason: null,
+      consecutiveUnaccepted: 0,
+      since: null,
+      notified: false,
+    },
+  };
+
+  constructor(private readonly host: RivalHubEventTransportHost) {}
+
+  setControlFailure(key: string, reason: string | null): void {
+    this.state.controlFailureKey = key;
+    this.state.controlFailure = reason;
+  }
+
+  controlFailureFor(key: string): string | null {
+    return this.state.controlFailureKey === key ? this.state.controlFailure : null;
+  }
+
+  resetLiveBackoff(): void {
+    this.state.nextLiveAt = 0;
+    this.state.liveFailures = 0;
+    this.state.liveFailureKind = null;
+  }
+
+  resetForNewClaim(): void {
+    this.state.controlFailure = null;
+    this.resetLiveBackoff();
+    this.state.liveDelivery = {
+      cursor: null,
+      status: 'idle',
+      reason: null,
+      consecutiveUnaccepted: 0,
+      since: null,
+      notified: false,
+    };
+  }
+
+  liveDeliveryView(now: number) {
+    return {
+      status: this.state.liveDelivery.status,
+      cursor: this.state.liveDelivery.cursor,
+      reason: this.state.liveDelivery.reason,
+      failure: this.state.liveDelivery.failure ?? null,
+      consecutiveUnaccepted: this.state.liveDelivery.consecutiveUnaccepted,
+      durationMs:
+        this.state.liveDelivery.since === null
+          ? 0
+          : Math.max(0, now - this.state.liveDelivery.since),
+    };
+  }
+
+  liveStatusForCursor(cursorKey: string, now: number) {
+    const matchesCursor = Boolean(
+      this.state.liveDelivery.cursor && executionKey(this.state.liveDelivery.cursor) === cursorKey,
+    );
+    return {
+      matchesCursor,
+      recentlyAccepted:
+        matchesCursor &&
+        this.state.liveDelivery.status === 'accepted' &&
+        now - this.state.lastAcceptedAt < 15_000,
+      reason: this.state.liveDelivery.reason,
+    };
+  }
+
+  async awaitLiveInFlight(identity: ExactSource): Promise<void> {
+    const requests = [...this.liveInFlight.entries()]
+      .filter(([source]) => sameExactSource(source, identity))
+      .flatMap(([, pending]) => [...pending]);
+    await Promise.allSettled(requests);
+  }
 
   private async uploadReliable(
     event: ReliableEventV1,
@@ -209,7 +278,7 @@ export class RivalHubEventTransport {
     const execution = executionKey(cursor);
     if (source.deliveryExecution === execution) return;
     source.deliveryExecution = execution;
-    this.host.retryLive();
+    this.resetLiveBackoff();
     this.state.liveDelivery = {
       cursor,
       status: 'idle',
@@ -225,14 +294,14 @@ export class RivalHubEventTransport {
     const source = this.host.source();
     const pending = this.sendLiveOnce(snapshot);
     if (!source) return pending;
-    const inFlight = this.host.liveInFlight().get(source) ?? new Set<Promise<void>>();
+    const inFlight = this.liveInFlight.get(source) ?? new Set<Promise<void>>();
     inFlight.add(pending);
-    this.host.liveInFlight().set(source, inFlight);
+    this.liveInFlight.set(source, inFlight);
     try {
       await pending;
     } finally {
       inFlight.delete(pending);
-      if (!inFlight.size) this.host.liveInFlight().delete(source);
+      if (!inFlight.size) this.liveInFlight.delete(source);
     }
   }
 
@@ -407,7 +476,7 @@ export class RivalHubEventTransport {
     if (accepted) {
       this.state.controlFailure = null;
       this.state.lastAcceptedAt = this.host.monotonicNow();
-      this.host.retryLive();
+      this.resetLiveBackoff();
       if (previous.notified)
         this.host.onDiagnostic('live_recovered', new Error('RivalHub LIVE 投递已恢复。'));
       this.state.liveDelivery = {
@@ -502,25 +571,14 @@ export class RivalHubEventTransport {
     )
       return 'retry';
     const installation = this.host.installation();
-    const state = await this.host.sourceState().snapshot();
-    const key = exactKey(identity);
-    const record = state.records.find((item) => sameExactSource(item.identity, identity));
-    if (
-      !record ||
-      !['owned', 'release_pending'].includes(record.state) ||
-      record.installationRevoked ||
-      record.quarantineUncertain ||
-      this.host.confirmedSourcesAwaitingPersistence().has(key)
-    )
-      return 'retry';
+    if (!(await this.host.canSendRetainedReliable(identity))) return 'retry';
     const activeSource = this.host.source();
     if (activeSource && sameExactSource(activeSource, identity))
       return this.sendReliable(event, current, signal, retainedLineup, identity);
     const valid = () =>
       this.host.installation() === installation &&
       this.host.isCurrentInstallation(identity) &&
-      !this.host.isolatedRevokedSources().has(key) &&
-      !this.host.confirmedSourcesAwaitingPersistence().has(key);
+      this.host.isRetainedSourceActive(identity);
     if (!valid()) return 'retry';
     return this.uploadReliable(event, retainedLineup ?? [], signal, valid, identity);
   }
