@@ -10,6 +10,7 @@ import { ReliableOutbox } from '../src/output/reliable-outbox.js';
 import { OutputService } from '../src/output/service.js';
 import Fastify from 'fastify';
 import { registerRivalHubConnectionRoutes } from '../src/match-context/rivalhub-routes.js';
+import { claimRecoveryProof } from '../src/match-context/rivalhub-source-recovery.js';
 
 test('manifest refresh bounds automatic retries, allows explicit recovery, and honors Retry-After', async () => {
   const fixture = async (name: string) =>
@@ -979,4 +980,330 @@ test('a release response after shutdown cancellation preserves the original hand
   const restarted = await h.restart();
   await restarted.release();
   assert.equal(restarted.view().sourceCleanup.pending, 0);
+});
+
+test('claimRecoveryProof enforces request receipt id, cancelled, ambiguous, and foreign fences', () => {
+  const scope = {
+    baseUrl: 'https://example.com',
+    competitionId: 'competition-1',
+    installationId: 'installation-a',
+    matchId: 'match-1',
+    producerInstanceId: 'producer-1',
+    liveSessionId: 'session-1',
+  };
+  const numberedIntent = {
+    id: '11111111-1111-4111-8111-111111111111',
+    scope,
+    previousAuthorityRevision: 1,
+    claimRecoveryVersion: 1 as const,
+  };
+  const foundSource = {
+    competitionId: scope.competitionId,
+    installationId: scope.installationId,
+    matchId: scope.matchId,
+    producerInstanceId: scope.producerInstanceId,
+    liveSessionId: scope.liveSessionId,
+    authorityRevision: 2,
+    state: 'open',
+  };
+
+  assert.equal(
+    claimRecoveryProof(
+      { status: 'found', claimRequestId: 'req-other', source: foundSource },
+      numberedIntent,
+      true,
+    ),
+    undefined,
+  );
+  assert.equal(
+    claimRecoveryProof({ status: 'cancelled', claimRequestId: 'req-other' }, numberedIntent, true),
+    undefined,
+  );
+  assert.deepEqual(
+    claimRecoveryProof(
+      { status: 'cancelled', claimRequestId: numberedIntent.id },
+      numberedIntent,
+      false,
+    ),
+    { kind: 'clear' },
+  );
+  assert.equal(
+    claimRecoveryProof(
+      { status: 'ambiguous', claimRequestId: numberedIntent.id },
+      numberedIntent,
+      true,
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    claimRecoveryProof(
+      { status: 'found', claimRequestId: numberedIntent.id, source: foundSource },
+      numberedIntent,
+      false,
+    ),
+    { kind: 'authority', authorityRevision: 2, state: 'open' },
+  );
+
+  const legacyIntent = {
+    id: '22222222-2222-4222-8222-222222222222',
+    scope,
+    previousAuthorityRevision: 1,
+  };
+  const wireScope = {
+    competitionId: scope.competitionId,
+    installationId: scope.installationId,
+    matchId: scope.matchId,
+    producerInstanceId: scope.producerInstanceId,
+    liveSessionId: scope.liveSessionId,
+  };
+  assert.equal(
+    claimRecoveryProof(
+      { status: 'fenced', scope: { ...wireScope, installationId: 'installation-b' } },
+      legacyIntent,
+      true,
+    ),
+    undefined,
+  );
+  assert.equal(claimRecoveryProof({ status: 'ambiguous' }, legacyIntent, true), undefined);
+  assert.deepEqual(claimRecoveryProof({ status: 'fenced', scope: wireScope }, legacyIntent, true), {
+    kind: 'clear',
+  });
+});
+
+test('historical unnumbered intent recovery validates exact source, previousAuthorityRevision, idempotentAuthorityRevision, and watermarks', async (t) => {
+  const writeLegacyIntent = async (
+    h: Awaited<ReturnType<typeof setup>>,
+    options: {
+      previousAuthorityRevision: number | null;
+      idempotentAuthorityRevision?: number;
+      record?: boolean;
+      recordSessionId?: string;
+      watermarkRevision?: number;
+      quarantineWatermarkRevision?: number;
+    },
+  ) => {
+    const file = join(h.path, '..', 'rivalhub-source-state.json');
+    const state = JSON.parse(await readFile(file, 'utf8')) as {
+      records: unknown[];
+      watermarks: unknown[];
+      intents: unknown[];
+    };
+    const scope = {
+      baseUrl: 'https://example.com',
+      competitionId: h.snapshot.competitionId,
+      installationId: 'installation-a',
+      matchId: h.snapshot.matchId,
+      producerInstanceId: h.snapshot.cursor.producerInstanceId,
+      liveSessionId: h.snapshot.cursor.liveSessionId,
+    };
+    state.records = options.record
+      ? [
+          {
+            identity: {
+              ...scope,
+              liveSessionId: options.recordSessionId ?? scope.liveSessionId,
+              authorityRevision: 1,
+            },
+            state: 'release_pending',
+            cause: 'recovery',
+            attempts: 0,
+            nextAttemptAt: null,
+            lastFailureCode: null,
+          },
+        ]
+      : [];
+    state.watermarks =
+      options.watermarkRevision !== undefined
+        ? [{ ...scope, authorityRevision: options.watermarkRevision }]
+        : [];
+    state.intents = [
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        scope,
+        previousAuthorityRevision: options.previousAuthorityRevision,
+        ...(options.idempotentAuthorityRevision !== undefined
+          ? { idempotentAuthorityRevision: options.idempotentAuthorityRevision }
+          : {}),
+      },
+    ];
+    await writeFile(file, JSON.stringify(state));
+
+    if (options.quarantineWatermarkRevision !== undefined) {
+      const { createHash } = await import('node:crypto');
+      const { mkdir } = await import('node:fs/promises');
+      const qDir = join(h.path, '..', 'rivalhub-source-state.json.revoked');
+      await mkdir(qDir, { recursive: true });
+      const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+      const identity = { ...scope, authorityRevision: options.quarantineWatermarkRevision };
+      const scopePrefix = sha(
+        JSON.stringify([
+          scope.baseUrl,
+          scope.competitionId,
+          scope.installationId,
+          scope.matchId,
+          scope.producerInstanceId,
+          scope.liveSessionId,
+        ]),
+      );
+      const itemDigest = sha(
+        `watermark:${JSON.stringify([
+          identity.baseUrl,
+          identity.competitionId,
+          identity.installationId,
+          identity.matchId,
+          identity.producerInstanceId,
+          identity.liveSessionId,
+          identity.authorityRevision,
+        ])}`,
+      );
+      const evidence = { kind: 'watermark', identity };
+      const body = JSON.stringify(evidence);
+      await writeFile(join(qDir, `${scopePrefix}-w-${itemDigest}-${sha(body)}.json`), body);
+    }
+  };
+
+  // 1. revision < previousAuthorityRevision -> blocked
+  {
+    const h = await setup(t);
+    h.setIdempotent(true);
+    await h.connection.claim(h.snapshot, 'revision', false); // serverClaim at authorityRevision=1
+    await writeLegacyIntent(h, { previousAuthorityRevision: 2, record: false });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+    assert.deepEqual(h.releases, []);
+  }
+
+  // 2. revision === previousAuthorityRevision, idempotentAuthorityRevision undefined, exact record absent -> blocked
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, { previousAuthorityRevision: 1, record: false });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+    assert.deepEqual(h.releases, []);
+  }
+
+  // 3. revision === previousAuthorityRevision, record has mismatched liveSessionId -> blocked
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      record: true,
+      recordSessionId: 'other-session',
+    });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  }
+
+  // 4. revision === previousAuthorityRevision, exact record present, but state.watermarks blocks -> blocked
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      record: true,
+      watermarkRevision: 1,
+    });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  }
+
+  // 5. revision === previousAuthorityRevision, exact record present, but quarantined watermark blocks -> blocked
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      record: true,
+      quarantineWatermarkRevision: 1,
+    });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  }
+
+  // 6. revision === previousAuthorityRevision, idempotentAuthorityRevision !== revision (2) -> blocked even with record
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      idempotentAuthorityRevision: 2,
+      record: true,
+    });
+    const restarted = await h.restart();
+    await assert.rejects(restarted.release(), /待重试或核对/);
+    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
+  }
+
+  // 7. revision === previousAuthorityRevision, idempotentAuthorityRevision === 1 -> recovers without record
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      idempotentAuthorityRevision: 1,
+      record: false,
+    });
+    const restarted = await h.restart();
+    await restarted.release();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.deepEqual(
+      h.releases.map((item) => item.authority),
+      ['1'],
+    );
+  }
+
+  // 8. revision === previousAuthorityRevision, idempotentAuthorityRevision undefined, exact record present & no watermark -> recovers
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      record: true,
+    });
+    const restarted = await h.restart();
+    await restarted.release();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.deepEqual(
+      h.releases.map((item) => item.authority),
+      ['1'],
+    );
+  }
+
+  // 9. revision > previousAuthorityRevision -> recovers newer authority (rev 2)
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
+    await h.connection.release();
+    await h.connection.claim(h.snapshot, 'revision', false); // rev 2
+    await writeLegacyIntent(h, {
+      previousAuthorityRevision: 1,
+      record: false,
+    });
+    const restarted = await h.restart();
+    await restarted.release();
+    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+    assert.deepEqual(
+      h.releases.map((item) => item.authority),
+      ['1', '2'],
+    );
+  }
+});
+
+test('lost claim response clears cleanly after restart when a new source takes over and closes the old claim', async (t) => {
+  const h = await setup(t);
+  h.setLose(true);
+  await assert.rejects(h.connection.claim(h.snapshot, 'revision', false));
+  assert.equal(h.connection.view().sourceCleanup.claimIntent, true);
+  h.closeByTakeover();
+  const restarted = await h.restart();
+  await restarted.release();
+  assert.equal(restarted.view().sourceCleanup.claimIntent, false);
+  assert.deepEqual(h.releases, []);
 });
