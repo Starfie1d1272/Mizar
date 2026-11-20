@@ -6,6 +6,7 @@ import { crc32, deflateRawSync, gunzipSync } from 'node:zlib';
 import { StringDecoder } from 'node:string_decoder';
 import { performance } from 'node:perf_hooks';
 import { Zip, type ZipInputFile } from 'fflate';
+import { performanceSegmentPattern } from './segments.js';
 
 export interface ArchiveWorkerData {
   sources: {
@@ -65,6 +66,7 @@ export function runArchiveWorker(
   let carrierRecords = 0,
     retainedRecords = 0,
     aggregatedOccurrences = 0,
+    preservedPerformanceSegments = 0,
     processedBytes = 0;
   const budget = Math.min(d.diskBudgetBytes ?? 256 * 1024 * 1024, 256 * 1024 * 1024);
   const started = performance.now(),
@@ -94,11 +96,18 @@ export function runArchiveWorker(
       position += written;
     }
   }
-  function readGzip(source: ArchiveWorkerData['sources'][number]): unknown {
-    if (source.bytes > 16 * 1024 * 1024) throw Error('source_decode_budget');
+  function readSource(
+    source: ArchiveWorkerData['sources'][number],
+    maximum: number,
+  ): Buffer<ArrayBuffer> {
+    if (source.bytes > maximum) throw Error('source_decode_budget');
     const raw = Buffer.alloc(source.bytes);
     let position = 0;
     while (position < raw.length) position += read(source.fd, raw.subarray(position), position);
+    return raw;
+  }
+  function readGzip(source: ArchiveWorkerData['sources'][number]): unknown {
+    const raw = readSource(source, 16 * 1024 * 1024);
     const start = performance.now();
     const expanded = gunzipSync(raw, { maxOutputLength: 4 * 1024 * 1024 });
     const value: unknown = JSON.parse(expanded.toString('utf8'));
@@ -106,7 +115,7 @@ export function runArchiveWorker(
     sample();
     return value;
   }
-  function add(name: string, data: Buffer) {
+  function add(name: string, data: Buffer<ArrayBuffer>, store = false) {
     if (
       !/^[-a-zA-Z0-9_/.]+$/.test(name) ||
       name.startsWith('/') ||
@@ -118,12 +127,12 @@ export function runArchiveWorker(
       throw new OutputFailure('export_zip_budget');
     const start = performance.now();
     output(() => {
-      const compressed = deflateRawSync(data, { level: 1 });
+      const compressed = store ? data : deflateRawSync(data, { level: 1 });
       const file: ZipInputFile = {
         filename: name,
         size: data.length,
         crc: crc32(data),
-        compression: 8,
+        compression: store ? 0 : 8,
       };
       zip.add(file);
       file.ondata!(null, compressed, true);
@@ -226,6 +235,7 @@ export function runArchiveWorker(
           retainedRecords,
           carrierRecords,
           aggregatedOccurrences,
+          preservedPerformanceSegments,
           gaps: inline ? redact(gaps) : [],
           excludedSources: inline ? excludedSources : [],
           ...(inline
@@ -237,6 +247,8 @@ export function runArchiveWorker(
               }),
           interpretation: {
             gaps: 'Missing or unconfirmed evidence; archive completion does not resolve these gaps.',
+            preservedPerformanceSegments:
+              'Sealed original files under logs/performance-pending; their records are not counted in the decoded event totals.',
             excludedSources:
               'Outside the supported schema or requested range; originals remain at their source.',
           },
@@ -447,6 +459,18 @@ export function runArchiveWorker(
       try {
         if (!Number.isSafeInteger(source.bytes) || source.bytes < 0)
           throw Error('invalid_source_size');
+        const performancePrefix = 'performance-pending/';
+        if (
+          !Number.isFinite(rangeStart) &&
+          !Number.isFinite(rangeEnd) &&
+          source.bytes <= ENTRY_MAX &&
+          source.name.startsWith(performancePrefix) &&
+          performanceSegmentPattern.test(source.name.slice(performancePrefix.length))
+        ) {
+          add(`logs/${source.name}`, readSource(source, ENTRY_MAX), true);
+          preservedPerformanceSegments++;
+          continue;
+        }
         if (source.rawIndex || source.jsonAttachment || source.name.endsWith('.gz')) {
           if (
             source.bytes >
@@ -455,10 +479,7 @@ export function runArchiveWorker(
             throw Error('source_decode_budget');
           let value: unknown;
           if (source.rawIndex || source.jsonAttachment) {
-            const raw = Buffer.alloc(source.bytes);
-            let position = 0;
-            while (position < raw.length)
-              position += read(source.fd, raw.subarray(position), position);
+            const raw = readSource(source, source.jsonAttachment ? 128 * 1024 : ENTRY_MAX);
             const start = performance.now();
             value = JSON.parse(raw.toString('utf8'));
             stages.decodeMs += performance.now() - start;
@@ -612,6 +633,7 @@ export function runArchiveWorker(
       retainedRecords,
       carrierRecords,
       aggregatedOccurrences,
+      preservedPerformanceSegments,
       gaps: inlineCoverage() ? redact(gaps) : [],
       excludedSources: inlineCoverage() ? excludedSources : [],
       ...(coverageFiles.length
