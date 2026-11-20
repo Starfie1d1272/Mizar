@@ -2,10 +2,10 @@ import { diagnosticEvidence as redact } from './diagnostic-evidence.js';
 import { diagnosticValue } from './diagnostic-value.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { gunzipSync } from 'node:zlib';
+import { crc32, deflateRawSync, gunzipSync } from 'node:zlib';
 import { StringDecoder } from 'node:string_decoder';
 import { performance } from 'node:perf_hooks';
-import { Zip, ZipDeflate } from 'fflate';
+import { Zip, type ZipInputFile } from 'fflate';
 
 export interface ArchiveWorkerData {
   sources: {
@@ -118,9 +118,15 @@ export function runArchiveWorker(
       throw new OutputFailure('export_zip_budget');
     const start = performance.now();
     output(() => {
-      const file = new ZipDeflate(name, { level: 1 });
+      const compressed = deflateRawSync(data, { level: 1 });
+      const file: ZipInputFile = {
+        filename: name,
+        size: data.length,
+        crc: crc32(data),
+        compression: 8,
+      };
       zip.add(file);
-      file.push(data, true);
+      file.ondata!(null, compressed, true);
     });
     stages.encodeMs += performance.now() - start;
     expandedBytes += data.length;
