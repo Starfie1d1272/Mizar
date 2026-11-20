@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { crc32, gunzipSync, inflateRawSync } from 'node:zlib';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 
 // Read locally; never upload or execute bundle content. Redirect stdout to retain the full timeline.
@@ -201,44 +201,14 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     }
   }
   if (!emit) return;
-  const unreadablePerformanceSegments = [];
-  for (const name of entries.keys()) {
-    let lines;
-    if (name.startsWith('events/') && name.endsWith('.ndjson')) {
-      lines = readEntry(name).toString('utf8').split('\n');
-      for (const line of lines) if (line) JSON.parse(line);
-    } else if (
-      /^logs\/performance-pending\/[a-f0-9-]{36}\.(?:[a-f0-9]{4}|[a-f0-9]{8})\.gz$/.test(name)
-    ) {
-      try {
-        const remaining = 8 * 1024 * 1024 * 1024 - expanded;
-        if (remaining <= 0) throw new Error('timeline_expanded_budget');
-        const data = gunzipSync(readEntry(name), {
-          maxOutputLength: Math.min(remaining, 4 * 1024 * 1024),
-        });
-        expanded += data.length;
-        const events = JSON.parse(data.toString('utf8'));
-        if (
-          !Array.isArray(events) ||
-          !events.every((event) => event?.schema === 'mizar-diagnostic-event/2')
-        )
-          throw new Error('performance_schema');
-        const source = name.slice('logs/'.length);
-        lines = events.map((event, offset) =>
-          JSON.stringify({
-            ...event,
-            carrier: { source, offset, role: 'local-original' },
-          }),
-        );
-      } catch {
-        unreadablePerformanceSegments.push(name);
-        continue;
-      }
-    } else continue;
-    for (const line of lines)
-      if (line && !process.stdout.write(line + '\n'))
-        await new Promise((resolve) => process.stdout.once('drain', resolve));
-  }
+  for (const name of entries.keys())
+    if (name.startsWith('events/') && name.endsWith('.ndjson'))
+      for (const line of readEntry(name).toString('utf8').split('\n'))
+        if (line) {
+          JSON.parse(line);
+          if (!process.stdout.write(line + '\n'))
+            await new Promise((resolve) => process.stdout.once('drain', resolve));
+        }
   process.stderr.write(
     JSON.stringify({
       source,
@@ -246,7 +216,6 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
       partIndex: metadata.partIndex,
       coverage,
       ...(coverageDetails.length ? { coverageDetails } : {}),
-      ...(unreadablePerformanceSegments.length ? { unreadablePerformanceSegments } : {}),
     }) + '\n',
   );
 }

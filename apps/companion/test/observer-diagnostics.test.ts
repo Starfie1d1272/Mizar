@@ -531,8 +531,7 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   await journal.recordCommitted('before_cutoff', { recorded: true });
   const performance = join(logs, 'performance-pending');
   await mkdir(performance);
-  const performanceName = `${randomUUID()}.00000001.gz`;
-  const segment = join(performance, performanceName);
+  const segment = join(performance, `${randomUUID()}.00000001.gz`);
   const compressed = gzipSync(
     JSON.stringify([{ schema: 'mizar-diagnostic-event/2', kind: 'unpinned_performance' }]),
   );
@@ -569,20 +568,7 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   assert.match(events, /host-event/);
   assert.match(events, /document-event/);
   assert.match(events, /before_cutoff/);
-  assert.deepEqual(
-    Buffer.from(entries[`logs/performance-pending/${performanceName}`]!),
-    compressed,
-  );
-  assert.equal(coverage.preservedPerformanceSegments, 1);
-  const reader = fileURLToPath(
-    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
-  );
-  const timeline = execFileSync(
-    process.execPath,
-    [reader, join(exports.directory, job.exportId, 'part-1.zip')],
-    { stdio: 'pipe' },
-  ).toString();
-  assert.match(timeline, /unpinned_performance/);
+  assert.match(events, /unpinned_performance/);
   assert.deepEqual(await readFile(segment), compressed);
   assert.doesNotMatch(events, /uncommitted-partial-line|excluded-private-marker/);
   const generated = JSON.parse(
