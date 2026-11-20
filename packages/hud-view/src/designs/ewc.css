@@ -64,7 +64,7 @@
   background: color-mix(in srgb, var(--mizar-hud-text-muted) 55%, transparent);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card--dead .player-rail__body::before {
-  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 76%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 50%, transparent);
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-status-effects,
 .hud-widget-design[data-hud-design='ewc'] .player-rail__card > .player-combat-transition,
@@ -207,12 +207,7 @@
 .hud-widget-design[data-hud-design='ewc'] .match-header__score-shell {
   left: 12px;
   width: 456px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--mizar-hud-surface-strong) 40%, transparent) 16% 84%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 65%, transparent);
   clip-path: none;
   overflow: visible;
 }
@@ -396,17 +391,17 @@
 .hud-widget-design[data-hud-design='ewc'] .player-rail__death-watermark {
   position: absolute;
   display: block;
-  top: 6px;
-  left: 132px;
-  width: 60px;
-  height: 64px;
+  top: 0;
+  left: 96px;
+  width: 88px;
+  height: 76px;
   fill: var(--mizar-hud-text-primary);
-  opacity: 0.22;
+  opacity: 0.25;
   pointer-events: none;
 }
 .hud-widget-design[data-hud-design='ewc'] .player-rail--right .player-rail__death-watermark {
   left: auto;
-  right: 132px;
+  right: 96px;
 }
 .hud-widget-design[data-hud-design='ewc'] .match-header__round-meta {
   margin-top: 10px;
@@ -464,10 +459,10 @@
   .objective-center__caption {
   display: none;
 }
-/* Invert planting C4 artwork & progress bar on EWC's white center field. */
+/* Keep both the C4 outline and the code dots in its clear window readable. */
 .hud-widget-design[data-hud-design='ewc']
   .objective-center[data-objective-mode='planting']
-  .objective-center__icon {
+  :is(.objective-center__icon, .objective-center__code i) {
   background: var(--mizar-hud-surface-strong);
 }
 .hud-widget-design[data-hud-design='ewc'] .objective-center__plant-progress {

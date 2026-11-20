@@ -5,6 +5,7 @@
   inset: 3px 8px auto 8px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail--right .player-rail__health-value {
+  top: 53px;
   left: auto;
   right: 0;
 }
@@ -114,7 +115,7 @@
 .hud-widget-design[data-hud-design='perfectworld'] .player-rail__health-value {
   position: absolute;
   right: auto;
-  top: 50px;
+  top: 52px;
   left: 0;
   font-size: 22px;
   line-height: 28px;

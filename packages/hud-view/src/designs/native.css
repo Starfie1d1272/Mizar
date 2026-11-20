@@ -921,24 +921,6 @@
     color: var(--mizar-hud-text-muted);
     line-height: 14px;
   }
-  .focused-player[data-dead='false'][data-has-ammo='false'] {
-    width: min(100%, 310px);
-    margin-inline: auto;
-    .focused-player__ammo {
-      display: none;
-    }
-    .focused-player__identity {
-      right: 0;
-    }
-    .focused-player__active {
-      left: auto;
-      right: 12px;
-      width: 88px;
-    }
-  }
-  .focused-player[data-dead='false'][data-has-ammo='false'][data-has-active-item='false'] {
-    width: min(100%, 224px);
-  }
   .focused-player__vitals {
     position: absolute;
     top: 34px;

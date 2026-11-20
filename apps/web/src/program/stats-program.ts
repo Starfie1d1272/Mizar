@@ -623,14 +623,14 @@ export function statsProgramInserts(
             kind: 'current-map',
             map: mapPhoto(m.mapName),
             score: `${number(m.score.a)} : ${number(m.score.b)}`,
-            columns: bundle.summaryHasKAD ? ['K', 'D', 'A'] : [],
+            columns: bundle.summaryHasKAD ? ['K', 'A', 'D'] : [],
             sides: sides.map((side) => ({
               name: names[side],
               players: (side === 0 ? m.players.a : m.players.b).map((p) => ({
                 name: p.name ?? '—',
                 avatar: p.avatarUrl,
                 ...(bundle.summaryHasKAD
-                  ? { values: [number(p.kills), number(p.deaths), number(p.assists)] }
+                  ? { values: [number(p.kills), number(p.assists), number(p.deaths)] }
                   : {}),
               })),
             })),

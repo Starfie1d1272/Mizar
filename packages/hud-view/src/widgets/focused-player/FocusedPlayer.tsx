@@ -528,20 +528,11 @@ export function FocusedPlayerCard({
     };
   }, [handoff]);
   const crossfadeActive = options.showMedia && handoff?.phase === 'crossfading';
-  const hasAmmo =
-    !player.dead &&
-    (player.clip !== null ||
-      (options.showReserveAmmo &&
-        (player.reserveMagazine !== null || player.reserveText !== null)));
-  const hasActiveItem =
-    !player.dead && player.activeItem !== null && player.activeItem.asset !== null;
   return (
     <article
       aria-label="Focused player"
       className="focused-player"
       data-show-metrics={options.showMetrics}
-      data-has-ammo={hasAmmo}
-      data-has-active-item={hasActiveItem}
       data-focused-player={player.sourcePlayerId}
       data-avatar={
         options.showMedia && loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined

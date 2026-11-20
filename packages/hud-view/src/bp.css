@@ -1267,7 +1267,7 @@
   min-width: 0;
   box-sizing: border-box;
   padding: 0 14px;
-  background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 86%, transparent);
+  background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 82%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 45%, transparent);
   color: var(--mizar-broadcast-pulse-white);
   font-size: 16px;

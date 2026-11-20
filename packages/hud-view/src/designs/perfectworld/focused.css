@@ -168,25 +168,9 @@
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__face[data-side='T'] {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--mizar-side-t) 54%, var(--mizar-hud-surface-primary)),
-    color-mix(in srgb, var(--mizar-side-t) 38%, var(--mizar-hud-surface-primary))
+    var(--mizar-side-t),
+    color-mix(in srgb, var(--mizar-side-t) 68%, var(--mizar-hud-surface-primary))
   );
-}
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__name,
-.hud-widget-design[data-hud-design='perfectworld'] .focused-player__hp {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
-}
-.hud-widget-design[data-hud-design='perfectworld']
-  .focused-player__vitals[data-danger='true']
-  .focused-player__hp {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  border-radius: 3px;
-  background: rgba(16, 18, 24, 0.86);
-  border: 1px solid rgba(255, 92, 108, 0.45);
-  color: #ff6b7a;
-  text-shadow: none;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__identity {
   left: 192px;

@@ -204,7 +204,7 @@
 }
 .hud-widget-design[data-hud-design='iem'] .player-rail__card--dead .player-rail__body::before {
   width: 256px;
-  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 76%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 50%, transparent);
 }
 .hud-widget-design[data-hud-design='iem']
   .player-rail--right

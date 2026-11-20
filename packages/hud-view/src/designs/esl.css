@@ -150,10 +150,10 @@
   z-index: -2;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__name {
-  max-width: 78px;
+  max-width: 80px;
   font-size: 18px;
   font-weight: 400;
-  letter-spacing: 0.7px;
+  letter-spacing: 1.9px;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__weapons {
   left: 164px;
@@ -203,10 +203,7 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__body::before {
   width: 216px;
   opacity: 1;
-  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 78%, transparent);
-}
-.hud-widget-design[data-hud-design='esl'] .player-rail__card--dead .player-rail__name {
-  color: color-mix(in srgb, var(--mizar-hud-text-primary) 86%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 50%, transparent);
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__death-watermark {
   display: block;
@@ -391,22 +388,22 @@
 .hud-widget-design[data-hud-design='esl'] .player-rail__avatar {
   position: absolute;
   top: 0;
-  left: 100px;
-  width: 68px;
+  left: 104px;
+  width: 60px;
   height: 76px;
   z-index: 1;
   background: transparent;
   opacity: 0.78;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__avatar img {
-  width: 68px;
+  width: 60px;
   height: 76px;
   object-fit: contain;
   object-position: center;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail--right .player-rail__avatar {
   left: auto;
-  right: 100px;
+  right: 104px;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__body {
   isolation: auto;
@@ -415,14 +412,14 @@
   background: transparent;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__identity {
-  inset: 0 8px auto 16px;
+  inset: 0 8px auto 20px;
   height: 32px;
   z-index: 4;
 }
 .hud-widget-design[data-hud-design='esl']
   .player-rail__card[data-physical-side='right']
   .player-rail__identity {
-  inset: 0 16px auto 8px;
+  inset: 0 20px auto 8px;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail__health-value {
   position: absolute;
