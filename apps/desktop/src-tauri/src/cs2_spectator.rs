@@ -370,24 +370,37 @@ fn restored_bindings(
 }
 
 #[test]
-fn restores_other_number_keys_when_a_user_binding_has_changed() {
-    let before = r#""config" { "bindings" { "1" "say original" "2" "say second" } }"#;
-    let saved = backup_bindings(before).unwrap();
+fn restores_other_number_keys_when_a_user_binding_has_changed() -> Result<(), String> {
+    let root = std::env::temp_dir().join(format!(
+        "mizar-spectator-keys-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cfg = root.join("730/local/cfg");
+    fs::create_dir_all(&cfg).map_err(|error| error.to_string())?;
+    let video = cfg.join("cs2_video.txt");
+    let keys = cfg.join(KEYS_NAME);
+    let before =
+        r#""config" { "bindings" { "1" "say original" "2" "say second" "h" "switchhands" } }"#;
+    let saved = backup_bindings(before)?;
+    let hud = backup_hud(before)?;
     let (_, managed) = NUMBER_BINDINGS[1];
     let current = format!(
-        r#""config" {{ "bindings" {{ "1" "say user edit" "2" "{managed}" "h" "switchhands" }} }}"#
+        r#""config" {{ "bindings" {{ "1" "say user edit" "2" "{managed}" "h" "{HUD_COMMAND}" }} }}"#
     );
-    let mut conflicts = Vec::new();
-    let restored = restored_bindings(&saved, &current, &mut conflicts).unwrap();
-    assert_eq!(restored, current.replace(managed, "say second"));
-    assert_eq!(conflicts.len(), 1);
-    assert!(conflicts[0].contains("数字键 1"));
-    conflicts.clear();
-    assert_eq!(
-        restored_bindings(&saved, &restored, &mut conflicts).unwrap(),
-        restored
-    );
-    assert_eq!(conflicts.len(), 1);
+    let result = (|| {
+        fs::write(&keys, &current).map_err(|error| error.to_string())?;
+        let expected = current
+            .replace(managed, "say second")
+            .replace(HUD_COMMAND, "switchhands");
+        for _ in 0..2 {
+            let conflict = restore_keys(&video, Some(&saved), Some(&hud)).unwrap_err();
+            assert!(conflict.contains("数字键 1"), "{conflict}");
+            assert_eq!(read_keys(&video)?, expected);
+        }
+        Ok(())
+    })();
+    result.and(fs::remove_dir_all(root).map_err(|error| error.to_string()))
 }
 
 /// A missing explicit binding uses the standard physical H scancode; aliases are never inferred.
