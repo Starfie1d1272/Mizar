@@ -242,6 +242,7 @@ export function runArchiveWorker(
       fd = undefined;
       fs.renameSync(d.output + '/part-1.zip.partial', d.output + '/part-1.zip');
     });
+    stages.finalizeMs += performance.now() - start - (stages.encodeMs - encodedBefore);
   }
   let chunk: string[] = [],
     chunkBytes = 0,
