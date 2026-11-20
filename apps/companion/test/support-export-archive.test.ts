@@ -36,9 +36,24 @@ test('needsEvidenceSanitize fast-path matches diagnosticEvidence output on clean
     { ...cleanEvent, evidence: { nested: '{"token":"abc"}' } },
     { ...cleanEvent, kind: 'program_all_chat', evidence: { text: 'hello' } },
     { ...cleanEvent, evidence: { stream: { key: 'live_key' } } },
+    { ...cleanEvent, evidence: { apiKey: 'ak_123' } },
+    { ...cleanEvent, evidence: { api_key: 'ak_123' } },
+    { ...cleanEvent, evidence: { streamKey: 'sk_123' } },
+    { ...cleanEvent, evidence: { stream_key: 'sk_123' } },
+    { ...cleanEvent, evidence: { deviceCode: 'dc_123' } },
+    { ...cleanEvent, evidence: { device_code: 'dc_123' } },
+    { ...cleanEvent, evidence: { userCode: 'uc_123' } },
+    { ...cleanEvent, evidence: { user_code: 'uc_123' } },
+    { ...cleanEvent, evidence: { pairingCode: 'pc_123' } },
+    { ...cleanEvent, evidence: { pairing_code: 'pc_123' } },
+    { ...cleanEvent, evidence: { accessToken: 'at_123' } },
+    { ...cleanEvent, evidence: { 'proxy-authorization': 'Basic abc' } },
+    { ...cleanEvent, evidence: { 'set-cookie': 'sid=abc' } },
   ];
   for (const item of sensitiveCases) {
-    assert.equal(needsEvidenceSanitize(JSON.stringify(item)), true);
+    const raw = JSON.stringify(item);
+    assert.equal(needsEvidenceSanitize(raw), true, `expected sanitize for ${raw}`);
+    assert.notDeepEqual(diagnosticEvidence(item), item, `expected redaction for ${raw}`);
   }
   assert.equal(needsEvidenceSanitize('{"\u0074oken":"secret"}'), true);
 });
