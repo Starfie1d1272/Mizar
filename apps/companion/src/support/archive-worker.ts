@@ -1,4 +1,8 @@
-import { diagnosticEvidence as redact, diagnosticValue } from './diagnostic-value.js';
+import {
+  diagnosticEvidence as redact,
+  diagnosticValue,
+  needsEvidenceSanitize,
+} from './diagnostic-value.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { crc32, deflateRawSync, gunzipSync } from 'node:zlib';
@@ -296,7 +300,7 @@ export function runArchiveWorker(
     }
     flushCoverage();
   }
-  function emit(input: unknown, source: string, offset: number): boolean {
+  function emit(input: unknown, source: string, offset: number, cleanRaw = false): boolean {
     carrierRecords++;
     const event =
       input !== null && typeof input === 'object' && !Array.isArray(input)
@@ -409,9 +413,10 @@ export function runArchiveWorker(
       typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
         ? occurrences
         : 1;
+    const sanitized = cleanRaw ? event : object(redact(event));
     const line =
       JSON.stringify({
-        ...object(redact(event)),
+        ...sanitized,
         eventId: id,
         carrier: {
           source,
@@ -523,9 +528,11 @@ export function runArchiveWorker(
               bodyBytes += lineBytes;
             } else if (line) {
               let value: unknown;
+              let cleanRaw = false;
               const start = performance.now();
               try {
                 value = JSON.parse(line);
+                cleanRaw = !needsEvidenceSanitize(line);
               } catch {
                 value = {
                   evidence: { text: line },
@@ -533,7 +540,7 @@ export function runArchiveWorker(
                 };
               }
               stages.decodeMs += performance.now() - start;
-              emit(value, source.name, offset);
+              emit(value, source.name, offset, cleanRaw);
             }
           };
           while (position < source.bytes) {
@@ -544,9 +551,10 @@ export function runArchiveWorker(
             tail = lines.pop()!;
             if (Buffer.byteLength(tail) > ENTRY_MAX) throw Error('source_line_budget');
             for (const line of lines) {
-              if (Buffer.byteLength(line) > ENTRY_MAX) throw Error('source_line_budget');
+              const lineBytes = Buffer.byteLength(line);
+              if (lineBytes > ENTRY_MAX) throw Error('source_line_budget');
               write(line);
-              offset += Buffer.byteLength(line) + 1;
+              offset += lineBytes + 1;
             }
           }
           tail += decoder.end();
