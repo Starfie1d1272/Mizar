@@ -451,6 +451,7 @@
   align-items: center;
   gap: var(--mizar-layout-compact);
   flex: 0 0 auto;
+  margin-inline-start: auto;
   min-width: 0;
 }
 .workspace-footer-actions > .mizar-button {

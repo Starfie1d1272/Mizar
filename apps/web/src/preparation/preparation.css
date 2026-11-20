@@ -839,7 +839,9 @@
   grid-template-rows: subgrid;
   row-gap: normal;
 }
-.preparation-task-links {
+.preparation-dashboard > .preparation-task-links {
+  grid-column: 1;
+  grid-row: 2;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--mizar-layout-gap);
@@ -914,14 +916,20 @@
 .preparation-heading__buttons {
   display: flex;
   align-items: center;
-  gap: var(--mizar-layout-compact);
+  gap: var(--mizar-layout-padding);
 }
 .preparation-tools-menu {
   position: relative;
 }
 .preparation-tools-menu > summary {
   list-style: none;
-  cursor: pointer;
+  min-height: var(--mizar-layout-target);
+  gap: calc(var(--mizar-layout-compact) / 2);
+}
+.preparation-tools-menu:not([open]) > summary:not(:hover) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--mizar-fg-secondary);
 }
 .preparation-tools-menu > summary::-webkit-details-marker {
   display: none;
