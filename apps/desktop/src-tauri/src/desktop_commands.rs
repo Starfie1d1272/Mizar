@@ -774,6 +774,17 @@ pub(crate) async fn persist_diagnostic_events(
         .and_then(decode_result)
 }
 
+pub(crate) async fn read_support_log_state(
+    log: tauri::State<'_, DesktopLog>,
+) -> Result<desktop_types::SupportLogState, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.support_log_state())
+        .await
+        .map_err(|error| format!("本机日志状态读取任务未完成：{error}"))?
+        .map_err(|error| format!("本机日志状态无法确认：{error}"))
+        .and_then(decode_result)
+}
+
 pub(crate) async fn diagnostic_pin(
     log: tauri::State<'_, DesktopLog>,
     action: desktop_types::PinAction,

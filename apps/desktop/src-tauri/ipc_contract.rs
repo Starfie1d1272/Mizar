@@ -117,6 +117,12 @@ macro_rules! desktop_ipc {
             reason: String, count: u64, bytes: u64,
             first_observed_at: Nullable(String), last_observed_at: Nullable(String),
         });
+        $object!(SupportLogState {
+            as_of: String,
+            memory_only: PinMemoryEvidence,
+            unreported_loss: PinLossReasons,
+            loss_totals: PinLossTotals,
+        });
         $object!(PinSourceState {
             as_of: String,
             memory_only: PinMemoryEvidence,
@@ -283,6 +289,9 @@ macro_rules! desktop_ipc {
         $command!(async diagnostic_pin SUPPORT_WINDOWS
             (log: tauri::State<'_, DesktopLog>) required [action: PinAction, pin_id: String, kind: PinKind]
             () -> DiagnosticPin = crate::desktop_commands::diagnostic_pin);
+        $command!(async read_support_log_state SUPPORT_WINDOWS
+            (log: tauri::State<'_, DesktopLog>) required []
+            () -> SupportLogState = crate::desktop_commands::read_support_log_state);
         $command!(async save_support_bundle SUPPORT_WINDOWS
             (app: tauri::AppHandle) required [export_id: String]
             (diagnostic_operation_id: Option<String>) -> bool = crate::desktop_commands::save_support_bundle);

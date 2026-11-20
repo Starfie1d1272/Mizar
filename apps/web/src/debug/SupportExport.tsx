@@ -1,5 +1,4 @@
 import { flushPerformanceJournal } from './performance-journal';
-import { pinHostEvidence, releaseHostPinWhenSettled } from './export-host-pin';
 import {
   flushControlEvidence,
   flushControlSnapshots,
@@ -159,9 +158,6 @@ export function SupportExport() {
     };
     signal.addEventListener('abort', cancelExport, { once: true });
     let stage: 'collect' | 'generate' | 'save' = 'collect';
-    let releaseHostPin: (() => void) | undefined;
-    let hostPinId: string | undefined;
-    let hostPinSubmitted = false;
     let deliveryJob = readyJob;
     const desktop = Boolean(window.__TAURI_INTERNALS__);
     try {
@@ -229,14 +225,11 @@ export function SupportExport() {
       // Let synchronous snapshot failures join the fixed document prefix.
       await Promise.resolve();
       const documentHandoff = await flushControlEvidence();
-      const hostPin = desktop ? await pinHostEvidence(signal) : undefined;
-      hostPinId = hostPin?.pinId;
-      releaseHostPin = hostPin?.release;
+      const host = desktop ? await boundedStatus(desktopInvoke('read_support_log_state')) : null;
       if (signal.aborted) throw new Error('export_cancelled');
       stage = 'generate';
       const requestBody = JSON.stringify({
-        ...(hostPinId ? { hostPinId } : {}),
-        ...(hostPin ? { hostPinCoverage: hostPin.coverage } : {}),
+        ...(host?.collectionStatus === 'available' ? { host: host.value } : {}),
         documentHandoff,
         ...(from ? { from: new Date(from).toISOString() } : {}),
         ...(to ? { to: new Date(to).toISOString() } : {}),
@@ -256,7 +249,6 @@ export function SupportExport() {
             }
           : null,
       });
-      hostPinSubmitted = Boolean(hostPinId);
       // This admission request is issued once. Never replay an uncertain result
       // or follow a redirect that could change its destination/ownership.
       const response = await fetch('/debug/support-exports', {
@@ -267,24 +259,7 @@ export function SupportExport() {
         redirect: 'error',
         signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       });
-      if (!response.ok) {
-        const rejection = (await response.json().catch(() => null)) as {
-          error?: unknown;
-          rejectedHostPinId?: unknown;
-        } | null;
-        if (
-          hostPinId &&
-          response.status === 409 &&
-          ['Error: export_busy', 'Error: export_cache_job_budget'].includes(
-            typeof rejection?.error === 'string' ? rejection.error : '',
-          ) &&
-          rejection?.rejectedHostPinId === hostPinId
-        )
-          hostPinSubmitted = false;
-        // Identity conflicts, malformed/legacy responses and transport failures
-        // remain uncertain even when an HTTP error was received.
-        throw new Error(`export_http_${response.status}`);
-      }
+      if (!response.ok) throw new Error(`export_http_${response.status}`);
       let job = (await response.json()) as {
         exportId: string;
         phase: string;
@@ -295,7 +270,6 @@ export function SupportExport() {
         downloadName?: string;
         cleanupStatus?: 'unconfirmed';
       };
-      if (hostPinId && job.exportId !== hostPinId) throw new Error('export_identity_mismatch');
       activeExportId = job.exportId;
       if (signal.aborted) cancelExport();
       setProgress(job);
@@ -357,11 +331,6 @@ export function SupportExport() {
       });
     } finally {
       signal.removeEventListener('abort', cancelExport);
-      // A timed-out POST may still have admitted the matching job. Keep its
-      // hold rather than releasing sources before Companion has finished.
-      // Cleanup cannot make the UI wait on the same unavailable Host writer.
-      if (!hostPinSubmitted) releaseHostPin?.();
-      else if (hostPinId && releaseHostPin) releaseHostPinWhenSettled(hostPinId, releaseHostPin);
       busyRef.current = false;
       setBusy(false);
     }

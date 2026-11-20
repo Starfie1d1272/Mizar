@@ -351,7 +351,8 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 | 入口 | 语义 |
 | --- | --- |
-| `POST /debug/support-exports` | 可选 ISO from/to 与已验证 Host pin，返回 exportId/阶段，不回大正文 |
+| `POST /debug/support-exports` | 接受可选的 ISO from/to 与 Host 日志状态，返回 exportId 和阶段 |
+| `read_support_log_state()` | 尝试冲刷 Host 待写日志并返回覆盖状态，便于诊断包说明尚未持久化的记录 |
 | `GET /debug/support-exports/:id` | 固定任务状态与覆盖摘要 |
 | `POST /debug/support-exports/:id/cancel` | 请求取消，不证明 worker 已退出或输入已释放 |
 | `GET /debug/support-exports/:id/files/:name` | 受控附件下载，校验本机同源请求 |
@@ -360,7 +361,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 `settled` 表示输入使用结束且已尝试收尾，要等待 worker 实际退出；单个终态消息不够。有效 ZIP 的临时清理失败仍可 ready，另报 `cleanupStatus:unconfirmed`，不删除有效包、不伪造正文缺口，也不声称资源全释放。
 
-人工包为 `mizar-support-bundle/2`。覆盖、分卷、pin/保存租约和容量见[诊断架构](architecture.md#诊断证据历史与导出)。旧 `/debug/support-bundle` 不注册；旧包/日志留原位，使用对应版本工具，不自动迁移删除。人工保存不自动公开上传，云回传另遵循[同意与撤回契约](diagnostics-delivery.md)。
+人工包为 `mizar-support-bundle/2`。覆盖、分卷、保存租约和容量见[诊断架构](architecture.md#诊断证据历史与导出)。旧 `/debug/support-bundle` 不注册；旧包/日志留原位，使用对应版本工具，不自动迁移删除。人工保存不自动公开上传，云回传另遵循[同意与撤回契约](diagnostics-delivery.md)。
 
 ## Program 统计与装备事实
 

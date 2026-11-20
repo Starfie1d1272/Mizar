@@ -1520,6 +1520,11 @@ impl DesktopLog {
             "lossTotals":{"reason":"native_event_loss_cumulative","count":self.deferred.total_lost.load(Ordering::Relaxed),"bytes":self.deferred.lost_bytes.load(Ordering::Relaxed),"firstObservedAt":timestamp(self.deferred.first_lost_ms.load(Ordering::Relaxed)),"lastObservedAt":timestamp(self.deferred.last_lost_ms.load(Ordering::Relaxed))}})
     }
 
+    pub(crate) fn support_log_state(&self) -> io::Result<Value> {
+        self.drain_deferred()?;
+        Ok(self.deferred_source_state())
+    }
+
     fn drain_deferred(&self) -> io::Result<()> {
         let mut log = match self.inner.try_lock() {
             Ok(log) => log,

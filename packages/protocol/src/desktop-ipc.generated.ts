@@ -180,6 +180,12 @@ const PinLossTotals = z.object({
   firstObservedAt: z.string().nullable(),
   lastObservedAt: z.string().nullable(),
 });
+const SupportLogState = z.object({
+  asOf: z.string(),
+  memoryOnly: PinMemoryEvidence,
+  unreportedLoss: PinLossReasons,
+  lossTotals: PinLossTotals,
+});
 const PinSourceState = z.object({
   asOf: z.string(),
   memoryOnly: PinMemoryEvidence,
@@ -394,6 +400,7 @@ export const desktopIpc = {
     }),
     result: DiagnosticPin,
   },
+  read_support_log_state: { args: z.undefined(), result: SupportLogState },
   save_support_bundle: {
     args: z.strictObject({ exportId: z.string() }),
     result: z.boolean(),
