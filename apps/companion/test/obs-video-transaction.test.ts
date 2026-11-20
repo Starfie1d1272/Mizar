@@ -77,7 +77,7 @@ async function usingTest(
 }
 const endpoint = 'ws://127.0.0.1:4455';
 
-for (const condition of ['external output', 'OBS closed'] as const) {
+for (const condition of ['external output', 'OBS closed', 'control changed'] as const) {
   test(`safe production exit defers video restoration for ${condition}`, async () =>
     usingTest(async (tx, f) => {
       await tx.prepare(f.obs, endpoint, () => true);
@@ -88,10 +88,11 @@ for (const condition of ['external output', 'OBS closed'] as const) {
         ];
       const app = Fastify();
       let released = false;
+      let controlCurrent = true;
       const scenes = {
         get: () => ({ active: 'waiting', revision: 'scene' }),
         holdAutomatic: () => undefined,
-        controlValid: () => () => true,
+        controlValid: () => () => controlCurrent,
         // Models the separate exit proof: external takeover or confirmed absent OBS.
         selectWaitingForExit: async () => ({ ok: true }),
       } as unknown as ProgramSceneController;
@@ -113,17 +114,20 @@ for (const condition of ['external output', 'OBS closed'] as const) {
           settleAutomatic: async () => {},
           startBrowserRecovery: () => {},
           restoreProgram: async () => {},
-          restoreVideo: () =>
-            condition === 'OBS closed'
-              ? tx.restore(
-                  {
-                    call: async () => {
-                      throw new Error('OBS unavailable');
-                    },
-                  },
-                  endpoint,
-                )
-              : tx.restore(f.obs, endpoint),
+          restoreVideo: (id, valid) =>
+            tx.restore(
+              {
+                call: async (method, data) => {
+                  if (condition === 'OBS closed') throw new Error('OBS unavailable');
+                  if (condition === 'control changed' && method === 'GetVideoSettings')
+                    controlCurrent = false;
+                  return f.obs.call(method, data);
+                },
+              },
+              endpoint,
+              id,
+              valid,
+            ),
         } as ProductionDependencies['obs'],
         source: {
           clearStats: () => {},
