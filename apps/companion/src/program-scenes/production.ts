@@ -101,6 +101,7 @@ export function createProduction(options: ProductionDependencies) {
   let sessionGeneration = 0;
   let sessionId = randomUUID();
   let lastEnteredId: string | null = null;
+  let lastFinish: { requestedRevision: string; committedRevision: string } | undefined;
   let releaseHandoffState: ProductionExitEvidence['releaseHandoffState'] = 'idle';
   let releaseGeneration = 0;
   let handoffStarted = false;
@@ -566,6 +567,8 @@ export function createProduction(options: ProductionDependencies) {
       // Hiding the workspace while preparing changes no production state and
       // must not invalidate the preparation owner's in-flight operations.
       if (body?.action !== 'hide') revision = randomUUID();
+      if (body.action === 'finish')
+        lastFinish = { requestedRevision: body.expectedRevision, committedRevision: revision };
       if (entering) {
         sessionGeneration++;
         options.obs?.startBrowserRecovery(production.sessionValid());
@@ -628,6 +631,13 @@ export function createProduction(options: ProductionDependencies) {
   ) {
     if (body.action !== 'finish' && body.action !== 'shutdown')
       return change(body, onShutdownCommit);
+    if (
+      body.action === 'finish' &&
+      mode === 'preparation' &&
+      lastFinish?.requestedRevision === body.expectedRevision &&
+      lastFinish.committedRevision === revision
+    )
+      return { ok: true as const, value: view() };
     if (activeExitChange) {
       if (body?.expectedRevision !== revision) return change(body, onShutdownCommit);
       const originalSession = sessionId;
