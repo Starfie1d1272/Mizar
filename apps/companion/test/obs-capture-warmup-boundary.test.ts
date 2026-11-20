@@ -31,6 +31,7 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
   const visibleWrites: string[] = [];
   let valid = true;
   let streaming = false;
+  let streamStatusUnavailable = false;
   let streamBytes = 0;
   let allowOutput = true;
   let cancelOnCleanup = false;
@@ -80,7 +81,9 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
         if (data.sceneUuid === 'gameplay-uuid') data.sceneName = obsSceneName('gameplay');
         calls.push(type);
         let responseData: Record<string, unknown> = {};
-        if (
+        if (type === 'GetStreamStatus' && streamStatusUnavailable) {
+          responseData = {};
+        } else if (
           [
             'GetStreamStatus',
             'GetRecordStatus',
@@ -295,6 +298,9 @@ async function rig(scenario: 'normal' | 'starting' | 'takeover' | 'cancel' = 'no
     visibleWrites,
     geometry: () => geometry,
     item: () => item,
+    setStreamStatusUnavailable: (unavailable: boolean) => {
+      streamStatusUnavailable = unavailable;
+    },
     setFailure: () => {
       diagnosticFailure = true;
     },
@@ -314,6 +320,30 @@ it('keeps disconnected observations valid across failed reconnects, but revokes 
     expect(outputs.snapshot().stream.active).toBeNull();
     outputs.reset();
     expect(outputs.preparationConfigurationEpoch()).not.toBe(epoch);
+  } finally {
+    await outputs.close();
+  }
+});
+
+it('reports an unreadable OBS status before start as safe to retry', async () => {
+  const r = await rig();
+  const outputs = new ObsOutputController(r.config, () => {});
+  try {
+    const before = (await outputs.read()).stream;
+    r.setStreamStatusUnavailable(true);
+    await expect(
+      outputs.command({ output: 'stream', action: 'start', expectedRevision: before.revision }),
+    ).rejects.toMatchObject({ code: 'obs_output_unavailable' });
+    expect(r.calls).not.toContain('StartStream');
+
+    r.setStreamStatusUnavailable(false);
+    const recovered = (await outputs.read()).stream;
+    await outputs.command({
+      output: 'stream',
+      action: 'start',
+      expectedRevision: recovered.revision,
+    });
+    expect(r.calls.filter((type) => type === 'StartStream')).toHaveLength(1);
   } finally {
     await outputs.close();
   }

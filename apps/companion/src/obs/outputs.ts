@@ -35,6 +35,14 @@ export class ObsOutputError extends Error {
   }
 }
 
+function missingOutputObservation(cause?: unknown): ObsOutputError {
+  return new ObsOutputError(
+    'obs_output_unavailable',
+    '暂时无法读取 OBS 输出状态，本次请求未提交。连接恢复后可以重试。',
+    { cause },
+  );
+}
+
 /** OBS request-status codes, not arbitrary server comments, choose operator guidance. */
 function rejectedOutput(failure: unknown): ObsOutputError {
   const code = (failure as { code: number }).code;
@@ -776,8 +784,7 @@ export class ObsOutputController {
       throw new ObsOutputError('obs_output_busy', 'OBS 正在处理此输出，请等待状态确认。');
     if (expectedRevision !== null && state.revision !== expectedRevision)
       throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
-    if (!this.ready || state.active === null)
-      throw new ObsOutputError('obs_output_unavailable', 'OBS 输出状态无法确认，请等待重新连接。');
+    if (!this.ready || state.active === null) throw missingOutputObservation();
     const generation = this.generation;
     const revision = state.revision;
     const client = this.client!;
@@ -792,10 +799,13 @@ export class ObsOutputController {
         : current.active === false && current.phase === 'idle';
     };
     try {
-      await this.read();
+      await this.read().catch((cause: unknown) => {
+        throw missingOutputObservation(cause);
+      });
       if (generation !== this.generation)
         throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
       if (reached()) return this.snapshot();
+      if (this.values[output].active === null) throw missingOutputObservation();
       if (this.values[output].revision !== revision)
         throw new ObsOutputError('obs_output_stale', 'OBS 状态已变化，请核对后重新操作。');
       if (action === 'start' && this.values[output].active !== false)
