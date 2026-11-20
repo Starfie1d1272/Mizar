@@ -50,7 +50,6 @@ if (bundle.schema === 'mizar-support-export/2') {
 }
 throw new Error('Unsupported support export; expected a current ZIP or generated manifest');
 async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit = true) {
-  if (bytes.length > 18_874_368) throw new Error('ZIP exceeds part budget');
   let end = -1;
   for (let n = bytes.length - 22; n >= Math.max(0, bytes.length - 65557); n--)
     if (bytes.readUInt32LE(n) === 0x06054b50) {
@@ -87,7 +86,7 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     offset += 46 + nameLength + extra + comment;
     if (
       size > 2 * 1024 * 1024 ||
-      (expanded += size) > 256 * 1024 * 1024 ||
+      (expanded += size) > 8 * 1024 * 1024 * 1024 ||
       entries.has(name) ||
       name.startsWith('/') ||
       name.split('/').some((segment) => !segment) ||
@@ -107,23 +106,30 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
         name
     )
       throw new Error('Incomplete ZIP entry');
-    const data =
-      method === 0
-        ? bytes.subarray(start, start + compressed)
-        : method === 8
-          ? inflateRawSync(bytes.subarray(start, start + compressed), {
-              maxOutputLength: 2 * 1024 * 1024,
-            })
-          : null;
-    if (!data || data.length !== size) throw new Error('ZIP entry size mismatch');
-    // Coverage cannot carry its own SHA; CRC validates every entry, including this metadata.
-    if (crc32(data) !== checksum) throw new Error(`ZIP entry CRC mismatch: ${name}`);
-    entries.set(name, data);
+    entries.set(name, { method, start, compressed, size, checksum });
   }
   if (offset !== end) throw new Error('ZIP directory count mismatch');
-  const metadata = JSON.parse(entries.get('bundle.json')?.toString('utf8') ?? 'null');
+  function readEntry(name) {
+    const entry = entries.get(name);
+    if (!entry) return undefined;
+    const { method, start, compressed, size, checksum } = entry;
+    const payload = bytes.subarray(start, start + compressed);
+    const data =
+      method === 0
+        ? payload
+        : method === 8
+          ? inflateRawSync(payload, { maxOutputLength: 2 * 1024 * 1024 })
+          : null;
+    if (!data || data.length !== size) throw new Error('ZIP entry size mismatch');
+    if (crc32(data) !== checksum) throw new Error(`ZIP entry CRC mismatch: ${name}`);
+    return data;
+  }
+  const metadata = JSON.parse(readEntry('bundle.json')?.toString('utf8') ?? 'null');
   if (
-    metadata?.schema !== 'mizar-support-bundle/2' ||
+    !['mizar-support-bundle/2', 'mizar-support-bundle/3'].includes(metadata?.schema) ||
+    (metadata.schema === 'mizar-support-bundle/3' && partCount !== 1) ||
+    (metadata.schema === 'mizar-support-bundle/2' &&
+      (bytes.length > 18_874_368 || expanded > 256 * 1024 * 1024)) ||
     typeof metadata.bundleId !== 'string' ||
     !metadata.bundleId ||
     (bundleId && metadata.bundleId !== bundleId) ||
@@ -140,31 +146,35 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     throw new Error(
       'Incomplete ZIP set: final metadata requires the total manifest and every listed part',
     );
-  const coverage = JSON.parse(entries.get('coverage.json')?.toString('utf8') ?? 'null');
+  const coverage = JSON.parse(readEntry('coverage.json')?.toString('utf8') ?? 'null');
   if (
-    coverage?.schema !== 'mizar-support-coverage/2' ||
-    !Array.isArray(coverage.entries) ||
+    !['mizar-support-coverage/2', 'mizar-support-coverage/3'].includes(coverage?.schema) ||
     !Array.isArray(coverage.gaps)
   )
     throw new Error('Missing final coverage');
-  const indexed = new Set();
-  for (const entry of coverage?.entries ?? []) {
-    if (indexed.has(entry.name) || entry.name === 'coverage.json')
-      throw new Error('Invalid entry index');
-    indexed.add(entry.name);
-    const data = entries.get(entry.name);
+  if (coverage.schema === 'mizar-support-coverage/2') {
+    if (!Array.isArray(coverage.entries)) throw new Error('Missing legacy entry index');
+    const indexed = new Set();
+    for (const entry of coverage.entries) {
+      if (indexed.has(entry.name) || entry.name === 'coverage.json')
+        throw new Error('Invalid entry index');
+      indexed.add(entry.name);
+      const data = readEntry(entry.name);
+      if (
+        !data ||
+        data.length !== entry.bytes ||
+        createHash('sha256').update(data).digest('hex') !== entry.sha256
+      )
+        throw new Error('ZIP entry digest mismatch');
+    }
     if (
-      !data ||
-      data.length !== entry.bytes ||
-      createHash('sha256').update(data).digest('hex') !== entry.sha256
+      indexed.size !== entries.size - 1 ||
+      [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
     )
-      throw new Error('ZIP entry digest mismatch');
+      throw new Error('Unindexed ZIP entry');
+  } else {
+    for (const name of entries.keys()) readEntry(name);
   }
-  if (
-    indexed.size !== entries.size - 1 ||
-    [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
-  )
-    throw new Error('Unindexed ZIP entry');
   const coverageDetails = [];
   if (coverage.coverageFiles !== undefined) {
     if (!Array.isArray(coverage.coverageFiles)) throw new Error('Invalid coverage file index');
@@ -180,7 +190,7 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
         throw new Error('Invalid coverage file reference');
       detailNames.add(ref.name);
       if (ref.partIndex !== expectedIndex) continue;
-      const data = entries.get(ref.name);
+      const data = readEntry(ref.name);
       if (!data) throw new Error('Missing coverage file');
       for (const line of data.toString('utf8').trimEnd().split('\n')) {
         const detail = JSON.parse(line);
@@ -191,9 +201,9 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     }
   }
   if (!emit) return;
-  for (const [name, data] of entries)
+  for (const name of entries.keys())
     if (name.startsWith('events/') && name.endsWith('.ndjson'))
-      for (const line of data.toString('utf8').split('\n'))
+      for (const line of readEntry(name).toString('utf8').split('\n'))
         if (line) {
           JSON.parse(line);
           if (!process.stdout.write(line + '\n'))

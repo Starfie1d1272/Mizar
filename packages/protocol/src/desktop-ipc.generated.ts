@@ -76,7 +76,7 @@ const BackupSelection = z.object({
 });
 const FrameRateAction = z.enum(['inspect', 'apply', 'restore']);
 const PinAction = z.enum(['prepare', 'commit', 'release']);
-const PinKind = z.enum(['incident', 'export', 'delivery', 'active']);
+const PinKind = z.enum(['incident', 'delivery', 'active']);
 const ObserverAction = z.enum([
   'connection-mode',
   'start-configured',
@@ -179,6 +179,12 @@ const PinLossTotals = z.object({
   bytes: z.number().int().nonnegative(),
   firstObservedAt: z.string().nullable(),
   lastObservedAt: z.string().nullable(),
+});
+const SupportLogState = z.object({
+  asOf: z.string(),
+  memoryOnly: PinMemoryEvidence,
+  unreportedLoss: PinLossReasons,
+  lossTotals: PinLossTotals,
 });
 const PinSourceState = z.object({
   asOf: z.string(),
@@ -394,6 +400,7 @@ export const desktopIpc = {
     }),
     result: DiagnosticPin,
   },
+  read_support_log_state: { args: z.undefined(), result: SupportLogState },
   save_support_bundle: {
     args: z.strictObject({ exportId: z.string() }),
     result: z.boolean(),

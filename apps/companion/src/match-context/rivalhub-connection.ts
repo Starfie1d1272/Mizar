@@ -217,8 +217,11 @@ export class RivalHubConnection {
   private claimRevision = 0;
   private stoppedMatchId: string | null = null;
   private controlFailure: string | null = null;
-  private controlFailureScope: string | null = null;
-  private failureScope(snapshot: { matchId: string; cursor: LiveSnapshotV1['cursor'] }): string {
+  private controlFailureKey: string | null = null;
+  private failureExecutionKey(snapshot: {
+    matchId: string;
+    cursor: LiveSnapshotV1['cursor'];
+  }): string {
     return JSON.stringify([snapshot.matchId, executionKey(snapshot.cursor), this.claimRevision]);
   }
   private nextLiveAt = 0;
@@ -263,7 +266,7 @@ export class RivalHubConnection {
     if (this.activeDeviceName && this.activeDeviceMatchId === matchId)
       return result('other_device');
     const controlFailure =
-      snapshot && this.controlFailureScope === this.failureScope(snapshot)
+      snapshot && this.controlFailureKey === this.failureExecutionKey(snapshot)
         ? this.controlFailure
         : null;
     // Only a current, bound formal execution can start a watch. Warmup and
@@ -335,7 +338,7 @@ export class RivalHubConnection {
   ): void {
     if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
       return;
-    this.controlFailureScope = this.failureScope(event);
+    this.controlFailureKey = this.failureExecutionKey(event);
     this.controlFailure = state;
   }
 
@@ -359,7 +362,7 @@ export class RivalHubConnection {
     if (this.source && (!matchId || this.source.matchId === matchId)) {
       this.source.draining = true;
       this.source.paused = true;
-      this.sealCapture(this.exactSource(this.source));
+      this.sealCapture(this.sourceIdentity(this.source));
     }
   }
   private liveDelivery: {
@@ -396,7 +399,7 @@ export class RivalHubConnection {
   }
 
   reliableExactSource(): ExactSource | undefined {
-    return this.source && this.installation ? this.exactSource(this.source) : undefined;
+    return this.source && this.installation ? this.sourceIdentity(this.source) : undefined;
   }
 
   private readonly authorization: RivalHubAuthorization;
@@ -515,7 +518,7 @@ export class RivalHubConnection {
 
   private async confirmedCapture(identity: ExactSource): Promise<CaptureReference | undefined> {
     const state = await this.sourceState.snapshot();
-    return state.records.find((record) => exactKey(record.identity) === exactKey(identity))
+    return state.records.find((record) => sameExactSource(record.identity, identity))
       ?.captureReference;
   }
 
@@ -623,7 +626,7 @@ export class RivalHubConnection {
     if (this.source && this.source.matchId !== matchId) {
       this.source.draining = true;
       this.source.paused = true;
-      this.sealCapture(this.exactSource(this.source));
+      this.sealCapture(this.sourceIdentity(this.source));
     }
     void this.sourceCommands
       .run(async () => {
@@ -720,7 +723,7 @@ export class RivalHubConnection {
       state.records.some(
         (item) =>
           item.state !== 'owned' &&
-          (this.scopeMatches(item.identity) ||
+          (this.isCurrentInstallation(item.identity) ||
             (item.state !== 'archive_pending' && !item.installationRevoked)),
       ) || state.intents.length > 0
     );
@@ -743,11 +746,11 @@ export class RivalHubConnection {
     }
   }
 
-  private scopeMatches(scope: SourceScope): boolean {
+  private isCurrentInstallation(scope: SourceScope): boolean {
     return this.installation !== null && sameInstallationScope(scope, this.installation);
   }
 
-  private exactSource(source: Source): ExactSource {
+  private sourceIdentity(source: Source): ExactSource {
     return {
       baseUrl: source.baseUrl,
       competitionId: source.competitionId,
@@ -794,7 +797,7 @@ export class RivalHubConnection {
   private async retireCurrent(cause: 'finish' | 'switch' | 'shutdown'): Promise<void> {
     const source = this.source;
     if (!source) return;
-    const identity = this.exactSource(source);
+    const identity = this.sourceIdentity(source);
     source.draining = true;
     source.paused = true;
     this.sealCapture(identity);
@@ -811,7 +814,7 @@ export class RivalHubConnection {
 
   private async reconcileIntent(deadline: number, force: boolean): Promise<void> {
     const state = await this.sourceState.snapshot();
-    const intents = state.intents.filter((intent) => this.scopeMatches(intent.scope));
+    const intents = state.intents.filter((intent) => this.isCurrentInstallation(intent.scope));
     const pendingIds = new Set(intents.map((intent) => intent.id));
     for (const id of this.intentRetry.keys()) {
       if (!pendingIds.has(id)) this.intentRetry.delete(id);
@@ -854,7 +857,7 @@ export class RivalHubConnection {
     claimedFrom: Source | null,
     installation: Installation | null,
   ): Promise<void> {
-    if (!this.scopeMatches(intent.scope) || Date.now() >= deadline) return;
+    if (!this.isCurrentInstallation(intent.scope) || Date.now() >= deadline) return;
     const signal = this.cleanupRequestSignal(deadline);
     let legacyScopeRecovery = false;
     if (!intent.claimRecoveryVersion) {
@@ -957,7 +960,7 @@ export class RivalHubConnection {
       this.stopSync(source.matchId);
       source.draining = true;
       source.paused = true;
-      key = this.trackExitHandoff(this.exactSource(source), cause);
+      key = this.trackExitHandoff(this.sourceIdentity(source), cause);
     }
     if (matchId === undefined || key !== undefined)
       await this.persistExitHandoffs(matchId === undefined ? undefined : key);
@@ -1005,14 +1008,14 @@ export class RivalHubConnection {
     for (const [key, { identity, cause }] of this.exitHandoffs) {
       if (onlyKey !== undefined && key !== onlyKey) continue;
       const active = this.source;
-      const current = active?.draining && exactKey(this.exactSource(active)) === key;
+      const current = active?.draining && sameExactSource(active, identity);
       if (current && this.captureLifecycle && !(await this.captureLifecycle.seal(identity))) {
         if (!this.captureLifecycle.coverage(identity).durableUnknown)
           throw new Error('rivalhub_source_capture_unconfirmed');
         this.cleanupEvidence(identity, 'source_capture_coverage_unknown', 0);
       }
       const state = await this.sourceState.snapshot();
-      const record = state.records.find((item) => exactKey(item.identity) === key);
+      const record = state.records.find((item) => sameExactSource(item.identity, identity));
       if (record) await this.sourceState.handoff(identity, cause);
       else if (
         !state.watermarks.some(
@@ -1075,7 +1078,7 @@ export class RivalHubConnection {
         this.confirmedSourcesAwaitingPersistence.has(attemptKey)
       )
         continue;
-      if (!this.scopeMatches(record.identity)) {
+      if (!this.isCurrentInstallation(record.identity)) {
         if (record.state === 'release_pending')
           await this.sourceState.failure(record.identity, 'installation_mismatch', null, true);
         continue;
@@ -1135,7 +1138,7 @@ export class RivalHubConnection {
         'released' in result &&
         result.released === true
       ) {
-        if (this.source && exactKey(this.source) === attemptKey) this.source = null;
+        if (this.source && sameExactSource(this.source, identity)) this.source = null;
         if (!(await this.persistConfirmedSource(identity))) continue;
         if (await this.archiveConfirmedSource(identity)) {
           this.cleanupAttempts.delete(attemptKey);
@@ -1334,7 +1337,7 @@ export class RivalHubConnection {
         !(this.activeDeviceName && this.activeDeviceMatchId === snapshot.matchId);
       if (!eligible()) return;
       const sameMatch = (scope: SourceScope) =>
-        this.scopeMatches(scope) && scope.matchId === snapshot.matchId;
+        this.isCurrentInstallation(scope) && scope.matchId === snapshot.matchId;
       const state = await this.sourceState.snapshot();
       // An unknown request must be reconciled by the existing cleanup owner first.
       // Old records for this match require explicit recovery, including another
@@ -1532,7 +1535,7 @@ export class RivalHubConnection {
           await this.sourceState.clearIntent(intent.id);
           await this.updateCleanupSummary();
         }
-        this.controlFailureScope = this.failureScope(snapshot);
+        this.controlFailureKey = this.failureExecutionKey(snapshot);
         this.controlFailure =
           response.status === 401
             ? 'authorization_expired'
@@ -1552,14 +1555,10 @@ export class RivalHubConnection {
         if (!Number.isSafeInteger(result.authorityRevision) || result.authorityRevision <= 0)
           throw new Error('数据源授权响应无效，等待核对。');
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
-        if (
-          claimedFrom &&
-          this.source === claimedFrom &&
-          exactKey(this.exactSource(claimedFrom)) !== exactKey(identity)
-        ) {
+        if (claimedFrom && this.source === claimedFrom && !sameExactSource(claimedFrom, identity)) {
           claimedFrom.draining = true;
           claimedFrom.paused = true;
-          this.sealCapture(this.exactSource(claimedFrom));
+          this.sealCapture(this.sourceIdentity(claimedFrom));
         }
         if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
@@ -1653,7 +1652,7 @@ export class RivalHubConnection {
       return this.view();
     } catch (error) {
       if (requestFailureReason(error) !== 'unknown') {
-        this.controlFailureScope = this.failureScope(snapshot);
+        this.controlFailureKey = this.failureExecutionKey(snapshot);
         this.controlFailure = requestFailureReason(error);
       }
       throw error;
@@ -1680,7 +1679,7 @@ export class RivalHubConnection {
       // confirmClaim may also have retired the previous authority of this scope.
       claimedFrom.draining = true;
       claimedFrom.paused = true;
-      this.sealCapture(this.exactSource(claimedFrom));
+      this.sealCapture(this.sourceIdentity(claimedFrom));
     }
   }
 
@@ -1717,7 +1716,7 @@ export class RivalHubConnection {
     if (this.source) {
       this.source.draining = true;
       this.source.paused = true;
-      this.sealCapture(this.exactSource(this.source));
+      this.sealCapture(this.sourceIdentity(this.source));
     }
     return this.sourceCommands.run(() => this.releaseLocked());
   }
@@ -1727,7 +1726,7 @@ export class RivalHubConnection {
     this.requireSourceState();
     const source = this.source;
     if (!source || !this.installation) throw new Error('rivalhub_stopped_source_changed');
-    const identity = this.exactSource(source);
+    const identity = this.sourceIdentity(source);
     const key = exactKey(identity);
     const generation = this.bindingGeneration;
     await this.finishExitHandoffs(
@@ -1739,8 +1738,8 @@ export class RivalHubConnection {
           this.stoppedMatchId !== matchId ||
           source.matchId !== matchId ||
           !source.draining ||
-          !this.scopeMatches(identity) ||
-          exactKey(source) !== key ||
+          !this.isCurrentInstallation(identity) ||
+          !sameExactSource(source, identity) ||
           !this.exitHandoffs.has(key) ||
           !isCurrent()
         )
@@ -1777,7 +1776,7 @@ export class RivalHubConnection {
     const source =
       retainedSource &&
       (!this.source ||
-        !this.scopeMatches(retainedSource) ||
+        !this.isCurrentInstallation(retainedSource) ||
         !sameExactSource(this.source, retainedSource))
         ? retainedSource
         : this.source;
@@ -1827,7 +1826,7 @@ export class RivalHubConnection {
         this.source === source &&
         this.source?.deliveryExecution === executionKey(event.cursor)
       ) {
-        this.controlFailureScope = this.failureScope(event);
+        this.controlFailureKey = this.failureExecutionKey(event);
         this.controlFailure =
           rejection?.reason ??
           (response.status === 401
@@ -1854,7 +1853,7 @@ export class RivalHubConnection {
         this.source === source &&
         this.source?.deliveryExecution === executionKey(event.cursor)
       ) {
-        this.controlFailureScope = this.failureScope(event);
+        this.controlFailureKey = this.failureExecutionKey(event);
         this.controlFailure = requestFailureReason(error);
       }
       evidence({
@@ -2104,7 +2103,7 @@ export class RivalHubConnection {
       this.nextLiveAt =
         this.monotonicNow() +
         Math.min(transientNetwork ? 2_000 : 8_000, 500 * 2 ** Math.min(this.liveFailures, 4));
-      this.controlFailureScope = this.failureScope(snapshot);
+      this.controlFailureKey = this.failureExecutionKey(snapshot);
       this.controlFailure =
         reason === 'http_401'
           ? 'authorization_expired'
@@ -2157,13 +2156,13 @@ export class RivalHubConnection {
       identity.matchId !== event.matchId ||
       identity.competitionId !== event.competitionId ||
       !sameSourceSession(identity, event.cursor) ||
-      !this.scopeMatches(identity)
+      !this.isCurrentInstallation(identity)
     )
       return 'retry';
     const installation = this.installation;
     const state = await this.sourceState.snapshot();
     const key = exactKey(identity);
-    const record = state.records.find((item) => exactKey(item.identity) === key);
+    const record = state.records.find((item) => sameExactSource(item.identity, identity));
     if (
       !record ||
       !['owned', 'release_pending'].includes(record.state) ||
@@ -2176,7 +2175,7 @@ export class RivalHubConnection {
       return this.sendReliable(event, current, signal, retainedLineup, identity);
     const valid = () =>
       this.installation === installation &&
-      this.scopeMatches(identity) &&
+      this.isCurrentInstallation(identity) &&
       !this.isolatedRevokedSources.has(key) &&
       !this.confirmedSourcesAwaitingPersistence.has(key);
     if (!valid()) return 'retry';
@@ -2246,7 +2245,7 @@ export class RivalHubConnection {
       isCurrent() &&
       !signal.aborted
     ) {
-      this.controlFailureScope = this.failureScope(event);
+      this.controlFailureKey = this.failureExecutionKey(event);
       this.controlFailure = 'reliable_needs_attention';
       this.liveDelivery = {
         ...this.liveDelivery,
@@ -2264,7 +2263,7 @@ export class RivalHubConnection {
       !signal.aborted &&
       (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed')
     ) {
-      this.controlFailureScope = this.failureScope(event);
+      this.controlFailureKey = this.failureExecutionKey(event);
       this.controlFailure = result.reason;
     }
     if (attempt && source && isCurrent() && !signal.aborted) {

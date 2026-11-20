@@ -1,6 +1,6 @@
-import type { DocumentHandoffCoverage, HostPinCoverage } from '@mizar/protocol';
-import type { IncidentParticipant } from './retention.js';
-import { SupportExports } from './export-job.js';
+import type { DocumentHandoffCoverage } from '@mizar/protocol';
+import { desktopIpc } from '@mizar/protocol/desktop-ipc';
+import { SupportExports, type LocalExportEvidence } from './export-job.js';
 import { diagnosticValue } from './session-journal.js';
 import type { WorkspaceObserver } from '../telemetry/observer-workspace.js';
 import type { registerDiagnosticDelivery } from './delivery-routes.js';
@@ -190,7 +190,7 @@ export function registerSupportRoutes(
   options: {
     readonly originPolicy: LocalWebOriginPolicy;
     readonly logsDirectory?: string;
-    readonly exportParticipants?: () => IncidentParticipant[];
+    readonly flushLocalExportEvidence?: () => Promise<LocalExportEvidence>;
     readonly artifact?: { readonly gitSha: string; readonly artifactSha256: string };
     readonly observer?: () => ReturnType<WorkspaceObserver['view']> | null;
     readonly runtimeSummary: () => ReturnType<DebugEvidenceStore['getSupportSummary']>;
@@ -429,7 +429,7 @@ export function registerSupportRoutes(
   const exports = options.logsDirectory
     ? new SupportExports(
         options.logsDirectory,
-        options.exportParticipants,
+        options.flushLocalExportEvidence,
         (error, exportId, stage = 'build') => {
           const evidence = {
             event: 'support_export',
@@ -452,18 +452,7 @@ export function registerSupportRoutes(
           type: 'object',
           additionalProperties: false,
           properties: {
-            hostPinId: { type: 'string', maxLength: 36 },
-            hostPinCoverage: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['status', 'phase', 'observedAt', 'budgetMs'],
-              properties: {
-                status: { type: 'string', enum: ['committed', 'failed', 'timeout'] },
-                phase: { type: 'string', enum: ['admission', 'prepare', 'commit'] },
-                observedAt: { type: 'string', format: 'date-time' },
-                budgetMs: { type: 'integer', minimum: 0, maximum: 8000 },
-              },
-            },
+            host: { type: 'object' },
             documentHandoff: {
               type: 'object',
               additionalProperties: false,
@@ -531,12 +520,8 @@ export function registerSupportRoutes(
         return reply.code(403).send({ error: 'origin' });
       if (!exports) return reply.code(503).send({ error: 'logs_unavailable' });
       const body = record(request.body);
-      if (
-        body.hostPinId !== undefined &&
-        (typeof body.hostPinId !== 'string' ||
-          !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(body.hostPinId))
-      )
-        return reply.code(400).send({ error: 'host_pin_id_invalid' });
+      const host = desktopIpc.read_support_log_state.result.optional().safeParse(body.host);
+      if (!host.success) return reply.code(400).send({ error: 'host_log_state_invalid' });
       const range: { from?: string; to?: string } = {};
       for (const key of ['from', 'to'] as const) {
         if (body[key] !== undefined) {
@@ -570,28 +555,15 @@ export function registerSupportRoutes(
               pendingEvidence: {
                 included: false,
                 reason:
-                  'memory-only-uncommitted; producer pin sourceState describes the fixed committed boundary',
+                  'only persisted file prefixes were read; producer status records any observed pending work',
               },
             }),
-            body.hostPinId as string | undefined,
             body.documentHandoff as DocumentHandoffCoverage | undefined,
-            body.hostPinCoverage as HostPinCoverage | undefined,
+            host.data,
           ),
         );
       } catch (error) {
-        // An existing/duplicate job with this ID may still be using its pin.
-        // Only these pre-admission failures can supply a cleanup acknowledgement.
-        const rejectedHostPinId =
-          error instanceof Error &&
-          ['export_busy', 'export_cache_job_budget'].includes(error.message) &&
-          typeof body.hostPinId === 'string' &&
-          exports.canReleaseRejectedHostPin(body.hostPinId)
-            ? body.hostPinId
-            : undefined;
-        return reply.code(409).send({
-          error: String(error),
-          ...(rejectedHostPinId ? { rejectedHostPinId } : {}),
-        });
+        return reply.code(409).send({ error: String(error) });
       }
     },
   );

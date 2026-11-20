@@ -2,6 +2,7 @@ import { hostDeliveryParticipant } from './host-delivery-pin.js';
 import { type IncidentParticipant, type PinReceipt } from './retention.js';
 import { diagnosticSegmentNames, performanceSegmentPattern } from './segments.js';
 import { technicalProjection, sourceCoversProjection } from './technical-projection.js';
+import { isDiagnosticEvent } from '@mizar/protocol';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
   DIAGNOSTIC_RECEIVER_STAGES,
@@ -45,6 +46,7 @@ export const DELIVERY_LIMITS = {
   sendPerTick: 4,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
+const diagnosticKind = /^[a-z][a-z0-9_.-]{0,63}$/;
 const retryDelay = (failures: number) =>
   Math.ceil(
     Math.min(
@@ -1213,7 +1215,7 @@ export class DiagnosticDelivery {
       !Number.isSafeInteger(value.sequence) ||
       value.sequence < 1 ||
       typeof value.stage !== 'string' ||
-      !/^[a-z][a-z0-9_.-]{0,63}$/.test(value.stage)
+      !diagnosticKind.test(value.stage)
     ) {
       this.omitted('invalid_source_cursor');
       return;
@@ -1379,12 +1381,23 @@ export class DiagnosticDelivery {
       for (const name of files) {
         try {
           const records = await read(name);
-          if (records[0])
-            ordered.push({
-              name,
-              run: String(records[0].producerRunId),
-              sequence: Number(records[0].sequence),
-            });
+          const first = records[0];
+          if (!first) continue;
+          const run = String(first.producerRunId);
+          const cursor = this.state.sessions[`performance:${run}`];
+          if (
+            cursor &&
+            records.every(
+              (event) =>
+                isDiagnosticEvent(event) &&
+                event.producerKind === 'companion' &&
+                event.producerRunId === run &&
+                diagnosticKind.test(event.kind) &&
+                event.sequence <= cursor.queued,
+            )
+          )
+            continue;
+          ordered.push({ name, run, sequence: Number(first.sequence) });
         } catch {
           this.omitted('performance_source_unreadable');
           sourceUnavailable = true;
@@ -1450,16 +1463,16 @@ export class DiagnosticDelivery {
           group.push(item);
           groups.set(item.sessionId, group);
         }
-        for (const group of groups.values()) {
-          while (group.length) {
-            let size = group.length;
+        for (const [sessionId, group] of groups) {
+          const projected = group.map((item) => cloudRecord(item.line, this.state.consentAt));
+          let offset = 0;
+          while (offset < projected.length) {
+            let size = projected.length - offset;
             let raw: Buffer;
             let compressed: Buffer | null;
             let events: ReturnType<typeof cloudRecord>[];
             for (;;) {
-              events = group
-                .slice(0, size)
-                .map((item) => cloudRecord(item.line, this.state.consentAt));
+              events = projected.slice(offset, offset + size);
               raw = Buffer.from(
                 JSON.stringify({
                   schema: 'mizar-technical-diagnostics/1',
@@ -1474,7 +1487,7 @@ export class DiagnosticDelivery {
               );
               compressed =
                 raw.length <= DELIVERY_LIMITS.expandedBytes
-                  ? Buffer.from(stampDiagnosticGzip(await compress(raw, { level: 3 }), this.now()))
+                  ? await compress(raw, { level: 3 })
                   : null;
               if (
                 compressed &&
@@ -1490,11 +1503,12 @@ export class DiagnosticDelivery {
             ) {
               skipped++;
             } else {
+              const stamped = Buffer.from(stampDiagnosticGzip(compressed, this.now()));
               packets.push({
-                compressed,
+                compressed: stamped,
                 batch: {
-                  id: checksum(compressed),
-                  bytes: compressed.length,
+                  id: checksum(stamped),
+                  bytes: stamped.length,
                   index: {
                     schema: 'mizar-technical-diagnostics/1',
                     events: events.length,
@@ -1503,12 +1517,12 @@ export class DiagnosticDelivery {
                       0,
                       32,
                     ),
-                    ...batchMetadata(group[0]!.sessionId, events),
+                    ...batchMetadata(sessionId, events),
                   },
                 },
               });
             }
-            group.splice(0, size);
+            offset += size;
           }
         }
         const queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];

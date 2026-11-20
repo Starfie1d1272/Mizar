@@ -458,7 +458,7 @@ fn run_desktop(
         .manage(pending_update.clone())
         .invoke_handler(|invoke| {
             let command = invoke.message.command();
-            if !["gsi_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "save_local_logs", "persist_diagnostic_events", "diagnostic_pin"].contains(&command) {
+            if !["gsi_status", "cs2_host_status", "cs2_config_status", "cs2_console_status", "workspace_exit_status", "preparation_status", "read_obs_configuration_context", "save_support_bundle", "save_local_logs", "persist_diagnostic_events", "diagnostic_pin", "read_support_log_state"].contains(&command) {
                 let log = invoke.message.webview_ref().state::<DesktopLog>();
                 let payload = match invoke.message.payload() {
                     tauri::ipc::InvokeBody::Json(value) => value.clone(),
@@ -1199,7 +1199,7 @@ fn main() {
                 std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
             )
             .map_err(|error| error.to_string())?;
-            support_export::save_local_logs(&state, Path::new(destination))
+            support_export::save_cli_logs(&root, &state, Path::new(destination))
         })();
         if let Err(error) = result {
             failure_dialog(&error, None);

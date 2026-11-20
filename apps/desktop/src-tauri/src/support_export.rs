@@ -8,29 +8,47 @@ use std::{
 
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MANIFEST_LIMIT: u64 = 1024 * 1024;
-const PART_LIMIT: u64 = 18_874_368;
+
+pub(crate) fn save_cli_logs(
+    root: &Path,
+    state_root: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+
+    let target = log_destination(&local_logs_root(state_root)?, destination)?;
+    let node = root.join("resources/runtime/node.exe");
+    let script = root.join("resources/app/dist/support/export-logs-cli.js");
+    if !node.is_file() || !script.is_file() {
+        return save_local_logs(state_root, &target);
+    }
+    let mut command = std::process::Command::new(node);
+    command
+        .arg(script)
+        .arg(state_root)
+        .current_dir(root)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH");
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = match command.output() {
+        Ok(output) if output.status.success() => output,
+        // Broken or incomplete local runtime still has the independent raw archive.
+        _ => return save_local_logs(state_root, &target),
+    };
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("诊断归档结果无法读取：{error}"))?;
+    let export_id = result["exportId"].as_str().ok_or_else(|| {
+        let reason = result["error"].as_str().unwrap_or("export_result_missing");
+        format!("日志包未能生成：{reason}")
+    })?;
+    prepare_generated(state_root, export_id)?.save(&target)
+}
 
 pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(), String> {
-    let logs = state_root.join("logs");
-    if !fs::symlink_metadata(&logs).is_ok_and(|metadata| metadata.is_dir() && plain(&metadata)) {
-        return Err("本机日志目录不可用。".into());
-    }
-    let source = logs
-        .canonicalize()
-        .map_err(|error| format!("无法读取本机日志目录：{error}"))?;
-    let destination = std::path::absolute(destination).map_err(|error| error.to_string())?;
-    let parent = destination
-        .parent()
-        .ok_or("日志包保存位置无效。")?
-        .canonicalize()
-        .map_err(|error| format!("无法打开保存目录：{error}"))?;
-    if parent.starts_with(&source) {
-        return Err("请选择日志目录以外的保存位置。".into());
-    }
-    let target = parent.join(destination.file_name().ok_or("日志包文件名无效。")?);
-    if target.exists() {
-        return Err("保存位置已有同名文件，请选择新的文件名。".into());
-    }
+    let source = local_logs_root(state_root)?;
+    let target = log_destination(&source, destination)?;
     let output = crate::powershell::background()
         .env(
             "MIZAR_EXPORT_LOG_SOURCE",
@@ -47,6 +65,32 @@ pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(
         return Err("本机日志包未能写入。请检查保存位置的空间和写入权限。".into());
     }
     Ok(())
+}
+
+fn local_logs_root(state_root: &Path) -> Result<std::path::PathBuf, String> {
+    let logs = state_root.join("logs");
+    if !fs::symlink_metadata(&logs).is_ok_and(|metadata| metadata.is_dir() && plain(&metadata)) {
+        return Err("本机日志目录不可用。".into());
+    }
+    logs.canonicalize()
+        .map_err(|error| format!("无法读取本机日志目录：{error}"))
+}
+
+fn log_destination(source: &Path, destination: &Path) -> Result<std::path::PathBuf, String> {
+    let destination = std::path::absolute(destination).map_err(|error| error.to_string())?;
+    let parent = destination
+        .parent()
+        .ok_or("日志包保存位置无效。")?
+        .canonicalize()
+        .map_err(|error| format!("无法打开保存目录：{error}"))?;
+    if parent.starts_with(source) {
+        return Err("请选择日志目录以外的保存位置。".into());
+    }
+    let target = parent.join(destination.file_name().ok_or("日志包文件名无效。")?);
+    if target.exists() {
+        return Err("保存位置已有同名文件，请选择新的文件名。".into());
+    }
+    Ok(target)
 }
 
 fn plain(metadata: &fs::Metadata) -> bool {
@@ -506,13 +550,13 @@ fn transfer(
     Ok(())
 }
 
-/// Holds the source and lease across the native folder dialog, including cancellation.
+/// Holds the source and lease across the native save dialog, including cancellation.
 /// Admission checks expiry once; an admitted save may finish after that deadline.
 pub struct PreparedExport {
-    export_id: String,
-    files: Vec<(String, u64, String, File)>,
-    manifest_bytes: Vec<u8>,
-    single_file_name: Option<String>,
+    input: File,
+    bytes: u64,
+    digest: String,
+    filename: String,
     _manifest: File,
     _lease: Pending,
     _directories: Vec<File>,
@@ -579,150 +623,81 @@ fn prepare_inner(state_root: &Path, export_id: &str) -> io::Result<PreparedExpor
             "export has expired or has an invalid lifetime",
         ));
     }
-    let parts = manifest["parts"]
+    let part = manifest["parts"]
         .as_array()
-        .filter(|parts| !parts.is_empty() && parts.len() <= 32)
-        .ok_or_else(|| io::Error::other("invalid export part list"))?;
-    // Validate the entire list and open every source before touching the selected destination.
-    let mut files = Vec::new();
-    let mut total = 0;
-    for (index, part) in parts.iter().enumerate() {
-        let name = format!("part-{}.zip", index + 1);
-        let bytes = part["bytes"]
-            .as_u64()
-            .filter(|bytes| *bytes > 0 && *bytes <= PART_LIMIT)
-            .ok_or_else(|| io::Error::other("invalid export part size"))?;
-        let digest = part["sha256"]
-            .as_str()
-            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or_else(|| io::Error::other("invalid export digest"))?;
-        total += bytes;
-        if part["name"] != name || total > MAX_BYTES {
-            return Err(io::Error::other("invalid export name or total budget"));
-        }
-        let (input, _) = checked(&source.join(&name))?;
-        if input.metadata()?.len() != bytes {
-            return Err(io::Error::other("export source size changed"));
-        }
-        files.push((name, bytes, digest.to_owned(), input));
+        .filter(|parts| parts.len() == 1)
+        .map(|parts| &parts[0])
+        .ok_or_else(|| io::Error::other("invalid export archive list"))?;
+    let bytes = part["bytes"]
+        .as_u64()
+        .filter(|bytes| *bytes > 0 && *bytes <= MAX_BYTES)
+        .ok_or_else(|| io::Error::other("invalid export archive size"))?;
+    if part["name"] != "part-1.zip" || manifest["outputBytes"].as_u64() != Some(bytes) {
+        return Err(io::Error::other("invalid export archive identity"));
     }
-    if manifest["outputBytes"].as_u64() != Some(total) {
-        return Err(io::Error::other("export total does not match its parts"));
+    let digest = part["sha256"]
+        .as_str()
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| io::Error::other("invalid export digest"))?;
+    let (input, _) = checked(&source.join("part-1.zip"))?;
+    if input.metadata()?.len() != bytes {
+        return Err(io::Error::other("export source size changed"));
     }
-    let single_file_name = if files.len() == 1 {
-        Some(format!(
-            "mizar-support-{}.zip",
-            chrono::DateTime::from_timestamp_millis(created)
-                .ok_or_else(|| io::Error::other("invalid export creation time"))?
-                .format("%Y-%m-%dT%H-%M-%SZ")
-        ))
-    } else {
-        None
-    };
+    let filename = format!(
+        "mizar-support-{}.zip",
+        chrono::DateTime::from_timestamp_millis(created)
+            .ok_or_else(|| io::Error::other("invalid export creation time"))?
+            .format("%Y-%m-%dT%H-%M-%SZ")
+    );
     Ok(PreparedExport {
-        single_file_name,
-        export_id: export_id.to_owned(),
-        files,
-        manifest_bytes,
+        input,
+        bytes,
+        digest: digest.to_owned(),
+        filename,
         _manifest: manifest_file,
         _lease,
         _directories: _source_guard,
     })
 }
 impl PreparedExport {
-    pub fn suggested_filename(&self) -> Option<&str> {
-        self.single_file_name.as_deref()
+    pub fn suggested_filename(&self) -> &str {
+        &self.filename
     }
     /// Destination must come exclusively from the native dialog.
-    pub fn save(self, destination: &Path) -> Result<(), String> {
+    pub fn save(mut self, destination: &Path) -> Result<(), String> {
         self.save_inner(destination).map_err(save_error)
     }
-    fn save_inner(self, destination: &Path) -> io::Result<()> {
+    fn save_inner(&mut self, destination: &Path) -> io::Result<()> {
         absolute(destination)?;
-        let Self {
-            export_id,
-            files,
-            manifest_bytes,
-            single_file_name,
-            _manifest,
-            _lease,
-            _directories,
-        } = self;
-        let single = single_file_name.is_some();
-        let target = if single {
-            destination
-                .parent()
-                .ok_or_else(|| io::Error::other("save destination has no parent"))?
-                .to_path_buf()
-        } else {
-            destination.join(format!("mizar-support-{export_id}"))
-        };
-        let parent = if single {
-            target.as_path()
-        } else {
-            destination
-        };
-        let _destination_guard = hold_directories(parent)?;
-        if !single {
-            match fs::create_dir(&target) {
-                Ok(()) => (),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-                Err(error) => return Err(error),
-            }
-        }
-        let _target_guard = hold_directories(&target)?;
-        for (name, bytes, digest, mut input) in files {
-            let final_path = if single {
-                destination.to_path_buf()
-            } else {
-                target.join(&name)
-            };
-            match fs::symlink_metadata(&final_path) {
-                Ok(_) => {
-                    let (mut existing, _) = checked(&final_path)?;
-                    transfer(&mut existing, None, bytes, &digest)?;
-                    continue;
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error),
-            }
-            let unique = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(io::Error::other)?
-                .as_nanos();
-            let mut pending =
-                create_pending(&target.join(format!("{name}.{unique}.partial")), false)?;
-            transfer(&mut input, Some(&mut pending.0), bytes, &digest)?;
-            pending.0.sync_all()?;
-            publish(pending, &final_path)?;
-        }
-        // A single ZIP already contains final coverage and indexes. The trusted source
-        // manifest stays private in the cache and is needed only for multi-volume delivery.
-        if single {
-            return Ok(());
-        }
-        // The manifest is the completion marker; publish only after every part succeeds.
-        let final_path = target.join("generated.json");
-        match fs::symlink_metadata(&final_path) {
+        let target = destination
+            .parent()
+            .ok_or_else(|| io::Error::other("save destination has no parent"))?;
+        let _destination_guard = hold_directories(target)?;
+        match fs::symlink_metadata(destination) {
             Ok(_) => {
-                let (mut existing, _) = checked(&final_path)?;
-                if bounded_read(&mut existing, MANIFEST_LIMIT)? != manifest_bytes {
-                    return Err(io::Error::other("destination has a different manifest"));
-                }
+                let (mut existing, _) = checked(destination)?;
+                transfer(&mut existing, None, self.bytes, &self.digest)?;
+                return Ok(());
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let unique = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(io::Error::other)?
-                    .as_nanos();
-                let mut pending =
-                    create_pending(&target.join(format!("generated.{unique}.partial")), false)?;
-                pending.0.write_all(&manifest_bytes)?;
-                pending.0.sync_all()?;
-                publish(pending, &final_path)?;
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
             Err(error) => return Err(error),
         }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos();
+        let mut pending = create_pending(
+            &target.join(format!("mizar-support.{unique}.partial")),
+            false,
+        )?;
+        transfer(
+            &mut self.input,
+            Some(&mut pending.0),
+            self.bytes,
+            &self.digest,
+        )?;
+        pending.0.sync_all()?;
+        publish(pending, destination)?;
         Ok(())
     }
 }

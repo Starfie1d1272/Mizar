@@ -397,13 +397,10 @@ export class PerformanceWindow {
   incidentParticipant(): IncidentParticipant {
     return this.evidenceParticipant('incident');
   }
-  exportParticipant(): IncidentParticipant {
-    return this.evidenceParticipant('export');
-  }
   deliveryParticipant(): IncidentParticipant {
     return this.evidenceParticipant('delivery');
   }
-  private evidenceParticipant(kind: 'incident' | 'export' | 'delivery'): IncidentParticipant {
+  private evidenceParticipant(kind: 'incident' | 'delivery'): IncidentParticipant {
     const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
       this.exporting++;
       // Pins and body writes mutate the same retained ledger. Reserve their

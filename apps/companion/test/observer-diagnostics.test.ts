@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, open, readFile, realpath, writeFile, rm, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { unzipSync } from 'fflate';
+import { gzipSync } from 'node:zlib';
+import { unzipSync, zipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
@@ -64,6 +66,8 @@ test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed s
   assert.equal(result?.knownGaps, gaps.length);
   const zip = unzipSync(await readFile(join(output, 'part-1.zip')));
   const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  assert.equal(coverage.schema, 'mizar-support-coverage/3');
+  assert.ok(!Object.hasOwn(coverage, 'entries'));
   assert.equal(coverage.gapCount, gaps.length);
   const details = coverage.coverageFiles.flatMap(({ name }: { name: string }) =>
     Buffer.from(zip[name]!)
@@ -107,6 +111,64 @@ test('manual ZIP retains both copies of an event without a temporary identity in
   );
   assert.equal(JSON.parse(Buffer.from(zip['coverage.json']!).toString()).retainedRecords, 2);
   assert(!zip['indexes/carriers.json']);
+  const reader = fileURLToPath(
+    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+  );
+  const readTimeline = (name: string) =>
+    execFileSync(process.execPath, [reader, join(output, name)], { stdio: 'pipe' });
+  const current = readTimeline('part-1.zip');
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  const metadata = JSON.parse(Buffer.from(zip['bundle.json']!).toString());
+  zip['bundle.json'] = Buffer.from(
+    JSON.stringify({ ...metadata, schema: 'mizar-support-bundle/2' }),
+  );
+  const entries = Object.entries(zip)
+    .filter(([entry]) => entry !== 'coverage.json')
+    .map(([name, bytes]) => ({
+      name,
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }));
+  zip['coverage.json'] = Buffer.from(
+    JSON.stringify({ ...coverage, schema: 'mizar-support-coverage/2', entries }),
+  );
+  await writeFile(join(output, 'legacy.zip'), zipSync(zip));
+  assert.deepEqual(readTimeline('legacy.zip'), current);
+});
+
+test('large manual exports retain a single ZIP readable by the offline tool', async (t) => {
+  const output = await mkdtemp(join(tmpdir(), 'mizar-large-single-zip-'));
+  const name = 'companion.log';
+  const rowBytes = 640 * 1024;
+  const rows = Array.from({ length: 32 }, () => randomBytes(rowBytes).toString('base64'));
+  const body = rows.join('\n') + '\n';
+  await writeFile(join(output, name), body);
+  const file = await open(join(output, name));
+  t.after(async () => {
+    await file.close();
+    await rm(output, { recursive: true, force: true });
+  });
+  let result: Record<string, unknown> | undefined;
+  runArchiveWorker(
+    {
+      sources: [{ name, fd: file.fd, bytes: Buffer.byteLength(body), rawAttachment: true }],
+      gaps: [],
+      output,
+      exportId: 'large-archive',
+      range: {},
+      snapshot: {},
+    },
+    (message) => {
+      result = message;
+    },
+  );
+  assert.equal(result?.phase, 'ready', String(result?.error));
+  assert((result?.outputBytes as number) > 18_874_368);
+  assert.equal((result?.parts as unknown[]).length, 1);
+  const reader = fileURLToPath(
+    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+  );
+  execFileSync(process.execPath, [reader, join(output, 'part-1.zip')], { stdio: 'pipe' });
 });
 
 test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {
@@ -177,10 +239,30 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   assert.equal(manager.getHealth().normalDrain, true);
   assert.equal(manager.getHealth().generation, live.generation);
   assert.deepEqual(seen, [4, 8, 14]);
+
+  write(17, begin, 3);
+  write(18, cursor, 3);
+  write(
+    19,
+    {
+      ...fixture,
+      sdkQueueAgeUs: 2_000_000,
+      dequeueToSubmitUs: 100,
+      submitToObservedUs: 1000,
+    },
+    3,
+  );
+  write(20, fixture, 3);
+  assert.equal(manager.getHealth().state, 'connecting');
+  assert.equal(manager.getHealth().lastErrorCode, 'observer-residence-limit');
+  assert.deepEqual(seen, [4, 8, 14]);
+  write(21, cursor, 3);
+  write(22, fixture, 3);
+  assert.deepEqual(seen, [4, 8, 14, 22]);
   await manager.stop();
   assert.equal(manager.getHealth().normalDrain, undefined);
-  write(17, fixture, 2);
-  assert.deepEqual(seen, [4, 8, 14]);
+  write(23, fixture, 3);
+  assert.deepEqual(seen, [4, 8, 14, 22]);
 });
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
@@ -259,7 +341,7 @@ test('component failure survives local journal and actual support ZIP without cr
       cleanupCompleted: true,
     }),
   );
-  const exports = new SupportExports(logs, () => [journal.exportParticipant()]);
+  const exports = new SupportExports(logs);
   const job = await exports.begin({}, {});
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
@@ -343,7 +425,7 @@ test('pre-report and protocol failures survive the real export; overflow retains
     const { terminal } = await owner.closed;
     await journal.recordCommitted('observer_attempt_terminal', terminal);
   }
-  const exports = new SupportExports(logs, () => [journal.exportParticipant()]);
+  const exports = new SupportExports(logs);
   const job = await exports.begin({}, {});
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
@@ -422,76 +504,65 @@ test('support export rejects hard-linked or invalid observer reports and records
   );
 });
 
-test('support ZIP keeps safe fixed segments and reports each unavailable committed segment', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-pinned-log-gap-'));
+test('support ZIP reads durable Host prefixes and reports uncommitted and unavailable evidence', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'mizar-live-log-gap-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(await realpath(root), 'logs');
   await mkdir(logs);
-  const pinId = randomUUID();
-  const emptyOld = `desktop-${randomUUID()}.ndjson`;
-  const successor = `document-${randomUUID()}.ndjson`;
-  const unknown = `document-${randomUUID()}.ndjson`;
-  const good = `desktop-${randomUUID()}.ndjson`;
-  const missingHost = `desktop-${randomUUID()}.ndjson`;
-  const changedHost = `document-${randomUUID()}.ndjson`;
-  const unavailableAtPrepare = `document-${randomUUID()}.ndjson`;
-  const fixedContent =
-    '{"eventId":"safely-fixed-host-event"}\n' +
-    '{"eventId":"reported-host-loss","kind":"native_diagnostic_coverage_gap","evidence":{"dropped":2}}\n';
-  const fixed = {
-    bytes: Buffer.byteLength(fixedContent),
-    sha256: createHash('sha256').update(fixedContent).digest('hex'),
-  };
-  await mkdir(join(logs, 'host-pins'));
+  const desktop = `desktop-${randomUUID()}.ndjson`;
+  const document = `document-${randomUUID()}.ndjson`;
+  const unsafe = `desktop-${randomUUID()}.ndjson`;
+  const privateFile = join(root, 'not-a-log');
   await Promise.all([
-    writeFile(join(logs, emptyOld), ''),
-    writeFile(join(logs, successor), 'post-cutoff'),
-    writeFile(join(logs, unknown), 'unfixed-original'),
-    writeFile(join(logs, unavailableAtPrepare), 'unverified-by-host'),
-    writeFile(join(logs, good), fixedContent),
-    writeFile(join(logs, changedHost), fixedContent.replace('safely', 'edited')),
     writeFile(
-      join(logs, 'host-pins', `${pinId}.json`),
-      JSON.stringify({
-        schema: 'mizar-producer-pin/2',
-        pinId,
-        producerKind: 'host',
-        producerRunId: randomUUID(),
-        kind: 'export',
-        state: 'committed',
-        expiresAt: new Date(Date.now() + 60000).toISOString(),
-        segments: [missingHost, changedHost, good].map((name) => ({ name, ...fixed })),
-        sourceState: {
-          asOf: new Date().toISOString(),
-          memoryOnly: { events: 0, bytes: 0 },
-          unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
-          emptyAtCutoffSegments: [emptyOld],
-          postCutoffSegments: [successor],
-          unavailableSegments: [
-            { name: unavailableAtPrepare, reason: 'host_pin_source_read_failed' },
-          ],
-        },
-      }),
+      join(logs, desktop),
+      '{"eventId":"host-event"}\n' +
+        '{"eventId":"reported-host-loss","kind":"native_diagnostic_coverage_gap","evidence":{"dropped":2}}\n',
     ),
+    writeFile(
+      join(logs, document),
+      '{"eventId":"document-event"}\n{"eventId":"uncommitted-partial-line',
+    ),
+    writeFile(privateFile, 'excluded-private-marker'),
   ]);
+  await link(privateFile, join(logs, unsafe));
   const journal = new SessionJournal(logs);
   t.after(() => journal.close());
   await journal.recordCommitted('before_cutoff', { recorded: true });
-  const participant = journal.exportParticipant();
-  let missing: string | undefined;
-  const exports = new SupportExports(logs, () => [
-    {
-      ...participant,
-      async commit(pinId) {
-        const receipt = await participant.commit(pinId);
-        missing = receipt.segments[0]?.name;
-        assert.ok(missing);
-        await rm(join(logs, missing));
-        return receipt;
+  const performance = join(logs, 'performance-pending');
+  await mkdir(performance);
+  const segment = join(performance, `${randomUUID()}.00000001.gz`);
+  const compressed = gzipSync(
+    JSON.stringify([
+      {
+        schema: 'mizar-diagnostic-event/2',
+        kind: 'unpinned_performance',
+        evidence: {
+          password: 'fixture-performance-secret',
+          nested: { kind: 'program_all_chat', evidence: { body: 'fixture-performance-chat' } },
+        },
       },
+    ]),
+  );
+  await writeFile(segment, compressed);
+  const missing = `session-${randomUUID()}.ndjson`;
+  const exports = new SupportExports(logs, async () => ({
+    sessionSegments: [missing],
+    session: { pendingRecords: 0 },
+    performance: null,
+  }));
+  const job = await exports.begin({}, {}, undefined, {
+    asOf: new Date().toISOString(),
+    memoryOnly: { included: false, events: 1, bytes: 150, reason: 'not-durably-committed' },
+    unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
+    lossTotals: {
+      reason: 'native_event_loss_cumulative',
+      count: 2,
+      bytes: 200,
+      firstObservedAt: null,
+      lastObservedAt: null,
     },
-  ]);
-  const job = await exports.begin({}, {}, pinId);
+  });
   t.after(() => exports.cancel(job.exportId));
   const deadline = Date.now() + 15_000;
   while (!exports.status(job.exportId)?.settled && Date.now() < deadline) await delay(20);
@@ -503,53 +574,36 @@ test('support ZIP keeps safe fixed segments and reports each unavailable committ
     .filter(([name]) => name.startsWith('events/'))
     .map(([, bytes]) => Buffer.from(bytes).toString())
     .join('');
-  assert.match(events, /safely-fixed-host-event/);
-  assert.doesNotMatch(events, /edited-fixed-host-event|unfixed-original|unverified-by-host/);
+  assert.match(events, /host-event/);
+  assert.match(events, /document-event/);
+  assert.match(events, /before_cutoff/);
+  assert.match(events, /unpinned_performance/);
+  assert.match(events, /\[redacted\]/);
+  assert.match(events, /raw-chat-body/);
+  assert.doesNotMatch(events, /fixture-performance-secret|fixture-performance-chat/);
+  assert.deepEqual(await readFile(segment), compressed);
+  assert.doesNotMatch(events, /uncommitted-partial-line|excluded-private-marker/);
   const generated = JSON.parse(
     await readFile(join(exports.directory, job.exportId, 'generated.json'), 'utf8'),
   );
   assert.equal(generated.completeKnownSources, false);
-  assert.equal(
-    coverage.gaps.filter(
-      ({ source, phase, reason }: { source: string; phase: string; reason: string }) =>
-        source === unavailableAtPrepare &&
-        phase === 'prepare' &&
-        reason === 'host_pin_source_read_failed',
-    ).length,
-    1,
-  );
-  assert.ok(
-    coverage.gaps.some(
-      (entry: { reason: string; eventId?: string }) =>
-        entry.reason === 'native_event_loss_reported' && entry.eventId === 'reported-host-loss',
+  const gaps: { source: string; reason: string; eventId?: string }[] = coverage.gaps;
+  assert(
+    gaps.some(
+      ({ reason, eventId }) =>
+        reason === 'native_event_loss_reported' && eventId === 'reported-host-loss',
     ),
   );
-  assert.deepEqual(
-    coverage.gaps
-      .filter((entry: { source: string }) => [missingHost, changedHost].includes(entry.source))
-      .map(({ source, phase }: { source: string; phase: string }) => [source, phase]),
-    [
-      [missingHost, 'read'],
-      [changedHost, 'read'],
-    ],
+  assert(
+    gaps.some(({ source, reason }) => source === document && reason === 'uncommitted_partial_line'),
   );
-  assert.ok(
-    coverage.gaps.some(
-      (entry: { source: string; phase: string }) =>
-        entry.source === missing && entry.phase === 'read',
-    ),
+  assert(
+    gaps.some(({ source, reason }) => source === unsafe && reason.includes('resource_path_unsafe')),
   );
-  assert.ok(coverage.gaps.some((entry: { source: string }) => entry.source === unknown));
-  assert.ok(
-    coverage.excludedSources.some(
-      (entry: { source: string; reason: string }) =>
-        entry.source === emptyOld && entry.reason === 'producer-declared-empty-at-cutoff',
-    ),
-  );
-  assert.ok(
-    coverage.excludedSources.some(
-      (entry: { source: string; reason: string }) =>
-        entry.source === successor && entry.reason === 'producer-declared-post-cutoff-segment',
+  assert(gaps.some(({ source }) => source === missing));
+  assert(
+    gaps.some(
+      ({ source, reason }) => source === 'host' && reason === 'host_memory_only_or_unreported_loss',
     ),
   );
 });

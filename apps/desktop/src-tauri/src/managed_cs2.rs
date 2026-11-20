@@ -88,6 +88,12 @@ pub(crate) struct CameraLease {
     lease: String,
     invalidated: bool,
 }
+impl CameraLease {
+    fn matches_running_game(&self, log: &crate::startup_log::DesktopLog) -> bool {
+        self.process.is_running()
+            && cs2_pids(log).is_ok_and(|pids| pids.as_slice() == [self.process.pid])
+    }
+}
 /// Serialize renewal with revocation. This lock never acquires ManagedCs2.
 pub(crate) fn pulse_camera(
     state: &Mutex<Option<CameraLease>>,
@@ -108,9 +114,7 @@ pub(crate) fn pulse_camera(
     if camera.invalidated {
         return;
     }
-    let valid = camera.process.is_running()
-        && cs2_pids(log).is_ok_and(|pids| pids == vec![camera.process.pid]);
-    let result = if valid {
+    let result = if camera.matches_running_game(log) {
         crate::production_exit::camera_session(log, "pulse", Some(&camera.lease), None)
     } else {
         Err("当前游戏状态已经变化。请重新检查游戏后重试。".into())
@@ -533,9 +537,7 @@ impl ManagedCs2 {
             mulnx_launch_resumable,
             camera_lease_ready: self.camera.lock().is_ok_and(|state| {
                 state.as_ref().is_some_and(|camera| {
-                    !camera.invalidated
-                        && camera.process.is_running()
-                        && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])
+                    !camera.invalidated && camera.matches_running_game(&self.log)
                 })
             }),
             running,
@@ -905,9 +907,7 @@ impl ManagedCs2 {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let camera = state.as_mut()?;
-        if !camera.process.is_running()
-            || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid])
-        {
+        if !camera.invalidated && !camera.matches_running_game(&self.log) {
             camera.invalidated = true;
         }
         Some((camera.lease.clone(), camera.invalidated))
@@ -957,11 +957,7 @@ impl ManagedCs2 {
         if !self.start_internal(preserve, None, true, preparation_id, guard)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
-        let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
-        if !same_executable(expected, journal.executable.as_str()) {
-            return Err("游戏安装位置已变化，原配置备份仍保留。".into());
-        }
-        Ok(journal)
+        self.prepared_installation(expected)
     }
     pub(crate) fn prepare_managed_mulnx_demo(
         &mut self,
@@ -970,22 +966,12 @@ impl ManagedCs2 {
         path: &Path,
         request_id: &str,
     ) -> Result<SessionRecord, String> {
-        self.ensure_demo_available()?;
-        let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
-        if !self.start_internal(
-            preserve,
-            Some((&argument, request_id)),
-            true,
-            None,
-            &crate::preparation_gate::PreparationGuard {
-                gate: None,
-                id: None,
-                verify: None,
-                exit: None,
-            },
-        )? {
+        if !self.start_demo_internal(path, request_id, preserve, true)? {
             return Err("请先结束现有游戏并恢复配置。".into());
         }
+        self.prepared_installation(expected)
+    }
+    fn prepared_installation(&self, expected: &Path) -> Result<SessionRecord, String> {
         let journal = self.store.load()?.ok_or("CS2 配置事务缺失。")?;
         if !same_executable(expected, journal.executable.as_str()) {
             return Err("游戏安装位置已变化，原配置备份仍保留。".into());
@@ -1060,16 +1046,25 @@ impl ManagedCs2 {
     }
     pub fn start_demo(
         &mut self,
-        path: &std::path::Path,
+        path: &Path,
         request_id: &str,
         preserve: bool,
+    ) -> Result<bool, String> {
+        self.start_demo_internal(path, request_id, preserve, false)
+    }
+    fn start_demo_internal(
+        &mut self,
+        path: &Path,
+        request_id: &str,
+        preserve: bool,
+        prepare_only: bool,
     ) -> Result<bool, String> {
         self.ensure_demo_available()?;
         let argument = crate::demo_test::playdemo_argument(path, &self.log)?;
         self.start_internal(
             preserve,
             Some((&argument, request_id)),
-            false,
+            prepare_only,
             None,
             &crate::preparation_gate::PreparationGuard {
                 gate: None,
@@ -1079,11 +1074,8 @@ impl ManagedCs2 {
             },
         )
     }
-    pub(crate) fn cancel_unsubmitted_mulnx_demo(&mut self) -> Result<(), String> {
-        self.cancel_unsubmitted_mulnx()
-    }
     pub(crate) fn cancel_unsubmitted_mulnx(&mut self) -> Result<(), String> {
-        if self.demo_launch_attempted()? || any_cs2_running(&self.log)? {
+        if self.launch_was_submitted()? || any_cs2_running(&self.log)? {
             return Err("启动结果待确认，请先检查游戏后恢复。".into());
         }
         if let Some(launcher) = &self.mulnx_launcher {
@@ -1116,7 +1108,7 @@ impl ManagedCs2 {
         }
         self.cancel_unsubmitted_mulnx()
     }
-    pub fn demo_launch_attempted(&self) -> Result<bool, String> {
+    pub fn launch_was_submitted(&self) -> Result<bool, String> {
         Ok(self.store.load()?.is_some_and(|v| v.was_submitted()))
     }
     pub(crate) fn matches_pending_demo(&self, request_id: &str) -> Result<bool, String> {

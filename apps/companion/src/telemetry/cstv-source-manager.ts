@@ -284,7 +284,10 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     if (reason === 'failed') this.recordDiagnostic({ code: 'session-run-failed' });
   }
 
-  private resetObserverContinuity(state: CstvSourceState = 'connecting'): void {
+  private resetObserverContinuity(
+    state: CstvSourceState = 'connecting',
+    cause?: CstvDiagnosticCode,
+  ): void {
     this.normalDrainConfirmed = false;
     this.generation += 1;
     this.observerMap = undefined;
@@ -298,7 +301,8 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     this.lastSync = undefined;
     this.lastReceiveMonotonicMs = undefined;
     this.state = state;
-    this.notifySnapshotChanged();
+    if (cause) this.recordDiagnostic({ code: cause });
+    else this.notifySnapshotChanged();
   }
 
   /** Consume bounded, parsed local observer output, not arbitrary network messages. */
@@ -445,7 +449,7 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     if (!SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === kind)) return;
     const residenceUs = this.role === 'lookahead' ? observerResidenceUs(row) : undefined;
     if (residenceUs !== undefined && residenceUs >= 2_000_000) {
-      this.resetObserverContinuity();
+      this.resetObserverContinuity('connecting', 'observer-residence-limit');
       return;
     }
     const sample = this.clock?.now() ?? {

@@ -774,6 +774,17 @@ pub(crate) async fn persist_diagnostic_events(
         .and_then(decode_result)
 }
 
+pub(crate) async fn read_support_log_state(
+    log: tauri::State<'_, DesktopLog>,
+) -> Result<desktop_types::SupportLogState, String> {
+    let log = log.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || log.support_log_state())
+        .await
+        .map_err(|error| format!("本机日志状态读取任务未完成：{error}"))?
+        .map_err(|error| format!("本机日志状态无法确认：{error}"))
+        .and_then(decode_result)
+}
+
 pub(crate) async fn diagnostic_pin(
     log: tauri::State<'_, DesktopLog>,
     action: desktop_types::PinAction,
@@ -812,20 +823,13 @@ pub(crate) async fn save_support_bundle(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let prepared = support_export::prepare_generated(&state_root, &export_id)?;
         let dialog_started = std::time::Instant::now();
-        let destination = match prepared.suggested_filename() {
-            Some(name) => app
-                .dialog()
-                .file()
-                .set_title("保存 Mizar 诊断包")
-                .set_file_name(name)
-                .add_filter("ZIP 诊断包", &["zip"])
-                .blocking_save_file(),
-            None => app
-                .dialog()
-                .file()
-                .set_title("选择 Mizar 诊断分卷保存目录")
-                .blocking_pick_folder(),
-        };
+        let destination = app
+            .dialog()
+            .file()
+            .set_title("保存 Mizar 诊断包")
+            .set_file_name(prepared.suggested_filename())
+            .add_filter("ZIP 诊断包", &["zip"])
+            .blocking_save_file();
         save_log.event(
             "support_save",
             "dialog",

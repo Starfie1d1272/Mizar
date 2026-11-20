@@ -40,6 +40,7 @@ async function rig() {
     scene: 'personal-program',
     output: false,
     marker: undefined as unknown,
+    inputListReads: 0,
   };
   const writes: string[] = [];
   let notify: (type: string, data: object) => void = () => {};
@@ -85,7 +86,10 @@ async function rig() {
             .get(state.collection)!
             .map((sceneUuid) => ({ sceneUuid, sceneName: sceneUuid })),
         };
-      if (type === 'GetInputList') return { inputs: [] };
+      if (type === 'GetInputList') {
+        state.inputListReads++;
+        return { inputs: [] };
+      }
       if (type === 'GetPersistentData') return { slotValue: state.marker };
       if (type === 'SetPersistentData') state.marker = data!.slotValue;
       if (type === 'CreateSceneCollection' || type === 'SetCurrentSceneCollection') {
@@ -206,6 +210,23 @@ it('reports unsupported or unknown OBS versions and blocks preparation before co
   expect(f.writes).toEqual([]);
   expect(f.state.collection).toBe('个人');
   expect(await f.store.managedResources.hasPendingReturn()).toBe(false);
+});
+
+it('reuses the visual input inventory for preparation observations', async () => {
+  const f = await rig();
+  const managed = await f.bind();
+  await managed.prepareManagedCollection!(true, managed);
+  const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
+  cleanups.push(() => adapter.close());
+  const before = f.state.inputListReads;
+  f.writes.length = 0;
+  expect(await adapter.check()).toContainEqual({
+    code: 'scene_missing',
+    scene: expect.any(String),
+    message: expect.any(String),
+  });
+  expect(f.state.inputListReads - before).toBe(6);
+  expect(f.writes).toEqual([]);
 });
 
 it('rechecks after an OBS upgrade, prepares video on the supported major, and permits old-version recovery', async () => {

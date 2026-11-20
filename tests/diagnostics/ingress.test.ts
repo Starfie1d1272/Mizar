@@ -223,7 +223,8 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
     assert(!JSON.stringify(uploaded).includes('ingress-test-secret'));
     assert(!JSON.stringify(uploaded).includes('private-lease'));
     assert(!JSON.stringify(uploaded).includes('private-chat-marker'));
-    const exports = new SupportExports(client, () => [journal.exportParticipant()]);
+    await journal.flush();
+    const exports = new SupportExports(client);
     const job = await exports.begin({}, {});
     try {
       const deadline = Date.now() + 15_000;

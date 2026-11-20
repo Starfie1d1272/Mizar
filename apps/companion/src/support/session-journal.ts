@@ -572,13 +572,10 @@ export class SessionJournal {
   incidentParticipant(): IncidentParticipant {
     return this.evidenceParticipant('incident');
   }
-  exportParticipant(): IncidentParticipant {
-    return this.evidenceParticipant('export');
-  }
   deliveryParticipant(): IncidentParticipant {
     return this.evidenceParticipant('delivery');
   }
-  private evidenceParticipant(kind: 'incident' | 'export' | 'delivery'): IncidentParticipant {
+  private evidenceParticipant(kind: 'incident' | 'delivery'): IncidentParticipant {
     const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
       const result = this.writer.then(operation);
       this.writer = result.then(

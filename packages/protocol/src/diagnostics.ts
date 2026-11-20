@@ -103,11 +103,3 @@ export interface DocumentHandoffCoverage {
   budgetMs: number;
   attempts: number;
 }
-
-/** Client-observed pin outcome; only the producer's durable receipt proves the range. */
-export interface HostPinCoverage {
-  status: 'committed' | 'failed' | 'timeout';
-  phase: 'admission' | 'prepare' | 'commit';
-  observedAt: string;
-  budgetMs: number;
-}
