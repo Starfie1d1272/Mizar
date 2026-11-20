@@ -24,6 +24,14 @@ const chatIdentity = new Set([
   'sourceInterval',
 ]);
 
+const POTENTIAL_SENSITIVE_RAW =
+  /password|passwd|token|secret|credential|ticket|authorization|cookie|bearer|basic|rh_mizar_|data:|"key"|_key|-key|:\/\/|program_all_chat|\\u|"\s*[{[]/i;
+
+/** Fast pre-check: when false, `diagnosticEvidence(JSON.parse(raw))` is a no-op clone. */
+export function needsEvidenceSanitize(rawJson: string): boolean {
+  return rawJson.includes(BOX_READ_TOKEN) || POTENTIAL_SENSITIVE_RAW.test(rawJson);
+}
+
 export function diagnosticEvidence(value: unknown): unknown {
   return sanitize(value, '', new Set(), [], true);
 }
