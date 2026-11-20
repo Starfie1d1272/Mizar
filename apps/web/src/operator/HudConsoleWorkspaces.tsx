@@ -18,7 +18,7 @@ import {
 
 import { HudPresetFiles } from './HudPresetFiles';
 import { HudWidgetInspector } from './HudWidgetInspector';
-import { activePresetId, resourceList } from './hud-console-drafts';
+import { resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
 
 const ANCHOR_LABELS: Record<(typeof HUD_ANCHORS)[number], string> = {
@@ -38,7 +38,6 @@ export interface HudConsoleWorkspaceProps {
   readonly configDocument: HudConfigDocument;
   readonly editorReady: boolean;
   readonly busy: boolean;
-  readonly activationStale: boolean;
   readonly hasDirtyDraft: boolean;
   readonly selectedPresetId: string;
   readonly selectedLayoutId: string;
@@ -94,7 +93,6 @@ export function HudConsoleWorkspaces({
   configDocument,
   editorReady,
   busy,
-  activationStale,
   hasDirtyDraft,
   selectedPresetId,
   selectedLayoutId,
@@ -130,18 +128,8 @@ export function HudConsoleWorkspaces({
   onImportPresetFile,
   onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
-  const activePresetResourceId = activePresetId(configDocument);
   const previewMatchesPresetReferences =
     selectedLayoutId === presetDraft.layoutId && selectedThemeId === presetDraft.themeId;
-  const activationLabel = hasDirtyDraft
-    ? '有未保存更改'
-    : !previewMatchesPresetReferences
-      ? '预览内容与此预设不一致'
-      : selectedPresetId !== activePresetResourceId
-        ? '尚未应用'
-        : activationStale
-          ? '已保存，尚未应用'
-          : '已应用';
 
   function renderResourceActions(kind: HudWorkspace, dirty: boolean, id: string) {
     const invalid =
@@ -183,7 +171,6 @@ export function HudConsoleWorkspaces({
   if (workspace === 'preset') {
     return (
       <section className="hud-console__workspace" aria-label="HUD 预设编辑">
-        <span className="hud-console__badge">{activationLabel}</span>
         <label className="hud-console__field">
           预设
           <select

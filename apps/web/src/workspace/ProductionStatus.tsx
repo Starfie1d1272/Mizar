@@ -2,7 +2,7 @@ import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import { useLocalRead, type Production } from '../preparation/client';
 import type { DemoTestView } from '../preparation/demo-test';
 import { desktopInvoke } from './client';
-import { obsStreamLabel, useObsStatus } from './obs-client';
+import { useObsStatus } from './obs-client';
 import { useState } from 'react';
 import './workspace.css';
 
@@ -20,14 +20,6 @@ export function ProductionStatus({
   const [error, setError] = useState('');
   const guidance = matchId !== undefined && response?.matchId !== matchId ? null : response;
   const connected = obs?.connection === 'connected';
-  const obsText =
-    obs?.streamPhase === 'active' && connected
-      ? obs.sceneAligned !== true ||
-        obs.findings.length > 0 ||
-        obs.captureDiagnostic?.state === 'needs_attention'
-        ? '需检查'
-        : '直播中'
-      : obsStreamLabel(obs);
   const platformText = !guidance
     ? '无法确认'
     : ({ live: '已开播', offline: '未开播', unknown: '无法确认', unconfigured: '未设置' } as const)[
@@ -44,35 +36,30 @@ export function ProductionStatus({
       className={`production-status${compact ? ' production-status--compact' : ''}`}
       aria-label="当前任务与直播状态"
     >
-      <div className="production-status__signals" aria-label="直播状态">
-        <span data-tone={obsText === '直播中' ? 'success' : 'muted'}>OBS {obsText}</span>
-        {guidance?.phase === 'match_end' ? (
-          <span>
-            录像{' '}
-            {connected && typeof obs?.recording === 'boolean'
-              ? obs.recording
-                ? '进行中'
-                : '已停止'
-              : '无法确认'}
-          </span>
-        ) : null}
+      <div className="production-status__signals" aria-label="平台状态">
         <span data-tone={platformText === '已开播' ? 'success' : 'muted'}>
           Bilibili {platformText}
         </span>
       </div>
-      <strong role={compact && (reminder || guidance?.interMapReminder) ? 'status' : undefined}>
-        {trial?.active
-          ? trial.phase === 'playing'
-            ? trial.dataReady
-              ? 'Demo 试播 · 游戏数据已就绪'
-              : 'Demo 试播 · 等待有效观战数据'
-            : 'Demo 试播 · 等待游戏启动或配置恢复'
-          : compact && reminder
-            ? '比赛进行中，OBS 未推流，请检查 OBS。'
-            : compact && guidance?.interMapReminder
-              ? '图间已超过 10 分钟，请确认下一图准备情况。'
-              : (guidance?.task ?? '正在读取制作状态')}
-      </strong>
+      {trial?.active ||
+      !compact ||
+      reminder ||
+      guidance?.interMapReminder ||
+      (guidance?.phase !== 'live' && guidance?.task !== '比赛进行中') ? (
+        <strong role={compact && (reminder || guidance?.interMapReminder) ? 'status' : undefined}>
+          {trial?.active
+            ? trial.phase === 'playing'
+              ? trial.dataReady
+                ? 'Demo 试播 · 游戏数据已就绪'
+                : 'Demo 试播 · 等待有效观战数据'
+              : 'Demo 试播 · 等待游戏启动或配置恢复'
+            : compact && reminder
+              ? '比赛进行中，OBS 未推流，请检查 OBS。'
+              : compact && guidance?.interMapReminder
+                ? '图间已超过 10 分钟，请确认下一图准备情况。'
+                : (guidance?.task ?? '正在读取制作状态')}
+        </strong>
+      ) : null}
       {guidance && !compact && !trial?.active ? (
         <>
           {guidance.result && ['map_end', 'match_end'].includes(guidance.phase) ? (

@@ -19,7 +19,7 @@ import { RivalHubPreparationPanel } from '../operator/RivalHubPreparationPanel';
 import { RivalHubSyncControls } from '../operator/RivalHubSyncControls';
 import { desktopInvoke } from '../workspace/client';
 import { LocalTournamentEditor } from '../workspace/LocalTournamentEditor';
-import { Button, Dialog, Panel, StatusBanner, StatusPill } from '../ui';
+import { Button, Dialog, Panel, SourceBadge, StatusBanner, StatusPill } from '../ui';
 import { LocalOverlayControls } from './LocalOverlayControls';
 import { LocalMatchControls } from './LocalMatchControls';
 import { useLocalTournament } from './tournament';
@@ -95,6 +95,15 @@ export function PreparationPage() {
     '';
   const envelope = useLocalRead<ContextEnvelope<MatchDocumentV1>>('/local/v1/match-document');
   const match = envelope?.document;
+  const round = match ? matchRound(match) : null;
+  const stageAndRound = [
+    match?.stageLabel,
+    round && !match?.stageLabel?.replace(/\s+/g, '').includes(round.replace(/\s+/g, ''))
+      ? round
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const onAirHud = useHudConfigClient(path === '/');
   const matchGuidance = useLocalRead<ProductionGuidance>(
     path === '/matches' && (envelope?.source === 'rivalhub' || envelope?.source === 'cache')
@@ -130,6 +139,7 @@ export function PreparationPage() {
     null,
   );
   const preparation = usePreparationStatus();
+  const showEntryHelp = path === '/' && production?.mode === 'preparation';
   const entering = Boolean(preparation?.running && !preparation.entered);
   const [submittingEntry, setSubmittingEntry] = useState(false);
   const [cancellingEntry, setCancellingEntry] = useState(false);
@@ -175,22 +185,13 @@ export function PreparationPage() {
     };
   }, []);
 
-  const tools = (
-    <div className="preparation-actions">
-      {(
-        [
-          ['hud', 'HUD 编辑器'],
-          ['bp', '地图与禁选'],
-          ['diagnostics', '运行诊断'],
-        ] as const
-      ).map(([tool, label]) => (
-        <Button key={tool} onClick={() => void action(() => openTool(tool))}>
-          {label}
-        </Button>
-      ))}
-      <Button onClick={() => setDemoOpen(true)}>Demo 试播</Button>
-    </div>
-  );
+  const toolsMenuRef = useRef<HTMLDetailsElement>(null);
+  function closeToolsMenu() {
+    const menu = toolsMenuRef.current;
+    if (!menu) return;
+    menu.querySelector('summary')?.focus();
+    menu.open = false;
+  }
 
   const capabilities = useLocalRead<
     {
@@ -278,31 +279,61 @@ export function PreparationPage() {
                       : '本场准备'}
             </h1>
           </div>
-          <Button
-            variant="primary"
-            disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
-            onClick={() =>
-              production &&
-              void action(async () => {
-                setSubmittingEntry(true);
-                try {
-                  await productionAction('enter', production);
-                } finally {
-                  setSubmittingEntry(false);
+          <div className="preparation-heading__actions">
+            <div className="preparation-heading__buttons">
+              {path === '/' ? (
+                <details className="preparation-tools-menu" ref={toolsMenuRef}>
+                  <summary className="mizar-button">工具 ▾</summary>
+                  <div className="preparation-tools-menu__list">
+                    <Button
+                      onClick={() => {
+                        closeToolsMenu();
+                        void action(() => openTool('diagnostics'));
+                      }}
+                    >
+                      运行诊断
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        closeToolsMenu();
+                        setDemoOpen(true);
+                      }}
+                    >
+                      Demo 试播
+                    </Button>
+                  </div>
+                </details>
+              ) : null}
+              <Button
+                variant="primary"
+                aria-describedby={showEntryHelp ? 'preparation-entry-help' : undefined}
+                disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
+                onClick={() =>
+                  production &&
+                  void action(async () => {
+                    setSubmittingEntry(true);
+                    try {
+                      await productionAction('enter', production);
+                    } finally {
+                      setSubmittingEntry(false);
+                    }
+                  })
                 }
-              })
-            }
-          >
-            {entering || submittingEntry
-              ? '正在打开工作台…'
-              : production?.mode !== 'preparation'
-                ? '返回工作台'
-                : '打开工作台'}
-          </Button>
+              >
+                {entering || submittingEntry
+                  ? '正在打开工作台…'
+                  : production?.mode !== 'preparation'
+                    ? '返回工作台'
+                    : '打开工作台'}
+              </Button>
+            </div>
+            {showEntryHelp ? (
+              <p id="preparation-entry-help">
+                打开后自动准备游戏和 OBS，比赛资料可稍后选择。如已有 CS2，将正常关闭后重新启动。
+              </p>
+            ) : null}
+          </div>
         </header>
-        {production?.mode === 'preparation' ? (
-          <p>打开后自动准备游戏和 OBS，比赛资料可稍后选择。如已有 CS2，将正常关闭后重新启动。</p>
-        ) : null}
         {entering || submittingEntry || cancellingEntry || cancelFailed ? (
           <Button
             disabled={cancellingEntry}
@@ -414,9 +445,7 @@ export function PreparationPage() {
             ) : (
               <Panel className="preparation-match">
                 <div className="preparation-match__meta">
-                  <span>
-                    {match.competition?.name} · {match.format.toUpperCase()}
-                  </span>
+                  {match.competition?.name ? <span>{match.competition.name}</span> : null}
                   <StatusPill tone="info">
                     {envelope?.source === 'fixture'
                       ? '示例比赛'
@@ -431,9 +460,7 @@ export function PreparationPage() {
                     <TeamBadge name={match.entrants.a.name} logoUrl={match.entrants.a.logoUrl} />
                     <strong title={match.entrants.a.name}>{match.entrants.a.name}</strong>
                   </span>
-                  <span className="preparation-match__versus">
-                    VS · {match.format.toUpperCase()}
-                  </span>
+                  <span className="preparation-match__versus">VS</span>
                   <span className="preparation-match__team">
                     <TeamBadge name={match.entrants.b.name} logoUrl={match.entrants.b.logoUrl} />
                     <strong title={match.entrants.b.name}>{match.entrants.b.name}</strong>
@@ -456,14 +483,6 @@ export function PreparationPage() {
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      window.location.href = '/matches';
-                    }}
-                  >
-                    查看比赛资料
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
                       window.location.href = '/resources';
                     }}
                   >
@@ -483,24 +502,22 @@ export function PreparationPage() {
                     <span>核对双方名单与赛程</span>
                   </div>
                   <div className="preparation-task-summary">
-                    {(['a', 'b'] as const).map((side) => (
-                      <div className="preparation-task-roster" key={side}>
-                        <span title={match.entrants[side].name}>{match.entrants[side].name}</span>
-                        <b>
-                          {match.entrants[side].players.length
-                            ? `首发 ${match.entrants[side].players.filter((p) => p.isStarter).length} 人`
-                            : '名单待填写'}
-                        </b>
-                      </div>
-                    ))}
-                    <p>
-                      {[match.stageLabel, matchRound(match)]
-                        .filter(
-                          (label, index) =>
-                            label && (index === 0 || !match.stageLabel?.includes(label)),
-                        )
-                        .join(' · ') || '阶段与轮次待填写'}
-                    </p>
+                    {match.entrants.a.players.filter((p) => p.isStarter).length === 5 &&
+                    match.entrants.b.players.filter((p) => p.isStarter).length === 5 ? (
+                      <b>双方首发齐全</b>
+                    ) : (
+                      (['a', 'b'] as const).map((side) => (
+                        <div className="preparation-task-roster" key={side}>
+                          <span title={match.entrants[side].name}>{match.entrants[side].name}</span>
+                          <b>
+                            {match.entrants[side].players.length
+                              ? `首发 ${match.entrants[side].players.filter((p) => p.isStarter).length} 人`
+                              : '名单待填写'}
+                          </b>
+                        </div>
+                      ))
+                    )}
+                    <p>{stageAndRound || '阶段与轮次待填写'}</p>
                   </div>
                   <span className="preparation-task-entry">查看比赛资料 →</span>
                 </a>
@@ -515,7 +532,6 @@ export function PreparationPage() {
                     <strong>
                       <small>02</small> 地图禁选
                     </strong>
-                    <span>{match.format.toUpperCase()} · 地图与禁选资料</span>
                   </div>
                   <div className="preparation-task-summary">
                     <b>
@@ -530,17 +546,18 @@ export function PreparationPage() {
                           </li>
                         ))}
                       </ol>
-                    ) : (
-                      <p>地图待确定，录入后在此查看。</p>
-                    )}
+                    ) : null}
                   </div>
                   <span className="preparation-task-entry">查看地图与禁选 →</span>
                 </a>
                 <a href="/picture?tab=hud">
                   <div className="preparation-task-title">
-                    <strong>
-                      <small>03</small> HUD 与包装
-                    </strong>
+                    <div className="preparation-task-title__row">
+                      <strong>
+                        <small>03</small> HUD 与包装
+                      </strong>
+                      {onAirHud.status === 'ready' ? <SourceBadge kind="sample" compact /> : null}
+                    </div>
                     <span>选择风格与调整布局</span>
                   </div>
                   <div className="preparation-task-summary">
@@ -570,8 +587,8 @@ export function PreparationPage() {
                 </a>
               </nav>
             ) : null}
-            <div className="preparation-overview">
-              {problems.length ? (
+            {problems.length ? (
+              <div className="preparation-overview">
                 <Panel>
                   <h2>需要处理</h2>
                   {problems.map(({ id, label, reason, href, action: nextAction }) => (
@@ -603,12 +620,8 @@ export function PreparationPage() {
                     </a>
                   ))}
                 </Panel>
-              ) : null}
-              <Panel className="preparation-quick-tools">
-                <h2>工具与试播</h2>
-                {tools}
-              </Panel>
-            </div>
+              </div>
+            ) : null}
             <Dialog
               className="demo-test-dialog"
               title="Demo 试播"

@@ -824,7 +824,7 @@
   background: var(--mizar-action-danger-hover);
   border-color: var(--mizar-action-danger-hover);
 }
-/* Shared rows align the match/checks and preparation tasks/tools. */
+/* Shared rows align match preparation and outstanding checks. */
 .preparation-dashboard {
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
   align-items: stretch;
@@ -903,21 +903,54 @@
   background: var(--mizar-bg-canvas);
 }
 
-.preparation-quick-tools h2 {
-  margin-bottom: var(--mizar-layout-padding);
-}
-.preparation-quick-tools .preparation-actions {
+.preparation-heading__actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--mizar-layout-gap);
+  justify-items: end;
+  gap: var(--mizar-layout-compact);
 }
-.preparation-quick-tools .mizar-button {
+.preparation-heading__actions > p {
+  text-align: end;
+}
+.preparation-heading__buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--mizar-layout-compact);
+}
+.preparation-tools-menu {
+  position: relative;
+}
+.preparation-tools-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.preparation-tools-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.preparation-tools-menu__list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--mizar-layout-compact));
+  z-index: 20;
+  min-width: 160px;
+  display: grid;
+  gap: calc(var(--mizar-layout-compact) / 2);
+  padding: var(--mizar-layout-compact);
+  background: var(--mizar-bg-raised);
+  border: var(--mizar-line-border) solid var(--mizar-border-strong);
+  border-radius: var(--mizar-shape-panel);
+}
+.preparation-tools-menu__list .mizar-button {
   width: 100%;
-  min-height: calc(var(--mizar-layout-target) * 1.5);
+  justify-content: flex-start;
 }
-
 .preparation-task-title {
   display: grid;
+  gap: var(--mizar-layout-compact);
+}
+.preparation-task-title__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--mizar-layout-compact);
 }
 .preparation-task-title strong {

@@ -20,15 +20,29 @@ function NavigationIcon({ path }: { readonly path: string }) {
           <rect x="3" y="15" width="6" height="6" rx="1" />
           <rect x="15" y="15" width="6" height="6" rx="1" />
         </>
-      ) : path === '/matches' ? (
+      ) : path === '/resources' ? (
         <>
-          <rect x="3" y="4" width="18" height="14" rx="2" />
-          <path d="M8 22h8M12 18v4" />
+          <path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round" />
+        </>
+      ) : path === '/packages' ? (
+        <>
+          <polygon points="12 3 20 7.5 12 12 4 7.5 12 3" strokeLinejoin="round" />
+          <path
+            d="M4 12.5L12 17l8-4.5M4 17l8 4.5 8-4.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      ) : path === '/picture' ? (
+        <>
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M8 20h8M12 17v3M7 8h10" strokeLinecap="round" />
         </>
       ) : (
         <>
-          <ellipse cx="12" cy="12" rx="10" ry="6" transform="rotate(-35 12 12)" />
-          <circle cx="12" cy="12" r="2" />
+          <path d="M4 7h2.5m5 0H20M4 17h8.5m5 0H20" strokeLinecap="round" />
+          <circle cx="9" cy="7" r="2.5" />
+          <circle cx="15" cy="17" r="2.5" />
         </>
       )}
     </svg>
@@ -73,10 +87,9 @@ export function OperatorShell({
               </a>
             ))}
           </nav>
-          <footer>Mizar · 制播工作台</footer>
         </aside>
         <div className="product-content" id="product-content">
-          <SessionContext returnToWorkspace={active !== '/'} />
+          <SessionContext />
           <div className="product-page">{children}</div>
         </div>
       </div>
