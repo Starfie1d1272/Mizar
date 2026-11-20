@@ -249,7 +249,7 @@ Steam 和 MulNX 的未知启动结果都保留待确认记录，不自动重发�
 
 同一次独立恢复中的观战原值和旧试播清理共用游戏写回等待。每一步开始前重新查询游戏进程，发现游戏重新启动时保留该步原件和恢复记录。
 
-现场帧率、手动旧备份恢复、MulNX 启动项及本机 HUD 自动隐藏分别沿各自有限事务持有身份与原值，不创建通用游戏命令入口。相关实现见[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)、[配置会话](../../apps/desktop/src-tauri/src/cs2_session.rs)和[启动恢复](../../apps/desktop/src-tauri/src/startup_recovery.rs)。
+现场帧率、手动旧备份恢复、MulNX 启动项及本机 HUD 自动隐藏分别沿各自有限事务持有身份与原值。运镜租约的展示、续期和读回共用原生句柄及唯一游戏进程核验，续期与撤销继续由同一租约锁串行。相关实现见[受管 CS2](../../apps/desktop/src-tauri/src/managed_cs2.rs)、[配置会话](../../apps/desktop/src-tauri/src/cs2_session.rs)和[启动恢复](../../apps/desktop/src-tauri/src/startup_recovery.rs)。
 
 配置会话的原始备份按已核实的画面配置路径关联 Steam 账号。实际写入范围与恢复职责如下。
 

@@ -88,6 +88,12 @@ pub(crate) struct CameraLease {
     lease: String,
     invalidated: bool,
 }
+impl CameraLease {
+    fn matches_running_game(&self, log: &crate::startup_log::DesktopLog) -> bool {
+        self.process.is_running()
+            && cs2_pids(log).is_ok_and(|pids| pids.as_slice() == [self.process.pid])
+    }
+}
 /// Serialize renewal with revocation. This lock never acquires ManagedCs2.
 pub(crate) fn pulse_camera(
     state: &Mutex<Option<CameraLease>>,
@@ -108,9 +114,7 @@ pub(crate) fn pulse_camera(
     if camera.invalidated {
         return;
     }
-    let valid = camera.process.is_running()
-        && cs2_pids(log).is_ok_and(|pids| pids == vec![camera.process.pid]);
-    let result = if valid {
+    let result = if camera.matches_running_game(log) {
         crate::production_exit::camera_session(log, "pulse", Some(&camera.lease), None)
     } else {
         Err("当前游戏状态已经变化。请重新检查游戏后重试。".into())
@@ -533,9 +537,7 @@ impl ManagedCs2 {
             mulnx_launch_resumable,
             camera_lease_ready: self.camera.lock().is_ok_and(|state| {
                 state.as_ref().is_some_and(|camera| {
-                    !camera.invalidated
-                        && camera.process.is_running()
-                        && cs2_pids(&self.log).is_ok_and(|pids| pids == vec![camera.process.pid])
+                    !camera.invalidated && camera.matches_running_game(&self.log)
                 })
             }),
             running,
@@ -905,9 +907,7 @@ impl ManagedCs2 {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let camera = state.as_mut()?;
-        if !camera.process.is_running()
-            || cs2_pids(&self.log).map_or(true, |pids| pids != vec![camera.process.pid])
-        {
+        if !camera.invalidated && !camera.matches_running_game(&self.log) {
             camera.invalidated = true;
         }
         Some((camera.lease.clone(), camera.invalidated))
