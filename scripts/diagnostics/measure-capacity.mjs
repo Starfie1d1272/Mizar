@@ -486,36 +486,28 @@ async function profile(directory, minutes) {
       if (sequence % 20 === 19) await yieldIO();
     }
     await journal.flush();
-    // Native receipt is a synthetic fixture; the actual route/owner validates its
-    // fixed bytes and SHA. This is not evidence of Rust/Windows pin execution.
-    const hostPinId = randomUUID();
-    const pinnedHostSegments = await Promise.all(
-      hostSegments.map(async ({ name, bytes }) => {
-        const body = await readFile(join(logs, name));
-        assert.equal(body.length, bytes);
-        assert(bytes <= hostSegmentLimit);
-        return { name, bytes, sha256: createHash('sha256').update(body).digest('hex') };
-      }),
-    );
-    await mkdir(join(logs, 'host-pins'));
-    await writeFile(
-      join(logs, 'host-pins', hostPinId + '.json'),
-      JSON.stringify({
-        schema: 'mizar-producer-pin/2',
-        pinId: hostPinId,
-        producerKind: 'host',
-        producerRunId: hostRunId,
-        kind: 'export',
-        state: 'committed',
-        expiresAt: new Date(Date.now() + 600000).toISOString(),
-        segments: pinnedHostSegments,
-      }),
-    );
+    for (const { name, bytes } of hostSegments) {
+      assert.equal((await stat(join(logs, name))).size, bytes);
+      assert(bytes <= hostSegmentLimit);
+    }
     const admitted = await app.inject({
       method: 'POST',
       url: '/debug/support-exports',
       headers: localHeaders,
-      payload: { hostPinId },
+      payload: {
+        host: {
+          asOf: new Date(utc).toISOString(),
+          memoryOnly: { included: false, events: 0, bytes: 0, reason: 'not-durably-committed' },
+          unreportedLoss: { overflow: 0, contended: 0, writeFailed: 0 },
+          lossTotals: {
+            reason: 'native_event_loss_cumulative',
+            count: 0,
+            bytes: 0,
+            firstObservedAt: null,
+            lastObservedAt: null,
+          },
+        },
+      },
     });
     assert.equal(admitted.statusCode, 202, admitted.body);
     const exportId = admitted.json().exportId;
@@ -661,9 +653,9 @@ async function profile(directory, minutes) {
       host: {
         runId: hostRunId,
         events: hostSequence,
-        bytes: pinnedHostSegments.reduce((total, segment) => total + segment.bytes, 0),
-        segments: pinnedHostSegments.length,
-        largestSegmentBytes: Math.max(...pinnedHostSegments.map((segment) => segment.bytes)),
+        bytes: hostSegments.reduce((total, segment) => total + segment.bytes, 0),
+        segments: hostSegments.length,
+        largestSegmentBytes: Math.max(...hostSegments.map((segment) => segment.bytes)),
         consoleRecords,
         nativeOperations: nativeOps,
         chatRecords,
@@ -712,7 +704,7 @@ async function profile(directory, minutes) {
       chat_not_collected: chatRecords,
       source_sequence_gap: chatRecords,
     });
-    for (const { name } of pinnedHostSegments) {
+    for (const { name } of hostSegments) {
       const source = await readFile(join(logs, name), 'utf8');
       for (const line of source.trim().split('\n')) {
         const record = JSON.parse(line);
