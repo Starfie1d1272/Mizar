@@ -26,11 +26,7 @@ import {
 } from './commentary-switch.js';
 import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
-import {
-  commentaryTargetReady,
-  configureIndependentAudio,
-  prepareIndependentForDesktop,
-} from './audio-setup.js';
+import { configureIndependentAudio, prepareIndependentForDesktop } from './audio-setup.js';
 import { reconcileManagedAudio } from './managed-audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import type { MusicAudioMode, MusicAudioRecovery } from '../music/device.js';
