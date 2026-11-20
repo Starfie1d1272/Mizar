@@ -208,8 +208,8 @@ pub(crate) async fn start(
                     return match result {
                         Ok(_) => Ok(starting),
                         Err(error) => {
-                            if !cs2.demo_launch_attempted()? {
-                                if let Err(recovery) = cs2.cancel_unsubmitted_mulnx_demo() {
+                            if !cs2.launch_was_submitted()? {
+                                if let Err(recovery) = cs2.cancel_unsubmitted_mulnx() {
                                     return Err(format!("{error}；恢复未完成：{recovery}"));
                                 }
                             }
@@ -223,7 +223,7 @@ pub(crate) async fn start(
                     Err(error) => {
                         // A durable attempted launch can still arrive late through
                         // Steam. Only a proven pre-launch failure permits cancel.
-                        if !cs2.demo_launch_attempted()? {
+                        if !cs2.launch_was_submitted()? {
                             demo_test::request(&log, "cancel", &id, None)?;
                             cs2.recover(false)?;
                         }
