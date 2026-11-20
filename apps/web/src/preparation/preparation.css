@@ -799,44 +799,77 @@
   background: var(--mizar-action-danger-hover);
   border-color: var(--mizar-action-danger-hover);
 }
-/* The match and preparation tasks share the wider column. */
 .preparation-dashboard {
   grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+  gap: calc(var(--mizar-layout-padding) * 1.25);
   align-items: stretch;
 }
 .preparation-dashboard > .preparation-match {
   grid-column: 1;
   grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: calc(var(--mizar-layout-target) * 11);
+  padding: calc(var(--mizar-layout-padding) * 1.5);
 }
 .preparation-dashboard > .preparation-overview {
   grid-column: 2;
-  grid-row: 1 / 3;
-  align-self: start;
+  grid-row: 1;
+}
+.preparation-quick-tools {
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--mizar-layout-padding) * 1.5);
 }
 .preparation-quick-tools .preparation-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  gap: var(--mizar-layout-gap);
+  flex: 1;
+  align-content: space-between;
 }
 .preparation-quick-tools .mizar-button {
   justify-content: flex-start;
+  min-height: calc(var(--mizar-layout-target) * 1.5);
 }
 .preparation-dashboard > .preparation-task-links {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 2;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--mizar-layout-gap);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr);
+  gap: var(--mizar-layout-padding);
 }
 .preparation-task-links a {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  min-height: calc(var(--mizar-layout-target) * 5);
-  gap: var(--mizar-layout-gap);
-  padding: var(--mizar-layout-padding);
+  min-height: calc(var(--mizar-layout-target) * 6.5);
+  gap: var(--mizar-layout-padding);
+  padding: calc(var(--mizar-layout-padding) * 1.25);
   border: var(--mizar-line-border) solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-panel);
   background: var(--mizar-bg-surface);
   text-decoration: none;
+}
+.preparation-task-links a.preparation-task-hud:has(.preparation-task-reference) {
+  grid-template-columns: minmax(0, 1fr) calc(var(--mizar-layout-target) * 7.5);
+  column-gap: var(--mizar-layout-padding);
+}
+.preparation-task-hud > .preparation-task-title {
+  grid-column: 1;
+  grid-row: 1;
+}
+.preparation-task-hud > .preparation-task-summary {
+  grid-column: 1;
+  grid-row: 2;
+}
+.preparation-task-hud > .preparation-task-reference {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 .preparation-task-links a:hover {
   background: var(--mizar-bg-hover);
@@ -897,8 +930,8 @@
 .preparation-task-preset-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--mizar-layout-compact);
+  min-width: 0;
 }
 .preparation-task-title strong {
   display: flex;
@@ -969,6 +1002,7 @@
 }
 
 .preparation-task-links .preparation-task-entry {
+  grid-column: 1 / -1;
   border-top: var(--mizar-line-border) solid var(--mizar-border-default);
   padding-top: var(--mizar-layout-gap);
   color: var(--mizar-fg-primary);

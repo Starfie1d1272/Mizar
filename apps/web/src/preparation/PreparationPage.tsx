@@ -435,7 +435,11 @@ export function PreparationPage() {
                 </h2>
                 <p>
                   {[
-                    match.matchLabel,
+                    match.matchLabel &&
+                    match.matchLabel.trim().toLowerCase() !==
+                      `${match.entrants.a.name} vs ${match.entrants.b.name}`.trim().toLowerCase()
+                      ? match.matchLabel
+                      : null,
                     match.scheduledAt
                       ? new Date(match.scheduledAt).toLocaleString('zh-CN', {
                           timeZone: 'Asia/Shanghai',
@@ -466,7 +470,6 @@ export function PreparationPage() {
                     <strong>
                       <small>01</small> 比赛资料
                     </strong>
-                    <span>核对双方名单与赛程</span>
                   </div>
                   <div className="preparation-task-summary">
                     {match.entrants.a.players.filter((p) => p.isStarter).length === 5 &&
@@ -517,34 +520,20 @@ export function PreparationPage() {
                   </div>
                   <span className="preparation-task-entry">查看地图与禁选 →</span>
                 </a>
-                <a href="/picture?tab=hud">
+                <a className="preparation-task-hud" href="/picture?tab=hud">
                   <div className="preparation-task-title">
                     <strong>
                       <small>03</small> HUD 与包装
                     </strong>
-                    <span>选择风格与调整布局</span>
                   </div>
                   <div className="preparation-task-summary">
                     {onAirHud.status === 'ready' ? (
-                      <>
-                        <div className="preparation-task-preset-row">
-                          <b
-                            className="preparation-task-preset"
-                            title={onAirHud.current.preset.name}
-                          >
-                            已启用 · {onAirHud.current.preset.name}
-                          </b>
-                          <SourceBadge kind="sample" compact />
-                        </div>
-                        <figure className="preparation-task-reference">
-                          <img
-                            src={hudStyleReference(
-                              onAirHud.current.widgets['top-score-bar'].variant,
-                            )}
-                            alt="HUD 风格参考"
-                          />
-                        </figure>
-                      </>
+                      <div className="preparation-task-preset-row">
+                        <b className="preparation-task-preset" title={onAirHud.current.preset.name}>
+                          已启用 · {onAirHud.current.preset.name}
+                        </b>
+                        <SourceBadge kind="sample" compact />
+                      </div>
                     ) : (
                       <p>
                         {onAirHud.status === 'loading'
@@ -553,6 +542,14 @@ export function PreparationPage() {
                       </p>
                     )}
                   </div>
+                  {onAirHud.status === 'ready' ? (
+                    <figure className="preparation-task-reference">
+                      <img
+                        src={hudStyleReference(onAirHud.current.widgets['top-score-bar'].variant)}
+                        alt="HUD 风格参考"
+                      />
+                    </figure>
+                  ) : null}
                   <span className="preparation-task-entry">选择与编辑 →</span>
                 </a>
               </nav>
