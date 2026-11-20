@@ -533,7 +533,16 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   await mkdir(performance);
   const segment = join(performance, `${randomUUID()}.00000001.gz`);
   const compressed = gzipSync(
-    JSON.stringify([{ schema: 'mizar-diagnostic-event/2', kind: 'unpinned_performance' }]),
+    JSON.stringify([
+      {
+        schema: 'mizar-diagnostic-event/2',
+        kind: 'unpinned_performance',
+        evidence: {
+          password: 'fixture-performance-secret',
+          nested: { kind: 'program_all_chat', evidence: { body: 'fixture-performance-chat' } },
+        },
+      },
+    ]),
   );
   await writeFile(segment, compressed);
   const missing = `session-${randomUUID()}.ndjson`;
@@ -569,6 +578,9 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   assert.match(events, /document-event/);
   assert.match(events, /before_cutoff/);
   assert.match(events, /unpinned_performance/);
+  assert.match(events, /\[redacted\]/);
+  assert.match(events, /raw-chat-body/);
+  assert.doesNotMatch(events, /fixture-performance-secret|fixture-performance-chat/);
   assert.deepEqual(await readFile(segment), compressed);
   assert.doesNotMatch(events, /uncommitted-partial-line|excluded-private-marker/);
   const generated = JSON.parse(
