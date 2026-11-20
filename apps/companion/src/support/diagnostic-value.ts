@@ -25,7 +25,7 @@ const chatIdentity = new Set([
 ]);
 
 const POTENTIAL_SENSITIVE_RAW =
-  /password|passwd|token|secret|credential|ticket|authorization|cookie|bearer|basic|rh_mizar_|data:|"key"|_key|-key|:\/\/|program_all_chat|\\u|"\s*[{[]/i;
+  /password|passwd|token|secret|credential|ticket|authorization|cookie|bearer|basic|rh_mizar_|data:|"key"|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|:\/\/|program_all_chat|\\u|"\s*[{[]/i;
 
 /** Fast pre-check: when false, `diagnosticEvidence(JSON.parse(raw))` is a no-op clone. */
 export function needsEvidenceSanitize(rawJson: string): boolean {
