@@ -1,4 +1,5 @@
 import { diagnosticEvidence } from './diagnostic-value.js';
+
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -99,67 +100,4 @@ export function technicalProjection(input: Record<string, unknown>, consentAt: s
         ? input.appVersion
         : null,
   };
-}
-
-/** Prove a known /2 technical projection is covered without depending on today's
- * optional projection fields. Stable identity and every transmitted fact must match. */
-export function sourceCoversProjection(
-  source: Record<string, unknown>,
-  projected: Record<string, unknown>,
-): boolean {
-  const projection = object(projected.projection);
-  if (projection.policyVersion === 3) source = object(diagnosticEvidence(source));
-  if (
-    source.schema !== 'mizar-diagnostic-event/2' ||
-    projected.schema !== source.schema ||
-    ![2, 3].includes(Number(projection.policyVersion)) ||
-    projection.sourceEventId !== projected.eventId ||
-    source.projection
-  )
-    return false;
-  for (const key of ['eventId', 'producerKind', 'producerRunId', 'sequence', 'kind'])
-    if (source[key] !== projected[key]) return false;
-  const subset = (value: unknown, full: unknown): boolean => {
-    if (value === null || typeof value !== 'object') return value === full;
-    if (!Array.isArray(value) && Object.keys(value).length === 0) return true;
-    if (!full || typeof full !== 'object' || Array.isArray(value) !== Array.isArray(full))
-      return false;
-    return Object.entries(value).every(([key, item]) =>
-      subset(item, (full as Record<string, unknown>)[key]),
-    );
-  };
-  // Fields omitted by the technical policy cannot add evidence. Nonidentical facts stay retained.
-  return (
-    subset(projected.evidence, source.evidence) &&
-    (projected.scope === null || subset(projected.scope, source.scope)) &&
-    [
-      'phase',
-      'outcome',
-      'taskId',
-      'operationId',
-      'parentOperationId',
-      'attemptId',
-      'monotonicMs',
-    ].every((key) => projected[key] == null || projected[key] === source[key]) &&
-    (projected.sourceInterval == null ||
-      ['from', 'to'].every((key) => {
-        const value = object(projected.sourceInterval)[key];
-        const full = object(source.sourceInterval)[key];
-        return value === null
-          ? full === null
-          : typeof value === 'string' &&
-              typeof full === 'string' &&
-              Number.isFinite(Date.parse(value)) &&
-              Date.parse(value) === Date.parse(full);
-      })) &&
-    (projected.appVersion == null || projected.appVersion === source.appVersion) &&
-    Number(object(projected.coverage).occurrences ?? 1) ===
-      Number(object(source.coverage).occurrences ?? 1) &&
-    ['observedAt', 'recordedAt'].every(
-      (key) =>
-        projected[key] === null ||
-        (typeof source[key] === 'string' &&
-          Date.parse(String(source[key])) === Date.parse(String(projected[key]))),
-    )
-  );
 }

@@ -120,7 +120,6 @@ async function describe(
 export class ProducerRetention {
   private state: ProducerInventory;
   private ready = false;
-  private readonly deliveryHolds = new Set<string>();
   private readonly name: string;
   constructor(
     private readonly root: string,
@@ -308,7 +307,7 @@ export class ProducerRetention {
     }
     const previous = structuredClone(receipt);
     receipt.status = 'committed';
-    if (!['export', 'delivery'].includes(receipt.kind)) receipt.expiresAt = null;
+    if (receipt.kind !== 'export') receipt.expiresAt = null;
     receipt.confirmedAt = new Date().toISOString();
     try {
       await this.save();
@@ -316,9 +315,6 @@ export class ProducerRetention {
       Object.assign(receipt, previous);
       throw error;
     }
-    // A running ACK transaction owns this hold through unlink, even after its
-    // admission deadline. A restarted producer discards delivery leases.
-    if (receipt.kind === 'delivery') this.deliveryHolds.add(pinId);
     return structuredClone(receipt);
   }
   async releasePin(pinId: string): Promise<void> {
@@ -331,7 +327,6 @@ export class ProducerRetention {
       this.state.pins = previous;
       throw error;
     }
-    this.deliveryHolds.delete(pinId);
   }
   private async finishDeletes() {
     for (const name of [...this.state.deleting]) {
@@ -405,7 +400,7 @@ export class ProducerRetention {
     const now = options.now ?? Date.now();
     await this.initialize(now);
     this.state.pins = this.state.pins.filter(
-      (pin) => this.deliveryHolds.has(pin.pinId) || pin.expiresAt === null || pin.expiresAt > now,
+      (pin) => pin.expiresAt === null || pin.expiresAt > now,
     );
     const pinned = new Set(
       this.state.pins.flatMap((pin) => pin.segments.map((value) => value.name)),

@@ -75,7 +75,6 @@ export function registerDiagnosticDelivery(
           ...(options.endpointSource ? { endpointSource: options.endpointSource } : {}),
           ...(options.fetch ? { fetch: options.fetch } : {}),
           ...(options.onConsent ? { onConsent: options.onConsent } : {}),
-          participants: options.deliveryParticipants ?? (() => [journal.deliveryParticipant()]),
         });
         await delivery.initialize();
         ready = true;

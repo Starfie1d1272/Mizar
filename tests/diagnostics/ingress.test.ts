@@ -61,7 +61,6 @@ test('an unacknowledged old-endpoint batch resumes unchanged through ingress and
   let now = Date.now();
   const options = {
     now: () => now,
-    participants: () => [],
     fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       const headers = new Headers(init?.headers);

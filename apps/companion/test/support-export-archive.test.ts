@@ -179,3 +179,25 @@ test('SupportExports supports cancellation and retry', async (t) => {
   const settled = await exports.whenSettled(retried.exportId);
   assert.equal(settled?.phase, 'ready', `unexpected error: ${settled?.error}`);
 });
+
+test('needsEvidenceSanitize never misses JSON-escaped URLs, nested JSON, or unicode keys', () => {
+  const escapedSamples = [
+    '{"schema":"mizar-diagnostic-event/2","evidence":{"url":"rtmps:\\/\\/live.twitch.tv\\/app\\/live_secret_99"}}',
+    '{"schema":"mizar-diagnostic-event/2","evidence":{"url":"https:\\/\\/user:pass@example.com\\/hook?auth=abc"}}',
+    '{"schema":"mizar-diagnostic-event/2","evidence":{"stream":{"raw":"\\n  {\\"key\\":\\"stream-secret\\"}"}}}',
+    '{"schema":"mizar-diagnostic-event/2","evidence":{"\\u0061piKey":"secret-val"}}',
+    '{"schema":"mizar-diagnostic-event/2","evidence":{"ok":true,"count":42,"msg":"normal line"}}',
+  ];
+  for (const raw of escapedSamples) {
+    const parsed = JSON.parse(raw);
+    const sanitized = JSON.stringify(diagnosticEvidence(parsed));
+    if (!needsEvidenceSanitize(raw)) {
+      assert.equal(sanitized, JSON.stringify(parsed), `fast-path missed sanitization for: ${raw}`);
+    }
+  }
+  assert.equal(needsEvidenceSanitize(escapedSamples[0]!), true);
+  assert.equal(needsEvidenceSanitize(escapedSamples[1]!), true);
+  assert.equal(needsEvidenceSanitize(escapedSamples[2]!), true);
+  assert.equal(needsEvidenceSanitize(escapedSamples[3]!), true);
+  assert.equal(needsEvidenceSanitize(escapedSamples[4]!), false);
+});

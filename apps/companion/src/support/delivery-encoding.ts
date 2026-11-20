@@ -18,11 +18,15 @@ import { safePath } from '../resource-store/files.js';
 
 export const compress = promisify(gzip);
 export const decompress = promisify(gunzip);
+export const LEGACY_QUEUE_LIMITS = {
+  queueBytes: 64 * 1024 * 1024,
+  batches: 2048,
+};
 export const DELIVERY_LIMITS = {
   expandedBytes: 4 * 1024 * 1024,
   compressedBytes: 512 * 1024,
-  queueBytes: 64 * 1024 * 1024,
-  batches: 2048,
+  queueBytes: 8 * 1024 * 1024,
+  batches: 16,
   manifestBytes: 2 * 1024 * 1024,
   pendingBytes: 8 * 1024 * 1024,
   events: 4096,
@@ -256,7 +260,8 @@ export const stateSchema = z
         }),
       )
       .refine(
-        (queue) => queue.filter((batch) => !batch.acknowledgedAt).length <= DELIVERY_LIMITS.batches,
+        (queue) =>
+          queue.filter((batch) => !batch.acknowledgedAt).length <= LEGACY_QUEUE_LIMITS.batches,
       ),
     omitted: counter,
     omissionReasons: z.record(z.string().max(96), counter),
@@ -274,7 +279,7 @@ export const stateSchema = z
         (v.credentials && (v.credentials.enrollmentAttempted || v.credentials.token) ? 1 : 0) <=
         DELIVERY_LIMITS.tombstones &&
       v.queue.reduce((n, b) => n + b.bytes, 0) <=
-        DELIVERY_LIMITS.queueBytes + DELIVERY_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
+        LEGACY_QUEUE_LIMITS.queueBytes + LEGACY_QUEUE_LIMITS.batches * DIAGNOSTIC_PERMIT_BYTES &&
       (!v.consent || v.credentials !== null),
   );
 export async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
