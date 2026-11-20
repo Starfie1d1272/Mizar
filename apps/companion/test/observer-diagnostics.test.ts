@@ -177,10 +177,30 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   assert.equal(manager.getHealth().normalDrain, true);
   assert.equal(manager.getHealth().generation, live.generation);
   assert.deepEqual(seen, [4, 8, 14]);
+
+  write(17, begin, 3);
+  write(18, cursor, 3);
+  write(
+    19,
+    {
+      ...fixture,
+      sdkQueueAgeUs: 2_000_000,
+      dequeueToSubmitUs: 100,
+      submitToObservedUs: 1000,
+    },
+    3,
+  );
+  write(20, fixture, 3);
+  assert.equal(manager.getHealth().state, 'connecting');
+  assert.equal(manager.getHealth().lastErrorCode, 'observer-residence-limit');
+  assert.deepEqual(seen, [4, 8, 14]);
+  write(21, cursor, 3);
+  write(22, fixture, 3);
+  assert.deepEqual(seen, [4, 8, 14, 22]);
   await manager.stop();
   assert.equal(manager.getHealth().normalDrain, undefined);
-  write(17, fixture, 2);
-  assert.deepEqual(seen, [4, 8, 14]);
+  write(23, fixture, 3);
+  assert.deepEqual(seen, [4, 8, 14, 22]);
 });
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
