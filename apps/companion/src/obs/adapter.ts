@@ -353,7 +353,7 @@ export class ObsAdapter {
         if (command.action === 'start') {
           if (this.configurationPending)
             throw new ObsOutputError('obs_output_busy', 'OBS 正在准备配置，请等待状态确认。');
-          const preparation = await this.preparationStatus();
+          let preparation = await this.preparationStatus();
           if (preparation === 'cleanup_pending' && command.output === 'stream') {
             const stream = (await this.outputs.read()).stream;
             if (command.expectedRevision !== stream.revision)
@@ -367,8 +367,9 @@ export class ObsAdapter {
                 throw new ObsOutputError('obs_output_busy', error.message, { cause: error });
               throw error;
             }
+            preparation = await this.preparationStatus();
           }
-          if (preparation && (await this.preparationStatus()))
+          if (preparation)
             throw new ObsOutputError(
               'obs_output_busy',
               preparation === 'checking'
