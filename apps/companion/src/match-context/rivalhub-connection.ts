@@ -42,6 +42,8 @@ import {
   canCheckBlockedSource,
   claimRecoveryProof,
   confirmsClosedSource,
+  definitiveClaimRejection,
+  executionKey,
   releaseRetry,
   serverRetryAt,
   sourceStatusRequest,
@@ -75,33 +77,6 @@ type Source = ExactSource & {
   draining?: boolean;
   drainReliable?: boolean;
 };
-
-/** Only explicit, structured receiver refusals prove that this claim did not commit. */
-function definitiveClaimRejection(response: Response, body: unknown): boolean {
-  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json'))
-    return false;
-  if (!response.headers.get('cache-control')?.toLowerCase().includes('no-store')) return false;
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  const value = body as Record<string, unknown>;
-  if (typeof value.error !== 'string' || !value.error || typeof value.code !== 'string')
-    return false;
-  return (
-    (response.status === 400 && value.code === 'VALIDATION_FAILED') ||
-    (response.status === 401 && value.code === 'UNAUTHORIZED') ||
-    (response.status === 403 && value.code === 'FORBIDDEN') ||
-    (response.status === 404 &&
-      ['NOT_FOUND', 'MATCH_NOT_FOUND', 'SEASON_NOT_FOUND'].includes(value.code))
-  );
-}
-
-function executionKey(cursor: LiveSnapshotV1['cursor']): string {
-  return JSON.stringify([
-    cursor.producerInstanceId,
-    cursor.liveSessionId,
-    cursor.programSourceGeneration,
-    cursor.mapEpoch,
-  ]);
-}
 
 /** Companion-owned scoped installation. Never exposed to the browser. */
 export class RivalHubConnection {

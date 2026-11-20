@@ -26,53 +26,53 @@ Companion 组装运行时、持久化和接口
 
 ## 模块职责
 
-| 模块 | 负责 | 不负责 |
-| --- | --- | --- |
-| `apps/companion` | 运行时组合、HTTP/WebSocket、持久化、输入输出、制作控制 | 在传输层重新推导比赛事实 |
-| `apps/desktop` | 启动同包服务、受管游戏与配置恢复、原生窗口和文件操作 | 复制比赛、节目或 OBS 状态 |
-| `apps/web` | 工作台、编辑器、诊断及播出交互 | 消费原始 GSI 或整个运行状态 |
-| `apps/diagnostics-worker` | 经同意的技术诊断接收、私有正文、索引、撤回与保留 | 公开原始诊断或读取客户端任意文件 |
-| `packages/core` | 状态转换、身份、连续性、统计、系列进展和投影 | 网络、React、OBS 或第三方解析器 |
-| `packages/protocol` | 接口结构、版本、场景注册表与接收校验 | 业务状态机 |
-| `packages/telemetry-gsi` / `telemetry-cstv` | 输入解析、规范化和来源诊断 | 将原始类型泄漏给消费者 |
-| `packages/rivalhub` | 公开赛事资料解析、验证和转换 | 核心运行时或雷达逻辑 |
-| `packages/radar` / `radar-view` | 前者负责地图几何与语义，后者负责共享展示和平滑 | 展示层再次校准或推断比赛 |
-| `packages/hud-view` / `hud-config` | 前者负责共享展示，后者负责配置、校验和解析 | 实时连接或比赛事实 |
-| `packages/broadcast-config` / `broadcast-pack` | 播出模块、方案与交换包契约 | 消费者运行状态或设备控制 |
-| `packages/resource-pack-contract` / `cs2-assets` | 资源清单与信任契约、展示资产与来源 | 比赛事实或地图几何 |
-| `packages/design-tokens` | 静态设计变量和生成 CSS | 运行时业务 |
-| `packages/replay` / `testkit` | 离散回放游标与调度；测试组合、故障注入和断言 | 另建生产运行时 |
+| 模块                                             | 负责                                                   | 不负责                           |
+| ------------------------------------------------ | ------------------------------------------------------ | -------------------------------- |
+| `apps/companion`                                 | 运行时组合、HTTP/WebSocket、持久化、输入输出、制作控制 | 在传输层重新推导比赛事实         |
+| `apps/desktop`                                   | 启动同包服务、受管游戏与配置恢复、原生窗口和文件操作   | 复制比赛、节目或 OBS 状态        |
+| `apps/web`                                       | 工作台、编辑器、诊断及播出交互                         | 消费原始 GSI 或整个运行状态      |
+| `apps/diagnostics-worker`                        | 经同意的技术诊断接收、私有正文、索引、撤回与保留       | 公开原始诊断或读取客户端任意文件 |
+| `packages/core`                                  | 状态转换、身份、连续性、统计、系列进展和投影           | 网络、React、OBS 或第三方解析器  |
+| `packages/protocol`                              | 接口结构、版本、场景注册表与接收校验                   | 业务状态机                       |
+| `packages/telemetry-gsi` / `telemetry-cstv`      | 输入解析、规范化和来源诊断                             | 将原始类型泄漏给消费者           |
+| `packages/rivalhub`                              | 公开赛事资料解析、验证和转换                           | 核心运行时或雷达逻辑             |
+| `packages/radar` / `radar-view`                  | 前者负责地图几何与语义，后者负责共享展示和平滑         | 展示层再次校准或推断比赛         |
+| `packages/hud-view` / `hud-config`               | 前者负责共享展示，后者负责配置、校验和解析             | 实时连接或比赛事实               |
+| `packages/broadcast-config` / `broadcast-pack`   | 播出模块、方案与交换包契约                             | 消费者运行状态或设备控制         |
+| `packages/resource-pack-contract` / `cs2-assets` | 资源清单与信任契约、展示资产与来源                     | 比赛事实或地图几何               |
+| `packages/design-tokens`                         | 静态设计变量和生成 CSS                                 | 运行时业务                       |
+| `packages/replay` / `testkit`                    | 离散回放游标与调度；测试组合、故障注入和断言           | 另建生产运行时                   |
 
 依赖顺序为适配器 → 领域模型 → 投影 → 渲染或传输。不得通过深层导入、路径映射或共享数据库绕过边界。新增数据源先增加适配器，新增画面先复用投影；没有真实独立消费者或提供方时，不建设通用插件框架。
 
 Companion 内部按领域持有事实与副作用，HTTP、IPC 和窗口只校验并转发意图：
 
-| 领域入口 | 唯一职责 |
-| --- | --- |
-| [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) | 提交输入与命令、解析身份、推进系列事实，发布同版本快照与转换 |
-| [输入提交](../../apps/companion/src/runtime/observation-commit.ts) | 统一现场与重放的遥测提交，协调来源代际、投影发布与可靠输出捕获 |
-| [ProjectionCoordinator](../../apps/companion/src/projections/projection-coordinator.ts) | 从运行时快照发布 Program、Operator、Radar 和观察辅助。接口与播出页面消费对应投影 |
-| [MatchContextController](../../apps/companion/src/match-context/controller.ts) | 选择与激活比赛、资料修订和串行提交。[运行时订阅](../../apps/companion/src/match-context/runtime-binding.ts) 离开重放样例时先清理样例状态，再发布新绑定 |
-| [制作生命周期](../../apps/companion/src/program-scenes/production.ts) | 制作会话、进入/退出、试播及资源/更新互斥 |
-| [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序 |
-| [节目呈现](../../apps/companion/src/program-scenes/presentation.ts) | 提供当前节目内容和已冻结结果，供场景、音乐和运镜消费 |
-| [OBS](../../apps/companion/src/obs/) | [适配器装配与启动恢复](../../apps/companion/src/obs/runtime.ts)、连接、受管来源、配置准备、音频及 OBS 事务 |
-| [音乐](../../apps/companion/src/music/)与[运镜](../../apps/companion/src/orchestration/) | 各自的配置、意图、控制资格和播放恢复 |
-| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts) | 网站输出负责投递资格、连续性与本地存储。来源状态负责远端认领、交接和释放 |
-| [网站资料读取](../../apps/companion/src/match-context/rivalhub-read-client.ts) | 在当前授权范围内合并赛程与比赛资料读取。自动比赛资料读取按失败间隔退避，人工刷新遵守网站限频。来源认领和可靠赛果沿自己的队列恢复 |
-| [诊断](../../apps/companion/src/support/) | 日志、覆盖证据、导出和经同意的回传 |
+| 领域入口                                                                                                                       | 唯一职责                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts)                                                          | 提交输入与命令、解析身份、推进系列事实，发布同版本快照与转换                                                                                           |
+| [输入提交](../../apps/companion/src/runtime/observation-commit.ts)                                                             | 统一现场与重放的遥测提交，协调来源代际、投影发布与可靠输出捕获                                                                                         |
+| [ProjectionCoordinator](../../apps/companion/src/projections/projection-coordinator.ts)                                        | 从运行时快照发布 Program、Operator、Radar 和观察辅助。接口与播出页面消费对应投影                                                                       |
+| [MatchContextController](../../apps/companion/src/match-context/controller.ts)                                                 | 选择与激活比赛、资料修订和串行提交。[运行时订阅](../../apps/companion/src/match-context/runtime-binding.ts) 离开重放样例时先清理样例状态，再发布新绑定 |
+| [制作生命周期](../../apps/companion/src/program-scenes/production.ts)                                                          | 制作会话、进入/退出、试播及资源/更新互斥                                                                                                               |
+| [场景控制](../../apps/companion/src/program-scenes/controller.ts)与[导演](../../apps/companion/src/program-scenes/director.ts) | 前者执行切场，后者依据投影决定自动节目顺序                                                                                                             |
+| [节目呈现](../../apps/companion/src/program-scenes/presentation.ts)                                                            | 提供当前节目内容和已冻结结果，供场景、音乐和运镜消费                                                                                                   |
+| [OBS](../../apps/companion/src/obs/)                                                                                           | [适配器装配与启动恢复](../../apps/companion/src/obs/runtime.ts)、连接、受管来源、配置准备、音频及 OBS 事务                                             |
+| [音乐](../../apps/companion/src/music/)与[运镜](../../apps/companion/src/orchestration/)                                       | 各自的配置、意图、控制资格和播放恢复                                                                                                                   |
+| [网站输出](../../apps/companion/src/output/)与[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts)      | 网站输出负责投递资格、连续性与本地存储。来源状态负责远端认领、交接和释放                                                                               |
+| [网站资料读取](../../apps/companion/src/match-context/rivalhub-read-client.ts)                                                 | 在当前授权范围内合并赛程与比赛资料读取。自动比赛资料读取按失败间隔退避，人工刷新遵守网站限频。来源认领和可靠赛果沿自己的队列恢复                       |
+| [诊断](../../apps/companion/src/support/)                                                                                      | 日志、覆盖证据、导出和经同意的回传                                                                                                                     |
 
 ### 关键路径
 
-| 场景 | 从哪里跟踪 |
-| --- | --- |
-| 启动与遥测 | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再连接各领域。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 让正式输入和重放复用同一提交链 |
-| 赛事与节目 | [赛事控制](../../apps/companion/src/match-context/runtime.ts) 注册本地与线上入口。[节目呈现](../../apps/companion/src/program-scenes/presentation-routes.ts) 选择赛程来源。[场景联动](../../apps/companion/src/program-scenes/obs-scenes.ts) 在 OBS 确认对阵切入开始时通知音乐和运镜 |
-| 正常退出 | [产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求。[关停顺序](../../apps/companion/src/runtime/shutdown.ts) 先停止生产者，再等待本机必要写入确认，最后写退出回执 |
-| 同图重开和来源切换 | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核 |
-| OBS 断连与恢复 | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供 |
-| 网站收尾和未知回执 | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。[网站输出的启停](../../apps/companion/src/output/website-lifecycle.ts) 接入来源恢复与交接，后台通过原请求身份获取确认 |
-| 进入、取消和结束制作 | [制作生命周期](#进入隐藏与退出)校验准备身份和修订。Host 恢复游戏配置，Companion 分别核验 OBS 与网站责任。试播沿[标记与临时资料](#demo-与采集)恢复 |
+| 场景                 | 从哪里跟踪                                                                                                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 启动与遥测           | [buildApp](../../apps/companion/src/app.ts) 先探测试播标记，再连接各领域。[观察驱动](../../apps/companion/src/runtime/observation-driver.ts) 让正式输入和重放复用同一提交链                                                                                                          |
+| 赛事与节目           | [赛事控制](../../apps/companion/src/match-context/runtime.ts) 注册本地与线上入口。[节目呈现](../../apps/companion/src/program-scenes/presentation-routes.ts) 选择赛程来源。[场景联动](../../apps/companion/src/program-scenes/obs-scenes.ts) 在 OBS 确认对阵切入开始时通知音乐和运镜 |
+| 正常退出             | [产品运行时](../../apps/companion/src/runtime/product-runtime.ts) 核验 Host 停止请求。[关停顺序](../../apps/companion/src/runtime/shutdown.ts) 先停止生产者，再等待本机必要写入确认，最后写退出回执                                                                                  |
+| 同图重开和来源切换   | [ProgramRuntime](../../apps/companion/src/runtime/program-runtime.ts) 推进地图执行与来源代际，投影根据两者失效旧数据。可通过[观察辅助时间线验证](../../packages/core/test/observer-assist-clock.test.ts)复核                                                                         |
+| OBS 断连与恢复       | [OBS 事务](#obs-准备与恢复)持有未确认的副作用。恢复读取当前集合、来源和新回执，节目事实继续由 Runtime 提供                                                                                                                                                                           |
+| 网站收尾和未知回执   | [网站来源与可靠交付](#网站来源与可靠交付)持久封存旧身份。[网站输出的启停](../../apps/companion/src/output/website-lifecycle.ts) 接入来源恢复与交接，后台通过原请求身份获取确认                                                                                                       |
+| 进入、取消和结束制作 | [制作生命周期](#进入隐藏与退出)校验准备身份和修订。Host 恢复游戏配置，Companion 分别核验 OBS 与网站责任。试播沿[标记与临时资料](#demo-与采集)恢复                                                                                                                                    |
 
 验证依赖方向用 `pnpm architecture:check`，其检查入口包括 Companion 领域导入、Program 投影依赖、工作区和包内循环以及设计例外。与当前需求相关的收敛候选从 [AGENTS.md](../../AGENTS.md#推进澄清与批准) 查找。
 
@@ -124,17 +124,17 @@ Core 定义 `SeriesProgress`，Companion 的唯一运行时组合持有它。它
 
 ## 连续性与事件
 
-| 概念 | 含义 |
-| --- | --- |
-| `liveSessionId` | 比赛与生产会话的绑定 |
-| `producerInstanceId` | 一次本地服务运行 |
-| `mapEpoch` | 地图的一次实际执行 |
-| `sourceGeneration` / 数据源序号 | 单个来源的连接与读取连续性 |
-| 高频快照 | 可被新状态覆盖的当前视图 |
-| `RuntimeTransition` | 已观测到的边界 |
-| `OperatorCommand` | 有明确结果的人工操作 |
-| `ReliableObservation` | 使用转换发生时上下文派生的可靠事实 |
-| `Incident` | 运行问题与诊断 |
+| 概念                            | 含义                               |
+| ------------------------------- | ---------------------------------- |
+| `liveSessionId`                 | 比赛与生产会话的绑定               |
+| `producerInstanceId`            | 一次本地服务运行                   |
+| `mapEpoch`                      | 地图的一次实际执行                 |
+| `sourceGeneration` / 数据源序号 | 单个来源的连接与读取连续性         |
+| 高频快照                        | 可被新状态覆盖的当前视图           |
+| `RuntimeTransition`             | 已观测到的边界                     |
+| `OperatorCommand`               | 有明确结果的人工操作               |
+| `ReliableObservation`           | 使用转换发生时上下文派生的可靠事实 |
+| `Incident`                      | 运行问题与诊断                     |
 
 这些概念不能合并成全局序号或万能事件。重连只使依赖该来源的证明失效，可选事件源或 Lookahead 重连不推进正式地图执行。曾观测正式阶段后，同图完整热身、零回合、零比分及无冲突历史才可证明重开；普通回退、缺字段或重连本身不能。已完成地图不因重开撤销。投递和背压见[实时通道](protocol.md#本地实时通道)。
 
@@ -253,12 +253,12 @@ Steam 和 MulNX 试播共用 Demo 启动资格、播放参数和配置准备。�
 
 配置会话的原始备份按已核实的画面配置路径关联 Steam 账号。实际写入范围与恢复职责如下。
 
-| 受管配置 | 原件与恢复 |
-| --- | --- |
-| `cs2_video.txt`、`cs2_machine_convars.vcfg` 中受管的画质、帧率与观战字段 | 配置会话按本次游戏恢复；手动恢复画面可选择同账号的可信快照。 |
-| `cs2_user_keys_0_slot0.vcfg` 中受管的 H 键和数字键 | 观战事务按本次实际写入的键位恢复。若存在待恢复事务或仍含 Mizar HUD 绑定，长期备份记录缺口，不保存为原始键位。手动恢复 H 键沿用同账号快照和写回复核。 |
-| `mizar_observer.cfg` 与临时启动选项 | 观战事务与启动事务分别保存原值，在取消或退出时撤销各自的修改。 |
-| `gamestate_integration_mizar.cfg` | 配置会话独立保留和恢复已有 GSI 配置。 |
+| 受管配置                                                                                                             | 原件与恢复                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cs2_video.txt`、`cs2_machine_convars.vcfg` 中受管的画质、帧率与观战字段                                             | 配置会话按本次游戏恢复；手动恢复画面可选择同账号的可信快照。                                                                                               |
+| `cs2_user_keys_0_slot0.vcfg` 与 `cs2_user_convars_0_slot0.vcfg` 中受管的 H 键、数字键及 `spec_usenumberkeys_nobinds` | 观战事务按本次实际写入的键位与变量恢复。若存在待恢复事务或仍含 Mizar HUD 绑定，长期备份记录缺口，不保存为原始键位。手动恢复 H 键沿用同账号快照和写回复核。 |
+| `mizar_observer.cfg` 与临时启动选项                                                                                  | 观战事务与启动事务分别保存原值，在取消或退出时撤销各自的修改。                                                                                             |
+| `gamestate_integration_mizar.cfg`                                                                                    | 配置会话独立保留和恢复已有 GSI 配置。                                                                                                                      |
 
 ### 窗口与本地 HUD
 
