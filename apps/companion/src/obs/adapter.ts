@@ -1,13 +1,6 @@
-import type { AudioMonitorChange } from './audio-monitor-contract.js';
-import { writeMonitorMode, writeMonitorOriginals } from '../music/monitor-journal.js';
 import { AudioMeter } from './audio-meter.js';
 import { ObsObservationConnection } from './observation-connection.js';
-import {
-  readAudioDevices,
-  readAudioDeviceDiagnostics,
-  setAudioDevice,
-  type AudioDeviceCommand,
-} from './audio-device-settings.js';
+import type { AudioDeviceCommand } from './audio-device-settings.js';
 import {
   captureAudioCollectionTransfer,
   applyAudioCollectionTransfer,
@@ -24,8 +17,10 @@ import {
   ObsVideoError,
   ObsVideoTransaction,
 } from './video-transaction.js';
+import { ObsAudioCoordinator } from './audio-coordinator.js';
 import {
   commentaryPreparationFinding,
+  guardedObs,
   obsAudioModeFailureEvidence,
   obsErrorEvidence,
   obsFailureKind,
@@ -36,8 +31,7 @@ import { requireSupportedObs } from './version-support.js';
 import { ObsActionError } from './action-error.js';
 import { readLocalObsConnection } from './local-connection.js';
 import { BpOverlayOwner } from './bp-overlay.js';
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
@@ -50,27 +44,14 @@ import type {
 } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
 import type { GameAudioController } from './audio-policy-controller.js';
-import type { MixerChannelStatus, MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
-import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
-import {
-  AUTO_TEAMSPEAK_TARGET,
-  readCommentarySwitch,
-  saveCommentarySwitch,
-} from './commentary-switch.js';
-import { readOwnedCommentaryTarget } from './commentary-owned-target.js';
+import type { MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
+import type { RemoteCommentary } from './remote-commentary.js';
+import { readCommentarySwitch } from './commentary-switch.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
-import {
-  commentaryTargetReady,
-  configureIndependentAudio,
-  prepareIndependentForDesktop,
-} from './audio-setup.js';
-import { reconcileManagedAudio, verifyManagedAudioMode } from './managed-audio.js';
-import { AudioMigration, type MigrationObserver } from './audio-migration.js';
+import { configureIndependentAudio } from './audio-setup.js';
+import { reconcileManagedAudio } from './managed-audio.js';
+import { AudioMigration } from './audio-migration.js';
 import type { MusicAudioMode, MusicAudioRecovery } from '../music/device.js';
-import { createMusicDevice } from './music-device.js';
-import { recoverAudioModeTransaction } from './audio-mode-recovery.js';
-import { assertDesktopDeviceRoute, desktopMonitorRelationship } from './audio-monitor-device.js';
-import { inspectAudioSceneGraph } from './audio-scene-graph.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
@@ -80,12 +61,7 @@ import {
   isObsProcessRunning,
   type ObsConfig,
 } from './config.js';
-import {
-  assertManagedGlobalAudioSilent,
-  checkObsAudio,
-  ensureManagedAudioSources,
-  setupObsAudio,
-} from './audio.js';
+import { checkObsAudio, ensureManagedAudioSources, setupObsAudio } from './audio.js';
 import {
   ObsExitSafetyError,
   checkObsConfiguration,
@@ -123,25 +99,12 @@ export interface ObsStatus {
 const TIMEOUT_MS = 4000;
 const PROGRAM_EVIDENCE_MS = 750;
 
-function guardedObs(obs: ObsRpc, valid: () => boolean): ObsRpc {
-  const assertCurrent = () => {
-    if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
-  };
-  const guarded = obs.withMutationGuard?.(assertCurrent) ?? obs;
-  return {
-    ...guarded,
-    call: (type, data, onDispatch) => {
-      assertCurrent();
-      return guarded.call(type, data, onDispatch);
-    },
-  };
-}
-
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
   private readonly observations = new ObsObservationConnection();
   private readonly audioConfiguration: AudioConfigurationConnection;
   private readonly audioMeter: AudioMeter;
+  private readonly audioCoordinator: ObsAudioCoordinator;
   private readonly bpOwner = new BpOverlayOwner();
   private programChanged: (kind: 'disconnected' | 'changed') => void = () => undefined;
   private expectedScene: string | undefined;
@@ -184,10 +147,7 @@ export class ObsAdapter {
   private browserRefreshSubmitted = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly submittedBrowserRefreshes = new Set<string>();
-  private commentaryChoices = new Map<
-    string,
-    { window: string; revision: string; endpoint: string; probe: string; until: number }
-  >();
+
   constructor(
     private readonly configStore: ObsConfigStore,
     private readonly browserBaseUrl: string,
@@ -207,6 +167,26 @@ export class ObsAdapter {
           : obsErrorEvidence(error, password),
       ),
     );
+    this.audioCoordinator = new ObsAudioCoordinator({
+      audioConfiguration: this.audioConfiguration,
+      audioMeter: this.audioMeter,
+      audioRouting: this.audioRouting,
+      commentary: this.commentary,
+      browserBaseUrl: this.browserBaseUrl,
+      audioPreparationWarnings: this.audioPreparationWarnings,
+      diagnostic: (stage, error) => this.diagnostic(stage, error),
+      observe: (read) => this.observe(read),
+      serial: (operation) => this.serial(operation),
+      configurationMutation: (operation) => this.configurationMutation(operation),
+      withObs: (operation, timeoutMs, diagnosticStage, allowUncheckedCapture) =>
+        this.withObs(operation, timeoutMs, diagnosticStage, allowUncheckedCapture),
+      withReadObs: (operation, timeoutMs) => this.withReadObs(operation, timeoutMs),
+      captureWarmupGuard: () => this.captureWarmupGuard(),
+      observationValidity: () => this.observationValidity(),
+      waitForAutomaticAudioConnection: () => this.waitForAutomaticAudioConnection(),
+      programGeneration: () => this.programGeneration,
+      recoveryGeneration: () => this.recoveryGeneration,
+    });
     this.outputs = new ObsOutputController(
       configStore,
       (error, password) => diagnostic('obs_output', obsErrorEvidence(error, password)),
@@ -396,7 +376,7 @@ export class ObsAdapter {
     this.bpDisconnect?.();
     await this.configStore.save(config);
     this.audioRouting?.invalidateSelections();
-    this.commentaryChoices.clear();
+    this.audioCoordinator.clearCommentaryChoices();
     this.outputs.reset();
     this.observations.reset();
   }
@@ -537,7 +517,7 @@ export class ObsAdapter {
             if (!valid()) return;
             // Leave incomplete mode transactions for the next explicit
             // operator action. Recovery can itself change audible paths.
-            await this.queueIndependentCommentary(valid);
+            await this.audioCoordinator.queueIndependentCommentary(valid);
             if (!valid()) return;
             // Switching the live mix remains an explicit operator action.
           } catch (error) {
@@ -556,51 +536,12 @@ export class ObsAdapter {
     };
     attempt();
   }
-  async recoverAudioMode(
+  recoverAudioMode(
     music: MusicAudioRecovery,
     valid: () => boolean = () => true,
     revision?: string,
   ): Promise<void> {
-    if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
-    await this.configurationMutation(async () => {
-      const state = await this.audioRouting!.modeRecoveryState();
-      if (revision !== undefined && state.revision !== revision)
-        throw new Error('audio_revision_changed');
-      const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
-      const pending = await migration.pending();
-      if (!state.transition && !pending?.modeId) return;
-      await this.audioConfiguration.run((obs, endpoint, observer) =>
-        music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(
-            guardedObs(obs, valid),
-            endpoint,
-            observer,
-            music,
-            valid,
-          ),
-        ),
-      );
-    });
-  }
-  private recoverAudioModeOnConnection(
-    obs: ObsRpc,
-    endpoint: string,
-    observer: MigrationObserver,
-    music: MusicAudioRecovery,
-    valid: () => boolean = () => true,
-  ) {
-    return recoverAudioModeTransaction(
-      {
-        routing: this.audioRouting!,
-        commentary: this.commentary!,
-        browserBaseUrl: this.browserBaseUrl,
-      },
-      obs,
-      endpoint,
-      observer,
-      music,
-      valid,
-    );
+    return this.audioCoordinator.recoverAudioMode(music, valid, revision);
   }
   async close(): Promise<void> {
     this.recoveryClosed = true;
@@ -1234,1181 +1175,64 @@ export class ObsAdapter {
     }, serialize);
   }
   sampleAudioMeters(valid: () => boolean) {
-    const generation = this.programGeneration;
-    return this.audioMeter.sample(() => valid() && generation === this.programGeneration);
+    return this.audioCoordinator.sampleAudioMeters(valid);
   }
   readAudioDevices() {
-    return this.observe(() =>
-      this.withReadObs(
-        async (obs) => ({
-          ...(await readAudioDevices(obs)),
-          desktopMode: Boolean(await this.audioRouting?.desktopBinding()),
-        }),
-        12000,
-      ),
-    );
+    return this.audioCoordinator.readAudioDevices();
   }
   readAudioDeviceDiagnostics() {
-    return this.observe(() => this.withReadObs(readAudioDeviceDiagnostics, 12000));
+    return this.audioCoordinator.readAudioDeviceDiagnostics();
   }
   setAudioDevice(command: AudioDeviceCommand) {
-    const generation = this.recoveryGeneration;
-    const programGeneration = this.programGeneration;
-    return this.configurationMutation(() =>
-      this.audioModeRun('audio_device_set', async (connection) => {
-        if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-        const state = await this.audioRouting.modeRecoveryState();
-        if (state.transition || state.waitingIndependent) throw new Error('audio_mode_pending');
-        const obs = guardedObs(
-          connection,
-          () =>
-            generation === this.recoveryGeneration && programGeneration === this.programGeneration,
-        );
-        return setAudioDevice(
-          obs,
-          command,
-          command.role === 'desktop' && state.desktop
-            ? async (uuid) => {
-                if (uuid !== state.desktop!.inputUuid) throw new Error('audio_devices_changed');
-                await assertDesktopDeviceRoute(obs, uuid, command.deviceId);
-              }
-            : undefined,
-        );
-      }),
-    );
+    return this.audioCoordinator.setAudioDevice(command);
   }
   readAudioRouting() {
-    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    return this.observe(() =>
-      this.withReadObs((obs, endpoint) => this.audioRouting!.read(obs, endpoint), 12000),
-    );
+    return this.audioCoordinator.readAudioRouting();
   }
   cancelAudioWait(revision: string) {
-    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    return this.serial(async () => {
-      if (!(await this.audioRouting!.cancelIndependentWait(undefined, true, revision)))
-        throw new Error('audio_wait_cancelled');
-      return { cancelled: true };
-    });
+    return this.audioCoordinator.cancelAudioWait(revision);
   }
-  private audioModeRun<T>(
-    stage: string,
-    operation: (obs: ObsRpc, endpoint: string, observer: MigrationObserver) => Promise<T>,
-  ): Promise<T> {
-    return this.audioConfiguration.run(operation, (error, password) => {
-      this.diagnostic(
-        stage,
-        password === undefined
-          ? { ...obsAudioModeFailureEvidence(error), redactionContext: 'unavailable' }
-          : obsErrorEvidence(error, password),
-      );
-    });
-  }
-  async requestIndependentMode(revision: string, music: MusicAudioMode) {
-    if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
-    await this.configurationMutation(() =>
-      this.audioModeRun('audio_mode_prepare', async (obs, endpoint, observer) => {
-        const before = await this.audioRouting!.modeRecoveryState();
-        if (before.revision !== revision) throw new Error('audio_revision_changed');
-        if (before.transition) throw new Error('audio_mode_pending');
-        await music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
-        );
-        const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
-        if (typeof collection !== 'string') throw new Error('audio_setup_context_changed');
-        await assertManagedGlobalAudioSilent(obs);
-        const preference = await this.commentary!.owner.get();
-        await this.audioRouting!.waitForIndependent(
-          revision,
-          endpoint,
-          collection,
-          preference.revision,
-          preference.preference.mode === 'disabled',
-        );
-      }),
-    );
-    const ready = await this.prepareWaitingIndependent();
-    if (!ready) return { waiting: true, monitorPending: false };
-    const result = await this.switchAudioMode(
-      ready.revision,
-      'independent',
-      undefined,
-      music,
-      ready.id,
-    );
-    return { waiting: false, ...result };
-  }
-  private async queueIndependentCommentary(valid: () => boolean = () => true): Promise<void> {
-    if (!this.audioRouting || !this.commentary) return;
-    const initial = await this.audioRouting.modeRecoveryState();
-    if (
-      initial.desktop ||
-      !initial.independentCommentaryDisabled ||
-      initial.transition ||
-      initial.waitingIndependent
-    )
-      return;
-    const preference = await this.commentary.owner.get();
-    if (
-      preference.preference.mode === 'disabled' ||
-      initial.cancelledCommentaryRevision === preference.revision
-    )
-      return;
-    if (this.waitForAutomaticAudioConnection()) return;
-    await this.configurationMutation(() =>
-      this.audioConfiguration.run(async (connection, endpoint) => {
-        const obs = guardedObs(connection, valid);
-        const current = await this.audioRouting!.modeRecoveryState();
-        if (
-          current.revision !== initial.revision ||
-          current.desktop ||
-          current.transition ||
-          current.waitingIndependent ||
-          !current.independentCommentaryDisabled ||
-          (await this.commentary!.owner.get()).revision !== preference.revision
-        )
-          return;
-        const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
-        if (collection !== OBS_COLLECTION || !obs.ownershipScope)
-          throw new Error('audio_setup_context_changed');
-        await obs.ownershipScope();
-        if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
-        await this.audioRouting!.waitForIndependent(
-          current.revision,
-          endpoint,
-          collection,
-          preference.revision,
-          false,
-        );
-      }),
-    );
-  }
-  private async prepareWaitingIndependent(
-    valid: () => boolean = () => true,
-  ): Promise<{ id: string; revision: string } | null> {
-    if (!this.audioRouting || !this.commentary) return null;
-    const initial = await this.audioRouting.modeRecoveryState();
-    if (
-      !initial.waitingIndependent ||
-      initial.transition ||
-      (!initial.desktop && !initial.independentCommentaryDisabled)
-    )
-      return null;
-    return this.configurationMutation(() =>
-      this.audioModeRun('audio_mode_sources', async (connection, endpoint, observer) => {
-        if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
-        const obs = guardedObs(connection, valid);
-        const state = await this.audioRouting!.modeRecoveryState();
-        const wait = state.waitingIndependent;
-        if (
-          !wait ||
-          wait.id !== initial.waitingIndependent!.id ||
-          state.transition ||
-          (!state.desktop && !state.independentCommentaryDisabled)
-        )
-          return null;
-        const preference = await this.commentary!.owner.get();
-        if (preference.revision !== wait.commentaryRevision) {
-          await this.audioRouting!.cancelIndependentWait(wait.id);
-          return null;
-        }
-        if (
-          endpoint !== wait.endpoint ||
-          (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== wait.collection
-        )
-          throw new Error('audio_migration_identity_changed');
-        const prepared = await prepareIndependentForDesktop(
-          obs,
-          endpoint,
-          observer,
-          this.commentary!.owner,
-          this.commentary!.journal,
-          this.browserBaseUrl,
-          state.bindings,
-          state.desktopMicrophone,
-          wait.commentaryRevision,
-          async () => {
-            const current = await this.audioRouting!.modeRecoveryState();
-            return (
-              valid() &&
-              current.revision === state.revision &&
-              current.waitingIndependent?.id === wait.id &&
-              !current.transition &&
-              (await this.commentary!.owner.get()).revision === wait.commentaryRevision
-            );
-          },
-        );
-        if (!prepared) return null;
-        const revision = await this.audioRouting!.adoptPreparedBindings(
-          obs,
-          endpoint,
-          wait.id,
-          state.revision,
-          prepared.ids,
-          prepared.createdMicrophone,
-        );
-        return { id: wait.id, revision };
-      }),
-    );
+  requestIndependentMode(revision: string, music: MusicAudioMode) {
+    return this.audioCoordinator.requestIndependentMode(revision, music);
   }
   switchAudioMode(
     revision: string,
     mode: 'desktop' | 'independent',
-    selectionId: string | undefined,
+    desktopDeviceId: string | undefined,
     music: MusicAudioMode,
-    waitId?: string,
-    valid: () => boolean = () => true,
+    preparedId?: string,
   ) {
-    if (!this.audioRouting || !this.commentary) throw new Error('audio_routing_unavailable');
-    return this.configurationMutation(() =>
-      this.audioModeRun('audio_mode_switch', async (connection, endpoint, observer) => {
-        if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
-        const guarded = guardedObs(connection, valid);
-        let obsWriteAttempted = false;
-        let metadataCommitAttempted = false;
-        const obs: ObsRpc = {
-          ...guarded,
-          call: (type, data, onDispatch) => {
-            if (/^(Create|Set|Remove)/.test(type)) obsWriteAttempted = true;
-            return guarded.call(type, data, onDispatch);
-          },
-        };
-        const completedPath = `${this.commentary!.journal}.dedicated-mode`;
-        let monitorPending = false;
-        const before = await this.audioRouting!.modeRecoveryState();
-        if (before.revision !== revision) throw new Error('audio_revision_changed');
-        if (before.transition) throw new Error('audio_mode_pending');
-        await music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
-        );
-        if (waitId) {
-          const waiting = (await this.audioRouting!.modeRecoveryState()).waitingIndependent;
-          if (
-            !waiting ||
-            waiting.id !== waitId ||
-            (await this.commentary!.owner.get()).revision !== waiting.commentaryRevision
-          )
-            throw new Error('audio_wait_cancelled');
-        }
-        await this.audioRouting!.switchMode(
-          obs,
-          endpoint,
-          revision,
-          mode,
-          selectionId,
-          async (ids, desktop, verify, begin, commit) => {
-            const [stream, record, collection, inputs] = await Promise.all([
-              obs.call('GetStreamStatus'),
-              obs.call('GetRecordStatus'),
-              obs.call('GetSceneCollectionList'),
-              obs.call('GetInputList'),
-            ]);
-            if (
-              typeof stream.outputActive !== 'boolean' ||
-              typeof record.outputActive !== 'boolean' ||
-              collection.currentSceneCollectionName !== OBS_COLLECTION ||
-              !Array.isArray(inputs.inputs)
-            )
-              throw new Error('audio_setup_context_changed');
-            const allInputs = inputs.inputs as Record<string, unknown>[];
-            if (!desktop) await assertManagedGlobalAudioSilent(obs);
-            const relationship = desktop
-              ? await desktopMonitorRelationship(obs, desktop)
-              : 'different';
-            monitorPending = Boolean(desktop && relationship === 'unknown' && music.wantsMonitor());
-            const microphoneChanges: AudioMonitorChange[] = [];
-            if (desktop && relationship !== 'different' && ids.microphone) {
-              const mic = await obs.call('GetInputAudioMonitorType', { inputUuid: ids.microphone });
-              if (
-                mic.monitorType === 'OBS_MONITORING_TYPE_MONITOR_ONLY' ||
-                mic.monitorType === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
-              )
-                microphoneChanges.push({
-                  kind: 'monitor',
-                  inputUuid: ids.microphone,
-                  before: mic.monitorType,
-                  applied: 'OBS_MONITORING_TYPE_NONE',
-                });
-              else if (mic.monitorType !== 'OBS_MONITORING_TYPE_NONE')
-                throw new Error('audio_microphone_monitor_unknown');
-            }
-            await new AudioMigration(`${this.commentary!.journal}.migration`).recover(
-              obs,
-              endpoint,
-              observer,
-            );
-            await music.prepareDesktopMix(
-              createMusicDevice(obs),
-              desktop ? relationship : 'independent',
-              async (plan) => {
-                const monitorChanges: AudioMonitorChange[] = [
-                  ...microphoneChanges,
-                  ...plan.changes.map((change) => ({
-                    kind: 'monitor' as const,
-                    inputUuid: change.sourceId,
-                    before: writeMonitorMode(change.before),
-                    applied: writeMonitorMode(change.applied),
-                  })),
-                ];
-                if (monitorChanges.length) {
-                  const graph = await inspectAudioSceneGraph(
-                    obs,
-                    obsDesiredScenes(this.browserBaseUrl).map((scene) => scene.sceneName),
-                  );
-                  const specials = await obs.call('GetSpecialInputs');
-                  for (const change of monitorChanges) {
-                    const input = allInputs.find((value) => value.inputUuid === change.inputUuid);
-                    const shared = graph.filter(
-                      (container) =>
-                        container.otherRoots.size &&
-                        container.items.some((item) => item.sourceUuid === change.inputUuid),
-                    );
-                    if (shared.length || Object.values(specials).includes(input?.inputName))
-                      throw new Error(
-                        `audio_monitor_shared:${String(input?.inputName ?? change.inputUuid)}`,
-                      );
-                  }
-                }
-                if (waitId) {
-                  const waiting = (await this.audioRouting!.modeRecoveryState()).waitingIndependent;
-                  if (
-                    !waiting ||
-                    waiting.id !== waitId ||
-                    (await this.commentary!.owner.get()).revision !== waiting.commentaryRevision
-                  )
-                    throw new Error('audio_wait_cancelled');
-                }
-                if (
-                  waitId &&
-                  ids.remoteCommentary &&
-                  !(await commentaryTargetReady(
-                    obs,
-                    this.commentary!.owner,
-                    ids.remoteCommentary,
-                    (await this.commentary!.owner.get()).revision,
-                  ))
-                )
-                  throw new Error('audio_commentary_unavailable');
-                const modeId = await begin(
-                  writeMonitorOriginals(plan.musicBefore),
-                  writeMonitorOriginals(plan.musicAfter),
-                );
-                const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
-                const extraIndependent: {
-                  sceneName: string;
-                  sceneItemId: number;
-                  sourceUuid: string;
-                  group?: boolean;
-                }[] = [];
-                const extraDesktop: typeof extraIndependent = [];
-                if (!desktop) {
-                  const graph = await inspectAudioSceneGraph(
-                    obs,
-                    obsDesiredScenes(this.browserBaseUrl).map((scene) => scene.sceneName),
-                  );
-                  const restored = await migration.completedEnabledItems(completedPath);
-                  const waiting = (await this.audioRouting!.modeRecoveryState()).waitingIndependent;
-                  const previousDesktop = (await this.audioRouting!.modeRecoveryState()).desktop;
-                  if (previousDesktop) {
-                    if (
-                      previousDesktop.endpoint !== endpoint ||
-                      previousDesktop.collection !== OBS_COLLECTION
-                    )
-                      throw new Error('audio_migration_identity_changed');
-                    for (const container of graph) {
-                      if (!container.activeManagedRoots.size) continue;
-                      for (const item of container.items) {
-                        if (item.sourceUuid !== previousDesktop.inputUuid || !item.sceneItemEnabled)
-                          continue;
-                        if (container.otherRoots.size) throw new Error('audio_nested_shared_path');
-                        extraDesktop.push({
-                          sceneName: container.name,
-                          sceneItemId: item.sceneItemId,
-                          sourceUuid: item.sourceUuid,
-                          ...(container.group ? { group: true } : {}),
-                        });
-                      }
-                    }
-                  }
-                  const targetIds = [
-                    ids.game,
-                    ...(waiting?.omitCommentary ? [] : [ids.remoteCommentary]),
-                    ...(waiting?.createdMicrophone ? [ids.microphone] : []),
-                  ];
-                  for (const scene of obsDesiredScenes(this.browserBaseUrl))
-                    for (const uuid of targetIds) {
-                      if (!uuid) throw new Error('audio_bindings_incomplete');
-                      const active = graph.some(
-                        (container) =>
-                          container.activeManagedRoots.has(scene.sceneName) &&
-                          container.items.some(
-                            (item) => item.sourceUuid === uuid && item.sceneItemEnabled,
-                          ),
-                      );
-                      const willRestore = restored.some(
-                        (entry) =>
-                          entry.sourceUuid === uuid &&
-                          graph.some(
-                            (container) =>
-                              container.name === entry.sceneName &&
-                              container.group === Boolean(entry.group) &&
-                              container.activeManagedRoots.has(scene.sceneName),
-                          ),
-                      );
-                      if (active || willRestore) continue;
-                      const root = graph.find(
-                        (container) => !container.group && container.name === scene.sceneName,
-                      );
-                      const candidate = root?.items.find(
-                        (item) => item.sourceUuid === uuid && !item.sceneItemEnabled,
-                      );
-                      if (!candidate) throw new Error('audio_independent_not_prepared');
-                      extraIndependent.push({
-                        sceneName: scene.sceneName,
-                        sceneItemId: candidate.sceneItemId,
-                        sourceUuid: uuid,
-                      });
-                    }
-                }
-                if (
-                  !desktop &&
-                  (await migration.restoreCompleted(
-                    obs,
-                    endpoint,
-                    observer,
-                    completedPath,
-                    monitorChanges,
-                    modeId,
-                    extraIndependent,
-                    plan.managedSources,
-                    extraDesktop,
-                    Object.values(ids).filter((id): id is string => Boolean(id)),
-                  ))
-                ) {
-                  // Reverse migration stays pending until the routing state is committed.
-                } else {
-                  await reconcileManagedAudio(
-                    obs,
-                    endpoint,
-                    observer,
-                    this.commentary!.journal,
-                    this.browserBaseUrl,
-                    ids,
-                    verify,
-                    desktop,
-                    monitorChanges,
-                    modeId,
-                    Boolean(
-                      (await this.audioRouting!.modeRecoveryState()).waitingIndependent
-                        ?.omitCommentary,
-                    ),
-                  );
-                }
-                let changed = false;
-                const stop = observer.subscribe((event) => {
-                  if (event.type !== 'programChanged' || !event.managed) changed = true;
-                });
-                try {
-                  if ((await migration.inspectMode(obs, endpoint, observer, modeId)) !== 'applied')
-                    throw new Error('audio_mode_unconfirmed');
-                  if (
-                    !(await verifyManagedAudioMode(
-                      obs,
-                      this.browserBaseUrl,
-                      ids,
-                      desktop,
-                      Boolean(
-                        (await this.audioRouting!.modeRecoveryState()).waitingIndependent
-                          ?.omitCommentary,
-                      ),
-                    ))
-                  ) {
-                    await migration.recover(obs, endpoint, observer, true);
-                    throw new Error('audio_mode_target_changed');
-                  }
-                  if (desktop) {
-                    metadataCommitAttempted = true;
-                    await migration.saveModeBackup(completedPath, modeId);
-                  }
-                  metadataCommitAttempted = true;
-                  await music.commitDesktopMonitorOriginals(
-                    plan.musicBefore,
-                    plan.musicAfter,
-                    'after',
-                  );
-                  if (
-                    changed ||
-                    (await migration.inspectMode(obs, endpoint, observer, modeId)) !== 'applied'
-                  )
-                    throw new Error('audio_migration_external_change');
-                  if (
-                    waitId &&
-                    ids.remoteCommentary &&
-                    !(await commentaryTargetReady(
-                      obs,
-                      this.commentary!.owner,
-                      ids.remoteCommentary,
-                      (await this.commentary!.owner.get()).revision,
-                    ))
-                  )
-                    throw new Error('audio_commentary_unavailable');
-                  if (desktop && (await desktopMonitorRelationship(obs, desktop)) !== relationship)
-                    throw new Error('audio_monitor_device_changed');
-                  if (changed) throw new Error('audio_migration_external_change');
-                  await commit(modeId);
-                } finally {
-                  stop();
-                }
-                if (!desktop) await migration.clearModeBackup(completedPath);
-                await migration.clearMode(modeId);
-              },
-            );
-          },
-        ).catch(async (error: unknown) => {
-          // Clear only if no OBS write or mode metadata commit was attempted.
-          // An unknown write or uncertain journal remains pending for review.
-          if (!obsWriteAttempted && !metadataCommitAttempted) {
-            try {
-              const current = await this.audioRouting!.modeRecoveryState();
-              const transition = current.transition;
-              if (
-                current.revision === revision &&
-                transition &&
-                transition !== true &&
-                transition.endpoint === endpoint
-              ) {
-                const migration = new AudioMigration(`${this.commentary!.journal}.migration`);
-                await migration.discardUnsentMode(transition.id);
-                await this.audioRouting!.commitModeTransition(transition.id, 'before');
-              }
-            } catch {
-              // Uncertain storage or journal state remains visible for review.
-            }
-          }
-          throw error;
-        });
-        if (mode === 'desktop') {
-          const after = await this.audioRouting!.modeRecoveryState();
-          if (after.desktop && !after.transition) {
-            delete this.audioPreparationWarnings.commentary;
-            if (this.audioPreparationWarnings.routing?.code === 'audio_bindings_required')
-              delete this.audioPreparationWarnings.routing;
-          }
-        }
-        return { monitorPending };
-      }),
+    return this.audioCoordinator.switchAudioMode(
+      revision,
+      mode,
+      desktopDeviceId,
+      music,
+      preparedId,
     );
-  }
-  private mixerRevision(routing: { revision: string; endpoint: string; collection: string }) {
-    return createHash('sha256')
-      .update(JSON.stringify([routing.revision, routing.endpoint, routing.collection]))
-      .digest('hex');
-  }
-  private async mixerReadObs(obs: ObsRpc, endpoint: string) {
-    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    const routing = await this.audioRouting.read(obs, endpoint);
-    const channels = {} as Record<'game' | 'remoteCommentary' | 'microphone', MixerChannelStatus>;
-    for (const role of ['game', 'remoteCommentary', 'microphone'] as const) {
-      if (routing.transition) {
-        channels[role] = {
-          name: role,
-          volume: null,
-          muted: null,
-          control: 'unknown',
-          message: '音频模式切换待完成，请回到声音设置重新切换。',
-        };
-        continue;
-      }
-      const binding =
-        routing.desktop && role === 'game'
-          ? {
-              ...routing.desktop,
-              valid:
-                routing.desktop.endpoint === endpoint &&
-                routing.desktop.collection === routing.collection &&
-                routing.candidates.some(
-                  (input) =>
-                    input.uuid === routing.desktop!.inputUuid &&
-                    input.kind === routing.desktop!.inputKind,
-                ),
-              name: '桌面混音',
-            }
-          : routing.desktop && role === 'microphone'
-            ? (routing.desktopMicrophone ?? null)
-            : routing.bindings[role];
-      if (
-        !routing.desktop &&
-        routing.independentCommentaryDisabled &&
-        role === 'remoteCommentary'
-      ) {
-        channels[role] = {
-          name: '远端解说',
-          volume: null,
-          muted: null,
-          control: 'unbound',
-          message: '远端解说已停用。',
-        };
-        continue;
-      }
-      if (routing.desktop && role === 'remoteCommentary') {
-        channels[role] = {
-          name: '远端解说',
-          volume: null,
-          muted: null,
-          control: 'unbound',
-          message: '桌面混音中无法单独调整。',
-        };
-        continue;
-      }
-      const name =
-        binding?.name ??
-        ({ game: '游戏', remoteCommentary: '远端解说', microphone: '麦克风' } as const)[role];
-      if (!binding || !binding.valid) {
-        channels[role] = {
-          name,
-          volume: null,
-          muted: null,
-          control: binding ? 'unknown' : 'unbound',
-        };
-        continue;
-      }
-      const args = { inputUuid: binding.inputUuid };
-      const [volume, mute] = await Promise.all([
-        obs.call('GetInputVolume', args),
-        obs.call('GetInputMute', args),
-      ]);
-      const known =
-        typeof volume.inputVolumeMul === 'number' &&
-        Number.isFinite(volume.inputVolumeMul) &&
-        typeof mute.inputMuted === 'boolean';
-      channels[role] = {
-        name,
-        volume: known ? (volume.inputVolumeMul as number) : null,
-        muted: known ? (mute.inputMuted as boolean) : null,
-        control: known ? 'available' : 'unknown',
-      };
-    }
-    return { revision: this.mixerRevision(routing), channels, routing };
   }
   mixerRead() {
-    return this.observe(() =>
-      this.withReadObs((obs, endpoint) => this.mixerReadObs(obs, endpoint), 12000),
-    );
+    return this.audioCoordinator.mixerRead();
   }
   mixerWrite(command: MixerCommand, gameAudio?: GameAudioController): Promise<MixerCommandResult> {
-    return this.serial(() =>
-      this.withObs<MixerCommandResult>(
-        async (obs, endpoint) => {
-          try {
-            const initial = await this.mixerReadObs(obs, endpoint);
-            if (
-              command.channel === 'music' ||
-              initial.revision !== command.revision ||
-              initial.channels[command.channel].control !== 'available'
-            )
-              return { status: 'rejected', message: '音频绑定已变化或不可用，请刷新。' };
-            const role = command.channel;
-            const binding =
-              role === 'game' && initial.routing.desktop
-                ? initial.routing.desktop
-                : role === 'microphone' && initial.routing.desktop
-                  ? initial.routing.desktopMicrophone!
-                  : initial.routing.bindings[role]!;
-            const perform = async (): Promise<MixerCommandResult> => {
-              const current = await this.mixerReadObs(obs, endpoint);
-              if (
-                current.revision !== command.revision ||
-                current.channels[role].control !== 'available'
-              )
-                return { status: 'rejected', message: '音频绑定已变化，请刷新。' };
-              const args = { inputUuid: binding.inputUuid };
-              if (command.volume !== undefined) {
-                await obs.call('SetInputVolume', { ...args, inputVolumeMul: command.volume });
-              }
-              if (command.muted !== undefined) {
-                await obs.call('SetInputMute', { ...args, inputMuted: command.muted });
-              }
-              const after = await this.mixerReadObs(obs, endpoint);
-              const observed = after.channels[role];
-              if (
-                after.revision !== command.revision ||
-                observed.control !== 'available' ||
-                (command.volume !== undefined &&
-                  (observed.volume === null ||
-                    Math.fround(observed.volume) !== Math.fround(command.volume))) ||
-                (command.muted !== undefined && observed.muted !== command.muted)
-              )
-                return { status: 'unknown', message: '写入结果未确认，请刷新。' };
-              return { status: 'confirmed' };
-            };
-            if (role === 'game' && !initial.routing.desktop) {
-              if (!gameAudio) return { status: 'rejected', message: '游戏音频控制不可用。' };
-              return await gameAudio.manual(perform);
-            }
-            return await perform();
-          } catch {
-            return {
-              status: 'unknown',
-              message: '音频操作未确认，请刷新。',
-            };
-          }
-        },
-        12000,
-        undefined,
-        true,
-      ).catch(() => ({ status: 'unknown', message: 'OBS 连接未确认。' })),
-    );
+    return this.audioCoordinator.mixerWrite(command, gameAudio);
   }
   bindAudio(command: ObsAudioBindCommand) {
-    if (!this.audioRouting) throw new Error('audio_routing_unavailable');
-    return this.serial(() =>
-      this.withObs(async (obs, endpoint) => {
-        await this.audioRouting!.bind(obs, command, endpoint, async (binding) => {
-          if (command.role !== 'remoteCommentary' || !this.commentary) return;
-          if ((await readCommentarySwitch(`${this.commentary.journal}.switch`))?.phase === 'sent')
-            throw new Error('commentary_switch_recovery_required');
-          const current = await this.commentary.owner.get();
-          await this.commentary.owner.set(
-            binding
-              ? {
-                  mode: 'existingInput',
-                  binding: {
-                    endpoint: binding.endpoint,
-                    collection: binding.collection,
-                    inputUuid: binding.inputUuid,
-                  },
-                }
-              : { mode: 'disabled' },
-            current.revision,
-          );
-        });
-      }, 12000),
-    );
+    return this.audioCoordinator.bindAudio(command);
   }
-  async readCommentary() {
-    if (!this.commentary) throw new Error('commentary_unavailable');
-    return this.commentary.owner.get();
+  readCommentary() {
+    return this.audioCoordinator.readCommentary();
   }
-  /** Explicit audio-only retry; it does not prepare or switch visual scenes. */
   prepareCommentaryAudio() {
-    if (!this.commentary || !this.audioRouting) throw new Error('commentary_unavailable');
-    return this.configurationMutation(() =>
-      this.audioConfiguration.run(async (connection, endpoint, observer) => {
-        const state = await this.audioRouting!.modeRecoveryState();
-        if (
-          state.desktop ||
-          state.transition ||
-          state.waitingIndependent ||
-          state.independentCommentaryDisabled
-        )
-          throw new Error('audio_mode_pending');
-        if (await this.audioRouting!.requiresManualBindings())
-          throw new Error('audio_bindings_required');
-        if (
-          Object.values(state.bindings).some(
-            (binding) => binding && ['game_capture', 'window_capture'].includes(binding.inputKind),
-          )
-        )
-          throw new Error('audio_video_requires_full_preparation');
-        const obs = guardedPreparationWrites(connection);
-        const preference = await this.commentary!.owner.get();
-        if (preference.preference.mode === 'existingInput') {
-          const bindingUuid = preference.preference.binding.inputUuid;
-          const inputs = (await obs.call('GetInputList')).inputs;
-          if (!Array.isArray(inputs)) throw new Error('audio_video_requires_full_preparation');
-          const selected = inputs.find(
-            (input: Record<string, unknown>) => input.inputUuid === bindingUuid,
-          ) as Record<string, unknown> | undefined;
-          if (
-            !selected ||
-            ![
-              'wasapi_output_capture',
-              'wasapi_input_capture',
-              'wasapi_process_output_capture',
-            ].includes(String(selected.inputKind))
-          )
-            throw new Error('audio_video_requires_full_preparation');
-        }
-        const findings = await configureIndependentAudio(
-          obs,
-          endpoint,
-          observer,
-          this.commentary!.owner,
-          this.commentary!.journal,
-          this.browserBaseUrl,
-          async (ids) => this.audioRouting?.seedAutomatic(obs, endpoint, ids),
-          async () => !(await this.audioRouting?.enabled()),
-          async (plan) => {
-            const routing = await this.audioRouting?.commentaryBinding();
-            return Boolean(
-              routing &&
-              routing.revision === plan.routingRevision &&
-              routing.binding?.inputUuid === plan.uuid &&
-              routing.binding.endpoint === plan.endpoint &&
-              routing.binding.collection === plan.collection &&
-              routing.game?.inputUuid !== plan.uuid &&
-              routing.microphone?.inputUuid !== plan.uuid,
-            );
-          },
-          async () => (await this.audioRouting?.managedBindings(obs, endpoint)) ?? null,
-        );
-        const pending = findings.find((item) => item.code === 'commentary_pending');
-        if (pending) this.audioPreparationWarnings.commentary = pending;
-        else delete this.audioPreparationWarnings.commentary;
-        return findings;
-      }),
-    );
-  }
-  /** An unbound owned probe may still carry an earlier target. Do not promise a
-   * new choice unless the existing target can already satisfy that choice. */
-  private async checkUnboundCommentaryChoice(obs: ObsRpc, endpoint: string, window?: string) {
-    const journal = this.commentary!.journal;
-    let owned: { endpoint?: string; collection?: string; uuid?: string };
-    try {
-      owned = JSON.parse(await readFile(journal, 'utf8')) as typeof owned;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    if (owned.endpoint !== endpoint || owned.collection !== OBS_COLLECTION || !owned.uuid)
-      throw new Error('commentary_binding_change_requires_independent');
-    const inputs = (await obs.call('GetInputList')).inputs;
-    if (
-      !Array.isArray(inputs) ||
-      !inputs.some(
-        (input: Record<string, unknown>) =>
-          input.inputUuid === owned.uuid && input.inputKind === 'wasapi_process_output_capture',
-      )
-    )
-      throw new Error('commentary_binding_change_requires_independent');
-    const settings = (await obs.call('GetInputSettings', { inputUuid: owned.uuid })).inputSettings;
-    if (!settings || typeof settings !== 'object')
-      throw new Error('commentary_binding_change_requires_independent');
-    let current = (settings as Record<string, unknown>).window;
-    if (current === undefined) {
-      const defaults = (
-        await obs.call('GetInputDefaultSettings', {
-          inputKind: 'wasapi_process_output_capture',
-        })
-      ).defaultInputSettings;
-      if (!defaults || typeof defaults !== 'object')
-        throw new Error('commentary_binding_change_requires_independent');
-      current = (defaults as Record<string, unknown>).window;
-    }
-    if (typeof current !== 'string')
-      throw new Error('commentary_binding_change_requires_independent');
-    const confirmed = await readOwnedCommentaryTarget(`${journal}.owned-target`);
-    if (current === '') {
-      if (confirmed) throw new Error('commentary_binding_change_requires_independent');
-      return;
-    }
-    if (
-      confirmed?.uuid !== owned.uuid ||
-      confirmed.endpoint !== endpoint ||
-      confirmed.collection !== OBS_COLLECTION ||
-      confirmed.window !== current ||
-      (window ? current !== window : !isTeamspeak(current))
-    )
-      throw new Error('commentary_binding_change_requires_independent');
+    return this.audioCoordinator.prepareCommentaryAudio();
   }
   listCommentaryApplications() {
-    if (!this.commentary) throw new Error('commentary_unavailable');
-    return this.withObs(async (obs, endpoint) => {
-      const { owner, journal } = this.commentary!;
-      const state = await owner.get();
-      const check = async (idle = false) => {
-        const [current, stream, record, collection] = await Promise.all([
-          owner.get(),
-          obs.call('GetStreamStatus'),
-          obs.call('GetRecordStatus'),
-          obs.call('GetSceneCollectionList'),
-        ]);
-        if (
-          current.revision !== state.revision ||
-          (idle && (stream.outputActive !== false || record.outputActive !== false)) ||
-          collection.currentSceneCollectionName !== OBS_COLLECTION
-        )
-          throw new Error('commentary_context_changed');
-      };
-      await check();
-      const inputs = (await obs.call('GetInputList')).inputs;
-      if (!Array.isArray(inputs)) throw new Error('commentary_inputs_unknown');
-      const existing = (inputs as Record<string, unknown>[]).find(
-        (input) =>
-          input.inputKind === 'wasapi_process_output_capture' &&
-          typeof input.inputUuid === 'string',
-      );
-      const probe =
-        typeof existing?.inputUuid === 'string'
-          ? existing.inputUuid
-          : await this.configurationMutation(async () => {
-              const lease = await this.captureWarmupGuard();
-              const guard = () => {
-                if (!lease())
-                  throw new ObsPreparationWriteBlocked(new Error('commentary_context_changed'));
-              };
-              return createCommentaryProbe(
-                guardedPreparationWrites(obs.withMutationGuard?.(guard) ?? obs),
-                journal,
-                {
-                  endpoint,
-                  collection: OBS_COLLECTION,
-                  sceneName: obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
-                },
-                () => check(true),
-              );
-            });
-      const current = this.observationValidity();
-      const windows = await owner.windows(obs, state.revision, probe);
-      await check();
-      if (!current()) throw new Error('commentary_context_changed');
-      this.commentaryChoices.clear();
-      const candidates = windows.map((candidate) => {
-        const id = randomUUID();
-        this.commentaryChoices.set(id, {
-          window: candidate.window,
-          revision: state.revision,
-          endpoint,
-          probe,
-          until: Date.now() + 30_000,
-        });
-        return { id, label: candidate.label };
-      });
-      return { revision: state.revision, candidates };
-    }, 45_000);
+    return this.audioCoordinator.listCommentaryApplications();
   }
   selectCommentaryApplication(id: string, revision: string) {
-    if (!this.commentary) throw new Error('commentary_unavailable');
-    return this.configurationMutation(() =>
-      this.audioConfiguration.run(async (obs, endpoint) => {
-        const selected = this.commentaryChoices.get(id);
-        this.commentaryChoices.clear();
-        if (
-          !selected ||
-          selected.until <= Date.now() ||
-          selected.revision !== revision ||
-          selected.endpoint !== endpoint ||
-          (await this.commentary!.owner.get()).revision !== revision
-        )
-          throw new Error('commentary_selection_changed');
-        const [collection, inputs] = await Promise.all([
-          obs.call('GetSceneCollectionList'),
-          obs.call('GetInputList'),
-        ]);
-        if (
-          collection.currentSceneCollectionName !== OBS_COLLECTION ||
-          !Array.isArray(inputs.inputs) ||
-          !(inputs.inputs as Record<string, unknown>[]).some(
-            (input) =>
-              input.inputUuid === selected.probe &&
-              input.inputKind === 'wasapi_process_output_capture',
-          )
-        )
-          throw new Error('commentary_selection_changed');
-        const candidates = await this.commentary!.owner.windows(obs, revision, selected.probe);
-        if (!candidates.some((candidate) => candidate.window === selected.window))
-          throw new Error('commentary_selection_changed');
-        const previous = await this.commentary!.owner.get();
-        const switchPath = `${this.commentary!.journal}.switch`;
-        const pendingSwitch = await readCommentarySwitch(switchPath);
-        if (pendingSwitch?.phase === 'sent') throw new Error('commentary_switch_recovery_required');
-        const routingState = await this.audioRouting?.modeRecoveryState();
-        if (routingState?.transition) throw new Error('audio_mode_pending');
-        if (routingState?.desktop && routingState.bindings.remoteCommentary)
-          throw new Error('commentary_binding_change_requires_independent');
-        if (routingState?.desktop) {
-          await this.checkUnboundCommentaryChoice(obs, endpoint, selected.window);
-          return this.commentary!.owner.set(
-            { mode: 'application', window: selected.window },
-            revision,
-          );
-        }
-        let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
-        try {
-          owned = JSON.parse(await readFile(this.commentary!.journal, 'utf8')) as typeof owned;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
-        let from: string | undefined;
-        const routing = await this.audioRouting?.commentaryBinding();
-        const confirmed = await readOwnedCommentaryTarget(
-          `${this.commentary!.journal}.owned-target`,
-        );
-        if (
-          owned?.endpoint === endpoint &&
-          owned.collection === OBS_COLLECTION &&
-          typeof owned.uuid === 'string' &&
-          confirmed?.endpoint === endpoint &&
-          confirmed.collection === OBS_COLLECTION &&
-          confirmed.uuid === owned.uuid &&
-          routing?.binding?.inputUuid === owned.uuid &&
-          routing.binding.endpoint === endpoint &&
-          routing.binding.collection === OBS_COLLECTION &&
-          routing.game?.inputUuid !== owned.uuid &&
-          routing.microphone?.inputUuid !== owned.uuid &&
-          (inputs.inputs as Record<string, unknown>[]).some(
-            (input) =>
-              input.inputUuid === owned.uuid && input.inputKind === 'wasapi_process_output_capture',
-          )
-        ) {
-          const settings = (await obs.call('GetInputSettings', { inputUuid: owned.uuid }))
-            .inputSettings;
-          if (settings && typeof settings === 'object') {
-            const value = (settings as Record<string, unknown>).window;
-            if (
-              typeof value === 'string' &&
-              value !== selected.window &&
-              value === confirmed.window &&
-              ((previous.preference.mode === 'autoTeamspeak' && isTeamspeak(value)) ||
-                (previous.preference.mode === 'application' &&
-                  previous.preference.window === value) ||
-                previous.preference.mode === 'disabled' ||
-                (previous.preference.mode === 'existingInput' &&
-                  previous.preference.binding.endpoint === endpoint &&
-                  previous.preference.binding.collection === OBS_COLLECTION &&
-                  previous.preference.binding.inputUuid === owned.uuid) ||
-                (pendingSwitch?.phase === 'prepared' &&
-                  pendingSwitch.endpoint === endpoint &&
-                  pendingSwitch.collection === OBS_COLLECTION &&
-                  pendingSwitch.uuid === owned.uuid &&
-                  pendingSwitch.revision === revision &&
-                  pendingSwitch.from === value &&
-                  ((previous.preference.mode === 'application' &&
-                    pendingSwitch.to === previous.preference.window) ||
-                    (previous.preference.mode === 'autoTeamspeak' &&
-                      pendingSwitch.to === AUTO_TEAMSPEAK_TARGET))))
-            )
-              from = value;
-          }
-        }
-        const next = await this.commentary!.owner.set(
-          { mode: 'application', window: selected.window },
-          revision,
-        );
-        if (from && owned?.uuid && routing)
-          await saveCommentarySwitch(switchPath, {
-            endpoint,
-            collection: OBS_COLLECTION,
-            uuid: owned.uuid,
-            from,
-            to: selected.window,
-            revision: next.revision,
-            routingRevision: routing.revision,
-            phase: 'prepared',
-          });
-        return next;
-      }),
-    );
+    return this.audioCoordinator.selectCommentaryApplication(id, revision);
   }
   setCommentaryMode(mode: 'autoTeamspeak' | 'disabled', revision: string) {
-    if (!this.commentary) throw new Error('commentary_unavailable');
-    if (mode === 'disabled')
-      return this.serial(async () => {
-        if ((await this.audioRouting?.modeRecoveryState())?.transition)
-          throw new Error('audio_mode_pending');
-        if ((await readCommentarySwitch(`${this.commentary!.journal}.switch`))?.phase === 'sent')
-          throw new Error('commentary_switch_recovery_required');
-        return this.commentary!.owner.set({ mode }, revision);
-      });
-    return this.configurationMutation(() =>
-      this.audioConfiguration.run(async (obs, endpoint) => {
-        const { owner, journal } = this.commentary!;
-        const previous = await owner.get();
-        if (previous.revision !== revision) throw new Error('commentary_revision_changed');
-        const path = `${journal}.switch`;
-        const pending = await readCommentarySwitch(path);
-        if (pending?.phase === 'sent') throw new Error('commentary_switch_recovery_required');
-        const routingState = await this.audioRouting?.modeRecoveryState();
-        if (routingState?.transition) throw new Error('audio_mode_pending');
-        if (routingState?.desktop && routingState.bindings.remoteCommentary)
-          throw new Error('commentary_binding_change_requires_independent');
-        if (routingState?.desktop) {
-          await this.checkUnboundCommentaryChoice(obs, endpoint);
-          return owner.set({ mode }, revision);
-        }
-        let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
-        try {
-          owned = JSON.parse(await readFile(journal, 'utf8')) as typeof owned;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
-        const routing = await this.audioRouting?.commentaryBinding();
-        const confirmed = await readOwnedCommentaryTarget(`${journal}.owned-target`);
-        let target: { uuid: string; from: string; to: string; routingRevision: string } | undefined;
-        if (
-          owned?.endpoint === endpoint &&
-          owned.collection === OBS_COLLECTION &&
-          typeof owned.uuid === 'string' &&
-          confirmed?.endpoint === endpoint &&
-          confirmed.collection === OBS_COLLECTION &&
-          confirmed.uuid === owned.uuid &&
-          routing?.binding?.inputUuid === owned.uuid &&
-          routing.binding.endpoint === endpoint &&
-          routing.binding.collection === OBS_COLLECTION &&
-          routing.game?.inputUuid !== owned.uuid &&
-          routing.microphone?.inputUuid !== owned.uuid &&
-          (previous.preference.mode === 'application' ||
-            previous.preference.mode === 'disabled' ||
-            (previous.preference.mode === 'existingInput' &&
-              previous.preference.binding.endpoint === endpoint &&
-              previous.preference.binding.collection === OBS_COLLECTION &&
-              previous.preference.binding.inputUuid === owned.uuid))
-        ) {
-          const [collection, inputs, settings] = await Promise.all([
-            obs.call('GetSceneCollectionList'),
-            obs.call('GetInputList'),
-            obs.call('GetInputSettings', { inputUuid: owned.uuid }),
-          ]);
-          const found =
-            Array.isArray(inputs.inputs) &&
-            (inputs.inputs as Record<string, unknown>[]).some(
-              (input) =>
-                input.inputUuid === owned.uuid &&
-                input.inputKind === 'wasapi_process_output_capture',
-            );
-          const from =
-            settings.inputSettings && typeof settings.inputSettings === 'object'
-              ? (settings.inputSettings as Record<string, unknown>).window
-              : undefined;
-          if (
-            collection.currentSceneCollectionName === OBS_COLLECTION &&
-            found &&
-            from === confirmed.window &&
-            (previous.preference.mode === 'disabled' ||
-              previous.preference.mode === 'existingInput' ||
-              from === previous.preference.window)
-          ) {
-            const windows = (await owner.windows(obs, revision, owned.uuid)).filter((candidate) =>
-              isTeamspeak(candidate.window),
-            );
-            if (windows.length === 1 && windows[0]!.window !== from)
-              target = {
-                uuid: owned.uuid,
-                from,
-                to: windows[0]!.window,
-                routingRevision: routing.revision,
-              };
-            else if (windows.length === 0)
-              target = {
-                uuid: owned.uuid,
-                from,
-                to: AUTO_TEAMSPEAK_TARGET,
-                routingRevision: routing.revision,
-              };
-          }
-        }
-        const next = await owner.set({ mode }, revision);
-        if (target)
-          await saveCommentarySwitch(path, {
-            endpoint,
-            collection: OBS_COLLECTION,
-            ...target,
-            revision: next.revision,
-            phase: 'prepared',
-          });
-        return next;
-      }),
-    );
+    return this.audioCoordinator.setCommentaryMode(mode, revision);
   }
   videoPreflight(valid: () => boolean): Promise<void> {
     return this.observe(() =>

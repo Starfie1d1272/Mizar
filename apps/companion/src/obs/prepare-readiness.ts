@@ -1,5 +1,19 @@
 import { diagnosticValue } from '../support/diagnostic-value.js';
-import type { ObsFinding } from './reconcile.js';
+import type { ObsFinding, ObsRpc } from './reconcile.js';
+
+export function guardedObs(obs: ObsRpc, valid: () => boolean): ObsRpc {
+  const assertCurrent = () => {
+    if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
+  };
+  const guarded = obs.withMutationGuard?.(assertCurrent) ?? obs;
+  return {
+    ...guarded,
+    call: (type, data, onDispatch) => {
+      assertCurrent();
+      return guarded.call(type, data, onDispatch);
+    },
+  };
+}
 
 export function obsFailureKind(
   error: unknown,
