@@ -9,27 +9,46 @@ use std::{
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MANIFEST_LIMIT: u64 = 1024 * 1024;
 
+pub(crate) fn save_cli_logs(
+    root: &Path,
+    state_root: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+
+    let target = log_destination(&local_logs_root(state_root)?, destination)?;
+    let node = root.join("resources/runtime/node.exe");
+    let script = root.join("resources/app/dist/support/export-logs-cli.js");
+    if !node.is_file() || !script.is_file() {
+        return save_local_logs(state_root, &target);
+    }
+    let mut command = std::process::Command::new(node);
+    command
+        .arg(script)
+        .arg(state_root)
+        .current_dir(root)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH");
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = match command.output() {
+        Ok(output) if output.status.success() => output,
+        // Broken or incomplete local runtime still has the independent raw archive.
+        _ => return save_local_logs(state_root, &target),
+    };
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("诊断归档结果无法读取：{error}"))?;
+    let export_id = result["exportId"].as_str().ok_or_else(|| {
+        let reason = result["error"].as_str().unwrap_or("export_result_missing");
+        format!("日志包未能生成：{reason}")
+    })?;
+    prepare_generated(state_root, export_id)?.save(&target)
+}
+
 pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(), String> {
-    let logs = state_root.join("logs");
-    if !fs::symlink_metadata(&logs).is_ok_and(|metadata| metadata.is_dir() && plain(&metadata)) {
-        return Err("本机日志目录不可用。".into());
-    }
-    let source = logs
-        .canonicalize()
-        .map_err(|error| format!("无法读取本机日志目录：{error}"))?;
-    let destination = std::path::absolute(destination).map_err(|error| error.to_string())?;
-    let parent = destination
-        .parent()
-        .ok_or("日志包保存位置无效。")?
-        .canonicalize()
-        .map_err(|error| format!("无法打开保存目录：{error}"))?;
-    if parent.starts_with(&source) {
-        return Err("请选择日志目录以外的保存位置。".into());
-    }
-    let target = parent.join(destination.file_name().ok_or("日志包文件名无效。")?);
-    if target.exists() {
-        return Err("保存位置已有同名文件，请选择新的文件名。".into());
-    }
+    let source = local_logs_root(state_root)?;
+    let target = log_destination(&source, destination)?;
     let output = crate::powershell::background()
         .env(
             "MIZAR_EXPORT_LOG_SOURCE",
@@ -46,6 +65,32 @@ pub(crate) fn save_local_logs(state_root: &Path, destination: &Path) -> Result<(
         return Err("本机日志包未能写入。请检查保存位置的空间和写入权限。".into());
     }
     Ok(())
+}
+
+fn local_logs_root(state_root: &Path) -> Result<std::path::PathBuf, String> {
+    let logs = state_root.join("logs");
+    if !fs::symlink_metadata(&logs).is_ok_and(|metadata| metadata.is_dir() && plain(&metadata)) {
+        return Err("本机日志目录不可用。".into());
+    }
+    logs.canonicalize()
+        .map_err(|error| format!("无法读取本机日志目录：{error}"))
+}
+
+fn log_destination(source: &Path, destination: &Path) -> Result<std::path::PathBuf, String> {
+    let destination = std::path::absolute(destination).map_err(|error| error.to_string())?;
+    let parent = destination
+        .parent()
+        .ok_or("日志包保存位置无效。")?
+        .canonicalize()
+        .map_err(|error| format!("无法打开保存目录：{error}"))?;
+    if parent.starts_with(source) {
+        return Err("请选择日志目录以外的保存位置。".into());
+    }
+    let target = parent.join(destination.file_name().ok_or("日志包文件名无效。")?);
+    if target.exists() {
+        return Err("保存位置已有同名文件，请选择新的文件名。".into());
+    }
+    Ok(target)
 }
 
 fn plain(metadata: &fs::Metadata) -> bool {

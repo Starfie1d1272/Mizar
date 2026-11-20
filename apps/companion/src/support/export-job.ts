@@ -116,6 +116,10 @@ export class SupportExports {
       ? { ...job, settled: this.active?.id !== id }
       : null;
   }
+  async whenSettled(id: string) {
+    if (this.active?.id === id) await this.active.task;
+    return this.status(id);
+  }
   async begin(
     range: { from?: string; to?: string },
     snapshot: unknown,

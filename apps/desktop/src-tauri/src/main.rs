@@ -1199,7 +1199,7 @@ fn main() {
                 std::env::var_os("MIZAR_STATE_ROOT").map(PathBuf::from),
             )
             .map_err(|error| error.to_string())?;
-            support_export::save_local_logs(&state, Path::new(destination))
+            support_export::save_cli_logs(&root, &state, Path::new(destination))
         })();
         if let Err(error) = result {
             failure_dialog(&error, None);
