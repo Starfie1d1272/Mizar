@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { programTransition, type ProgramSceneId } from '@mizar/protocol/program-scenes';
+import './scene-preview.css';
 
 export interface PreviewFrame {
   readonly key: string;

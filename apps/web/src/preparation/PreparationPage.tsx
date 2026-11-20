@@ -185,14 +185,6 @@ export function PreparationPage() {
     };
   }, []);
 
-  const toolsMenuRef = useRef<HTMLDetailsElement>(null);
-  function closeToolsMenu() {
-    const menu = toolsMenuRef.current;
-    if (!menu) return;
-    menu.querySelector('summary')?.focus();
-    menu.open = false;
-  }
-
   const capabilities = useLocalRead<
     {
       id: string;
@@ -280,66 +272,28 @@ export function PreparationPage() {
             </h1>
           </div>
           <div className="preparation-heading__actions">
-            <div className="preparation-heading__buttons">
-              {path === '/' ? (
-                <details className="preparation-tools-menu" ref={toolsMenuRef}>
-                  <summary className="mizar-button">
-                    工具
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      aria-hidden="true"
-                    >
-                      <path d="m3 4.5 3 3 3-3" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </summary>
-                  <div className="preparation-tools-menu__list">
-                    <Button
-                      onClick={() => {
-                        closeToolsMenu();
-                        void action(() => openTool('diagnostics'));
-                      }}
-                    >
-                      运行诊断
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        closeToolsMenu();
-                        setDemoOpen(true);
-                      }}
-                    >
-                      Demo 试播
-                    </Button>
-                  </div>
-                </details>
-              ) : null}
-              <Button
-                variant="primary"
-                aria-describedby={showEntryHelp ? 'preparation-entry-help' : undefined}
-                disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
-                onClick={() =>
-                  production &&
-                  void action(async () => {
-                    setSubmittingEntry(true);
-                    try {
-                      await productionAction('enter', production);
-                    } finally {
-                      setSubmittingEntry(false);
-                    }
-                  })
-                }
-              >
-                {entering || submittingEntry
-                  ? '正在打开工作台…'
-                  : production?.mode !== 'preparation'
-                    ? '返回工作台'
-                    : '打开工作台'}
-              </Button>
-            </div>
+            <Button
+              variant="primary"
+              aria-describedby={showEntryHelp ? 'preparation-entry-help' : undefined}
+              disabled={busy || cancellingEntry || Boolean(exit?.busy) || !production}
+              onClick={() =>
+                production &&
+                void action(async () => {
+                  setSubmittingEntry(true);
+                  try {
+                    await productionAction('enter', production);
+                  } finally {
+                    setSubmittingEntry(false);
+                  }
+                })
+              }
+            >
+              {entering || submittingEntry
+                ? '正在打开工作台…'
+                : production?.mode !== 'preparation'
+                  ? '返回工作台'
+                  : '打开工作台'}
+            </Button>
             {showEntryHelp ? (
               <p id="preparation-entry-help">
                 打开后自动准备游戏和 OBS，比赛资料可稍后选择。如已有 CS2，将正常关闭后重新启动。
@@ -565,20 +519,23 @@ export function PreparationPage() {
                 </a>
                 <a href="/picture?tab=hud">
                   <div className="preparation-task-title">
-                    <div className="preparation-task-title__row">
-                      <strong>
-                        <small>03</small> HUD 与包装
-                      </strong>
-                      {onAirHud.status === 'ready' ? <SourceBadge kind="sample" compact /> : null}
-                    </div>
+                    <strong>
+                      <small>03</small> HUD 与包装
+                    </strong>
                     <span>选择风格与调整布局</span>
                   </div>
                   <div className="preparation-task-summary">
                     {onAirHud.status === 'ready' ? (
                       <>
-                        <b className="preparation-task-preset" title={onAirHud.current.preset.name}>
-                          已启用 · {onAirHud.current.preset.name}
-                        </b>
+                        <div className="preparation-task-preset-row">
+                          <b
+                            className="preparation-task-preset"
+                            title={onAirHud.current.preset.name}
+                          >
+                            已启用 · {onAirHud.current.preset.name}
+                          </b>
+                          <SourceBadge kind="sample" compact />
+                        </div>
                         <figure className="preparation-task-reference">
                           <img
                             src={hudStyleReference(
@@ -600,8 +557,8 @@ export function PreparationPage() {
                 </a>
               </nav>
             ) : null}
-            {problems.length ? (
-              <div className="preparation-overview">
+            <div className="preparation-overview">
+              {problems.length ? (
                 <Panel>
                   <h2>需要处理</h2>
                   {problems.map(({ id, label, reason, href, action: nextAction }) => (
@@ -633,8 +590,25 @@ export function PreparationPage() {
                     </a>
                   ))}
                 </Panel>
-              </div>
-            ) : null}
+              ) : null}
+              <Panel className="preparation-quick-tools">
+                <h2>工具与试播</h2>
+                <div className="preparation-actions">
+                  {(
+                    [
+                      ['hud', 'HUD 编辑器'],
+                      ['bp', '地图与禁选'],
+                      ['diagnostics', '运行诊断'],
+                    ] as const
+                  ).map(([tool, label]) => (
+                    <Button key={tool} onClick={() => void action(() => openTool(tool))}>
+                      {label}
+                    </Button>
+                  ))}
+                  <Button onClick={() => setDemoOpen(true)}>Demo 试播</Button>
+                </div>
+              </Panel>
+            </div>
             <Dialog
               className="demo-test-dialog"
               title="Demo 试播"

@@ -126,23 +126,6 @@
 .preparation-team-heading {
   min-height: 64px;
 }
-.preparation-program-preview {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  position: relative;
-  container-type: inline-size;
-  margin-block: var(--mizar-layout-padding);
-}
-.preparation-program-preview iframe {
-  position: absolute;
-  inset: 0;
-  width: 1920px;
-  height: 1080px;
-  border: 0;
-  transform: scale(calc(100cqw / 1920px));
-  transform-origin: top left;
-}
 .preparation form,
 .preparation-editor,
 .preparation-capture {
@@ -514,14 +497,6 @@
   min-width: 0;
 }
 
-.program-preview-error {
-  position: absolute;
-  inset: auto 0 0;
-  padding: var(--mizar-layout-padding);
-  background: var(--mizar-bg-surface);
-  color: var(--mizar-fg-primary);
-}
-
 .preparation[data-page='/picture'] {
   max-width: 2160px;
 }
@@ -824,9 +799,9 @@
   background: var(--mizar-action-danger-hover);
   border-color: var(--mizar-action-danger-hover);
 }
-/* Shared rows align match preparation and outstanding checks. */
+/* The match and preparation tasks share the wider column. */
 .preparation-dashboard {
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
   align-items: stretch;
 }
 .preparation-dashboard > .preparation-match {
@@ -836,8 +811,14 @@
 .preparation-dashboard > .preparation-overview {
   grid-column: 2;
   grid-row: 1 / 3;
-  grid-template-rows: subgrid;
-  row-gap: normal;
+  align-self: start;
+}
+.preparation-quick-tools .preparation-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.preparation-quick-tools .mizar-button {
+  justify-content: flex-start;
 }
 .preparation-dashboard > .preparation-task-links {
   grid-column: 1;
@@ -901,10 +882,6 @@
   background: var(--mizar-bg-selected);
   border-color: var(--mizar-accent-primary);
 }
-.preparation-program-preview iframe {
-  background: var(--mizar-bg-canvas);
-}
-
 .preparation-heading__actions {
   display: grid;
   justify-items: end;
@@ -913,49 +890,11 @@
 .preparation-heading__actions > p {
   text-align: end;
 }
-.preparation-heading__buttons {
-  display: flex;
-  align-items: center;
-  gap: var(--mizar-layout-padding);
-}
-.preparation-tools-menu {
-  position: relative;
-}
-.preparation-tools-menu > summary {
-  list-style: none;
-  min-height: var(--mizar-layout-target);
-  gap: calc(var(--mizar-layout-compact) / 2);
-}
-.preparation-tools-menu:not([open]) > summary:not(:hover) {
-  background: transparent;
-  border-color: transparent;
-  color: var(--mizar-fg-secondary);
-}
-.preparation-tools-menu > summary::-webkit-details-marker {
-  display: none;
-}
-.preparation-tools-menu__list {
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--mizar-layout-compact));
-  z-index: 20;
-  min-width: 160px;
-  display: grid;
-  gap: calc(var(--mizar-layout-compact) / 2);
-  padding: var(--mizar-layout-compact);
-  background: var(--mizar-bg-raised);
-  border: var(--mizar-line-border) solid var(--mizar-border-strong);
-  border-radius: var(--mizar-shape-panel);
-}
-.preparation-tools-menu__list .mizar-button {
-  width: 100%;
-  justify-content: flex-start;
-}
 .preparation-task-title {
   display: grid;
   gap: var(--mizar-layout-compact);
 }
-.preparation-task-title__row {
+.preparation-task-preset-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
