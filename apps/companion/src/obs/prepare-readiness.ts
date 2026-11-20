@@ -1,4 +1,66 @@
+import { diagnosticValue } from '../support/diagnostic-value.js';
 import type { ObsFinding } from './reconcile.js';
+
+export function obsFailureKind(
+  error: unknown,
+): 'authentication' | 'refused' | 'timeout' | 'unknown' {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  const message = typeof value?.message === 'string' ? value.message.toLowerCase() : '';
+  if (value?.code === 4009 || /authentication|invalid password|password required/.test(message))
+    return 'authentication';
+  if (value?.code === 'ECONNREFUSED' || message.includes('econnrefused')) return 'refused';
+  if (/timeout|timed out|超时/.test(message)) return 'timeout';
+  return 'unknown';
+}
+
+export function obsErrorEvidence(error: unknown, password = ''): unknown {
+  const redact = (value: unknown): unknown => {
+    if (typeof value === 'string')
+      return password ? value.replaceAll(password, '[redacted]') : value;
+    if (Array.isArray(value)) return value.map(redact);
+    if (typeof value === 'object' && value !== null)
+      return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redact(field)]));
+    return value;
+  };
+  return redact(diagnosticValue(error, '', new Set(), password ? [password] : []));
+}
+
+export function obsAudioModeFailureEvidence(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  const exactReasons = [
+    'audio_desktop_choice_required',
+    'audio_selection_changed',
+    'audio_revision_changed',
+    'audio_mode_already_desktop',
+    'audio_commentary_unavailable',
+    'audio_mode_pending',
+    'audio_mode_target_changed',
+    'audio_migration_identity_changed',
+    'audio_migration_external_change',
+    'audio_migration_backup_conflict',
+    'audio_migration_recovery_required',
+    'audio_migration_write_uncertain',
+    'audio_setup_context_changed',
+    'audio_configuration_timeout',
+    'audio_configuration_disconnected',
+    'audio_configuration_busy',
+  ];
+  const parameterReasons = [
+    'audio_nested_shared_path',
+    'audio_video_path_unresolved',
+    'audio_monitor_shared',
+    'audio_global_path_unresolved',
+  ];
+  return {
+    code:
+      exactReasons.find((code) => message === code) ??
+      parameterReasons.find((code) => message === code || message.startsWith(`${code}:`)) ??
+      'hidden',
+    failureKind: obsFailureKind(error),
+    detailStatus: 'classification_only',
+    message: '此摘要仅含安全分类，不包含原始错误详情。',
+  };
+}
 
 /** Keep explicit operator audio choices visible without treating them as configuration failures. */
 export function obsFindingReadiness(findings: readonly ObsFinding[]) {
