@@ -1450,16 +1450,16 @@ export class DiagnosticDelivery {
           group.push(item);
           groups.set(item.sessionId, group);
         }
-        for (const group of groups.values()) {
-          while (group.length) {
-            let size = group.length;
+        for (const [sessionId, group] of groups) {
+          const projected = group.map((item) => cloudRecord(item.line, this.state.consentAt));
+          let offset = 0;
+          while (offset < projected.length) {
+            let size = projected.length - offset;
             let raw: Buffer;
             let compressed: Buffer | null;
             let events: ReturnType<typeof cloudRecord>[];
             for (;;) {
-              events = group
-                .slice(0, size)
-                .map((item) => cloudRecord(item.line, this.state.consentAt));
+              events = projected.slice(offset, offset + size);
               raw = Buffer.from(
                 JSON.stringify({
                   schema: 'mizar-technical-diagnostics/1',
@@ -1474,7 +1474,7 @@ export class DiagnosticDelivery {
               );
               compressed =
                 raw.length <= DELIVERY_LIMITS.expandedBytes
-                  ? Buffer.from(stampDiagnosticGzip(await compress(raw, { level: 3 }), this.now()))
+                  ? await compress(raw, { level: 3 })
                   : null;
               if (
                 compressed &&
@@ -1490,11 +1490,12 @@ export class DiagnosticDelivery {
             ) {
               skipped++;
             } else {
+              const stamped = Buffer.from(stampDiagnosticGzip(compressed, this.now()));
               packets.push({
-                compressed,
+                compressed: stamped,
                 batch: {
-                  id: checksum(compressed),
-                  bytes: compressed.length,
+                  id: checksum(stamped),
+                  bytes: stamped.length,
                   index: {
                     schema: 'mizar-technical-diagnostics/1',
                     events: events.length,
@@ -1503,12 +1504,12 @@ export class DiagnosticDelivery {
                       0,
                       32,
                     ),
-                    ...batchMetadata(group[0]!.sessionId, events),
+                    ...batchMetadata(sessionId, events),
                   },
                 },
               });
             }
-            group.splice(0, size);
+            offset += size;
           }
         }
         const queue = [...this.state.queue, ...packets.map(({ batch }) => batch)];
