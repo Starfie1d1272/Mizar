@@ -148,29 +148,33 @@ async function readZip(bytes, source, bundleId, partIndex, partCount = 1, emit =
     );
   const coverage = JSON.parse(readEntry('coverage.json')?.toString('utf8') ?? 'null');
   if (
-    coverage?.schema !== 'mizar-support-coverage/2' ||
-    !Array.isArray(coverage.entries) ||
+    !['mizar-support-coverage/2', 'mizar-support-coverage/3'].includes(coverage?.schema) ||
     !Array.isArray(coverage.gaps)
   )
     throw new Error('Missing final coverage');
-  const indexed = new Set();
-  for (const entry of coverage?.entries ?? []) {
-    if (indexed.has(entry.name) || entry.name === 'coverage.json')
-      throw new Error('Invalid entry index');
-    indexed.add(entry.name);
-    const data = readEntry(entry.name);
+  if (coverage.schema === 'mizar-support-coverage/2') {
+    if (!Array.isArray(coverage.entries)) throw new Error('Missing legacy entry index');
+    const indexed = new Set();
+    for (const entry of coverage.entries) {
+      if (indexed.has(entry.name) || entry.name === 'coverage.json')
+        throw new Error('Invalid entry index');
+      indexed.add(entry.name);
+      const data = readEntry(entry.name);
+      if (
+        !data ||
+        data.length !== entry.bytes ||
+        createHash('sha256').update(data).digest('hex') !== entry.sha256
+      )
+        throw new Error('ZIP entry digest mismatch');
+    }
     if (
-      !data ||
-      data.length !== entry.bytes ||
-      createHash('sha256').update(data).digest('hex') !== entry.sha256
+      indexed.size !== entries.size - 1 ||
+      [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
     )
-      throw new Error('ZIP entry digest mismatch');
+      throw new Error('Unindexed ZIP entry');
+  } else {
+    for (const name of entries.keys()) readEntry(name);
   }
-  if (
-    indexed.size !== entries.size - 1 ||
-    [...entries.keys()].some((name) => name !== 'coverage.json' && !indexed.has(name))
-  )
-    throw new Error('Unindexed ZIP entry');
   const coverageDetails = [];
   if (coverage.coverageFiles !== undefined) {
     if (!Array.isArray(coverage.coverageFiles)) throw new Error('Invalid coverage file index');

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
@@ -66,6 +66,8 @@ test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed s
   assert.equal(result?.knownGaps, gaps.length);
   const zip = unzipSync(await readFile(join(output, 'part-1.zip')));
   const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  assert.equal(coverage.schema, 'mizar-support-coverage/3');
+  assert.ok(!Object.hasOwn(coverage, 'entries'));
   assert.equal(coverage.gapCount, gaps.length);
   const details = coverage.coverageFiles.flatMap(({ name }: { name: string }) =>
     Buffer.from(zip[name]!)
@@ -109,6 +111,29 @@ test('manual ZIP retains both copies of an event without a temporary identity in
   );
   assert.equal(JSON.parse(Buffer.from(zip['coverage.json']!).toString()).retainedRecords, 2);
   assert(!zip['indexes/carriers.json']);
+  const reader = fileURLToPath(
+    new URL('../../../scripts/diagnostics/read-support-bundle.mjs', import.meta.url),
+  );
+  const readTimeline = (name: string) =>
+    execFileSync(process.execPath, [reader, join(output, name)], { stdio: 'pipe' });
+  const current = readTimeline('part-1.zip');
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString());
+  const metadata = JSON.parse(Buffer.from(zip['bundle.json']!).toString());
+  zip['bundle.json'] = Buffer.from(
+    JSON.stringify({ ...metadata, schema: 'mizar-support-bundle/2' }),
+  );
+  const entries = Object.entries(zip)
+    .filter(([entry]) => entry !== 'coverage.json')
+    .map(([name, bytes]) => ({
+      name,
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }));
+  zip['coverage.json'] = Buffer.from(
+    JSON.stringify({ ...coverage, schema: 'mizar-support-coverage/2', entries }),
+  );
+  await writeFile(join(output, 'legacy.zip'), zipSync(zip));
+  assert.deepEqual(readTimeline('legacy.zip'), current);
 });
 
 test('large manual exports retain a single ZIP readable by the offline tool', async (t) => {
