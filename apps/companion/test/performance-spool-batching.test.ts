@@ -72,4 +72,9 @@ test('stores multiple windows in one producer segment and recovers older per-win
     await readFile(join(root, 'diagnostic-outbox', 'state.json'), 'utf8'),
   );
   assert.equal(manifest.sessions[`performance:${sessionId}`]?.queued, 3);
+  await reopened.append([record(4)], () => {});
+  await delivery.tick();
+  const next = JSON.parse(await readFile(join(root, 'diagnostic-outbox', 'state.json'), 'utf8'));
+  assert.equal(next.sessions[`performance:${sessionId}`]?.queued, 4);
+  assert.deepEqual(next.queue.slice(0, manifest.queue.length), manifest.queue);
 });

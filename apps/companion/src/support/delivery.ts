@@ -2,6 +2,7 @@ import { hostDeliveryParticipant } from './host-delivery-pin.js';
 import { type IncidentParticipant, type PinReceipt } from './retention.js';
 import { diagnosticSegmentNames, performanceSegmentPattern } from './segments.js';
 import { technicalProjection, sourceCoversProjection } from './technical-projection.js';
+import { isDiagnosticEvent } from '@mizar/protocol';
 import {
   DIAGNOSTIC_PERMIT_BYTES,
   DIAGNOSTIC_RECEIVER_STAGES,
@@ -45,6 +46,7 @@ export const DELIVERY_LIMITS = {
   sendPerTick: 4,
 };
 const CONSENT = DIAGNOSTIC_CONSENT_REVISION;
+const diagnosticKind = /^[a-z][a-z0-9_.-]{0,63}$/;
 const retryDelay = (failures: number) =>
   Math.ceil(
     Math.min(
@@ -1213,7 +1215,7 @@ export class DiagnosticDelivery {
       !Number.isSafeInteger(value.sequence) ||
       value.sequence < 1 ||
       typeof value.stage !== 'string' ||
-      !/^[a-z][a-z0-9_.-]{0,63}$/.test(value.stage)
+      !diagnosticKind.test(value.stage)
     ) {
       this.omitted('invalid_source_cursor');
       return;
@@ -1379,12 +1381,23 @@ export class DiagnosticDelivery {
       for (const name of files) {
         try {
           const records = await read(name);
-          if (records[0])
-            ordered.push({
-              name,
-              run: String(records[0].producerRunId),
-              sequence: Number(records[0].sequence),
-            });
+          const first = records[0];
+          if (!first) continue;
+          const run = String(first.producerRunId);
+          const cursor = this.state.sessions[`performance:${run}`];
+          if (
+            cursor &&
+            records.every(
+              (event) =>
+                isDiagnosticEvent(event) &&
+                event.producerKind === 'companion' &&
+                event.producerRunId === run &&
+                diagnosticKind.test(event.kind) &&
+                event.sequence <= cursor.queued,
+            )
+          )
+            continue;
+          ordered.push({ name, run, sequence: Number(first.sequence) });
         } catch {
           this.omitted('performance_source_unreadable');
           sourceUnavailable = true;
