@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, watch } from 'node:fs';
 import { meteredRuntime } from './capacity-runtime.mjs';
 import { fullOutbox } from './outbox-capacity.mjs';
 /** Reproducible public synthetic qualification; never connects to a Cloudflare account. */
@@ -275,6 +275,15 @@ async function profile(directory, minutes) {
   const runtimeTemplate = fixture.runtime;
   const durations = [];
   const start = performance.now();
+  const cursorName = 'native-source-cursor.json';
+  let cursorChanged = false;
+  let cursorWatcherError;
+  const cursorWatcher = watch(sourceDirectory, { persistent: false }, (event, name) => {
+    if (event === 'rename' && (name === cursorName || name === null)) cursorChanged = true;
+  });
+  cursorWatcher.on('error', (error) => {
+    cursorWatcherError = error;
+  });
   try {
     for (let sequence = 0; sequence < frameCount; sequence++) {
       virtual = sequence * 50;
@@ -451,25 +460,25 @@ async function profile(directory, minutes) {
         );
         const deadline = performance.now() + 5000;
         for (;;) {
-          // This observer runs in the writer's process. Close its read handle
-          // before yielding, so the measurement cannot hold the Windows target
-          // open across the owner's atomic replacement.
-          let cursor = { cursors: [] };
-          try {
-            cursor = JSON.parse(
-              readFileSync(join(sourceDirectory, 'native-source-cursor.json'), 'utf8'),
-            );
-          } catch (error) {
-            if (error.code !== 'ENOENT') throw error;
+          if (cursorWatcherError) throw cursorWatcherError;
+          // Opening the current file on a timer races the writer's Windows rename.
+          // Read the checkpoint after the directory reports its replacement.
+          if (cursorChanged) {
+            cursorChanged = false;
+            try {
+              const cursor = JSON.parse(readFileSync(join(sourceDirectory, cursorName), 'utf8'));
+              if (
+                sources.every((source) =>
+                  cursor.cursors.some(
+                    (entry) => entry.identity === source.identity && entry.offset === source.bytes,
+                  ),
+                )
+              )
+                break;
+            } catch (error) {
+              if (error.code !== 'ENOENT') throw error;
+            }
           }
-          if (
-            sources.every((source) =>
-              cursor.cursors.some(
-                (entry) => entry.identity === source.identity && entry.offset === source.bytes,
-              ),
-            )
-          )
-            break;
           assert(
             performance.now() < deadline,
             'actual ProgramChatNativeInput did not commit minute input',
@@ -715,6 +724,7 @@ async function profile(directory, minutes) {
       assert(wireIds.has(`${documentRunId}:${sequence}`));
     return { report: output, packets };
   } finally {
+    cursorWatcher.close();
     await app.close();
     await journal.close();
   }
