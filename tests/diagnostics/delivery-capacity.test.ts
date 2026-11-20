@@ -251,8 +251,6 @@ test('retained ACK history frees sending capacity; quota retry survives restart 
   const options = {
     endpoint: 'https://diagnostics.invalid',
     now: () => now,
-    // An unavailable source owner cannot authorize removing acknowledged wire.
-    participants: () => [],
     fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       headers.set('cf-connecting-ip', '192.0.2.10');
@@ -279,10 +277,10 @@ test('retained ACK history frees sending capacity; quota retry survives restart 
     await delivery.pause(false);
     for (let count = 0; count < 160; count++) await delivery.tick(false);
     assert.equal(delivery.status().acknowledged, 160);
-    assert.equal(delivery.status().retainedAcknowledgedBatches, 160);
+    assert.equal(delivery.status().retainedAcknowledgedBatches, 0);
     await journal.recordCommitted('retained_capacity_probe', {});
     await delivery.tick();
-    assert.equal(delivery.status().queuedBatches, 2, 'ACK history must not consume sending slots');
+    assert.equal(delivery.status().queuedBatches, 2, 'ACKed wire copies are released directly');
     const counters = () =>
       db.prepare('SELECT permits,batches,bytes FROM daily WHERE day=?').bind(day).first();
     const before = await counters();

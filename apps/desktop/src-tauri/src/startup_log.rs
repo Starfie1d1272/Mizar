@@ -12,10 +12,7 @@ use std::{
 };
 
 mod metadata;
-use metadata::{
-    delivery_request_active, pin_protection, process_instance, read_delivery_json, read_pin_json,
-    recover_pin_metadata, remove_missing_ok, write_delivery_json,
-};
+use metadata::{pin_protection, read_pin_json, recover_pin_metadata, remove_missing_ok};
 
 thread_local! {
     static TASK_CONTEXT: std::cell::RefCell<Value> = const { std::cell::RefCell::new(Value::Null) };
@@ -225,17 +222,11 @@ fn hash_pin_sources(
     }
     Ok(segments)
 }
-fn pin_identity(
-    receipt: &Value,
-    pin_id: &str,
-    kind: &str,
-    owner: Option<&Value>,
-) -> Result<(), String> {
+fn pin_identity(receipt: &Value, pin_id: &str, kind: &str) -> Result<(), String> {
     if receipt["schema"] != "mizar-producer-pin/2"
         || receipt["producerKind"] != "host"
         || receipt["pinId"] != pin_id
         || receipt["kind"] != kind
-        || (kind == "delivery" && receipt.get("deliveryOwner") != owner)
     {
         return Err("诊断固定回执不匹配。".into());
     }
@@ -564,7 +555,7 @@ impl DesktopLog {
                 Some(&json!({"reason":reason,"action":"preserve-originals"}).to_string()),
             );
         }
-        logger.start_delivery_pins();
+        logger.start_deferred_drain();
         Ok(logger)
     }
 
@@ -862,21 +853,8 @@ impl DesktopLog {
     /// Pin state and collection use this producer's lock. Full source hashing
     /// happens outside it, protected by the same owner's in-flight source set.
     pub fn diagnostic_pin(&self, action: &str, pin_id: &str, kind: &str) -> Result<Value, String> {
-        if kind == "delivery" {
-            return Err("诊断交付固定仅允许内部生产者请求。".into());
-        }
-        self.diagnostic_pin_owned(action, pin_id, kind, None)
-    }
-
-    fn diagnostic_pin_owned(
-        &self,
-        action: &str,
-        pin_id: &str,
-        kind: &str,
-        delivery_owner: Option<Value>,
-    ) -> Result<Value, String> {
         if diagnostic_uuid(Some(pin_id)).is_none()
-            || !["incident", "delivery", "active"].contains(&kind)
+            || !["incident", "active"].contains(&kind)
             || !["prepare", "commit", "release"].contains(&action)
         {
             return Err("诊断固定请求无效。".into());
@@ -904,17 +882,9 @@ impl DesktopLog {
             if let Some(receipt) = &previous {
                 // Validate the on-disk identity on ALL actions, including release.
                 // Changing the caller's kind cannot revoke another kind's hold.
-                pin_identity(receipt, pin_id, kind, delivery_owner.as_ref())?;
+                pin_identity(receipt, pin_id, kind)?;
             }
             if action == "release" {
-                if previous
-                    .as_ref()
-                    .is_some_and(|receipt| receipt["kind"] == "delivery")
-                    && delivery_request_active(&self.directory, previous.as_ref().unwrap())
-                        .map_err(|e| e.to_string())?
-                {
-                    return Err("诊断交付固定仍由活动请求持有。".into());
-                }
                 remove_missing_ok(&path).map_err(|e| e.to_string())?;
                 return Ok(json!({"pinId":pin_id,"state":"released"}));
             }
@@ -976,11 +946,7 @@ impl DesktopLog {
                 if !empty_segments.is_empty() {
                     source_state["emptyAtCutoffSegments"] = json!(empty_segments);
                 }
-                let mut receipt = json!({"sourceState":source_state,"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments});
-                if let Some(owner) = &delivery_owner {
-                    receipt["deliveryOwner"] = owner.clone();
-                }
-                receipt
+                json!({"sourceState":source_state,"schema":"mizar-producer-pin/2","pinId":pin_id,"producerKind":"host","producerRunId":self.session_id,"kind":kind,"state":"prepared","expiresAt":(Utc::now()+chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Millis,true),"segments":segments})
             } else {
                 let receipt = previous.clone().ok_or("诊断固定回执缺失。")?;
                 pin_current(&receipt)?;
@@ -1062,25 +1028,21 @@ impl DesktopLog {
         }
         if action == "commit" {
             receipt["state"] = json!("committed");
-            if kind != "delivery" {
-                receipt["expiresAt"] = Value::Null;
-            }
+            receipt["expiresAt"] = Value::Null;
         }
         crate::support_export::write_metadata(&path, &receipt).map_err(|e| e.to_string())?;
         Ok(receipt)
     }
 
-    fn start_delivery_pins(&self) {
+    fn start_deferred_drain(&self) {
         let weak = Arc::downgrade(&self.inner);
         let directory = self.directory.clone();
         let state_root = self.state_root.clone();
         let session_id = self.session_id.clone();
         let deferred = self.deferred.clone();
         let started = self.started;
-        // The original producer seals/commits under its lock; full-source
-        // hashing in this background thread does not hold that writer lock.
         let _ = std::thread::Builder::new()
-            .name("diagnostic-delivery-pins".into())
+            .name("diagnostic-deferred-drain".into())
             .spawn(move || {
                 let mut last_error = None;
                 loop {
@@ -1094,166 +1056,18 @@ impl DesktopLog {
                         state_root: state_root.clone(),
                         session_id: session_id.clone(),
                     };
-                    // I/O failures leave the wire and original evidence untouched.
-                    // Never recursively log a diagnostic writer failure through
-                    // that same writer. Pin cleanup remains independent of drain.
-                    let before = owner.drain_deferred();
-                    let pins = owner.poll_delivery_pins();
-                    let after = owner.drain_deferred();
-                    match before.and(pins).and(after) {
+                    match owner.drain_deferred() {
                         Ok(()) => last_error = None,
                         Err(error) => {
                             let detail = error.to_string();
                             if last_error.as_ref() != Some(&detail) {
-                                eprintln!("诊断后台写入/固定失败：{detail}");
+                                eprintln!("诊断后台写入失败：{detail}");
                                 last_error = Some(detail);
                             }
                         }
                     }
                 }
             });
-    }
-
-    fn poll_delivery_pins(&self) -> io::Result<()> {
-        let directory = self.directory.join("host-delivery-pins");
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        let metadata = fs::symlink_metadata(&directory)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(io::Error::other("unsafe delivery request directory"));
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        for (index, entry) in entries.enumerate() {
-            if index >= 256 {
-                return Err(io::Error::other("delivery request inventory budget"));
-            }
-            let name = entry?.file_name().to_string_lossy().into_owned();
-            let id = name
-                .strip_suffix(".response.json")
-                .or_else(|| name.strip_suffix(".json"));
-            if let Some(id) = id.filter(|id| diagnostic_uuid(Some(id)).is_some()) {
-                ids.insert(id.to_owned());
-            }
-        }
-        // Responses can be removed by the caller before the next poll. Include
-        // native receipts so no completed operation leaves an orphan ledger file.
-        if let Ok(pins) = fs::read_dir(self.directory.join("host-pins")) {
-            for (index, entry) in pins.enumerate() {
-                if index >= 256 {
-                    return Err(io::Error::other("delivery pin inventory budget"));
-                }
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if let Some(id) = name
-                    .strip_suffix(".json")
-                    .filter(|id| diagnostic_uuid(Some(id)).is_some())
-                {
-                    if read_pin_json(&entry.path())?
-                        .as_ref()
-                        .is_some_and(|pin| pin["kind"] == "delivery")
-                    {
-                        ids.insert(id.to_owned());
-                    }
-                }
-            }
-        }
-        for pin_id in ids {
-            let path = directory.join(format!("{pin_id}.json"));
-            let response_path = directory.join(format!("{pin_id}.response.json"));
-            let request = read_delivery_json(&path)?;
-            let receipt_path = self
-                .directory
-                .join("host-pins")
-                .join(format!("{pin_id}.json"));
-            let receipt = read_pin_json(&receipt_path)?;
-            if let Some(receipt) = &receipt {
-                if receipt["kind"] == "delivery"
-                    && !delivery_request_active(&self.directory, receipt)?
-                    && (receipt["state"] == "committed"
-                        || request.is_none()
-                        || receipt["expiresAt"]
-                            .as_str()
-                            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                            .is_some_and(|at| at <= Utc::now()))
-                {
-                    self.diagnostic_pin_owned(
-                        "release",
-                        &pin_id,
-                        "delivery",
-                        receipt.get("deliveryOwner").cloned(),
-                    )
-                    .map_err(io::Error::other)?;
-                }
-            }
-            let Some(request) = request else {
-                remove_missing_ok(&response_path)?;
-                continue;
-            };
-            if request["schema"] != "mizar-host-delivery-request/1"
-                || request["pinId"] != pin_id
-                || diagnostic_uuid(request["requestId"].as_str()).is_none()
-                || !matches!(request["action"].as_str(), Some("prepare" | "commit"))
-            {
-                continue;
-            }
-            let Some(pid) = request["ownerPid"]
-                .as_u64()
-                .and_then(|value| u32::try_from(value).ok())
-                .filter(|pid| *pid > 0)
-            else {
-                continue;
-            };
-            let identity = process_instance(pid)?;
-            let requested_instance = request["ownerInstance"].as_str();
-            if identity.is_none()
-                || (requested_instance.is_some() && identity.as_deref() != requested_instance)
-            {
-                remove_missing_ok(&path)?;
-                remove_missing_ok(&response_path)?;
-                continue;
-            }
-            if read_delivery_json(&response_path)?
-                .as_ref()
-                .is_some_and(|response| response["requestId"] == request["requestId"])
-            {
-                continue;
-            }
-            let Some(deadline) = request["expiresAt"]
-                .as_i64()
-                .filter(|deadline| *deadline <= Utc::now().timestamp_millis() + 10_000)
-            else {
-                continue;
-            };
-            // An elapsed response deadline refuses new work. A committed live hold
-            // is retained until its caller withdraws it after unlink/failure.
-            if deadline <= Utc::now().timestamp_millis() {
-                if receipt
-                    .as_ref()
-                    .is_none_or(|receipt| receipt["state"] != "committed")
-                {
-                    remove_missing_ok(&path)?;
-                    remove_missing_ok(&response_path)?;
-                }
-                continue;
-            }
-            let action = request["action"].as_str().unwrap();
-            let instance = identity.unwrap();
-            let owner = json!({"pid":pid,"instance":instance});
-            let result = if action == "commit" && requested_instance != Some(instance.as_str()) {
-                Err("交付固定进程实例不匹配。".to_owned())
-            } else {
-                self.diagnostic_pin_owned(action, &pin_id, "delivery", Some(owner))
-            };
-            let mut response = json!({"schema":"mizar-host-delivery-response/1","pinId":pin_id,"requestId":request["requestId"],"ownerPid":pid,"ownerInstance":instance});
-            if let Err(error) = result {
-                response["error"] = json!(error.chars().take(512).collect::<String>());
-            }
-            write_delivery_json(&response_path, &response)?;
-        }
-        Ok(())
     }
 
     /// Scope synchronous native work only; async/spawned work must enter its own scope.
