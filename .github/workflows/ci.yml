@@ -69,7 +69,8 @@ jobs:
   native:
     name: native build / Windows
     runs-on: windows-2025
-    timeout-minutes: 3
+    # Keep the 180 s feedback objective in ci-gate; cold toolchain builds must still finish.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
