@@ -174,6 +174,17 @@ export function createProduction(options: ProductionDependencies) {
       return Promise.reject(error);
     }
   }
+  async function selectObsWaitingForExit(valid: () => boolean) {
+    const result = await options.scenes.selectWaitingForExit(options.scenes.get().revision, valid);
+    if (!result.ok) throw new Error(result.message);
+  }
+  async function restoreObsExitSettings(valid: () => boolean, videoRestored?: () => void) {
+    if (!valid()) throw new Error('OBS 播出状态已变化。');
+    await options.obs?.restoreVideo(undefined, valid);
+    videoRestored?.();
+    await options.obs?.restoreProgram(valid);
+    if (!valid()) throw new Error('OBS 播出状态已变化。');
+  }
   function scheduleObsExit(controlValid: () => boolean, sceneRequired: boolean) {
     let task = obsExitTask;
     if (!task) {
@@ -196,17 +207,8 @@ export function createProduction(options: ProductionDependencies) {
       if (!valid()) throw new Error('OBS 播出状态已变化。');
       await options.obs?.settleAutomatic();
       if (!valid()) throw new Error('OBS 播出状态已变化。');
-      if (sceneRequired) {
-        const result = await options.scenes.selectWaitingForExit(
-          options.scenes.get().revision,
-          valid,
-        );
-        if (!result.ok) throw new Error(result.message);
-      }
-      if (!valid()) throw new Error('OBS 播出状态已变化。');
-      await options.obs?.restoreVideo(undefined, valid);
-      await options.obs?.restoreProgram(valid);
-      if (!valid()) throw new Error('OBS 播出状态已变化。');
+      if (sceneRequired) await selectObsWaitingForExit(valid);
+      await restoreObsExitSettings(valid);
     })()
       .then(
         async () => {
@@ -494,11 +496,7 @@ export function createProduction(options: ProductionDependencies) {
             }
             if (mode !== 'preparation') {
               stage = 'production_safe_scene';
-              const result = await options.scenes.selectWaitingForExit(
-                options.scenes.get().revision,
-                controlValid,
-              );
-              if (!result.ok) throw new Error(result.message);
+              await selectObsWaitingForExit(controlValid);
             }
           } catch (error) {
             if (shutdown || trialPending) throw error;
@@ -509,9 +507,9 @@ export function createProduction(options: ProductionDependencies) {
           if (safeScene) {
             stage = 'production_video_restore';
             try {
-              await options.obs?.restoreVideo();
-              stage = 'production_program_restore';
-              await options.obs?.restoreProgram(controlValid);
+              await restoreObsExitSettings(controlValid, () => {
+                stage = 'production_program_restore';
+              });
             } catch (error) {
               obsExitState = 'unconfirmed';
               options.warn(
