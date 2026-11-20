@@ -1,5 +1,4 @@
-import { diagnosticEvidence as redact } from './diagnostic-evidence.js';
-import { diagnosticValue } from './diagnostic-value.js';
+import { diagnosticEvidence as redact, diagnosticValue } from './diagnostic-value.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { crc32, deflateRawSync, gunzipSync } from 'node:zlib';
