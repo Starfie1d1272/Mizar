@@ -216,7 +216,7 @@ OBS 领域核对端点、集合、来源 UUID、类型、连接代际与当前�
 
 [RivalHub 读取客户端](../../apps/companion/src/match-context/rivalhub-read-client.ts)持有赛程、比赛资料与统计缓存；[授权会话](../../apps/companion/src/match-context/rivalhub-authorization.ts)持有凭据和配对过程。更换授权、认领、交接和释放由[连接协调器](../../apps/companion/src/match-context/rivalhub-connection.ts)使用同一串行队列，读取结果按原授权身份核对。
 
-来源身份以网站、赛事、安装、比赛、生产者、运行会话与网站签发的授权修订为准，由[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts)保存并比较。节目来源代际和地图执行只表示采集的连续性和当前地图范围，用于校验节目与赛果，不替代网站授权修订。
+来源身份以网站、赛事、安装、比赛、生产者、运行会话与网站签发的授权修订为准，由[来源状态](../../apps/companion/src/match-context/rivalhub-source-state.ts)保存并比较。当前安装范围只用于核对网站、赛事和安装，接续交接与回执仍按完整来源身份查找。界面的发送失败关联当次认领和节目执行。节目来源代际和地图执行表示采集的连续性和当前地图范围，用于校验节目与赛果。
 
 重新授权先持久交接旧数据源，再按旧凭据执行有界清理；远端释放未确认时保留原身份与待处理状态，允许保存已获批准的新授权。旧记录继续受安装身份边界约束，不能由新授权冒充已释放。
 
