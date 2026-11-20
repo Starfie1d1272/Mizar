@@ -4,7 +4,7 @@ import { collectObsNativeEvidence } from '../obs/native-evidence.js';
 import { constants, lstatSync, unlinkSync, utimesSync, type Stats } from 'node:fs';
 import { mkdir, open, lstat, readdir, rm, rmdir, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
