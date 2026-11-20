@@ -135,7 +135,6 @@ export class RivalHubConnection {
     }
   }
   private source: Source | null = null;
-  private readonly liveInFlight = new Map<Source, Set<Promise<void>>>();
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private cleanupCursor = 0;
   private readonly blockedStatusRetryAt = new Map<string, number>();
@@ -174,45 +173,40 @@ export class RivalHubConnection {
   private activeDeviceMatchId: string | null = null;
   private claimRevision = 0;
   private stoppedMatchId: string | null = null;
-  private readonly eventTransport = new RivalHubEventTransport(
-    {
-      authorization: {
-        request: (path, init) => this.authorization.request(path, init),
-      },
-      fetchImpl: (...args) => this.fetchImpl(...args),
-      sourceState: () => this.sourceState,
-      liveInFlight: () => this.liveInFlight,
-      isolatedRevokedSources: () => this.isolatedRevokedSources,
-      confirmedSourcesAwaitingPersistence: () => this.confirmedSourcesAwaitingPersistence,
-      installation: () => this.installation,
-      source: () => this.source,
-      stoppedMatchId: () => this.stoppedMatchId,
-      monotonicNow: () => this.monotonicNow(),
-      requireSourceState: () => this.requireSourceState(),
-      isCurrentInstallation: (scope) => this.isCurrentInstallation(scope),
-      business: (stage, payload, fields) => this.business(stage, payload, fields),
-      onDiagnostic: (operation, error) => this.onDiagnostic(operation, error),
-      originalError: (operation, error) => this.originalError(operation, error),
-      retryLive: () => this.retryLive(),
-      failureExecutionKey: (payload) => this.failureExecutionKey(payload),
+  private readonly eventTransport = new RivalHubEventTransport({
+    authorization: {
+      request: (path, init) => this.authorization.request(path, init),
     },
-    {
-      controlFailure: null,
-      controlFailureKey: null,
-      nextLiveAt: 0,
-      liveFailures: 0,
-      liveFailureKind: null,
-      lastAcceptedAt: 0,
-      liveDelivery: {
-        cursor: null,
-        status: 'idle',
-        reason: null,
-        consecutiveUnaccepted: 0,
-        since: null,
-        notified: false,
-      },
+    fetchImpl: (...args) => this.fetchImpl(...args),
+    canSendRetainedReliable: async (identity) => {
+      const state = await this.sourceState.snapshot();
+      const key = exactKey(identity);
+      const record = state.records.find((item) => sameExactSource(item.identity, identity));
+      return Boolean(
+        record &&
+        ['owned', 'release_pending'].includes(record.state) &&
+        !record.installationRevoked &&
+        !record.quarantineUncertain &&
+        !this.confirmedSourcesAwaitingPersistence.has(key),
+      );
     },
-  );
+    isRetainedSourceActive: (identity) => {
+      const key = exactKey(identity);
+      return (
+        !this.isolatedRevokedSources.has(key) && !this.confirmedSourcesAwaitingPersistence.has(key)
+      );
+    },
+    installation: () => this.installation,
+    source: () => this.source,
+    stoppedMatchId: () => this.stoppedMatchId,
+    monotonicNow: () => this.monotonicNow(),
+    requireSourceState: () => this.requireSourceState(),
+    isCurrentInstallation: (scope) => this.isCurrentInstallation(scope),
+    business: (stage, payload, fields) => this.business(stage, payload, fields),
+    onDiagnostic: (operation, error) => this.onDiagnostic(operation, error),
+    originalError: (operation, error) => this.originalError(operation, error),
+    failureExecutionKey: (payload) => this.failureExecutionKey(payload),
+  });
   private failureExecutionKey(snapshot: {
     matchId: string;
     cursor: LiveSnapshotV1['cursor'];
@@ -256,10 +250,9 @@ export class RivalHubConnection {
     if (matchId && this.stoppedMatchId === matchId) return result('stopped');
     if (this.activeDeviceName && this.activeDeviceMatchId === matchId)
       return result('other_device');
-    const controlFailure =
-      snapshot && this.eventTransport.state.controlFailureKey === this.failureExecutionKey(snapshot)
-        ? this.eventTransport.state.controlFailure
-        : null;
+    const controlFailure = snapshot
+      ? this.eventTransport.controlFailureFor(this.failureExecutionKey(snapshot))
+      : null;
     // Only a current, bound formal execution can start a watch. Warmup and
     // unbound practice/demo inputs never establish an expected website stream.
     if (snapshot && snapshot.map.phase !== 'live') {
@@ -284,20 +277,18 @@ export class RivalHubConnection {
     }
     const watch = this.syncWatch;
     if (!watch) return result('inactive', controlFailure);
-    const current =
+    const now = this.monotonicNow();
+    const liveStatus = snapshot
+      ? this.eventTransport.liveStatusForCursor(executionKey(snapshot.cursor), now)
+      : null;
+    const current = Boolean(
       snapshot &&
       this.source?.matchId === snapshot.matchId &&
       this.source.deliveryExecution === executionKey(snapshot.cursor) &&
-      this.eventTransport.state.liveDelivery.cursor &&
-      executionKey(this.eventTransport.state.liveDelivery.cursor) === executionKey(snapshot.cursor);
-    const now = this.monotonicNow();
+      liveStatus?.matchesCursor,
+    );
     const boundaryStatus = this.boundaryStatus?.() ?? null;
-    if (
-      !boundaryStatus &&
-      current &&
-      this.eventTransport.state.liveDelivery.status === 'accepted' &&
-      now - this.eventTransport.state.lastAcceptedAt < 15_000
-    ) {
+    if (!boundaryStatus && current && liveStatus?.recentlyAccepted) {
       watch.since = now;
       watch.incidentId = null;
       return result('healthy');
@@ -310,7 +301,7 @@ export class RivalHubConnection {
         : !this.source
           ? 'source_unavailable'
           : current
-            ? (this.eventTransport.state.liveDelivery.reason ?? 'reception_unconfirmed')
+            ? (liveStatus?.reason ?? 'reception_unconfirmed')
             : 'map_start_pending');
     if (now - watch.since < 15_000 && !watch.incidentId) return result('waiting', reason);
     watch.incidentId ??= randomUUID();
@@ -329,14 +320,11 @@ export class RivalHubConnection {
   ): void {
     if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
       return;
-    this.eventTransport.state.controlFailureKey = this.failureExecutionKey(event);
-    this.eventTransport.state.controlFailure = state;
+    this.eventTransport.setControlFailure(this.failureExecutionKey(event), state);
   }
 
   retryLive(): void {
-    this.eventTransport.state.nextLiveAt = 0;
-    this.eventTransport.state.liveFailures = 0;
-    this.eventTransport.state.liveFailureKind = null;
+    this.eventTransport.resetLiveBackoff();
   }
 
   hasCurrentStart(snapshot: LiveSnapshotV1): boolean {
@@ -552,17 +540,7 @@ export class RivalHubConnection {
       liveDelivery:
         this.source === null
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
-          : {
-              status: this.eventTransport.state.liveDelivery.status,
-              cursor: this.eventTransport.state.liveDelivery.cursor,
-              reason: this.eventTransport.state.liveDelivery.reason,
-              failure: this.eventTransport.state.liveDelivery.failure ?? null,
-              consecutiveUnaccepted: this.eventTransport.state.liveDelivery.consecutiveUnaccepted,
-              durationMs:
-                this.eventTransport.state.liveDelivery.since === null
-                  ? 0
-                  : Math.max(0, this.monotonicNow() - this.eventTransport.state.liveDelivery.since),
-            },
+          : this.eventTransport.liveDeliveryView(this.monotonicNow()),
     };
   }
 
@@ -741,15 +719,12 @@ export class RivalHubConnection {
     if (!this.settleSource) return false;
     const key = exactKey(identity);
     const drain = async () => {
-      const requests = [...this.liveInFlight.entries()]
-        .filter(([source]) => sameExactSource(source, identity))
-        .flatMap(([, pending]) => [...pending]);
       // The output owner fences new events synchronously on entry. Only after
       // that fence exists may a paused source deliver its already queued tail.
       const disposition = this.settleSource!(identity).catch(() => false);
       const source = this.source;
       if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
-      await Promise.allSettled(requests);
+      await this.eventTransport.awaitLiveInFlight(identity);
       return disposition;
     };
     let operation = this.sourceSettlements.get(key);
@@ -1493,15 +1468,16 @@ export class RivalHubConnection {
           await this.sourceState.clearIntent(intent.id);
           await this.updateCleanupSummary();
         }
-        this.eventTransport.state.controlFailureKey = this.failureExecutionKey(snapshot);
-        this.eventTransport.state.controlFailure =
+        this.eventTransport.setControlFailure(
+          this.failureExecutionKey(snapshot),
           response.status === 401
             ? 'authorization_expired'
             : response.status === 403
               ? 'permission_denied'
               : response.status === 409
                 ? 'context_conflict'
-                : `http_${response.status}`;
+                : `http_${response.status}`,
+        );
         throw new Error('当前比赛无法成为数据源，请检查同步状态后重试。');
       }
       const result = (await this.authorization.readJson(response)) as {
@@ -1578,16 +1554,7 @@ export class RivalHubConnection {
         }
         this.resumeSource?.(scope);
         this.stoppedMatchId = null;
-        this.eventTransport.state.controlFailure = null;
-        this.retryLive();
-        this.eventTransport.state.liveDelivery = {
-          cursor: null,
-          status: 'idle',
-          reason: null,
-          consecutiveUnaccepted: 0,
-          since: null,
-          notified: false,
-        };
+        this.eventTransport.resetForNewClaim();
         this.claimRevision += 1;
         this.source = { ...identity };
         this.business('business_claim', snapshot, { contextRevision, reason: 'source_published' });
@@ -1610,8 +1577,10 @@ export class RivalHubConnection {
       return this.view();
     } catch (error) {
       if (requestFailureReason(error) !== 'unknown') {
-        this.eventTransport.state.controlFailureKey = this.failureExecutionKey(snapshot);
-        this.eventTransport.state.controlFailure = requestFailureReason(error);
+        this.eventTransport.setControlFailure(
+          this.failureExecutionKey(snapshot),
+          requestFailureReason(error),
+        );
       }
       throw error;
     }
