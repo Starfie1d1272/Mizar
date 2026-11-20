@@ -957,7 +957,11 @@ fn run_desktop(
                                 production_exit::finish_managed_game(
                                     &cleanup_host.state::<DesktopLog>(),
                                     || cs2.finish_for_production(),
-                                )?.record_deferred(&cleanup_host.state::<DesktopLog>(), "managed_source");
+                                )?
+                                .record_deferred(
+                                    &cleanup_host.state::<DesktopLog>(),
+                                    "managed_source",
+                                );
                                 Ok(())
                             }
                         },

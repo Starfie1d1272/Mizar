@@ -282,7 +282,8 @@ impl ManagedCs2 {
                 guard.check()?;
                 self.finish_with_guard(false, guard)?;
                 self.confirm_game_stopped()
-            })?.confirm()?;
+            })?
+            .confirm()?;
         } else {
             if let Some(target) = target {
                 let (created, actual) = identity(&target.process, &self.log)?;
@@ -1770,7 +1771,8 @@ impl ManagedCs2 {
 
     pub fn finish_for_production(&mut self) -> Result<(), String> {
         self.finish()?;
-        self.log.step("workspace_exit_stop_proof", || self.confirm_game_stopped())
+        self.log
+            .step("workspace_exit_stop_proof", || self.confirm_game_stopped())
     }
     /// Only the verified service-stop path can skip the lease expiry wait.
     pub fn finish_with_service_stopped(&mut self, service_stopped: bool) -> Result<(), String> {
@@ -1823,13 +1825,8 @@ impl ManagedCs2 {
             let outcome = retire_camera_before_cleanup(
                 service_stopped,
                 || {
-                    crate::cs2_camera::camera_session(
-                        &self.log,
-                        "invalidate",
-                        Some(&lease),
-                        None,
-                    )
-                    .map(|_| ())
+                    crate::cs2_camera::camera_session(&self.log, "invalidate", Some(&lease), None)
+                        .map(|_| ())
                 },
                 || thread::sleep(Duration::from_millis(12100)),
             );

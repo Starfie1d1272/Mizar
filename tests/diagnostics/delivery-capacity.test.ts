@@ -19,20 +19,26 @@ test('partial producer coverage survives ACK and restart; legacy history yields 
   const client = join(root, 'client');
   const outbox = join(client, 'diagnostic-outbox');
   const manifest = join(outbox, 'state.json');
-  const receiver = meteredRuntime(root, 10);
+  const receiver = meteredRuntime(root, 100);
   await migrate(await receiver.getD1Database('DIAGNOSTICS_DB'));
-  const now = Date.now();
+  let now = Date.now();
   await receiver.dispatchFetch('https://diagnostics.invalid/__test/control', {
     method: 'POST',
     body: JSON.stringify({ now, accepting: true }),
   });
+  const received = new Set<string>();
   const options = {
     endpoint: 'https://diagnostics.invalid',
     now: () => now,
-    fetch: (input: string | URL | Request, init?: RequestInit) => {
+    fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       headers.set('cf-connecting-ip', '192.0.2.10');
-      return receiver.dispatchFetch(String(input), { ...init, headers });
+      const response = await receiver.dispatchFetch(String(input), { ...init, headers });
+      if (response.ok && init?.method === 'PUT' && init.body instanceof Uint8Array) {
+        const { events } = await decodeDiagnosticBatch(Buffer.from(init.body));
+        for (const event of events ?? []) received.add((event as { kind: string }).kind);
+      }
+      return response;
     },
   };
   const readState = async () => JSON.parse(await readFile(manifest, 'utf8'));
@@ -105,6 +111,24 @@ test('partial producer coverage survives ACK and restart; legacy history yields 
     assert.deepEqual(await readFile(join(outbox, `${confirmed.id}.gz`)), confirmedBody);
     assert.deepEqual(await readFile(join(outbox, `${oldestExpired.id}.gz`)), historical(0));
     assert((await readState()).queue.length <= 2048);
+
+    await delivery.pause(true);
+    for (let index = 0; index < DELIVERY_LIMITS.batches; index++) {
+      await journal.recordCommitted('fill_window', { index });
+      await delivery.tick();
+    }
+    assert.equal(delivery.status().queuedBatches, DELIVERY_LIMITS.batches);
+    await journal.recordCommitted('tail_after_full_window', {});
+    await delivery.close();
+    delivery = await new DiagnosticDelivery(client, journal, options).initialize(false);
+    await delivery.pause(false);
+    for (let tick = 0; tick < 12; tick++) {
+      now += DELIVERY_LIMITS.pollMs;
+      await delivery.tick(false);
+    }
+    assert(received.has('tail_after_full_window'));
+    assert.equal(delivery.status().queuedBatches, 0);
+    assert.equal(delivery.status().pendingBytes, 0);
   } finally {
     await delivery.close();
     await journal.close();

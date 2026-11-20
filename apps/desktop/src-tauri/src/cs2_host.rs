@@ -420,10 +420,10 @@ pub(crate) async fn finish_managed_cs2(
                         })?;
                         let activity = app.state::<cs2_activity::Activity>();
                         let _activity = activity.begin(2);
-                        production_exit::finish_managed_game(
-                            &app.state::<DesktopLog>(),
-                            || cs2.finish_for_production(),
-                        )?.confirm()?;
+                        production_exit::finish_managed_game(&app.state::<DesktopLog>(), || {
+                            cs2.finish_for_production()
+                        })?
+                        .confirm()?;
                         workspace_presentation::refresh_finished_window_feedback(&app, &cs2);
                         Ok(())
                     },

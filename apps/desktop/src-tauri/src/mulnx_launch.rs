@@ -110,7 +110,6 @@ pub fn prepare_mulnx_with_demo(
     Ok(value)
 }
 
-
 // Once submitted, transient readers must not abort observation of the same launch.
 // Never resend the launch request while waiting for this process-local state.
 fn confirmation_lock<'a, T>(
