@@ -570,7 +570,9 @@
   width: 420px;
   max-height: 600px;
   overflow: auto;
+  overflow-wrap: anywhere;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--mizar-layout-gap);
   padding: var(--mizar-layout-padding);
   background: var(--mizar-bg-raised);
