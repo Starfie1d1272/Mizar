@@ -95,33 +95,6 @@
   color: var(--mizar-status-danger);
 }
 
-.hud-console__replay-provenance {
-  border-top: 1px solid var(--mizar-border-default);
-  color: var(--mizar-fg-secondary);
-  font-size: var(--mizar-type-size-small);
-  padding-top: 0.55rem;
-}
-
-.hud-console__replay-provenance summary {
-  cursor: pointer;
-}
-
-.hud-console__replay-provenance dl {
-  display: grid;
-  gap: 0.35rem 0.75rem;
-  grid-template-columns: minmax(7rem, auto) minmax(0, 1fr);
-  margin: 0.65rem 0 0;
-}
-
-.hud-console__replay-provenance dt {
-  color: var(--mizar-fg-muted);
-}
-
-.hud-console__replay-provenance dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .hud-console__field input,
 .hud-console__field select,
 .hud-console__preview-toolbar select {
@@ -733,6 +706,27 @@
   }
   .hud-console__replay-actions {
     grid-column: 1 / -1;
+  }
+}
+
+.hud-console__activation-reason {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--mizar-fg-secondary);
+  font-size: var(--mizar-type-size-small);
+}
+
+@media (min-width: 1101px) {
+  .hud-console__source-status {
+    flex: 0 1 auto;
+  }
+
+  .hud-console__replay {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+
+  .hud-console__replay-readout {
+    grid-column: auto;
   }
 }
 

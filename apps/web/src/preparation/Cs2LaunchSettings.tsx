@@ -143,9 +143,7 @@ export function Cs2LaunchSettings() {
             </span>
           </div>
         </form>
-      ) : (
-        <p>请在 Mizar 桌面应用中设置并启动 CS2。</p>
-      )}
+      ) : null}
       <details className="settings-details">
         <summary>启动方式说明</summary>
         <p>无边框窗口 · 分辨率适配工作台</p>

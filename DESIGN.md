@@ -232,7 +232,7 @@ Frontmatter 收录现有工作台令牌，运行时取值由 DTCG 源和生成 C
 
 | 组件 | 现有用法 |
 | --- | --- |
-| `Button` / `IconButton` | 默认次要按钮用抬升面和细边框，主要按钮用蓝底白字。共享按钮显示焦点，加载期间显示「处理中…」并提供 `aria-busy`，禁用时给出视觉反馈。图标按钮提供无障碍名称。深红危险按钮是工作台和准备中心现有动作样式，基础 `Button` 仍提供 `primary` 与 `secondary` 两种变体。 |
+| `Button` / `IconButton` | 默认次要按钮用抬升面和细边框，主要按钮用蓝底白字。共享按钮显示焦点，加载期间显示「处理中…」并提供 `aria-busy`，禁用时给出视觉反馈。图标按钮提供无障碍名称。现场底栏的「结束本次制作」使用红字描边，确认框内的结束操作使用深红实底。基础 `Button` 提供 `primary` 与 `secondary` 两种变体。 |
 | `Field` / `Select` / `Checkbox` | 输入和选择用冷石墨底，保留标签、可见焦点及关联说明。字段错误在输入附近显示。布尔项用带可点标签的共享复选框。 |
 | `Panel` / `Divider` / `EmptyState` | 面板和分隔线组织同一任务。空状态交代缺少什么，在存在有效操作时给出该入口。 |
 | `StatusPill` / `StatusBanner` | 简短状态用圆点加文字，需要处理的情况用带侧边状态线的横幅。异常说明包括事实和一个主要动作，详细证据按需打开。 |
@@ -241,7 +241,7 @@ Frontmatter 收录现有工作台令牌，运行时取值由 DTCG 源和生成 C
 | `OperatorShell` / `ToolShell` | 准备中心使用单色线性导航图标、`aria-current` 和选中底色。HUD 独立工具用单行上下文条保留返回入口及 OBS 连接、直播与录像状态。 |
 | `Workbench` / `PreviewFrame` / `Inspector` / `LibraryWorkspace` | 工具复用预览加检查区。比赛库复用列表、详情和底部操作区，浏览候选与切换本场使用不同操作。 |
 
-保持草稿、已保存资源与当前启用状态可辨。停止直播、停止录像和结束本次制作分别说明影响并确认。「返回设置」保留制作会话。 [产品约束](PRODUCT.md#capabilities-and-constraints) · [确认组件](apps/web/src/ui/useConfirmation.tsx)
+保持草稿、已保存资源与当前启用状态可辨。编辑区提供保存，正式启用在独立位置。在直播、重连或录像期间启用 HUD 前须确认。停止直播、停止录像和结束本次制作分别说明影响并确认。「返回设置」保留制作会话。 [产品约束](PRODUCT.md#capabilities-and-constraints) · [确认组件](apps/web/src/ui/useConfirmation.tsx)
 
 现场左栏直接提供「GoTV 连接」，本场与本图资料从「本场」展开。底栏输出区统一呈现 OBS 连接、直播与录像。节目区保留完整 16:9 的「下一场景」缩略图。仅人工接管或自动暂停时显示「恢复自动」。底栏在常态提示手动切场的后果。 [界面规范](docs/design/ui-system.md#播出视觉与工作台)
 
