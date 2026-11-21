@@ -283,6 +283,9 @@
   background: var(--mizar-bg-surface);
   padding-inline: var(--mizar-layout-compact);
 }
+.workspace-confidence__time[data-stale='true'] {
+  color: var(--mizar-status-warning);
+}
 .workspace-left .mizar-button {
   min-height: var(--mizar-layout-target);
   padding-block: calc(var(--mizar-layout-compact) / 4);

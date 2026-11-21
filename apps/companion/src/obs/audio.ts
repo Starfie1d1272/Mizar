@@ -49,7 +49,33 @@ export async function assertManagedGlobalAudioSilent(obs: ObsRpc): Promise<void>
 /** Structural readiness only. Audible content still needs an OBS/stream listening check. */
 export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
   await assertManagedGlobalAudioSilent(obs);
-  const inputs = (await obs.call('GetInputList')).inputs as Input[];
+  const [collection, sceneList, inputList] = await Promise.all([
+    obs.call('GetSceneCollectionList'),
+    obs.call('GetSceneList'),
+    obs.call('GetInputList'),
+  ]);
+  if (collection.currentSceneCollectionName !== OBS_COLLECTION)
+    return [
+      {
+        code: 'collection_inactive',
+        message: 'OBS 当前未使用「Mizar 制播」场景集合，停止直播和录像后选择「修复场景与音频」。',
+      },
+    ];
+  const existingScenes = new Set(
+    ((sceneList.scenes as { sceneName?: unknown }[] | undefined) ?? [])
+      .map((item) => item.sceneName)
+      .filter((name): name is string => typeof name === 'string'),
+  );
+  const missingScenes = obsDesiredScenes('http://127.0.0.1').filter(
+    (scene) => !existingScenes.has(scene.sceneName),
+  );
+  if (missingScenes.length > 0)
+    return missingScenes.map((scene) => ({
+      code: 'scene_missing',
+      scene: scene.sceneName,
+      message: `OBS 缺少「${scene.sceneName}」场景，停止直播和录像后选择「修复场景与音频」。`,
+    }));
+  const inputs = inputList.inputs as Input[];
   const active = await activeManagedInputs(obs, inputs);
   const candidates = active.filter((input) => AUDIO_KINDS.has(input.inputKind));
   for (const input of active.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {
