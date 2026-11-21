@@ -765,12 +765,23 @@ export async function switchObsScene(
     assertCurrent();
     options.onStarted?.();
     if (finished) {
-      await Promise.race([
-        finished,
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error('OBS 转场完成确认超时。')), 1000);
+      const waitMs = Math.max(1500, options.transition.durationMs + 1000);
+      const completed = await Promise.race([
+        finished.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), waitMs);
         }),
       ]);
+      if (!completed) {
+        assertCurrent();
+        const [sceneNow, cursorNow] = await Promise.all([
+          obs.call('GetCurrentProgramScene'),
+          obs.call('GetCurrentSceneTransitionCursor'),
+        ]);
+        assertCurrent();
+        if (sceneNow.currentProgramSceneName !== name || cursorNow.transitionCursor !== 1)
+          throw new Error('OBS 转场完成确认超时。');
+      }
     }
     assertCurrent();
     const current = await obs.call('GetCurrentProgramScene');
