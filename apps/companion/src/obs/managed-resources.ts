@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { renameObsJournal } from './atomic-rename.js';
 import {
   OBS_CAPTURE_INPUT,
   OBS_COLLECTION,
@@ -84,20 +84,7 @@ export class ManagedObsResources {
       await mkdir(dirname(this.path), { recursive: true });
       const temp = `${this.path}.${randomUUID()}.tmp`;
       await writeFile(temp, JSON.stringify(next), { flag: 'wx', mode: 0o600, flush: true });
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await rename(temp, this.path);
-          break;
-        } catch (error) {
-          if (
-            process.platform !== 'win32' ||
-            attempt >= 4 ||
-            !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')
-          )
-            throw error;
-          await delay(25 * (attempt + 1));
-        }
-      }
+      await renameObsJournal(temp, this.path);
     });
     this.queue = task.catch(() => undefined);
     await task;

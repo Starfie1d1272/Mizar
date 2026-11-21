@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { renameObsJournal } from './atomic-rename.js';
 import type { ObsRpc } from './reconcile.js';
 
 const videoSchema = z
@@ -149,7 +150,7 @@ export class ObsVideoTransaction {
     try {
       await writeFile(temp, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
       if (create) await link(temp, this.path);
-      else await rename(temp, this.path);
+      else await renameObsJournal(temp, this.path);
     } finally {
       await rm(temp, { force: true });
     }
@@ -224,6 +225,7 @@ export class ObsVideoTransaction {
       if (!valid()) throw new ObsVideoError('cancelled', '准备已取消。');
       journal.phase = 'sent';
       await this.save(journal);
+      if (!valid()) throw new ObsVideoError('cancelled', '准备已取消。');
       await obs.call('SetVideoSettings', patch);
       const result = await current(obs);
       if (
