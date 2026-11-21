@@ -780,13 +780,19 @@
 .program-scene--match_result .summary-map-winner {
   position: absolute;
   z-index: 2;
-  bottom: 34px;
+  /* Sits in the clear band under the pick pill; the big map score owns the
+   * bottom of the card and must never be crossed, at three or five maps. The
+   * plate keeps the label readable over bright map imagery. */
+  top: 44px;
   left: 14px;
   max-width: calc(100% - 28px);
   overflow: hidden;
+  padding: 2px 7px;
   color: var(--mizar-broadcast-pulse-gold);
+  background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 84%, transparent);
+  border-radius: 2px;
   font-family: var(--mizar-type-family-display);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-overflow: ellipsis;
