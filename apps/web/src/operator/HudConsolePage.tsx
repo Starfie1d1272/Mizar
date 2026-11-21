@@ -3,18 +3,9 @@ import { SessionContext } from '../preparation/SessionContext';
 import { downloadHudPresetFile, downloadLhmHud, readHudPresetFile } from './hud-preset-file';
 import { Button, Select, SourceBadge, useConfirmation } from '../ui';
 import { useObsStatus } from '../workspace/obs-client';
-import { HudPresetFiles } from './HudPresetFiles';
 import { ResourceSettings } from '../preparation/ResourceSettings';
 import { ToolShell, Workbench } from '../patterns';
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { PointerEvent } from 'react';
 
 import {
@@ -152,6 +143,8 @@ export function HudConsolePage() {
     new URLSearchParams(window.location.search).get('hud-config') !== 'companion';
   const hudEditor = useHudConfigEditorClient(!visualFixtureMode);
   const onAir = useHudConfigClient(!visualFixtureMode);
+  const obs = useObsStatus();
+  const confirmation = useConfirmation();
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');
   const radarSource = useRadarViewSource(radarClient);
@@ -389,17 +382,6 @@ export function HudConsolePage() {
   };
   const hasDirtyDraft = presetDirty || layoutDirty || themeDirty;
   const activationStale = hudEditor.activationStale;
-  const obs = useObsStatus();
-  const confirmation = useConfirmation();
-  const moreRef = useRef<HTMLDetailsElement>(null);
-
-  function closeMore() {
-    const details = moreRef.current;
-    if (!details) return;
-    details.querySelector('summary')?.focus();
-    details.open = false;
-  }
-
   const activationReasons = [
     ...(busy ? ['正在处理上一项操作，请稍候。'] : []),
     ...(!editorReady || (!visualFixtureMode && hudEditor.status !== 'ready')
@@ -815,7 +797,7 @@ export function HudConsolePage() {
         obs?.streamPhase === 'reconnecting' ||
         obs?.recording === true) &&
       !(await confirmation.confirm(
-        `当前直播或录像正在进行。启用「${presetDraft.name}」会改变正式播出 HUD，确认继续？`,
+        `启用「${presetDraft.name}」会改变当前直播或录像中的 HUD，确认启用？`,
       ))
     )
       return;
@@ -962,17 +944,37 @@ export function HudConsolePage() {
     busy,
     configDocument,
     editorReady,
+    hasDirtyDraft,
     layoutDirty,
     layoutDraft,
     layoutNameError,
+    onImportPresetFile: (file: File) => void importPresetFile(file),
+    onExportPresetFile: exportPresetFile,
+    onDiscard: (kind: HudWorkspace) => {
+      void confirmation.confirm('放弃当前编辑区未保存的更改？').then((accepted) => {
+        if (accepted) discard(kind);
+      });
+    },
     onLayoutDraftChange: (draft: HudLayout) => setLayoutDraft(draft),
     onPresetDraftChange: (draft: HudPreset) => setPresetDraft(draft),
+    onReset: (kind: HudWorkspace) => {
+      if (!(kind === 'preset' ? presetDirty : kind === 'layout' ? layoutDirty : themeDirty)) {
+        reset(kind);
+        return;
+      }
+      void confirmation
+        .confirm('恢复默认会覆盖当前编辑区未保存的更改，确认继续？')
+        .then((accepted) => {
+          if (accepted) reset(kind);
+        });
+    },
     onSelectResource: selectResource,
     onSelectWidget: (id: HudWidgetId) => setSelectedWidgetId(id),
     onShowCenterChange: (value: boolean) => setShowCenter(value),
     onShowGridChange: (value: boolean) => setShowGrid(value),
     onShowSafeAreaChange: (value: boolean) => setShowSafeArea(value),
     onSnapToGridChange: (value: boolean) => setSnapToGridEnabled(value),
+    onSubmitMutation: (kind: HudWorkspace, saveAs: boolean) => void submitMutation(kind, saveAs),
     onThemeDraftChange: setThemeDraftValue,
     onUpdatePresetReference: updatePresetReference,
     onUpdateSelectedPlacement: updateSelectedPlacement,
@@ -983,6 +985,7 @@ export function HudConsolePage() {
     selectedLayoutId,
     selectedPlacement,
     selectedPresetId,
+    selectedThemeId,
     selectedWidgetId,
     showCenter,
     showGrid,
@@ -997,54 +1000,6 @@ export function HudConsolePage() {
 
   const isEditingOnAir = onAir.status === 'ready' && selectedPresetId === onAir.current.preset.id;
 
-  const activeResource = {
-    preset: { id: selectedPresetId, dirty: presetDirty, invalid: presetNameError !== null },
-    layout: { id: selectedLayoutId, dirty: layoutDirty, invalid: layoutNameError !== null },
-    theme: {
-      id: selectedThemeId,
-      dirty: themeDirty,
-      invalid: themeNameError !== null || themeDraftInvalid,
-    },
-  }[workspace];
-  const builtinResource = activeResource.id.startsWith('builtin:');
-  const saveDisabled = busy || !editorReady || activeResource.invalid;
-  const activationDisabled = activationReasons.length > 0 || (isEditingOnAir && !activationStale);
-  const toolActions = (
-    <div className="hud-console__edit-actions">
-      <Button
-        disabled={busy || !editorReady || !activeResource.dirty}
-        onClick={() =>
-          void confirmation.confirm('放弃当前编辑区未保存的更改？').then((accepted) => {
-            if (accepted) discard(workspace);
-          })
-        }
-      >
-        放弃
-      </Button>
-      <Button
-        variant={!builtinResource && activeResource.dirty ? 'primary' : 'secondary'}
-        disabled={saveDisabled || builtinResource}
-        onClick={() => void submitMutation(workspace, false)}
-      >
-        保存
-      </Button>
-      <Button
-        variant={builtinResource && activeResource.dirty ? 'primary' : 'secondary'}
-        disabled={saveDisabled}
-        onClick={() => void submitMutation(workspace, true)}
-      >
-        另存为
-      </Button>
-      <Button
-        variant={!activationDisabled ? 'primary' : 'secondary'}
-        disabled={activationDisabled}
-        onClick={() => void activateSelectedPreset()}
-      >
-        启用
-      </Button>
-    </div>
-  );
-
   return (
     <ToolShell title="HUD 编辑器" fill context={<SessionContext returnToWorkspace compact />}>
       <main className="hud-console" data-surface="hud-console">
@@ -1052,24 +1007,19 @@ export function HudConsolePage() {
           <p role="alert">请求的 HUD 预设不存在；保留当前资源，未启用任何新预设。</p>
         ) : null}
         <section className="hud-console__versions" aria-label="编辑与正式播出版本">
-          <div className="hud-console__version-state">
+          <div>
             <strong>{presetDraft.name}</strong>
-            {builtinResource ? <span>内置只读</span> : null}
             <span>
               {!editorReady
                 ? '正在读取配置'
                 : editorStatus === 'error'
                   ? '连接异常，最近保存快照'
                   : hasDirtyDraft
-                    ? isEditingOnAir
-                      ? '已启用 · 有未保存修改'
-                      : '未保存修改'
+                    ? '草稿未保存'
                     : isEditingOnAir && activationStale
                       ? '已保存 · 更新待启用'
                       : !isEditingOnAir
-                        ? onAir.status === 'ready'
-                          ? '已保存 · 未启用'
-                          : '已保存'
+                        ? '已保存'
                         : null}
             </span>
             {onAir.status === 'ready' ? (
@@ -1090,142 +1040,34 @@ export function HudConsolePage() {
               </span>
             )}
           </div>
-          {toolActions}
-          <details
-            className="hud-console__more"
-            ref={moreRef}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape' && event.currentTarget.open) {
-                event.preventDefault();
-                closeMore();
-              }
+          <Button
+            disabled={
+              busy || visualFixtureMode || onAir.status !== 'ready' || onAir.activeRevision === null
+            }
+            onClick={() => {
+              void exportLhm();
             }}
           >
-            <summary className="mizar-button" aria-label="更多 HUD 操作">
-              ⋯
-            </summary>
-            <div className="hud-console__more-panel">
-              <Button
-                disabled={
-                  busy ||
-                  visualFixtureMode ||
-                  onAir.status !== 'ready' ||
-                  onAir.activeRevision === null
-                }
-                onClick={() => {
-                  closeMore();
-                  void exportLhm();
-                }}
-              >
-                导出 LHM HUD
-              </Button>
-              <details>
-                <summary>导入与导出预设</summary>
-                <HudPresetFiles
-                  disabled={busy || !editorReady || hasDirtyDraft}
-                  exportDisabled={
-                    selectedLayoutId !== presetDraft.layoutId ||
-                    selectedThemeId !== presetDraft.themeId
-                  }
-                  onImport={(file) => void importPresetFile(file)}
-                  onExport={exportPresetFile}
-                />
-                <p className="hud-console__hint">导入创建新副本。保存后可分享或启用。</p>
-              </details>
-              <details aria-label="启用条件与引用">
-                <summary>共享引用与启用条件</summary>
-                <span>
-                  共享布局引用 · {savedLayout?.name ?? selectedLayoutId}；共享外观引用 ·{' '}
-                  {savedTheme?.name ?? selectedThemeId}。保存引用资源可影响其他使用它的预设；保存 /
-                  另存与正式启用分开。
-                </span>
-                {activationReasons.length ? (
-                  <ul>
-                    {activationReasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <span>资源已保存，可明确启用上屏。</span>
-                )}
-                {activationReasons.length ? (
-                  <Button
-                    onClick={() => {
-                      closeMore();
-                      changeWorkspace(layoutDirty ? 'layout' : 'preset');
-                      const buttons = document.querySelectorAll<HTMLButtonElement>(
-                        '.hud-console__tabs button',
-                      );
-                      buttons[layoutDirty ? 1 : 0]?.focus();
-                    }}
-                  >
-                    定位需处理编辑区
-                  </Button>
-                ) : null}
-              </details>
-              <details className="hud-console__source-help">
-                <summary>预览来源与版本详情</summary>
-                <h4>
-                  预览来源说明 ·{' '}
-                  {activePreviewSource === 'current-live' ? '当前观战资料' : '示例资料，非本场事实'}
-                </h4>
-                <p className="hud-console__hint">
-                  {activePreviewSource === 'fixture'
-                    ? '静态样例名单与比分仅用于检查版式，不代表本场已核实。'
-                    : activePreviewSource === 'replay'
-                      ? '实景回放来自已记录的示例比赛，不代表本场名单或实时状态。'
-                      : '当前观战数据只读预览；是否属于本场及首发身份需在制播中核对。'}
-                </p>
-                {replayFixture !== null ? (
-                  <section className="hud-console__replay-provenance">
-                    <h4>来源、覆盖与完整性</h4>
-                    <dl>
-                      <dt>原始 capture</dt>
-                      <dd>{replayFixture.manifest.source.sourceCaptureId}</dd>
-                      <dt>来源 SHA-256</dt>
-                      <dd>{replayFixture.manifest.source.sourceFramesSha256}</dd>
-                      <dt>帧 / 语义事件</dt>
-                      <dd>
-                        {replayFixture.manifest.frameCount} / {replayFixture.manifest.eventCount}
-                      </dd>
-                      <dt>Sanitizer</dt>
-                      <dd>v{replayFixture.manifest.source.sanitizerVersion}</dd>
-                      {replayFixture.manifest.coverage
-                        .filter((item) => item.status !== 'observed')
-                        .map((item) => (
-                          <Fragment key={item.kind}>
-                            <dt>{item.kind}</dt>
-                            <dd>{item.status}</dd>
-                          </Fragment>
-                        ))}
-                    </dl>
-                  </section>
-                ) : null}
-                <h4>版本诊断</h4>
-                <p>
-                  资源版本 {hudEditor.revision ?? '未知'} · 启用版本{' '}
-                  {onAir.activeRevision ?? '未知'}
-                </p>
-              </details>
-              <Button
-                disabled={busy || !editorReady}
-                onClick={() => {
-                  closeMore();
-                  if (!activeResource.dirty) {
-                    reset(workspace);
-                    return;
-                  }
-                  void confirmation
-                    .confirm('恢复默认会覆盖当前编辑区未保存的更改，确认继续？')
-                    .then((accepted) => {
-                      if (accepted) reset(workspace);
-                    });
-                }}
-              >
-                恢复默认
-              </Button>
-            </div>
-          </details>
+            导出在播 HUD（LHM）
+          </Button>
+          <Button
+            disabled={
+              activationReasons.length > 0 ||
+              (onAir.status === 'ready' &&
+                selectedPresetId === onAir.current.preset.id &&
+                !activationStale)
+            }
+            onClick={() => {
+              void activateSelectedPreset();
+            }}
+          >
+            启用
+          </Button>
+          {activationReasons.length > 0 ? (
+            <p className="hud-console__activation-reason" role="status">
+              {activationReasons[0]}
+            </p>
+          ) : null}
         </section>
         <Workbench
           layout="canvas"
@@ -1522,6 +1364,14 @@ export function HudConsolePage() {
               </div>
               <fieldset className="hud-console__editor-fieldset" disabled={!editorReady}>
                 <HudConsoleWorkspaces {...workspaceProps} />
+                <details aria-label="共享布局和外观">
+                  <summary>共享布局和外观</summary>
+                  <span>
+                    共享布局引用 · {savedLayout?.name ?? selectedLayoutId}；共享外观引用 ·{' '}
+                    {savedTheme?.name ?? selectedThemeId}。保存引用资源可影响其他使用它的预设；保存
+                    / 另存与正式启用分开。
+                  </span>
+                </details>
               </fieldset>
             </div>
           }

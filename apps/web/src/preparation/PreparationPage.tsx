@@ -769,9 +769,12 @@ export function PreparationPage() {
           </>
         ) : path === '/picture' ? (
           tab === 'hud' ? (
-            <Suspense fallback={<StatusBanner tone="info">正在加载画面预览…</StatusBanner>}>
-              <HudPresetDirectory action={action} />
-            </Suspense>
+            <>
+              <Suspense fallback={<StatusBanner tone="info">正在加载画面预览…</StatusBanner>}>
+                <HudPresetDirectory action={action} />
+              </Suspense>
+              <BpPresentationSettingsPanel />
+            </>
           ) : (
             <div className="preparation-overlay-workspace">
               <Panel className="preparation-overlay-display">
@@ -788,11 +791,6 @@ export function PreparationPage() {
           <Settings tab={tab} />
         )}
       </main>
-      {path === '/picture' && tab === 'hud' ? (
-        <div className="preparation preparation-picture-extras">
-          <BpPresentationSettingsPanel />
-        </div>
-      ) : null}
     </OperatorShell>
   );
 }

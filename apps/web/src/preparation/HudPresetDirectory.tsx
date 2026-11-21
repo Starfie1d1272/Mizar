@@ -59,7 +59,7 @@ export function HudPresetDirectory({
         obs?.streamPhase === 'reconnecting' ||
         obs?.recording === true) &&
       !(await confirmation.confirm(
-        `当前直播或录像正在进行。启用「${selected.name}」会改变正式播出 HUD，确认继续？`,
+        `启用「${selected.name}」会改变当前直播或录像中的 HUD，确认启用？`,
       ))
     )
       return;
@@ -114,46 +114,44 @@ export function HudPresetDirectory({
             {scene === 'gameplay' ? selected?.name : '仅预览，不影响播出'}
           </span>
         </div>
-        <div className="picture-preview-space">
-          <div className="picture-preview" aria-label="画面预览" data-scene={scene}>
-            {scene === 'gameplay' ? (
-              resolved ? (
-                <HudCanvasPreview
-                  resolvedPreset={resolved}
-                  snapshot={fixture}
-                  radarSnapshot={radar}
-                  mapBackground
-                  connectionState="live"
-                  liveSource={false}
-                  editorMode="preview"
-                  editorInteractive={false}
-                  selectedWidgetId={null}
-                  showGrid={false}
-                  showCenter={false}
-                  showSafeArea={false}
-                />
-              ) : (
-                <p>所选预设不可用，请重新选择。</p>
-              )
-            ) : scene === 'bp' ? (
-              bp?.projection ? (
-                <div className="picture-bp-canvas">
-                  <BpPresentation
-                    snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
-                    animate={false}
-                  />
-                </div>
-              ) : (
-                <p className="picture-empty">本场暂无完整 BP。现场将按已有比赛资料继续编排。</p>
-              )
-            ) : (
-              <iframe
-                key={scene}
-                title="节目场景预览"
-                src={`${PROGRAM_SCENES.find((item) => item.id === scene)!.path}?preview=1`}
+        <div className="picture-preview" aria-label="画面预览" data-scene={scene}>
+          {scene === 'gameplay' ? (
+            resolved ? (
+              <HudCanvasPreview
+                resolvedPreset={resolved}
+                snapshot={fixture}
+                radarSnapshot={radar}
+                mapBackground
+                connectionState="live"
+                liveSource={false}
+                editorMode="preview"
+                editorInteractive={false}
+                selectedWidgetId={null}
+                showGrid={false}
+                showCenter={false}
+                showSafeArea={false}
               />
-            )}
-          </div>
+            ) : (
+              <p>所选预设不可用，请重新选择。</p>
+            )
+          ) : scene === 'bp' ? (
+            bp?.projection ? (
+              <div className="picture-bp-canvas">
+                <BpPresentation
+                  snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
+                  animate={false}
+                />
+              </div>
+            ) : (
+              <p className="picture-empty">本场暂无完整 BP。现场将按已有比赛资料继续编排。</p>
+            )
+          ) : (
+            <iframe
+              key={scene}
+              title="节目场景预览"
+              src={`${PROGRAM_SCENES.find((item) => item.id === scene)!.path}?preview=1`}
+            />
+          )}
         </div>
       </div>
       <aside className="picture-preset-panel" aria-label="选择 HUD 预设">

@@ -17,7 +17,6 @@ import type {
 } from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
-import { useStatusFeedback } from './useStatusFeedback';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { ContextEnvelope } from '@mizar/core/match-context';
@@ -547,9 +546,6 @@ function WorkspaceDockContent() {
     });
   };
   const mode = sceneState?.director?.mode;
-  const directorStatus =
-    mode === 'auto' ? 's0' : mode === 'manual' ? 's2' : mode === 'blocked' ? 's3' : 's1';
-  const directorFeedback = useStatusFeedback(directorStatus);
   const connected = obs?.connection === 'connected';
   const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
   const nextFrame = useMemo(
@@ -565,22 +561,21 @@ function WorkspaceDockContent() {
       data-camera={showCamera}
       aria-label="现场控制底栏"
     >
-      <section className="workspace-direction" data-mode={mode ?? 'unknown'} aria-label="节目控制">
+      <section className="workspace-direction" aria-label="节目控制">
         <div className="workspace-section-heading">
           <span
-            className="workspace-director-status"
-            data-state={directorStatus}
-            data-status-feedback={directorFeedback ?? undefined}
+            className="workspace-director-mode"
+            data-mode={mode}
+            data-tone={mode === 'blocked' ? 'warning' : undefined}
           >
             {mode === 'auto'
               ? '自动编排'
               : mode === 'manual'
-                ? '手动'
+                ? '手动编排'
                 : mode === 'blocked'
                   ? '自动暂停'
                   : '准备中'}
           </span>
-          {directorFeedback === 'recovered' ? <small role="status">已恢复</small> : null}
           {mode === 'manual' || mode === 'blocked' ? (
             <Button
               disabled={busy || !sceneState}
@@ -701,26 +696,22 @@ function WorkspaceDockContent() {
       </section>
       <section className="workspace-production" aria-label="制作工具">
         <div className="workspace-section-heading">
-          <span
-            data-tone={
-              obs?.connection === 'invalid_password' || obs?.connection === 'password_required'
-                ? 'warning'
-                : undefined
-            }
-          >
+          <span data-tone={obs && !connected ? 'warning' : undefined}>
             {connected
               ? 'OBS · 已连接'
               : obs?.connection === 'invalid_password'
                 ? 'OBS · 密码无效'
                 : obs?.connection === 'password_required'
                   ? 'OBS · 需要密码'
-                  : 'OBS · 未连接'}
+                  : obs
+                    ? 'OBS · 未连接'
+                    : 'OBS · 连接待确认'}
           </span>
           <Button onClick={() => navigate(openPreparation('/settings?tab=obs'))}>OBS 配置</Button>
         </div>
         <ObsOutputControls
           onError={setErrorMessage}
-          unknownReason={connected ? '等待 OBS 确认输出状态' : 'OBS 尚未连接或连接状态待确认'}
+          connected={connected}
           startWarning={
             connected
               ? obs.captureDiagnostic?.state === 'needs_attention'

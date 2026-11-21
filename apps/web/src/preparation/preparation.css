@@ -1145,30 +1145,17 @@
 
 .game-settings-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
   gap: var(--mizar-layout-padding);
 }
-.preparation .settings-card--collapsible {
-  padding: 0;
+.game-settings-desktop-notice {
+  grid-column: 1 / -1;
 }
-.settings-disclosure > summary {
-  padding: var(--mizar-layout-padding);
-}
-.settings-disclosure > summary > span {
-  margin-inline-start: var(--mizar-layout-gap);
-  color: var(--mizar-fg-secondary);
-}
-.settings-disclosure__body {
-  display: grid;
-  gap: var(--mizar-layout-gap);
-  padding: 0 var(--mizar-layout-padding) var(--mizar-layout-padding);
-}
-.settings-disclosure__body > p {
-  margin: 0;
-}
-.settings-save-row--end {
-  justify-content: flex-end;
+@media (max-width: 900px) {
+  .game-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .game-settings-current,
 .game-settings-preferences {
