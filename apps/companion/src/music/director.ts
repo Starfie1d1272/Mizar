@@ -109,6 +109,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   private fades: Partial<Record<MusicLayer, Fade>> = {};
   private expectedStops = new Map<MusicLayer, string>();
   private appliedVolumes = new Map<MusicLayer, number>();
+  private externalDriftCounts = new Map<MusicLayer, number>();
   private failed = new Map<string, Set<string>>();
   private status: MusicStatus = {
     held: false,
@@ -476,8 +477,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         const before = await obs.mediaStatus({ sourceId: uuid });
         const mute = await obs.mute({ sourceId: uuid });
         const volume = await obs.volume({ sourceId: uuid });
-        if (current() && this.manualControlObserved('bgm', before.state, mute, volume)) {
-          await this.holdForObsControl();
+        if (current() && this.manualControlObserved('bgm', before.state, mute, volume, true)) {
+          await this.holdForObsControl('bgm');
           throw new Error('music_source_changed');
         }
         if (!current() || before.state !== (paused ? 'playing' : 'paused'))
@@ -570,8 +571,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         const media = await obs.mediaStatus({ sourceId: uuid });
         const mute = await obs.mute({ sourceId: uuid });
         const volume = await obs.volume({ sourceId: uuid });
-        if (current() && this.manualControlObserved('bgm', media.state, mute, volume)) {
-          await this.holdForObsControl();
+        if (current() && this.manualControlObserved('bgm', media.state, mute, volume, true)) {
+          await this.holdForObsControl('bgm');
           throw new Error('music_source_changed');
         }
         const duration = media.durationMs;
@@ -676,6 +677,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     if (!valid()) return;
     this.status.monitorPending = wanted === true && relationship === 'unknown';
     if (wanted === null) return;
+    if (wanted === true && relationship === 'unknown') return;
     const safe = await obs.monitorSafe().catch(() => false);
     if (!valid()) return;
     if (!safe) {
@@ -710,6 +712,13 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.status.monitorPending = wanted;
         continue;
       }
+      if (observed !== desired) {
+        await obs.setMonitorMode({ sourceId: uuid, mode: desired });
+        if (!valid()) return;
+        if ((await obs.monitorMode({ sourceId: uuid })) !== desired)
+          throw new Error('music_monitor_unconfirmed');
+      }
+      if (!valid()) return;
       await this.store.update((state) => {
         state.monitorConfigured[layer] = uuid;
         if (relationship !== 'independent')
@@ -719,12 +728,6 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             applied: desired,
           });
       });
-      if (!valid()) return;
-      if (observed !== desired) {
-        await obs.setMonitorMode({ sourceId: uuid, mode: desired });
-        if ((await obs.monitorMode({ sourceId: uuid })) !== desired)
-          throw new Error('music_monitor_unconfirmed');
-      }
     }
   }
 
@@ -946,7 +949,16 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             continue;
           }
           found = true;
+          if (monitorPending) continue;
           const monitorType = desiredMusicMonitorMode(relation, enabled);
+          await obs.setMonitorMode({
+            sourceId: uuid,
+            mode: monitorType,
+          });
+          if (!current()) return;
+          const read = await obs.monitorMode({ sourceId: uuid });
+          if (!current()) return;
+          if (read !== monitorType) throw new Error('music_monitor_unconfirmed');
           await this.store.update((state) => {
             state.monitorConfigured[layer] = uuid;
             state.desktopMonitorOriginal[layer] =
@@ -958,15 +970,6 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
                     applied: monitorType,
                   });
           });
-          if (!current()) return;
-          await obs.setMonitorMode({
-            sourceId: uuid,
-            mode: monitorType,
-          });
-          if (!current()) return;
-          const read = await obs.monitorMode({ sourceId: uuid });
-          if (!current()) return;
-          if (read !== monitorType) throw new Error('music_monitor_unconfirmed');
         }
         if (pending) throw new Error('music_preview_monitor_pending');
         if (!found) throw new Error('music_source_missing');
@@ -1228,14 +1231,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       if (waitForAutomaticAudio()) return;
       await this.provider.session(async (obs, epoch) => {
         const reconnect = this.epoch !== epoch;
-        if (this.manual && this.manual.epoch !== null && this.manual.epoch !== epoch) {
-          this.manual = null;
-          this.unknownControl = true;
-          this.heldOverride = true;
-          this.holdReasonOverride = 'external';
-          await this.store.hold(true);
-          cue = null;
-        }
+        if (reconnect) this.externalDriftCounts.clear();
         if (!valid()) return;
         if (this.manual) this.manual.epoch = epoch;
         this.epoch = epoch;
@@ -1263,9 +1259,12 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         await this.reconcilePreview(obs, epoch, valid, previewSafe);
         const monitorRecheck = reconnect || this.monitorSettingsChanged;
         this.monitorSettingsChanged = false;
-        await this.configureDefaultMonitor(obs, valid, monitorRecheck);
-        if (valid() && this.preview.busy) await this.readMonitor(obs, valid);
-        if (!valid() || this.preview.busy) return;
+        if (!valid()) return;
+        if (this.preview.busy) {
+          await this.configureDefaultMonitor(obs, valid, monitorRecheck);
+          if (valid()) await this.readMonitor(obs, valid);
+          return;
+        }
         if (this.unknownControl) {
           const name = await obs.hasSource(this.store, 'bgm', valid);
           if (name && valid()) {
@@ -1280,9 +1279,6 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         // Observe both existing layers before changing a cue or attributing a stop to the system.
         if (await this.observeManualControls(obs, valid, previewOwned)) return;
         await this.layer(obs, 'bgm', cue, valid);
-        await this.configureDefaultMonitor(obs, valid);
-        if (this.store.state.sources.bgm || this.store.state.sources.stinger)
-          await this.readMonitor(obs, valid);
         if (
           opening &&
           opening.scope === musicOpeningScope(this.truth().program) &&
@@ -1322,7 +1318,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             valid,
           );
         }
-        await this.configureDefaultMonitor(obs, valid);
+        await this.configureDefaultMonitor(obs, valid, monitorRecheck);
         if (valid()) await this.readMonitor(obs, valid);
       });
       if (valid()) recovered();
@@ -1357,13 +1353,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.preview.unavailable(error);
         this.status.failure = failure.code;
         this.status.connection = failure.code === 'obs_disconnected' ? 'unavailable' : 'connected';
-        if (this.manual) {
-          this.manual = null;
-          this.unknownControl = true;
-          this.heldOverride = true;
-          this.holdReasonOverride = 'external';
-          await this.store.hold(true).catch(() => undefined);
-        }
+
         if (!valid()) return;
         this.status.playback = 'unknown';
         this.status.cursorMs = null;
@@ -1380,34 +1370,62 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     state: MusicMediaState,
     muted: boolean | undefined,
     volume: number | undefined,
+    immediate = false,
   ) {
-    if (this.isHeld() || this.resumeLayers.has(layer)) return false;
+    if ((layer === 'bgm' ? this.isHeld() : this.isStingerHeld()) || this.resumeLayers.has(layer)) {
+      this.externalDriftCounts.delete(layer);
+      return false;
+    }
     const saved = this.store.state[layer];
     if ((saved?.finished || saved?.suspended) && ['stopped', 'ended', 'empty'].includes(state))
       this.expectedStops.delete(layer);
-    const active = ['playing', 'opening', 'buffering'].includes(state);
+    const playing = state === 'playing';
     const expectedVolume =
       this.appliedVolumes.get(layer) ??
       (saved ? this.effectiveVolume(saved.group, saved.track) : null);
-    return (
+    const definiteExternal =
       // A registered source or a monitor receipt is not an active formal playback grant.
-      (active &&
+      (playing &&
         (!saved || saved.finished) &&
         this.expectedStops.get(layer) !== this.store.state.sources[layer]) ||
       (muted === true && !this.store.state.muted) ||
-      Boolean(layer === 'bgm' && this.manual?.paused && state === 'playing') ||
-      (state === 'paused' && !(layer === 'bgm' && this.manual?.paused)) ||
-      Boolean(
-        saved &&
-        !saved.finished &&
-        !saved.suspended &&
-        ((state === 'stopped' &&
-          this.expectedStops.get(layer) !== this.store.state.sources[layer]) ||
-          (active && expectedVolume !== null && Math.abs(Number(volume) - expectedVolume) > 0.015)),
-      )
+      Boolean(layer === 'bgm' && this.manual?.paused && playing) ||
+      (state === 'paused' && !(layer === 'bgm' && this.manual?.paused));
+    if (definiteExternal) {
+      this.externalDriftCounts.delete(layer);
+      return true;
+    }
+    const transientMismatch = Boolean(
+      saved &&
+      !saved.finished &&
+      !saved.suspended &&
+      !this.fades[layer] &&
+      ((state === 'stopped' &&
+        this.appliedVolumes.has(layer) &&
+        this.expectedStops.get(layer) !== this.store.state.sources[layer]) ||
+        (playing &&
+          typeof volume === 'number' &&
+          Number.isFinite(volume) &&
+          expectedVolume !== null &&
+          Math.abs(volume - expectedVolume) > 0.03)),
     );
+    if (!transientMismatch) {
+      this.externalDriftCounts.delete(layer);
+      return false;
+    }
+    if (immediate) return true;
+    const count = (this.externalDriftCounts.get(layer) ?? 0) + 1;
+    this.externalDriftCounts.set(layer, count);
+    return count >= 2;
   }
-  private async holdForObsControl() {
+  private async holdForObsControl(layer?: MusicLayer) {
+    this.externalDriftCounts.clear();
+    if (layer === 'stinger') {
+      await this.store.update((state) => {
+        state.stingerHeld = true;
+      });
+      return;
+    }
     this.commandRevision++;
     this.manual = null;
     this.preview.cancel('manual_control');
@@ -1418,7 +1436,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     this.nextRequested = false;
     this.resumeLayers.clear();
     this.invalidate();
-    await this.store.hold(true);
+    await this.store.hold(true, 'external', this.isStingerHeld());
   }
   private async holdForPreviewControl(valid: () => boolean) {
     if (!valid()) return;
@@ -1510,8 +1528,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       if (!valid()) throw new Error('music_cancelled');
       if (layer === 'bgm') this.status.playback = observedPlayback(media.state);
       if (this.manualControlObserved(layer, media.state, mute, volume)) {
-        await this.holdForObsControl();
-        return true;
+        await this.holdForObsControl(layer);
+        if (layer === 'bgm') return true;
       }
     }
     return false;
@@ -1535,8 +1553,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       if (media.state === 'playing') {
         const volume = await obs.volume({ sourceId });
         if (!valid()) throw new Error('music_cancelled');
-        if (this.manualControlObserved(layer, media.state, false, volume)) {
-          await this.holdForObsControl();
+        if (this.manualControlObserved(layer, media.state, false, volume, true)) {
+          await this.holdForObsControl(layer);
           return false;
         }
         if (cursorMs) await obs.setMediaCursor({ sourceId, cursorMs: cursorMs });
@@ -1608,7 +1626,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       else this.status.stinger = p && !p.finished ? p.track.name : null;
     };
     if (!resuming && this.manualControlObserved(layer, state, mute, volume)) {
-      await this.holdForObsControl();
+      await this.holdForObsControl(layer);
       markStatus(null);
       return;
     }
@@ -1770,7 +1788,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         if (valid()) this.appliedVolumes.set(layer, gain);
         markStatus(saved);
         return; // Reconcile an existing source without Restart or seek.
-      } else return;
+      } else if (this.appliedVolumes.has(layer) || state !== 'stopped') return;
     }
     // Ordinary BGM changes fade out incrementally. They never block polling or emergency stop.
     if (!matching && active && saved && layer === 'bgm') {
@@ -1954,16 +1972,17 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
           ]);
           guard();
           if (
-            this.manualControlObserved(layer, media.state, mute, volume) ||
+            this.manualControlObserved(layer, media.state, mute, volume, true) ||
             (path && settings !== path)
           ) {
             try {
-              await this.holdForObsControl();
+              await this.holdForObsControl(layer);
             } catch (error) {
               localWriteFailure = error;
               throw error;
             }
-            return;
+            if (layer === 'bgm') return;
+            continue;
           }
           if (
             !path ||
