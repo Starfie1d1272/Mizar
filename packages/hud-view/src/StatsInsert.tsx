@@ -106,12 +106,14 @@ export function StatsInsertView({
   };
   return (
     <div style={{ display: 'contents', ...sceneStyle }}>
-      <ProgramCanvas className="program-scene stats-insert">
+      <ProgramCanvas
+        className={`program-scene stats-insert${insert.content?.kind === 'current-map' ? ' stats-insert--current-map' : ''}`}
+      >
         <BroadcastArc />
         <div className="stats-top">
-          <span>{matchTeams[0]}</span>
+          <span>{insert.content?.kind === 'current-map' ? '' : matchTeams[0]}</span>
           <span className="stats-top-center">{insert.phaseFormat}</span>
-          <span>{matchTeams[1]}</span>
+          <span>{insert.content?.kind === 'current-map' ? '' : matchTeams[1]}</span>
         </div>
         {insert.content?.kind !== 'match' && (
           <header className="stats-heading">

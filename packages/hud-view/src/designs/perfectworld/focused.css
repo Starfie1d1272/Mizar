@@ -187,14 +187,14 @@
   bottom: 29px;
   height: 26px;
   padding: 0 8px;
-  gap: 7px;
+  gap: 9px;
   justify-content: flex-start;
-  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--mizar-hud-surface-primary) 34%, transparent);
   font-size: 12px;
   line-height: 18px;
 }
 .hud-widget-design[data-hud-design='perfectworld'] .focused-player__metrics > span {
-  gap: 2px;
+  gap: 5px;
   align-items: center;
   flex: none;
 }

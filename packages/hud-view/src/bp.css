@@ -14,7 +14,7 @@
   flex-direction: column;
   box-sizing: border-box;
   overflow: hidden;
-  padding: 76px 104px 64px;
+  padding: 64px 104px 104px;
   opacity: 1;
   transform: none;
 }
@@ -136,7 +136,7 @@
 .bp-cards {
   display: flex;
   min-height: 0;
-  height: 430px;
+  height: 416px;
   gap: 12px;
 }
 .bp-card {
@@ -187,8 +187,10 @@
   inset: 0;
   background: linear-gradient(
     180deg,
-    transparent 10%,
-    color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 20%, transparent) 35%,
+    color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 78%, transparent) 0%,
+    color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 36%, transparent) 16%,
+    transparent 30%,
+    color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 24%, transparent) 46%,
     var(--mizar-broadcast-pulse-canvas) 78%
   );
 }
@@ -325,7 +327,6 @@
 .bp-progress i[data-on='true'] {
   background: var(--mizar-broadcast-pulse-white);
 }
-
 .bp-controls {
   display: grid;
   gap: 12px;
@@ -1244,9 +1245,9 @@
   right: 48px;
   bottom: 32px;
   left: 48px;
-  height: 208px;
+  height: 214px;
   display: grid;
-  grid-template-rows: 24px 176px;
+  grid-template-rows: 30px 176px;
   gap: 8px;
 }
 .bp-compact[data-animate='true'] {
@@ -1264,10 +1265,13 @@
   align-items: center;
   gap: 24px;
   min-width: 0;
+  box-sizing: border-box;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 82%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--mizar-broadcast-pulse-blue) 45%, transparent);
   color: var(--mizar-broadcast-pulse-white);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  text-shadow: 0 1px 4px var(--mizar-broadcast-pulse-canvas);
 }
 .bp-compact-status > span {
   overflow: hidden;

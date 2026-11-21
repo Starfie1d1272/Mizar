@@ -54,6 +54,13 @@
   line-height: 1.2;
   letter-spacing: 1px;
 }
+.stats-insert--current-map .stats-heading h1 {
+  font-family: var(--mizar-type-family-display);
+  font-size: 76px;
+  font-weight: 700;
+  line-height: 0.96;
+  letter-spacing: 0.02em;
+}
 .stats-logos {
   display: flex;
   align-items: center;
@@ -1296,13 +1303,26 @@
   align-items: center;
   padding: 0 24px 0 98px;
   font-size: 16px;
+  font-weight: 600;
   letter-spacing: 1px;
   color: var(--mizar-broadcast-pulse-muted);
 }
-.stats-summary-columns span:first-child {
+.stats-summary-team {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mizar-broadcast-pulse-white);
+  font-size: 18px;
 }
-.stats-summary-columns span:not(:first-child) {
+.stats-summary-stat-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+}
+.stats-summary-columns .stats-summary-stat-group span {
   width: 78px;
   text-align: center;
 }
@@ -1310,7 +1330,7 @@
   flex-direction: row-reverse;
   padding: 0 98px 0 24px;
 }
-.stats-roster.right .stats-summary-columns span:first-child {
+.stats-roster.right .stats-summary-team {
   text-align: right;
 }
 .stats-summary-rosters .stats-roster-row {
