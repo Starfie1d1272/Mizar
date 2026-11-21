@@ -426,8 +426,8 @@ export class RivalHubConnection {
   automaticManifestDeferred(matchId: string) {
     return this.readClient.automaticManifestDeferred(matchId);
   }
-  library() {
-    return this.readClient.library();
+  library(fresh = false) {
+    return this.readClient.library(fresh);
   }
   libraryDetail(matchId: string, fresh = true) {
     return this.readClient.libraryDetail(matchId, fresh);

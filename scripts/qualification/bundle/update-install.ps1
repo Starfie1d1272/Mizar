@@ -1,4 +1,4 @@
-﻿param(
+param(
   [ValidateSet('Prepare', 'Install', 'Recover', 'Rollback', 'Finalize', 'Handoff')][string]$Mode,
   [string]$PlanPath,
   [string]$StageRoot,
@@ -509,7 +509,7 @@ function Test-HandoffResidueFailure($failure) {
   $message = if ($failure -is [System.Management.Automation.ErrorRecord]) { $failure.Exception.Message } else { [string]$failure }
   return $message -notmatch '^(update_transaction_busy|update_handoff_process_active|update_handoff_process_unknown|update_handoff_process_ended|update_handoff_process_changed|update_installer_remaining|update_data_inside_installation|update_reparse_point|update_path_invalid|update_handoff_caller_unknown|update_handoff_arguments_invalid|update_handoff_bootstrap_active|update_handoff_bootstrap_owner_changed|update_handoff_pending_changed|update_handoff_lease_unknown|update_handoff_writer_unknown)$'
 }
-function Retire-StaleUpdateRecords([string]$target, [string]$state) {
+function Retire-StaleUpdateRecords([string]$target, [string]$state, [string]$excludeStage = '') {
   # Rename, never delete: every original byte stays on disk for later recovery.
   $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
   $roots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -530,8 +530,33 @@ function Retire-StaleUpdateRecords([string]$target, [string]$state) {
     if (!(Test-Path -LiteralPath $updates -PathType Container)) { continue }
     $archive = Join-Path $root ('updates-retired-' + $stamp)
     if (Test-Path -LiteralPath $archive) { $archive = $archive + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8) }
-    [IO.Directory]::Move($updates, $archive)
-    $moved.Add($archive)
+    if (!$excludeStage) {
+      [IO.Directory]::Move($updates, $archive)
+      $moved.Add($archive)
+    } else {
+      foreach ($entry in @(Get-ChildItem -LiteralPath $updates -Directory -Force)) {
+        if ($entry.Name -notmatch '^install-[a-f0-9]{32}$' -or $entry.FullName -eq $excludeStage) { continue }
+        if (!(Test-Path -LiteralPath $archive)) { [IO.Directory]::CreateDirectory($archive) | Out-Null }
+        $dest = Join-Path $archive $entry.Name
+        [IO.Directory]::Move($entry.FullName, $dest)
+        $moved.Add($dest)
+      }
+    }
+  }
+  if (!$excludeStage) {
+    $pending = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'Mizar') 'bootstrap-cache') 'fresh-install.pending'
+    if (Test-Path -LiteralPath $pending -PathType Leaf) {
+      try {
+        $p = Read-HandoffJson $pending -SharedSnapshot
+        if ($p.ownerPid -gt 0 -and $p.ownerStarted -gt 0) { Assert-HandoffProcessEnded $p.ownerPid $p.ownerStarted }
+        if ($p.writerPid -gt 0 -and $p.writerStarted -gt 0) { Assert-HandoffProcessEnded $p.writerPid $p.writerStarted }
+      } catch {
+        if ($_.Exception.Message -eq 'update_handoff_process_active') { throw }
+      }
+      $retiredPending = $pending + '.retired-' + $stamp
+      [IO.File]::Move($pending, $retiredPending)
+      $moved.Add($retiredPending)
+    }
   }
   return @($moved)
 }
@@ -844,12 +869,18 @@ function Recovery-Registration([bool]$enabled) {
 function Assert-InstallationRegistration {
   $key = 'HKCU:\Software\Mizar'
   $registered = if (Test-Path -LiteralPath $key) { Get-ItemProperty -LiteralPath $key }
-  if ($registered -and $registered.InstallDir -and
-    [IO.Path]::GetFullPath([string]$registered.InstallDir).TrimEnd('\') -ne [IO.Path]::GetFullPath($plan.bundleRoot).TrimEnd('\')) { throw 'update_recovery_target_changed' }
+  if ($registered -and $registered.InstallDir) {
+    $oldDir = [IO.Path]::GetFullPath([string]$registered.InstallDir).TrimEnd('\')
+    if ($oldDir -ne [IO.Path]::GetFullPath($plan.bundleRoot).TrimEnd('\') -and
+      (Test-Path -LiteralPath (Join-Path $oldDir 'installed.flag'))) { throw 'update_recovery_target_changed' }
+  }
   $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar'
   $uninstall = if (Test-Path -LiteralPath $key) { Get-ItemProperty -LiteralPath $key }
   if ($uninstall -and $uninstall.UninstallString -and
-    $uninstall.UninstallString -ne ('"' + (Join-Path $plan.bundleRoot 'Uninstall.exe') + '"')) { throw 'update_recovery_target_changed' }
+    $uninstall.UninstallString -ne ('"' + (Join-Path $plan.bundleRoot 'Uninstall.exe') + '"')) {
+    $oldUninstallDir = Split-Path -Parent ($uninstall.UninstallString.Trim('"'))
+    if ($oldUninstallDir -and (Test-Path -LiteralPath (Join-Path $oldUninstallDir 'installed.flag'))) { throw 'update_recovery_target_changed' }
+  }
 }
 function Clear-CompletedRecoveryOwner {
   $marker = Join-Path $plan.bundleRoot '.mizar-update-owner'; Assert-PlainPath $marker
@@ -1447,7 +1478,16 @@ try {
   try {
     $parent = if ($BootstrapLease -ne 0) { Handoff-BootstrapParent (Handoff-Process $PID) (Handoff-Path $plan.bundleRoot) (Handoff-Path $StageRoot) }
     $script:handoffLeaseStream = Open-HandoffLease $parent $BootstrapLease
-    if ($Mode -eq 'Install') { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:handoffLeaseStream }) }
+    if ($Mode -eq 'Install') {
+      try { [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:handoffLeaseStream }) }
+      catch {
+        if (!(Test-HandoffResidueFailure $_)) { throw }
+        $retired = @(Retire-StaleUpdateRecords $plan.bundleRoot $plan.stateRoot $StageRoot)
+        if ($retired.Count -eq 0) { throw }
+        [Console]::Error.WriteLine('retired-stale-handoff-records: ' + ($retired -join '; '))
+        [void](Invoke-LegacyHandoff $plan.bundleRoot $plan.stateRoot $StageRoot @{ lease = $script:handoffLeaseStream })
+      }
+    }
   } finally { foreach ($handle in $script:handoffHandles) { $handle.Dispose() } }
 # Reject stale recovery before any registration/result write or automatic rollback.
 $journal = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $StageRoot 'journal.json') -Raw | ConvertFrom-Json
