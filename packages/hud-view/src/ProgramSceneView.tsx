@@ -92,10 +92,15 @@ function BroadcastIdentity({
   );
 }
 
-function MapStrip({ data }: { data: ProgramPresentation }) {
+function MapStrip({ data, scene }: { data: ProgramPresentation; scene: ProgramSceneId }) {
   const resolveAssetUrl = useAssetUrl();
   const series = data.series;
   if (!series) return null;
+  // Between maps the next unplayed map is the one the audience is waiting for.
+  const upNextOrder =
+    scene === 'intermap'
+      ? (series.maps.find((map) => map.status === 'pending')?.mapOrder ?? null)
+      : null;
   return (
     <div className="summary-map-strip">
       <Media src={series.entrants.a.logoUrl} className="summary-entrant-logo" />
@@ -109,8 +114,27 @@ function MapStrip({ data }: { data: ProgramPresentation }) {
                 )?.name
               : null;
           const asset = getMapThumbnail(map.mapName);
+          // Only a recorded per-map winner may mark a card; an unresolved map stays neutral.
+          const winner =
+            scene === 'match_result' && map.status === 'completed' && map.winnerEntryId != null
+              ? (Object.values(series.entrants).find(
+                  (entrant) => entrant.entryId === map.winnerEntryId,
+                ) ?? null)
+              : null;
+          const upNext = upNextOrder === map.mapOrder;
           return (
-            <article key={map.mapOrder} className={`summary-map summary-map--${map.status}`}>
+            <article
+              key={map.mapOrder}
+              className={`summary-map summary-map--${map.status}`}
+              data-map-winner={
+                winner === null
+                  ? undefined
+                  : winner.entryId === series.entrants.a.entryId
+                    ? 'a'
+                    : 'b'
+              }
+              data-up-next={upNext ? 'true' : undefined}
+            >
               <div className="summary-map-tab">{mapName(map.mapName)}</div>
               <div className="summary-map-art">
                 {asset ? <img src={resolveAssetUrl(asset.outputPath)} alt="" /> : null}
@@ -129,8 +153,15 @@ function MapStrip({ data }: { data: ProgramPresentation }) {
                     ? 'CURRENT'
                     : map.status === 'not_played'
                       ? 'NOT PLAYED'
-                      : `MAP ${map.mapOrder}`}
+                      : upNext
+                        ? `UP NEXT · MAP ${map.mapOrder}`
+                        : `MAP ${map.mapOrder}`}
                 </span>
+                {winner === null ? null : (
+                  <span className="summary-map-winner" title={`${winner.name} 赢下本图`}>
+                    {winner.name} WIN
+                  </span>
+                )}
               </div>
             </article>
           );
@@ -145,7 +176,7 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
   const hasPlayers = Boolean(summary && (summary.players.a.length || summary.players.b.length));
   return (
     <>
-      <MapStrip data={data} />
+      <MapStrip data={data} scene={scene} />
       <div className="summary-caption">
         <span>
           {scene === 'halftime'

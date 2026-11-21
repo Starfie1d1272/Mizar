@@ -528,11 +528,19 @@ export function FocusedPlayerCard({
     };
   }, [handoff]);
   const crossfadeActive = options.showMedia && handoff?.phase === 'crossfading';
+  // Empty-state collapse keeps the card's outer box: only the internal empty
+  // ammunition column retracts, never the width or the anchor.
+  const hasAmmo =
+    !player.dead &&
+    (player.clip !== null ||
+      (options.showReserveAmmo &&
+        (player.reserveMagazine !== null || player.reserveText !== null)));
   return (
     <article
       aria-label="Focused player"
       className="focused-player"
       data-show-metrics={options.showMetrics}
+      data-has-ammo={hasAmmo}
       data-focused-player={player.sourcePlayerId}
       data-avatar={
         options.showMedia && loadedAvatarIdentityKey === currentAvatarIdentityKey ? true : undefined

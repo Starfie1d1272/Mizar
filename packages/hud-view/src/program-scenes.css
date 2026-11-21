@@ -256,6 +256,35 @@
 .summary-map--not_played {
   opacity: 0.45;
 }
+/* Between maps: the unplayed map the audience is waiting for leads, the map just
+ * finished recedes, and later maps step further back. */
+.program-scene--intermap .summary-map--completed {
+  opacity: 0.72;
+}
+.program-scene--intermap .summary-map[data-up-next='true'] {
+  opacity: 1;
+  box-shadow:
+    0 0 0 2px var(--mizar-broadcast-pulse-blue),
+    0 12px 28px color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 62%, transparent);
+}
+.program-scene--intermap .summary-map[data-up-next='true'] .summary-map-tab {
+  background: var(--mizar-broadcast-pulse-blue);
+  color: var(--mizar-broadcast-pulse-white);
+}
+.program-scene--intermap .summary-map[data-up-next='true'] .summary-map-art {
+  border-radius: 0 4px 4px 4px;
+}
+.program-scene--intermap .summary-map[data-up-next='true'] .summary-map-art > img {
+  opacity: 0.92;
+}
+.program-scene--intermap .summary-map[data-up-next='true'] .summary-map-state {
+  color: var(--mizar-broadcast-pulse-highlight);
+  font-size: 16px;
+  letter-spacing: 0.14em;
+}
+.program-scene--intermap .summary-map--pending:not([data-up-next='true']) {
+  opacity: 0.52;
+}
 .summary-map-art {
   position: relative;
   height: 180px;
@@ -708,8 +737,60 @@
   font-size: 36px;
   white-space: nowrap;
 }
+.program-scene--match_result .summary-footer {
+  top: 18px;
+  height: 68px;
+}
+/* The series result is the peak of the broadcast: it leads, the winner is named,
+ * and the losing side steps back. With no recorded series winner both sides stay
+ * symmetric because the dimmer only fires behind a winner. */
 .program-scene--match_result .summary-footer span {
-  font-size: 48px;
+  font-size: 74px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.program-scene--match_result .summary-footer strong[data-winner='true'] {
+  font-size: 32px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.program-scene--match_result .summary-footer strong[data-winner='true']::after {
+  content: 'WINNER';
+  display: inline-block;
+  margin-left: 14px;
+  padding: 3px 9px;
+  vertical-align: middle;
+  color: var(--mizar-broadcast-pulse-canvas);
+  background: var(--mizar-broadcast-pulse-gold);
+  border-radius: 2px;
+  font-family: var(--mizar-type-family-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+.program-scene--match_result
+  .summary-footer:has(strong[data-winner='true'])
+  strong[data-winner='false'] {
+  opacity: 0.58;
+}
+/* Each completed map keeps a quiet winner anchor; unrecorded winners stay bare. */
+.program-scene--match_result .summary-map[data-map-winner] {
+  box-shadow: inset 0 -3px 0 var(--mizar-broadcast-pulse-gold);
+}
+.program-scene--match_result .summary-map-winner {
+  position: absolute;
+  z-index: 2;
+  bottom: 34px;
+  left: 14px;
+  max-width: calc(100% - 28px);
+  overflow: hidden;
+  color: var(--mizar-broadcast-pulse-gold);
+  font-family: var(--mizar-type-family-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .summary-footer strong[data-winner='true'] {
   text-decoration: underline;
@@ -834,6 +915,24 @@
   text-decoration: underline;
   text-underline-offset: 14px;
   text-decoration-thickness: 3px;
+}
+/* A recorded map winner earns the warm-gold anchor; the other side recedes but
+ * stays legible. Without a recorded winner both sides keep equal weight. */
+.result-sting:has(.result-side[data-winner='true']) .result-side[data-winner='true'] .result-logo {
+  border-bottom-color: var(--mizar-broadcast-pulse-gold);
+}
+.result-sting:has(.result-side[data-winner='true'])
+  .result-side[data-winner='true']
+  .result-series-score {
+  text-decoration-color: var(--mizar-broadcast-pulse-gold);
+}
+.result-sting:has(.result-side[data-winner='true'])
+  .result-side[data-winner='false']
+  :is(.result-round-score, .result-team-name, .result-series-score) {
+  opacity: 0.56;
+}
+.result-sting:has(.result-side[data-winner='true']) .result-side[data-winner='false'] .result-logo {
+  opacity: 0.72;
 }
 .summary-avatar {
   display: grid;
