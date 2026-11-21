@@ -9,7 +9,7 @@ if ($Product) {
 }
 $LEGACY_GSI_CFG_NAME = 'gamestate_integration_rivalhub_broadcast.cfg'
 $MIZAR_GSI_CFG_NAME = 'gamestate_integration_mizar.cfg'
-# Automatic preparation never takes ownership of an unknown sender or disables third-party files.
+# Automatic preparation repairs only Mizar's canonical sender and leaves other senders alone.
 if ($Automatic) {
     if (-not $Product) { throw 'Automatic configuration requires product mode' }
     $safeDirectory = Resolve-CfgDirectory -ExplicitRoot $Cs2Root
@@ -19,16 +19,13 @@ if ($Automatic) {
     if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
         $owned = Read-InstallState
         if ([string]$owned.cfgPath -ine $safePath) { Stop-Cs2Discovery 'record-unreadable' }
-        if (-not (Test-Path -LiteralPath $safePath)) {
-            # Only recreate bytes whose identity was already recorded by our install transaction.
-            $template = Get-Content -LiteralPath (Join-Path $script:BundleRoot 'config\gamestate_integration_mizar.cfg.template') -Raw -Encoding UTF8
-            $restored = $template.Replace('REPLACE_WITH_GSI_TOKEN', [string]$owned.gsiToken)
-            $sha = [System.Security.Cryptography.SHA256]::Create()
-            try { $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($restored))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
-            if ($digest -ne [string]$owned.cfgFingerprint) { Stop-Cs2Discovery 'gsi-file-changed' }
-            Write-Utf8NoBom -Path $safePath -Content $restored
+    }
+    if (Test-Path -LiteralPath $safePath) {
+        $sender = Get-Item -LiteralPath $safePath -Force
+        if ($sender.PSIsContainer -or ($sender.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Stop-Cs2Discovery 'gsi-file-changed'
         }
-    } elseif (Test-Path -LiteralPath $safePath) { Stop-Cs2Discovery 'gsi-file-changed' }
+    }
 }
 if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
     try { $existing = Read-InstallState } catch { Stop-Cs2Discovery 'record-unreadable' -Cause $_.Exception }
@@ -47,8 +44,8 @@ if (Test-Path -LiteralPath $script:InstallStatePath -PathType Leaf) {
         if ($Cs2Root) { Stop-Cs2Discovery 'restore-before-selection' }
         if (-not (Test-Path -LiteralPath $existingCfgPath -PathType Leaf) -or
             (Get-FileHash -LiteralPath $existingCfgPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$existing.cfgFingerprint) {
-            if (-not $Product -or $Automatic -or $existingCfgName -ine $MIZAR_GSI_CFG_NAME) { Stop-Cs2Discovery 'gsi-file-changed' }
-            # Explicit repair owns only the recorded Mizar sender. Keep the original
+            if (-not $Product -or $existingCfgName -ine $MIZAR_GSI_CFG_NAME) { Stop-Cs2Discovery 'gsi-file-changed' }
+            # Repair owns only the recorded Mizar sender. Keep the original
             # restore contract and token; never compose destructive restore + install.
             $resolvedPath = Join-Path (Resolve-CfgDirectory) $MIZAR_GSI_CFG_NAME
             if ($resolvedPath -ine $existingCfgPath -or $existing.schemaVersion -ne 1 -or
@@ -118,7 +115,17 @@ $legacyCfgPath = Join-Path $cfgDirectory $LEGACY_GSI_CFG_NAME
 New-Item -ItemType Directory -Force -Path $script:QualificationStateRoot | Out-Null
 $backupPath = Join-Path $script:QualificationStateRoot "$MIZAR_GSI_CFG_NAME.original"
 $hadExisting = Test-Path -LiteralPath $cfgPath -PathType Leaf
-if ($hadExisting) { Copy-Item -LiteralPath $cfgPath -Destination $backupPath -Force }
+$beforeFingerprint = $null
+if ($hadExisting) {
+    $beforeFingerprint = (Get-FileHash -LiteralPath $cfgPath -Algorithm SHA256).Hash
+    if ($Automatic) {
+        if (-not (Test-Path -LiteralPath $backupPath)) { [IO.File]::Copy($cfgPath, $backupPath) }
+    }
+    else { Copy-Item -LiteralPath $cfgPath -Destination $backupPath -Force }
+    if ((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash -ne $beforeFingerprint) {
+        throw 'GSI 备份校验失败，现有配置保留'
+    }
+}
 if (Test-Path -LiteralPath $legacyCfgPath -PathType Leaf) {
     Remove-Item -LiteralPath $legacyCfgPath -Force
 }
@@ -170,10 +177,22 @@ $state = [ordered]@{
 }
 # Record the original before touching the canonical sender; an interrupted write
 # can then be undone by restore instead of losing the user's original config.
-$pendingState = $script:InstallStatePath + '.pending'
-Write-JsonFile -Path $pendingState -Value $state
-[System.IO.File]::Move($pendingState, $script:InstallStatePath)
-Write-Utf8NoBom -Path $cfgPath -Content $materialized
+$pendingState = $script:InstallStatePath + '.pending-' + [Guid]::NewGuid().ToString('N')
+$pendingCfg = $cfgPath + '.mizar-install-' + [Guid]::NewGuid().ToString('N')
+try {
+    Write-Utf8NoBom -Path $pendingCfg -Content $materialized
+    Write-JsonFile -Path $pendingState -Value $state
+    [IO.File]::Move($pendingState, $script:InstallStatePath)
+    if ($hadExisting) {
+        if ((Get-FileHash -LiteralPath $cfgPath -Algorithm SHA256).Hash -ne $beforeFingerprint) {
+            throw 'GSI 配置在安装期间发生变化，现有配置与备份保留'
+        }
+        [IO.File]::Replace($pendingCfg, $cfgPath, [NullString]::Value)
+    } else { [IO.File]::Move($pendingCfg, $cfgPath) }
+} finally {
+    if (Test-Path -LiteralPath $pendingCfg -PathType Leaf) { Remove-Item -LiteralPath $pendingCfg -Force }
+    if (Test-Path -LiteralPath $pendingState -PathType Leaf) { Remove-Item -LiteralPath $pendingState -Force }
+}
 
 Write-Output "GSI 配置已安装：$cfgPath"
 Write-Output "配置指纹（SHA-256）：$fingerprint"

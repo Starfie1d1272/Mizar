@@ -190,6 +190,25 @@ try {
   await assert.rejects(access(installationPath));
   await assert.rejects(access(legacyCfgPath));
   await assert.rejects(access(mizarCfgPath));
+  await powershell('select-cs2-installation.ps1', ['-Product', '-Cs2Root', cfgDirectory]);
+  const preexisting = 'previous contents of the Mizar sender\n';
+  await writeFile(mizarCfgPath, preexisting);
+  await powershell('ensure-gsi.ps1', ['-Product']);
+  const generated = await readFile(mizarCfgPath, 'utf8');
+  assert.match(generated, /http:\/\/127\.0\.0\.1:3000\/gsi/);
+  const edited = `${generated}\n// Local edit\n`;
+  await writeFile(mizarCfgPath, edited);
+  await powershell('ensure-gsi.ps1', ['-Product']);
+  assert.equal(await readFile(mizarCfgPath, 'utf8'), generated);
+  const repairsRoot = join(stateRoot, 'data/gsi-repairs');
+  const repairs = await readdir(repairsRoot);
+  assert.equal(repairs.length, 1);
+  assert.equal(
+    await readFile(join(repairsRoot, repairs[0], `${MIZAR_GSI_CFG_NAME}.before-repair`), 'utf8'),
+    edited,
+  );
+  await powershell('restore-gsi.ps1', ['-Product']);
+  assert.equal(await readFile(mizarCfgPath, 'utf8'), preexisting);
   await rm(join(stateRoot, 'gsi-migration-test'), { recursive: true, force: true });
   const occupied = createServer((socket) => socket.destroy());
   await new Promise((done) => occupied.listen(3000, '127.0.0.1', done));

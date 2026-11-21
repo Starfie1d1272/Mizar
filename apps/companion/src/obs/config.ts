@@ -1,6 +1,6 @@
 import { ManagedObsResources } from './managed-resources.js';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { ObsActionError } from './action-error.js';
@@ -84,6 +84,14 @@ export class ObsConfigStore {
       return validateObsConfig(JSON.parse(await readFile(this.filePath, 'utf8')) as unknown);
     } catch {
       return DEFAULT_OBS_CONFIG;
+    }
+  }
+  async isUnconfigured(): Promise<boolean> {
+    try {
+      await lstat(this.filePath);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT';
     }
   }
   async save(config: ObsConfig): Promise<void> {

@@ -302,21 +302,36 @@ fn entered(app: &tauri::AppHandle, id: &str) -> Result<bool, String> {
     crate::lifecycle_contract::cancellation_entered(&status)
 }
 fn request(app: &tauri::AppHandle, method: &str, path: &str, body: Value) -> Result<Value, String> {
-    let (status, value) = crate::companion_http::request_with_identity(
-        &app.state::<DesktopLog>(),
-        method,
-        path,
-        &body.to_string(),
-        Instant::now() + Duration::from_secs(40),
-        None,
-    )?;
-    if !(200..300).contains(&status) {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let body = body.to_string();
+    let mut remaining_reads = 3;
+    loop {
+        let (status, value) = crate::companion_http::request_with_identity(
+            &app.state::<DesktopLog>(),
+            method,
+            path,
+            &body,
+            deadline,
+            None,
+        )?;
+        if (200..300).contains(&status) {
+            return Ok(value);
+        }
+        // Entering production or adopting the local connection can retire a read in flight.
+        if method == "GET"
+            && path == "/local/v1/obs"
+            && value["error"] == "obs_observation_changed"
+            && remaining_reads > 0
+        {
+            remaining_reads -= 1;
+            thread::sleep(Duration::from_millis(150));
+            continue;
+        }
         return Err(value["message"]
             .as_str()
             .unwrap_or("自动准备未完成，请重试。")
             .into());
     }
-    Ok(value)
 }
 async fn http(
     app: &tauri::AppHandle,
@@ -464,6 +479,19 @@ async fn prepare_obs(
             t.obs = false;
             t.capture = false;
         });
+        let try_local = || {
+            controlled_post(
+                &app,
+                &id,
+                "/operator/obs/use-local-connection",
+                json!({"expectedRevision": revision}),
+            )
+        };
+        if obs["connection"] != "connected" {
+            let _ = try_local().await;
+            check(&app, &id)?;
+            obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+        }
         if obs["connection"] != "connected" {
             if obs["connection"] == "password_required" || obs["connection"] == "invalid_password" {
                 return Err("OBS WebSocket 密码未配置或不正确。".into());
@@ -481,7 +509,7 @@ async fn prepare_obs(
             .await?;
         }
         // OBS accepts WebSocket connections before its output requests are ready.
-        for _ in 0..30 {
+        for attempt in 0..30 {
             if obs["connection"] == "connected"
                 && obs["streaming"].is_boolean()
                 && obs["recording"].is_boolean()
@@ -492,6 +520,10 @@ async fn prepare_obs(
             tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
                 .await
                 .map_err(|_| "OBS 等待失败。")?;
+            if matches!(attempt, 3 | 11) && obs["connection"] != "connected" {
+                let _ = try_local().await;
+                check(&app, &id)?;
+            }
             obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
         }
         if obs["connection"] != "connected" {
@@ -657,6 +689,12 @@ async fn prepare_game(
                     .as_str()
                     .unwrap_or("无法确认 CS2 安装或 GSI 配置。")
                     .into());
+            }
+            if !preparation_evidence::gsi_current(&status) {
+                let game = crate::cs2_host::status(app.clone()).await?;
+                if game["running"] == true || game["pending"] == true {
+                    return Err("CS2 正在运行或启动，请结束本次游戏后重试准备。".into());
+                }
             }
             let result = crate::gsi_host::ensure(
                 app.clone(),

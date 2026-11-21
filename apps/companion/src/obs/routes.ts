@@ -624,12 +624,22 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     const body = z
-      .object({ useLocalSettings: z.literal(true) })
-      .strict()
+      .union([
+        z.object({ useLocalSettings: z.literal(true) }).strict(),
+        z.object({ expectedRevision: z.string() }).strict(),
+      ])
       .safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'obs_local_settings_invalid' });
+    const automatic = 'expectedRevision' in body.data;
+    const valid =
+      'expectedRevision' in body.data
+        ? options.preparationValid(body.data.expectedRevision)
+        : () => true;
     try {
-      await options.adapter.useLocalConnection(() => !request.raw.aborted && !reply.raw.destroyed);
+      await options.adapter.useLocalConnection(
+        () => valid() && !request.raw.aborted && !reply.raw.destroyed,
+        automatic,
+      );
       return reply.header('cache-control', 'no-store').send({ ok: true });
     } catch (error) {
       if (error instanceof ObsOutputError) return reply.code(409).send(outputFailure(error));

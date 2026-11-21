@@ -42,6 +42,7 @@ import {
 } from './model';
 import { workspaceLiveRosterAlert, type LiveRosterConnection } from './live-roster-model';
 import { useObsStatus } from './obs-client';
+import { prepareObs, useObsPreparation } from './obs-preparation';
 import {
   useLocalRead,
   useLocalReadWithTime,
@@ -485,6 +486,9 @@ function WorkspaceDockContent() {
   const [errorMessage, setErrorMessage] = useState('');
   const preparation = usePreparationStatus();
   const entryNotice = preparation?.message ?? '';
+  const obsPreparation = useObsPreparation();
+  const preparingObs = preparation?.running || obsPreparation.phase === 'running';
+  const audioMissing = obs?.readiness?.warnings?.[0]?.code === 'audio_missing';
   const [dockDetail, setDockDetail] = useState<'notices' | 'display' | 'tools' | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
@@ -713,10 +717,15 @@ function WorkspaceDockContent() {
           onError={setErrorMessage}
           connected={connected}
           startWarning={
-            connected
+            connected && !preparingObs
               ? obs.captureDiagnostic?.state === 'needs_attention'
                 ? '游戏画面可能需要检查，请核对 OBS 预览。'
                 : (obs.readiness?.warnings?.[0]?.message ?? null)
+              : null
+          }
+          audioRepair={
+            audioMissing && obs?.captureDiagnostic?.state !== 'needs_attention'
+              ? { run: () => void action(() => prepareObs()), busy }
               : null
           }
         />
