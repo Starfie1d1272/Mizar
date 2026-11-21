@@ -172,7 +172,15 @@ function ContextPanel({
             {match ? '识别服务器首发' : '从服务器创建本地比赛'}
           </Button>
         ) : null}
-        <details className="workspace-match-menu">
+        <details
+          className="workspace-match-menu"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && event.currentTarget.open) {
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}
+        >
           <summary className="mizar-button">本场 ▾</summary>
           <div className="workspace-match-menu__list">
             <Button

@@ -287,9 +287,6 @@
   min-height: var(--mizar-layout-target);
   padding-block: calc(var(--mizar-layout-compact) / 4);
 }
-.workspace-match-menu {
-  position: relative;
-}
 .workspace-match-menu > summary {
   list-style: none;
   cursor: pointer;
@@ -298,14 +295,11 @@
   display: none;
 }
 .workspace-match-menu__list {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + var(--mizar-layout-compact) / 2);
-  z-index: 20;
   min-width: 150px;
   display: grid;
   gap: calc(var(--mizar-layout-compact) / 2);
   padding: var(--mizar-layout-compact);
+  margin-top: calc(var(--mizar-layout-compact) / 2);
   background: var(--mizar-bg-raised);
   border: var(--mizar-line-border) solid var(--mizar-border-strong);
   border-radius: var(--mizar-shape-panel);
