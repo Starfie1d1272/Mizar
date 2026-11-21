@@ -2,10 +2,18 @@ import { useRadarViewSource } from '../realtime/radar-view-source';
 import { SessionContext } from '../preparation/SessionContext';
 import { downloadHudPresetFile, downloadLhmHud, readHudPresetFile } from './hud-preset-file';
 import { Button, Select, SourceBadge, useConfirmation } from '../ui';
-import { useObsStatus } from '../workspace/obs-client';
+import { confirmHudActivation } from './hud-activation';
 import { ResourceSettings } from '../preparation/ResourceSettings';
 import { ToolShell, Workbench } from '../patterns';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { PointerEvent } from 'react';
 
 import {
@@ -143,7 +151,6 @@ export function HudConsolePage() {
     new URLSearchParams(window.location.search).get('hud-config') !== 'companion';
   const hudEditor = useHudConfigEditorClient(!visualFixtureMode);
   const onAir = useHudConfigClient(!visualFixtureMode);
-  const obs = useObsStatus();
   const confirmation = useConfirmation();
   const program = useProgramConnection();
   const radarClient = useLocalChannelClient('radar');
@@ -400,6 +407,15 @@ export function HudConsolePage() {
       ? ['资源已在另一页面更新，请先处理冲突。']
       : []),
   ];
+  const activationState = useRef({
+    selectedPresetId,
+    revision: hudEditor.revision,
+    activationReasons,
+  });
+  const activationPending = useRef(false);
+  useLayoutEffect(() => {
+    activationState.current = { selectedPresetId, revision: hudEditor.revision, activationReasons };
+  });
 
   const currentReplayEvent = replayFixture?.events.find(
     (event) => event.id === replayState.currentEventId,
@@ -790,37 +806,48 @@ export function HudConsolePage() {
   }
 
   async function activateSelectedPreset(): Promise<void> {
-    if (activationReasons.length > 0 || hudEditor.revision === null) return;
-    if (
-      (obs?.streaming === true ||
-        obs?.streamPhase === 'active' ||
-        obs?.streamPhase === 'reconnecting' ||
-        obs?.recording === true) &&
-      !(await confirmation.confirm(
-        `启用「${presetDraft.name}」会改变当前直播或录像中的 HUD，确认启用？`,
-      ))
-    )
+    if (activationPending.current || activationReasons.length > 0 || hudEditor.revision === null)
       return;
-    setBusy(true);
-    setCommandState(null);
-    setCommandError(false);
+    activationPending.current = true;
     try {
-      const response = await mutateHudConfig({
-        kind: 'activate-preset',
-        sourceId: selectedPresetId,
-        expectedEditorRevision: hudEditor.revision,
+      const target = selectedPresetId;
+      const revision = hudEditor.revision;
+      const result = await confirmHudActivation(presetDraft.name, confirmation.confirm, () => {
+        const latest = activationState.current;
+        return (
+          latest.selectedPresetId === target &&
+          latest.revision === revision &&
+          latest.activationReasons.length === 0
+        );
       });
-      applyResponse(response);
-      setCommandState('当前预设已启用。');
-    } catch (error: unknown) {
-      setCommandError(true);
-      setCommandState(
-        error instanceof HudConfigMutationError && error.status === 409
-          ? '已在另一页面更新，请先处理冲突。'
-          : 'HUD 预设未启用，请检查配置连接后重试。',
-      );
+      if (result === 'cancelled') return;
+      if (result === 'changed') {
+        setCommandState('编辑状态已变化，请重新核对后启用。');
+        return;
+      }
+      setBusy(true);
+      setCommandState(null);
+      setCommandError(false);
+      try {
+        const response = await mutateHudConfig({
+          kind: 'activate-preset',
+          sourceId: target,
+          expectedEditorRevision: revision,
+        });
+        applyResponse(response);
+        setCommandState('当前预设已启用。');
+      } catch (error: unknown) {
+        setCommandError(true);
+        setCommandState(
+          error instanceof HudConfigMutationError && error.status === 409
+            ? '已在另一页面更新，请先处理冲突。'
+            : 'HUD 预设未启用，请检查配置连接后重试。',
+        );
+      } finally {
+        setBusy(false);
+      }
     } finally {
-      setBusy(false);
+      activationPending.current = false;
     }
   }
 
@@ -1064,9 +1091,51 @@ export function HudConsolePage() {
             启用
           </Button>
           {activationReasons.length > 0 ? (
-            <p className="hud-console__activation-reason" role="status">
-              {activationReasons[0]}
-            </p>
+            <div className="hud-console__activation-reason" role="status">
+              <p>{activationReasons[0]}</p>
+              <details>
+                <summary>查看全部启用条件</summary>
+                <ul>
+                  {activationReasons.map((reason) => (
+                    <li key={reason}>
+                      {reason}{' '}
+                      {reason.includes('预设') ||
+                      reason.includes('布局') ||
+                      reason.includes('外观') ? (
+                        <Button
+                          type="button"
+                          onClick={() =>
+                            changeWorkspace(
+                              reason.startsWith('布局有')
+                                ? 'layout'
+                                : reason.startsWith('外观有')
+                                  ? 'theme'
+                                  : 'preset',
+                            )
+                          }
+                        >
+                          前往编辑
+                        </Button>
+                      ) : null}
+                      {reason.includes('冲突')
+                        ? (['preset', 'layout', 'theme'] as const)
+                            .filter((kind) => draftConflicts[kind])
+                            .map((kind) => (
+                              <Button
+                                key={kind}
+                                type="button"
+                                onClick={() => changeWorkspace(kind)}
+                              >
+                                {kind === 'preset' ? '预设' : kind === 'layout' ? '布局' : '外观'}
+                                冲突
+                              </Button>
+                            ))
+                        : null}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
           ) : null}
         </section>
         <Workbench
@@ -1275,6 +1344,18 @@ export function HudConsolePage() {
                   </label>
                   <details className="hud-console__replay-details">
                     <summary>回放事件与序列</summary>
+                    {replayFixture ? (
+                      <p>
+                        原始回放：{replayFixture.manifest.source.sourceCaptureId}
+                        <br />
+                        SHA-256：{replayFixture.manifest.source.sourceFramesSha256}
+                        <br />
+                        Sanitizer：v{replayFixture.manifest.source.sanitizerVersion}
+                        <br />
+                        资源版本：{hudEditor.revision ?? '未知'} · 启用版本：
+                        {onAir.activeRevision ?? '未知'}
+                      </p>
+                    ) : null}
                     <div className="hud-console__replay-actions">
                       <Button
                         aria-label="上一个语义事件"

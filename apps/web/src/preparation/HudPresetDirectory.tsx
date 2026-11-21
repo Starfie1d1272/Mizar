@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { resolveHudPreset, type HudLayout, type HudPreset, type HudTheme } from '@mizar/hud-config';
 import { PROGRAM_SCENES, type ProgramSceneId } from '@mizar/protocol/program-scenes';
 import {
@@ -13,7 +13,7 @@ import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtur
 import { useBpSession } from '../bp/client';
 import { BpPresentation } from '@mizar/hud-view';
 import { Button, SourceBadge, StatusBanner, useConfirmation } from '../ui';
-import { useObsStatus } from '../workspace/obs-client';
+import { confirmHudActivation } from '../operator/hud-activation';
 import { openTool } from './client';
 import '../operator/hud-console.css';
 
@@ -25,7 +25,6 @@ export function HudPresetDirectory({
 }) {
   const editor = useHudConfigEditorClient();
   const onAir = useHudConfigClient();
-  const obs = useObsStatus();
   const confirmation = useConfirmation();
   const { snapshot: bp } = useBpSession();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -51,34 +50,51 @@ export function HudPresetDirectory({
   })();
   const active = onAir.status === 'ready' && selected?.id === onAir.current.preset.id;
   const ready = editor.status === 'ready' && onAir.status === 'ready';
+  const activationState = useRef({ id: selected?.id, revision: editor.revision, ready, resolved });
+  const activationPending = useRef(false);
+  useLayoutEffect(() => {
+    activationState.current = { id: selected?.id, revision: editor.revision, ready, resolved };
+  });
   async function apply() {
-    if (!ready || !selected || !resolved || !editor.revision || busy) return;
-    if (
-      (obs?.streaming === true ||
-        obs?.streamPhase === 'active' ||
-        obs?.streamPhase === 'reconnecting' ||
-        obs?.recording === true) &&
-      !(await confirmation.confirm(
-        `启用「${selected.name}」会改变当前直播或录像中的 HUD，确认启用？`,
-      ))
-    )
+    if (activationPending.current || !ready || !selected || !resolved || !editor.revision || busy)
       return;
-    setBusy(true);
-    setMessage('');
-    setError('');
+    activationPending.current = true;
     try {
-      const response = await mutateHudConfig({
-        kind: 'activate-preset',
-        sourceId: selected.id,
-        expectedEditorRevision: editor.revision,
+      const id = selected.id;
+      const revision = editor.revision;
+      const result = await confirmHudActivation(selected.name, confirmation.confirm, () => {
+        const latest = activationState.current;
+        return (
+          latest.id === id &&
+          latest.revision === revision &&
+          latest.ready &&
+          latest.resolved !== null
+        );
       });
-      editor.applyResponse(response.editor);
-      onAir.applyResponse(response.onAir);
-      setMessage(`已启用「${response.onAir.resolved.preset.name}」。`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '应用失败，请重试。');
+      if (result === 'cancelled') return;
+      if (result === 'changed') {
+        setError('编辑状态已变化，请重新核对后启用。');
+        return;
+      }
+      setBusy(true);
+      setMessage('');
+      setError('');
+      try {
+        const response = await mutateHudConfig({
+          kind: 'activate-preset',
+          sourceId: id,
+          expectedEditorRevision: revision,
+        });
+        editor.applyResponse(response.editor);
+        onAir.applyResponse(response.onAir);
+        setMessage(`已启用「${response.onAir.resolved.preset.name}」。`);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : '应用失败，请重试。');
+      } finally {
+        setBusy(false);
+      }
     } finally {
-      setBusy(false);
+      activationPending.current = false;
     }
   }
   if (!editor.document)
