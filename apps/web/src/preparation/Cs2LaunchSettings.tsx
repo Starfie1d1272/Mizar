@@ -48,127 +48,139 @@ export function Cs2LaunchSettings() {
       setBusy(false);
     }
   }
+  const launchSummary = status
+    ? `${status.preferMulnx ? 'MulNX' : '标准启动'} · ${qualityLabels[status.qualityPreset] ?? status.qualityPreset}画质 · ${status.frameRateLimit === 0 ? '不限帧' : `${status.frameRateLimit}fps`}`
+    : '启动设置待确认';
   return (
-    <Panel className="settings-card">
-      <h2>下次启动设置</h2>
-      <p>画质与帧率在下次启动游戏时生效，不改变当前游戏画面。</p>
-      {desktop ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <div className="settings-fields">
-            <Select
-              label="游戏启动方式"
-              value={preferences?.preferMulnx ? 'mulnx' : 'steam'}
-              disabled={disabled}
-              onChange={(event) => {
-                if (preferences)
-                  edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
+    <Panel className="settings-card settings-card--collapsible">
+      <details className="settings-disclosure">
+        <summary>
+          <strong>下次启动设置</strong>
+          <span>{launchSummary}</span>
+        </summary>
+        <div className="settings-disclosure__body">
+          <p>画质与帧率在下次启动游戏时生效，不改变当前游戏画面。</p>
+          {desktop ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save();
               }}
             >
-              <option value="steam">标准启动</option>
-              <option value="mulnx">MulNX 官方启动器</option>
-            </Select>
-            <Select
-              label="游戏画质"
-              value={preferences?.qualityPreset ?? 'medium'}
-              disabled={disabled}
-              onChange={(event) => {
-                if (preferences)
-                  edit({
-                    preferMulnx: preferences.preferMulnx ?? false,
-                    qualityPreset: event.target.value as Cs2ConfigStatus['qualityPreset'],
-                    frameRateLimit: preferences.frameRateLimit,
-                  });
-              }}
-            >
-              {Object.entries(qualityLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </Select>
-            <Select
-              label="游戏帧率上限"
-              value={preferences?.frameRateLimit ?? 60}
-              disabled={disabled}
-              onChange={(event) => {
-                if (preferences)
-                  edit({
-                    preferMulnx: preferences.preferMulnx ?? false,
-                    qualityPreset: preferences.qualityPreset,
-                    frameRateLimit: Number(event.target.value) as Cs2ConfigStatus['frameRateLimit'],
-                  });
-              }}
-            >
-              <option value={60}>60 帧／秒（推荐）</option>
-              <option value={30}>30 帧／秒（省资源）</option>
-              <option value={0}>不限帧（可能导致雷达卡顿）</option>
-            </Select>
-          </div>
-          {preferences?.preferMulnx ? (
+              <div className="settings-fields">
+                <Select
+                  label="游戏启动方式"
+                  value={preferences?.preferMulnx ? 'mulnx' : 'steam'}
+                  disabled={disabled}
+                  onChange={(event) => {
+                    if (preferences)
+                      edit({ ...preferences, preferMulnx: event.target.value === 'mulnx' });
+                  }}
+                >
+                  <option value="steam">标准启动</option>
+                  <option value="mulnx">MulNX 官方启动器</option>
+                </Select>
+                <Select
+                  label="游戏画质"
+                  value={preferences?.qualityPreset ?? 'medium'}
+                  disabled={disabled}
+                  onChange={(event) => {
+                    if (preferences)
+                      edit({
+                        preferMulnx: preferences.preferMulnx ?? false,
+                        qualityPreset: event.target.value as Cs2ConfigStatus['qualityPreset'],
+                        frameRateLimit: preferences.frameRateLimit,
+                      });
+                  }}
+                >
+                  {Object.entries(qualityLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  label="游戏帧率上限"
+                  value={preferences?.frameRateLimit ?? 60}
+                  disabled={disabled}
+                  onChange={(event) => {
+                    if (preferences)
+                      edit({
+                        preferMulnx: preferences.preferMulnx ?? false,
+                        qualityPreset: preferences.qualityPreset,
+                        frameRateLimit: Number(
+                          event.target.value,
+                        ) as Cs2ConfigStatus['frameRateLimit'],
+                      });
+                  }}
+                >
+                  <option value={60}>60 帧／秒（推荐）</option>
+                  <option value={30}>30 帧／秒（省资源）</option>
+                  <option value={0}>不限帧（可能导致雷达卡顿）</option>
+                </Select>
+              </div>
+              {preferences?.preferMulnx ? (
+                <p>
+                  Full 完整包已包含 MulNX，首次启动工作台时自动准备，无需先检查更新或安装。
+                  进入工作台时由 MulNX 自动检查环境并启动
+                  CS2，无需操作启动器页面。检测到完美世界竞技平台等冲突时，先退出提示的程序再重试。需要支持一键启动的
+                  MulNX 版本；仅用于离线 Demo 或已授权观战。
+                </p>
+              ) : null}
+              {status?.nativeHudToggle ? <p>按 H 切换 CS2 原生 HUD</p> : null}
+              {status?.spectatorWarning ? (
+                <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
+              ) : null}
+              <p>默认 60 帧／秒，为雷达与 OBS 留出图形资源。30 帧／秒适合资源紧张或 30 帧播出。</p>
+              {preferences?.frameRateLimit === 0 ? (
+                <StatusBanner tone="danger">
+                  不限帧可能占满图形资源，导致雷达或播出画面卡顿。
+                </StatusBanner>
+              ) : null}
+              {preferences?.qualityPreset === 'medium' ? (
+                <p>中画质采用游戏原生预设，包含 FSR 缩放，画面清晰度会降低。</p>
+              ) : null}
+              <div className="settings-save-row">
+                <Button type="submit" variant="primary" disabled={disabled || !dirty}>
+                  {busy ? '保存中…' : '保存启动设置'}
+                </Button>
+                <span role="status">
+                  {saved
+                    ? '已保存，下次启动生效。'
+                    : dirty
+                      ? '有未保存的修改'
+                      : '修改后保存，下次启动生效。'}
+                </span>
+              </div>
+            </form>
+          ) : null}
+          <details className="settings-details">
+            <summary>启动方式说明</summary>
+            <p>无边框窗口 · 分辨率适配工作台</p>
+            <p>游戏与 OBS 分别自动准备；OBS 首次使用需启用 WebSocket 服务器。</p>
             <p>
-              Full 完整包已包含 MulNX，首次启动工作台时自动准备，无需先检查更新或安装。
-              进入工作台时由 MulNX 自动检查环境并启动
-              CS2，无需操作启动器页面。检测到完美世界竞技平台等冲突时，先退出提示的程序再重试。需要支持一键启动的
-              MulNX 版本；仅用于离线 Demo 或已授权观战。
+              解说配置包含数字键 1–9 与 0 的观战选择及 CS2 原生 HUD 切换。
+              键位无法应用或恢复时会显示原因。
             </p>
+            <div>
+              <code>-console -allow_third_party_software -worldwide</code>
+              <p>
+                仅传给本次 Steam 启动，Steam
+                中保存的启动项保持原样。第三方软件选项可能影响信任系数。工作台会按屏幕可用空间调整游戏尺寸。
+              </p>
+              <p>
+                本次帧率同时应用到游戏配置和启动时加载的配置文件，退出后恢复。存在无法处理的冲突时会提示检查配置。
+              </p>
+            </div>
+            <p>
+              结束本次制作或退出 Mizar 时关闭本次游戏并恢复设置。返回设置和隐藏工作区会保留游戏。
+            </p>
+          </details>
+          {error || statusError ? (
+            <StatusBanner tone="danger">{error || statusError}</StatusBanner>
           ) : null}
-          {status?.nativeHudToggle ? <p>按 H 切换 CS2 原生 HUD</p> : null}
-          {status?.spectatorWarning ? (
-            <StatusBanner tone="warning">{status.spectatorWarning}</StatusBanner>
-          ) : null}
-          <p>默认 60 帧／秒，为雷达与 OBS 留出图形资源。30 帧／秒适合资源紧张或 30 帧播出。</p>
-          {preferences?.frameRateLimit === 0 ? (
-            <StatusBanner tone="danger">
-              不限帧可能占满图形资源，导致雷达或播出画面卡顿。
-            </StatusBanner>
-          ) : null}
-          {preferences?.qualityPreset === 'medium' ? (
-            <p>中画质采用游戏原生预设，包含 FSR 缩放，画面清晰度会降低。</p>
-          ) : null}
-          <div className="settings-save-row">
-            <Button type="submit" variant="primary" disabled={disabled || !dirty}>
-              {busy ? '保存中…' : '保存启动设置'}
-            </Button>
-            <span role="status">
-              {saved
-                ? '已保存，下次启动生效。'
-                : dirty
-                  ? '有未保存的修改'
-                  : '修改后保存，下次启动生效。'}
-            </span>
-          </div>
-        </form>
-      ) : (
-        <p>请在 Mizar 桌面应用中设置并启动 CS2。</p>
-      )}
-      <details className="settings-details">
-        <summary>启动方式说明</summary>
-        <p>无边框窗口 · 分辨率适配工作台</p>
-        <p>游戏与 OBS 分别自动准备；OBS 首次使用需启用 WebSocket 服务器。</p>
-        <p>
-          解说配置包含数字键 1–9 与 0 的观战选择及 CS2 原生 HUD 切换。
-          键位无法应用或恢复时会显示原因。
-        </p>
-        <div>
-          <code>-console -allow_third_party_software -worldwide</code>
-          <p>
-            仅传给本次 Steam 启动，Steam
-            中保存的启动项保持原样。第三方软件选项可能影响信任系数。工作台会按屏幕可用空间调整游戏尺寸。
-          </p>
-          <p>
-            本次帧率同时应用到游戏配置和启动时加载的配置文件，退出后恢复。存在无法处理的冲突时会提示检查配置。
-          </p>
         </div>
-        <p>结束本次制作或退出 Mizar 时关闭本次游戏并恢复设置。返回设置和隐藏工作区会保留游戏。</p>
       </details>
-      {error || statusError ? (
-        <StatusBanner tone="danger">{error || statusError}</StatusBanner>
-      ) : null}
     </Panel>
   );
 }

@@ -16,7 +16,6 @@ import {
   type HudWidgetPlacement,
 } from '@mizar/hud-config';
 
-import { HudPresetFiles } from './HudPresetFiles';
 import { HudWidgetInspector } from './HudWidgetInspector';
 import { resourceList } from './hud-console-drafts';
 import type { HudWorkspace } from './hud-console-state';
@@ -38,20 +37,15 @@ export interface HudConsoleWorkspaceProps {
   readonly configDocument: HudConfigDocument;
   readonly editorReady: boolean;
   readonly busy: boolean;
-  readonly hasDirtyDraft: boolean;
   readonly selectedPresetId: string;
   readonly selectedLayoutId: string;
-  readonly selectedThemeId: string;
   readonly presetDraft: HudPreset;
   readonly layoutDraft: HudLayout;
   readonly themeDraft: HudTheme;
-  readonly presetDirty: boolean;
   readonly layoutDirty: boolean;
   readonly themeDirty: boolean;
   readonly presetNameError: string | null;
   readonly layoutNameError: string | null;
-  readonly themeNameError: string | null;
-  readonly themeDraftInvalid: boolean;
   readonly selectedWidgetId: HudWidgetId | null;
   readonly selectedPlacement: HudWidgetPlacement | null;
   readonly selectedBox: HudWidgetBox | null;
@@ -73,11 +67,6 @@ export interface HudConsoleWorkspaceProps {
   readonly onShowCenterChange: (value: boolean) => void;
   readonly onShowSafeAreaChange: (value: boolean) => void;
   readonly onSnapToGridChange: (value: boolean) => void;
-  readonly onSubmitMutation: (kind: HudWorkspace, saveAs: boolean) => void;
-  readonly onDiscard: (kind: HudWorkspace) => void;
-  readonly onReset: (kind: HudWorkspace) => void;
-  readonly onImportPresetFile: (file: File) => void;
-  readonly onExportPresetFile: () => void;
 }
 
 function isBuiltin(id: string): boolean {
@@ -93,18 +82,13 @@ export function HudConsoleWorkspaces({
   configDocument,
   editorReady,
   busy,
-  hasDirtyDraft,
   selectedPresetId,
   selectedLayoutId,
-  selectedThemeId,
   presetDraft,
   layoutDraft,
-  presetDirty,
   layoutDirty,
   presetNameError,
   layoutNameError,
-  themeNameError,
-  themeDraftInvalid,
   selectedWidgetId,
   selectedPlacement,
   selectedBox,
@@ -122,52 +106,7 @@ export function HudConsoleWorkspaces({
   onShowCenterChange,
   onShowSafeAreaChange,
   onSnapToGridChange,
-  onSubmitMutation,
-  onDiscard,
-  onReset,
-  onImportPresetFile,
-  onExportPresetFile,
 }: HudConsoleWorkspaceProps) {
-  const previewMatchesPresetReferences =
-    selectedLayoutId === presetDraft.layoutId && selectedThemeId === presetDraft.themeId;
-
-  function renderResourceActions(kind: HudWorkspace, dirty: boolean, id: string) {
-    const invalid =
-      (kind === 'preset' && presetNameError !== null) ||
-      (kind === 'layout' && layoutNameError !== null) ||
-      (kind === 'theme' && (themeNameError !== null || themeDraftInvalid));
-    return (
-      <div className="hud-console__actions">
-        <Button
-          variant={isBuiltin(id) ? 'secondary' : 'primary'}
-          disabled={busy || !editorReady || isBuiltin(id) || invalid}
-          onClick={() => onSubmitMutation(kind, false)}
-          type="button"
-        >
-          保存
-        </Button>
-        <Button
-          variant={isBuiltin(id) ? 'primary' : 'secondary'}
-          disabled={busy || !editorReady || invalid}
-          onClick={() => onSubmitMutation(kind, true)}
-          type="button"
-        >
-          另存为
-        </Button>
-        <Button
-          disabled={busy || !editorReady || !dirty}
-          onClick={() => onDiscard(kind)}
-          type="button"
-        >
-          放弃
-        </Button>
-        <Button disabled={busy || !editorReady} onClick={() => onReset(kind)} type="button">
-          恢复默认
-        </Button>
-      </div>
-    );
-  }
-
   if (workspace === 'preset') {
     return (
       <section className="hud-console__workspace" aria-label="HUD 预设编辑">
@@ -247,17 +186,6 @@ export function HudConsoleWorkspaces({
             }
           />
         )}
-        <details>
-          <summary>导入与导出预设</summary>
-          <HudPresetFiles
-            disabled={busy || !editorReady || hasDirtyDraft}
-            exportDisabled={!previewMatchesPresetReferences}
-            onImport={onImportPresetFile}
-            onExport={onExportPresetFile}
-          />
-          <p className="hud-console__hint">导入创建新副本；先保存，再分享或明确启用。</p>
-        </details>
-        {renderResourceActions('preset', presetDirty, selectedPresetId)}
       </section>
     );
   }
@@ -485,7 +413,6 @@ export function HudConsoleWorkspaces({
         {isBuiltin(selectedLayoutId) ? (
           <p className="hud-console__hint">内置布局，修改后请另存为副本。</p>
         ) : null}
-        {renderResourceActions('layout', layoutDirty, selectedLayoutId)}
       </section>
     );
   }

@@ -197,6 +197,118 @@ export function Settings({ tab }: { tab: string }) {
               <a href="/packages">管理资源</a>
               <MulnxToolControls tool={camera?.tool} runtimeOnly />
             </Panel>
+            <Panel className="settings-card game-settings-maintenance">
+              <h2>CS2 安装位置与维护</h2>
+              <p>安装位置、GSI 配置与游戏设置备份在这里分别管理。</p>
+              {window.__TAURI_INTERNALS__ ? (
+                <details
+                  key={String(Boolean(gsi && !gsi.detected))}
+                  open={Boolean(gsi && !gsi.detected)}
+                >
+                  <summary>安装位置与 GSI 维护</summary>
+                  <p>更换安装位置前，先恢复当前 GSI 配置。新写入的配置在下次启动 CS2 时加载。</p>
+                  <div className="preparation-actions">
+                    {gsi?.installed && !gsi.conflict ? gsiInstallButton : null}
+                    <Button
+                      disabled={busy || (!gsi?.installed && !gsi?.conflict)}
+                      onClick={() =>
+                        void action(async () => {
+                          await desktopInvoke('configure_gsi', { restore: true, choose: false });
+                          await refreshGsi();
+                          setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
+                        })
+                      }
+                    >
+                      恢复原 GSI 配置
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void action(async () => {
+                          const selected = await desktopInvoke('select_cs2_installation', {
+                            executable: false,
+                          });
+                          if (selected) {
+                            await refreshGsi();
+                            setMessage(
+                              '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
+                            );
+                          }
+                        })
+                      }
+                    >
+                      选择 CS2 安装目录
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void action(async () => {
+                          const selected = await desktopInvoke('select_cs2_installation', {
+                            executable: true,
+                          });
+                          if (selected) {
+                            await refreshGsi();
+                            setMessage(
+                              '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
+                            );
+                          }
+                        })
+                      }
+                    >
+                      选择 cs2.exe
+                    </Button>
+                    <Button
+                      disabled={busy || !gsi?.cfgPath}
+                      onClick={() => void action(() => desktopInvoke('open_cs2_config_directory'))}
+                    >
+                      打开配置文件夹
+                    </Button>
+                  </div>
+                </details>
+              ) : (
+                <p>安装位置与配置目录维护仅在 Mizar 桌面应用中可用。</p>
+              )}{' '}
+              <details>
+                <summary>配置详情{gsi?.endpointConflict ? ' · 重复文件' : ''}</summary>
+                {gsi?.endpointConflict ? (
+                  <ul className="settings-conflict-files">
+                    {gsi.conflictFiles.map((path) => (
+                      <li key={path}>
+                        <code>{path}</code>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <p>
+                  支持选择 CS2 安装根目录、game\bin\win64 文件夹或
+                  cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；由 Mizar
+                  启动的游戏结束并恢复设置后才能更换。
+                </p>
+                <p className="settings-conflict-files">
+                  {gsi?.cfgPath ??
+                    (gsiPhase === 'ready' && !gsi?.readFailed
+                      ? '尚未发现配置目录'
+                      : '配置目录待确认')}
+                </p>
+                {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
+              </details>
+              {window.__TAURI_INTERNALS__ ? (
+                <details>
+                  <summary>游戏设置备份</summary>
+                  <Cs2BackupImport />
+                  <p>
+                    游戏设置备份用于恢复 Mizar 启动前的画质、帧率与观战设置，与 GSI
+                    接收配置不同。需要恢复时，游戏设置中的游戏连接区域会显示处理入口。
+                  </p>
+                  <Button
+                    disabled={busy}
+                    onClick={() => void action(() => desktopInvoke('open_cs2_backup'))}
+                  >
+                    打开游戏设置备份目录
+                  </Button>
+                </details>
+              ) : null}
+            </Panel>
           </div>
           <Panel className="settings-card advanced-settings-support">
             <h2>诊断与支持</h2>
@@ -219,6 +331,11 @@ export function Settings({ tab }: { tab: string }) {
         </>
       ) : (
         <div className="game-settings-layout">
+          {!window.__TAURI_INTERNALS__ ? (
+            <StatusBanner tone="info">
+              当前为浏览器视图，CS2 启动、安装路径与 GSI 检测请在 Mizar 桌面应用中操作。
+            </StatusBanner>
+          ) : null}
           <div className="game-settings-current">
             <Panel className="settings-card game-settings-connection">
               <div className="preparation-check-heading">
@@ -293,9 +410,7 @@ export function Settings({ tab }: { tab: string }) {
                   </p>
                 </>
               ) : null}
-              {!window.__TAURI_INTERNALS__ ? (
-                <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
-              ) : (
+              {!window.__TAURI_INTERNALS__ ? null : (
                 <>
                   <div className="preparation-actions">
                     <Button
@@ -316,118 +431,6 @@ export function Settings({ tab }: { tab: string }) {
               <section aria-label="配置与恢复">
                 <Cs2Recovery production={production} showManagedDetails />
               </section>
-            </Panel>
-            <Panel className="settings-card game-settings-maintenance">
-              <h2>安装位置与维护</h2>
-              <p>安装位置、GSI 配置与游戏设置备份在这里分别管理。</p>
-              {window.__TAURI_INTERNALS__ ? (
-                <details
-                  key={String(Boolean(gsi && !gsi.detected))}
-                  open={Boolean(gsi && !gsi.detected)}
-                >
-                  <summary>安装位置与 GSI 维护</summary>
-                  <p>更换安装位置前，先恢复当前 GSI 配置。新写入的配置在下次启动 CS2 时加载。</p>
-                  <div className="preparation-actions">
-                    {gsi?.installed && !gsi.conflict ? gsiInstallButton : null}
-                    <Button
-                      disabled={busy || (!gsi?.installed && !gsi?.conflict)}
-                      onClick={() =>
-                        void action(async () => {
-                          await desktopInvoke('configure_gsi', { restore: true, choose: false });
-                          await refreshGsi();
-                          setMessage('原 GSI 配置已恢复，请重新启动 CS2 以加载配置。');
-                        })
-                      }
-                    >
-                      恢复原 GSI 配置
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          const selected = await desktopInvoke('select_cs2_installation', {
-                            executable: false,
-                          });
-                          if (selected) {
-                            await refreshGsi();
-                            setMessage(
-                              '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
-                            );
-                          }
-                        })
-                      }
-                    >
-                      选择 CS2 安装目录
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          const selected = await desktopInvoke('select_cs2_installation', {
-                            executable: true,
-                          });
-                          if (selected) {
-                            await refreshGsi();
-                            setMessage(
-                              '已保存 CS2 安装位置，游戏启动与 GSI 安装共用此位置。请安装或检查 GSI。',
-                            );
-                          }
-                        })
-                      }
-                    >
-                      选择 cs2.exe
-                    </Button>
-                    <Button
-                      disabled={busy || !gsi?.cfgPath}
-                      onClick={() => void action(() => desktopInvoke('open_cs2_config_directory'))}
-                    >
-                      打开配置文件夹
-                    </Button>
-                  </div>
-                </details>
-              ) : (
-                <p>请在桌面应用中管理安装位置与配置。</p>
-              )}{' '}
-              <details>
-                <summary>配置详情{gsi?.endpointConflict ? ' · 重复文件' : ''}</summary>
-                {gsi?.endpointConflict ? (
-                  <ul className="settings-conflict-files">
-                    {gsi.conflictFiles.map((path) => (
-                      <li key={path}>
-                        <code>{path}</code>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                <p>
-                  支持选择 CS2 安装根目录、game\bin\win64 文件夹或
-                  cs2.exe。更换安装位置前，请先恢复当前 GSI 配置；由 Mizar
-                  启动的游戏结束并恢复设置后才能更换。
-                </p>
-                <p className="settings-conflict-files">
-                  {gsi?.cfgPath ??
-                    (gsiPhase === 'ready' && !gsi?.readFailed
-                      ? '尚未发现配置目录'
-                      : '配置目录待确认')}
-                </p>
-                {gsi ? <p>安装候选数量：{gsi.candidateCount ?? 0}</p> : null}
-              </details>
-              {window.__TAURI_INTERNALS__ ? (
-                <details>
-                  <summary>游戏设置备份</summary>
-                  <Cs2BackupImport />
-                  <p>
-                    游戏设置备份用于恢复 Mizar 启动前的画质、帧率与观战设置，与 GSI
-                    接收配置不同。需要恢复时，上方游戏连接区域会显示处理入口。
-                  </p>
-                  <Button
-                    disabled={busy}
-                    onClick={() => void action(() => desktopInvoke('open_cs2_backup'))}
-                  >
-                    打开游戏设置备份目录
-                  </Button>
-                </details>
-              ) : null}
             </Panel>
             <GameAutomationSettingsPanel />
           </div>

@@ -12,7 +12,8 @@ import { getHudEditorFixture } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
 import { useBpSession } from '../bp/client';
 import { BpPresentation } from '@mizar/hud-view';
-import { Button, SourceBadge, StatusBanner } from '../ui';
+import { Button, SourceBadge, StatusBanner, useConfirmation } from '../ui';
+import { useObsStatus } from '../workspace/obs-client';
 import { openTool } from './client';
 import '../operator/hud-console.css';
 
@@ -24,6 +25,8 @@ export function HudPresetDirectory({
 }) {
   const editor = useHudConfigEditorClient();
   const onAir = useHudConfigClient();
+  const obs = useObsStatus();
+  const confirmation = useConfirmation();
   const { snapshot: bp } = useBpSession();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scene, setScene] = useState<ProgramSceneId>('gameplay');
@@ -50,6 +53,16 @@ export function HudPresetDirectory({
   const ready = editor.status === 'ready' && onAir.status === 'ready';
   async function apply() {
     if (!ready || !selected || !resolved || !editor.revision || busy) return;
+    if (
+      (obs?.streaming === true ||
+        obs?.streamPhase === 'active' ||
+        obs?.streamPhase === 'reconnecting' ||
+        obs?.recording === true) &&
+      !(await confirmation.confirm(
+        `当前直播或录像正在进行。启用「${selected.name}」会改变正式播出 HUD，确认继续？`,
+      ))
+    )
+      return;
     setBusy(true);
     setMessage('');
     setError('');
@@ -101,44 +114,46 @@ export function HudPresetDirectory({
             {scene === 'gameplay' ? selected?.name : '仅预览，不影响播出'}
           </span>
         </div>
-        <div className="picture-preview" aria-label="画面预览" data-scene={scene}>
-          {scene === 'gameplay' ? (
-            resolved ? (
-              <HudCanvasPreview
-                resolvedPreset={resolved}
-                snapshot={fixture}
-                radarSnapshot={radar}
-                mapBackground
-                connectionState="live"
-                liveSource={false}
-                editorMode="preview"
-                editorInteractive={false}
-                selectedWidgetId={null}
-                showGrid={false}
-                showCenter={false}
-                showSafeArea={false}
-              />
-            ) : (
-              <p>所选预设不可用，请重新选择。</p>
-            )
-          ) : scene === 'bp' ? (
-            bp?.projection ? (
-              <div className="picture-bp-canvas">
-                <BpPresentation
-                  snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
-                  animate={false}
+        <div className="picture-preview-space">
+          <div className="picture-preview" aria-label="画面预览" data-scene={scene}>
+            {scene === 'gameplay' ? (
+              resolved ? (
+                <HudCanvasPreview
+                  resolvedPreset={resolved}
+                  snapshot={fixture}
+                  radarSnapshot={radar}
+                  mapBackground
+                  connectionState="live"
+                  liveSource={false}
+                  editorMode="preview"
+                  editorInteractive={false}
+                  selectedWidgetId={null}
+                  showGrid={false}
+                  showCenter={false}
+                  showSafeArea={false}
                 />
-              </div>
+              ) : (
+                <p>所选预设不可用，请重新选择。</p>
+              )
+            ) : scene === 'bp' ? (
+              bp?.projection ? (
+                <div className="picture-bp-canvas">
+                  <BpPresentation
+                    snapshot={{ ...bp, state: 'shown', revealedCount: bp.projection.steps.length }}
+                    animate={false}
+                  />
+                </div>
+              ) : (
+                <p className="picture-empty">本场暂无完整 BP。现场将按已有比赛资料继续编排。</p>
+              )
             ) : (
-              <p className="picture-empty">本场暂无完整 BP。现场将按已有比赛资料继续编排。</p>
-            )
-          ) : (
-            <iframe
-              key={scene}
-              title="节目场景预览"
-              src={`${PROGRAM_SCENES.find((item) => item.id === scene)!.path}?preview=1`}
-            />
-          )}
+              <iframe
+                key={scene}
+                title="节目场景预览"
+                src={`${PROGRAM_SCENES.find((item) => item.id === scene)!.path}?preview=1`}
+              />
+            )}
+          </div>
         </div>
       </div>
       <aside className="picture-preset-panel" aria-label="选择 HUD 预设">
@@ -191,6 +206,7 @@ export function HudPresetDirectory({
         {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
         {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
       </aside>
+      {confirmation.dialog}
     </section>
   );
 }

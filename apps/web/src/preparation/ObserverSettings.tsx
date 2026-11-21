@@ -170,13 +170,19 @@ export function GameAutomationSettingsPanel() {
 
   return (
     <Panel className="settings-card">
-      <h2>游戏连接与画面准备</h2>
+      <h2>开台自动操作</h2>
       {cs2.status?.running ? (
         <Button disabled={busy} onClick={() => void changeConnection()}>
           切换本图观战连接
         </Button>
       ) : null}
-      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本图观战连接。</p>
+      {!useMulnx ? (
+        <p className="settings-disabled-reason">
+          以下两项需要 MulNX。可在「下次启动设置」中更改启动方式。
+        </p>
+      ) : (
+        <p>打开工作台后填写并确认本图观战连接即可自动执行。</p>
+      )}
       <Checkbox
         label="自动连接已提交的 GoTV"
         checked={settings.autoConnect}
@@ -190,21 +196,27 @@ export function GameAutomationSettingsPanel() {
         onChange={(event) => setDraft({ ...settings, hideGameHud: event.target.checked })}
         message="保留击杀提示，结束时恢复原值。开启聊天上屏后，下次启动游戏时生效。"
       />
-      <Button
-        disabled={busy || !view || !useMulnx}
-        onClick={() => {
-          setBusy(true);
-          setMessage('');
-          void command('/operator/observer-assist', { action: 'configure-game', settings })
-            .then(() => setMessage('游戏自动操作设置已保存。'))
-            .catch((error: unknown) =>
-              setMessage(error instanceof Error ? error.message : '请重试保存。'),
-            )
-            .finally(() => setBusy(false));
-        }}
-      >
-        保存游戏自动操作设置
-      </Button>
+      <div className="settings-save-row settings-save-row--end">
+        {message ? <span role="status">{message}</span> : null}
+        <Button
+          aria-label="保存游戏自动操作设置"
+          disabled={busy || !view || !useMulnx}
+          onClick={() => {
+            setBusy(true);
+            setMessage('');
+            void command('/operator/observer-assist', { action: 'configure-game', settings })
+              .then(() => {
+                setMessage('已保存');
+              })
+              .catch((error: unknown) =>
+                setMessage(error instanceof Error ? error.message : '请重试保存。'),
+              )
+              .finally(() => setBusy(false));
+          }}
+        >
+          保存
+        </Button>
+      </div>
       {cs2.status?.observerHudPending ? (
         <Button
           disabled={busy}
@@ -219,7 +231,6 @@ export function GameAutomationSettingsPanel() {
           恢复游戏 HUD
         </Button>
       ) : null}
-      {message ? <p role="status">{message}</p> : null}
     </Panel>
   );
 }

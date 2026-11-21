@@ -17,6 +17,7 @@
 }
 .workspace-left {
   background: var(--mizar-bg-surface);
+  container-type: size;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
@@ -72,7 +73,9 @@
   min-height: 0;
 }
 .workspace-radar {
-  width: 100%;
+  width: min(100%, 55cqh);
+  max-height: 55cqh;
+  justify-self: center;
   aspect-ratio: 1;
   min-width: 0;
   overflow: hidden;
@@ -261,7 +264,8 @@
 }
 .workspace-confidence {
   position: relative;
-  width: 100%;
+  width: min(100%, calc(25cqh * 16 / 9));
+  max-height: 25cqh;
   justify-self: center;
   aspect-ratio: 16 / 9;
   background: var(--mizar-bg-canvas);
@@ -520,13 +524,85 @@
   font-size: var(--mizar-type-size-small);
 }
 
+.workspace-dock > .workspace-direction[data-mode='manual'] {
+  border-top: var(--mizar-line-focus) solid var(--mizar-accent-primary);
+}
+.workspace-dock > .workspace-direction[data-mode='blocked'] {
+  border-top: var(--mizar-line-focus) solid var(--mizar-status-warning);
+}
+.workspace-obs-controls .mizar-button .workspace-output-label {
+  color: inherit;
+}
+.workspace-obs-controls .mizar-button[data-output-state='s0'] {
+  color: var(--mizar-fg-secondary);
+}
+.workspace-obs-controls .mizar-button[data-output-state='s1'] {
+  color: var(--mizar-fg-muted);
+  background: var(--mizar-bg-surface);
+  border-color: var(--mizar-border-default);
+}
+.workspace-obs-controls .mizar-button[data-output-state='s1']:disabled {
+  opacity: 1;
+}
+.workspace-obs-controls .workspace-output-reason {
+  grid-column: 1 / -1;
+}
+.workspace-obs-controls .mizar-button[data-output-state='s2'],
+.workspace-obs-controls .mizar-button:has([role='status']) {
+  flex-direction: column;
+  gap: 0;
+  color: var(--mizar-fg-primary);
+}
+.workspace-obs-controls .mizar-button[data-output-state='s2'] .workspace-output-label::before {
+  content: '';
+  display: inline-block;
+  width: var(--mizar-layout-compact);
+  height: var(--mizar-layout-compact);
+  margin-inline-end: calc(var(--mizar-layout-compact) / 2);
+  border-radius: 50%;
+  background: var(--mizar-status-danger);
+}
+.workspace-output-time {
+  font-variant-numeric: tabular-nums;
+}
+.workspace-dock .workspace-director-status[data-state='s3'] {
+  color: var(--mizar-status-warning);
+}
+.workspace-dock .workspace-director-status[data-state='s2'] {
+  color: var(--mizar-fg-link);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-dock [data-status-feedback='pulse'] {
+    animation: workspace-state-pulse var(--mizar-transition-fast) var(--mizar-easing-standard) 2
+      alternate;
+  }
+}
+@keyframes workspace-state-pulse {
+  to {
+    background-color: var(--mizar-bg-hover);
+  }
+}
+.workspace-obs-controls .mizar-button[data-output-state='s3'] {
+  border-color: var(--mizar-status-warning);
+  color: var(--mizar-status-warning);
+}
 .workspace-exit.mizar-button {
-  color: var(--mizar-fg-on-accent);
-  background: var(--mizar-action-danger);
-  border-color: var(--mizar-action-danger);
+  color: var(--mizar-status-danger);
+  background: var(--mizar-bg-raised);
+  border-color: var(--mizar-status-danger);
   margin: 3px;
 }
 .workspace-exit.mizar-button:hover:not(:disabled) {
+  color: var(--mizar-fg-on-accent);
+  background: var(--mizar-action-danger);
+  border-color: var(--mizar-action-danger);
+}
+.workspace-exit-confirm.mizar-button {
+  color: var(--mizar-fg-on-accent);
+  background: var(--mizar-action-danger);
+  border-color: var(--mizar-action-danger);
+}
+.workspace-exit-confirm.mizar-button:hover:not(:disabled) {
   background: var(--mizar-action-danger-hover);
   border-color: var(--mizar-action-danger-hover);
 }
