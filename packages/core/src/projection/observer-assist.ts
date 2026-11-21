@@ -29,7 +29,9 @@ export interface ObserverAssistProjection {
 
 export type ObserverProgramView = Pick<ProgramProjection, 'cursor' | 'status'> & {
   readonly match: { readonly matchId: string } | null;
-  readonly map: Pick<ProgramProjection['map'], 'name' | 'roundNumber'>;
+  readonly map: Pick<ProgramProjection['map'], 'name' | 'roundNumber'> & {
+    readonly phase?: ProgramProjection['map']['phase'];
+  };
   readonly clock: Pick<NonNullable<ProgramProjection['clock']>, 'phase'> | null;
   readonly coverage: Pick<ProgramProjection['coverage'], 'allPlayers'>;
   readonly players: readonly Pick<
@@ -87,9 +89,15 @@ export class ObserverHintTimeline {
   private contextIdentity: { match: string; session: string | null; map: string } | null = null;
   private generation: number | undefined;
   private lastDeathSequence = -1;
+  private lastAcceptedRound: number | undefined;
   private sourceExecution: number | undefined;
   private sourceExecutionGeneration: number | undefined;
-  private sourceExecutionChanged = false;
+  private sourceExecutionFence: {
+    wasLive: boolean;
+    sawWarmup: boolean;
+    lockedRound: number | null | undefined;
+  } | null = null;
+  private unverifiedReconnect = false;
   private earliest = -Infinity;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
@@ -188,9 +196,11 @@ export class ObserverHintTimeline {
     this.replaceBuffered(reason, retained);
     this.lastReadyScope = undefined;
     this.sealedSource = undefined;
+    this.lastAcceptedRound = undefined;
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
-    this.sourceExecutionChanged = false;
+    this.sourceExecutionFence = null;
+    this.unverifiedReconnect = false;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
@@ -207,7 +217,16 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
-      this.advanceGeneration(event.cursor.generation);
+      const continuous =
+        this.canRetainAcrossGeneration() &&
+        event.cursor.mapName === this.contextIdentity?.map &&
+        (this.sourceExecution === undefined ||
+          event.cursor.sourceMapExecution === undefined ||
+          event.cursor.sourceMapExecution === this.sourceExecution) &&
+        (this.lastAcceptedRound === undefined ||
+          event.cursor.roundsCompleted === undefined ||
+          event.cursor.roundsCompleted >= this.lastAcceptedRound);
+      this.advanceGeneration(event.cursor.generation, continuous);
     }
     if (event.kind !== 'player-death') return;
     if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) {
@@ -221,6 +240,23 @@ export class ObserverHintTimeline {
     if (event.cursor.sequence <= this.lastDeathSequence) {
       this.discard('duplicate');
       return;
+    }
+    if (
+      this.lastAcceptedRound !== undefined &&
+      event.cursor.roundsCompleted !== undefined &&
+      event.cursor.roundsCompleted < this.lastAcceptedRound
+    ) {
+      // A round regression proves the match restarted (e.g. during a disconnect).
+      this.replaceBuffered('source-execution');
+      this.lastAcceptedRound = undefined;
+      this.unverifiedReconnect = false;
+      this.sourceExecutionFence ??= { wasLive: true, sawWarmup: false, lockedRound: undefined };
+    }
+    if (event.cursor.roundsCompleted !== undefined) {
+      this.lastAcceptedRound =
+        this.lastAcceptedRound === undefined
+          ? event.cursor.roundsCompleted
+          : Math.max(this.lastAcceptedRound, event.cursor.roundsCompleted);
     }
     this.lastDeathSequence = event.cursor.sequence;
     this.acceptedDeaths++;
@@ -239,10 +275,24 @@ export class ObserverHintTimeline {
       if (!oldest.retired) this.finish(oldest, 'capacity');
     }
   }
-  private advanceGeneration(generation: number) {
+  private canRetainAcrossGeneration(): boolean {
+    return (
+      !this.awaitingNextMap &&
+      !this.sealedSource &&
+      this.contextIdentity !== null &&
+      this.sourceExecutionFence === null &&
+      this.kills.some((kill) => !kill.retired)
+    );
+  }
+  private advanceGeneration(generation: number, retain = false) {
     this.generation = generation;
     this.lastDeathSequence = -1;
-    this.replaceBuffered('source-generation');
+    if (retain) {
+      this.unverifiedReconnect = true;
+    } else {
+      this.unverifiedReconnect = false;
+      this.replaceBuffered('source-generation');
+    }
   }
 
   private countReceived(event: GameEventObservation) {
@@ -390,18 +440,66 @@ export class ObserverHintTimeline {
     this.staged = null;
   }
 
-  private observeExecution(execution: number | undefined, generation: number) {
+  private engageExecutionFence(program: ObserverProgramView) {
+    const isWarmup = program.map.phase === 'warmup';
+    const isLive =
+      program.map.phase === 'live' ||
+      (program.map.phase === undefined && program.clock?.phase === 'live');
+    this.sourceExecutionFence = {
+      wasLive: isLive,
+      sawWarmup: isWarmup,
+      lockedRound: program.map.roundNumber ?? null,
+    };
+  }
+  private observeExecution(
+    execution: number | undefined,
+    generation: number,
+    program: ObserverProgramView,
+  ) {
     if (execution === undefined) return;
     if (
       this.sourceExecutionGeneration === generation &&
       this.sourceExecution !== undefined &&
       execution !== this.sourceExecution
     ) {
-      this.sourceExecutionChanged = true;
+      this.engageExecutionFence(program);
+      this.unverifiedReconnect = false;
       this.replaceBuffered('source-execution');
+    } else if (
+      this.unverifiedReconnect &&
+      this.sourceExecution !== undefined &&
+      execution !== this.sourceExecution
+    ) {
+      this.unverifiedReconnect = false;
+      this.replaceBuffered('source-generation');
     }
     this.sourceExecution = execution;
     this.sourceExecutionGeneration = generation;
+  }
+  private reconcileExecutionFence(program: ObserverProgramView) {
+    const fence = this.sourceExecutionFence;
+    if (!fence || program.status.telemetry !== 'fresh') return;
+    if (fence.lockedRound === undefined) {
+      fence.lockedRound = program.map.roundNumber ?? null;
+      fence.wasLive =
+        program.map.phase === 'live' ||
+        (program.map.phase === undefined && program.clock?.phase === 'live');
+    }
+    if (program.map.phase === 'warmup') {
+      fence.sawWarmup = true;
+      return;
+    }
+    const isLive =
+      program.map.phase === 'live' ||
+      (program.map.phase === undefined && program.clock?.phase === 'live');
+    if (!isLive) return;
+    if (
+      !fence.wasLive ||
+      fence.sawWarmup ||
+      (fence.lockedRound !== null && fence.lockedRound > 0 && program.map.roundNumber === 0)
+    ) {
+      this.sourceExecutionFence = null;
+    }
   }
 
   project(
@@ -493,7 +591,7 @@ export class ObserverHintTimeline {
       if (pendingConflict) {
         this.sourceExecution = sourceExecution;
         this.sourceExecutionGeneration = source.generation;
-        this.sourceExecutionChanged = true;
+        this.engageExecutionFence(program);
       }
       this.pendingMap = null;
       this.context = context;
@@ -504,14 +602,28 @@ export class ObserverHintTimeline {
       };
     }
     if (this.generation === undefined || source.generation > this.generation) {
-      this.advanceGeneration(source.generation);
+      this.advanceGeneration(source.generation, this.canRetainAcrossGeneration());
     }
     if (source.generation !== this.generation) {
       this.blocked = 'source-generation-mismatch';
       return empty('unavailable');
     }
     if (!waitingForNextMap) this.releaseStaged(program, source, sourceExecution);
-    if (source.sameMap === true) this.observeExecution(sourceExecution, source.generation);
+    if (source.sameMap === true) {
+      this.observeExecution(sourceExecution, source.generation, program);
+      if (this.unverifiedReconnect && source.connected && source.fresh) {
+        this.unverifiedReconnect = false;
+      }
+    } else if (
+      this.unverifiedReconnect &&
+      source.sameMap === false &&
+      source.connected &&
+      source.fresh
+    ) {
+      this.unverifiedReconnect = false;
+      this.replaceBuffered('source-generation');
+    }
+    this.reconcileExecutionFence(program);
     const scope = JSON.stringify([
       context,
       program.cursor.programSourceGeneration,
@@ -574,7 +686,7 @@ export class ObserverHintTimeline {
       return empty('unavailable');
     }
     this.blocked = null;
-    if (this.sourceExecutionChanged) {
+    if (this.sourceExecutionFence) {
       this.blocked = 'source-execution-ahead';
       return empty('unavailable');
     }
