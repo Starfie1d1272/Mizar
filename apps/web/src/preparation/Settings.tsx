@@ -219,6 +219,11 @@ export function Settings({ tab }: { tab: string }) {
         </>
       ) : (
         <div className="game-settings-layout">
+          {!window.__TAURI_INTERNALS__ ? (
+            <div className="game-settings-desktop-notice">
+              <StatusBanner tone="info">请在 Mizar 桌面应用中管理 CS2 与 GSI。</StatusBanner>
+            </div>
+          ) : null}
           <div className="game-settings-current">
             <Panel className="settings-card game-settings-connection">
               <div className="preparation-check-heading">
@@ -293,9 +298,7 @@ export function Settings({ tab }: { tab: string }) {
                   </p>
                 </>
               ) : null}
-              {!window.__TAURI_INTERNALS__ ? (
-                <p>请在 Mizar 桌面应用中检测并安装 GSI。</p>
-              ) : (
+              {window.__TAURI_INTERNALS__ ? (
                 <>
                   <div className="preparation-actions">
                     <Button
@@ -312,7 +315,7 @@ export function Settings({ tab }: { tab: string }) {
                     {!gsi?.installed || gsi?.conflict ? gsiInstallButton : null}
                   </div>
                 </>
-              )}
+              ) : null}
               <section aria-label="配置与恢复">
                 <Cs2Recovery production={production} showManagedDetails />
               </section>
@@ -385,9 +388,7 @@ export function Settings({ tab }: { tab: string }) {
                     </Button>
                   </div>
                 </details>
-              ) : (
-                <p>请在桌面应用中管理安装位置与配置。</p>
-              )}{' '}
+              ) : null}
               <details>
                 <summary>配置详情{gsi?.endpointConflict ? ' · 重复文件' : ''}</summary>
                 {gsi?.endpointConflict ? (

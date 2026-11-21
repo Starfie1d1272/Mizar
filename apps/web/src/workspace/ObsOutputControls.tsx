@@ -16,8 +16,8 @@ function label(
     return `${action === 'stop' || state?.phase === 'stopping' ? '停止' : '开始'}${name}中…`;
   if (state?.phase === 'unknown' && state.active === true) return `${name}连接待确认 · 停止`;
   if (!state || state.active === null || state.phase === 'unknown') return `${name}状态未确认`;
-  if (state.phase === 'reconnecting') return '重连 · 停止';
-  if (state.phase === 'paused') return '暂停 · 停止';
+  if (state.phase === 'reconnecting') return `${name}重连 · 停止`;
+  if (state.phase === 'paused') return `${name}已暂停 · 停止`;
   return `${state.active ? '停止' : '开始'}${name}`;
 }
 
@@ -35,7 +35,7 @@ function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
   return (
     <div className="workspace-stream-health" aria-label="直播状态">
       <span>连接 {connection}</span>
-      <span>时长 {time}</span>
+      {seconds === null ? null : <span>时长 {time}</span>}
       <span>码率 {health?.bitrateKbps == null ? '—' : `${health.bitrateKbps} kb/s`}</span>
       <span>推流丢帧 {health?.droppedFrames ?? '—'}</span>
     </div>
@@ -44,9 +44,11 @@ function StreamHealth({ stream }: { stream: ObsOutputStatus }) {
 
 export function ObsOutputControls({
   onError,
+  connected,
   startWarning,
 }: {
   onError: (message: string) => void;
+  connected: boolean;
   startWarning: string | null;
 }) {
   const {
@@ -81,6 +83,11 @@ export function ObsOutputControls({
         onError(error instanceof Error ? error.message : 'OBS 操作未完成。');
     }
   }
+  const awaitingOutput =
+    !outputs ||
+    [outputs.stream, outputs.record].some(
+      (output) => output.active === null || output.phase === 'unknown',
+    );
   const confirmedState = confirmation ? outputs?.[confirmation.output] : undefined;
   const canConfirm =
     confirmation &&
@@ -113,18 +120,27 @@ export function ObsOutputControls({
               : kind === 'stream' && showStartWarning
                 ? '继续直播'
                 : label(kind, state, commandPending);
+          const active = state?.active === true && state.phase === 'active' && !busy;
+          const waiting = !state || state.active === null || state.phase === 'unknown';
+          const displayed = active ? `${kind === 'stream' ? '直播中' : '录像中'} · 停止` : text;
           return (
             <Button
               key={kind}
               disabled={busy || Boolean(preparation) || !state || state.active === null}
-              aria-label={text}
+              aria-label={displayed}
+              data-waiting={waiting || undefined}
+              data-live={active || undefined}
               loading={Boolean(
                 commandPending ||
                 state?.pending ||
                 state?.phase === 'starting' ||
                 state?.phase === 'stopping',
               )}
-              variant={state?.active ? 'secondary' : 'primary'}
+              variant={
+                kind === 'stream' && state?.phase === 'idle' && !busy && !preparation
+                  ? 'primary'
+                  : 'secondary'
+              }
               onClick={() => {
                 const command: ObsOutputCommand = {
                   output: kind,
@@ -135,12 +151,11 @@ export function ObsOutputControls({
                 else void run(command);
               }}
             >
-              {state?.active && state.phase === 'active' && !busy
-                ? `${kind === 'stream' ? '直播中' : '录像中'} · 停止`
-                : text}
+              {displayed}
             </Button>
           );
         })}
+        {connected && awaitingOutput ? <small>等待 OBS 确认输出</small> : null}
       </div>
       {preparingStream ? (
         <StatusBanner tone="info">

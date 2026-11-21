@@ -1149,6 +1149,9 @@
   align-items: start;
   gap: var(--mizar-layout-padding);
 }
+.game-settings-desktop-notice {
+  grid-column: 1 / -1;
+}
 @media (max-width: 900px) {
   .game-settings-layout {
     grid-template-columns: minmax(0, 1fr);

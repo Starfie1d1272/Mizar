@@ -176,7 +176,13 @@ export function GameAutomationSettingsPanel() {
           切换本图观战连接
         </Button>
       ) : null}
-      <p>MulNX 启动方式提供自动连接和游戏 HUD 控制；打开工作台后填写并确认本图观战连接。</p>
+      <p>
+        {useMulnx
+          ? '打开工作台后填写并确认本图观战连接。'
+          : cs2.status
+            ? '下面两项需要 MulNX。可在「下次启动设置」中更改启动方式。'
+            : '等待确认游戏启动方式。'}
+      </p>
       <Checkbox
         label="自动连接已提交的 GoTV"
         checked={settings.autoConnect}

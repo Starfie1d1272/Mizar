@@ -50,7 +50,7 @@ import {
   type Production,
   command,
 } from '../preparation/client';
-import { Button, StatusPill, StatusBanner, Dialog, Select } from '../ui';
+import { Button, StatusBanner, Dialog, Select } from '../ui';
 import { ProductionStatus } from './ProductionStatus';
 import { LiveRosterAlert } from './LiveRosterAlert';
 import type { SyncHealth } from './sync-health';
@@ -563,15 +563,19 @@ function WorkspaceDockContent() {
     >
       <section className="workspace-direction" aria-label="节目控制">
         <div className="workspace-section-heading">
-          <StatusPill tone={mode === 'blocked' ? 'warning' : 'info'}>
+          <span
+            className="workspace-director-mode"
+            data-mode={mode}
+            data-tone={mode === 'blocked' ? 'warning' : undefined}
+          >
             {mode === 'auto'
               ? '自动编排'
               : mode === 'manual'
-                ? '手动保持'
+                ? '手动编排'
                 : mode === 'blocked'
                   ? '自动暂停'
                   : '准备中'}
-          </StatusPill>
+          </span>
           {mode === 'manual' || mode === 'blocked' ? (
             <Button
               disabled={busy || !sceneState}
@@ -692,19 +696,22 @@ function WorkspaceDockContent() {
       </section>
       <section className="workspace-production" aria-label="制作工具">
         <div className="workspace-section-heading">
-          <span data-tone={connected ? 'success' : 'warning'}>
+          <span data-tone={obs && !connected ? 'warning' : undefined}>
             {connected
               ? 'OBS · 已连接'
               : obs?.connection === 'invalid_password'
                 ? 'OBS · 密码无效'
                 : obs?.connection === 'password_required'
                   ? 'OBS · 需要密码'
-                  : 'OBS · 未连接'}
+                  : obs
+                    ? 'OBS · 未连接'
+                    : 'OBS · 连接待确认'}
           </span>
           <Button onClick={() => navigate(openPreparation('/settings?tab=obs'))}>OBS 配置</Button>
         </div>
         <ObsOutputControls
           onError={setErrorMessage}
+          connected={connected}
           startWarning={
             connected
               ? obs.captureDiagnostic?.state === 'needs_attention'
@@ -884,7 +891,7 @@ function WorkspaceDockContent() {
               继续制作
             </Button>
             <Button
-              variant="primary"
+              className="workspace-exit-confirm"
               disabled={!production || busy}
               onClick={() =>
                 production &&
