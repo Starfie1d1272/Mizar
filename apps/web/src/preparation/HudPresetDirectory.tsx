@@ -12,7 +12,7 @@ import { getHudEditorFixture } from '../program/fixtures';
 import { radarSnapshotForProgramFixture } from '../program/fixtures/radar-fixtures';
 import { useBpSession } from '../bp/client';
 import { BpPresentation } from '@mizar/hud-view';
-import { Button, StatusBanner } from '../ui';
+import { Button, SourceBadge, StatusBanner } from '../ui';
 import { openTool } from './client';
 import '../operator/hud-console.css';
 
@@ -61,7 +61,7 @@ export function HudPresetDirectory({
       });
       editor.applyResponse(response.editor);
       onAir.applyResponse(response.onAir);
-      setMessage(`已应用「${response.onAir.resolved.preset.name}」。`);
+      setMessage(`已启用「${response.onAir.resolved.preset.name}」。`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '应用失败，请重试。');
     } finally {
@@ -91,6 +91,16 @@ export function HudPresetDirectory({
             </Button>
           ))}
         </nav>
+        <div className="picture-preview-bar">
+          {scene === 'bp' ? (
+            <SourceBadge kind="live" label={bp?.projection ? '本场 BP' : '本场 · 暂无 BP'} />
+          ) : (
+            <SourceBadge kind="sample" />
+          )}
+          <span className="picture-preview-bar__meta">
+            {scene === 'gameplay' ? selected?.name : '仅预览，不影响播出'}
+          </span>
+        </div>
         <div className="picture-preview" aria-label="画面预览" data-scene={scene}>
           {scene === 'gameplay' ? (
             resolved ? (
@@ -130,27 +140,11 @@ export function HudPresetDirectory({
             />
           )}
         </div>
-        <div className="picture-preview-caption">
-          <span>
-            {scene === 'gameplay'
-              ? `HUD · ${selected?.name ?? '预设不可用'}`
-              : PROGRAM_SCENES.find((item) => item.id === scene)?.title}
-          </span>
-          <span>
-            {scene === 'gameplay' ? '示例数据 · 非本场 · ' : ''}
-            仅预览 · 切换场景不影响播出
-          </span>
-        </div>
       </div>
       <aside className="picture-preset-panel" aria-label="选择 HUD 预设">
-        <div className="picture-active">
-          <small>当前播出配置</small>
-          <strong>
-            {onAir.status === 'ready' ? onAir.current.preset.name : '连接异常，状态待确认'}
-          </strong>
-        </div>
         <h2>选择 HUD</h2>
-        <div className="picture-preset-list">
+        {scene !== 'gameplay' ? <p>此场景不使用 HUD 预设</p> : null}
+        <div className="picture-preset-list" data-inactive={scene !== 'gameplay' || undefined}>
           {presets.map((preset) => (
             <Button
               key={preset.id}
@@ -166,21 +160,22 @@ export function HudPresetDirectory({
             >
               <span>{preset.name}</span>
               {onAir.status === 'ready' && onAir.current.preset.id === preset.id ? (
-                <small>{editor.activationStale ? '有更新待应用' : '已应用'}</small>
+                <small>{editor.activationStale ? '已启用 · 更新待启用' : '✓ 已启用'}</small>
               ) : null}
             </Button>
           ))}
         </div>
-        <p>HUD 预设用于比赛中画面；其他节目场景在左侧查看。</p>
         <div className="picture-preset-actions">
-          <Button
-            variant="primary"
-            loading={busy}
-            disabled={!ready || !resolved || busy || (active && !editor.activationStale)}
-            onClick={() => void apply()}
-          >
-            {active && !editor.activationStale ? '已应用' : '应用'}
-          </Button>
+          {ready && selected && (!active || editor.activationStale) ? (
+            <Button
+              variant="primary"
+              loading={busy}
+              disabled={!resolved || busy}
+              onClick={() => void apply()}
+            >
+              启用 {selected.name}
+            </Button>
+          ) : null}
           <Button
             disabled={!ready || !resolved || busy}
             onClick={() => void action(() => openTool('hud', selected!.id))}
@@ -188,7 +183,11 @@ export function HudPresetDirectory({
             调整此预设
           </Button>
         </div>
-        {!ready ? <StatusBanner tone="warning">连接未就绪，暂不能应用。</StatusBanner> : null}
+        {editor.status === 'error' || onAir.status === 'error' ? (
+          <StatusBanner tone="warning">暂时无法确认播出配置，请检查连接。</StatusBanner>
+        ) : !ready ? (
+          <p role="status">正在读取播出配置…</p>
+        ) : null}
         {error ? <StatusBanner tone="danger">{error}</StatusBanner> : null}
         {message ? <StatusBanner tone="info">{message}</StatusBanner> : null}
       </aside>

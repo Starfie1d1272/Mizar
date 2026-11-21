@@ -1,7 +1,7 @@
 import { useRadarViewSource } from '../realtime/radar-view-source';
 import { SessionContext } from '../preparation/SessionContext';
 import { downloadHudPresetFile, downloadLhmHud, readHudPresetFile } from './hud-preset-file';
-import { Button, Select } from '../ui';
+import { Button, Select, SourceBadge } from '../ui';
 import { ResourceSettings } from '../preparation/ResourceSettings';
 import { ToolShell, Workbench } from '../patterns';
 import {
@@ -936,7 +936,6 @@ export function HudConsolePage() {
   }
 
   const workspaceProps = {
-    activationStale,
     busy,
     configDocument,
     editorReady,
@@ -944,7 +943,6 @@ export function HudConsolePage() {
     layoutDirty,
     layoutDraft,
     layoutNameError,
-    onActivate: () => void activateSelectedPreset(),
     onImportPresetFile: (file: File) => void importPresetFile(file),
     onExportPresetFile: exportPresetFile,
     onDiscard: discard,
@@ -981,41 +979,45 @@ export function HudConsolePage() {
     workspace,
   };
 
+  const isEditingOnAir = onAir.status === 'ready' && selectedPresetId === onAir.current.preset.id;
+
   return (
-    <ToolShell title="HUD 编辑器" fill context={<SessionContext returnToWorkspace />}>
+    <ToolShell title="HUD 编辑器" fill context={<SessionContext returnToWorkspace compact />}>
       <main className="hud-console" data-surface="hud-console">
         {requestedPresetMissing ? (
           <p role="alert">请求的 HUD 预设不存在；保留当前资源，未启用任何新预设。</p>
         ) : null}
         <section className="hud-console__versions" aria-label="编辑与正式播出版本">
           <div>
-            <strong>正在编辑 · {presetDraft.name}</strong>
+            <strong>{presetDraft.name}</strong>
             <span>
               {!editorReady
                 ? '正在读取配置'
                 : editorStatus === 'error'
                   ? '连接异常，最近保存快照'
                   : hasDirtyDraft
-                    ? '未保存修改'
-                    : '已保存'}
+                    ? '草稿未保存'
+                    : isEditingOnAir && activationStale
+                      ? '已保存 · 更新待启用'
+                      : !isEditingOnAir
+                        ? '已保存'
+                        : null}
             </span>
-          </div>
-          <div>
-            <strong>
-              当前播出配置 ·{' '}
-              {onAir.status === 'ready'
-                ? onAir.current.preset.name
-                : onAir.status === 'loading'
-                  ? '正在读取'
-                  : '无法确认'}
-            </strong>
             {onAir.status === 'ready' ? (
-              <span>{activationStale ? '已保存，尚未应用' : '已应用'}</span>
+              <span>
+                {!isEditingOnAir
+                  ? `当前播出 · ${onAir.current.preset.name}`
+                  : hasDirtyDraft || activationStale || editorStatus === 'error'
+                    ? '当前播出 · 已启用版本'
+                    : '✓ 已启用'}
+              </span>
             ) : (
               <span role={onAir.status === 'error' ? 'alert' : 'status'}>
-                {onAir.activeRevision
-                  ? `最近确认：${onAir.current.preset.name}；当前状态待重查`
-                  : '尚无已确认的播出配置'}
+                {onAir.status === 'loading'
+                  ? '播出配置读取中'
+                  : onAir.activeRevision
+                    ? `最近确认：${onAir.current.preset.name}；当前状态待重查`
+                    : '尚无已确认的播出配置'}
               </span>
             )}
           </div>
@@ -1040,7 +1042,7 @@ export function HudConsolePage() {
               void activateSelectedPreset();
             }}
           >
-            应用
+            启用
           </Button>
         </section>
         <Workbench
@@ -1141,19 +1143,31 @@ export function HudConsolePage() {
                   }
                   {...radarDiagnosticAttributes}
                 >
-                  {activePreviewSource === 'replay'
-                    ? replayLoadError === null
-                      ? replayLoading
-                        ? '正在加载实景回放'
-                        : '回放示例，非本场事实'
-                      : '重放素材不可用'
-                    : activePreviewSource === 'fixture'
-                      ? sampleError
-                        ? '示例资料不可用'
-                        : fixture === null
-                          ? '正在加载示例资料'
-                          : '示例资料，非本场事实'
-                      : connectionLabel(program.state)}
+                  {activePreviewSource === 'replay' ? (
+                    <SourceBadge
+                      kind="sample"
+                      label={
+                        replayLoadError === null
+                          ? replayLoading
+                            ? '正在加载实景回放'
+                            : '回放示例 · 非本场'
+                          : '重放素材不可用'
+                      }
+                    />
+                  ) : activePreviewSource === 'fixture' ? (
+                    <SourceBadge
+                      kind="sample"
+                      label={
+                        sampleError
+                          ? '示例资料不可用'
+                          : fixture === null
+                            ? '正在加载示例资料'
+                            : '示例资料 · 非本场'
+                      }
+                    />
+                  ) : (
+                    <SourceBadge kind="live" label={connectionLabel(program.state)} />
+                  )}
                   {activePreviewSource === 'current-live' && unsupportedRadarMap !== null
                     ? ` · 雷达不可用：不支持地图 ${unsupportedRadarMap}`
                     : null}

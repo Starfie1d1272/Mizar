@@ -68,12 +68,6 @@
   height: var(--mizar-type-size-title);
   flex: none;
 }
-.product-sidebar footer {
-  margin-top: auto;
-  color: var(--mizar-fg-muted);
-  font-size: var(--mizar-type-size-small);
-  padding-inline: var(--mizar-layout-gap);
-}
 @media (max-width: 1100px) {
   .product-shell {
     grid-template-columns: calc(var(--mizar-layout-target) * 5) minmax(0, 1fr);
@@ -95,8 +89,7 @@
     display: flex;
     flex-wrap: wrap;
   }
-  .product-sidebar nav small,
-  .product-sidebar footer {
+  .product-sidebar nav small {
     display: none;
   }
   .product-sidebar .product-brand {

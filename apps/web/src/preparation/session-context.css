@@ -22,7 +22,22 @@
   gap: var(--mizar-layout-padding);
   margin-left: auto;
 }
+.session-context[data-compact='true'] {
+  flex-wrap: nowrap;
+  gap: var(--mizar-layout-compact);
+  padding: calc(var(--mizar-layout-compact) * 0.75) var(--mizar-layout-padding);
+  white-space: nowrap;
+}
+.session-context[data-compact='true'] > strong {
+  font-size: var(--mizar-type-size-small);
+}
+.session-context[data-compact='true'] .session-context__outputs {
+  gap: var(--mizar-layout-gap);
+}
 .session-context > [role='alert'] {
   flex-basis: 100%;
   color: var(--mizar-status-danger);
+}
+.session-context[data-compact='true'] > [role='alert'] {
+  flex-basis: auto;
 }
