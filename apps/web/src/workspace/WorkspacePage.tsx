@@ -114,6 +114,10 @@ function ContextPanel({
       new URLSearchParams(window.location.search).get('kind') === 'issues',
   );
   const [issueError, setIssueError] = useState<{ key: string; message: string } | null>(null);
+  const [matchNavigationError, setMatchNavigationError] = useState('');
+  const canCaptureRoster = operator?.matchContext.rosterAuthority !== 'rivalhub';
+  const captureNeedsAttention =
+    !match || Boolean(rosterAlert) || issues.some(({ id }) => id === 'roster' || id === 'steam64');
   const attentionIssues = rosterAlert
     ? issues.filter((issue) => issue.id !== 'steam64' && issue.id !== 'roster')
     : issues;
@@ -162,36 +166,64 @@ function ContextPanel({
         <p>尚未选择比赛，可先准备音画与音乐。</p>
       )}
       <div className="workspace-context__actions">
-        <Button onClick={() => void openPreparation('/matches')}>比赛资料</Button>
         {!connectionInRadar ? <MatchConnectionControl /> : null}
-        {operator?.matchContext.rosterAuthority !== 'rivalhub' ? (
-          <>
-            <Button onClick={() => setCaptureOpen(true)}>
-              {match ? '识别服务器首发' : '从服务器创建本地比赛'}
-            </Button>
-            <Dialog
-              open={captureOpen}
-              title={match ? '核对现场首发' : '从服务器创建本地比赛'}
-              modal={false}
-              className="workspace-recovery workspace-roster-capture"
-              onClose={() => setCaptureOpen(false)}
-            >
-              <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
-              <RosterCapture
-                key={match?.matchId ?? 'empty'}
-                create={!match}
-                autoOpen
-                {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
-              />
-            </Dialog>
-          </>
+        {canCaptureRoster && captureNeedsAttention ? (
+          <Button onClick={() => setCaptureOpen(true)}>
+            {match ? '识别服务器首发' : '从服务器创建本地比赛'}
+          </Button>
         ) : null}
-        <PreflightReview
-          operator={operator}
-          program={program}
-          cursor={programCursor}
-          onOpen={openPreparation}
-        />
+        <details
+          className="workspace-match-menu"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && event.currentTarget.open) {
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}
+        >
+          <summary className="mizar-button">本场 ▾</summary>
+          <div className="workspace-match-menu__list">
+            <Button
+              onClick={() => {
+                setMatchNavigationError('');
+                void openPreparation('/matches').catch((failure: unknown) =>
+                  setMatchNavigationError(
+                    failure instanceof Error ? failure.message : '比赛资料未能打开，请重试。',
+                  ),
+                );
+              }}
+            >
+              比赛资料
+            </Button>
+            <PreflightReview
+              operator={operator}
+              program={program}
+              cursor={programCursor}
+              onOpen={openPreparation}
+            />
+            {canCaptureRoster && !captureNeedsAttention ? (
+              <Button onClick={() => setCaptureOpen(true)}>识别服务器首发</Button>
+            ) : null}
+            {matchNavigationError ? <p role="alert">{matchNavigationError}</p> : null}
+          </div>
+        </details>
+        {canCaptureRoster ? (
+          <Dialog
+            open={captureOpen}
+            title={match ? '核对现场首发' : '从服务器创建本地比赛'}
+            modal={false}
+            className="workspace-recovery workspace-roster-capture"
+            onClose={() => setCaptureOpen(false)}
+          >
+            <p>连接服务器并进入观战后，核对双方十人名单，再确认保存。</p>
+            <RosterCapture
+              key={match?.matchId ?? 'empty'}
+              create={!match}
+              autoOpen
+              {...(match ? { names: { a: match.entryAName, b: match.entryBName } } : {})}
+            />
+          </Dialog>
+        ) : null}
       </div>
       {seriesBinding?.ownership?.status === 'attention' ? (
         <StatusBanner tone="warning">
@@ -531,9 +563,6 @@ function WorkspaceDockContent() {
     >
       <section className="workspace-direction" aria-label="节目控制">
         <div className="workspace-section-heading">
-          <strong>
-            {PROGRAM_SCENES.find((scene) => scene.id === sceneState?.active)?.title ?? '等待同步'}
-          </strong>
           <StatusPill tone={mode === 'blocked' ? 'warning' : 'info'}>
             {mode === 'auto'
               ? '自动编排'
@@ -543,20 +572,22 @@ function WorkspaceDockContent() {
                   ? '自动暂停'
                   : '准备中'}
           </StatusPill>
-          <Button
-            disabled={busy || !sceneState || (mode !== 'manual' && mode !== 'blocked')}
-            onClick={() =>
-              sceneState &&
-              void action(() =>
-                command('/operator/program-director', {
-                  action: 'resume',
-                  expectedRevision: sceneState.revision,
-                }),
-              )
-            }
-          >
-            恢复自动
-          </Button>
+          {mode === 'manual' || mode === 'blocked' ? (
+            <Button
+              disabled={busy || !sceneState}
+              onClick={() =>
+                sceneState &&
+                void action(() =>
+                  command('/operator/program-director', {
+                    action: 'resume',
+                    expectedRevision: sceneState.revision,
+                  }),
+                )
+              }
+            >
+              恢复自动
+            </Button>
+          ) : null}
         </div>
         <div className="workspace-scene-buttons" aria-label="手动切换场景">
           {PROGRAM_SCENES.map((scene) => (
@@ -646,7 +677,6 @@ function WorkspaceDockContent() {
           >
             返回游戏
           </Button>
-          <Button onClick={() => navigate(openTool('bp'))}>地图资料</Button>
           {bp && bp.state !== 'hidden' && bp.projection ? (
             <span>
               BP · {bp.revealedCount} / {bp.projection.steps.length}

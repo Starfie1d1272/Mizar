@@ -1,0 +1,24 @@
+.preparation-program-preview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  position: relative;
+  container-type: inline-size;
+}
+.preparation-program-preview iframe {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  border: 0;
+  background: var(--mizar-bg-canvas);
+  transform: scale(calc(100cqw / 1920px));
+  transform-origin: top left;
+}
+.program-preview-error {
+  position: absolute;
+  inset: auto 0 0;
+  padding: var(--mizar-layout-padding);
+  background: var(--mizar-bg-surface);
+  color: var(--mizar-fg-primary);
+}
