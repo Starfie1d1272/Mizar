@@ -121,6 +121,56 @@
 .focused-player .broadcast-smoke .player-status-effects__smoke {
   width: 56%;
 }
+/* Mizar Pulse and Perfect World keep the cloud as a state, but pull it back onto
+ * the media edge so residual health, armour and economy keep their contrast. */
+.hud-widget-design[data-hud-design='current']
+  .player-rail__card
+  > .broadcast-smoke
+  .player-status-effects__smoke {
+  left: 62px;
+  bottom: -6px;
+  width: 34%;
+  height: 56%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.32);
+  filter: blur(2.2px);
+}
+.hud-widget-design[data-hud-design='current']
+  .player-rail--right
+  .player-rail__card
+  > .broadcast-smoke
+  .player-status-effects__smoke {
+  left: auto;
+  right: 62px;
+}
+.hud-widget-design[data-hud-design='current']
+  .focused-player
+  .broadcast-smoke
+  .player-status-effects__smoke {
+  left: 0;
+  width: 82px;
+  height: 58%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.45);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .player-rail__card
+  > .broadcast-smoke
+  .player-status-effects__smoke {
+  left: auto;
+  right: 4px;
+  width: 38%;
+  height: 58%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.36);
+}
+.hud-widget-design[data-hud-design='perfectworld']
+  .focused-player
+  .broadcast-smoke
+  .player-status-effects__smoke {
+  left: 0;
+  right: auto;
+  width: 192px;
+  height: 44%;
+  opacity: calc(var(--rh-player-status-smoke, 0) * 0.52);
+}
 @media (prefers-reduced-motion: reduce) {
   .broadcast-smoke .player-status-effects__smoke,
   .broadcast-smoke .player-status-effects__smoke::before {

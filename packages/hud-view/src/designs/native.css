@@ -921,6 +921,20 @@
     color: var(--mizar-hud-text-muted);
     line-height: 14px;
   }
+  /* A knife or a replay without ammunition must not open a hole in the card.
+   * The outer box keeps its width and anchor; only the empty ammunition column
+   * and its divider retract, and the identity row claims the freed width. */
+  .focused-player[data-has-ammo='false'] .focused-player__ammo {
+    display: none;
+  }
+  .focused-player[data-has-ammo='false'] .focused-player__identity {
+    right: 0;
+  }
+  .focused-player[data-has-ammo='false'] .focused-player__active {
+    left: auto;
+    right: 16px;
+    width: 160px;
+  }
   .focused-player__vitals {
     position: absolute;
     top: 34px;

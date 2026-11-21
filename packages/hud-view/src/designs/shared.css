@@ -551,6 +551,41 @@
   opacity: 0.6;
   height: 2px;
 }
+/* IEM and ESL keep the reference's whole-card estimate sweep. Its contrast drops
+ * so the card's own reading order survives, and the identity, health and economy
+ * rows sit on a dark scrim that never moves them. */
+.hud-widget-design:is([data-hud-design='iem'], [data-hud-design='esl'])
+  .player-rail__bomb-prediction {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 6px,
+      color-mix(in srgb, var(--mizar-hud-surface-strong) 34%, transparent) 6px 10px
+    ),
+    color-mix(in srgb, var(--mizar-hud-state-warning) 56%, var(--mizar-hud-surface-strong));
+}
+.hud-widget-design:is([data-hud-design='iem'], [data-hud-design='esl'])
+  .player-rail__card:has(.player-rail__bomb-prediction)
+  .player-rail__body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--mizar-hud-surface-strong) 62%, transparent),
+    color-mix(in srgb, var(--mizar-hud-surface-strong) 42%, transparent) 55%,
+    color-mix(in srgb, var(--mizar-hud-surface-strong) 56%, transparent)
+  );
+}
+.hud-widget-design:is([data-hud-design='iem'], [data-hud-design='esl'])
+  .player-rail__card:has(.player-rail__bomb-prediction)
+  :is(.player-rail__name, .player-rail__health-value, .player-rail__kd, .player-rail__money) {
+  text-shadow:
+    0 1px 4px color-mix(in srgb, var(--mizar-hud-surface-strong) 92%, transparent),
+    0 0 8px color-mix(in srgb, var(--mizar-hud-surface-strong) 55%, transparent);
+}
 /* Match the reference's bright held weapon and subdued holstered inventory. */
 .hud-widget-design.hud-redraw .player-rail__icon[data-weapon-active='false'] {
   opacity: 0.45;

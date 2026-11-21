@@ -265,6 +265,12 @@
 .hud-widget-design[data-hud-design='esl'] .focused-player__face {
   background: transparent;
 }
+/* The top rule belongs to the portrait, not to empty air on either side. */
+.hud-widget-design[data-hud-design='esl'] .focused-player__face::before {
+  left: 76px;
+  right: 76px;
+  width: 144px;
+}
 .hud-widget-design[data-hud-design='esl'] .focused-player__action,
 .hud-widget-design[data-hud-design='esl']
   .focused-player__face[data-dead='true']
@@ -324,16 +330,46 @@
   height: 2px;
   top: 34px;
 }
+/* Armour and the held item share one quiet band under the portrait. */
+.hud-widget-design[data-hud-design='esl'] .focused-player__face::after {
+  content: '';
+  position: absolute;
+  top: 180px;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  height: 36px;
+  background: color-mix(in srgb, var(--mizar-hud-surface-strong) 92%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--mizar-hud-text-primary) 12%, transparent);
+}
 .hud-widget-design[data-hud-design='esl'] .focused-player__armor {
   position: absolute;
   top: 42px;
-  right: 94px;
+  right: 12px;
+  z-index: 4;
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 5px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__armor .focused-player__icon {
+  width: 16px;
+  height: 16px;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__armor b {
+  font-size: 18px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__active {
-  top: 184px;
-  left: 8px;
-  width: 96px;
-  height: 30px;
+  top: 182px;
+  left: 12px;
+  z-index: 4;
+  width: 112px;
+  height: 32px;
+  justify-content: flex-start;
+}
+.hud-widget-design[data-hud-design='esl'] .focused-player__active .focused-player__icon {
+  max-width: 96px;
+  max-height: 26px;
 }
 .hud-widget-design[data-hud-design='esl'] .focused-player__ammo {
   top: 184px;
@@ -508,9 +544,7 @@
 .hud-widget-design[data-hud-design='esl'] .focused-player__face {
   background: transparent;
 }
-.hud-widget-design[data-hud-design='esl'] .focused-player__active,
-.hud-widget-design[data-hud-design='esl'] .focused-player__ammo,
-.hud-widget-design[data-hud-design='esl'] .focused-player__armor {
+.hud-widget-design[data-hud-design='esl'] .focused-player__ammo {
   display: none;
 }
 .hud-widget-design[data-hud-design='esl'] .player-rail,
