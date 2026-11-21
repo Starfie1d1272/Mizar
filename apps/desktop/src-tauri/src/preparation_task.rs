@@ -464,6 +464,19 @@ async fn prepare_obs(
             t.obs = false;
             t.capture = false;
         });
+        let try_local = || {
+            controlled_post(
+                &app,
+                &id,
+                "/operator/obs/use-local-connection",
+                json!({"expectedRevision": revision}),
+            )
+        };
+        if obs["connection"] != "connected" {
+            let _ = try_local().await;
+            check(&app, &id)?;
+            obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
+        }
         if obs["connection"] != "connected" {
             if obs["connection"] == "password_required" || obs["connection"] == "invalid_password" {
                 return Err("OBS WebSocket 密码未配置或不正确。".into());
@@ -481,7 +494,7 @@ async fn prepare_obs(
             .await?;
         }
         // OBS accepts WebSocket connections before its output requests are ready.
-        for _ in 0..30 {
+        for attempt in 0..30 {
             if obs["connection"] == "connected"
                 && obs["streaming"].is_boolean()
                 && obs["recording"].is_boolean()
@@ -492,6 +505,10 @@ async fn prepare_obs(
             tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1)))
                 .await
                 .map_err(|_| "OBS 等待失败。")?;
+            if matches!(attempt, 3 | 11) && obs["connection"] != "connected" {
+                let _ = try_local().await;
+                check(&app, &id)?;
+            }
             obs = http(&app, "GET", "/local/v1/obs", json!({})).await?;
         }
         if obs["connection"] != "connected" {
@@ -657,6 +674,12 @@ async fn prepare_game(
                     .as_str()
                     .unwrap_or("无法确认 CS2 安装或 GSI 配置。")
                     .into());
+            }
+            if !preparation_evidence::gsi_current(&status) {
+                let game = crate::cs2_host::status(app.clone()).await?;
+                if game["running"] == true || game["pending"] == true {
+                    return Err("CS2 正在运行或启动，请结束本次游戏后重试准备。".into());
+                }
             }
             let result = crate::gsi_host::ensure(
                 app.clone(),

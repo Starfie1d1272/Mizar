@@ -322,8 +322,10 @@ export class ObsAdapter {
     return this.configurationMutation(() => this.commitConnectionConfig(config));
   }
 
-  useLocalConnection(valid: () => boolean): Promise<void> {
+  useLocalConnection(valid: () => boolean, automatic = false): Promise<void> {
     return this.configurationMutation(async () => {
+      if (automatic && !(await this.configStore.isUnconfigured())) return;
+      if (!valid()) throw new Error('local_obs_changed');
       const saved = await this.configStore.read();
       const { config, stillCurrent } = await readLocalObsConnection(saved.executablePath);
       if (!valid()) throw new Error('local_obs_changed');

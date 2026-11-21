@@ -46,10 +46,12 @@ export function ObsOutputControls({
   onError,
   connected,
   startWarning,
+  audioRepair,
 }: {
   onError: (message: string) => void;
   connected: boolean;
   startWarning: string | null;
+  audioRepair: { run: () => void; busy: boolean } | null;
 }) {
   const {
     outputs,
@@ -98,7 +100,16 @@ export function ObsOutputControls({
     !pending[confirmation.output];
   return (
     <>
-      {showStartWarning ? <StatusBanner tone="warning">{startWarning}</StatusBanner> : null}
+      {showStartWarning ? (
+        <StatusBanner tone="warning">
+          {startWarning}
+          {audioRepair && outputsIdle ? (
+            <Button disabled={audioRepair.busy} onClick={audioRepair.run}>
+              {audioRepair.busy ? '正在修复…' : '修复场景与音频'}
+            </Button>
+          ) : null}
+        </StatusBanner>
+      ) : null}
       <div className="workspace-obs-controls" aria-label="OBS 输出控制">
         {(['stream', 'record'] as const).map((kind) => {
           const state = outputs?.[kind];
@@ -117,9 +128,7 @@ export function ObsOutputControls({
           const text =
             kind === 'stream' && preparingStream
               ? '正在检查开播画面…'
-              : kind === 'stream' && showStartWarning
-                ? '继续直播'
-                : label(kind, state, commandPending);
+              : label(kind, state, commandPending);
           const active = state?.active === true && state.phase === 'active' && !busy;
           const waiting = !state || state.active === null || state.phase === 'unknown';
           const displayed = active ? `${kind === 'stream' ? '直播中' : '录像中'} · 停止` : text;

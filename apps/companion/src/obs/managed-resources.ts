@@ -603,6 +603,16 @@ export class ManagedObsResources {
           for (const item of items)
             if (await protectsSource(protection, item)) protectedScene = true;
           if (protectedScene) continue;
+          if (
+            (await raw.call('GetCurrentProgramScene')).currentProgramSceneUuid === scene.sceneUuid
+          ) {
+            // OBS would choose its own replacement and report an unexpected program change.
+            const waiting = registry!.roles[desired[0]!.sceneName]?.uuid;
+            if (!waiting || !scenes.some((item) => item.sceneUuid === waiting)) throw conflict();
+            await writer.call('SetCurrentProgramScene', { sceneUuid: waiting });
+            if ((await raw.call('GetCurrentProgramScene')).currentProgramSceneUuid !== waiting)
+              throw conflict();
+          }
           await writer.call('RemoveScene', { sceneUuid: scene.sceneUuid });
           continue;
         }
