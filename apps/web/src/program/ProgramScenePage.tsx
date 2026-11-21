@@ -14,9 +14,10 @@ import {
 } from '@mizar/protocol/program-scenes';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { useHudConfigClient } from '../realtime/hud-config-client';
+import { useRadarViewSource } from '../realtime/radar-view-source';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
-import { ProgramView, StatsInsertView } from '@mizar/hud-view';
+import { ProgramView, StatsInsertView, type ProgramSceneViewProps } from '@mizar/hud-view';
 import { useStatsRotation } from './useStatsRotation';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
@@ -126,23 +127,25 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const sceneStyle = display.current
     ? (pulseTokenStyle(display.current.program) ?? undefined)
     : undefined;
-  const scene = (
-    <ProgramView
-      kind="scene"
-      sceneStyle={sceneStyle}
-      sceneId={sceneId}
-      data={data}
-      snapshot={snapshot ?? null}
-      scenes={scenes}
-      resolvedPreset={activeHud?.config ?? hud.current}
-      overlays={activeHud?.overlays}
-      accent={activeHud?.accent}
-      reducedMotion={reducedMotion}
-      preview={preview}
-      shortIntro={params.get('intro') === 'short'}
-      previewBackground={params.get('background') !== 'transparent'}
-    />
-  );
+  const sceneProps: ProgramSceneViewProps = {
+    sceneId,
+    data,
+    snapshot: snapshot ?? null,
+    scenes,
+    resolvedPreset: activeHud?.config ?? hud.current,
+    overlays: activeHud?.overlays,
+    accent: activeHud?.accent,
+    reducedMotion,
+    preview,
+    shortIntro: params.get('intro') === 'short',
+    previewBackground: params.get('background') !== 'transparent',
+  };
+  const scene =
+    !preview && (sceneId === 'matchup' || sceneId === 'gameplay') ? (
+      <LiveRadarScene {...sceneProps} sceneStyle={sceneStyle} />
+    ) : (
+      <ProgramView kind="scene" sceneStyle={sceneStyle} {...sceneProps} />
+    );
   return canRotate && sameMatch && matchId ? (
     <RotatingScene
       key={JSON.stringify([sceneId, matchId])}
@@ -154,6 +157,17 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   ) : (
     scene
   );
+}
+
+function LiveRadarScene({
+  sceneStyle,
+  ...props
+}: ProgramSceneViewProps & {
+  readonly sceneStyle?: CSSProperties | undefined;
+}) {
+  const radarClient = useLocalChannelClient('radar');
+  const radarSource = useRadarViewSource(radarClient);
+  return <ProgramView kind="scene" sceneStyle={sceneStyle} {...props} radarSource={radarSource} />;
 }
 
 function RotatingScene({

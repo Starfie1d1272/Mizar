@@ -11,6 +11,7 @@ import type {
 } from '@mizar/protocol/program-scenes';
 import { ProgramCanvas } from './ProgramCanvas.js';
 import { GameplayHud } from './GameplayHud.js';
+import type { RadarProps } from './widgets/radar/Radar.js';
 import { BroadcastArc } from './BroadcastArc.js';
 import './program-scenes.css';
 import './broadcast-material.css';
@@ -333,6 +334,8 @@ export interface ProgramSceneViewProps {
   readonly sceneId: ProgramSceneId;
   readonly data: ProgramPresentation | null;
   readonly snapshot: ProgramSnapshot | null;
+  readonly radarSource?: RadarProps['source'];
+  readonly radarSnapshot?: RadarProps['snapshot'];
   readonly scenes: ProgramSceneState | null;
   readonly resolvedPreset: HudResolvedPreset;
   readonly overlays?: Extract<ResolvedHudModule, { renderer: 'native' }>['overlays'] | undefined;
@@ -348,6 +351,8 @@ export function ProgramSceneView({
   sceneId,
   data,
   snapshot,
+  radarSource,
+  radarSnapshot,
   scenes,
   resolvedPreset,
   overlays,
@@ -597,6 +602,8 @@ export function ProgramSceneView({
         ) : sceneId === 'gameplay' ? (
           <GameplayHud
             snapshot={snapshot}
+            radarSource={radarSource}
+            radarSnapshot={radarSnapshot}
             resolvedPreset={resolvedPreset}
             overlays={overlays}
             accent={accent}
@@ -615,6 +622,8 @@ export function ProgramSceneView({
             >
               <GameplayHud
                 snapshot={snapshot}
+                radarSource={radarSource}
+                radarSnapshot={radarSnapshot}
                 resolvedPreset={resolvedPreset}
                 overlays={overlays}
                 accent={accent}
@@ -659,6 +668,8 @@ export function ProgramSceneView({
       ) : sceneId === 'gameplay' ? (
         <GameplayHud
           snapshot={snapshot}
+          radarSource={radarSource}
+          radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}
           overlays={overlays}
           accent={accent}
