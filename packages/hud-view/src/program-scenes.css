@@ -780,23 +780,26 @@
 .program-scene--match_result .summary-map-winner {
   position: absolute;
   z-index: 2;
-  /* Sits in the clear band under the pick pill; the big map score owns the
-   * bottom of the card and must never be crossed, at three or five maps. The
-   * plate keeps the label readable over bright map imagery. */
-  top: 44px;
+  bottom: 34px;
   left: 14px;
-  max-width: calc(100% - 28px);
+  /* The label keeps the map-art baseline it belongs to. Its ceiling reserves
+   * the big map score's column, so a long team name truncates instead of
+   * reaching across the score. */
+  max-width: calc(100% - 208px);
   overflow: hidden;
-  padding: 2px 7px;
   color: var(--mizar-broadcast-pulse-gold);
-  background: color-mix(in srgb, var(--mizar-broadcast-pulse-canvas) 84%, transparent);
-  border-radius: 2px;
+  /* A four- or five-map series leaves no room beside the score, and a five
+   * character stub names nobody. Drop the label there and let the gold
+   * underline carry the per-map winner instead. */
   font-family: var(--mizar-type-family-display);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.program-scene--match_result .summary-map-cards[data-map-count='compact'] .summary-map-winner {
+  display: none;
 }
 .summary-footer strong[data-winner='true'] {
   text-decoration: underline;

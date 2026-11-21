@@ -104,7 +104,10 @@ function MapStrip({ data, scene }: { data: ProgramPresentation; scene: ProgramSc
   return (
     <div className="summary-map-strip">
       <Media src={series.entrants.a.logoUrl} className="summary-entrant-logo" />
-      <div className="summary-map-cards">
+      <div
+        className="summary-map-cards"
+        data-map-count={series.maps.length > 3 ? 'compact' : undefined}
+      >
         {series.maps.map((map) => {
           const picker =
             map.selection.kind === 'pick'
