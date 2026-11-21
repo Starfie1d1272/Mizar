@@ -54,3 +54,48 @@
 .bp-canvas .broadcast-arc__companion {
   display: none;
 }
+
+.broadcast-identity {
+  position: absolute;
+  z-index: 2;
+  left: 120px;
+  right: 120px;
+  bottom: 32px;
+  height: 52px;
+  border-top: 1px solid color-mix(in srgb, var(--mizar-broadcast-pulse-highlight) 22%, transparent);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 40px;
+}
+
+.broadcast-identity > div {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.broadcast-identity img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.broadcast-identity strong {
+  font-size: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.broadcast-identity span {
+  font-size: 15px;
+  color: var(--mizar-broadcast-pulse-muted);
+  letter-spacing: 0.1em;
+}
+
+.broadcast-signature {
+  flex-shrink: 0;
+  opacity: 0.6;
+}

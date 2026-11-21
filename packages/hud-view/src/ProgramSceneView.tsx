@@ -11,6 +11,7 @@ import type {
 } from '@mizar/protocol/program-scenes';
 import { ProgramCanvas } from './ProgramCanvas.js';
 import { GameplayHud } from './GameplayHud.js';
+import type { RadarProps } from './widgets/radar/Radar.js';
 import { BroadcastArc } from './BroadcastArc.js';
 import './program-scenes.css';
 import './broadcast-material.css';
@@ -64,13 +65,23 @@ const scheduleTime = (value: string) =>
     timeZone: 'Asia/Shanghai',
   }).format(new Date(value)) + ' · UTC+8';
 
-function BroadcastIdentity({ data }: { data: ProgramPresentation }) {
+function BroadcastIdentity({
+  data,
+  hideEventName = false,
+}: {
+  data: ProgramPresentation;
+  hideEventName?: boolean;
+}) {
   const resolveAssetUrl = useAssetUrl();
   return (
     <footer className="broadcast-identity">
       <div>
-        <Media src={data.eventLogoUrl} />
-        <strong>{data.match?.competition?.name}</strong>
+        {!hideEventName ? (
+          <>
+            <Media src={data.eventLogoUrl} />
+            <strong>{data.match?.competition?.name}</strong>
+          </>
+        ) : null}
         <span>{data.match?.stage}</span>
       </div>
       <div className="broadcast-signature">
@@ -155,10 +166,8 @@ function SummaryBoard({ data, scene }: { data: ProgramPresentation; scene: Progr
         <span>{scene === 'match_result' ? 'FINAL MAP STATS' : 'MAP STATS'}</span>
       </div>
       {hasPlayers ? (
-        <div className="summary-stat-axis" aria-hidden="true">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i}>K/D</span>
-          ))}
+        <div className="summary-stat-header" aria-hidden="true">
+          <span>K / D</span>
         </div>
       ) : null}
       <div className="summary-players">
@@ -247,8 +256,12 @@ function Waiting({ data }: { data: ProgramPresentation }) {
                 <span className="waiting-schedule-team">{card.b}</span>
               </strong>
               <p>
-                {card.stage} · {card.format.toUpperCase()}
-                {card.scheduledAt ? ` · ${scheduleTime(card.scheduledAt)}` : ''}
+                <span>
+                  {card.stage} · {card.format.toUpperCase()}
+                </span>
+                {card.scheduledAt ? (
+                  <span className="waiting-schedule-time">{scheduleTime(card.scheduledAt)}</span>
+                ) : null}
               </p>
             </article>
           ) : null;
@@ -276,6 +289,7 @@ function MapResult({ data }: { data: ProgramPresentation }) {
       <h1>MAP {summary.mapOrder}</h1>
       <p className="result-map-name">{mapName(summary.mapName)}</p>
       <span className="result-vs">VS</span>
+      <span className="result-series-label">SERIES</span>
       {(['a', 'b'] as const).map((side) => (
         <div
           className={`result-side result-side--${side}`}
@@ -320,6 +334,8 @@ export interface ProgramSceneViewProps {
   readonly sceneId: ProgramSceneId;
   readonly data: ProgramPresentation | null;
   readonly snapshot: ProgramSnapshot | null;
+  readonly radarSource?: RadarProps['source'];
+  readonly radarSnapshot?: RadarProps['snapshot'];
   readonly scenes: ProgramSceneState | null;
   readonly resolvedPreset: HudResolvedPreset;
   readonly overlays?: Extract<ResolvedHudModule, { renderer: 'native' }>['overlays'] | undefined;
@@ -335,6 +351,8 @@ export function ProgramSceneView({
   sceneId,
   data,
   snapshot,
+  radarSource,
+  radarSnapshot,
   scenes,
   resolvedPreset,
   overlays,
@@ -552,15 +570,20 @@ export function ProgramSceneView({
     onAirIntro,
     introPaused,
   ]);
+  const introMap = data?.series?.maps.find((map) => map.mapOrder === data.series?.currentMapOrder);
+  const previewArt =
+    preview && previewBackground && (sceneId === 'matchup' || sceneId === 'gameplay')
+      ? getMapThumbnail(introMap?.mapName ?? snapshot?.payload.map.name ?? '')
+      : undefined;
   return (
     <ProgramCanvas className={`program-scene program-scene--${sceneId}`}>
       {preview && (sceneId === 'matchup' || sceneId === 'gameplay') && previewBackground ? (
         <div
           className="intro-preview-backdrop"
           style={{
-            backgroundImage: assetCssUrl(
-              resolveAssetUrl(getMapThumbnail('de_ancient')?.outputPath ?? ''),
-            ),
+            backgroundImage: previewArt
+              ? assetCssUrl(resolveAssetUrl(previewArt.outputPath))
+              : undefined,
           }}
         />
       ) : null}
@@ -568,7 +591,7 @@ export function ProgramSceneView({
         <BroadcastArc hero={sceneId === 'waiting'} />
       ) : null}
       {data && sceneId !== 'matchup' && sceneId !== 'gameplay' ? (
-        <BroadcastIdentity data={data} />
+        <BroadcastIdentity data={data} hideEventName={sceneId === 'waiting'} />
       ) : null}
       {preview ? <p className="program-preview-source">示例画面</p> : null}
       {data ? (
@@ -579,6 +602,8 @@ export function ProgramSceneView({
         ) : sceneId === 'gameplay' ? (
           <GameplayHud
             snapshot={snapshot}
+            radarSource={radarSource}
+            radarSnapshot={radarSnapshot}
             resolvedPreset={resolvedPreset}
             overlays={overlays}
             accent={accent}
@@ -597,6 +622,8 @@ export function ProgramSceneView({
             >
               <GameplayHud
                 snapshot={snapshot}
+                radarSource={radarSource}
+                radarSnapshot={radarSnapshot}
                 resolvedPreset={resolvedPreset}
                 overlays={overlays}
                 accent={accent}
@@ -613,11 +640,7 @@ export function ProgramSceneView({
                 <BroadcastArc hero />
               </div>
               <p className="intro-map">
-                MAP {data.series?.currentMapOrder ?? 1} ·{' '}
-                {mapName(
-                  data.series?.maps.find((map) => map.mapOrder === data.series?.currentMapOrder)
-                    ?.mapName ?? '',
-                )}
+                MAP {data.series?.currentMapOrder ?? 1} · {mapName(introMap?.mapName ?? '')}
               </p>
               {(['a', 'b'] as const).map((side) => (
                 <div className={`intro-team intro-team--${side}`} key={side}>
@@ -645,6 +668,8 @@ export function ProgramSceneView({
       ) : sceneId === 'gameplay' ? (
         <GameplayHud
           snapshot={snapshot}
+          radarSource={radarSource}
+          radarSnapshot={radarSnapshot}
           resolvedPreset={resolvedPreset}
           overlays={overlays}
           accent={accent}

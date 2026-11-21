@@ -75,6 +75,7 @@ function Team({
         aria-label={`${team.name} logo`}
         className={`match-header__score-zone match-header__score-zone--logo match-header__score-zone--logo-${team.key}`}
         data-team-logo-slot={team.key}
+        data-show-team-logo={options.showTeamLogo}
         data-side={team.side ?? 'unknown'}
       >
         {options.showTeamLogo ? (
@@ -396,10 +397,10 @@ function ShanghaiPanels({
           ) : null}
           <div className="shanghai-event-panel" data-owner={actionOwner} data-kind={action.kind}>
             {action.kind === 'defuse' && p.objective.hasKit ? <ShanghaiKit /> : null}
-            {action.kind === 'defuse' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
+            {action.kind === 'defuse' ? <b>{remaining.toFixed(2)}</b> : null}
             <strong>{actor?.displayName ?? 'PLAYER'}</strong>
             <span>{action.kind === 'plant' ? 'PLANTING BOMB' : 'DEFUSING THE BOMB'}</span>
-            {action.kind === 'plant' ? <b>{remaining.toFixed(2).replace('.', ':')}</b> : null}
+            {action.kind === 'plant' ? <b>{remaining.toFixed(2)}</b> : null}
           </div>
         </>
       ) : winner ? (

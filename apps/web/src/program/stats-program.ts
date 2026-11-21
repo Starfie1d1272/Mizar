@@ -56,7 +56,7 @@ const attrLabels: Record<string, string> = {
 };
 const titles: Record<Page['kind'], readonly [string, string]> = {
   match: ['对阵', 'MATCH'],
-  'current-map': ['单图数据', 'MAP RESULT'],
+  'current-map': ['MAP STATS', 'MAP RESULT'],
   series: ['地图顺序', 'SERIES'],
   bp: ['本场选禁', 'MAP VETO'],
   lineup: ['本场阵容', 'LINEUPS'],
@@ -208,10 +208,7 @@ export function statsProgramInserts(
       ].includes(page.kind)
         ? `${names[visible[0]!]} · `
         : '';
-    const title =
-      page.kind === 'current-map' && bundle.phase === 'halftime'
-        ? '半场数据'
-        : `${topicPrefix}${defaultTitle}`;
+    const title = `${topicPrefix}${defaultTitle}`;
     const chosen = byPage(page);
     const teamScoped = [
       'lineup',
@@ -620,6 +617,7 @@ export function statsProgramInserts(
         break;
       case 'current-map': {
         const m = bundle.selectedMap;
+        rail = ['', ''];
         if (m)
           content = {
             kind: 'current-map',

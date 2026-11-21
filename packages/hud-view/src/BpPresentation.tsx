@@ -286,6 +286,16 @@ export function BpPresentation({
             </div>
             <span>{projection.format.toUpperCase()}</span>
           </div>
+          <footer className="broadcast-identity">
+            <div>
+              <strong>{projection.competition}</strong>
+              <span>{projection.stage}</span>
+            </div>
+            <div className="broadcast-signature">
+              <img src={resolveAssetUrl('/brand/mizar-mark-mono.svg')} alt="" />
+              <span>MIZAR</span>
+            </div>
+          </footer>
         </section>
       ) : null}
     </ProgramCanvas>
