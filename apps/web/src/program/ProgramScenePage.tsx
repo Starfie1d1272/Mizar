@@ -14,11 +14,11 @@ import {
 } from '@mizar/protocol/program-scenes';
 import type { ProgramSnapshot } from '@mizar/protocol/program';
 import { useHudConfigClient } from '../realtime/hud-config-client';
-import { useRadarViewSource } from '../realtime/radar-view-source';
 import { useLocalChannelClient } from '../realtime';
 import { useProgramScenes } from '../workspace/client';
 import { ProgramView, StatsInsertView, type ProgramSceneViewProps } from '@mizar/hud-view';
 import { useStatsRotation } from './useStatsRotation';
+import { radarMatchesProgram } from './program-radar';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
 const subscribeMotion = (notify: () => void) => {
@@ -166,8 +166,20 @@ function LiveRadarScene({
   readonly sceneStyle?: CSSProperties | undefined;
 }) {
   const radarClient = useLocalChannelClient('radar');
-  const radarSource = useRadarViewSource(radarClient);
-  return <ProgramView kind="scene" sceneStyle={sceneStyle} {...props} radarSource={radarSource} />;
+  const radar = useSyncExternalStore(
+    radarClient.subscribe,
+    radarClient.getSnapshot,
+    radarClient.getSnapshot,
+  );
+  const sameSource = radar.state === 'live' && radarMatchesProgram(props.snapshot, radar.current);
+  return (
+    <ProgramView
+      kind="scene"
+      sceneStyle={sceneStyle}
+      {...props}
+      radarSnapshot={sameSource ? radar.current : null}
+    />
+  );
 }
 
 function RotatingScene({
