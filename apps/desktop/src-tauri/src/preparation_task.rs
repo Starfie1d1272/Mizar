@@ -302,21 +302,36 @@ fn entered(app: &tauri::AppHandle, id: &str) -> Result<bool, String> {
     crate::lifecycle_contract::cancellation_entered(&status)
 }
 fn request(app: &tauri::AppHandle, method: &str, path: &str, body: Value) -> Result<Value, String> {
-    let (status, value) = crate::companion_http::request_with_identity(
-        &app.state::<DesktopLog>(),
-        method,
-        path,
-        &body.to_string(),
-        Instant::now() + Duration::from_secs(40),
-        None,
-    )?;
-    if !(200..300).contains(&status) {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let body = body.to_string();
+    let mut remaining_reads = 3;
+    loop {
+        let (status, value) = crate::companion_http::request_with_identity(
+            &app.state::<DesktopLog>(),
+            method,
+            path,
+            &body,
+            deadline,
+            None,
+        )?;
+        if (200..300).contains(&status) {
+            return Ok(value);
+        }
+        // Entering production or adopting the local connection can retire a read in flight.
+        if method == "GET"
+            && path == "/local/v1/obs"
+            && value["error"] == "obs_observation_changed"
+            && remaining_reads > 0
+        {
+            remaining_reads -= 1;
+            thread::sleep(Duration::from_millis(150));
+            continue;
+        }
         return Err(value["message"]
             .as_str()
             .unwrap_or("自动准备未完成，请重试。")
             .into());
     }
-    Ok(value)
 }
 async fn http(
     app: &tauri::AppHandle,
