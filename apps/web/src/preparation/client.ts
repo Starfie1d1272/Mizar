@@ -11,10 +11,12 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
   const [value, setValue] = useState<{
     value: T | null;
     updatedAt: number | null;
+    polledAt: number | null;
     status: 'loading' | 'ready' | 'unavailable';
   }>({
     value: null,
     updatedAt: null,
+    polledAt: null,
     status: 'loading',
   });
   useEffect(() => {
@@ -29,9 +31,11 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
         });
         if (!response.ok) throw new Error('unavailable');
         const next = (await response.json()) as T;
-        if (active) setValue({ value: next, updatedAt: Date.now(), status: 'ready' });
+        const now = Date.now();
+        if (active) setValue({ value: next, updatedAt: now, polledAt: now, status: 'ready' });
       } catch {
-        if (active) setValue({ value: null, updatedAt: null, status: 'unavailable' });
+        if (active)
+          setValue({ value: null, updatedAt: null, polledAt: Date.now(), status: 'unavailable' });
       } finally {
         if (active) timer = setTimeout(() => void poll(), interval);
       }

@@ -27,13 +27,18 @@ async function activeManagedInputs(obs: ObsRpc, inputs: Input[]): Promise<Input[
 }
 
 /** OBS global channels cannot be removed through WebSocket; muted, unmonitored ones are inert. */
-export async function assertManagedGlobalAudioSilent(obs: ObsRpc): Promise<void> {
+export async function assertManagedGlobalAudioSilent(
+  obs: ObsRpc,
+  preloadedInputs?: (Input & { inputUuid?: string })[],
+): Promise<void> {
   const specials = await obs.call('GetSpecialInputs');
   const names = Object.values(specials).filter(
     (value): value is string => typeof value === 'string' && Boolean(value),
   );
   if (!names.length) return;
-  const inputs = (await obs.call('GetInputList')).inputs as (Input & { inputUuid: string })[];
+  const inputs =
+    preloadedInputs ??
+    ((await obs.call('GetInputList')).inputs as (Input & { inputUuid: string })[]);
   for (const name of names) {
     const input = inputs.find((candidate) => candidate.inputName === name);
     if (!input?.inputUuid) throw new Error('audio_global_path_unresolved');
@@ -48,12 +53,13 @@ export async function assertManagedGlobalAudioSilent(obs: ObsRpc): Promise<void>
 
 /** Structural readiness only. Audible content still needs an OBS/stream listening check. */
 export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
-  await assertManagedGlobalAudioSilent(obs);
   const [collection, sceneList, inputList] = await Promise.all([
     obs.call('GetSceneCollectionList'),
     obs.call('GetSceneList'),
     obs.call('GetInputList'),
   ]);
+  const inputs = inputList.inputs as (Input & { inputUuid?: string })[];
+  await assertManagedGlobalAudioSilent(obs, inputs);
   if (collection.currentSceneCollectionName !== OBS_COLLECTION)
     return [
       {
@@ -75,7 +81,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       scene: scene.sceneName,
       message: `OBS 缺少「${scene.sceneName}」场景，停止直播和录像后选择「修复场景与音频」。`,
     }));
-  const inputs = inputList.inputs as Input[];
+
   const active = await activeManagedInputs(obs, inputs);
   const candidates = active.filter((input) => AUDIO_KINDS.has(input.inputKind));
   for (const input of active.filter((item) => VIDEO_AUDIO_KINDS.has(item.inputKind))) {

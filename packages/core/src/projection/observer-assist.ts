@@ -93,8 +93,7 @@ export class ObserverHintTimeline {
   private sourceExecution: number | undefined;
   private sourceExecutionGeneration: number | undefined;
   private sourceExecutionFence: {
-    wasLive: boolean;
-    sawWarmup: boolean;
+    sawNonLive: boolean;
     lockedRound: number | null | undefined;
     maxProgramRound: number | null;
     priorExecutionHadRounds: boolean;
@@ -248,8 +247,7 @@ export class ObserverHintTimeline {
       this.replaceBuffered('source-execution');
       this.lastAcceptedRound = undefined;
       this.sourceExecutionFence ??= {
-        wasLive: true,
-        sawWarmup: false,
+        sawNonLive: false,
         lockedRound: undefined,
         maxProgramRound: null,
         priorExecutionHadRounds,
@@ -438,18 +436,19 @@ export class ObserverHintTimeline {
     this.staged = null;
   }
 
+  private isLivePhase(program: ObserverProgramView): boolean {
+    return (
+      program.map.phase === 'live' ||
+      (program.map.phase === undefined && program.clock?.phase === 'live')
+    );
+  }
   private engageExecutionFence(
     program: ObserverProgramView,
     priorExecutionHadRounds = (this.lastAcceptedRound ?? 0) > 0,
   ) {
-    const isWarmup = program.map.phase === 'warmup';
-    const isLive =
-      program.map.phase === 'live' ||
-      (program.map.phase === undefined && program.clock?.phase === 'live');
     const round = program.map.roundNumber ?? null;
     this.sourceExecutionFence = {
-      wasLive: isLive,
-      sawWarmup: isWarmup,
+      sawNonLive: program.map.phase === 'warmup' || !this.isLivePhase(program),
       lockedRound: round,
       maxProgramRound: round,
       priorExecutionHadRounds,
@@ -481,24 +480,16 @@ export class ObserverHintTimeline {
     if (fence.lockedRound === undefined) {
       fence.lockedRound = round;
       fence.maxProgramRound = round;
-      fence.wasLive =
-        program.map.phase === 'live' ||
-        (program.map.phase === undefined && program.clock?.phase === 'live');
     } else if (round !== null) {
       fence.maxProgramRound =
         fence.maxProgramRound === null ? round : Math.max(fence.maxProgramRound, round);
     }
-    if (program.map.phase === 'warmup') {
-      fence.sawWarmup = true;
+    if (program.map.phase === 'warmup' || !this.isLivePhase(program)) {
+      fence.sawNonLive = true;
       return;
     }
-    const isLive =
-      program.map.phase === 'live' ||
-      (program.map.phase === undefined && program.clock?.phase === 'live');
-    if (!isLive) return;
     if (
-      !fence.wasLive ||
-      fence.sawWarmup ||
+      fence.sawNonLive ||
       (fence.maxProgramRound !== null && fence.maxProgramRound > 0 && round === 0) ||
       (fence.lockedRound === 0 && !fence.priorExecutionHadRounds && round !== null && round > 0)
     ) {

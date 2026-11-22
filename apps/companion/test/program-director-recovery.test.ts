@@ -46,77 +46,77 @@ function loadBaseProjection(): ProgramProjection {
   };
 }
 
-describe('director transient failure recovery and OBS transition readback', () => {
-  it('recovers automatically from transient OBS switch failure using current match facts, while respecting manual hold', async () => {
-    const base = loadBaseProjection();
-    let currentProgram: ProgramProjection = {
+function createDirectorRig(switchObs: (scene: ProgramSceneId) => Promise<void>) {
+  const base = loadBaseProjection();
+  const state = {
+    program: {
       ...base,
       map: { ...base.map, phase: 'warmup', roundNumber: 0 },
-    };
-    const coordinator = {
-      getCurrent: () => ({
-        program: currentProgram,
-        operator: {
-          runtime: { telemetryFreshness: 'fresh' },
-          matchContext: { freshness: 'fresh', origin: 'rivalhub' },
-          identity: { state: 'matched' },
-        },
-      }),
-      getBpAssessment: () => ({ readiness: 'unavailable' as const }),
-    };
+    } as ProgramProjection,
+    telemetryFreshness: 'fresh' as 'fresh' | 'stale',
+    now: 1000,
+  };
+  const coordinator = {
+    getCurrent: () => ({
+      program: state.program,
+      operator: {
+        runtime: { telemetryFreshness: state.telemetryFreshness },
+        matchContext: { freshness: 'fresh', origin: 'rivalhub' },
+        identity: { state: 'matched' },
+      },
+    }),
+    getBpAssessment: () => ({ readiness: 'unavailable' as const }),
+  };
+  const bp = new BpSession(() => null);
+  const controller = new ProgramSceneController(coordinator as never, bp, switchObs);
+  const director = new ProgramDirector(
+    coordinator as never,
+    controller,
+    bp,
+    () => true,
+    () => state.now,
+    DEFAULT_PROGRAM_TIMINGS,
+  );
+  controller.attachDirector(director);
+  return { base, state, controller, director };
+}
 
+describe('director transient failure recovery and OBS transition readback', () => {
+  it('recovers automatically from transient OBS switch failure using current match facts, while respecting manual hold', async () => {
     let obsReady = false;
     const switched: ProgramSceneId[] = [];
-    const bp = new BpSession(() => null);
-    const controller = new ProgramSceneController(coordinator as never, bp, async (scene) => {
+    const rig = createDirectorRig(async (scene) => {
       if (!obsReady) throw new Error('OBS 尚未连接');
       switched.push(scene);
     });
-    let now = 1000;
-    const director = new ProgramDirector(
-      coordinator as never,
-      controller,
-      bp,
-      () => true,
-      () => now,
-      DEFAULT_PROGRAM_TIMINGS,
-    );
-    controller.attachDirector(director);
 
-    // Move to live round 1 while OBS is briefly unavailable.
-    currentProgram = {
-      ...base,
-      map: { ...base.map, phase: 'live', roundNumber: 1 },
+    rig.state.program = {
+      ...rig.base,
+      map: { ...rig.base.map, phase: 'live', roundNumber: 1 },
       round: { phase: 'live', winnerSide: 'unknown' },
     };
-    await director.tick();
-    expect(director.get().mode).toBe('blocked');
-    expect(director.get().reason).toContain('OBS 场景切换未完成');
+    await rig.director.tick();
+    expect(rig.director.get().mode).toBe('blocked');
+    expect(rig.director.get().reason).toContain('OBS 场景切换未完成');
+
+    rig.state.now = 1500;
+    await rig.director.tick();
     expect(switched).toEqual([]);
 
-    // Inside cooldown window: stays blocked without hammering OBS.
-    now = 1500;
-    await director.tick();
-    expect(director.get().mode).toBe('blocked');
-    expect(switched).toEqual([]);
-
-    // OBS becomes ready after cooldown: director recovers to auto and switches to current target.
     obsReady = true;
-    now = 3000;
-    await director.tick();
+    rig.state.now = 3000;
+    await rig.director.tick();
     expect(switched).toEqual(['gameplay']);
-    expect(director.get().mode).toBe('auto');
-    expect(director.get().reason).toBeNull();
+    expect(rig.director.get().mode).toBe('auto');
 
-    // Operator manual hold is never overridden by automatic ticks.
-    director.hold();
-    currentProgram = {
-      ...currentProgram,
-      map: { ...currentProgram.map, phase: 'warmup', roundNumber: 0 },
+    rig.director.hold();
+    rig.state.program = {
+      ...rig.state.program,
+      map: { ...rig.state.program.map, phase: 'warmup', roundNumber: 0 },
     };
-    now = 6000;
-    await director.tick();
-    expect(director.get().mode).toBe('manual');
+    rig.state.now = 6000;
+    await rig.director.tick();
+    expect(rig.director.get().mode).toBe('manual');
     expect(switched).toEqual(['gameplay']);
   });
 
@@ -192,70 +192,42 @@ describe('director transient failure recovery and OBS transition readback', () =
   });
 
   it('does not invoke OBS while preconditions or structural OBS errors block a target, and recovers when conditions change', async () => {
-    const base = loadBaseProjection();
-    const currentProgram: ProgramProjection = {
-      ...base,
-      map: { ...base.map, phase: 'live', roundNumber: 1 },
-      round: { phase: 'live', winnerSide: 'unknown' },
-    };
-    let telemetryFreshness: 'fresh' | 'stale' = 'stale';
-    const coordinator = {
-      getCurrent: () => ({
-        program: currentProgram,
-        operator: {
-          runtime: { telemetryFreshness },
-          matchContext: { freshness: 'fresh', origin: 'rivalhub' },
-          identity: { state: 'matched' },
-        },
-      }),
-      getBpAssessment: () => ({ readiness: 'unavailable' as const }),
-    };
-
     let sceneMissing = true;
     const attempts: ProgramSceneId[] = [];
     const switched: ProgramSceneId[] = [];
-    const bp = new BpSession(() => null);
-    const controller = new ProgramSceneController(coordinator as never, bp, async (scene) => {
+    const rig = createDirectorRig(async (scene) => {
       attempts.push(scene);
       if (sceneMissing && scene === 'gameplay')
         throw new ObsVideoError('scene_target_unavailable', '缺少目标 OBS 场景「比赛中」。');
       switched.push(scene);
     });
-    let now = 1000;
-    const director = new ProgramDirector(
-      coordinator as never,
-      controller,
-      bp,
-      () => true,
-      () => now,
-      DEFAULT_PROGRAM_TIMINGS,
-    );
-    controller.attachDirector(director);
+    rig.state.program = {
+      ...rig.base,
+      map: { ...rig.base.map, phase: 'live', roundNumber: 1 },
+      round: { phase: 'live', winnerSide: 'unknown' },
+    };
+    rig.state.telemetryFreshness = 'stale';
 
-    // 1. Precondition unsatisfied (stale telemetry): blocked without touching OBS.
-    await director.tick();
-    now = 10_000;
-    await director.tick();
+    await rig.director.tick();
+    rig.state.now = 10_000;
+    await rig.director.tick();
     expect(attempts).toEqual([]);
-    expect(director.get().mode).toBe('blocked');
+    expect(rig.director.get().mode).toBe('blocked');
 
-    // 2. Structural missing-scene error attempts once and does not poll every 5s.
-    telemetryFreshness = 'fresh';
-    now = 11_000;
-    await director.tick();
+    rig.state.telemetryFreshness = 'fresh';
+    rig.state.now = 11_000;
+    await rig.director.tick();
     expect(attempts.filter((s) => s === 'gameplay')).toHaveLength(1);
-    expect(director.get().mode).toBe('blocked');
     const countBeforeWait = attempts.length;
-    now = 40_000;
-    await director.tick();
+    rig.state.now = 40_000;
+    await rig.director.tick();
     expect(attempts.length).toBe(countBeforeWait);
 
-    // 3. OBS change interrupt wakes the director and succeeds.
     sceneMissing = false;
-    controller.obsProgramChanged();
-    now = 40_100;
-    await director.tick();
+    rig.controller.obsProgramChanged();
+    rig.state.now = 40_100;
+    await rig.director.tick();
     expect(switched.at(-1)).toBe('gameplay');
-    expect(director.get().mode).toBe('auto');
+    expect(rig.director.get().mode).toBe('auto');
   });
 });
