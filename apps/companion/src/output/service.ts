@@ -144,10 +144,28 @@ export class OutputService {
     }
     this.onDiagnostic?.(diagnostic);
   }
+  private currentDeliveryScope(): ReliableDeliveryScope | undefined {
+    const matchId = this.binding?.context.matchId;
+    const cursor = this.bundle?.program.cursor;
+    return matchId && cursor
+      ? {
+          matchId,
+          producerInstanceId: cursor.producerInstanceId,
+          liveSessionId: cursor.liveSessionId ?? '',
+        }
+      : undefined;
+  }
+  private pendingBoundaryCapture(recovery = this.outbox?.getBoundaryCaptureRecovery()): boolean {
+    if (!recovery?.pending) return false;
+    const scope = this.currentDeliveryScope();
+    return scope ? this.outbox!.hasPendingBoundaryCaptures(scope) : true;
+  }
   private get quarantined(): boolean {
     const recovery = this.outbox?.getBoundaryCaptureRecovery();
     return (
-      this.trialQuarantined || this.faultQuarantined || Boolean(recovery?.pending || recovery?.lost)
+      this.trialQuarantined ||
+      this.faultQuarantined ||
+      Boolean(recovery?.lost || this.pendingBoundaryCapture(recovery))
     );
   }
   private outboxStartupUnavailable = false;
@@ -926,7 +944,7 @@ export class OutputService {
     if (this.localProjectionQuarantined)
       return result(
         null,
-        !quarantined && !recovery?.lost && recovery?.pending
+        !quarantined && !recovery?.lost && this.pendingBoundaryCapture(recovery)
           ? 'output_persistence_pending'
           : 'output_quarantined',
       );
@@ -1493,9 +1511,14 @@ export class OutputService {
       finishRetry = resolve;
     });
     try {
-      await this.outbox.retryPendingCaptures();
+      try {
+        await this.outbox.retryPendingCaptures();
+      } catch (error) {
+        if (!(error instanceof BoundaryCaptureError)) throw error;
+        this.reportBoundaryCaptureError(error);
+      }
       const recovery = this.outbox.getBoundaryCaptureRecovery();
-      if (recovery.pending) return;
+      if (this.pendingBoundaryCapture(recovery)) return;
       if (!recovery.lost) {
         for (const [scopeKey, kind] of this.faultQuarantinedScopes) {
           if (kind !== 'boundary') continue;
@@ -1687,7 +1710,7 @@ export class OutputService {
       recovery?.lost
     )
       return 'continuity_chain_missing';
-    if (recovery?.pending) return 'continuity_waiting';
+    if (this.pendingBoundaryCapture(recovery)) return 'continuity_waiting';
     const active = this.options.exactSource?.();
     if (active && !this.outbox?.canCapture(active)) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
