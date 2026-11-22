@@ -108,14 +108,16 @@ export class GameAudioPolicy {
     this.watched = null;
     this.pending = null;
   }
+  private holdLease(): Promise<void> | undefined {
+    if (!this.lease) return undefined;
+    this.lease = { ...this.lease, phase: 'held' };
+    return this.store.write(this.lease);
+  }
   /** Manual control supersedes any automatic lease without restoring its old value. */
   async relinquish() {
     await this.load();
     this.disconnect();
-    if (this.lease) {
-      this.lease = { ...this.lease, phase: 'held' };
-      await this.store.write(this.lease);
-    }
+    await this.holdLease();
   }
   /** Invoke for every volume/mute event, including changes away and back. */
   observe(uuid: string, field: Field, value: number | boolean) {
@@ -125,18 +127,12 @@ export class GameAudioPolicy {
       return;
     }
     this.sequence++;
-    if (this.lease) {
-      this.lease = { ...this.lease, phase: 'held' };
-      void this.store.write(this.lease).catch(() => undefined);
-    }
+    void this.holdLease()?.catch(() => undefined);
   }
   disconnect() {
     this.sequence++;
     this.pending = null;
-    if (this.lease) {
-      this.lease = { ...this.lease, phase: 'held' };
-      void this.store.write(this.lease).catch(() => undefined);
-    }
+    void this.holdLease()?.catch(() => undefined);
   }
   private async get(obs: ObsRpc, lease: AudioLease) {
     const value = await obs.call(lease.field === 'volume' ? 'GetInputVolume' : 'GetInputMute', {

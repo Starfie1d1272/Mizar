@@ -157,6 +157,7 @@ export class ObsOutputController {
           }
         | { kind: 'collection-ready'; collectionName: string },
     ) => void,
+    private readonly onConfigurationChanged?: () => void,
   ) {}
 
   get busy(): boolean {
@@ -319,7 +320,10 @@ export class ObsOutputController {
     if (this.ready) this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     // A failed reconnect has no configuration to revoke; explicit reset still does.
-    if (this.ready || !client) this.preparationConfigurationGeneration++;
+    if (this.ready || !client) {
+      this.preparationConfigurationGeneration++;
+      this.onConfigurationChanged?.();
+    }
     this.warmupGeneration++;
     this.streamBytes = undefined;
     this.warmupExtraOutputs.replay = 'unknown';
@@ -530,8 +534,10 @@ export class ObsOutputController {
         if (
           (event !== 'InputSettingsChanged' || this.preparationSettingsChanged(data)) &&
           !this.ownedPreparationEvent(event, data as unknown as Record<string, unknown>)
-        )
+        ) {
           this.preparationConfigurationGeneration++;
+          this.onConfigurationChanged?.();
+        }
       });
     client.on('InputSettingsChanged', invalidateWarmup);
     client.on('InputRemoved', invalidateWarmup);
@@ -619,6 +625,7 @@ export class ObsOutputController {
         this.reconnectDelay = RETRY_MS;
         this.outputObservationGeneration++;
         this.hasConnected = true;
+        this.onConfigurationChanged?.();
         if (reconnected && identity?.collection === OBS_COLLECTION)
           this.onCollectionSceneItemEvent?.({
             kind: 'collection-ready',

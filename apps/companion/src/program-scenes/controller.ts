@@ -112,6 +112,11 @@ export class ProgramSceneController {
     this.obsReconciliationNeeded = true;
   }
 
+  /** OBS scene/resource recovery clears structural retry blocks without triggering scene reconciliation. */
+  obsConfigurationChanged(): void {
+    this.director?.clearRetryBlock();
+  }
+
   reconcileObs(productionValid: () => boolean, now = performance.now()): Promise<void> {
     if (this.obsReconciliation) return Promise.resolve();
     if (!this.obsReconciliationNeeded || !productionValid() || now < this.nextObsReconciliation)
@@ -246,16 +251,18 @@ export class ProgramSceneController {
     this.revision = randomUUID();
   }
 
-  select(id: ProgramSceneId, expectedRevision: string) {
-    if (expectedRevision === this.revision) {
-      this.holdAutomatic();
-    }
-    const current = this.controlValid();
-    const result = this.queue.then(() =>
-      this.selectSerial(id, expectedRevision, undefined, false, false, current),
-    );
+  private enqueueSerial<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.queue.then(run);
     this.queue = result.catch(() => undefined);
     return result;
+  }
+
+  select(id: ProgramSceneId, expectedRevision: string) {
+    if (expectedRevision === this.revision) this.holdAutomatic();
+    const current = this.controlValid();
+    return this.enqueueSerial(() =>
+      this.selectSerial(id, expectedRevision, undefined, false, false, current),
+    );
   }
 
   compactDisconnected(preservePlayback = false): void {
@@ -273,7 +280,7 @@ export class ProgramSceneController {
     expectedRevision: string,
     target: 'managed' | 'external' = 'managed',
   ) {
-    const result = this.queue.then(async () => {
+    return this.enqueueSerial(async () => {
       if (expectedRevision !== this.revision)
         return { ok: false as const, message: '播出状态已变化，请核对后重试。' };
       const actualTarget = visible ? target : this.bpCompactTarget;
@@ -326,8 +333,6 @@ export class ProgramSceneController {
         this.compactPreparing = false;
       }
     });
-    this.queue = result.catch(() => undefined);
-    return result;
   }
 
   /** Exit has its own OBS safety proof; manual Takes still always verify OBS. */
@@ -336,11 +341,9 @@ export class ProgramSceneController {
       this.holdAutomatic();
       current = this.controlValid();
     }
-    const result = this.queue.then(() =>
+    return this.enqueueSerial(() =>
       this.selectSerial('waiting', expectedRevision, undefined, false, true, current),
     );
-    this.queue = result.catch(() => undefined);
-    return result;
   }
 
   selectAutomatic(
@@ -350,11 +353,9 @@ export class ProgramSceneController {
     finalBp = false,
   ) {
     const current = this.controlValid();
-    const result = this.queue.then(() =>
+    return this.enqueueSerial(() =>
       this.selectSerial(id, expectedRevision, valid, finalBp, false, current),
     );
-    this.queue = result.catch(() => undefined);
-    return result;
   }
 
   private async selectSerial(

@@ -104,18 +104,29 @@ export class ProgramDirector {
             this.timings.hudLeadMs + this.takeBudget(active, 'gameplay')))
     );
   }
+  private setMode(
+    mode: DirectorView['mode'],
+    reason: string | null = null,
+    blockCause: DirectorView['blockCause'] = null,
+    clearReadyToTake = false,
+  ): void {
+    this.view = {
+      ...this.view,
+      mode,
+      blockCause,
+      reason,
+      ...(clearReadyToTake ? { readyToTake: null } : {}),
+    };
+  }
   hold(): void {
     this.ggStartedAt = null;
     this.view.gg = null;
     this.manual = true;
     this.generation++;
-    this.view = {
-      ...this.view,
-      mode: 'manual',
-      blockCause: null,
-      readyToTake: null,
-      reason: '手动保持，恢复自动后继续。',
-    };
+    this.setMode('manual', '手动保持，恢复自动后继续。', null, true);
+  }
+  clearRetryBlock(): void {
+    this.retryBlock = null;
   }
   interrupt(): void {
     this.generation++;
@@ -128,13 +139,15 @@ export class ProgramDirector {
     this.lastTime = this.now();
     this.generation++;
   }
-  private safe(p: ProgramProjection): boolean {
+  private contextBound(p: ProgramProjection): boolean {
     return (
       p.status.context === 'fresh' &&
-      p.status.telemetry === 'fresh' &&
       p.status.identity !== 'mismatch' &&
       p.series?.bindingState === 'bound'
     );
+  }
+  private safe(p: ProgramProjection): boolean {
+    return this.contextBound(p) && p.status.telemetry === 'fresh';
   }
   /** Selected pre-match information has no dependency on a live game map. */
   private prematch(p: ProgramProjection): boolean {
@@ -162,13 +175,7 @@ export class ProgramDirector {
     this.view.nextStatus = 'awaiting';
     this.view.nextReason = '比赛阶段待确认。';
     this.view.readyToTake = null;
-    if (
-      !p.match ||
-      !p.series ||
-      p.status.context !== 'fresh' ||
-      p.status.identity === 'mismatch' ||
-      p.series.bindingState !== 'bound'
-    ) {
+    if (!p.match || !p.series || !this.contextBound(p)) {
       this.view.nextReason = '等待有效比赛上下文与归属确认。';
       return;
     }
@@ -261,12 +268,7 @@ export class ProgramDirector {
     );
     if (!production) {
       this.wasProduction = false;
-      this.view = {
-        ...this.view,
-        mode: 'preparation',
-        blockCause: null,
-        reason: null,
-      };
+      this.setMode('preparation');
       return;
     }
     if (!this.wasProduction) {
@@ -306,36 +308,27 @@ export class ProgramDirector {
     if (!this.safe(p) && !prematch && !resultProgression) {
       this.ggStartedAt = null;
       this.view.gg = null;
-      this.view = {
-        ...this.view,
-        mode: this.manual ? 'manual' : 'blocked',
-        blockCause:
-          !this.manual &&
+      this.setMode(
+        this.manual ? 'manual' : 'blocked',
+        '比赛数据过期或归属未确认，保持当前画面。',
+        !this.manual &&
           p.status.telemetry !== 'fresh' &&
           p.status.context === 'fresh' &&
           p.status.identity !== 'mismatch' &&
           p.series?.bindingState !== 'needs_operator'
-            ? 'telemetry'
-            : null,
-        reason: '比赛数据过期或归属未确认，保持当前画面。',
-      };
+          ? 'telemetry'
+          : null,
+      );
       return;
     }
     if (paused && !resultProgression && !halftime && !this.halftimeSeen) {
-      this.view = {
-        ...this.view,
-        mode: this.manual ? 'manual' : 'blocked',
-        blockCause: null,
-        reason: '比赛暂停，保持当前画面。',
-      };
+      this.setMode(this.manual ? 'manual' : 'blocked', '比赛暂停，保持当前画面。');
       return;
     }
-    this.view = {
-      ...this.view,
-      mode: this.manual ? 'manual' : 'auto',
-      blockCause: null,
-      reason: this.manual ? '手动保持，恢复自动后继续。' : null,
-    };
+    this.setMode(
+      this.manual ? 'manual' : 'auto',
+      this.manual ? '手动保持，恢复自动后继续。' : null,
+    );
     if ((!paused || resultProgression) && !this.manual) this.elapsed += delta;
     const seconds = p.clock?.phase === 'freezetime' ? p.clock.endsInSeconds : null;
     const remaining = seconds === null ? 0 : seconds * 1000;
@@ -487,12 +480,7 @@ export class ProgramDirector {
     const preconditionBlocked = this.scenes.automaticBlockedReason(target);
     if (preconditionBlocked !== null) {
       this.retryBlock = null;
-      this.view = {
-        ...this.view,
-        mode: 'blocked',
-        reason: preconditionBlocked,
-        blockCause: null,
-      };
+      this.setMode('blocked', preconditionBlocked);
       return;
     }
     const sceneRevision = this.scenes.get().revision;
@@ -500,12 +488,7 @@ export class ProgramDirector {
       if (this.retryBlock.revision !== sceneRevision) {
         this.retryBlock = null;
       } else if (time < this.retryBlock.until) {
-        this.view = {
-          ...this.view,
-          mode: 'blocked',
-          reason: this.retryBlock.message,
-          blockCause: null,
-        };
+        this.setMode('blocked', this.retryBlock.message);
         return;
       }
     }
@@ -515,29 +498,36 @@ export class ProgramDirector {
     this.inFlight = target;
     const generation = this.generation;
     const key = sceneRequestScope(p);
+    const matchupBudgetOk = (current: ProgramProjection) =>
+      current.round?.phase === 'freezetime' &&
+      current.clock?.phase === 'freezetime' &&
+      (current.clock?.endsInSeconds ?? 0) * 1000 >=
+        this.timings.hudLeadMs +
+          this.takeBudget(this.scenes.get().active, 'matchup') +
+          this.takeBudget('matchup', 'gameplay') +
+          this.timings.shortIntroMs;
+    const scopeOk = (current: ProgramProjection) =>
+      this.production() &&
+      key === sceneRequestScope(current) &&
+      (prematchAction
+        ? this.prematch(current) &&
+          (target !== 'bp' || this.projections.getBpAssessment().readiness === 'ready')
+        : resultAction
+          ? this.resultProgression(current)
+          : this.safe(current));
     try {
       const result = await this.scenes.selectAutomatic(
         target,
         this.scenes.get().revision,
-        () =>
-          !this.manual &&
-          generation === this.generation &&
-          this.production() &&
-          (prematchAction
-            ? this.prematch(this.projections.getCurrent().program) &&
-              (target !== 'bp' || this.projections.getBpAssessment().readiness === 'ready')
-            : resultAction
-              ? this.resultProgression(this.projections.getCurrent().program)
-              : this.safe(this.projections.getCurrent().program)) &&
-          (target !== 'matchup' ||
-            (this.projections.getCurrent().program.round?.phase === 'freezetime' &&
-              this.projections.getCurrent().program.clock?.phase === 'freezetime' &&
-              (this.projections.getCurrent().program.clock?.endsInSeconds ?? 0) * 1000 >=
-                this.timings.hudLeadMs +
-                  this.takeBudget(this.scenes.get().active, 'matchup') +
-                  this.takeBudget('matchup', 'gameplay') +
-                  this.timings.shortIntroMs)) &&
-          key === sceneRequestScope(this.projections.getCurrent().program),
+        () => {
+          const current = this.projections.getCurrent().program;
+          return (
+            !this.manual &&
+            generation === this.generation &&
+            scopeOk(current) &&
+            (target !== 'matchup' || matchupBudgetOk(current))
+          );
+        },
         finalBp,
       );
       if (!result.ok) {
@@ -547,23 +537,11 @@ export class ProgramDirector {
         const current = this.projections.getCurrent().program;
         if (
           generation !== this.generation ||
-          (resultAction &&
-            (!this.resultProgression(current) || key !== sceneRequestScope(current))) ||
-          !this.production() ||
-          (prematchAction &&
-            (!this.prematch(current) ||
-              key !== sceneRequestScope(current) ||
-              (target === 'bp' && this.projections.getBpAssessment().readiness !== 'ready'))) ||
-          (key === sceneRequestScope(current) &&
-            target !== 'gameplay' &&
+          !scopeOk(current) ||
+          (target !== 'gameplay' &&
             this.safe(current) &&
             (this.hudDue(current, this.scenes.get().active) ||
-              (target === 'matchup' &&
-                (current.clock?.endsInSeconds ?? 0) * 1000 <
-                  this.timings.hudLeadMs +
-                    this.takeBudget(this.scenes.get().active, 'matchup') +
-                    this.takeBudget('matchup', 'gameplay') +
-                    this.timings.shortIntroMs)))
+              (target === 'matchup' && !matchupBudgetOk(current))))
         )
           return;
         if (!this.manual) {
@@ -575,7 +553,7 @@ export class ProgramDirector {
                 ? 1
                 : 0;
           const until = retryable
-            ? this.now() + Math.min(30_000, 1500 * 2 ** Math.min(attempts - 1, 4))
+            ? this.now() + 1500 * 2 ** Math.min(attempts - 1, 4)
             : Number.POSITIVE_INFINITY;
           this.retryBlock = {
             message: result.message,
@@ -584,12 +562,7 @@ export class ProgramDirector {
             attempts,
             revision: this.scenes.get().revision,
           };
-          this.view = {
-            ...this.view,
-            mode: 'blocked',
-            reason: result.message,
-            blockCause: null,
-          };
+          this.setMode('blocked', result.message);
         }
         return;
       }

@@ -962,20 +962,26 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
         diagnostic(&app, &id, "capture", "begin", Value::Null);
         let result: Result<(), String> = async {
             check(&app, &id)?;
-            // Only a completed/released capture may use the read-only shortcut.
-            // Incomplete warmup still goes through its owner's recovery transaction.
-            if task.capture {
-                let since = SystemTime::now().duration_since(UNIX_EPOCH)
-                    .map_err(|_| "当前时间不可用，采集证据未确认。")?.as_millis();
-                let current = http(&app, "POST", "/operator/obs/capture-initialization",
-                    json!({"expectedRevision":revision,"since":since,"transactionId":null})).await?;
-                match preparation_evidence::capture_evidence(&current) {
-                    preparation_evidence::CaptureEvidence::Ready => return Ok(()),
-                    preparation_evidence::CaptureEvidence::Unconfirmed =>
-                        return Err("当前 OBS 采集证据未确认，请检查游戏窗口和 OBS 后重试。".into()),
-                    preparation_evidence::CaptureEvidence::Warmup => {},
+            // Check read-only capture evidence first so already-initialized capture skips warmup.
+            let precheck_since = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "当前时间不可用，采集证据未确认。")?
+                .as_millis();
+            let current = http(
+                &app,
+                "POST",
+                "/operator/obs/capture-initialization",
+                json!({"expectedRevision":revision,"since":precheck_since,"transactionId":null}),
+            )
+            .await?;
+            match preparation_evidence::capture_evidence(&current) {
+                preparation_evidence::CaptureEvidence::Ready => return Ok(()),
+                preparation_evidence::CaptureEvidence::Unconfirmed => {
+                    return Err(preparation_evidence::capture_failure_message(&current).into());
                 }
-                update(&id, |t| t.capture = false);
+                preparation_evidence::CaptureEvidence::Warmup => {
+                    update(&id, |t| t.capture = false);
+                }
             }
             let mut warmup = Value::Null;
             for _ in 0..60 {
@@ -998,12 +1004,8 @@ async fn run(app: tauri::AppHandle, id: String) -> Result<(), String> {
                     check(&app, &id)?;
                     let state = http(&app, "POST", "/operator/obs/capture-initialization", json!({"expectedRevision":revision,"since":since,"transactionId":transaction})).await?;
                     if state["state"] == "initialized" { return Ok(()); }
-                    message = match state["reason"].as_str() {
-                        Some("target_unavailable") => "OBS 游戏采集目标不可用，请确认 CS2 窗口已打开，并在停止输出后修复 Mizar 场景，再重试准备。",
-                        Some("target_ambiguous") => "OBS 检测到多个 CS2 窗口，请关闭多余游戏窗口，再重试准备。",
-                        _ => "OBS 游戏捕获未确认，请检查后重试。",
-                    };
-                    if state["state"] == "failed" || state["reason"] == "source_inactive" { break; }
+                    message = preparation_evidence::capture_failure_message(&state);
+                    if state["state"] == "failed" { break; }
                     tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(1))).await.map_err(|_| "捕获等待失败。")?;
                 }
                 Err(message.to_string())

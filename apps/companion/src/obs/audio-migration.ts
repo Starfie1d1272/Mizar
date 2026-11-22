@@ -175,23 +175,11 @@ export class AudioMigration {
         desktop: [],
         independent: [],
       };
-      await this.context(obs, plan, endpoint, false);
-      const first = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
-      const second = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
-      await this.context(obs, plan, endpoint, false);
-      if (
-        changed ||
-        first.some((value, index) => {
-          const entry = journal.fields[index]!;
-          return (
-            value !== second[index] ||
-            (value !== entry.before && value !== entry.applied) ||
-            (['prepared', 'restored'].includes(entry.phase) && value !== entry.before) ||
-            (entry.phase === 'confirmed' && value !== entry.applied)
-          );
-        })
-      )
-        throw new Error('audio_migration_external_change');
+      const first = await this.readVerifiedSnapshot(obs, journal, async () => {
+        if (changed) throw new Error('audio_migration_external_change');
+        await this.context(obs, plan, endpoint, false);
+        if (changed) throw new Error('audio_migration_external_change');
+      });
       if (journal.fields.every((entry, index) => first[index] === entry.applied)) {
         for (const entry of journal.fields) entry.phase = 'confirmed';
         await this.save(journal);
@@ -468,6 +456,29 @@ export class AudioMigration {
     );
     return true;
   }
+  private async readVerifiedSnapshot(
+    obs: ObsRpc,
+    journal: Journal,
+    check: () => Promise<void>,
+  ): Promise<Value[]> {
+    await check();
+    const first = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+    await check();
+    const second = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
+    if (
+      first.some((value, index) => {
+        const entry = journal.fields[index]!;
+        return (
+          value !== second[index] ||
+          (value !== entry.before && value !== entry.applied) ||
+          (['prepared', 'restored'].includes(entry.phase) && value !== entry.before) ||
+          (entry.phase === 'confirmed' && value !== entry.applied)
+        );
+      })
+    )
+      throw new Error('audio_migration_external_change');
+    return first;
+  }
   private async context(obs: ObsRpc, plan: AudioMigrationPlan, endpoint: string, idle: boolean) {
     const [stream, record, collection] = await Promise.all([
       obs.call('GetStreamStatus'),
@@ -594,22 +605,7 @@ export class AudioMigration {
         await this.context(obs, plan, endpoint, !retain);
         if (interrupted) throw new Error('audio_migration_observation_lost');
       };
-      await check();
-      const initial = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
-      await check();
-      const confirmed = await Promise.all(journal.fields.map((entry) => this.status(obs, entry)));
-      if (
-        initial.some(
-          (value, index) =>
-            value !== confirmed[index] ||
-            (value !== journal.fields[index]!.before && value !== journal.fields[index]!.applied) ||
-            (['prepared', 'restored'].includes(journal.fields[index]!.phase) &&
-              value !== journal.fields[index]!.before) ||
-            (journal.fields[index]!.phase === 'confirmed' &&
-              value !== journal.fields[index]!.applied),
-        )
-      )
-        throw new Error('audio_migration_external_change');
+      await this.readVerifiedSnapshot(obs, journal, check);
       await check();
       // Close paths added by the interrupted switch before reopening the previous paths.
       for (const entry of [...journal.fields].sort(

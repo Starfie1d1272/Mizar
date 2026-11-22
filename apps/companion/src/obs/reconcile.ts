@@ -3,7 +3,9 @@ import {
   OBS_COLLECTION,
   OBS_HEIGHT,
   OBS_WIDTH,
+  isCs2Window,
   obsDesiredScenes,
+  obsObjects as objects,
   obsSceneName,
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
@@ -84,14 +86,6 @@ export interface ObsFinding {
   readonly message: string;
 }
 
-function objects(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
-      )
-    : [];
-}
-
 function names(value: unknown, key: string): string[] {
   return objects(value)
     .map((item) => item[key])
@@ -99,17 +93,6 @@ function names(value: unknown, key: string): string[] {
 }
 
 const CS2_WINDOW_FALLBACK = 'Counter-Strike 2:SDL_app:cs2.exe';
-
-function isCs2Window(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  const parts = value.split(':');
-  return (
-    parts.length === 3 &&
-    parts[0] !== '' &&
-    parts[1] !== '' &&
-    parts[2]?.toLowerCase() === 'cs2.exe'
-  );
-}
 
 async function cs2CaptureWindow(obs: ObsRpc) {
   const properties = await obs.call('GetInputPropertiesListPropertyItems', {
@@ -206,39 +189,25 @@ export async function refreshObsBrowserSources(
   refreshed: Set<string>,
   buildId = 'development',
 ): Promise<boolean> {
-  const collections = await obs.call('GetSceneCollectionList');
-  if (collections.currentSceneCollectionName !== OBS_COLLECTION) return false;
+  if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
+    return false;
   const scope = (await obs.ownershipScope?.()) ?? OBS_COLLECTION;
   const inputs = objects((await obs.call('GetInputList')).inputs);
-  for (const scene of obsDesiredScenes(baseUrl)) {
+  const desired = obsDesiredScenes(baseUrl);
+  for (const scene of desired) {
     const input = inputs.find(
       (item) => item.inputName === scene.browserInput && item.inputKind === 'browser_source',
     );
-    if (!input) continue;
-    const uuid = typeof input.inputUuid === 'string' ? input.inputUuid : undefined;
+    const uuid = typeof input?.inputUuid === 'string' ? input.inputUuid : undefined;
     if (!uuid) continue;
     const key = `${scope}|${baseUrl}|${buildId}|${uuid}`;
     if (refreshed.has(key)) continue;
     const identity = { inputUuid: uuid };
-    const result = await obs.call('GetInputSettings', identity);
-    const settings = result.inputSettings as Record<string, unknown> | undefined;
+    const settings = (await obs.call('GetInputSettings', identity)).inputSettings as
+      Record<string, unknown> | undefined;
     if (settings?.url !== scene.browserUrl) continue;
-    // Recheck ownership after reading settings: an operator may switch collections.
-    const current = await obs.call('GetSceneCollectionList');
-    if (current.currentSceneCollectionName !== OBS_COLLECTION) return false;
-    const currentInputs = objects((await obs.call('GetInputList')).inputs);
-    if (
-      !currentInputs.some(
-        (item) =>
-          item.inputName === scene.browserInput &&
-          item.inputKind === 'browser_source' &&
-          item.inputUuid === uuid,
-      )
-    )
-      continue;
-    const latest = await obs.call('GetInputSettings', identity);
-    if ((latest.inputSettings as Record<string, unknown> | undefined)?.url !== scene.browserUrl)
-      continue;
+    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
+      return false;
     await assertNoVideoOutput(obs);
     const press = obs.call('PressInputPropertiesButton', {
       ...identity,
@@ -248,13 +217,12 @@ export async function refreshObsBrowserSources(
     refreshed.add(key);
     await press;
   }
-  return obsDesiredScenes(baseUrl).every((scene) => {
+  return desired.every((scene) => {
     const input = inputs.find(
       (item) => item.inputName === scene.browserInput && item.inputKind === 'browser_source',
     );
     return (
-      input !== undefined &&
-      typeof input.inputUuid === 'string' &&
+      typeof input?.inputUuid === 'string' &&
       refreshed.has(`${scope}|${baseUrl}|${buildId}|${input.inputUuid}`)
     );
   });
@@ -664,19 +632,20 @@ export async function repairObsConfiguration(
     let items = objects(
       (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
     );
+    let createdAny = false;
     for (const source of scene.sources) {
-      if (blocked.has(source)) continue;
-      if (!items.some((item) => item.sourceName === source)) {
-        await obs.call('CreateSceneItem', {
-          sceneName: scene.sceneName,
-          sourceName: source,
-          sceneItemEnabled: true,
-        });
-      }
+      if (blocked.has(source) || items.some((item) => item.sourceName === source)) continue;
+      await obs.call('CreateSceneItem', {
+        sceneName: scene.sceneName,
+        sourceName: source,
+        sceneItemEnabled: true,
+      });
+      createdAny = true;
     }
-    items = objects(
-      (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-    );
+    if (createdAny)
+      items = objects(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      );
     for (const [source, transform] of sceneTransforms(scene)) {
       if (blocked.has(source)) continue;
       const item = items.find((candidate) => candidate.sourceName === source);

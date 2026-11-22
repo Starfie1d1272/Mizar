@@ -1,7 +1,7 @@
 import { readFile, rm } from 'node:fs/promises';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { reconcileManagedAudio } from './managed-audio.js';
-import { ensureManagedAudioSources } from './audio.js';
+import { ensureManagedAudioSources, readDesiredSceneItems } from './audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
@@ -17,6 +17,49 @@ function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
     throw new Error('audio_response_unknown');
   return value as Record<string, unknown>[];
+}
+
+async function resolveGameCaptureTarget(
+  obs: ObsRpc,
+  inputs: Record<string, unknown>[],
+  requireCaptureInput: boolean,
+): Promise<string> {
+  const capture = inputs.find(
+    (item) => item.inputName === OBS_CAPTURE_INPUT && item.inputKind === 'game_capture',
+  );
+  if (!capture || typeof capture.inputUuid !== 'string') {
+    if (requireCaptureInput) throw new Error('audio_game_capture_missing');
+    return 'Counter-Strike 2:SDL_app:cs2.exe';
+  }
+  const settings = (await obs.call('GetInputSettings', { inputUuid: capture.inputUuid }))
+    .inputSettings as Record<string, unknown> | undefined;
+  return typeof settings?.window === 'string' &&
+    settings.window.split(':').at(-1)?.toLowerCase() === 'cs2.exe'
+    ? settings.window
+    : 'Counter-Strike 2:SDL_app:cs2.exe';
+}
+
+async function applyGameAudioTarget(
+  obs: ObsRpc,
+  gameUuid: string,
+  target: string,
+  check: () => Promise<void>,
+  verifyReadback = false,
+): Promise<void> {
+  await check();
+  await obs.call('SetInputSettings', {
+    inputUuid: gameUuid,
+    inputSettings: { window: target, priority: 2 },
+    overlay: true,
+  });
+  if (
+    verifyReadback &&
+    (
+      (await obs.call('GetInputSettings', { inputUuid: gameUuid })).inputSettings as
+        Record<string, unknown> | undefined
+    )?.window !== target
+  )
+    throw new Error('audio_game_target_changed');
 }
 
 /** Prepare the independent sources inside the dedicated collection. */
@@ -181,19 +224,7 @@ export async function configureIndependentAudio(
         throw new Error('audio_setup_context_changed');
     };
     const inputs = records((await obs.call('GetInputList')).inputs);
-    const capture = inputs.find(
-      (x: Record<string, unknown>) =>
-        x.inputName === OBS_CAPTURE_INPUT && x.inputKind === 'game_capture',
-    );
-    if (!capture || typeof capture.inputUuid !== 'string')
-      throw new Error('audio_game_capture_missing');
-    const settings = (await obs.call('GetInputSettings', { inputUuid: capture.inputUuid }))
-      .inputSettings as Record<string, unknown>;
-    const window =
-      typeof settings?.window === 'string' &&
-      settings.window.split(':').at(-1)?.toLowerCase() === 'cs2.exe'
-        ? settings.window
-        : 'Counter-Strike 2:SDL_app:cs2.exe';
+    const window = await resolveGameCaptureTarget(obs, inputs, true);
     const game = await createCommentaryProbe(
       obs,
       `${journal}.game`,
@@ -209,14 +240,7 @@ export async function configureIndependentAudio(
       .inputSettings as Record<string, unknown>;
     if (!gameSettings || (gameSettings.window && gameSettings.window !== window))
       throw new Error('audio_game_target_changed');
-    if (!gameSettings.window) {
-      await check();
-      await obs.call('SetInputSettings', {
-        inputUuid: game,
-        inputSettings: { window, priority: 2 },
-        overlay: true,
-      });
-    }
+    if (!gameSettings.window) await applyGameAudioTarget(obs, game, window, check);
     const { microphone } = await ensureManagedAudioSources(obs, baseUrl);
     const ids = { game, remoteCommentary: target, microphone };
     await reconcileManagedAudio(
@@ -367,38 +391,12 @@ export async function prepareIndependentForDesktop(
       Record<string, unknown> | undefined;
     if (!settings) throw new Error('audio_game_target_changed');
     if (!settings.window) {
-      for (const scene of scenes) {
-        const items = records(
-          (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-        );
+      for (const { items } of await readDesiredSceneItems(obs, baseUrl)) {
         if (items.some((item) => item.sourceUuid === game && item.sceneItemEnabled))
           throw new Error('audio_game_source_active');
       }
-      const capture = inputs.find(
-        (input) => input.inputName === OBS_CAPTURE_INPUT && input.inputKind === 'game_capture',
-      );
-      const captureSettings = capture
-        ? ((await obs.call('GetInputSettings', { inputUuid: capture.inputUuid })).inputSettings as
-            Record<string, unknown> | undefined)
-        : undefined;
-      const target =
-        typeof captureSettings?.window === 'string' &&
-        captureSettings.window.split(':').at(-1)?.toLowerCase() === 'cs2.exe'
-          ? captureSettings.window
-          : 'Counter-Strike 2:SDL_app:cs2.exe';
-      await check();
-      await obs.call('SetInputSettings', {
-        inputUuid: game,
-        inputSettings: { window: target, priority: 2 },
-        overlay: true,
-      });
-      if (
-        (
-          (await obs.call('GetInputSettings', { inputUuid: game })).inputSettings as
-            Record<string, unknown> | undefined
-        )?.window !== target
-      )
-        throw new Error('audio_game_target_changed');
+      const target = await resolveGameCaptureTarget(obs, inputs, false);
+      await applyGameAudioTarget(obs, game, target, check, true);
     }
     inputs = records((await obs.call('GetInputList')).inputs);
   }

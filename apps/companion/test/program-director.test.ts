@@ -305,11 +305,16 @@ describe('program director results, recovery, and OBS transition readback', () =
     expect(attempts.length).toBe(countBeforeWait);
 
     sceneMissing = false;
-    rig.controller.obsProgramChanged();
+    rig.controller.obsConfigurationChanged();
     rig.state.now = 40_100;
     await rig.director.tick();
     expect(switched.at(-1)).toBe('gameplay');
     expect(rig.director.get().mode).toBe('auto');
+
+    // Manual hold stays manual when OBS configuration recovers.
+    rig.director.hold();
+    rig.controller.obsConfigurationChanged();
+    expect(rig.director.get().mode).toBe('manual');
   });
 
   it('confirms completed OBS fade transitions via readback when transition event is missed', async () => {

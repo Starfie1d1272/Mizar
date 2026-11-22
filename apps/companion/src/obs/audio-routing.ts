@@ -15,9 +15,13 @@ import {
   type ObsAudioRoutingStatus,
 } from '@mizar/protocol/obs';
 import type { ObsRpc } from './reconcile.js';
-import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { OBS_COLLECTION, obsDesiredScenes, obsObjects as records } from './desired-state.js';
 import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
-import { assertManagedGlobalAudioSilent } from './audio.js';
+import {
+  AUDIO_KINDS as audioKinds,
+  assertManagedGlobalAudioSilent,
+  readDesiredSceneItems,
+} from './audio.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const modeTransition = z
@@ -68,19 +72,7 @@ const stateSchema = z
   .strict();
 type State = z.infer<typeof stateSchema>;
 type Input = { inputUuid: string; inputName: string; inputKind: string };
-const audioKinds = new Set([
-  'wasapi_output_capture',
-  'wasapi_input_capture',
-  'wasapi_process_output_capture',
-]);
 const videoKinds = new Set(['game_capture', 'window_capture']);
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
-      )
-    : [];
-}
 
 /** Explicit identities are revalidated against OBS; selection tokens expire and contain no PID. */
 export class ObsAudioRouting {
@@ -328,11 +320,8 @@ export class ObsAudioRouting {
       )
     )
       return false;
-    const scenes = obsDesiredScenes('http://127.0.0.1:3000');
-    for (const scene of scenes) {
-      const items = records(
-        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-      );
+    for (const { items: rawItems } of await readDesiredSceneItems(obs, 'http://127.0.0.1:3000')) {
+      const items = records(rawItems);
       if (
         selectedIds.some(
           (id) =>

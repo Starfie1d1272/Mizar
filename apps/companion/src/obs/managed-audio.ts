@@ -1,15 +1,9 @@
 import type { AudioMonitorChange } from './audio-monitor-contract.js';
-import { assertManagedGlobalAudioSilent } from './audio.js';
+import { AUDIO_KINDS, assertManagedGlobalAudioSilent, readDesiredSceneItems } from './audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
-import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { OBS_COLLECTION } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
-
-const audioKinds = new Set([
-  'wasapi_output_capture',
-  'wasapi_input_capture',
-  'wasapi_process_output_capture',
-]);
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.some((item) => !item || typeof item !== 'object'))
     throw new Error('audio_response_unknown');
@@ -91,7 +85,6 @@ export async function reconcileManagedAudio(
       sourceUuid: string;
     }[] = [];
     const independent: typeof desktop = [];
-    const desired = obsDesiredScenes(baseUrl);
     const captureAudio: {
       inputUuid: string;
       inputKind: 'game_capture' | 'window_capture';
@@ -122,8 +115,11 @@ export async function reconcileManagedAudio(
       sourceUuid: string;
       enabled: boolean;
     }[] = [];
-    for (const { sceneName } of desired) {
-      const items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
+    for (const {
+      scene: { sceneName },
+      items: rawItems,
+    } of await readDesiredSceneItems(obs, baseUrl)) {
+      const items = records(rawItems);
       for (const input of selected) {
         const count = items.filter((item) => item.sourceUuid === input.inputUuid).length;
         if (count > 1) throw new Error('audio_duplicate_path');
@@ -134,7 +130,7 @@ export async function reconcileManagedAudio(
         const input = inputs.find((value) => value.inputUuid === item.sourceUuid);
         if (!input) continue;
         const wanted = wantedIds.includes(String(input.inputUuid));
-        if (!wanted && !audioKinds.has(String(input.inputKind))) continue;
+        if (!wanted && !AUDIO_KINDS.has(String(input.inputKind))) continue;
         if (
           typeof item.sceneItemId !== 'number' ||
           typeof item.sourceUuid !== 'string' ||
@@ -241,9 +237,8 @@ export async function verifyManagedAudioMode(
     inputs.find((input) => input.inputUuid === desktop)?.inputKind !== 'wasapi_output_capture'
   )
     return false;
-  const names = obsDesiredScenes(baseUrl).map((scene) => scene.sceneName);
-  for (const name of names) {
-    const items = records((await obs.call('GetSceneItemList', { sceneName: name })).sceneItems);
+  for (const { items: rawItems } of await readDesiredSceneItems(obs, baseUrl)) {
+    const items = records(rawItems);
     const active = items.filter((item) => item.sceneItemEnabled === true);
     if (
       wanted.some((uuid) => {
@@ -255,7 +250,7 @@ export async function verifyManagedAudioMode(
     for (const item of active) {
       const input = inputs.find((entry) => entry.inputUuid === item.sourceUuid);
       if (!input) continue;
-      if (audioKinds.has(String(input.inputKind)) && !wanted.includes(String(item.sourceUuid)))
+      if (AUDIO_KINDS.has(String(input.inputKind)) && !wanted.includes(String(item.sourceUuid)))
         return false;
       if (['game_capture', 'window_capture'].includes(String(input.inputKind))) {
         const settings = (await obs.call('GetInputSettings', { inputUuid: item.sourceUuid }))

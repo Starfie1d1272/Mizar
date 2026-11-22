@@ -266,35 +266,24 @@ test('offline OBS produces zero automatic RPCs or failure diagnostics, aggregate
     ownershipScope: async () => 'owned-collection',
     async call(method) {
       rpcCalls++;
-      if (method === 'GetSceneCollectionList') {
-        return { currentSceneCollectionName: OBS_COLLECTION };
-      }
-      if (method === 'GetSceneList') {
-        return { scenes: [] };
-      }
-      if (method === 'GetSceneItemList') {
-        return { sceneItems: [] };
-      }
-      if (method === 'GetInputSettings') {
-        return { inputSettings: {} };
-      }
-      if (method === 'GetInputList') {
-        return {
+      const responses: Record<string, Record<string, unknown>> = {
+        GetSceneCollectionList: { currentSceneCollectionName: OBS_COLLECTION },
+        GetSceneList: { scenes: [] },
+        GetSceneItemList: { sceneItems: [] },
+        GetInputSettings: { inputSettings: {} },
+        GetInputList: {
           inputs: [{ inputUuid: 'owned-source', inputName: 'BGM', inputKind: 'ffmpeg_source' }],
-        };
-      }
-      if (method === 'GetInputAudioMonitorType') {
-        return { monitorType: 'OBS_MONITORING_TYPE_NONE' };
-      }
-      if (method === 'GetInputVolume') {
-        return { inputVolumeDb: -6, inputVolumeMul: 0.5 };
-      }
-      if (method === 'GetInputMute') {
-        return { inputMuted: false };
-      }
-      if (method === 'GetMediaInputStatus') {
-        return { mediaState: 'OBS_MEDIA_STATE_STOPPED', mediaDuration: 0, mediaCursor: 0 };
-      }
+        },
+        GetInputAudioMonitorType: { monitorType: 'OBS_MONITORING_TYPE_NONE' },
+        GetInputVolume: { inputVolumeDb: -6, inputVolumeMul: 0.5 },
+        GetInputMute: { inputMuted: false },
+        GetMediaInputStatus: {
+          mediaState: 'OBS_MEDIA_STATE_STOPPED',
+          mediaDuration: 0,
+          mediaCursor: 0,
+        },
+      };
+      if (method in responses) return responses[method]!;
       throw new Error(`Unexpected OBS request: ${method}`);
     },
   });

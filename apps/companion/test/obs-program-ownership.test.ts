@@ -538,7 +538,14 @@ it('syncs managed microphone across all scenes on OBS SceneItemEnableStateChange
 
   const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
   cleanups.push(() => adapter.close());
+  let configChanges = 0;
+  adapter.onConfigurationChanged(() => {
+    configChanges++;
+  });
   await adapter.outputStatus(false);
+  const beforeCheck = configChanges;
+  await adapter.check();
+  expect(configChanges).toBe(beforeCheck);
   f.writes.length = 0;
 
   f.state.sceneItems.get('比赛中')![0]!.sceneItemEnabled = true;

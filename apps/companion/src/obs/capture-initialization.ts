@@ -1,5 +1,11 @@
 import type { ObsCaptureDiagnostic } from '@mizar/protocol/obs';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  isCs2Window as cs2Window,
+  obsObjects as objects,
+  obsSceneName,
+} from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 
 export type CaptureInitializationReason =
@@ -17,15 +23,6 @@ export interface CaptureInitialization {
   reason: CaptureInitializationReason | null;
   captureDiagnostic: ObsCaptureDiagnostic;
 }
-
-const objects = (value: unknown): Record<string, unknown>[] =>
-  Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    : [];
-const cs2Window = (value: unknown) =>
-  typeof value === 'string' &&
-  value.split(':').length === 3 &&
-  value.toLowerCase().endsWith(':cs2.exe');
 
 /** Read current managed source facts without switching the user's OBS program or preview. */
 export async function readCaptureInitialization(
