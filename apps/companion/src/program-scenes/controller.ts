@@ -11,7 +11,9 @@ import {
 } from '@mizar/protocol/program-scenes';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { BpSession } from '../bp/controller.js';
+import { ObsActionError } from '../obs/action-error.js';
 import { ObsExitSafetyError, type ObsSceneSwitchOptions } from '../obs/reconcile.js';
+import { ObsVideoError } from '../obs/video-transaction.js';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 
 export class ProgramSceneController {
@@ -133,6 +135,10 @@ export class ProgramSceneController {
       this.nextObsReconciliation = performance.now() + 5000;
     });
     return this.obsReconciliation;
+  }
+
+  automaticBlockedReason(id: ProgramSceneId): string | null {
+    return this.blockedReason(id, true);
   }
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
@@ -380,7 +386,7 @@ export class ProgramSceneController {
         message: '播出场景已变化，请核对后重试。',
       };
     const reason = this.blockedReason(id, automaticValid !== undefined);
-    if (reason !== null) return { ok: false as const, message: reason };
+    if (reason !== null) return { ok: false as const, retryable: false as const, message: reason };
     if (this.active === id && !automaticValid) {
       // A manual Take also restores OBS after an external scene change or reconnect.
       // Preserve presentation identity (including BP / matchup) on the same scene.
@@ -519,7 +525,11 @@ export class ProgramSceneController {
           const bp = this.bpSession.get();
           if (bp.state === 'hidden') {
             if (this.bpSession.command('play', bp.revision) === null)
-              return { ok: false as const, message: 'BP 播放未能启动，当前场景保持不变。' };
+              return {
+                ok: false as const,
+                retryable: false as const,
+                message: 'BP 播放未能启动，当前场景保持不变。',
+              };
             if (finalBp) this.bpSession.showFinal();
             preparedBpRevision = this.bpSession.get().revision;
           } else if (finalBp) this.bpSession.showFinal();
@@ -589,6 +599,7 @@ export class ProgramSceneController {
           return {
             ok: false as const,
             cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
+            retryable: false as const,
             message: stillBlocked ?? '自动编排请求已失效，保持当前场景。',
           };
         }
@@ -599,11 +610,16 @@ export class ProgramSceneController {
         if (id === 'matchup') this.introRevision = nextRevision;
       } catch (error) {
         await rollback();
+        const structural =
+          error instanceof ObsExitSafetyError ||
+          error instanceof ObsVideoError ||
+          error instanceof ObsActionError;
         return {
           ok: false as const,
           cancelled: abort.signal.aborted || !valid() || expectedRevision !== this.revision,
+          retryable: !structural,
           message:
-            error instanceof ObsExitSafetyError
+            error instanceof ObsExitSafetyError || error instanceof ObsVideoError
               ? error.message
               : 'OBS 场景切换未完成，当前播出场景保持不变。',
         };
