@@ -515,6 +515,18 @@ export function registerRivalHubConnectionRoutes(
       return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
     }
   });
+  app.post('/operator/rivalhub/schedule/refresh', { bodyLimit: 64 }, async (request, reply) => {
+    if (!allowed(request.headers.origin))
+      return reply.code(403).send({ message: '本机页面来源无效。' });
+    if (!options.connection.view().paired)
+      return reply.code(409).send({ message: '尚未连接赛事。' });
+    try {
+      return reply.header('cache-control', 'no-store').send(await options.connection.library(true));
+    } catch (error) {
+      request.log.error({ err: error }, 'RivalHub manual schedule refresh failed');
+      return reply.code(502).send({ message: '赛事赛程暂时无法获取。' });
+    }
+  });
   app.get<{ Params: { matchId: string }; Querystring: { fresh?: string } }>(
     '/local/v1/rivalhub-library/:matchId',
     async (request, reply) => {

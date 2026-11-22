@@ -528,7 +528,11 @@ export async function checkObsConfiguration(
   }
   if (obs.observeManagedResources && !(await obs.observeManagedResources()))
     return [
-      { code: 'resource_identity_missing', message: '专用集合尚未登记，不能接管已有同名集合。' },
+      {
+        code: 'resource_identity_missing',
+        message:
+          '「Mizar 制播」集合尚未登记，不能接管已有同名集合。请在 OBS 顶部「场景集合」重命名或删除它，再重新检测并新建场景。',
+      },
     ];
   if (obs.managedResourcesDrift && (await obs.managedResourcesDrift()))
     findings.push({

@@ -44,7 +44,7 @@ const rows = (value: unknown): Row[] => {
 const conflict = () =>
   new ObsVideoError(
     'collection_ownership_unknown',
-    '无法确认「Mizar 制播」专用集合的归属。请保留现有集合并检查诊断；不会接管同名个人集合。',
+    '无法确认「Mizar 制播」专用集合的归属。请在 OBS 中重命名或删除旧「Mizar 制播」集合后再重新配置；不会接管同名个人集合。',
   );
 const markerArgs = {
   realm: 'OBS_WEBSOCKET_DATA_REALM_GLOBAL',
