@@ -1,18 +1,43 @@
 //! Serializes cancellation with the irreversible submission of a preparation step.
-use std::{collections::HashSet, sync::Mutex};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Mutex,
+};
 use tauri::Manager;
 
+const MAX_CANCELLED_IDS: usize = 256;
+
 #[derive(Default)]
-pub struct PreparationGate(Mutex<HashSet<String>>);
+struct GateState {
+    cancelled: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+#[derive(Default)]
+pub struct PreparationGate(Mutex<GateState>);
 
 impl PreparationGate {
     pub fn cancel(&self, id: String) -> Result<(), String> {
-        let mut cancelled = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
-        if cancelled.len() >= 1024 && !cancelled.contains(&id) {
-            return Err("启动取消记录已满，请重新启动 Mizar。".into());
+        let mut state = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
+        if state.cancelled.insert(id.clone()) {
+            state.order.push_back(id);
+            while state.cancelled.len() > MAX_CANCELLED_IDS {
+                let Some(oldest) = state.order.pop_front() else {
+                    break;
+                };
+                state.cancelled.remove(&oldest);
+            }
         }
-        cancelled.insert(id);
         Ok(())
+    }
+
+    pub fn retire(&self, id: &str) {
+        let Ok(mut state) = self.0.lock() else {
+            return;
+        };
+        if state.cancelled.remove(id) {
+            state.order.retain(|item| item != id);
+        }
     }
 
     pub fn check(&self, id: Option<&str>) -> Result<(), String> {
@@ -24,8 +49,8 @@ impl PreparationGate {
         id: Option<&str>,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let cancelled = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
-        if id.is_some_and(|id| cancelled.contains(id)) {
+        let state = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
+        if id.is_some_and(|id| state.cancelled.contains(id)) {
             return Err("本次启动已取消，请重新启动工作台。".into());
         }
         // Cancellation cannot return while this submission is in progress.

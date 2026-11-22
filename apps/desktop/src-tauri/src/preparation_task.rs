@@ -1159,10 +1159,14 @@ fn preparation_start(
             return Err("原准备任务取消或恢复未确认，请重试取消。".into());
         }
     }
+    let retired_id = state.as_ref().map(|task| task.id.clone());
     *app.state::<HostState>()
         .entry_ticket
         .lock()
         .map_err(|_| "启动状态不可用。")? = Some((preparation_id.clone(), ticket));
+    if let Some(old_id) = retired_id.filter(|old_id| old_id != &preparation_id) {
+        app.state::<preparation_gate::PreparationGate>().retire(&old_id);
+    }
     *state = Some(Task {
         id: preparation_id.clone(),
         revision: expected_revision,

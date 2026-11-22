@@ -95,12 +95,12 @@ impl PendingUpdate {
         request(log, "recheck", Some(&attempt))?;
         Ok(())
     }
-    pub fn cancel(&self, log: &DesktopLog) {
+    fn cancel_local(&self, log: &DesktopLog) -> Option<String> {
         let (stage, attempt) = {
             let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
             // A retired GUI cannot cancel the replacement GUI's owner or stage.
             if self.gui_ticket.is_some() && self.gui_current().is_err() {
-                return;
+                return None;
             }
             // Process-level recovery also retires a GUI that panicked before
             // Exit. Cancelling within the current GUI keeps that GUI usable.
@@ -113,7 +113,7 @@ impl PendingUpdate {
                 .lock()
                 .ok()
                 .and_then(|mut pending| pending.take());
-            let attempt = self.attempt.lock().ok().and_then(|owner| owner.clone());
+            let attempt = self.attempt.lock().ok().and_then(|mut owner| owner.take());
             (stage, attempt)
         };
         if let Some(stage) = stage {
@@ -121,14 +121,19 @@ impl PendingUpdate {
                 io_failure(log, "stage_cleanup", &error, "更新暂存清理失败。");
             }
         }
-        if let Some(attempt) = attempt {
-            if release_plan(log, &attempt).is_ok() {
-                if let Ok(mut owner) = self.attempt.lock() {
-                    if owner.as_deref() == Some(attempt.as_str()) {
-                        *owner = None;
-                    }
-                }
-            }
+        attempt
+    }
+    pub fn cancel_without_service(&self, log: &DesktopLog) {
+        let _ = self.cancel_local(log);
+    }
+    pub fn cancel(&self, log: &DesktopLog) {
+        if let Some(attempt) = self.cancel_local(log) {
+            let bg_log = log.clone();
+            let _ = std::thread::Builder::new()
+                .name("mizar-update-release".into())
+                .spawn(move || {
+                    let _ = release_plan(&bg_log, &attempt);
+                });
         }
     }
 }
@@ -173,7 +178,7 @@ fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summar
     failure_guidance(summary)
 }
 fn release_plan(log: &DesktopLog, attempt: &str) -> Result<(), String> {
-    if let Err(error) = request(log, "release", Some(attempt)) {
+    if let Err(error) = request_with_timeout(log, "release", Some(attempt), Duration::from_secs(3)) {
         log.event(
             "update_install",
             "failure",
@@ -184,6 +189,14 @@ fn release_plan(log: &DesktopLog, attempt: &str) -> Result<(), String> {
     Ok(())
 }
 fn request(log: &DesktopLog, action: &str, attempt: Option<&str>) -> Result<Value, String> {
+    request_with_timeout(log, action, attempt, Duration::from_secs(75))
+}
+fn request_with_timeout(
+    log: &DesktopLog,
+    action: &str,
+    attempt: Option<&str>,
+    timeout: Duration,
+) -> Result<Value, String> {
     log.event(
         "update_install",
         "begin",
@@ -235,7 +248,7 @@ fn request(log: &DesktopLog, action: &str, attempt: Option<&str>) -> Result<Valu
             );
             "本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。"
         })?;
-    let deadline = Instant::now() + Duration::from_secs(75);
+    let deadline = Instant::now() + timeout;
     let address: SocketAddr = "127.0.0.1:3000".parse().unwrap();
     let mut stream =
         TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|error| {
@@ -724,8 +737,13 @@ pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
     pending.recheck(&app.state::<DesktopLog>())
 }
 pub fn cancel(app: &tauri::AppHandle) {
-    app.state::<PendingUpdate>()
-        .cancel(&app.state::<DesktopLog>());
+    let pending = app.state::<PendingUpdate>();
+    let log = app.state::<DesktopLog>();
+    if app.state::<crate::production_exit::VerifiedStop>().complete() {
+        pending.cancel_without_service(&log);
+    } else {
+        pending.cancel(&log);
+    }
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
     if crate::host_runtime::health_matches(&crate::host_runtime::bundle_root()?) {

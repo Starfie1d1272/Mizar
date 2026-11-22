@@ -3,11 +3,14 @@
 use std::sync::Mutex;
 use tauri::Manager;
 
+const MAX_ENTRY_CANCELLED_IDS: usize = 256;
+
 #[derive(Default)]
 struct EntryIntentState {
     document: u64,
     active: Option<(String, bool)>,
     cancelled: std::collections::HashSet<String>,
+    cancelled_order: std::collections::VecDeque<String>,
 }
 #[derive(Default)]
 pub(crate) struct EntryIntent(Mutex<EntryIntentState>);
@@ -54,11 +57,14 @@ impl EntryIntent {
         } else {
             false
         };
-        if !matched {
-            if state.cancelled.len() >= 1024 && !state.cancelled.contains(id) {
-                return Err("进入取消记录已满，请重新启动 Mizar。".into());
+        if !matched && state.cancelled.insert(id.to_owned()) {
+            state.cancelled_order.push_back(id.to_owned());
+            while state.cancelled.len() > MAX_ENTRY_CANCELLED_IDS {
+                let Some(oldest) = state.cancelled_order.pop_front() else {
+                    break;
+                };
+                state.cancelled.remove(&oldest);
             }
-            state.cancelled.insert(id.to_owned());
         }
         Ok((matched, read()?))
     }
@@ -74,7 +80,9 @@ impl EntryIntent {
             {
                 state.active = None;
             }
-            state.cancelled.remove(id);
+            if state.cancelled.remove(id) {
+                state.cancelled_order.retain(|item| item != id);
+            }
         }
     }
     pub(crate) fn cancel_all(&self) {
@@ -83,6 +91,7 @@ impl EntryIntent {
             *cancelled = true;
         }
         state.cancelled.clear();
+        state.cancelled_order.clear();
         state.document = state.document.wrapping_add(1);
     }
     pub(crate) fn commit<T>(
