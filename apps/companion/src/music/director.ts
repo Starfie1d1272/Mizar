@@ -109,7 +109,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   private fades: Partial<Record<MusicLayer, Fade>> = {};
   private expectedStops = new Map<MusicLayer, string>();
   private appliedVolumes = new Map<MusicLayer, number>();
-  private externalDriftCounts = new Map<MusicLayer, number>();
+  private externalDriftCounts = new Map<MusicLayer, { count: number; tick: number }>();
+  private driftTick = 0;
   private failed = new Map<string, Set<string>>();
   private status: MusicStatus = {
     held: false,
@@ -1229,6 +1230,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         return;
       }
       if (waitForAutomaticAudio()) return;
+      this.driftTick++;
       await this.provider.session(async (obs, epoch) => {
         const reconnect = this.epoch !== epoch;
         if (reconnect) this.externalDriftCounts.clear();
@@ -1414,8 +1416,10 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       return false;
     }
     if (immediate) return true;
-    const count = (this.externalDriftCounts.get(layer) ?? 0) + 1;
-    this.externalDriftCounts.set(layer, count);
+    const previous = this.externalDriftCounts.get(layer);
+    if (previous && previous.tick === this.driftTick) return previous.count >= 2;
+    const count = (previous?.count ?? 0) + 1;
+    this.externalDriftCounts.set(layer, { count, tick: this.driftTick });
     return count >= 2;
   }
   private async holdForObsControl(layer?: MusicLayer) {
@@ -1547,7 +1551,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       const mute = await obs.mute({ sourceId });
       if (!valid()) throw new Error('music_cancelled');
       if ((mute === true && !this.store.state.muted) || media.state === 'paused') {
-        await this.holdForObsControl();
+        await this.holdForObsControl(layer);
         return false;
       }
       if (media.state === 'playing') {
@@ -1783,7 +1787,11 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
           gain,
           tailVolume(saved.track, media.cursorMs, media.durationMs, targetVolume, spec!.fadeOutMs),
         );
-        if (valid() && Math.abs(gain - Number(volume)) > 0.0001)
+        if (
+          valid() &&
+          !this.externalDriftCounts.has(layer) &&
+          Math.abs(gain - Number(volume)) > 0.0001
+        )
           await device.setVolume({ ...args, gain: gain });
         if (valid()) this.appliedVolumes.set(layer, gain);
         markStatus(saved);

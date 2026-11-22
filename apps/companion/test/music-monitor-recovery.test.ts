@@ -562,3 +562,124 @@ test('transient media states and stinger external control do not falsely hold au
   assert.equal(store.state.holdReason, 'external');
   assert.equal(director.get().stingerHeld, false);
 });
+
+test('single-tick volume drift does not hold active BGM, two independent ticks do, and stinger waitAfterRestart pause isolates stingerHeld', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-drift-isolation-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  store.trackPath = async () => '/tmp/fake-track.mp3';
+  const track = {
+    id: `${'b'.repeat(64)}.mp3`,
+    name: 'Waiting Track',
+    startMs: 0,
+    endMs: null,
+    gain: 1,
+  };
+  await store.update((state) => {
+    state.sources.bgm = 'bgm-uuid';
+    state.sources.stinger = 'stinger-uuid';
+    state.sourceScopes.bgm = 'owned-collection';
+    state.sourceScopes.stinger = 'owned-collection';
+    state.config.groups.waiting = {
+      ...state.config.groups.waiting,
+      enabled: true,
+      tracks: [track],
+    };
+    state.config.groups.opening = {
+      ...state.config.groups.opening,
+      enabled: true,
+      tracks: [track],
+    };
+    state.bgm = {
+      group: 'waiting',
+      key: 'waiting:m1',
+      track,
+      configRevision: state.configRevision,
+      finished: false,
+      suspended: false,
+      cursorMs: 0,
+    };
+  });
+
+  let bgmVolume = 1;
+  let stingerState: 'stopped' | 'paused' = 'stopped';
+  const device: Partial<MusicDevice> = {
+    hasSource: async () => true,
+    monitorRelationship: async () => 'independent' as const,
+    monitorSafe: async () => true,
+    monitorMode: async () => 'monitor-and-output' as const,
+    setMonitorMode: async () => {},
+    readManagedMonitorModes: async () => ['monitor-and-output'],
+    mediaStatus: async ({ sourceId }) =>
+      sourceId === 'stinger-uuid'
+        ? { state: stingerState, cursorMs: 0, durationMs: 5000 }
+        : { state: 'playing' as const, cursorMs: 100, durationMs: 10_000 },
+    mute: async () => false,
+    volume: async ({ sourceId }) => (sourceId === 'stinger-uuid' ? 1 : bgmVolume),
+    mediaFile: async () => await store.trackPath(track.id),
+    loadMedia: async () => {},
+    setVolume: async ({ sourceId, gain }) => {
+      if (sourceId === 'bgm-uuid') bgmVolume = gain;
+    },
+    setMute: async () => {},
+    controlMedia: async ({ sourceId, action }) => {
+      if (sourceId === 'stinger-uuid' && action === 'restart') {
+        stingerState = 'paused';
+      }
+    },
+    verifyPlayback: async () => {},
+    checkCalls: () => device as unknown as MusicDevice,
+  } satisfies Partial<MusicDevice>;
+  const provider: MusicDeviceProvider = {
+    collectionRevision: 1,
+    session: (run) => run(device as unknown as MusicDevice, 1),
+    close: async () => {},
+  };
+  const truth = (): MusicTruth => ({
+    active: 'waiting',
+    production: true,
+    program: {
+      map: { name: 'de_test', phase: 'warmup', roundNumber: 0, score: { ct: 0, t: 0 } },
+      cursor: { mapEpoch: 1 },
+      match: { matchId: 'm1' },
+      series: {
+        bindingState: 'bound',
+        currentMapOrder: 1,
+        entrants: { a: { entryId: 'a' }, b: { entryId: 'b' } },
+      },
+      clock: { phase: 'live' },
+      status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+    } as MusicTruth['program'],
+  });
+  let now = 1000;
+  const director = new MusicDirector(store, provider, truth, () => now);
+
+  // Establish applied volume on bgm.
+  await director.tick();
+  assert.equal(director.get().held, false);
+
+  // 1. Single tick with volume drift across both observeManualControls() and layer() must NOT hold.
+  bgmVolume = 0.25;
+  now += 500;
+  await director.tick();
+  assert.equal(director.get().held, false);
+
+  // 2. Second independent tick with persistent drift DOES hold BGM.
+  now += 500;
+  await director.tick();
+  assert.equal(director.get().held, true);
+  assert.equal(store.state.holdReason, 'external');
+
+  // 3. Stinger external pause during waitAfterRestart() holds ONLY stinger, never BGM.
+  bgmVolume = store.state.master;
+  await director.command('resume');
+  assert.equal(director.get().held, false);
+
+  director.opening('opening:1', track);
+  now += 500;
+  await director.tick();
+  assert.equal(director.get().stingerHeld, true);
+  assert.equal(director.get().held, false);
+  assert.equal(store.state.held, false);
+});
