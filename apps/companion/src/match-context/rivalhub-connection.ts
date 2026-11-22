@@ -36,6 +36,7 @@ import {
 import {
   canCheckBlockedSource,
   claimRecoveryProof,
+  confirmedSourceStatus,
   confirmsClosedSource,
   definitiveClaimRejection,
   executionKey,
@@ -178,6 +179,7 @@ export class RivalHubConnection {
       request: (path, init) => this.authorization.request(path, init),
     },
     fetchImpl: (...args) => this.fetchImpl(...args),
+    confirmSourceAuthority: (source, signal) => this.confirmSourceAuthority(source, signal),
     canSendRetainedReliable: async (identity) => {
       const state = await this.sourceState.snapshot();
       const key = exactKey(identity);
@@ -426,8 +428,8 @@ export class RivalHubConnection {
   automaticManifestDeferred(matchId: string) {
     return this.readClient.automaticManifestDeferred(matchId);
   }
-  library() {
-    return this.readClient.library();
+  library(fresh = false) {
+    return this.readClient.library(fresh);
   }
   libraryDetail(matchId: string, fresh = true) {
     return this.readClient.libraryDetail(matchId, fresh);
@@ -701,6 +703,37 @@ export class RivalHubConnection {
 
   private isCurrentInstallation(scope: SourceScope): boolean {
     return this.installation !== null && sameInstallationScope(scope, this.installation);
+  }
+
+  private async confirmSourceAuthority(
+    source: Source,
+    signal?: AbortSignal,
+  ): Promise<'confirmed' | 'revoked' | 'unknown'> {
+    try {
+      const response = await this.authorization.request(
+        sourceStatusRequest(source, source.authorityRevision),
+        ...(signal ? [{ signal }] : [{}]),
+      );
+      if (response.status === 401 || response.status === 403) {
+        await response.body?.cancel().catch(() => undefined);
+        return 'revoked';
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return 'unknown';
+      }
+      const body: unknown = await readReliableBody(response);
+      const status = confirmedSourceStatus(body, source);
+      if (status) {
+        return status.state === 'open' && status.authorityRevision === source.authorityRevision
+          ? 'confirmed'
+          : 'revoked';
+      }
+      const rawStatus = (body as { status?: unknown } | undefined)?.status;
+      return rawStatus === 'not_found' ? 'revoked' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
 
   private sourceIdentity(source: Source): ExactSource {
@@ -1321,6 +1354,7 @@ export class RivalHubConnection {
         source &&
         !source.draining &&
         !source.paused &&
+        !source.livePaused &&
         source.matchId === snapshot.matchId &&
         source.producerInstanceId === snapshot.cursor.producerInstanceId &&
         source.liveSessionId === snapshot.cursor.liveSessionId &&

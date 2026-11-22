@@ -17,6 +17,10 @@ import { ObsVideoError } from '../src/obs/video-transaction.js';
 import { registerUpdateRoutes } from '../src/updates/routes.js';
 import { UpdateManager } from '../src/updates/manager.js';
 import { updateManifestSchema } from '../src/updates/contract.js';
+import { RivalHubLibrary } from '../src/match-context/rivalhub-library.js';
+import { createProduction } from '../src/program-scenes/production.js';
+import { registerCompanionShutdown } from '../src/runtime/shutdown.js';
+import { BusinessJournal } from '../src/support/business-journal.js';
 
 const host = '127.0.0.1:3000';
 const origin = `http://${host}`;
@@ -560,4 +564,171 @@ test('an overdue website shutdown releases the real SQLite writer before the loc
   } finally {
     await second.close();
   }
+});
+
+test('RivalHubLibrary separates manual refresh from 60s background cooldown and reports cache persistence failures honestly', async (t) => {
+  const { directory } = await fixture(t);
+  let now = 100_000;
+  let calls = 0;
+  let online = true;
+  const schedule = {
+    schemaVersion: 'rivalhub.broadcast-schedule-window.v1' as const,
+    revision: 'rev-1',
+    competition: { competitionId: 'comp-1', slug: 'comp-1', name: 'Test Cup', themeColor: null },
+    from: '2026-11-01T00:00:00.000Z',
+    to: '2026-11-30T00:00:00.000Z',
+    matches: [],
+  };
+  const validPath = join(directory, 'library.json');
+  const library = new RivalHubLibrary(
+    validPath,
+    'comp-1',
+    async () => {
+      calls++;
+      if (!online) throw new Error('network down');
+      return schedule;
+    },
+    async () => ({}),
+    () => now,
+  );
+  const first = await library.view();
+  assert.equal(calls, 1);
+  assert.equal(first.library.error, null);
+  assert.ok(first.library.syncedAt);
+  await new Promise((r) => setTimeout(r, 15));
+
+  now += 61_000;
+  online = false;
+  await library.view();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls, 2);
+
+  online = true;
+  now += 5_000;
+  const bg = await library.view(false);
+  assert.equal(calls, 2);
+  assert.match(bg.library.error ?? '', /网站暂时无法连接/);
+
+  const manual = await library.view(true);
+  assert.equal(calls, 3);
+  assert.equal(manual.library.error, null);
+
+  const blockedDir = join(directory, 'blocked-file');
+  await writeFile(blockedDir, 'not-a-directory');
+  const unwriteable = new RivalHubLibrary(
+    join(blockedDir, 'library.json'),
+    'comp-1',
+    async () => schedule,
+    async () => ({}),
+    () => now,
+  );
+  const result = await unwriteable.view(true);
+  assert.equal(result.matches.length, 0);
+  assert.equal(result.library.syncedAt, null);
+  assert.match(result.library.error ?? '', /本机缓存保存失败/);
+});
+
+test('entering workspace bounds broadcast wait and BusinessJournal failure does not block flush receipt', async (t) => {
+  const { directory } = await fixture(t);
+  const instanceId = randomUUID();
+  const artifactSha256 = 'b'.repeat(64);
+  const dataDir = join(directory, 'data');
+  await mkdir(dataDir);
+  for (const [key, value] of Object.entries({
+    MIZAR_STATE_ROOT: directory,
+    MIZAR_PRODUCT_INSTANCE: instanceId,
+  })) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const production = createProduction({
+    scenes: {
+      holdAutomatic: () => {},
+      selectWaitingForExit: async () => ({ ok: true }),
+      controlValid: () => () => true,
+      get: () => ({ revision: 'rev-1' }),
+      setResourceActivationPending: () => {},
+    } as unknown as Parameters<typeof createProduction>[0]['scenes'],
+    music: () => undefined,
+    camera: () => undefined,
+    demo: () => undefined,
+    observer: { endProduction: () => {} },
+    binding: () => undefined,
+    waitForBroadcast: () => new Promise(() => {}),
+    obsExit: { previousUnconfirmed: false, record: async () => {}, wait: async () => {} },
+    warn: () => {},
+    error: () => {},
+  });
+  const entering = production.change({
+    action: 'enter',
+    expectedRevision: production.get().revision,
+    preparationId: randomUUID(),
+  });
+  await Promise.resolve();
+  t.mock.timers.tick(2600);
+  const entered = await entering;
+  assert.equal(entered.ok, true);
+  assert.equal(production.get().mode, 'live');
+
+  const journal = new BusinessJournal(
+    directory,
+    () => {},
+    '1.0.0',
+    () => {
+      throw new Error('disk full');
+    },
+  );
+  journal.write('test_stage', { ok: true });
+  assert.equal(journal.getStatus(), 'write_failed');
+  const app = fastify();
+  registerCompanionShutdown(app, {
+    stopDirector: () => {},
+    stopObservation: () => {},
+    unsubscribePresentation: () => {},
+    unsubscribeObjectiveReference: undefined,
+    closeCamera: () => {},
+    closeMusic: () => {},
+    closeGameAudio: () => {},
+    closeObs: () => {},
+    waitForObsExit: async () => {},
+    stopCstv: [],
+    closeDeliveryConsumers: [],
+    closeProjection: () => {},
+    closeCues: () => {},
+    stopWebsiteDelivery: () => {},
+    flushWebsiteDiagnostics: () => {},
+    closeRuntime: () => {},
+    closeTransport: () => {},
+    hudConfigStore: {
+      flush: async () => {},
+      getState: () => ({ persistenceError: null }),
+    } as unknown as Parameters<typeof registerCompanionShutdown>[1]['hudConfigStore'],
+    flushBroadcastReceipts: () => {},
+    currentRecorder: () =>
+      ({ finalize: async () => {} }) as unknown as ReturnType<
+        Parameters<typeof registerCompanionShutdown>[1]['currentRecorder']
+      >,
+    readBusinessJournal: () => journal,
+    closeSupport: async () => {},
+    closeWebsiteOutput: () => {},
+    unsubscribeMatchBinding: undefined,
+    product: {
+      instanceId,
+      artifactSha256,
+      gitSha: 'a'.repeat(40),
+      controlToken: randomUUID(),
+      stop: () => {},
+    },
+  });
+  await app.close();
+  assert.deepEqual(
+    JSON.parse(await readFile(join(dataDir, `runtime-flush-${instanceId}.json`), 'utf8')),
+    { instanceId, artifactSha256, pid: process.pid },
+  );
 });

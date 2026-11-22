@@ -57,13 +57,14 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 
 ### RivalHub 比赛库缓存
 
-| 入口                                      | 语义                                                                               |
-| ----------------------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /local/v1/rivalhub-schedule`         | 授权赛程及已浏览库摘要，不预取整表详情                                             |
-| `GET /local/v1/rivalhub-library/:matchId` | 按需校验单场资料，失败区分浏览缓存与未缓存                                         |
-| `POST /operator/rivalhub/select`          | 暂存候选；`activate: true` 则重新获取并按原修订原子激活，成功返回 `loaded/matchId` |
-| `POST /operator/rivalhub/refresh`         | 使用已配对凭据刷新当前关联比赛，不接收任意 URL 或浏览器凭据                        |
-| `GET /local/v1/rivalhub-connection`       | 关联、来源资格、刷新与同步状态                                                     |
+| 入口                                       | 语义                                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `GET /local/v1/rivalhub-schedule`          | 授权赛程及已浏览库摘要，后台刷新按 60 秒节流，不预取整表详情                                                       |
+| `POST /operator/rivalhub/schedule/refresh` | 用户主动刷新赛程列表，绕过后台 60 秒冷却并合并在途请求，仍遵守服务端限流；本地缓存写盘失败单独提示，不伪报网络故障 |
+| `GET /local/v1/rivalhub-library/:matchId`  | 按需校验单场资料，失败区分浏览缓存与未缓存                                                                         |
+| `POST /operator/rivalhub/select`           | 暂存候选；`activate: true` 则重新获取并按原修订原子激活，成功返回 `loaded/matchId`                                 |
+| `POST /operator/rivalhub/refresh`          | 使用已配对凭据刷新当前关联比赛，不接收任意 URL 或浏览器凭据                                                        |
+| `GET /local/v1/rivalhub-connection`        | 关联、来源资格、刷新与同步状态                                                                                     |
 
 缓存按网站、赛事和安装身份隔离，重启重验提供方原文；浏览不激活比赛，也不作为节目新鲜度。轻量赛程定期刷新，详情在打开/持续查看时按需读取；当前制作比赛另按自身刷新周期。ETag 与核对时间不改变身份或授权，旧 scope 回包不得进入新连接。
 

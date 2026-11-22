@@ -11,6 +11,21 @@ import {
   type ProgramPresentation,
 } from '@mizar/protocol/program-scenes';
 
+/** Resolve the completed map for the current execution, including when series completion clears currentMapOrder. */
+export function completedMapResult(p: ProgramProjection) {
+  const series = p.series;
+  if (!series || p.map.phase !== 'gameover') return undefined;
+  const targetOrder =
+    series.currentMapOrder ??
+    [...series.maps].reverse().find((map) => map.status === 'completed')?.mapOrder ??
+    null;
+  if (targetOrder === null) return undefined;
+  const map = series.maps.find((item) => item.mapOrder === targetOrder);
+  return map && map.status === 'completed' && map.mapName === p.map.name && map.finalScore
+    ? map
+    : undefined;
+}
+
 /** Completed presentation facts survive telemetry loss, not a different match or execution. */
 export function hasFrozenMapResult(
   p: ProgramProjection,
@@ -30,9 +45,8 @@ export function hasFrozenMapResult(
     frozen.entrants.b.entryId !== series.entrants.b.entryId
   )
     return false;
-  const map = series.maps.find((item) => item.mapOrder === series.currentMapOrder);
-  if (!map || map.status !== 'completed' || map.mapName !== p.map.name || !map.finalScore)
-    return false;
+  const map = completedMapResult(p);
+  if (!map?.finalScore) return false;
   return presentation.completed.some(
     (item) =>
       item.mapOrder === map.mapOrder &&
@@ -198,14 +212,7 @@ export class ProgramPresentationStore {
         else if (next.cursor.mapEpoch > prior.cursor.mapEpoch) this.value.halftime = next;
       }
     }
-    if (p.map.phase !== 'gameover') return;
-    const completed = p.series.maps.find(
-      (map) =>
-        map.status === 'completed' &&
-        map.finalScore &&
-        map.mapName === p.map.name &&
-        (p.series?.currentMapOrder === null || map.mapOrder === p.series?.currentMapOrder),
-    );
+    const completed = completedMapResult(p);
     if (!completed?.finalScore) return;
     const snapshot = summarizeMap(p, completed.mapOrder, completed.finalScore);
     if (!snapshot) return;
