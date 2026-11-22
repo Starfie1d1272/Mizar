@@ -178,7 +178,8 @@ fn json_failure(log: &DesktopLog, phase: &str, error: &serde_json::Error, summar
     failure_guidance(summary)
 }
 fn release_plan(log: &DesktopLog, attempt: &str) -> Result<(), String> {
-    if let Err(error) = request_with_timeout(log, "release", Some(attempt), Duration::from_secs(3)) {
+    if let Err(error) = request_with_timeout(log, "release", Some(attempt), Duration::from_secs(3))
+    {
         log.event(
             "update_install",
             "failure",
@@ -739,7 +740,10 @@ pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
 pub fn cancel(app: &tauri::AppHandle) {
     let pending = app.state::<PendingUpdate>();
     let log = app.state::<DesktopLog>();
-    if app.state::<crate::production_exit::VerifiedStop>().complete() {
+    if app
+        .state::<crate::production_exit::VerifiedStop>()
+        .complete()
+    {
         pending.cancel_without_service(&log);
     } else {
         pending.cancel(&log);

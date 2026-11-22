@@ -1165,7 +1165,8 @@ fn preparation_start(
         .lock()
         .map_err(|_| "启动状态不可用。")? = Some((preparation_id.clone(), ticket));
     if let Some(old_id) = retired_id.filter(|old_id| old_id != &preparation_id) {
-        app.state::<preparation_gate::PreparationGate>().retire(&old_id);
+        app.state::<preparation_gate::PreparationGate>()
+            .retire(&old_id);
     }
     *state = Some(Task {
         id: preparation_id.clone(),
