@@ -5,6 +5,7 @@ import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
 import { BpSession } from '../src/bp/controller.js';
 import { OBS_COLLECTION, obsSceneName } from '../src/obs/desired-state.js';
 import { switchObsScene, type ObsRpc } from '../src/obs/reconcile.js';
+import { ObsVideoError } from '../src/obs/video-transaction.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
 import { DEFAULT_PROGRAM_TIMINGS, ProgramDirector } from '../src/program-scenes/director.js';
 
@@ -188,5 +189,87 @@ describe('director transient failure recovery and OBS transition readback', () =
       }),
     ).resolves.toBeUndefined();
     expect(currentScene).toBe(gameplayName);
+  });
+
+  it('does not invoke OBS while preconditions or structural OBS errors block a target, and recovers when conditions change', async () => {
+    const base = loadBaseProjection();
+    const currentProgram: ProgramProjection = {
+      ...base,
+      map: { ...base.map, phase: 'live', roundNumber: 1 },
+      round: { phase: 'live', winnerSide: 'unknown' },
+    };
+    let telemetryFreshness: 'fresh' | 'stale' = 'stale';
+    const coordinator = {
+      getCurrent: () => ({
+        program: currentProgram,
+        operator: {
+          runtime: { telemetryFreshness },
+          matchContext: { freshness: 'fresh', origin: 'rivalhub' },
+          identity: { state: 'matched' },
+        },
+      }),
+      getBpAssessment: () => ({ readiness: 'unavailable' as const }),
+    };
+
+    let obsEpoch = '1:1:1';
+    let sceneMissing = true;
+    const attempts: ProgramSceneId[] = [];
+    const switched: ProgramSceneId[] = [];
+    const bp = new BpSession(() => null);
+    const controller = new ProgramSceneController(
+      coordinator as never,
+      bp,
+      async (scene) => {
+        attempts.push(scene);
+        if (sceneMissing && scene === 'gameplay')
+          throw new ObsVideoError('scene_target_unavailable', '缺少目标 OBS 场景「比赛中」。');
+        switched.push(scene);
+      },
+      undefined,
+      undefined,
+      () => 'full',
+      () => Promise.resolve(false),
+      () => obsEpoch,
+    );
+    let now = 1000;
+    const director = new ProgramDirector(
+      coordinator as never,
+      controller,
+      bp,
+      () => true,
+      () => now,
+      DEFAULT_PROGRAM_TIMINGS,
+    );
+    controller.attachDirector(director);
+
+    // 1. Precondition unsatisfied (stale telemetry): blocked without touching OBS.
+    await director.tick();
+    now = 10_000;
+    await director.tick();
+    expect(attempts).toEqual([]);
+    expect(director.get().mode).toBe('blocked');
+
+    // 2. Telemetry becomes fresh, but OBS has a structural missing-scene error:
+    // attempts once and does NOT poll OBS every 5s while obsEpoch stays unchanged.
+    telemetryFreshness = 'fresh';
+    now = 11_000;
+    await director.tick();
+    expect(attempts.filter((s) => s === 'gameplay')).toHaveLength(1);
+    expect(director.get().mode).toBe('blocked');
+    expect(director.get().reason).toContain('缺少目标 OBS 场景');
+
+    const countBeforeWait = attempts.length;
+    now = 40_000;
+    await director.tick();
+    expect(attempts.length).toBe(countBeforeWait);
+
+    // 3. OBS repairs scenes (obsEpoch advances): director immediately retries and succeeds.
+    sceneMissing = false;
+    obsEpoch = '1:2:1';
+    now = 40_100;
+    await director.tick();
+    expect(attempts.filter((s) => s === 'gameplay')).toHaveLength(2);
+    expect(switched.at(-1)).toBe('gameplay');
+    expect(director.get().mode).toBe('auto');
   });
 });

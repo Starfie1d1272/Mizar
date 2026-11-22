@@ -52,6 +52,8 @@ export class ProgramDirector {
     target: ProgramSceneId;
     until: number;
     attempts: number;
+    obsEpoch: string;
+    revision: string;
   } | null = null;
   private inFlight: ProgramSceneId | null = null;
   private warmupChoice: 'waiting' | 'gameplay' = 'waiting';
@@ -483,14 +485,31 @@ export class ProgramDirector {
       }
       return;
     }
-    if (this.retryBlock && this.retryBlock.target === target && time < this.retryBlock.until) {
+    const preconditionBlocked = this.scenes.automaticBlockedReason(target);
+    if (preconditionBlocked !== null) {
+      this.retryBlock = null;
       this.view = {
         ...this.view,
         mode: 'blocked',
-        reason: this.retryBlock.message,
+        reason: preconditionBlocked,
         blockCause: null,
       };
       return;
+    }
+    const obsEpoch = this.scenes.obsStateEpoch();
+    const sceneRevision = this.scenes.get().revision;
+    if (this.retryBlock && this.retryBlock.target === target) {
+      if (this.retryBlock.obsEpoch !== obsEpoch || this.retryBlock.revision !== sceneRevision) {
+        this.retryBlock = null;
+      } else if (time < this.retryBlock.until) {
+        this.view = {
+          ...this.view,
+          mode: 'blocked',
+          reason: this.retryBlock.message,
+          blockCause: null,
+        };
+        return;
+      }
     }
     const resultAction =
       resultProgression && ['map_result', 'intermap', 'match_result'].includes(target);
@@ -550,14 +569,24 @@ export class ProgramDirector {
         )
           return;
         if (!this.manual) {
+          const retryable = 'retryable' in result ? result.retryable : true;
           const attempts =
-            this.retryBlock && this.retryBlock.target === target ? this.retryBlock.attempts + 1 : 1;
-          const backoffMs = Math.min(5000, 1500 * 2 ** Math.min(attempts - 1, 2));
+            retryable && this.retryBlock && this.retryBlock.target === target
+              ? this.retryBlock.attempts + 1
+              : retryable
+                ? 1
+                : 0;
+          const until =
+            retryable && attempts <= 3
+              ? this.now() + Math.min(5000, 1500 * 2 ** (attempts - 1))
+              : Number.POSITIVE_INFINITY;
           this.retryBlock = {
             message: result.message,
             target,
-            until: this.now() + backoffMs,
+            until,
             attempts,
+            obsEpoch: this.scenes.obsStateEpoch(),
+            revision: this.scenes.get().revision,
           };
           this.view = {
             ...this.view,

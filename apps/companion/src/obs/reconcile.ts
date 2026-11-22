@@ -726,7 +726,7 @@ export async function switchObsScene(
   const name = obsSceneName(sceneId);
   const collections = await obs.call('GetSceneCollectionList');
   if (collections.currentSceneCollectionName !== OBS_COLLECTION)
-    throw new Error('请先检查并修复 「Mizar 制播」场景集合。');
+    throw new ObsVideoError('collection_inactive', '请先检查并修复 「Mizar 制播」场景集合。');
   const sceneList = await obs.call('GetSceneList');
   const desired = obsDesiredScenes(baseUrl).find((scene) => scene.id === sceneId)!;
   const findings = await checkSceneVisual(obs, desired, sceneList, await obs.call('GetInputList'));
@@ -742,7 +742,10 @@ export async function switchObsScene(
     (item) => item.transitionKind === `${options.transition.kind}_transition`,
   );
   if (typeof transition?.transitionName !== 'string')
-    throw new Error('OBS 缺少所需的切换或淡化转场，请检查场景集合。');
+    throw new ObsVideoError(
+      'scene_transition_missing',
+      'OBS 缺少所需的切换或淡化转场，请检查场景集合。',
+    );
   assertCurrent();
   await obs.call('SetSceneSceneTransitionOverride', {
     sceneName: name,

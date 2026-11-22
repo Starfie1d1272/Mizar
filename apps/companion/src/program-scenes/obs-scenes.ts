@@ -27,6 +27,7 @@ export function createProgramScenes(
     obs && ((visible, valid) => obs.setBpCompactVisible(visible, valid)),
     readBpPresentationMode,
     () => obs?.gameBackgroundReady() ?? Promise.resolve(false),
+    obs && (() => obs.sceneRecoveryEpoch()),
   );
 }
 

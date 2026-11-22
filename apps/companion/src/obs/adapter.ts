@@ -248,6 +248,9 @@ export class ObsAdapter {
   outputObservationEpoch(): number {
     return this.outputs.outputObservationEpoch();
   }
+  sceneRecoveryEpoch(): string {
+    return `${this.programGeneration}:${this.outputs.preparationConfigurationEpoch()}:${this.outputs.outputObservationEpoch()}`;
+  }
 
   waitForAutomaticAudioConnection(): boolean {
     return this.outputs.waitForAutomaticAudioConnection();
