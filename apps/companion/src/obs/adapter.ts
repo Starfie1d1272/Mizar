@@ -1,3 +1,4 @@
+import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { AudioMeter } from './audio-meter.js';
 import { ObsObservationConnection } from './observation-connection.js';
 import type { AudioDeviceCommand } from './audio-device-settings.js';
@@ -141,6 +142,12 @@ export class ObsAdapter {
   private browserRefreshSubmitted = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly submittedBrowserRefreshes = new Set<string>();
+  private readonly confidenceFailures = new RepeatedDiagnostic((stage, evidence) =>
+    this.diagnostic(stage, evidence),
+  );
+  private readonly browserRecoveryFailures = new RepeatedDiagnostic((stage, evidence) =>
+    this.diagnostic(stage, evidence),
+  );
 
   constructor(
     private readonly configStore: ObsConfigStore,
@@ -184,6 +191,10 @@ export class ObsAdapter {
       configStore,
       (error, password) => diagnostic('obs_output', obsErrorEvidence(error, password)),
       (kind, name) => {
+        if (kind === 'outputs-idle') {
+          this.runBrowserRecovery();
+          return;
+        }
         if (kind === 'disconnected') {
           this.expectedScene = undefined;
           this.expectedCollection = undefined;
@@ -443,11 +454,11 @@ export class ObsAdapter {
         permission.program === this.programGeneration &&
         permission.production();
       this.recoveryTimer = undefined;
-      if (permission === undefined) return;
+      if (!valid() || this.outputs.hasRunningOutput()) return;
       this.recoveryTask = this.serial(async () => {
         // Keep the existing program observer connected across recovery retries.
         await this.outputs.read();
-        if (!valid()) return false;
+        if (!valid() || this.outputs.hasRunningOutput()) return false;
         return this.withObs(
           (obs) =>
             refreshObsBrowserSources(
@@ -463,13 +474,21 @@ export class ObsAdapter {
         );
       })
         .then((complete) => {
-          if (valid()) this.browserRefreshSubmitted = complete;
+          if (valid()) {
+            this.browserRefreshSubmitted = complete;
+            if (complete) this.browserRecoveryFailures.clear();
+          }
         })
-        .catch(() => undefined)
+        .catch((error) => {
+          if (!this.outputs.hasRunningOutput()) {
+            const kind = obsFailureKind(error);
+            this.browserRecoveryFailures.record('obs_browser_recovery', kind, { kind });
+          }
+        })
         .finally(() => {
           this.recoveryTask = undefined;
-          if (valid() && !this.browserRefreshSubmitted) {
-            this.recoveryTimer = setTimeout(attempt, 5000);
+          if (valid() && !this.browserRefreshSubmitted && !this.outputs.hasRunningOutput()) {
+            this.recoveryTimer = setTimeout(attempt, 15_000);
             this.recoveryTimer.unref();
           } else if (this.browserRecoveryPermission !== permission) {
             this.runBrowserRecovery();
@@ -1096,14 +1115,20 @@ export class ObsAdapter {
     return { ...status, facts, findings: [...findings], programEvidence };
   }
 
-  private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
-  confidencePreview(): Promise<{ scene: string; image: string } | null> {
+  private previewPending: Promise<{
+    preview: { scene: string; image: string } | null;
+    reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+  }> | null = null;
+  confidencePreview(): Promise<{
+    preview: { scene: string; image: string } | null;
+    reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+  }> {
     if (this.previewPending) return this.previewPending;
-    this.previewPending = this.observe(() =>
-      this.withReadObs(async (obs) => {
+    this.previewPending = this.withObs(
+      async (obs) => {
         const current = await obs.call('GetCurrentProgramScene');
         const scene = current.currentProgramSceneName;
-        if (typeof scene !== 'string') return null;
+        if (typeof scene !== 'string') return { preview: null, reason: 'unavailable' as const };
         const screenshot = await obs.call('GetSourceScreenshot', {
           sourceName: scene,
           imageFormat: 'jpeg',
@@ -1112,16 +1137,42 @@ export class ObsAdapter {
           imageCompressionQuality: 70,
         });
         const after = await obs.call('GetCurrentProgramScene');
+        if (after.currentProgramSceneName !== scene)
+          return { preview: null, reason: 'scene_changing' as const };
         const image = screenshot.imageData;
-        return after.currentProgramSceneName === scene &&
+        if (
           typeof image === 'string' &&
           image.startsWith('data:image/jpeg;base64,') &&
           image.length < 1_000_000
-          ? { scene, image }
-          : null;
-      }),
+        ) {
+          this.confidenceFailures.clear();
+          return { preview: { scene, image } };
+        }
+        return { preview: null, reason: 'unavailable' as const };
+      },
+      TIMEOUT_MS,
+      undefined,
+      false,
+      false,
+      false,
+      false,
+      undefined,
+      false,
     )
-      .catch(() => null)
+      .catch((error) => {
+        const kind = obsFailureKind(error);
+        const reason =
+          kind === 'refused' || kind === 'authentication'
+            ? ('disconnected' as const)
+            : error instanceof ObsVideoError && error.code === 'obs_observation_changed'
+              ? ('scene_changing' as const)
+              : ('unavailable' as const);
+        this.confidenceFailures.record('obs_confidence_preview', reason, {
+          reason,
+          kind,
+        });
+        return { preview: null, reason };
+      })
       .finally(() => {
         this.previewPending = null;
       });
