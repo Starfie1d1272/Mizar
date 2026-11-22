@@ -29,7 +29,7 @@ function operations(repository: OutboxRepository) {
     latestEvent: repository.latestEvent.bind(repository),
     createCaptureInterval: repository.createCaptureInterval.bind(repository),
     sealCaptureInterval: repository.sealCaptureInterval.bind(repository),
-    recordUnknownCapture: repository.recordUnknownCapture.bind(repository),
+    quarantineCaptureInterval: repository.quarantineCaptureInterval.bind(repository),
     stageBoundaryCaptures: repository.stageBoundaryCaptures.bind(repository),
     boundaryCaptureReceipt: repository.boundaryCaptureReceipt.bind(repository),
     captureReceipt: repository.captureReceipt.bind(repository),

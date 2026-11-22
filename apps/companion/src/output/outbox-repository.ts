@@ -312,6 +312,7 @@ export class OutboxRepository {
         }
         // The active v3 envelope and store identity become visible in one transaction.
         repository.write({ active: sealOutbox(parseOutbox(Buffer.from(raw.value))) });
+        repository.reconcileKnownUncleanIntervals();
       });
       repository.captureStoreId();
       for (const [table, max] of [
@@ -505,18 +506,56 @@ export class OutboxRepository {
     return row && parseCaptureUnknownReason(row.reason);
   }
 
-  recordUnknownCapture(source: ExactSource, reason: CaptureUnknownReason): void {
-    this.transaction(() => {
-      if (!this.captureUnknownReason(source)) {
-        const count = (
-          this.db.prepare('SELECT count(*) AS n FROM capture_unknown').get() as { n: number }
-        ).n;
-        if (count >= MAX_CAPTURE_UNKNOWN_SOURCES)
-          throw new Error('capture_unknown_capacity_exhausted');
-      }
-      this.db
-        .prepare('INSERT OR IGNORE INTO capture_unknown VALUES (?, ?, ?)')
-        .run(sourceKey(source), JSON.stringify(parseSource(source)), reason);
+  private insertUnknownCapture(source: ExactSource, reason: CaptureUnknownReason): void {
+    if (!this.captureUnknownReason(source)) {
+      const count = (
+        this.db.prepare('SELECT count(*) AS n FROM capture_unknown').get() as { n: number }
+      ).n;
+      if (count >= MAX_CAPTURE_UNKNOWN_SOURCES)
+        throw new Error('capture_unknown_capacity_exhausted');
+    }
+    this.db
+      .prepare('INSERT OR IGNORE INTO capture_unknown VALUES (?, ?, ?)')
+      .run(sourceKey(source), JSON.stringify(parseSource(source)), reason);
+  }
+
+  private reconcileKnownUncleanIntervals(): void {
+    const rows = this.db
+      .prepare(
+        "SELECT i.payload FROM capture_intervals i INNER JOIN capture_unknown u ON u.source_key = i.source_key WHERE json_extract(i.payload, '$.state') = 'armed'",
+      )
+      .all() as { payload: string }[];
+    for (const row of rows) {
+      const interval = this.parseInterval(row.payload);
+      this.writeCaptureInterval({ ...interval, state: 'unknown' });
+    }
+  }
+
+  quarantineCaptureInterval(
+    id: string | undefined,
+    source: ExactSource,
+    reason: CaptureUnknownReason,
+    endCursor?: CaptureInterval['endCursor'],
+  ): CaptureInterval | undefined {
+    return this.transaction(() => {
+      this.insertUnknownCapture(source, reason);
+      const interval =
+        (id ? this.captureInterval(id) : undefined) ?? this.captureIntervalForSource(source);
+      if (!interval || interval.state === 'sealed') return interval;
+      const validEnd =
+        endCursor &&
+        endCursor.producerInstanceId === interval.source.producerInstanceId &&
+        endCursor.liveSessionId === interval.source.liveSessionId &&
+        (!interval.activationCursor || endCursor.runtimeSeq >= interval.activationCursor.runtimeSeq)
+          ? endCursor
+          : interval.endCursor;
+      const quarantined: CaptureInterval = {
+        ...interval,
+        state: 'unknown',
+        ...(validEnd ? { endCursor: validEnd } : {}),
+      };
+      this.writeCaptureInterval(quarantined);
+      return quarantined;
     });
   }
 

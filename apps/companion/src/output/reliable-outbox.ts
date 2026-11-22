@@ -182,8 +182,7 @@ export class ReliableOutbox {
         reference.storeId !== this.captureStoreId() ||
         (interval && JSON.stringify(interval.reference) !== JSON.stringify(reference))
       ) {
-        this.unknownCaptures.set(key, reference ? 'mismatch' : 'legacy');
-        await this.recordUnknownCapture(source, reference ? 'mismatch' : 'legacy');
+        await this.quarantineIntervalInQueue(source, reference ? 'mismatch' : 'legacy');
         return;
       }
       if (!interval) {
@@ -191,8 +190,7 @@ export class ReliableOutbox {
           this.view.intervals.has(reference.id) ||
           (await this.repository().request('captureInterval', reference.id))
         ) {
-          this.unknownCaptures.set(key, 'mismatch');
-          await this.recordUnknownCapture(source, 'mismatch');
+          await this.quarantineIntervalInQueue(source, 'mismatch');
           return;
         }
         // JSON intent is persisted before arm. Absence in this exact store proves no activation.
@@ -207,8 +205,7 @@ export class ReliableOutbox {
         this.view.setInterval(retired);
         this.view.archived.add(key);
       } else if (interval.state !== 'sealed' && !this.captures.has(key)) {
-        this.unknownCaptures.set(key, 'unclean');
-        await this.recordUnknownCapture(source, 'unclean');
+        await this.quarantineIntervalInQueue(source, 'unclean', interval.endCursor);
       }
     });
   }
@@ -273,14 +270,16 @@ export class ReliableOutbox {
     const end = current?.endCursor ?? structuredClone(endCursor);
     return (async () => {
       if (!complete) {
-        await this.queue.run(() => this.recordUnknownCapture(source, 'unclean'));
+        await this.queue.run(() => this.quarantineIntervalInQueue(source, 'unclean', end));
         return false;
       }
       await this.queue.flush();
       if (this.captureCoverage(source).state === 'sealed') return true;
       if (!current || this.captureCoverage(source).state === 'unknown') return false;
+      let phase: 'retry' | 'seal' = 'retry';
       try {
-        await this.retryPendingCaptures(true);
+        await this.retryPendingCaptures(true, source);
+        phase = 'seal';
         return await this.queue.run(async () => {
           // Release and tail settlement may request the same seal concurrently.
           // Read its state under the same queue that commits the transition.
@@ -296,11 +295,14 @@ export class ReliableOutbox {
           const intents = await this.readBoundaryIntents(scope);
           if (
             this.boundaryCaptureLost ||
-            this.hasUnconfirmedWrites() ||
+            this.lostCaptureSources.has(key) ||
+            this.hasUnconfirmedWritesFor(source) ||
             this.hasStoredBoundaryGap(scope) ||
             intents.length
-          )
+          ) {
+            await this.quarantineIntervalInQueue(source, 'unclean', end);
             return false;
+          }
           const interval = await this.repository().request(
             'sealCaptureInterval',
             current.reference.id,
@@ -313,6 +315,11 @@ export class ReliableOutbox {
         });
       } catch (error) {
         this.reportCaptureFailure(error);
+        if (phase === 'seal' || !this.available || this.hasUnconfirmedWritesFor(source)) {
+          await this.queue
+            .run(() => this.quarantineIntervalInQueue(source, 'unclean', end))
+            .catch(() => undefined);
+        }
         return false;
       }
     })();
@@ -326,9 +333,34 @@ export class ReliableOutbox {
     }
   }
 
+  private hasUnconfirmedWritesFor(source: ExactSource): boolean {
+    const key = sourceKey(source);
+    if (this.database?.failed || this.boundaryCaptureLost || this.lostCaptureSources.has(key))
+      return true;
+    const scope: ReliableDeliveryScope = {
+      matchId: source.matchId,
+      producerInstanceId: source.producerInstanceId,
+      liveSessionId: source.liveSessionId,
+    };
+    if (this.hasPendingEnqueues(scope, source) || this.hasPendingBoundaryCaptures(scope))
+      return true;
+    for (const writeKey of this.unconfirmedWrites) {
+      if (
+        writeKey === 'unconfirmed-write-overflow' ||
+        writeKey === 'outbox_worker_write_unconfirmed' ||
+        writeKey === `archive:${key}` ||
+        writeKey === `revoke:${key}`
+      )
+        return true;
+    }
+    return false;
+  }
+
   hasDurableUnknownCapture(source: ExactSource): boolean {
     return (
-      this.available && this.view.unknown.has(sourceKey(source)) && !this.hasUnconfirmedWrites()
+      this.available &&
+      this.view.unknown.has(sourceKey(source)) &&
+      !this.hasUnconfirmedWritesFor(source)
     );
   }
 
@@ -341,7 +373,7 @@ export class ReliableOutbox {
     // Even if this write fails or the process dies first, the already armed
     // interval remains durable evidence that an empty queue cannot prove clean.
     void this.queue
-      .run(() => this.recordUnknownCapture(source, 'unclean'))
+      .run(() => this.quarantineIntervalInQueue(source, 'unclean', current?.endCursor))
       .catch((error: unknown) => this.reportCaptureFailure(error));
   }
 
@@ -387,13 +419,56 @@ export class ReliableOutbox {
     this.view.setInterval(interval);
   }
 
-  private async recordUnknownCapture(
+  private async quarantineIntervalInQueue(
     source: ExactSource,
     reason: 'legacy' | 'unclean' | 'mismatch',
-  ) {
-    await this.repository().request('recordUnknownCapture', source, reason);
+    endCursor?: ReliableEventV1['cursor'],
+  ): Promise<void> {
     const key = sourceKey(source);
+    this.unknownCaptures.set(key, reason);
+    this.sealRequests.add(key);
+    const current = this.captures.get(key);
+    if (current) current.sealing = true;
+    const interval = await this.repository().request(
+      'quarantineCaptureInterval',
+      current?.reference.id,
+      source,
+      reason,
+      endCursor ?? current?.endCursor,
+    );
+    if (interval) this.view.setInterval(interval);
     if (!this.view.unknown.has(key)) this.view.unknown.set(key, { source, reason });
+    for (const [operationKey, item] of this.pendingEnqueues) {
+      if (item.source && sourceKey(item.source) === key) {
+        this.pendingEnqueues.delete(operationKey);
+        this.unconfirmedWrites.delete(operationKey);
+        this.captureTickets.delete(operationKey);
+        this.captureOrder.delete(operationKey);
+      }
+    }
+    for (const [id, operation] of this.pendingBoundaryCaptures) {
+      if (operation.request.source && sourceKey(operation.request.source) === key) {
+        this.pendingBoundaryCaptures.delete(id);
+        this.durableBoundaryCaptures.delete(id);
+        this.unconfirmedWrites.delete(`boundary:${id}`);
+        this.captureOrder.delete(`boundary:${id}`);
+        this.captureOrder.delete(`boundary-request:${id}`);
+      }
+    }
+  }
+
+  private commitCaptureOnly(capture?: CaptureTicket): Promise<void> {
+    return this.commit(
+      this.records,
+      this.continuity,
+      this.boundaryIntents,
+      this.boundaryGap,
+      this.boundaryGaps,
+      this.boundaryOverflowOwners,
+      [],
+      undefined,
+      capture,
+    );
   }
 
   private currentEvents(
@@ -503,6 +578,7 @@ export class ReliableOutbox {
   private boundaryGaps: readonly BoundaryScope[] = [];
   private boundaryOverflowOwners: readonly string[] = [];
   private boundaryCaptureLost = false;
+  private readonly lostCaptureSources = new Set<string>();
   private readonly pendingBoundaryCaptures = new Map<string, BoundaryCaptureOperation>();
   private readonly durableBoundaryCaptures = new Set<string>();
   private activeBoundaryCapture: BoundaryCaptureOperation | undefined;
@@ -828,6 +904,29 @@ export class ReliableOutbox {
     return [...sources.values()];
   }
 
+  private runSourceDisposition<T>(
+    action: 'archive' | 'revoke',
+    input: ExactSource,
+    body: (identity: ExactSource, key: string) => Promise<T>,
+  ): Promise<T> {
+    const identity = parseSource(input);
+    const key = sourceKey(identity);
+    return (async () => {
+      await this.retryPendingEnqueues();
+      if (this.hasPendingEnqueues(identity)) throw new Error('outbox_source_unsettled');
+      return this.runDurable(`${action}:${key}`, async () => {
+        const digest = scopeDigest(
+          identity.competitionId,
+          identity.matchId,
+          identity.producerInstanceId,
+          identity.liveSessionId,
+        );
+        if ((await this.repository().request('sourceFences', [digest]))[0]?.damaged)
+          throw new Error('outbox_archive_unreadable');
+        return body(identity, key);
+      });
+    })();
+  }
   /** Exact closure moves records and its fence in the same transaction. */
   async archiveConfirmedSource(input: ExactSource): Promise<void> {
     if (this.captureCoverage(input).state !== 'sealed') {
@@ -844,24 +943,7 @@ export class ReliableOutbox {
       if (previouslyArchived) return;
       throw new Error('capture_coverage_unknown');
     }
-    await this.retryPendingEnqueues();
-    if (this.hasPendingEnqueues(input)) throw new Error('outbox_source_unsettled');
-    return this.runDurable(`archive:${sourceKey(parseSource(input))}`, async () => {
-      const identity = parseSource(input);
-      const key = sourceKey(identity);
-      if (
-        (
-          await this.repository().request('sourceFences', [
-            scopeDigest(
-              identity.competitionId,
-              identity.matchId,
-              identity.producerInstanceId,
-              identity.liveSessionId,
-            ),
-          ])
-        )[0]?.damaged
-      )
-        throw new Error('outbox_archive_unreadable');
+    return this.runSourceDisposition('archive', input, async (identity, key) => {
       if (
         this.records.some(
           (record) =>
@@ -910,25 +992,8 @@ export class ReliableOutbox {
       else this.revoking.set(key, { source, count: current.count - 1 });
     }
   }
-  private async isolateRevokedSourceOnce(input: ExactSource): Promise<void> {
-    await this.retryPendingEnqueues();
-    if (this.hasPendingEnqueues(input)) throw new Error('outbox_source_unsettled');
-    return this.runDurable(`revoke:${sourceKey(parseSource(input))}`, async () => {
-      const identity = parseSource(input);
-      const key = sourceKey(identity);
-      if (
-        (
-          await this.repository().request('sourceFences', [
-            scopeDigest(
-              identity.competitionId,
-              identity.matchId,
-              identity.producerInstanceId,
-              identity.liveSessionId,
-            ),
-          ])
-        )[0]?.damaged
-      )
-        throw new Error('outbox_archive_unreadable');
+  private isolateRevokedSourceOnce(input: ExactSource): Promise<void> {
+    return this.runSourceDisposition('revoke', input, async (identity, key) => {
       const selected = this.records.filter(
         (record) => record.source && sourceKey(record.source) === key,
       );
@@ -1256,8 +1321,13 @@ export class ReliableOutbox {
         this.pendingBoundaryCaptures.set(operation.id, operation);
       }
     } catch (error) {
-      // The original request cannot be retained: no future successful write can erase this gap.
-      this.boundaryCaptureLost = true;
+      // Attribute known-source capture losses to that source so independent matches keep working.
+      if (source) {
+        this.lostCaptureSources.add(sourceKey(source));
+        this.markCaptureUnknown(source);
+      } else {
+        this.boundaryCaptureLost = true;
+      }
       return Promise.reject(error);
     }
     return this.queue.run(() => this.captureBoundaryOperation(operation));
@@ -1434,27 +1504,38 @@ export class ReliableOutbox {
     }
   }
 
-  retryPendingCaptures(drain = false): Promise<void> {
-    if (this.orderedReplay) return this.orderedReplay;
+  retryPendingCaptures(drain = false, onlySource?: ExactSource): Promise<void> {
+    if (!onlySource && this.orderedReplay) return this.orderedReplay;
+    const targetKey = onlySource ? sourceKey(onlySource) : undefined;
     const replay = (async () => {
       await this.queue.flush();
       if (this.boundaryCaptureLost) {
         await this.queue.run(() => this.repository().request('stageBoundaryCaptures', [], true));
         throw new Error('boundary_capture_input_lost');
       }
+      if (targetKey && this.lostCaptureSources.has(targetKey))
+        throw new Error('boundary_capture_input_lost');
+      const matchesTarget = (source?: ExactSource | null) =>
+        !targetKey || (Boolean(source) && sourceKey(source!) === targetKey);
       const pending = [
-        ...[...this.pendingBoundaryCaptures.values()].map((operation) => ({
-          order: this.captureOrder.get(`boundary:${operation.id}`) ?? 0,
-          retry: () => this.queue.run(() => this.captureBoundaryOperation(operation)),
-        })),
-        ...[...this.pendingEnqueues.entries()].map(([key, value]) => ({
-          order: this.captureOrder.get(key) ?? 0,
-          retry: value.retry,
-        })),
-        ...[...this.pendingContinuities.entries()].map(([key, value]) => ({
-          order: this.captureOrder.get(key) ?? 0,
-          retry: value.retry,
-        })),
+        ...[...this.pendingBoundaryCaptures.values()]
+          .filter((operation) => matchesTarget(operation.request.source))
+          .map((operation) => ({
+            order: this.captureOrder.get(`boundary:${operation.id}`) ?? 0,
+            retry: () => this.queue.run(() => this.captureBoundaryOperation(operation)),
+          })),
+        ...[...this.pendingEnqueues.entries()]
+          .filter(([, value]) => matchesTarget(value.source))
+          .map(([key, value]) => ({
+            order: this.captureOrder.get(key) ?? 0,
+            retry: value.retry,
+          })),
+        ...(targetKey
+          ? []
+          : [...this.pendingContinuities.entries()].map(([key, value]) => ({
+              order: this.captureOrder.get(key) ?? 0,
+              retry: value.retry,
+            }))),
       ]
         .sort((a, b) => a.order - b.order)
         .slice(0, drain ? RELIABLE_OUTBOX_MAX_PENDING * 3 : 4);
@@ -1463,12 +1544,14 @@ export class ReliableOutbox {
         await setImmediate();
       }
     })();
-    this.orderedReplay = replay;
-    void replay
-      .finally(() => {
-        if (this.orderedReplay === replay) this.orderedReplay = undefined;
-      })
-      .catch(() => undefined);
+    if (!onlySource) {
+      this.orderedReplay = replay;
+      void replay
+        .finally(() => {
+          if (this.orderedReplay === replay) this.orderedReplay = undefined;
+        })
+        .catch(() => undefined);
+    }
     return replay;
   }
 
@@ -1795,31 +1878,10 @@ export class ReliableOutbox {
             throw new Error('outbox_capture_idempotency_conflict');
           }
           if (this.unconfirmedWrites.has(operationKey)) {
-            await this.commit(
-              this.records,
-              this.continuity,
-              this.boundaryIntents,
-              this.boundaryGap,
-              this.boundaryGaps,
-              this.boundaryOverflowOwners,
-              [],
-              undefined,
-              capture,
-            );
+            await this.commitCaptureOnly(capture);
             return true;
           }
-          if (capture)
-            await this.commit(
-              this.records,
-              this.continuity,
-              this.boundaryIntents,
-              this.boundaryGap,
-              this.boundaryGaps,
-              this.boundaryOverflowOwners,
-              [],
-              undefined,
-              capture,
-            );
+          if (capture) await this.commitCaptureOnly(capture);
           return false;
         }
         if (checkStartHistory) {
@@ -1834,19 +1896,7 @@ export class ReliableOutbox {
                 refusals[0]?.event.idempotencyKey !== recoveryKey ||
                 refusals[0]?.recoveryState !== 'awaiting_observation'))
           ) {
-            if (capture) {
-              await this.commit(
-                this.records,
-                this.continuity,
-                this.boundaryIntents,
-                this.boundaryGap,
-                this.boundaryGaps,
-                this.boundaryOverflowOwners,
-                [],
-                undefined,
-                capture,
-              );
-            }
+            if (capture) await this.commitCaptureOnly(capture);
             return false;
           }
         }
@@ -1968,6 +2018,17 @@ export class ReliableOutbox {
         return result;
       },
       (error: unknown) => {
+        if (
+          error instanceof Error &&
+          (error.message === 'outbox_source_revoked' || error.message === 'outbox_source_closed')
+        ) {
+          this.unconfirmedWrites.delete(operationKey);
+          this.pendingEnqueues.delete(operationKey);
+          this.captureTickets.delete(operationKey);
+          this.captureOrder.delete(operationKey);
+          if (capture && source) this.markCaptureUnknown(source);
+          throw error;
+        }
         if (capture) this.noteUnconfirmedWrite(operationKey);
         if (this.unconfirmedWrites.has(operationKey)) {
           const bytes = durableJsonByteLength(retryArgs);
@@ -1979,7 +2040,12 @@ export class ReliableOutbox {
                 bytes,
               ) > 4_000_000)
           ) {
-            this.boundaryCaptureLost = true;
+            if (source) {
+              this.lostCaptureSources.add(sourceKey(source));
+              this.markCaptureUnknown(source);
+            } else {
+              this.boundaryCaptureLost = true;
+            }
             throw new Error('outbox_pending_enqueue_capacity_exhausted', { cause: error });
           }
           this.pendingEnqueues.set(operationKey, {
@@ -2266,15 +2332,10 @@ export class ReliableOutbox {
               continue;
             }
           }
-          if (input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64)) {
-            this.evidence(record, 'send_guard_blocked');
-            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-            else if (['map_ended', 'map_started'].includes(record.event.kind))
-              blockedByMapEnd.add(deliveryScope(record.event));
-            next.push(record);
-            continue;
-          }
-          if (Date.parse(record.nextAttemptAt) > now.getTime()) {
+          const guardBlocked =
+            input.canSend !== undefined && !input.canSend(record.event, record.lineupSteam64);
+          if (guardBlocked || Date.parse(record.nextAttemptAt) > now.getTime()) {
+            if (guardBlocked) this.evidence(record, 'send_guard_blocked');
             if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
             else if (['map_ended', 'map_started'].includes(record.event.kind))
               blockedByMapEnd.add(deliveryScope(record.event));

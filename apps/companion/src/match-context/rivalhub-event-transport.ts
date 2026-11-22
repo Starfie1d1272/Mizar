@@ -84,6 +84,13 @@ export interface RivalHubEventTransportHost {
 }
 
 /** Owns HTTP LIVE and reliable event delivery for an active or retained RivalHub source. */
+function httpControlFailure(status: number): string {
+  if (status === 401) return 'authorization_expired';
+  if (status === 403) return 'permission_denied';
+  if (status === 409) return 'context_conflict';
+  return `http_${status}`;
+}
+
 export class RivalHubEventTransport {
   private readonly liveInFlight = new Map<RivalHubTransportSource, Set<Promise<void>>>();
   private readonly state: RivalHubDeliveryState = {
@@ -238,15 +245,7 @@ export class RivalHubEventTransport {
         this.host.source()?.deliveryExecution === executionKey(event.cursor)
       ) {
         this.state.controlFailureKey = this.host.failureExecutionKey(event);
-        this.state.controlFailure =
-          rejection?.reason ??
-          (response.status === 401
-            ? 'authorization_expired'
-            : response.status === 403
-              ? 'permission_denied'
-              : response.status === 409
-                ? 'context_conflict'
-                : `http_${response.status}`);
+        this.state.controlFailure = rejection?.reason ?? httpControlFailure(response.status);
       }
       if (retainedSource && response.status === 401) return 'retry';
       if (response.status === 403) {
@@ -527,14 +526,9 @@ export class RivalHubEventTransport {
         this.host.monotonicNow() +
         Math.min(transientNetwork ? 2_000 : 8_000, 500 * 2 ** Math.min(this.state.liveFailures, 4));
       this.state.controlFailureKey = this.host.failureExecutionKey(snapshot);
-      this.state.controlFailure =
-        reason === 'http_401'
-          ? 'authorization_expired'
-          : reason === 'http_403'
-            ? 'permission_denied'
-            : reason === 'http_409'
-              ? 'context_conflict'
-              : reason;
+      this.state.controlFailure = /^http_\d+$/.test(reason)
+        ? httpControlFailure(Number(reason.slice(5)))
+        : reason;
     }
     this.state.liveDelivery = {
       cursor: snapshot.cursor,
