@@ -17,7 +17,7 @@ import {
 } from '../scope/identities.js';
 import type { ProjectionCoordinator } from '../projections/projection-coordinator.js';
 import type { ProgramSceneController } from './controller.js';
-import { hasFrozenMapResult, isRegulationHalftime } from './presentation.js';
+import { completedMapResult, hasFrozenMapResult, isRegulationHalftime } from './presentation.js';
 
 export const DEFAULT_PROGRAM_TIMINGS = Object.freeze({
   bpFinalMs: 12_000,
@@ -142,16 +142,8 @@ export class ProgramDirector {
   }
   private resultProgression(p: ProgramProjection): boolean {
     return (
-      (p.map.phase === 'gameover' && hasFrozenMapResult(p, this.presentation())) ||
-      (this.safe(p) &&
-        p.map.phase === 'gameover' &&
-        p.series!.maps.some(
-          (map) =>
-            map.mapOrder === p.series!.currentMapOrder &&
-            map.status === 'completed' &&
-            map.mapName === p.map.name &&
-            map.finalScore !== null,
-        ))
+      hasFrozenMapResult(p, this.presentation()) ||
+      (this.safe(p) && completedMapResult(p) !== undefined)
     );
   }
 
