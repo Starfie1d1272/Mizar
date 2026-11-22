@@ -627,6 +627,7 @@ for (const operation of ['switch', 'backoff', 'exit'] as const) {
     });
     await h.connection.claim(h.snapshot, 'revision', false);
     await h.connection.sendReliable(h.event, h.snapshot);
+    h.setAmbiguous(true);
     h.setLive(403);
     await assert.rejects(h.connection.sendLive(h.snapshot));
     const before = h.reliableRequests();
@@ -735,6 +736,7 @@ test(
     const h = await setup(t);
     await h.connection.claim(h.snapshot, 'revision', false);
     await h.connection.sendReliable(h.event, h.snapshot);
+    h.setAmbiguous(true);
     h.setLive(403);
     await assert.rejects(h.connection.sendLive(h.snapshot));
     const before = h.reliableRequests();
@@ -1306,4 +1308,51 @@ test('lost claim response clears cleanly after restart when a new source takes o
   await restarted.release();
   assert.equal(restarted.view().sourceCleanup.claimIntent, false);
   assert.deepEqual(h.releases, []);
+});
+
+test('a LIVE 403 still delivers reliable terminal facts in-session when source-status confirms authority, and blocks on revocation', async (t) => {
+  // 1. Match finishes on RivalHub: LIVE returns 403 while source-status confirms this source is open -> series_ended delivers without leaving workspace.
+  {
+    const h = await setup(t);
+    const tail = parseReliableEventV1({
+      ...h.event,
+      kind: 'series_ended',
+      payload: { scoreA: 2, scoreB: 0 },
+      observedAt: new Date().toISOString(),
+      idempotencyKey: 'in-session-series-end',
+      cursor: { ...h.event.cursor, runtimeSeq: h.event.cursor.runtimeSeq + 1 },
+    });
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await h.connection.sendReliable(h.event, h.snapshot);
+    h.setLive(403);
+    await assert.rejects(h.connection.sendLive(h.snapshot), /rivalhub_live_unavailable/);
+
+    // Subsequent LIVE snapshots remain stopped without exiting the workspace.
+    const liveCountAfter403 = h.liveRequests();
+    h.setLive(200);
+    await h.connection.sendLive(h.snapshot);
+    assert.equal(h.liveRequests(), liveCountAfter403);
+
+    // Reliable terminal fact checks source-status and succeeds immediately.
+    const reliableBefore = h.reliableRequests();
+    assert.equal(await h.connection.sendReliable(tail, h.snapshot), 'accepted');
+    assert.equal(h.reliableRequests(), reliableBefore + 1);
+    assert.ok(h.statusQueries.length >= 1);
+    assert.equal(h.releases.length, 0);
+  }
+
+  // 2. Real takeover/revocation: source-status reports closed -> reliable send does NOT bypass revocation.
+  {
+    const h = await setup(t);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await h.connection.sendReliable(h.event, h.snapshot);
+    h.setLive(403);
+    await assert.rejects(h.connection.sendLive(h.snapshot), /rivalhub_live_unavailable/);
+    h.closeByTakeover();
+
+    const reliableBefore = h.reliableRequests();
+    assert.equal(await h.connection.sendReliable(h.event, h.snapshot), 'retry');
+    assert.equal(h.reliableRequests(), reliableBefore);
+    assert.ok(h.statusQueries.length >= 1);
+  }
 });
