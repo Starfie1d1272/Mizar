@@ -201,3 +201,30 @@ test('needsEvidenceSanitize never misses JSON-escaped URLs, nested JSON, or unic
   assert.equal(needsEvidenceSanitize(escapedSamples[3]!), true);
   assert.equal(needsEvidenceSanitize(escapedSamples[4]!), false);
 });
+
+test('SupportExports ignores and preserves safe unknown entries inside its cache directory', async (t) => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'mizar-export-unknown-entry-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const logsDir = join(dir, 'logs');
+  mkdirSync(logsDir);
+  writeFileSync(
+    join(logsDir, 'companion-20261120.ndjson'),
+    JSON.stringify({
+      schema: 'mizar-diagnostic-event/2',
+      eventId: '00000000-0000-4000-8000-000000000021',
+      kind: 'companion_started',
+      observedAt: '2026-11-20T10:00:00.000Z',
+    }) + '\n',
+  );
+
+  const exports = new SupportExports(logsDir);
+  mkdirSync(exports.directory, { recursive: true });
+  const unknownEntry = join(exports.directory, 'desktop.ini');
+  writeFileSync(unknownEntry, '[.ShellClassInfo]\n');
+
+  const job = await exports.begin({}, null);
+  const settled = await exports.whenSettled(job.exportId);
+  assert.equal(settled?.phase, 'ready', `unexpected error: ${settled?.error}`);
+  assert.equal(readFileSync(unknownEntry, 'utf8'), '[.ShellClassInfo]\n');
+});

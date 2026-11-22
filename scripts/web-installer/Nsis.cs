@@ -51,6 +51,29 @@ namespace Mizar.WebInstaller {
         ownerPid=process.Id, ownerStarted=process.StartTime.ToUniversalTime().Ticks, stage="prepared",
       };
     }
+    static string Timestamp() { return DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ"); }
+    static string ArchiveFile(string path, string suffix) {
+      string dest = path + "." + suffix + "-" + Timestamp();
+      if (File.Exists(dest)) dest += "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+      File.Move(path, dest);
+      return dest;
+    }
+    static string ArchiveDirectory(string path, string suffix) {
+      string dest = path + "-" + suffix + "-" + Timestamp();
+      if (Directory.Exists(dest) || File.Exists(dest)) dest += "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+      Directory.Move(path, dest);
+      return dest;
+    }
+    static string ActiveInstallDir() {
+      using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
+        string value = key == null ? null : Convert.ToString(key.GetValue("InstallDir"));
+        if (String.IsNullOrEmpty(value)) return null;
+        string target = Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar);
+        if (!Directory.Exists(target)) return null;
+        if (!File.Exists(Path.Combine(target, "installed.flag")) && Directory.GetFileSystemEntries(target).Length == 0) return null;
+        return target;
+      }
+    }
     internal static bool ProcessStillActive(int pid, long started) {
       if (pid <= 0 || started <= 0) throw new IOException("安装进程记录损坏，保留现场。");
       try { using (var process = Process.GetProcessById(pid)) return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == started; }
@@ -60,19 +83,35 @@ namespace Mizar.WebInstaller {
     internal static PendingInstall RecoverPending(Plan plan, string target, FileStream lease) {
       string path = PendingPath(); Downloader.NoReparse(path);
       if (!File.Exists(path)) return null;
+      PendingInstall record = null;
+      string raw = null;
       try {
-        if (new FileInfo(path).Length > 65536) throw new IOException("安装记录超限。");
-        string raw = File.ReadAllText(path);
-        var record = Serializer().Deserialize<PendingInstall>(raw);
-        using (var process = Process.GetCurrentProcess()) {
-          if (record == null || record.schemaVersion != "mizar.bootstrap-pending.v1" ||
-              raw != Serializer().Serialize(record) || record.planSha256 != PlanHash(plan) ||
-              record.bootstrapSha256 != Hash(process.MainModule.FileName)) throw new IOException("记录不属于当前安装器。");
+        if (new FileInfo(path).Length <= 65536) {
+          raw = File.ReadAllText(path);
+          record = Serializer().Deserialize<PendingInstall>(raw);
         }
+      } catch { record = null; }
+      if (record != null) {
+        if (record.ownerPid > 0 && record.ownerStarted > 0 && ProcessStillActive(record.ownerPid, record.ownerStarted))
+          throw new InstallerActionRequired("前一次更新尚未结束，请关闭旧安装窗口后再试。", true);
+        if (record.writerPid > 0 && record.writerStarted > 0 && ProcessStillActive(record.writerPid, record.writerStarted))
+          throw new InstallerActionRequired("前一次安装仍在写入，请等待完成后再试。", true);
+      }
+      using (var process = Process.GetCurrentProcess()) {
+        if (record == null || record.schemaVersion != "mizar.bootstrap-pending.v1" ||
+            raw != Serializer().Serialize(record) || record.planSha256 != PlanHash(plan) ||
+            record.bootstrapSha256 != Hash(process.MainModule.FileName) ||
+            !String.Equals(record.target, target, StringComparison.OrdinalIgnoreCase)) {
+          // Inactive stale/mismatched pending record: archive it safely and allow clean install.
+          ArchiveFile(path, "retired");
+          return null;
+        }
+      }
+      try {
         AssertAllowedTarget(target);
-        return RecoverUpdate(target,record,lease);
+        return RecoverUpdate(target, record, lease);
       } catch (Exception error) {
-        throw new InstallerRecoveryRequired(target, "不能安全恢复该记录；现场保持原样。" + error.Message,error);
+        throw new InstallerRecoveryRequired(target, "不能安全恢复该记录；现场保持原样。" + error.Message, error);
       }
     }
     static void AssertAllowedTarget(string target) {
@@ -95,7 +134,7 @@ namespace Mizar.WebInstaller {
       Downloader.NoReparse(target);
     }
     internal static bool CanChooseDestination() {
-      using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) return !HasPending() && (key==null || String.IsNullOrEmpty(Convert.ToString(key.GetValue("InstallDir"))));
+      return !HasPending() && ActiveInstallDir() == null;
     }
     internal static string SelectDestination(string directory) {
       directory=(directory ?? "").Trim();
@@ -105,30 +144,27 @@ namespace Mizar.WebInstaller {
       try {target=Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);}
       catch(Exception error) {if(!(error is ArgumentException) && !(error is NotSupportedException) && !(error is PathTooLongException)) throw;throw new InstallerActionRequired("安装路径格式有误，请删除非法字符或缩短路径后重试。",true,error);}
       AssertSafeSelection(target);
-      using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
-        string registered=key==null ? null : Convert.ToString(key.GetValue("InstallDir"));
-        if(!String.IsNullOrEmpty(registered) && !String.Equals(Path.GetFullPath(registered).TrimEnd(Path.DirectorySeparatorChar),target,StringComparison.OrdinalIgnoreCase)) throw new InstallerActionRequired("升级将沿用原安装位置，请勿迁移已有安装。");
-      }
+      string active=ActiveInstallDir();
+      if(active!=null && !String.Equals(active,target,StringComparison.OrdinalIgnoreCase)) throw new InstallerActionRequired("升级将沿用原安装位置，请勿迁移已有安装。");
       if(File.Exists(target) || (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length!=0 && !IsRegisteredTarget(target))) throw new InstallerActionRequired("该目录已有文件，请选择空目录。已有安装将沿用原位置。");
       selectedDestination=target;return target;
     }
     internal static string ResolveDestination(Plan plan=null) {
       if(plan!=null && HasPending()) {
         string path=PendingPath();
-        if(new FileInfo(path).Length<=65536) {
-          string raw=File.ReadAllText(path);var record=Serializer().Deserialize<PendingInstall>(raw);
-          using(var process=Process.GetCurrentProcess()) {
-            if(record!=null && raw==Serializer().Serialize(record) && record.schemaVersion=="mizar.bootstrap-pending.v1" && record.planSha256==PlanHash(plan) && record.bootstrapSha256==Hash(process.MainModule.FileName)) {
-              // The original same-installer record authorizes its own selected destination; recovery still verifies ownership and stopped writers.
-              selectedDestination=record.target;AssertAllowedTarget(record.target);return record.target;
+        try {
+          if(new FileInfo(path).Length<=65536) {
+            string raw=File.ReadAllText(path);var record=Serializer().Deserialize<PendingInstall>(raw);
+            using(var process=Process.GetCurrentProcess()) {
+              if(record!=null && raw==Serializer().Serialize(record) && record.schemaVersion=="mizar.bootstrap-pending.v1" && record.planSha256==PlanHash(plan) && record.bootstrapSha256==Hash(process.MainModule.FileName)) {
+                selectedDestination=record.target;AssertAllowedTarget(record.target);return record.target;
+              }
             }
           }
-        }
+        } catch { }
       }
-      using(var key=Registry.CurrentUser.OpenSubKey(@"Software\Mizar")) {
-        string value=key==null ? null : Convert.ToString(key.GetValue("InstallDir"));
-        if(!String.IsNullOrEmpty(value)) {string target=Path.GetFullPath(value);AssertAllowedTarget(target);return target;}
-      }
+      string active=ActiveInstallDir();
+      if(active!=null) {AssertAllowedTarget(active);return active;}
       return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar");
     }
     internal static bool HasPending() { Downloader.NoReparse(PendingPath()); return File.Exists(PendingPath()); }
@@ -216,12 +252,13 @@ namespace Mizar.WebInstaller {
       string digest=null;
       if(File.Exists(Path.Combine(target,"installed.flag"))) {
         string artifactPath=Path.Combine(target,"resources","metadata","artifact.json");Downloader.NoReparse(artifactPath);
-        if(new FileInfo(artifactPath).Length>65536) throw new InstallerActionRequired("原安装身份无法确认，请使用完整安装包修复。");
+        if(!File.Exists(artifactPath) || new FileInfo(artifactPath).Length>65536) throw new InstallerActionRequired("原安装目录不完整（缺少版本信息）。可使用下方「保留资料重装」或「重置并重装」。");
         var artifact=Serializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(artifactPath));
         string version=Convert.ToString(artifact["appVersion"]);
         digest=Convert.ToString(artifact["artifactSha256"]);
-        if(!System.Text.RegularExpressions.Regex.IsMatch(version??"",@"^\d+\.\d+\.\d+$") || !System.Text.RegularExpressions.Regex.IsMatch(digest??"","^[a-f0-9]{64}$") || new Version(version)>new Version(plan.version)) throw new InstallerActionRequired("原安装版本无法确认或比安装器更新，请使用对应版本安装器。");
-      } else if(File.Exists(target) || (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length!=0)) throw new InstallerActionRequired("该目录已有文件，请选择空目录。",true);
+        if(!System.Text.RegularExpressions.Regex.IsMatch(version??"",@"^\d+\.\d+\.\d+$") || !System.Text.RegularExpressions.Regex.IsMatch(digest??"","^[a-f0-9]{64}$")) throw new InstallerActionRequired("原安装版本信息已损坏。可使用下方「保留资料重装」或「重置并重装」。");
+        if(new Version(version)>new Version(plan.version)) throw new InstallerActionRequired("已安装版本比当前安装器更新，请下载对应版本安装器。");
+      } else if(File.Exists(target) || (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length!=0)) throw new InstallerActionRequired("该目录已有文件，请选择空目录或重置原安装。",true);
       if(progress!=null) progress.Report("preparing-update");
       string state=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Mizar"), work=Path.Combine(state,"updates","download-"+Guid.NewGuid().ToString("N"));
       Downloader.NoReparse(work);Directory.CreateDirectory(work);
@@ -262,6 +299,63 @@ namespace Mizar.WebInstaller {
     internal static void StartProduct(string target) {
       string executable=Path.Combine(target,"Mizar.exe");Downloader.NoReparse(executable);
       Process.Start(new ProcessStartInfo {FileName=executable,WorkingDirectory=target,UseShellExecute=false});
+    }
+    static void AssertNoActiveMizarOrWriter(Action action) {
+      if (Process.GetProcessesByName("Mizar").Length != 0) throw new InstallerActionRequired("请先正常退出 Mizar 后再试。", true);
+      using (var writer = new Mutex(false, @"Global\MizarUpdateWriter")) {
+        bool owned = false;
+        try {
+          try { owned = writer.WaitOne(0); } catch (AbandonedMutexException) { owned = true; }
+          if (!owned) throw new InstallerActionRequired("另一个安装或更新操作正在进行，请先关闭后重试。", true);
+          action();
+        } finally { if (owned) writer.ReleaseMutex(); }
+      }
+    }
+    static void ClearRecoveryRunOnce(string updatesDir) {
+      using (var runOnce = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\RunOnce", true)) {
+        if (runOnce == null) return;
+        string val = Convert.ToString(runOnce.GetValue("!MizarUpdateRecovery"));
+        if (!String.IsNullOrEmpty(val) && (updatesDir == null || val.IndexOf(updatesDir, StringComparison.OrdinalIgnoreCase) >= 0))
+          runOnce.DeleteValue("!MizarUpdateRecovery", false);
+      }
+    }
+    internal static void RetireUpdateState() {
+      AssertNoActiveMizarOrWriter(() => {
+        string state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar");
+        string cache = Path.Combine(state, "bootstrap-cache");
+        Downloader.NoReparse(state);
+        if (Directory.Exists(cache)) {
+          string leasePath = Path.Combine(cache, "fresh-install.lock"); Downloader.NoReparse(leasePath);
+          using (var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            string pending = PendingPath();
+            if (File.Exists(pending)) ArchiveFile(pending, "retired");
+          }
+        }
+        string updates = Path.Combine(state, "updates");
+        if (Directory.Exists(updates)) { ClearRecoveryRunOnce(updates); ArchiveDirectory(updates, "retired"); }
+        if (ActiveInstallDir() == null) Registry.CurrentUser.DeleteSubKeyTree(@"Software\Mizar", false);
+      });
+    }
+    internal static void ResetMizarState(string target) {
+      AssertNoActiveMizarOrWriter(() => {
+        string state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar");
+        Downloader.NoReparse(state);
+        string leasePath = Path.Combine(state, "bootstrap-cache", "fresh-install.lock");
+        if (File.Exists(leasePath)) {
+          Downloader.NoReparse(leasePath);
+          using (new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) { }
+        }
+        ClearRecoveryRunOnce(null);
+        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Mizar", false);
+        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar", false);
+        if (Directory.Exists(state)) ArchiveDirectory(state, "reset");
+        if (!String.IsNullOrEmpty(target) && Directory.Exists(target) &&
+            (File.Exists(Path.Combine(target, "installed.flag")) || File.Exists(Path.Combine(target, ".mizar-update-owner")))) {
+          AssertSafeSelection(target);
+          ArchiveDirectory(target, "mizar-reset");
+        }
+        selectedDestination = null;
+      });
     }
     public static async Task<string> Install(Plan plan, string installer, string destination,
       CancellationToken token, IProgress<string> progress = null) {
