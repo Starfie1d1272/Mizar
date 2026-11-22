@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { projectPublicRadarFrame } from '@mizar/radar';
 
+import { completedSeriesMapForProgram } from '@mizar/core/projection';
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import {
   parseLiveSnapshotV1,
@@ -54,17 +55,8 @@ interface ReliableMapResult {
 }
 
 function entrantRelativeMapResult(bundle: ProjectionBundle): ReliableMapResult | null {
-  const series = bundle.program.series;
-  const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
-  const resultMap =
-    mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
-  if (
-    resultMap === undefined ||
-    resultMap.status !== 'completed' ||
-    resultMap.finalScore === null ||
-    resultMap.mapName !== bundle.program.map.name
-  )
-    return null;
+  const resultMap = completedSeriesMapForProgram(bundle.program);
+  if (!resultMap?.finalScore) return null;
   return {
     mapId: resultMap.mapId,
     mapName: resultMap.mapName,

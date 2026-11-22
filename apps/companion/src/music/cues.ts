@@ -1,4 +1,4 @@
-import type { ProgramProjection } from '@mizar/core/projection';
+import { completedSeriesMapForProgram, type ProgramProjection } from '@mizar/core/projection';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { MusicGroup, MusicTrack } from '@mizar/protocol/music';
 import { musicMapScope } from '../scope/identities.js';
@@ -62,16 +62,7 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
       return ['map_result', 'match_result'].includes(active)
         ? { group: 'matchVictory', key: `matchVictory:${match}` }
         : null;
-    if (
-      ['map_result', 'intermap'].includes(active) &&
-      p.series?.maps.some(
-        (m) =>
-          m.status === 'completed' &&
-          m.finalScore &&
-          m.mapName === p.map.name &&
-          m.mapOrder === p.series?.currentMapOrder,
-      )
-    )
+    if (['map_result', 'intermap'].includes(active) && completedSeriesMapForProgram(p))
       return { group: 'mapVictory', key: `mapVictory:${map}` };
     return active === 'waiting' || active === 'bp' ? waiting : null;
   }

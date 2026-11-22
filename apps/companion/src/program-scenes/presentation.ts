@@ -4,27 +4,18 @@ import {
   type ScheduleWindow,
   type ScheduleMatchContext,
 } from '@mizar/core/match-context';
-import { seriesWinnerSide, type ProgramProjection } from '@mizar/core/projection';
+import {
+  completedSeriesMapForProgram,
+  seriesWinnerSide,
+  type ProgramProjection,
+} from '@mizar/core/projection';
 import {
   programPresentationSchema,
   type MapSummary,
   type ProgramPresentation,
 } from '@mizar/protocol/program-scenes';
 
-/** Resolve the completed map for the current execution, including when series completion clears currentMapOrder. */
-export function completedMapResult(p: ProgramProjection) {
-  const series = p.series;
-  if (!series || p.map.phase !== 'gameover') return undefined;
-  const targetOrder =
-    series.currentMapOrder ??
-    [...series.maps].reverse().find((map) => map.status === 'completed')?.mapOrder ??
-    null;
-  if (targetOrder === null) return undefined;
-  const map = series.maps.find((item) => item.mapOrder === targetOrder);
-  return map && map.status === 'completed' && map.mapName === p.map.name && map.finalScore
-    ? map
-    : undefined;
-}
+export const completedMapResult = completedSeriesMapForProgram;
 
 /** Completed presentation facts survive telemetry loss, not a different match or execution. */
 export function hasFrozenMapResult(
