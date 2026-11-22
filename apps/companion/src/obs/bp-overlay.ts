@@ -3,6 +3,7 @@ import {
   OBS_HEIGHT,
   OBS_WIDTH,
   obsBrowserInputName,
+  obsObjects as objects,
   obsSceneName,
 } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
@@ -10,14 +11,6 @@ import { OBSWebSocket } from 'obs-websocket-js';
 
 export const BP_COMPACT_INPUT = '禁选紧凑底栏';
 export const BP_COMPACT_PATH = '/program/bp-compact';
-
-function objects(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
-      )
-    : [];
-}
 
 /** Mutates only the compact source in the managed gameplay scene and verifies the result. */
 export async function setBpCompactVisible(
@@ -62,6 +55,7 @@ export async function setBpCompactVisible(
       inputSettings: { url, width: OBS_WIDTH, height: OBS_HEIGHT },
       sceneItemEnabled: false,
     });
+    items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
   }
   if (visible && input && !items.some((item) => item.sourceName === BP_COMPACT_INPUT)) {
     await obs.call('CreateSceneItem', {
@@ -69,8 +63,8 @@ export async function setBpCompactVisible(
       sourceName: BP_COMPACT_INPUT,
       sceneItemEnabled: false,
     });
+    items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
   }
-  items = objects((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
   const matches = items.filter((item) => item.sourceName === BP_COMPACT_INPUT);
   if (matches.length > 1) throw new Error('紧凑 BP 来源重复，请在 OBS 中检查。');
   const item = matches[0];

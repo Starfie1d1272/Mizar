@@ -153,7 +153,7 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
-      return { ok: true, findings: await options.adapter.prepareCommentaryAudio() };
+      return { ok: true, findings: await options.adapter.audio.prepareCommentaryAudio() };
     } catch (error) {
       request.log.error(
         {
@@ -186,7 +186,9 @@ export function registerObsRoutes(
   app.get('/local/v1/obs/remote-commentary', async (request, reply) => {
     if (!allowedRead(request)) return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
-      return reply.header('cache-control', 'no-store').send(await options.adapter.readCommentary());
+      return reply
+        .header('cache-control', 'no-store')
+        .send(await options.adapter.audio.readCommentary());
     } catch {
       return reply.code(409).send({ error: 'commentary_unavailable' });
     }
@@ -200,7 +202,7 @@ export function registerObsRoutes(
       .safeParse(request.body);
     if (!result.success) return reply.code(400).send({ error: 'commentary_invalid' });
     try {
-      return await options.adapter.setCommentaryMode(result.data.mode, result.data.revision);
+      return await options.adapter.audio.setCommentaryMode(result.data.mode, result.data.revision);
     } catch (error) {
       return reply.code(409).send({
         error: 'commentary_changed',
@@ -221,7 +223,7 @@ export function registerObsRoutes(
       if (!allowed(request.headers.origin))
         return reply.code(403).send({ error: 'operator_origin_forbidden' });
       try {
-        return await options.adapter.listCommentaryApplications();
+        return await options.adapter.audio.listCommentaryApplications();
       } catch {
         return reply.code(409).send({ error: 'commentary_candidates_unavailable' });
       }
@@ -239,7 +241,7 @@ export function registerObsRoutes(
         .safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: 'commentary_invalid' });
       try {
-        return await options.adapter.selectCommentaryApplication(
+        return await options.adapter.audio.selectCommentaryApplication(
           parsed.data.selectionId,
           parsed.data.revision,
         );
@@ -277,17 +279,19 @@ export function registerObsRoutes(
     if (!parsed.success) return reply.code(400).send({ error: 'audio_mode_invalid' });
     try {
       if (parsed.data.mode === 'cancel')
-        return { ok: true, ...(await options.adapter.cancelAudioWait(parsed.data.revision)) };
+        return { ok: true, ...(await options.adapter.audio.cancelAudioWait(parsed.data.revision)) };
       if (!options.gameAudio) throw new Error('audio_policy_unavailable');
       const command = parsed.data;
       const music = options.musicAudio?.();
       if (!music) throw new Error('music_unavailable');
       const result = await options.gameAudio.switchMode(() =>
         command.mode === 'recover'
-          ? options.adapter.recoverAudioMode(music, undefined, command.revision).then(() => ({}))
+          ? options.adapter.audio
+              .recoverAudioMode(music, undefined, command.revision)
+              .then(() => ({}))
           : command.mode === 'independent'
-            ? options.adapter.requestIndependentMode(command.revision, music)
-            : options.adapter.switchAudioMode(
+            ? options.adapter.audio.requestIndependentMode(command.revision, music)
+            : options.adapter.audio.switchAudioMode(
                 command.revision,
                 'desktop',
                 command.selectionId,
@@ -339,7 +343,7 @@ export function registerObsRoutes(
     if (!allowed(request.headers.origin))
       return reply.code(403).send({ error: 'operator_origin_forbidden' });
     try {
-      return await options.adapter.sampleAudioMeters(
+      return await options.adapter.audio.sampleAudioMeters(
         () => !request.raw.aborted && !reply.raw.destroyed,
       );
     } catch {
@@ -354,7 +358,7 @@ export function registerObsRoutes(
     try {
       return reply
         .header('cache-control', 'no-store')
-        .send(await options.adapter.readAudioDevices());
+        .send(await options.adapter.audio.readAudioDevices());
     } catch {
       return reply.code(409).send({
         error: 'audio_devices_unavailable',
@@ -368,7 +372,7 @@ export function registerObsRoutes(
     const parsed = audioDeviceCommandSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'audio_device_invalid' });
     try {
-      await options.adapter.setAudioDevice(parsed.data);
+      await options.adapter.audio.setAudioDevice(parsed.data);
       return { ok: true };
     } catch (error) {
       const code =
@@ -402,7 +406,7 @@ export function registerObsRoutes(
     try {
       return reply
         .header('cache-control', 'no-store')
-        .send(await options.adapter.readAudioRouting());
+        .send(await options.adapter.audio.readAudioRouting());
     } catch {
       return reply.code(409).send({ error: 'audio_routing_unavailable' });
     }
@@ -413,7 +417,7 @@ export function registerObsRoutes(
     const parsed = obsAudioBindCommandSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'audio_binding_invalid' });
     try {
-      await options.adapter.bindAudio(parsed.data);
+      await options.adapter.audio.bindAudio(parsed.data);
       return { ok: true };
     } catch (error) {
       return reply.code(409).send({
@@ -769,9 +773,10 @@ export function registerObsRoutes(
                   prepareMusic,
                 )
               : action === 'repair'
-                ? await options.adapter.repair(
+                ? await options.adapter.ensure(
                     options.activeScene,
                     () => valid() && connected(),
+                    undefined,
                     prepareMusic,
                   )
                 : action === 'capture-recover'

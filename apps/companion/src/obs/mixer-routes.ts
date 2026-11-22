@@ -36,7 +36,7 @@ export function registerMixerRoutes(
       muted: null,
       control: 'unknown',
     });
-    const obs = await adapter.mixerRead().catch(() => null);
+    const obs = await adapter.audio.mixerRead().catch(() => null);
     const music = director.mixerStatus();
     const desktopIncludesMusic = obs?.routing.desktop && music.desktopIncludesMusic;
     const result: MixerStatus = {
@@ -65,7 +65,7 @@ export function registerMixerRoutes(
       const task = musicQueue.then(async () => {
         if (sequence !== musicSequence)
           return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
-        const before = await adapter.mixerRead().catch(() => null);
+        const before = await adapter.audio.mixerRead().catch(() => null);
         if (!before) return { status: 'unknown' as const, message: 'OBS 连接未确认。' };
         if (before.revision !== command.revision)
           return { status: 'rejected' as const, message: '音频绑定已变化，请刷新。' };
@@ -73,7 +73,7 @@ export function registerMixerRoutes(
           return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
         try {
           const confirmed = await director.setMixer(command.volume, command.muted);
-          const after = await adapter.mixerRead().catch(() => null);
+          const after = await adapter.audio.mixerRead().catch(() => null);
           return confirmed && after?.revision === command.revision
             ? { status: 'confirmed' as const }
             : { status: 'unknown' as const, message: '音乐设置已保存，应用状态未确认。' };
@@ -90,7 +90,7 @@ export function registerMixerRoutes(
     const task = (channelQueues.get(command.channel) ?? Promise.resolve()).then(() => {
       if (channelSequences.get(command.channel) !== sequence)
         return { status: 'rejected' as const, message: '操作已被较新的请求替代。' };
-      return adapter.mixerWrite(command, game);
+      return adapter.audio.mixerWrite(command, game);
     });
     channelQueues.set(
       command.channel,

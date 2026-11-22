@@ -466,6 +466,7 @@ test('transient media states and stinger control isolate stingerHeld without fal
   let epoch = 1;
   let phase: 'warmup' | 'live' = 'live';
   let active: 'waiting' | 'gameplay' = 'gameplay';
+  let bgmMediaReads = 0;
   const rig = await createMusicRig(
     t,
     () => ({
@@ -486,10 +487,12 @@ test('transient media states and stinger control isolate stingerHeld without fal
     }),
     {
       epoch: () => epoch,
-      mediaStatus: async ({ sourceId }) =>
-        sourceId === 'stinger-uuid'
+      mediaStatus: async ({ sourceId }) => {
+        if (sourceId === 'bgm-uuid') bgmMediaReads++;
+        return sourceId === 'stinger-uuid'
           ? { state: stingerState, cursorMs: 0, durationMs: 5000 }
-          : { state: bgmState, cursorMs: 0, durationMs: 10_000 },
+          : { state: bgmState, cursorMs: 0, durationMs: 10_000 };
+      },
       volume: async ({ sourceId }) => (sourceId === 'stinger-uuid' ? 1 : bgmVolume),
       mediaFile: async () => '/tmp/fake-track.mp3',
       setVolume: async ({ sourceId, gain }) => {
@@ -519,8 +522,10 @@ test('transient media states and stinger control isolate stingerHeld without fal
     };
   });
 
-  // Opening/buffering mismatch and single-tick drift do not hold; reconnect clears drift counter.
+  // Opening/buffering mismatch and single-tick drift do not hold; steady tick reads BGM media once; reconnect clears drift counter.
+  bgmMediaReads = 0;
   await rig.tick();
+  assert.equal(bgmMediaReads, 1);
   assert.equal(rig.director.get().held, false);
   bgmState = 'playing';
   bgmVolume = 0.2;

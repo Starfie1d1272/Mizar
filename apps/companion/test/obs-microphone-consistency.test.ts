@@ -3,7 +3,9 @@ import {
   checkObsAudio,
   ensureManagedAudioSources,
   syncManagedMicrophoneAcrossScenes,
+  type ObsInventorySnapshot,
 } from '../src/obs/audio.js';
+import { checkObsConfiguration } from '../src/obs/reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
@@ -221,4 +223,48 @@ it('rejects unreadable scene item responses instead of creating duplicate source
     'audio_response_unknown',
   );
   expect(created).toEqual([]);
+});
+
+it('shares OBS inventory snapshot across checkObsConfiguration and checkObsAudio without rescanning scenes', async () => {
+  const rig = createManagedSceneRig({
+    activeScene: '比赛中',
+    micEnabledByScene: { 赛前等待: true, 比赛中: true },
+  });
+  const counts = new Map<string, number>();
+  const rpc: ObsRpc = {
+    ...rig.rpc,
+    call: async (type, data) => {
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+      if (type === 'GetSceneTransitionList')
+        return {
+          transitions: [
+            { transitionKind: 'fade_transition' },
+            { transitionKind: 'cut_transition' },
+          ],
+        };
+      if (type === 'GetVideoSettings')
+        return {
+          baseWidth: 1920,
+          baseHeight: 1080,
+          outputWidth: 1920,
+          outputHeight: 1080,
+          fpsNumerator: 60,
+          fpsDenominator: 1,
+        };
+      if (type === 'GetSceneList')
+        return { scenes: rig.desired.map((s) => ({ sceneName: s.sceneName })) };
+      if (type === 'GetSpecialInputs') return {};
+      if (type === 'GetInputAudioTracks') return { inputAudioTracks: { '1': true } };
+      if (type === 'GetOutputList') return { outputs: [] };
+      if (type === 'GetInputSettings') return { inputSettings: {} };
+      return rig.rpc.call(type, data);
+    },
+  };
+  const snapshot: ObsInventorySnapshot = {};
+  await checkObsConfiguration(rpc, 'http://127.0.0.1:3000', null, undefined, snapshot);
+  await checkObsAudio(rpc, snapshot);
+  expect(counts.get('GetSceneList')).toBe(1);
+  expect(counts.get('GetInputList')).toBe(1);
+  expect(counts.get('GetSceneCollectionList')).toBe(1);
+  expect(counts.get('GetSceneItemList')).toBe(rig.desired.length);
 });

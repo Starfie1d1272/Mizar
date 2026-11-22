@@ -10,6 +10,12 @@ import {
 } from './desired-state.js';
 import type { ProgramSceneId, ProgramTransition } from '@mizar/protocol/program-scenes';
 import {
+  obsRecordArray,
+  type ObsInputRow,
+  type ObsInventorySnapshot,
+  type SceneItemRow,
+} from './audio.js';
+import {
   assertNoVideoOutput,
   ObsPreparationWriteBlocked,
   ObsVideoError,
@@ -295,6 +301,7 @@ async function checkSceneVisual(
   inputs: Record<string, unknown>,
   conflicts: ReadonlySet<string> = new Set(),
   hiddenHud: { sceneUuid: string; inputUuid: string; itemId: number } | null = null,
+  snapshot?: ObsInventorySnapshot,
 ): Promise<ObsFinding[]> {
   const findings: ObsFinding[] = [];
   const sceneNames = names(scenes.scenes, 'sceneName');
@@ -350,9 +357,10 @@ async function checkSceneVisual(
     });
     return findings;
   }
-  const items = objects(
+  const items = obsRecordArray(
     (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
   );
+  snapshot?.desiredSceneItems?.set(scene.sceneName, items as SceneItemRow[]);
   for (const item of items.filter(
     (item) => ['音乐', '音效'].includes(String(item.sourceName)) && item.sceneItemEnabled !== false,
   )) {
@@ -479,10 +487,13 @@ export async function checkObsConfiguration(
   baseUrl: string,
   hiddenHud: { sceneUuid: string; inputUuid: string; itemId: number } | null = null,
   observeInputs?: (inputs: unknown) => void,
+  snapshot?: ObsInventorySnapshot,
 ): Promise<ObsFinding[]> {
   const desired = obsDesiredScenes(baseUrl);
   const findings: ObsFinding[] = [];
   const collections = await obs.call('GetSceneCollectionList');
+  if (snapshot && typeof collections.currentSceneCollectionName === 'string')
+    snapshot.collectionName = collections.currentSceneCollectionName;
   if (!collectionNames(collections.sceneCollections).includes(OBS_COLLECTION)) {
     findings.push({ code: 'collection_missing', message: '「Mizar 制播」场景集合尚未创建。' });
     return findings;
@@ -532,10 +543,17 @@ export async function checkObsConfiguration(
     });
   const scenes = await obs.call('GetSceneList');
   const inputs = await obs.call('GetInputList');
+  if (snapshot) {
+    if (Array.isArray(scenes.scenes)) snapshot.scenes = scenes.scenes as Record<string, unknown>[];
+    if (Array.isArray(inputs.inputs)) snapshot.inputs = inputs.inputs as ObsInputRow[];
+    snapshot.desiredSceneItems ??= new Map();
+  }
   observeInputs?.(inputs.inputs);
   const conflicts = new Set((await obs.managedResourceConflicts?.()) ?? []);
   for (const scene of desired)
-    findings.push(...(await checkSceneVisual(obs, scene, scenes, inputs, conflicts, hiddenHud)));
+    findings.push(
+      ...(await checkSceneVisual(obs, scene, scenes, inputs, conflicts, hiddenHud, snapshot)),
+    );
   return findings;
 }
 
@@ -740,6 +758,7 @@ export async function switchObsScene(
     await obs.call('SetCurrentProgramScene', { sceneName: name });
     assertCurrent();
     options.onStarted?.();
+    let verifiedScene = false;
     if (finished) {
       const waitMs = Math.max(1500, options.transition.durationMs + 1000);
       const completed = await Promise.race([
@@ -757,12 +776,15 @@ export async function switchObsScene(
         assertCurrent();
         if (sceneNow.currentProgramSceneName !== name || cursorNow.transitionCursor !== 1)
           throw new Error('OBS 转场完成确认超时。');
+        verifiedScene = true;
       }
     }
-    assertCurrent();
-    const current = await obs.call('GetCurrentProgramScene');
-    assertCurrent();
-    if (current.currentProgramSceneName !== name) throw new Error('OBS 未切入目标场景。');
+    if (!verifiedScene) {
+      assertCurrent();
+      const current = await obs.call('GetCurrentProgramScene');
+      assertCurrent();
+      if (current.currentProgramSceneName !== name) throw new Error('OBS 未切入目标场景。');
+    }
     options.onCompleted?.();
   } finally {
     unsubscribe?.();

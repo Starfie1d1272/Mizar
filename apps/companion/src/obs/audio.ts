@@ -11,6 +11,21 @@ export type SceneItemRow = {
   sceneItemId: number;
   sceneItemEnabled: boolean;
 };
+export interface ObsInventorySnapshot {
+  collectionName?: string;
+  scenes?: Record<string, unknown>[];
+  inputs?: ObsInputRow[];
+  desiredSceneItems?: Map<string, SceneItemRow[]>;
+}
+
+export function obsRecordArray(value: unknown): Record<string, unknown>[] {
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => !item || typeof item !== 'object' || Array.isArray(item))
+  )
+    throw new Error('audio_response_unknown');
+  return value as Record<string, unknown>[];
+}
 
 export const AUDIO_KINDS = new Set([
   'wasapi_output_capture',
@@ -26,16 +41,17 @@ const MANAGED = [
 export async function readDesiredSceneItems(
   obs: ObsRpc,
   baseUrl: string,
+  snapshot?: ObsInventorySnapshot,
 ): Promise<{ scene: ReturnType<typeof obsDesiredScenes>[number]; items: SceneItemRow[] }[]> {
   return Promise.all(
     obsDesiredScenes(baseUrl).map(async (scene) => {
-      const raw = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems;
-      if (
-        !Array.isArray(raw) ||
-        raw.some((item) => !item || typeof item !== 'object' || Array.isArray(item))
-      )
-        throw new Error('audio_response_unknown');
-      return { scene, items: raw as SceneItemRow[] };
+      const cached = snapshot?.desiredSceneItems?.get(scene.sceneName);
+      if (cached) return { scene, items: cached };
+      const items = obsRecordArray(
+        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
+      ) as SceneItemRow[];
+      snapshot?.desiredSceneItems?.set(scene.sceneName, items);
+      return { scene, items };
     }),
   );
 }
@@ -64,15 +80,23 @@ export async function assertManagedGlobalAudioSilent(
 }
 
 /** Structural readiness only. Audible content still needs an OBS/stream listening check. */
-export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
-  const [collection, sceneList, inputList] = await Promise.all([
-    obs.call('GetSceneCollectionList'),
-    obs.call('GetSceneList'),
-    obs.call('GetInputList'),
+export async function checkObsAudio(
+  obs: ObsRpc,
+  snapshot?: ObsInventorySnapshot,
+): Promise<ObsFinding[]> {
+  const [collectionName, rawScenes, inputs] = await Promise.all([
+    snapshot?.collectionName !== undefined
+      ? Promise.resolve(snapshot.collectionName)
+      : obs.call('GetSceneCollectionList').then((res) => res.currentSceneCollectionName),
+    snapshot?.scenes
+      ? Promise.resolve(snapshot.scenes)
+      : obs.call('GetSceneList').then((res) => res.scenes as Record<string, unknown>[] | undefined),
+    snapshot?.inputs
+      ? Promise.resolve(snapshot.inputs)
+      : obs.call('GetInputList').then((res) => res.inputs as ObsInputRow[]),
   ]);
-  const inputs = inputList.inputs as ObsInputRow[];
   await assertManagedGlobalAudioSilent(obs, inputs);
-  if (collection.currentSceneCollectionName !== OBS_COLLECTION)
+  if (collectionName !== OBS_COLLECTION)
     return [
       {
         code: 'collection_inactive',
@@ -80,7 +104,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       },
     ];
   const existingScenes = new Set(
-    ((sceneList.scenes as { sceneName?: unknown }[] | undefined) ?? [])
+    (rawScenes ?? [])
       .map((item) => item.sceneName)
       .filter((name): name is string => typeof name === 'string'),
   );
@@ -94,7 +118,7 @@ export async function checkObsAudio(obs: ObsRpc): Promise<ObsFinding[]> {
       message: `OBS 缺少「${scene.sceneName}」场景，停止直播和录像后选择「修复场景与音频」。`,
     }));
 
-  const perScene = await readDesiredSceneItems(obs, 'http://127.0.0.1');
+  const perScene = await readDesiredSceneItems(obs, 'http://127.0.0.1', snapshot);
   const activeNames = new Set<string>();
   for (const { items } of perScene)
     for (const item of items)
