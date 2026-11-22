@@ -262,3 +262,108 @@ it('opens a short-delay window at reception when the requested lead is longer', 
     timeline.project(program(1000), short, 1000, early, 1).observer?.hints[0]?.remainingSeconds,
   ).toBe(2);
 });
+
+it('recovers from source-execution-ahead on the same mapEpoch when Program enters live after warmup', () => {
+  const timeline = new ObserverHintTimeline();
+  const warmupProgram = (now: number): ObserverProgramView => ({
+    ...program(now, 2),
+    map: { name: 'de_test', roundNumber: 0, phase: 'warmup' },
+    clock: { phase: 'paused' },
+  });
+  const liveProgram = (now: number): ObserverProgramView => ({
+    ...program(now, 2),
+    map: { name: 'de_test', roundNumber: 0, phase: 'live' },
+    clock: { phase: 'live' },
+  });
+  timeline.project(warmupProgram(0), settings, 0, early, 0);
+  // Lookahead sees warmup -> live transition (mapExecution 0 -> 1) 120s ahead of Program.
+  expect(
+    timeline.project(warmupProgram(1000), settings, 1000, early, 1).observer?.waitingReason,
+  ).toBe('source-execution-ahead');
+  const roundZeroKill = {
+    ...death(1, 1, 2000),
+    cursor: { ...death(1, 1, 2000).cursor, roundsCompleted: 0, sourceMapExecution: 1 },
+  };
+  timeline.consume(roundZeroKill);
+  // Still blocked while Program remains in warmup.
+  expect(
+    timeline.project(warmupProgram(117500), settings, 117500, early, 1).observer?.waitingReason,
+  ).toBe('source-execution-ahead');
+  // Program enters live on the same mapEpoch=2: fence clears and buffered kill surfaces on time.
+  expect(liveProgram(118000).cursor.mapEpoch).toBe(2);
+  expect(timeline.project(liveProgram(118000), settings, 118000, early, 1).observer).toMatchObject({
+    state: 'ready',
+    hints: [{ id: '1:1', remainingSeconds: 4 }],
+  });
+});
+
+it('retains buffered kills across same-map, same-execution reconnects and drops them on round regression', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early, 1);
+  timeline.consume(death(1, 1, 1000));
+  // Transient disconnect (connecting with sameMap=false, generation=2) must not drop buffered 1:1.
+  expect(
+    timeline.project(
+      program(50000),
+      settings,
+      50000,
+      {
+        connected: false,
+        fresh: false,
+        sameMap: false,
+        generation: 2,
+      },
+      1,
+    ).observer?.state,
+  ).toBe('connecting');
+  // Reconnect resumes on the same map and execution=1: 1:1 surfaces at its 120s window.
+  expect(
+    timeline.project(program(116000), settings, 116000, { ...early, generation: 2 }, 1).observer,
+  ).toMatchObject({
+    state: 'ready',
+    hints: [{ id: '1:1', remainingSeconds: 5 }],
+  });
+
+  // If a reconnect actually jumped back to round 0 after round 6, fence and clear pre-restart kills.
+  timeline.consume({
+    ...death(2, 1, 117000),
+    cursor: { ...death(2, 1, 117000).cursor, roundsCompleted: 6 },
+  });
+  timeline.consume({
+    ...death(3, 1, 118000),
+    cursor: { ...death(3, 1, 118000).cursor, roundsCompleted: 0 },
+  });
+  expect(
+    timeline.project(program(118500), settings, 118500, { ...early, generation: 3 }, 1).observer
+      ?.waitingReason,
+  ).toBe('source-execution-ahead');
+});
+
+it('unlocks round-0 live execution fence when Program progresses past round 0 without warmup', () => {
+  const timeline = new ObserverHintTimeline();
+  const roundProgram = (now: number, roundNumber: number): ObserverProgramView => ({
+    ...program(now, 2),
+    map: { name: 'de_test', roundNumber, phase: 'live' },
+    clock: { phase: 'live' },
+  });
+  timeline.project(roundProgram(0, 0), settings, 0, early, 0);
+  timeline.consume({
+    ...death(1, 1, 1000),
+    cursor: { ...death(1, 1, 1000).cursor, roundsCompleted: 0, sourceMapExecution: 0 },
+  });
+  // mp_restartgame during live round 0 increments lookahead execution 0 -> 1 without warmup.
+  expect(
+    timeline.project(roundProgram(2000, 0), settings, 2000, early, 1).observer?.waitingReason,
+  ).toBe('source-execution-ahead');
+  timeline.consume({
+    ...death(1, 2, 3000),
+    cursor: { ...death(1, 2, 3000).cursor, roundsCompleted: 1, sourceMapExecution: 1 },
+  });
+  // Once Program advances to round 1, it is unambiguously on the restarted execution.
+  expect(
+    timeline.project(roundProgram(119000, 1), settings, 119000, early, 1).observer,
+  ).toMatchObject({
+    state: 'ready',
+    hints: [{ id: '1:2', remainingSeconds: 4 }],
+  });
+});

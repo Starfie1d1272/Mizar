@@ -578,7 +578,7 @@ export class MusicStore {
       s.held = held;
       if (held) s.holdReason = reason;
       else delete s.holdReason;
-      if ((held && reason === 'external') || preserveStinger) s.stingerHeld = true;
+      if (preserveStinger) s.stingerHeld = true;
       else delete s.stingerHeld;
     });
   }

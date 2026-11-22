@@ -4,17 +4,17 @@
 
 ## 契约来源
 
-| 契约 | 权威入口 |
-| --- | --- |
-| 比赛文档与赛程 | [context.ts](../../packages/protocol/src/context.ts) |
-| 公开快照与可靠事件 | [output.ts](../../packages/protocol/src/output.ts) |
-| 本地通道版本与消息 | [version.ts](../../packages/protocol/src/version.ts)、[协议包](../../packages/protocol/src/) |
-| 制作、场景与展示 | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts)、[跨语言生命周期](../../apps/companion/src/match-context/lifecycle-contract.json) |
-| 桌面 IPC | [命令、窗口权限和参数与回执](../../apps/desktop/src-tauri/ipc_contract.rs)、[前端校验入口](../../packages/protocol/src/desktop-ipc.ts) |
-| RivalHub 输入 | [来源适配器](../../packages/rivalhub/src/) |
-| HUD 与播出模块 | [hud-config](../../packages/hud-config/src/index.ts)、[broadcast-config](../../packages/broadcast-config/README.md) |
-| 音乐、混音与运镜 | [music.ts](../../packages/protocol/src/music.ts)、[mixer.ts](../../packages/protocol/src/mixer.ts)、[orchestration.ts](../../packages/protocol/src/orchestration.ts) |
-| 诊断事件 | [diagnostics.ts](../../packages/protocol/src/diagnostics.ts) |
+| 契约               | 权威入口                                                                                                                                                             |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 比赛文档与赛程     | [context.ts](../../packages/protocol/src/context.ts)                                                                                                                 |
+| 公开快照与可靠事件 | [output.ts](../../packages/protocol/src/output.ts)                                                                                                                   |
+| 本地通道版本与消息 | [version.ts](../../packages/protocol/src/version.ts)、[协议包](../../packages/protocol/src/)                                                                         |
+| 制作、场景与展示   | [program-scenes.ts](../../packages/protocol/src/program-scenes.ts)、[跨语言生命周期](../../apps/companion/src/match-context/lifecycle-contract.json)                 |
+| 桌面 IPC           | [命令、窗口权限和参数与回执](../../apps/desktop/src-tauri/ipc_contract.rs)、[前端校验入口](../../packages/protocol/src/desktop-ipc.ts)                               |
+| RivalHub 输入      | [来源适配器](../../packages/rivalhub/src/)                                                                                                                           |
+| HUD 与播出模块     | [hud-config](../../packages/hud-config/src/index.ts)、[broadcast-config](../../packages/broadcast-config/README.md)                                                  |
+| 音乐、混音与运镜   | [music.ts](../../packages/protocol/src/music.ts)、[mixer.ts](../../packages/protocol/src/mixer.ts)、[orchestration.ts](../../packages/protocol/src/orchestration.ts) |
+| 诊断事件           | [diagnostics.ts](../../packages/protocol/src/diagnostics.ts)                                                                                                         |
 
 Mizar 契约严格校验结构、版本与大小，各契约独立演进；破坏性变化升级对应版本，不同步抬升所有通道。提供方 DTO 的兼容规则留在其适配器，不替代 Mizar 契约。
 
@@ -42,14 +42,14 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 - 来源、修订、新鲜度和诊断属于外层包络；`source=cache` 的已核实来源可附 `cachedFrom`，缓存本身不授予写入或推送资格。
 - 未知时间/字段为空，不从 BP 补造地图池，不从阶段显示名猜键。解说直播链接仅接受无凭据的绝对 HTTP/HTTPS，资源 URL 继续使用自己的更严格规则。
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/match-document` | 当前统一比赛资料及来源包络 |
-| `GET /local/v1/tournament` | 本地库、选择和相邻赛程 |
-| `POST /operator/local-match/create`、`select`、`save` | 创建、选择、保存；修订与引用核对后原子提交 |
-| `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与顺序 |
-| `POST /operator/local-asset` | 有界 PNG/JPEG/WebP 资源。按字节摘要原子写入，同内容重传可修复残缺文件，读取核对摘要 |
-| `POST /operator/local-tournament/reload` | 故障修复后显式重读资料库，不激活比赛 |
+| 入口                                                                  | 语义                                                                                |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GET /local/v1/match-document`                                        | 当前统一比赛资料及来源包络                                                          |
+| `GET /local/v1/tournament`                                            | 本地库、选择和相邻赛程                                                              |
+| `POST /operator/local-match/create`、`select`、`save`                 | 创建、选择、保存；修订与引用核对后原子提交                                          |
+| `POST /operator/local-event/save`、`/operator/local-schedule/reorder` | 赛事资料与顺序                                                                      |
+| `POST /operator/local-asset`                                          | 有界 PNG/JPEG/WebP 资源。按字节摘要原子写入，同内容重传可修复残缺文件，读取核对摘要 |
+| `POST /operator/local-tournament/reload`                              | 故障修复后显式重读资料库，不激活比赛                                                |
 
 队伍复用按明确 `teamId`，不按同名猜测。模板更新不追改其他比赛快照；`create` 的可选 `eventName` 仅在无 `eventId` 时创建赛事。比赛删除/恢复、当前引用和退出资格由[资料库路由](../../apps/companion/src/match-context/local-tournament-routes.ts)与[架构](architecture.md#比赛与赛事上下文)维护。
 
@@ -57,14 +57,14 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 
 ### RivalHub 比赛库缓存
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/rivalhub-schedule` | 授权赛程及已浏览库摘要，后台刷新按 60 秒节流，不预取整表详情 |
+| 入口                                       | 语义                                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `GET /local/v1/rivalhub-schedule`          | 授权赛程及已浏览库摘要，后台刷新按 60 秒节流，不预取整表详情                                                       |
 | `POST /operator/rivalhub/schedule/refresh` | 用户主动刷新赛程列表，绕过后台 60 秒冷却并合并在途请求，仍遵守服务端限流；本地缓存写盘失败单独提示，不伪报网络故障 |
-| `GET /local/v1/rivalhub-library/:matchId` | 按需校验单场资料，失败区分浏览缓存与未缓存 |
-| `POST /operator/rivalhub/select` | 暂存候选；`activate: true` 则重新获取并按原修订原子激活，成功返回 `loaded/matchId` |
-| `POST /operator/rivalhub/refresh` | 使用已配对凭据刷新当前关联比赛，不接收任意 URL 或浏览器凭据 |
-| `GET /local/v1/rivalhub-connection` | 关联、来源资格、刷新与同步状态 |
+| `GET /local/v1/rivalhub-library/:matchId`  | 按需校验单场资料，失败区分浏览缓存与未缓存                                                                         |
+| `POST /operator/rivalhub/select`           | 暂存候选；`activate: true` 则重新获取并按原修订原子激活，成功返回 `loaded/matchId`                                 |
+| `POST /operator/rivalhub/refresh`          | 使用已配对凭据刷新当前关联比赛，不接收任意 URL 或浏览器凭据                                                        |
+| `GET /local/v1/rivalhub-connection`        | 关联、来源资格、刷新与同步状态                                                                                     |
 
 缓存按网站、赛事和安装身份隔离，重启重验提供方原文；浏览不激活比赛，也不作为节目新鲜度。轻量赛程定期刷新，详情在打开/持续查看时按需读取；当前制作比赛另按自身刷新周期。ETag 与核对时间不改变身份或授权，旧 scope 回包不得进入新连接。
 
@@ -78,13 +78,13 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 
 子协议为 `mizar.local.v1`，路由为 `/local/v1/{channel}`。
 
-| 通道 | 内容与交付 |
-| --- | --- |
-| `program` | 正式节目完整快照，不含未来信息或原始输入 |
-| `radar` | 雷达领域完整帧，不绑定展示框架 |
-| `operator` | 私有制作、绑定和诊断快照 |
-| `assist` | 私有辅助状态、游标与当前提示 |
-| `program-cue` | 节目时间轴的短时展示事件，不写快照存储 |
+| 通道          | 内容与交付                               |
+| ------------- | ---------------------------------------- |
+| `program`     | 正式节目完整快照，不含未来信息或原始输入 |
+| `radar`       | 雷达领域完整帧，不绑定展示框架           |
+| `operator`    | 私有制作、绑定和诊断快照                 |
+| `assist`      | 私有辅助状态、游标与当前提示             |
+| `program-cue` | 节目时间轴的短时展示事件，不写快照存储   |
 
 LAN 仅开放 `program/radar/program-cue`，协议发现也只列可访问通道。HTTP 与 WS 共用可见性声明，私有控制不能借白名单开放。
 
@@ -146,15 +146,15 @@ RivalHub 另有业务确认：
 
 `syncHealth` 区分未启用、主动停用、他机归属、等待、正在接收和需处理。正式 live、地图与首发就绪后有宽限期；只有当前来源/执行的新 LIVE 接受回执确认恢复。认领、开局 ACK、旧执行回执和人工补分不能替代。
 
-| POST 入口 | 作用与限制 |
-| --- | --- |
-| `/operator/rivalhub/source/claim` | 认领本场，默认不接管其他设备 |
-| `/operator/rivalhub/source/resume` | 明确恢复，先处理旧 scope，再合法复用或认领，等待新开局与 LIVE |
-| `/operator/rivalhub/source/retry` | 有开局确认则解除当前 LIVE 退避；否则重新核对认领并等新遥测，不重放历史赛果 |
-| `/operator/rivalhub/source/release` | 主动停用并交接既有责任；释放失败仍保持本地禁发 |
-| `/operator/rivalhub/source/retry-stop` | 只重试同进程仍保留的原人工停止来源，不重认领 |
-| `/operator/rivalhub/source/retry-handoff` | 重试已冻结待交接身份，持久交接不等于网站释放 |
-| `/operator/rivalhub/output/retry` | 只恢复原边界/待写事件的本机持久化，不认领、不恢复远端授权、不主动发送 |
+| POST 入口                                 | 作用与限制                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------------- |
+| `/operator/rivalhub/source/claim`         | 认领本场，默认不接管其他设备                                               |
+| `/operator/rivalhub/source/resume`        | 明确恢复，先处理旧 scope，再合法复用或认领，等待新开局与 LIVE              |
+| `/operator/rivalhub/source/retry`         | 有开局确认则解除当前 LIVE 退避；否则重新核对认领并等新遥测，不重放历史赛果 |
+| `/operator/rivalhub/source/release`       | 主动停用并交接既有责任；释放失败仍保持本地禁发                             |
+| `/operator/rivalhub/source/retry-stop`    | 只重试同进程仍保留的原人工停止来源，不重认领                               |
+| `/operator/rivalhub/source/retry-handoff` | 重试已冻结待交接身份，持久交接不等于网站释放                               |
+| `/operator/rivalhub/output/retry`         | 只恢复原边界/待写事件的本机持久化，不认领、不恢复远端授权、不主动发送      |
 
 来源动作固定 `matchId/contextRevision`，执行及异步返回后复核目标；过期认领若已被网站接受，保留原精确身份清理责任，不启用或暂停后来来源。认领意图在请求前按网站、赛事、安装与比赛持久保存，未知结果阻止同场重复认领，不阻断其他合格场次。明确业务拒绝才清除，丢响应/未知查询不能当作未提交；有界轮转对账的迟到确认直接进入原场 `release_pending`，不退役后来来源。清理先核对原范围可靠交付再释放；关闭确认后只补本地归档，不重复释放。
 
@@ -170,20 +170,20 @@ RivalHub 另有业务确认：
 
 ## 制作控制与场景
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/readiness` | 当前数据、场景、OBS 就绪摘要 |
-| `GET /local/v1/production`、`POST /operator/production` | 制作状态及带修订的 `enter/hide/finish/shutdown/begin-exit/cancel-exit/retry-handoff`。同一次已提交的 `finish` 可用原请求修订重取当前回执，制作修订推进后须重新读取 |
-| `GET /local/v1/preparation-status`、`POST /operator/preparation-cancel` | 按准备任务身份查询/取消，不重发未知进入请求 |
-| `GET /local/v1/program-scenes` | 场景、修订、候选、阻断及编排状态 |
-| `POST /operator/program-scene` | 带预期修订的人工切场 |
-| `POST /operator/program-director` | `resume` 恢复自动，`warmup` 设置等待/比赛画面接续，不隐式改变控制模式 |
-| `GET /local/v1/program-presentation` | 有限节目摘要与相邻赛程 |
-| `GET /local/v1/production-guidance` | 私有只读、不缓存的提示与平台状态 |
-| `GET /local/v1/roster-candidate` | 可信首发候选 |
-| `POST /operator/local-match/capture`、`create-from-server` | 按候选及修订保存，不信任客户端自报玩家列表 |
-| `GET /local/v1/series-binding`、`POST /operator/series/bind` | 派生可绑定位置及复核令牌；只接受已核验同名未完成图，不直接改比分或新增图 |
-| `GET/POST /local/v1/desktop-overlay` / `/operator/desktop-overlay` | 本机覆盖显隐，不改 OBS |
+| 入口                                                                    | 语义                                                                                                                                                               |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /local/v1/readiness`                                               | 当前数据、场景、OBS 就绪摘要                                                                                                                                       |
+| `GET /local/v1/production`、`POST /operator/production`                 | 制作状态及带修订的 `enter/hide/finish/shutdown/begin-exit/cancel-exit/retry-handoff`。同一次已提交的 `finish` 可用原请求修订重取当前回执，制作修订推进后须重新读取 |
+| `GET /local/v1/preparation-status`、`POST /operator/preparation-cancel` | 按准备任务身份查询/取消，不重发未知进入请求                                                                                                                        |
+| `GET /local/v1/program-scenes`                                          | 场景、修订、候选、阻断及编排状态                                                                                                                                   |
+| `POST /operator/program-scene`                                          | 带预期修订的人工切场                                                                                                                                               |
+| `POST /operator/program-director`                                       | `resume` 恢复自动，`warmup` 设置等待/比赛画面接续，不隐式改变控制模式                                                                                              |
+| `GET /local/v1/program-presentation`                                    | 有限节目摘要与相邻赛程                                                                                                                                             |
+| `GET /local/v1/production-guidance`                                     | 私有只读、不缓存的提示与平台状态                                                                                                                                   |
+| `GET /local/v1/roster-candidate`                                        | 可信首发候选                                                                                                                                                       |
+| `POST /operator/local-match/capture`、`create-from-server`              | 按候选及修订保存，不信任客户端自报玩家列表                                                                                                                         |
+| `GET /local/v1/series-binding`、`POST /operator/series/bind`            | 派生可绑定位置及复核令牌；只接受已核验同名未完成图，不直接改比分或新增图                                                                                           |
+| `GET/POST /local/v1/desktop-overlay` / `/operator/desktop-overlay`      | 本机覆盖显隐，不改 OBS                                                                                                                                             |
 
 `begin-exit` 冻结新进入并请求本地来源交接，OBS 与远端收尾分别报告；`cancel-exit` 解除本次退出意图，不清除未完成责任。`retry-handoff` 只在准备期重试原身份，不触碰后来来源或 OBS。生命周期精确响应由[合同](../../apps/companion/src/match-context/lifecycle-contract.json)维护。
 
@@ -201,17 +201,17 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 
 [OBS 路由](../../apps/companion/src/obs/routes.ts)统一控制连接、配置、输出与恢复，写操作受本机 Origin、身份、修订和输出状态保护。
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/obs` | 实际/预期节目、findings、有限节目与捕获证据 |
-| `GET /local/v1/obs/confidence` | 当前场景缩略图，请求中切场返回空 |
-| `GET /local/v1/obs/outputs` | 直播/录像的 `phase/active/pending/revision` 与捕获准备状态 |
-| `POST /operator/obs/output` | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`。写入前，同一连接已回读到目标状态时直接确认；实际写入要求修订仍有效。提交前读不到输出状态返回 `obs_output_unavailable`，恢复后可重试。提交后仍无结果时继续核对同一操作。不接受 Toggle 或任意 RPC |
-| `POST /operator/obs/ensure`、`repair`、`check` | 显式准备/修复与只读检查分开，返回当前 findings |
-| `POST /operator/obs/capture-recover` | 依原事务核对/回收已有项目并刷新证据，不新建、不重启游戏、不切当前节目 |
-| `POST /operator/obs/video-preflight`、`video-prepare`、`video-restore` | 制作修订与事务 ID 绑定的视频设置准备/恢复 |
-| `POST /operator/obs/capture-warmup`、`capture-initialization`、`capture-warmup-release` | 按准备事务和租约建立、核对、清理临时捕获 |
-| `POST /operator/obs/launch-target` | 供 Host 解析既有 OBS 启动目标，不启动进程、不回密码 |
+| 入口                                                                                    | 语义                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /local/v1/obs`                                                                     | 实际/预期节目、findings、有限节目与捕获证据                                                                                                                                                                                                                           |
+| `GET /local/v1/obs/confidence`                                                          | 当前场景缩略图（失败或切场返回 `preview: null` 与 `reason`，前端短暂保留上一成功帧并标注未更新）                                                                                                                                                                      |
+| `GET /local/v1/obs/outputs`                                                             | 直播/录像的 `phase/active/pending/revision` 与捕获准备状态                                                                                                                                                                                                            |
+| `POST /operator/obs/output`                                                             | 严格 `{output:stream\|record, action:start\|stop, expectedRevision}`。写入前，同一连接已回读到目标状态时直接确认；实际写入要求修订仍有效。提交前读不到输出状态返回 `obs_output_unavailable`，恢复后可重试。提交后仍无结果时继续核对同一操作。不接受 Toggle 或任意 RPC |
+| `POST /operator/obs/ensure`、`repair`、`check`                                          | 显式准备/修复与只读检查分开，返回当前 findings                                                                                                                                                                                                                        |
+| `POST /operator/obs/capture-recover`                                                    | 依原事务核对/回收已有项目并刷新证据，不新建、不重启游戏、不切当前节目                                                                                                                                                                                                 |
+| `POST /operator/obs/video-preflight`、`video-prepare`、`video-restore`                  | 制作修订与事务 ID 绑定的视频设置准备/恢复                                                                                                                                                                                                                             |
+| `POST /operator/obs/capture-warmup`、`capture-initialization`、`capture-warmup-release` | 按准备事务和租约建立、核对、清理临时捕获                                                                                                                                                                                                                              |
+| `POST /operator/obs/launch-target`                                                      | 供 Host 解析既有 OBS 启动目标，不启动进程、不回密码                                                                                                                                                                                                                   |
 
 输出启动与结构写入串行，停止命令由输出所有者去重和确认，不等待只读扫描；停止使在途准备的输出租约失效。RPC 成功后仍需事件/查询确认，未知/超时不重发。`active` 只表示 OBS 占用输出，`phase:active` 还需当前代际开始事件或新增发送字节，不能证明平台最终画面。断线/查询失败为 unknown，不当作停止。
 
@@ -229,14 +229,14 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 
 ### 本机混音控制
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/mixer`、`POST /operator/mixer` | 有修订的固定角色混音，写后读回才 `confirmed` |
-| `POST /operator/obs/audio-mode` | `desktop/independent/cancel/recover`，按绑定修订切换或恢复原模式事务 |
-| `GET /local/v1/obs/audio-devices`、`POST /operator/obs/audio-device` | 固定桌面/麦克风角色的短期设备候选，输出空闲时重验、写入和读回 |
-| `POST /operator/obs/remote-commentary/applications`、`application` | 本机应用候选及一次性选择，重验连接、集合和候选，不公开窗口信息 |
-| `POST /operator/obs/commentary-prepare`、`audio-setup` | 显式音频准备，不替代实际音轨与试听 |
-| `POST /operator/obs/audio-meter` | 约两秒只读输入峰值采样，取消/断线/身份变化结束，不改配置 |
+| 入口                                                                 | 语义                                                                 |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `GET /local/v1/mixer`、`POST /operator/mixer`                        | 有修订的固定角色混音，写后读回才 `confirmed`                         |
+| `POST /operator/obs/audio-mode`                                      | `desktop/independent/cancel/recover`，按绑定修订切换或恢复原模式事务 |
+| `GET /local/v1/obs/audio-devices`、`POST /operator/obs/audio-device` | 固定桌面/麦克风角色的短期设备候选，输出空闲时重验、写入和读回        |
+| `POST /operator/obs/remote-commentary/applications`、`application`   | 本机应用候选及一次性选择，重验连接、集合和候选，不公开窗口信息       |
+| `POST /operator/obs/commentary-prepare`、`audio-setup`               | 显式音频准备，不替代实际音轨与试听                                   |
+| `POST /operator/obs/audio-meter`                                     | 约两秒只读输入峰值采样，取消/断线/身份变化结束，不改配置             |
 
 音频切换可沿已准备模式事务在输出期间进行；新增结构仍要求空闲。未知原事务保留，恢复核对 before/applied/mixed 与来源身份，不清空记录。桌面模式可直接换采集设备，但先核对新设备与全部实际监听路径；未知或将重复/丢失节目声音时返回 `audio_device_monitor_unknown/conflict`，只拒绝本次换址，不重放旧监听恢复或加载音乐库。应用未运行可等待或取消，不后台自行切换。
 
@@ -244,10 +244,10 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 
 ## HUD 配置
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/hud-config` | 已启用解析快照、修订与 ETag |
-| `GET /operator/hud-config` | 完整编辑文档、启用状态及编辑修订 |
+| 入口                        | 语义                                                       |
+| --------------------------- | ---------------------------------------------------------- |
+| `GET /local/v1/hud-config`  | 已启用解析快照、修订与 ETag                                |
+| `GET /operator/hud-config`  | 完整编辑文档、启用状态及编辑修订                           |
 | `POST /operator/hud-config` | `save-resource/save-as/activate-preset/import-preset-pack` |
 
 修改带 `expectedEditorRevision`，过期 409、无效 400、持久化失败 500。创建返回明确身份，不凭列表差猜结果。保存不改变播出，启用后相同解析内容可保持 ETag；身份与来源回执仍须同步。内置只读，故障保留最后有效配置和原文件，冲突保留草稿不自动覆盖。
@@ -266,24 +266,24 @@ Host 私有 `POST /operator/runtime/managed-source` 使用 `prepare/commit/resum
 
 `GET /local/v1/bp` 返回地图卡、步骤、公开标题和播放状态，不返回内部比赛 ID、名单或完整文档。ETag 包括播放进度，超时隐藏，恢复读取当前值而不重演旧步骤。
 
-| 入口 | 语义 |
-| --- | --- |
-| `POST /operator/bp-command` | `{kind:play\|hide, expectedRevision}`，自动揭示不让正常隐藏命令过期 |
-| `GET /local/v1/bp-workspace` | `mizar.bp-workspace.v5` 来源、就绪、草稿与候选；standalone 可编辑，bound-overlay 仅补 BP |
-| `POST /operator/bp-local-save` | 核对 `expectedContextRevision`，失败保留绑定，成功后播放隐藏 |
-| `POST /operator/bp-rivalhub` | 核对上下文与候选修订，只激活已验证候选，不再获取或清除更新候选 |
-| `POST /operator/bp-demo` | 仅隐藏时进入/退出 BO1/BO3/BO5 演示，仅内存生效 |
+| 入口                           | 语义                                                                                     |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| `POST /operator/bp-command`    | `{kind:play\|hide, expectedRevision}`，自动揭示不让正常隐藏命令过期                      |
+| `GET /local/v1/bp-workspace`   | `mizar.bp-workspace.v5` 来源、就绪、草稿与候选；standalone 可编辑，bound-overlay 仅补 BP |
+| `POST /operator/bp-local-save` | 核对 `expectedContextRevision`，失败保留绑定，成功后播放隐藏                             |
+| `POST /operator/bp-rivalhub`   | 核对上下文与候选修订，只激活已验证候选，不再获取或清除更新候选                           |
+| `POST /operator/bp-demo`       | 仅隐藏时进入/退出 BO1/BO3/BO5 演示，仅内存生效                                           |
 
 BO3 草稿的 `bo3Rules` 有限表达禁图顺序与决胜选边；缺省沿用已有 BP/赛事默认，不假定所有 BO3 相同。演示不改赛事库、系列赛、身份或在线缓存，重启不保留；在线补录不改平台身份和名单。
 
 ## 本机观察器控制
 
-| 入口 | 语义 |
-| --- | --- |
-| `GET /local/v1/observer` | 组件/连接健康、当前失败、pending、retryAvailable、stopReason 与 recovering |
-| `GET /local/v1/observer-assist` | 设置、游戏自动操作、连接摘要、mapConnection 和修订，不返回密码 |
-| `POST /operator/observer-assist` | 本机可信 Origin 的偏好、连接和接收恢复意图 |
-| `POST /operator/runtime/observer` | 仅 Host 私有能力的准备、启动、停止与续约，路径/运行时由安装和数据目录推导 |
+| 入口                              | 语义                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------- |
+| `GET /local/v1/observer`          | 组件/连接健康、当前失败、pending、retryAvailable、stopReason 与 recovering |
+| `GET /local/v1/observer-assist`   | 设置、游戏自动操作、连接摘要、mapConnection 和修订，不返回密码             |
+| `POST /operator/observer-assist`  | 本机可信 Origin 的偏好、连接和接收恢复意图                                 |
+| `POST /operator/runtime/observer` | 仅 Host 私有能力的准备、启动、停止与续约，路径/运行时由安装和数据目录推导  |
 
 `prepare` 的修订令牌绑定游戏、Job、启动方式和配置，原样传给 `start-configured`。辅助设置、节目连接和 HUD 命令分别去重。只改提前时间保留缓冲，不重启已接受游戏连接。停止辅助保留本场连接，`resume-receiver` 核对连接 ID 与修订，旧目标拒绝。
 
@@ -331,16 +331,16 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 这些能力由 Host 持有文件选择、路径解析、进程验证和副作用，网页只提交有限意图。
 
-| 入口 | 边界 |
-| --- | --- |
-| `preparation_status` | 准备中心、工作台底栏和连接比赛工具只读准备进度；取消和重试仍仅由准备中心与底栏发起 |
-| `GET /local/v1/demo-test` | 有限阶段、requestId、双方和 dataReady；数据就绪不证明选定 Demo 已加载 |
-| `POST /operator/runtime/demo-test` | 私有 `begin/playing/finish/complete/cancel`，重试原 requestId，未知结果保持隔离 |
-| `select_demo_file/start_demo_test` | 短期选择 token 与文件名，不接受网页任意路径；完成须 Host 确认退出与恢复 |
-| `set_cs2_preferences/cs2_config_status` | 有限画质/帧率和当前恢复摘要；canPreserve 不是已完成备份或启动证明 |
-| `select_cs2_installation/open_cs2_config_directory` | 原生选择或重新解析当前目录，不接收任意打开路径 |
-| `GET /local/v1/updates`、`POST /operator/updates` | 有限状态、检查、下载、取消和偏好，不回暂存路径 |
-| `install_update` | 仅准备中心主窗口发起，Host 重新核对安装计划与运行资格 |
+| 入口                                                | 边界                                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `preparation_status`                                | 准备中心、工作台底栏和连接比赛工具只读准备进度；取消和重试仍仅由准备中心与底栏发起 |
+| `GET /local/v1/demo-test`                           | 有限阶段、requestId、双方和 dataReady；数据就绪不证明选定 Demo 已加载              |
+| `POST /operator/runtime/demo-test`                  | 私有 `begin/playing/finish/complete/cancel`，重试原 requestId，未知结果保持隔离    |
+| `select_demo_file/start_demo_test`                  | 短期选择 token 与文件名，不接受网页任意路径；完成须 Host 确认退出与恢复            |
+| `set_cs2_preferences/cs2_config_status`             | 有限画质/帧率和当前恢复摘要；canPreserve 不是已完成备份或启动证明                  |
+| `select_cs2_installation/open_cs2_config_directory` | 原生选择或重新解析当前目录，不接收任意打开路径                                     |
+| `GET /local/v1/updates`、`POST /operator/updates`   | 有限状态、检查、下载、取消和偏好，不回暂存路径                                     |
+| `install_update`                                    | 仅准备中心主窗口发起，Host 重新核对安装计划与运行资格                              |
 
 试播 `cancel` 只用于尚未提交游戏启动的撤销；`complete` 在游戏停止和配置恢复后确认。试播隔离允许原生宿主调用 `mulnx-prepare` 准备或恢复游戏启动参数，仍校验 Host token、无网页来源及既有制作资格，不开放正式比赛写入。错误响应使用稳定 error/stage/operationId 与有限中文提示，原始原因只进入脱敏诊断。
 
@@ -350,16 +350,16 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 
 事件为 `mizar-diagnostic-event/2`，保留原生产者、序号、事件与业务身份。桌面 `persist_diagnostic_events` 回执确认该批持久化，不证明业务成功；浏览器 `POST /debug/control-event` 经本机来源校验，持久后 204，非法 400，无可用 writer 503。
 
-| 入口 | 语义 |
-| --- | --- |
-| `POST /debug/support-exports` | 接受可选的 ISO from/to 与 Host 日志状态，返回 exportId 和阶段 |
-| `read_support_log_state()` | 尝试冲刷 Host 待写日志并返回覆盖状态，便于诊断包说明尚未持久化的记录 |
-| `GET /debug/support-exports/:id` | 固定任务状态与覆盖摘要 |
-| `POST /debug/support-exports/:id/cancel` | 请求取消，不证明 worker 已退出或输入已释放 |
-| `GET /debug/support-exports/:id/files/:name` | 受控附件下载，校验本机同源请求 |
-| `save_support_bundle(exportId)` | 原生选择目标并保存既有 ZIP，不接收任意源路径或前端摘要 |
-| `save_local_logs()` | 原生选择目标后使用独立兜底归档。ZIP 包含保留的本机日志和封存诊断正文，记录读取缺口并排除上传状态和其他配置 |
-| `Mizar.exe --export-logs <日志包.zip>` | 无需启动 Companion 服务，由同一个归档 Worker 保存全部保留日志。随包运行时不可用时转用独立兜底归档 |
+| 入口                                         | 语义                                                                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `POST /debug/support-exports`                | 接受可选的 ISO from/to 与 Host 日志状态，返回 exportId 和阶段                                              |
+| `read_support_log_state()`                   | 尝试冲刷 Host 待写日志并返回覆盖状态，便于诊断包说明尚未持久化的记录                                       |
+| `GET /debug/support-exports/:id`             | 固定任务状态与覆盖摘要                                                                                     |
+| `POST /debug/support-exports/:id/cancel`     | 请求取消，不证明 worker 已退出或输入已释放                                                                 |
+| `GET /debug/support-exports/:id/files/:name` | 受控附件下载，校验本机同源请求                                                                             |
+| `save_support_bundle(exportId)`              | 原生选择目标并保存既有 ZIP，不接收任意源路径或前端摘要                                                     |
+| `save_local_logs()`                          | 原生选择目标后使用独立兜底归档。ZIP 包含保留的本机日志和封存诊断正文，记录读取缺口并排除上传状态和其他配置 |
+| `Mizar.exe --export-logs <日志包.zip>`       | 无需启动 Companion 服务，由同一个归档 Worker 保存全部保留日志。随包运行时不可用时转用独立兜底归档          |
 
 `settled` 表示输入使用结束且已尝试收尾，要等待 worker 实际退出；单个终态消息不够。有效 ZIP 的临时清理失败仍可 ready，另报 `cleanupStatus:unconfirmed`，不删除有效包、不伪造正文缺口，也不声称资源全释放。
 

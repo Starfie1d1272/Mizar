@@ -459,9 +459,7 @@ export function registerObsRoutes(
     }
   });
   app.get('/local/v1/obs/confidence', async (_request, reply) =>
-    reply
-      .header('cache-control', 'no-store')
-      .send({ preview: await options.adapter.confidencePreview() }),
+    reply.header('cache-control', 'no-store').send(await options.adapter.confidencePreview()),
   );
   app.get('/local/v1/obs', async (_request, reply) => {
     const diagnostic = allowedRead(_request) ? captureDiagnostic() : Promise.resolve(null);
