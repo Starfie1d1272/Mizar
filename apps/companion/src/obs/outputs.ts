@@ -140,7 +140,7 @@ export class ObsOutputController {
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (error: unknown, password: string) => void,
     private readonly observeProgram: (
-      kind: 'scene' | 'collection' | 'collection-changing' | 'disconnected',
+      kind: 'scene' | 'collection' | 'collection-changing' | 'disconnected' | 'outputs-idle',
       name?: string,
     ) => void = () => undefined,
     private readonly ownedPreparationEvent: (
@@ -309,6 +309,7 @@ export class ObsOutputController {
       delete next.health;
     }
     this.values[kind] = next;
+    if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
   }
 
   private invalidate(client?: OBSWebSocket, retry = true): void {
@@ -483,6 +484,7 @@ export class ObsOutputController {
       this.warmupExtraOutputs[kind] =
         phase === 'idle' && event.outputActive !== false ? 'unknown' : phase;
       if (phase === 'starting' || phase === 'stopping') this.extraTransitionAt[kind] = Date.now();
+      if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
     };
     client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
     client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
@@ -612,11 +614,12 @@ export class ObsOutputController {
         }
         this.programIdentity = identity;
         if (!current()) throw new Error('OBS connection superseded');
+        const reconnected = this.hasConnected;
         this.ready = true;
         this.reconnectDelay = RETRY_MS;
         this.outputObservationGeneration++;
         this.hasConnected = true;
-        if (identity?.collection === OBS_COLLECTION)
+        if (reconnected && identity?.collection === OBS_COLLECTION)
           this.onCollectionSceneItemEvent?.({
             kind: 'collection-ready',
             collectionName: identity.collection,

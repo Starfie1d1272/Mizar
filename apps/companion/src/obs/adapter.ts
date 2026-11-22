@@ -1,3 +1,4 @@
+import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
 import { AudioMeter } from './audio-meter.js';
 import { ObsObservationConnection } from './observation-connection.js';
 import type { AudioDeviceCommand } from './audio-device-settings.js';
@@ -146,11 +147,16 @@ export class ObsAdapter {
   private browserRefreshSubmitted = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly submittedBrowserRefreshes = new Set<string>();
-  private readonly pendingMicSyncWrites = new Map<string, number>();
-  private pendingMicSync:
+  private readonly ownMicWrites = new Set<string>();
+  private micSyncPending:
     { sceneName: string; sceneItemId: number; enabled: boolean } | 'reconcile' | undefined;
-  private micSyncScheduled = false;
-  private micSyncTask: Promise<void> | undefined;
+  private micSyncRunning = false;
+  private readonly confidenceFailures = new RepeatedDiagnostic((stage, evidence) =>
+    this.diagnostic(stage, evidence),
+  );
+  private readonly browserRecoveryFailures = new RepeatedDiagnostic((stage, evidence) =>
+    this.diagnostic(stage, evidence),
+  );
 
   constructor(
     private readonly configStore: ObsConfigStore,
@@ -194,6 +200,10 @@ export class ObsAdapter {
       configStore,
       (error, password) => diagnostic('obs_output', obsErrorEvidence(error, password)),
       (kind, name) => {
+        if (kind === 'outputs-idle') {
+          this.runBrowserRecovery();
+          return;
+        }
         if (kind === 'disconnected') {
           this.expectedScene = undefined;
           this.expectedCollection = undefined;
@@ -229,11 +239,8 @@ export class ObsAdapter {
           this.scheduleMicrophoneSync('reconcile');
           return;
         }
-        const now = Date.now();
-        for (const [key, expiresAt] of this.pendingMicSyncWrites)
-          if (expiresAt < now) this.pendingMicSyncWrites.delete(key);
         const key = `${event.sceneName}\0${event.sceneItemId}\0${event.sceneItemEnabled}`;
-        if (this.pendingMicSyncWrites.delete(key)) return;
+        if (this.ownMicWrites.delete(key)) return;
         if (!obsDesiredScenes(this.browserBaseUrl).some((s) => s.sceneName === event.sceneName))
           return;
         this.scheduleMicrophoneSync({
@@ -249,51 +256,28 @@ export class ObsAdapter {
     next: { sceneName: string; sceneItemId: number; enabled: boolean } | 'reconcile',
   ): void {
     if (this.recoveryClosed) return;
-    if (next !== 'reconcile' || this.pendingMicSync === undefined) this.pendingMicSync = next;
-    if (this.micSyncScheduled) return;
-    this.micSyncScheduled = true;
-    const task = (async () => {
+    if (next !== 'reconcile' || this.micSyncPending === undefined) this.micSyncPending = next;
+    if (this.micSyncRunning) return;
+    this.micSyncRunning = true;
+    void this.serial(async () => {
       try {
-        while (this.pendingMicSync && !this.recoveryClosed) {
-          const target = this.pendingMicSync;
-          this.pendingMicSync = undefined;
-          if (target === 'reconcile') {
-            const config = await this.configStore.read().catch(() => undefined);
-            const endpoint = config ? `ws://${config.host}:${config.port}` : '';
-            if (
-              !endpoint ||
-              !(await this.configStore.managedResources
-                .hasRole(endpoint, '麦克风')
-                .catch(() => false))
-            )
-              continue;
-          }
-          const arg = target === 'reconcile' ? undefined : target;
-          const needed = await this.withReadObs((obs) =>
-            syncManagedMicrophoneAcrossScenes(obs, this.browserBaseUrl, arg, undefined, true),
-          ).catch(() => null);
-          if (needed === null || this.recoveryClosed) continue;
-          await this.serial(() =>
-            this.withObs((obs) =>
-              syncManagedMicrophoneAcrossScenes(
-                obs,
-                this.browserBaseUrl,
-                arg,
-                (sceneName, sceneItemId, enabled) => {
-                  this.pendingMicSyncWrites.set(
-                    `${sceneName}\0${sceneItemId}\0${enabled}`,
-                    Date.now() + 10_000,
-                  );
-                },
-              ),
+        while (this.micSyncPending && !this.recoveryClosed) {
+          const target = this.micSyncPending;
+          this.micSyncPending = undefined;
+          await this.withObs((obs) =>
+            syncManagedMicrophoneAcrossScenes(
+              obs,
+              this.browserBaseUrl,
+              target === 'reconcile' ? undefined : target,
+              (sceneName, sceneItemId, enabled) =>
+                this.ownMicWrites.add(`${sceneName}\0${sceneItemId}\0${enabled}`),
             ),
           ).catch(() => undefined);
         }
       } finally {
-        this.micSyncScheduled = false;
+        this.micSyncRunning = false;
       }
-    })();
-    this.micSyncTask = task.catch(() => undefined);
+    }).catch(() => undefined);
   }
 
   /** Guard an explicit capture warmup against output, ownership and exit changes. */
@@ -523,11 +507,11 @@ export class ObsAdapter {
         permission.program === this.programGeneration &&
         permission.production();
       this.recoveryTimer = undefined;
-      if (permission === undefined) return;
+      if (!valid() || this.outputs.hasRunningOutput()) return;
       this.recoveryTask = this.serial(async () => {
         // Keep the existing program observer connected across recovery retries.
         await this.outputs.read();
-        if (!valid()) return false;
+        if (!valid() || this.outputs.hasRunningOutput()) return false;
         return this.withObs(
           (obs) =>
             refreshObsBrowserSources(
@@ -543,13 +527,21 @@ export class ObsAdapter {
         );
       })
         .then((complete) => {
-          if (valid()) this.browserRefreshSubmitted = complete;
+          if (valid()) {
+            this.browserRefreshSubmitted = complete;
+            if (complete) this.browserRecoveryFailures.clear();
+          }
         })
-        .catch(() => undefined)
+        .catch((error) => {
+          if (!this.outputs.hasRunningOutput()) {
+            const kind = obsFailureKind(error);
+            this.browserRecoveryFailures.record('obs_browser_recovery', kind, { kind });
+          }
+        })
         .finally(() => {
           this.recoveryTask = undefined;
-          if (valid() && !this.browserRefreshSubmitted) {
-            this.recoveryTimer = setTimeout(attempt, 5000);
+          if (valid() && !this.browserRefreshSubmitted && !this.outputs.hasRunningOutput()) {
+            this.recoveryTimer = setTimeout(attempt, 15_000);
             this.recoveryTimer.unref();
           } else if (this.browserRecoveryPermission !== permission) {
             this.runBrowserRecovery();
@@ -616,8 +608,8 @@ export class ObsAdapter {
   }
   async close(): Promise<void> {
     this.recoveryClosed = true;
-    this.pendingMicSync = undefined;
-    this.pendingMicSyncWrites.clear();
+    this.micSyncPending = undefined;
+    this.ownMicWrites.clear();
     if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
     await this.commentaryTask;
     await this.outputs.close();
@@ -626,7 +618,7 @@ export class ObsAdapter {
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
-    await this.micSyncTask;
+    await this.queue;
   }
 
   private observationGeneration = 0;
@@ -1179,14 +1171,20 @@ export class ObsAdapter {
     return { ...status, facts, findings: [...findings], programEvidence };
   }
 
-  private previewPending: Promise<{ scene: string; image: string } | null> | null = null;
-  confidencePreview(): Promise<{ scene: string; image: string } | null> {
+  private previewPending: Promise<{
+    preview: { scene: string; image: string } | null;
+    reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+  }> | null = null;
+  confidencePreview(): Promise<{
+    preview: { scene: string; image: string } | null;
+    reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+  }> {
     if (this.previewPending) return this.previewPending;
-    this.previewPending = this.observe(() =>
-      this.withReadObs(async (obs) => {
+    this.previewPending = this.withObs(
+      async (obs) => {
         const current = await obs.call('GetCurrentProgramScene');
         const scene = current.currentProgramSceneName;
-        if (typeof scene !== 'string') return null;
+        if (typeof scene !== 'string') return { preview: null, reason: 'unavailable' as const };
         const screenshot = await obs.call('GetSourceScreenshot', {
           sourceName: scene,
           imageFormat: 'jpeg',
@@ -1195,16 +1193,42 @@ export class ObsAdapter {
           imageCompressionQuality: 70,
         });
         const after = await obs.call('GetCurrentProgramScene');
+        if (after.currentProgramSceneName !== scene)
+          return { preview: null, reason: 'scene_changing' as const };
         const image = screenshot.imageData;
-        return after.currentProgramSceneName === scene &&
+        if (
           typeof image === 'string' &&
           image.startsWith('data:image/jpeg;base64,') &&
           image.length < 1_000_000
-          ? { scene, image }
-          : null;
-      }),
+        ) {
+          this.confidenceFailures.clear();
+          return { preview: { scene, image } };
+        }
+        return { preview: null, reason: 'unavailable' as const };
+      },
+      TIMEOUT_MS,
+      undefined,
+      false,
+      false,
+      false,
+      false,
+      undefined,
+      false,
     )
-      .catch(() => null)
+      .catch((error) => {
+        const kind = obsFailureKind(error);
+        const reason =
+          kind === 'refused' || kind === 'authentication'
+            ? ('disconnected' as const)
+            : error instanceof ObsVideoError && error.code === 'obs_observation_changed'
+              ? ('scene_changing' as const)
+              : ('unavailable' as const);
+        this.confidenceFailures.record('obs_confidence_preview', reason, {
+          reason,
+          kind,
+        });
+        return { preview: null, reason };
+      })
       .finally(() => {
         this.previewPending = null;
       });

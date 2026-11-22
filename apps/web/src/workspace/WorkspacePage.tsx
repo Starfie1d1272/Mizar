@@ -45,7 +45,6 @@ import { useObsStatus } from './obs-client';
 import { prepareObs, useObsPreparation } from './obs-preparation';
 import {
   useLocalRead,
-  useLocalReadWithTime,
   openTool,
   productionAction,
   type Production,
@@ -313,18 +312,72 @@ function ContextPanel({
 }
 
 function ObsConfidence() {
-  const { value: result, updatedAt } = useLocalReadWithTime<{
+  const [state, setState] = useState<{
     preview: { scene: string; image: string } | null;
-  }>('/local/v1/obs/confidence', 2000);
+    updatedAt: number | null;
+    staleSince: number | null;
+    reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+  }>({ preview: null, updatedAt: null, staleSince: null });
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      let nextReason: 'scene_changing' | 'disconnected' | 'unavailable' = 'unavailable';
+      let nextPreview: { scene: string; image: string } | null = null;
+      try {
+        const response = await fetch('/local/v1/obs/confidence', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5000),
+        });
+        if (response.ok) {
+          const data = (await response.json()) as {
+            preview: { scene: string; image: string } | null;
+            reason?: 'scene_changing' | 'disconnected' | 'unavailable';
+          };
+          nextPreview = data.preview;
+          if (data.reason) nextReason = data.reason;
+        }
+      } catch {
+        nextReason = 'unavailable';
+      }
+      if (!active) return;
+      const now = Date.now();
+      setState((prev) => {
+        if (nextPreview) {
+          return { preview: nextPreview, updatedAt: now, staleSince: null };
+        }
+        const maxHoldMs = nextReason === 'disconnected' ? 8_000 : 30_000;
+        if (prev.preview && prev.updatedAt !== null && now - prev.updatedAt < maxHoldMs) {
+          return {
+            ...prev,
+            staleSince: prev.staleSince ?? now,
+            reason: nextReason,
+          };
+        }
+        return { preview: null, updatedAt: null, staleSince: null, reason: nextReason };
+      });
+      if (active) timer = setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
   return (
     <section className="workspace-confidence" aria-label="OBS 画面确认">
-      {result?.preview ? (
+      {state.preview ? (
         <>
-          <img src={result.preview.image} alt={`OBS 画面确认：${result.preview.scene}`} />
-          <small className="workspace-confidence__time">
-            画面确认 ·{' '}
-            {updatedAt
-              ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })
+          <img src={state.preview.image} alt={`OBS 画面确认：${state.preview.scene}`} />
+          <small
+            className="workspace-confidence__time"
+            data-stale={state.staleSince !== null ? 'true' : undefined}
+          >
+            {state.staleSince !== null ? '画面未更新 · 上次 ' : '画面确认 · '}
+            {state.updatedAt
+              ? new Date(state.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })
               : '更新中'}
           </small>
         </>
