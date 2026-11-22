@@ -108,6 +108,15 @@ it('propagates microphone enable/disable across all managed scenes without touch
   expect(rig.state.sceneItems.get('个人场景')![0]!.sceneItemEnabled).toBe(false);
   expect(rig.otherWrites).toEqual([]);
 
+  // Echo event matching already-converged state performs zero writes.
+  const writesAfterConverge = rig.setCalls.length;
+  await syncManagedMicrophoneAcrossScenes(rig.rpc, 'http://127.0.0.1:3000', {
+    sceneName: '赛前等待',
+    sceneItemId: 6,
+    enabled: true,
+  });
+  expect(rig.setCalls.length).toBe(writesAfterConverge);
+
   rig.state.sceneItems.get('图间')!.find((i) => i.sourceUuid === rig.micUuid)!.sceneItemEnabled =
     false;
   await syncManagedMicrophoneAcrossScenes(rig.rpc, 'http://127.0.0.1:3000', {
@@ -182,4 +191,34 @@ it('returns structured scene_missing finding in checkObsAudio without probing mi
   const findings = await checkObsAudio(obs);
   expect(findings.some((f) => f.code === 'scene_missing' && f.scene === '赛前等待')).toBe(true);
   expect(calls).not.toContain('GetSceneItemList');
+});
+
+it('rejects unreadable scene item responses instead of creating duplicate sources', async () => {
+  const created: string[] = [];
+  const rpc: ObsRpc = {
+    call: async (type) => {
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: OBS_COLLECTION };
+      if (type === 'GetInputList')
+        return {
+          inputs: [
+            {
+              inputName: '桌面声音',
+              inputKind: 'wasapi_output_capture',
+              inputUuid: 'desktop-uuid',
+            },
+            { inputName: '麦克风', inputKind: 'wasapi_input_capture', inputUuid: 'mic-uuid' },
+          ],
+        };
+      if (type === 'GetSceneItemList') return {};
+      if (type === 'CreateSceneItem') {
+        created.push('CreateSceneItem');
+        return {};
+      }
+      return {};
+    },
+  };
+  await expect(ensureManagedAudioSources(rpc, 'http://127.0.0.1:3000', false)).rejects.toThrow(
+    'audio_response_unknown',
+  );
+  expect(created).toEqual([]);
 });

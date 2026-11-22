@@ -1,5 +1,6 @@
 import { writeFile, rm } from 'node:fs/promises';
-import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import { OBS_COLLECTION, obsDesiredScenes, obsObjects } from './desired-state.js';
+import { readDesiredSceneItems } from './audio.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import {
   AUTO_TEAMSPEAK_TARGET,
@@ -14,7 +15,7 @@ import type { ObsFinding, ObsRpc } from './reconcile.js';
 
 function records(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) throw new Error('commentary_obs_response_invalid');
-  return value.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null);
+  return obsObjects(value);
 }
 
 /** Prepare inert scene references. Audio activation belongs to the later mixer migration. */
@@ -70,12 +71,15 @@ export async function prepareRemoteCommentary(
       throw new Error('commentary_context_changed');
   };
   const scenes = obsDesiredScenes(baseUrl);
+  const writeWaiting = (uuid: string) =>
+    writeFile(
+      `${journal}.waiting`,
+      `${JSON.stringify({ endpoint, collection, uuid, revision: state.revision, phase: 'waiting' })}\n`,
+      { mode: 0o600 },
+    );
   const ensureInert = async (uuid: string) => {
     if (!allowOutput) return;
-    for (const scene of scenes) {
-      const items = records(
-        (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-      );
+    for (const { items } of await readDesiredSceneItems(obs, baseUrl)) {
       if (items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled))
         throw new Error('commentary_source_active');
     }
@@ -115,11 +119,7 @@ export async function prepareRemoteCommentary(
           (candidate) => isTeamspeak(candidate.window),
         );
         if (windows.length === 0) {
-          await writeFile(
-            `${journal}.waiting`,
-            `${JSON.stringify({ endpoint, collection, uuid: deferred.uuid, revision: state.revision, phase: 'waiting' })}\n`,
-            { mode: 0o600 },
-          );
+          await writeWaiting(deferred.uuid);
           return pending('等待 TeamSpeak 启动；当前解说来源保持不变。');
         }
         if (windows.length !== 1) return pending('检测到多个 TeamSpeak 窗口，请选择来源。');
@@ -137,11 +137,7 @@ export async function prepareRemoteCommentary(
             check,
           );
           inputs = records((await obs.call('GetInputList')).inputs);
-          await writeFile(
-            `${journal}.waiting`,
-            `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
-            { mode: 0o600 },
-          );
+          await writeWaiting(target);
           pendingMessage = '等待 TeamSpeak 启动；场景已准备，音频分路待完成。';
         } else return pending('检测到多个远端解说候选，请选择来源。');
       }
@@ -160,11 +156,7 @@ export async function prepareRemoteCommentary(
         const candidates = await owner.windows(obs, state.revision, owned);
         if (!candidates.some((candidate) => candidate.window === window)) {
           target = owned;
-          await writeFile(
-            `${journal}.waiting`,
-            `${JSON.stringify({ endpoint, collection, uuid: target, revision: state.revision, phase: 'waiting' })}\n`,
-            { mode: 0o600 },
-          );
+          await writeWaiting(target);
           pendingMessage = '等待所选应用启动；场景已准备，音频分路待完成。';
           window = undefined;
         }
@@ -242,10 +234,7 @@ export async function prepareRemoteCommentary(
   if (!source || typeof source.inputName !== 'string')
     return pending('所选远端解说来源已失效，请重新选择。');
   const name = source.inputName;
-  for (const scene of scenes) {
-    const items = records(
-      (await obs.call('GetSceneItemList', { sceneName: scene.sceneName })).sceneItems,
-    );
+  for (const { scene, items } of await readDesiredSceneItems(obs, baseUrl)) {
     if (items.some((i) => i.sourceUuid === target)) continue;
     await check();
     await obs.call('CreateSceneItem', {

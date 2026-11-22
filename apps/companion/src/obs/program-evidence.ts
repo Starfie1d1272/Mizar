@@ -1,5 +1,11 @@
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  isCs2Window as cs2Window,
+  obsDesiredScenes,
+  obsObjects as objects,
+} from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 
 export interface ObsProgramEvidence {
@@ -40,11 +46,6 @@ export interface ObsProgramEvidence {
   };
 }
 
-function objects(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    : [];
-}
 const bool = (value: unknown) => (typeof value === 'boolean' ? value : null);
 const dimension = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -89,13 +90,6 @@ function transformEvidence(value: unknown): Record<string, number | string | boo
       ? String(transform.boundsType)
       : null,
   };
-}
-function cs2Window(value: unknown): boolean {
-  return (
-    typeof value === 'string' &&
-    value.split(':').length === 3 &&
-    value.split(':')[2]?.toLowerCase() === 'cs2.exe'
-  );
 }
 
 /** Read only owned inputs; never export arbitrary scene names, window titles or settings. */

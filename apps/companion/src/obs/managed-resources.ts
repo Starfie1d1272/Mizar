@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { renameObsJournal } from './atomic-rename.js';
+import { AUDIO_KINDS } from './audio.js';
 import {
   OBS_CAPTURE_INPUT,
   OBS_COLLECTION,
@@ -519,14 +520,7 @@ export class ManagedObsResources {
       const globals = visualsOnly ? [] : await globalInputs();
       const listed = await inventory();
       for (const [name, role] of visualsOnly ? [] : Object.entries(registry!.roles)) {
-        if (
-          ![
-            'wasapi_output_capture',
-            'wasapi_input_capture',
-            'wasapi_process_output_capture',
-          ].includes(role.kind)
-        )
-          continue;
+        if (!AUDIO_KINDS.has(role.kind)) continue;
         if (listed.inputs.some((input) => input.inputUuid === role.uuid)) {
           const waiting = rows(
             (await raw.call('GetSceneItemList', { sceneName: desired[0]!.sceneName })).sceneItems,

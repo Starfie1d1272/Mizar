@@ -3,7 +3,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { link, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
-import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsSceneName } from './desired-state.js';
+import {
+  OBS_CAPTURE_INPUT,
+  OBS_COLLECTION,
+  obsObjects as objects,
+  obsSceneName,
+} from './desired-state.js';
 import { assertNoVideoOutput } from './video-transaction.js';
 import type { ObsRpc } from './reconcile.js';
 
@@ -31,13 +36,6 @@ const transform = {
   positionY: -1,
   rotation: 0,
 } as const;
-const objects = (value: unknown): Record<string, unknown>[] =>
-  Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> =>
-          !!item && typeof item === 'object' && !Array.isArray(item),
-      )
-    : [];
 
 export class ObsCaptureWarmupError extends Error {
   constructor(

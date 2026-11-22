@@ -755,23 +755,23 @@ async function prepareMusicResources(
     await assertNoVideoOutput(obs);
     await obs.call('SetInputName', { inputUuid: found.inputUuid, newInputName: name });
   }
+  const sceneList = (await obs.call('GetSceneList')).scenes as {
+    sceneName: string;
+    sceneUuid: string;
+  }[];
+  const sceneNames = sceneList.map((s) => s.sceneName);
+  const desiredScenes = obsDesiredScenes('http://127.0.0.1:3000').filter((s) =>
+    sceneNames.includes(s.sceneName),
+  );
   if (found) {
     if (!expected || found.inputUuid !== expected || found.inputKind !== 'ffmpeg_source')
       throw new Error('music_source_conflict');
   } else {
     if (inputs.some((input) => input.inputName === name)) throw new Error('music_source_conflict');
     // Missing sources may be recreated, but existing unowned ones are never adopted.
-    const sceneList = (await obs.call('GetSceneList')).scenes as {
-      sceneName: string;
-      sceneUuid: string;
-    }[];
-    const sceneNames = sceneList.map((s) => s.sceneName);
-    const scenes = obsDesiredScenes('http://127.0.0.1:3000').filter((s) =>
-      sceneNames.includes(s.sceneName),
-    );
-    if (!scenes.length) throw new Error('music_scenes_missing');
+    if (!desiredScenes.length) throw new Error('music_scenes_missing');
     const sceneUuid = sceneList.find(
-      (scene) => scene.sceneName === scenes[0]!.sceneName,
+      (scene) => scene.sceneName === desiredScenes[0]!.sceneName,
     )?.sceneUuid;
     if (typeof sceneUuid !== 'string') throw new Error('music_source_conflict');
     assertCurrent();
@@ -795,7 +795,7 @@ async function prepareMusicResources(
       creation,
       'CreateInput',
       {
-        sceneName: scenes[0]!.sceneName,
+        sceneName: desiredScenes[0]!.sceneName,
         inputName: name,
         inputKind: 'ffmpeg_source',
         inputSettings: mediaSettings(''),
@@ -837,14 +837,7 @@ async function prepareMusicResources(
   )) {
     await initializeMusicItem(obs, store, pending, scope, valid);
   }
-  const sceneList = (await obs.call('GetSceneList')).scenes as {
-    sceneName: string;
-    sceneUuid: string;
-  }[];
-  const sceneNames = sceneList.map((s) => s.sceneName);
-  for (const scene of obsDesiredScenes('http://127.0.0.1:3000').filter((s) =>
-    sceneNames.includes(s.sceneName),
-  )) {
+  for (const scene of desiredScenes) {
     assertCurrent();
     const items = (await obs.call('GetSceneItemList', { sceneName: scene.sceneName }))
       .sceneItems as { sourceName: string; sourceUuid: string; sceneItemId: number }[];

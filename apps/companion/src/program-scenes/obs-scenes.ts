@@ -70,6 +70,9 @@ export function connectProgramScenes(
     production.invalidateObsExit();
     if (kind === 'disconnected') captureDisconnect();
   });
+  obsAdapter.onConfigurationChanged(() => {
+    sceneController.obsConfigurationChanged();
+  });
   app.addHook('onListen', () => {
     obsAdapter.startCommentaryRecovery(media?.music, () => production.automaticAllowed());
     return Promise.resolve();

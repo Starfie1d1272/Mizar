@@ -5,6 +5,26 @@ export const OBS_CAPTURE_INPUT = '游戏画面';
 export const OBS_WIDTH = 1920;
 export const OBS_HEIGHT = 1080;
 
+export function isCs2Window(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parts = value.split(':');
+  return (
+    parts.length === 3 &&
+    parts[0] !== '' &&
+    parts[1] !== '' &&
+    parts[2]?.toLowerCase() === 'cs2.exe'
+  );
+}
+
+export function obsObjects(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object' && !Array.isArray(item),
+      )
+    : [];
+}
+
 export function obsSceneName(sceneId: ProgramSceneId): string {
   const scene = PROGRAM_SCENES.find((item) => item.id === sceneId)!;
   return scene.id === 'bp' ? '地图禁选' : scene.title;
