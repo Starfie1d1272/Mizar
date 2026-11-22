@@ -17,12 +17,6 @@ use std::{
     time::Duration,
 };
 
-fn owned_process(
-    record: &SessionRecord,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<Option<WorkspaceProcess>, String> {
-    crate::cs2_process::verified_process(record.process_identity().as_ref(), log)
-}
 fn launched_process(
     value: &SessionRecord,
     log: &crate::startup_log::DesktopLog,
@@ -81,7 +75,9 @@ pub struct ManagedCs2 {
     selected_backup: Option<Value>,
     camera: CameraLeaseState,
     mulnx_launcher: Option<Arc<crate::mulnx_launch::HiddenLauncher>>,
-    source_resume: Mutex<Option<(String, std::time::Instant, bool)>>,
+    // Caches confirmed resume success and bounded cooldowns for deterministic 409 conflicts only.
+    source_resume: Mutex<Option<(String, std::time::Instant, Result<(), String>)>>,
+    held_process: Mutex<Option<WorkspaceProcess>>,
 }
 
 struct ReplacementTarget {
@@ -93,6 +89,24 @@ struct ReplacementTarget {
 
 fn valid_preparation_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn managed_session_identity(pid: u32, created: u64, executable: &str) -> Value {
+    json!({"pid": pid, "created": created.to_string(), "executable": executable})
+}
+
+fn retire_expected_source(
+    log: &crate::startup_log::DesktopLog,
+    source_id: &str,
+) -> Result<(), String> {
+    let prepared = crate::production_exit::managed_source_request(
+        log,
+        json!({"action": "retire", "phase": "prepare", "expectedSourceId": source_id}),
+    )?;
+    let ticket = prepared["ticket"]
+        .as_str()
+        .ok_or("游戏配置恢复没有完成。请重试。")?;
+    crate::production_exit::confirm_retirement(log, ticket)
 }
 
 fn replacement_decision(
@@ -124,7 +138,37 @@ impl ManagedCs2 {
             camera: CameraLeaseState::default(),
             mulnx_launcher: None,
             source_resume: Mutex::new(None),
+            held_process: Mutex::new(None),
         }
+    }
+    fn fail_with_recovery<T>(&mut self, error: String) -> Result<T, String> {
+        if let Err(recovery) = self.recover(false) {
+            return Err(format!("{error}；配置恢复待处理：{recovery}"));
+        }
+        Err(error)
+    }
+    fn owned_process_cached(
+        &self,
+        record: &SessionRecord,
+    ) -> Result<Option<WorkspaceProcess>, String> {
+        let Some(expected) = record.process_identity() else {
+            if let Ok(mut held) = self.held_process.lock() {
+                *held = None;
+            }
+            return Ok(None);
+        };
+        if let Ok(held) = self.held_process.lock() {
+            if let Some(process) = held.as_ref() {
+                if process.matches_held(&expected, &self.log)? {
+                    return Ok(Some(process.clone()));
+                }
+            }
+        }
+        let verified = crate::cs2_process::verified_process(Some(&expected), &self.log)?;
+        if let Ok(mut held) = self.held_process.lock() {
+            *held = verified.clone();
+        }
+        Ok(verified)
     }
     pub(crate) fn remember_mulnx_launcher(
         &mut self,
@@ -329,7 +373,7 @@ impl ManagedCs2 {
         let Some(value) = self.store.load()? else {
             return Ok(None);
         };
-        owned_process(&value, &self.log)
+        self.owned_process_cached(&value)
     }
     /// Read-only diagnostics for the verified managed game.
     pub fn console_source(&self) -> Result<Option<(SessionRecord, WorkspaceProcess)>, String> {
@@ -400,7 +444,7 @@ impl ManagedCs2 {
         let pending = self.store.load()?;
         let owned_running = pending
             .as_ref()
-            .map(|value| owned_process(value, &self.log))
+            .map(|value| self.owned_process_cached(value))
             .transpose()?
             .flatten()
             .is_some();
@@ -516,6 +560,13 @@ impl ManagedCs2 {
     }
 
     fn commit_managed_source(&self, journal: &mut SessionRecord) -> Result<(), String> {
+        self.sync_managed_source(journal, false)
+    }
+    fn sync_managed_source(
+        &self,
+        journal: &mut SessionRecord,
+        allow_rebind: bool,
+    ) -> Result<(), String> {
         if journal.gsi_source.is_none() {
             return Ok(());
         }
@@ -532,59 +583,108 @@ impl ManagedCs2 {
         if cs2_pids(&self.log)? != vec![pid] {
             return Err("游戏身份不唯一。".into());
         }
-        let process = open(pid, &self.log)?.ok_or("游戏已退出。")?;
-        let (actual_created, actual_executable) = identity(&process, &self.log)?;
-        if actual_created != created || !same_executable(&actual_executable, &executable) {
-            return Err("游戏身份已变化。".into());
+        if self.owned_process_cached(journal)?.is_none() {
+            return Err("游戏已退出或身份已变化。".into());
         }
         let committed = source.committed;
-        let resume_key = if committed {
-            let runtime: Value = serde_json::from_slice(
-                &fs::read(self.log.state_root.join("data/runtime.json"))
-                    .map_err(|_| "本地服务身份不可用。")?,
-            )
-            .map_err(|_| "本地服务身份不可用。")?;
-            let instance = runtime["instanceId"]
-                .as_str()
-                .ok_or("本地服务身份不可用。")?;
-            let key = format!("{instance}:{source_id}:{pid}:{created}");
-            if let Ok(state) = self.source_resume.lock() {
-                if let Some((last, at, succeeded)) = state.as_ref() {
-                    if last == &key && (*succeeded || at.elapsed() < Duration::from_secs(10)) {
-                        return Ok(());
+        let action = if committed { "resume" } else { "commit" };
+        let runtime_instance = fs::read(self.log.state_root.join("data/runtime.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|runtime| runtime["instanceId"].as_str().map(str::to_owned));
+        let cache_key = runtime_instance
+            .as_deref()
+            .map(|instance| format!("{instance}:{action}:{ticket}:{source_id}:{pid}:{created}"));
+        if !allow_rebind {
+            if let Some(key) = cache_key.as_deref() {
+                if let Ok(state) = self.source_resume.lock() {
+                    if let Some((last, at, cached_result)) = state.as_ref() {
+                        if last == key
+                            && (cached_result.is_ok() || at.elapsed() < Duration::from_secs(15))
+                        {
+                            return cached_result.clone();
+                        }
                     }
                 }
             }
-            Some(key)
-        } else {
-            None
-        };
+        } else if let Ok(mut state) = self.source_resume.lock() {
+            *state = None;
+        }
+        let identity = managed_session_identity(pid, created, &executable);
         let mut request = json!({
-            "action":if committed { "resume" } else { "commit" }, "ticket":ticket,
-            "managedSessionIdentity":{"pid":pid,"created":created.to_string(),"executable":executable}
+            "action": action,
+            "ticket": ticket,
+            "managedSessionIdentity": identity
         });
         if committed {
             request["sourceId"] = json!(source_id);
         }
-        let result = crate::production_exit::managed_source_request(&self.log, request);
-        if let Some(key) = resume_key {
-            if let Ok(mut state) = self.source_resume.lock() {
-                *state = Some((
-                    key,
-                    std::time::Instant::now(),
-                    result.as_ref().is_ok_and(|response| response["ok"] == true),
-                ));
+        let mut deterministic_conflict = false;
+        let outcome = match crate::production_exit::managed_source_request_detail(
+            &self.log,
+            request.clone(),
+        )? {
+            Ok(response) => Ok(response),
+            Err((409, response, message)) => {
+                let error_code = response["error"].as_str().unwrap_or("");
+                if error_code == "managed_retirement_in_progress"
+                    && response["retirementSourceId"].is_null()
+                {
+                    if let Some(stale_ticket) = response["retirementTicket"].as_str() {
+                        crate::production_exit::abort_retirement(&self.log, stale_ticket);
+                    }
+                    crate::production_exit::managed_source_request(&self.log, request)
+                } else if allow_rebind
+                    && matches!(
+                        error_code,
+                        "managed_source_selection_changed" | "managed_source_resume_unavailable"
+                    )
+                {
+                    crate::production_exit::managed_source_request(
+                        &self.log,
+                        json!({
+                            "action": "rebind",
+                            "ticket": ticket,
+                            "sourceId": source_id,
+                            "managedSessionIdentity": identity
+                        }),
+                    )
+                } else {
+                    deterministic_conflict = matches!(
+                        error_code,
+                        "managed_source_selection_changed"
+                            | "managed_source_resume_unavailable"
+                            | "managed_source_identity_changed"
+                            | "managed_source_not_retired"
+                            | "managed_retirement_in_progress"
+                            | "managed_source_already_retired"
+                            | "managed_source_pending"
+                    );
+                    Err(message)
+                }
+            }
+            Err((_, _, message)) => Err(message),
+        };
+        let status_result = outcome.and_then(|response| {
+            if response["ok"] == true {
+                Ok(())
+            } else {
+                Err("受管游戏遥测来源尚未确认，请重试。".to_owned())
+            }
+        });
+        if let Some(key) = cache_key {
+            if (committed && status_result.is_ok()) || deterministic_conflict {
+                if let Ok(mut state) = self.source_resume.lock() {
+                    *state = Some((key, std::time::Instant::now(), status_result.clone()));
+                }
             }
         }
-        let response = result?;
-        if response["ok"] != true {
-            return Err("游戏连接没有确认。请重新打开工作台后再试。".into());
-        }
+        status_result?;
         if !committed {
             journal
                 .gsi_source
                 .as_mut()
-                .ok_or("游戏配置恢复没有完成。请重新打开工作台后再试。")?
+                .ok_or("游戏配置恢复没有完成。请重试。".to_owned())?
                 .committed = true;
             self.store.save(journal)?;
         }
@@ -611,14 +711,7 @@ impl ManagedCs2 {
             .as_str()
             .ok_or("游戏配置恢复记录无效。请重新打开 Mizar。")?
             .to_owned();
-        let prepared = crate::production_exit::managed_source_request(
-            &self.log,
-            json!({"action":"retire","phase":"prepare","expectedSourceId":source_id}),
-        )?;
-        let ticket = prepared["ticket"]
-            .as_str()
-            .ok_or("游戏配置恢复没有完成。请重新打开 Mizar。")?;
-        crate::production_exit::confirm_retirement(&self.log, ticket)?;
+        retire_expected_source(&self.log, &source_id)?;
         self.store.clear_source_retire()
     }
 
@@ -672,7 +765,7 @@ impl ManagedCs2 {
                 return Ok(());
             }
         }
-        if owned_process(&value, &self.log)?.is_some() {
+        if self.owned_process_cached(&value)?.is_some() {
             if confirm_steam_cancelled {
                 return Err("CS2 正在运行，请先退出游戏再恢复备份。".into());
             }
@@ -959,7 +1052,12 @@ impl ManagedCs2 {
         {
             return Err("游戏身份已变化，原配置备份仍保留。".into());
         }
-        Ok(WorkspaceProcess::hold_verified(process, pid, created))
+        Ok(WorkspaceProcess::hold_verified(
+            process,
+            pid,
+            created,
+            actual_executable,
+        ))
     }
     pub fn ensure_demo_available(&self) -> Result<(), String> {
         if self.store.load()?.is_some() || any_cs2_running(&self.log)? {
@@ -1051,7 +1149,7 @@ impl ManagedCs2 {
         self.recover(false)?;
         let journal = self.store.load()?.ok_or("Demo 游戏启动记录已失效。")?;
         if journal.demo_test_request_id.as_deref() != Some(request_id)
-            || owned_process(&journal, &self.log)?.is_none()
+            || self.owned_process_cached(&journal)?.is_none()
         {
             return Err("正在等待本次 Demo 的 CS2 启动，请稍后重试。".into());
         }
@@ -1072,8 +1170,14 @@ impl ManagedCs2 {
         if preserve {
             self.check_preserved_start()?;
         }
-        if let Some(value) = self.store.load()? {
-            if owned_process(&value, &self.log)?.is_some() {
+        if let Some(mut value) = self.store.load()? {
+            if self.owned_process_cached(&value)?.is_some() {
+                if demo.is_none()
+                    && preparation_id.is_some()
+                    && value.preparation_id.as_deref() == preparation_id
+                {
+                    self.sync_managed_source(&mut value, true)?;
+                }
                 return Ok(false);
             }
             self.recover(false)?;
@@ -1208,12 +1312,7 @@ impl ManagedCs2 {
         let source_uninstalled = if demo.is_none() {
             match self.store.gsi_is_uninstalled(&journal) {
                 Ok(value) => value,
-                Err(error) => {
-                    if let Err(recovery) = self.recover(false) {
-                        return Err(format!("{error}；配置恢复待处理：{recovery}"));
-                    }
-                    return Err(error);
-                }
+                Err(error) => return self.fail_with_recovery(error),
             }
         } else {
             true
@@ -1236,7 +1335,34 @@ impl ManagedCs2 {
                 request["preparationId"] = json!(id);
             }
             let source = (|| -> Result<(String, String, String), String> {
-                let prepared = crate::production_exit::managed_source_request(&self.log, request)?;
+                let prepared = match crate::production_exit::managed_source_request_detail(
+                    &self.log,
+                    request.clone(),
+                )? {
+                    Ok(value) => value,
+                    Err((409, response, message))
+                        if response["error"] == "managed_source_not_retired"
+                            && !any_cs2_running(&self.log)? =>
+                    {
+                        if let Some(stale_ticket) = response["retirementTicket"].as_str() {
+                            if response["retirementSourceId"].is_null()
+                                && response["activeSourceId"].is_null()
+                            {
+                                crate::production_exit::abort_retirement(&self.log, stale_ticket);
+                            } else {
+                                let _ = crate::production_exit::confirm_retirement(
+                                    &self.log,
+                                    stale_ticket,
+                                );
+                            }
+                        }
+                        if let Some(old_source_id) = response["activeSourceId"].as_str() {
+                            retire_expected_source(&self.log, old_source_id)?;
+                        }
+                        crate::production_exit::managed_source_request(&self.log, request)?
+                    }
+                    Err((_, _, message)) => return Err(message),
+                };
                 Ok((
                     prepared["ticket"]
                         .as_str()
@@ -1254,12 +1380,7 @@ impl ManagedCs2 {
             })();
             let (ticket, source_id, uri) = match source {
                 Ok(source) => source,
-                Err(error) => {
-                    if let Err(recovery) = self.recover(false) {
-                        return Err(format!("{error}；配置恢复待处理：{recovery}"));
-                    }
-                    return Err(error);
-                }
+                Err(error) => return self.fail_with_recovery(error),
             };
             if let Err(error) =
                 self.store
@@ -1271,10 +1392,7 @@ impl ManagedCs2 {
                 );
                 // The source plan is durable before touching GSI. Restore any
                 // partially applied config before returning the launch error.
-                if let Err(recovery) = self.recover(false) {
-                    return Err(format!("{error}；配置恢复待处理：{recovery}"));
-                }
-                return Err(error);
+                return self.fail_with_recovery(error);
             }
         }
         if prepare_only {
@@ -1650,27 +1768,37 @@ impl ManagedCs2 {
                                 .into(),
                         );
                     }
-                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                    if self.mulnx_launcher_running()? {
                         return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
                     }
                 }
                 require_quiet_game("请先退出 CS2 再恢复观战原值。")?;
                 if let Some((video, executable, account)) = self.store.mulnx_observer_target()? {
-                    if !process_pids("CS2Injector.exe", &self.log)?.is_empty() {
+                    if self.mulnx_launcher_running()? {
                         return Err("MulNX 启动器仍在运行，观战备份仍保留。".into());
                     }
                     let (current_exe, current_video, current_account) = self.recovery_identity()?;
-                    let saved_video = fs::canonicalize(&video)
-                        .map_err(|e| crate::cs2_session::io_error("观战恢复目标无法确认。", &e))?;
-                    let live_video = fs::canonicalize(&current_video)
-                        .map_err(|e| crate::cs2_session::io_error("当前账号目标无法确认。", &e))?;
-                    let saved_exe = fs::canonicalize(&executable)
-                        .map_err(|e| crate::cs2_session::io_error("观战程序无法确认。", &e))?;
-                    let live_exe = fs::canonicalize(&current_exe)
-                        .map_err(|e| crate::cs2_session::io_error("当前程序无法确认。", &e))?;
+                    let same_path =
+                        |saved: &Path, live: &Path, a: &str, b: &str| -> Result<bool, String> {
+                            let left = fs::canonicalize(saved)
+                                .map_err(|e| crate::cs2_session::io_error(a, &e))?;
+                            let right = fs::canonicalize(live)
+                                .map_err(|e| crate::cs2_session::io_error(b, &e))?;
+                            Ok(left == right)
+                        };
                     if current_account != account
-                        || saved_video != live_video
-                        || saved_exe != live_exe
+                        || !same_path(
+                            &video,
+                            &current_video,
+                            "观战恢复目标无法确认。",
+                            "当前账号目标无法确认。",
+                        )?
+                        || !same_path(
+                            &executable,
+                            &current_exe,
+                            "观战程序无法确认。",
+                            "当前程序无法确认。",
+                        )?
                     {
                         return Err("请登录原 Steam 账号并确认原游戏安装位置后再恢复。".into());
                     }
@@ -1679,9 +1807,7 @@ impl ManagedCs2 {
                     crate::mulnx_launch::cleanup_mulnx(&self.log, &executable, None)
                         .map_err(|e| format!("MulNX 启动参数未能清理，观战备份仍保留：{e}"))?;
                     self.store.mark_mulnx_options_clean()?;
-                    if any_cs2_running(&self.log)?
-                        || !process_pids("CS2Injector.exe", &self.log)?.is_empty()
-                    {
+                    if any_cs2_running(&self.log)? || self.mulnx_launcher_running()? {
                         return Err("游戏或 MulNX 启动器正在运行，观战备份仍保留。".into());
                     }
                 }
@@ -1838,7 +1964,7 @@ impl ManagedCs2 {
         // Poll once to adopt a uniquely identified late launch before closing it.
         self.poll();
         if let Some(value) = self.store.load()? {
-            if let Some(process) = owned_process(&value, &self.log)? {
+            if let Some(process) = self.owned_process_cached(&value)? {
                 // Every owned-game exit, including application shutdown and a
                 // failed workbench entry, must pass the same MulNX unload fence.
                 // External sessions have already returned through detach above.

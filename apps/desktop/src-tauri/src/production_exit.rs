@@ -254,25 +254,46 @@ pub(crate) fn managed_source_request_status(
     )
 }
 
+pub(crate) fn managed_source_request_detail(
+    log: &DesktopLog,
+    body: serde_json::Value,
+) -> Result<Result<serde_json::Value, (u16, serde_json::Value, String)>, String> {
+    let action = body["action"].as_str().unwrap_or("unknown").to_owned();
+    let phase = body["phase"].as_str().unwrap_or("-").to_owned();
+    let (status, response) = managed_source_request_status(log, body)?;
+    if status != 200 {
+        let error_code = response["error"].as_str().unwrap_or("unknown");
+        log.event(
+            "managed_source",
+            "failure",
+            Some(&format!(
+                "action={action}; phase={phase}; status={status}; error={error_code}"
+            )),
+        );
+        let message = match (action.as_str(), error_code) {
+            ("retire", _) => "游戏配置与遥测来源收尾尚未确认，请确认 CS2 已退出后重试。",
+            (_, "managed_source_not_retired") | (_, "managed_retirement_in_progress") => {
+                "上一场受管游戏来源尚未退场，请先结束上一场收尾后重试。"
+            }
+            (_, "managed_source_selection_changed") | (_, "managed_source_resume_unavailable") => {
+                "当前比赛或制作会话已变化，受管游戏遥测需要重新绑定。"
+            }
+            (_, "managed_source_identity_changed") => "受管游戏进程或来源身份已变化，请重新检查。",
+            _ => "受管游戏来源未能确认，请重试。",
+        };
+        return Ok(Err((status, response, message.to_owned())));
+    }
+    Ok(Ok(response))
+}
+
 pub(crate) fn managed_source_request(
     log: &DesktopLog,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let (status, response) = managed_source_request_status(log, body)?;
-    if status != 200 {
-        log.event(
-            "managed_source",
-            "failure",
-            Some(&format!("status={status}")),
-        );
-        return Err(
-            "这次结束制作没有完成。请先退出 CS2，再重试；仍然失败时重新打开 Mizar。".into(),
-        );
-    }
-    Ok(response)
+    managed_source_request_detail(log, body)?.map_err(|(_, _, message)| message)
 }
 
-fn abort_retirement(log: &DesktopLog, ticket: &str) {
+pub(crate) fn abort_retirement(log: &DesktopLog, ticket: &str) {
     match managed_source_request_status(
         log,
         serde_json::json!({"action":"retire","phase":"abort","ticket":ticket}),

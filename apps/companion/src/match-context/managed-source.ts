@@ -6,6 +6,11 @@ import { preparationCancelled } from '../program-scenes/preparation-cancellation
 import type { MatchContextController } from './controller.js';
 import type { ProgramRuntime, ProgramRuntimeSnapshot } from '../runtime/program-runtime.js';
 
+const identitySchema = z.strictObject({
+  pid: z.number().int().positive(),
+  created: z.string().regex(/^\d+$/),
+  executable: z.string().min(1).max(32768),
+});
 const sourceRequest = z.discriminatedUnion('action', [
   z.strictObject({
     action: z.literal('prepare'),
@@ -19,21 +24,19 @@ const sourceRequest = z.discriminatedUnion('action', [
   z.strictObject({
     action: z.literal('commit'),
     ticket: z.string().uuid(),
-    managedSessionIdentity: z.strictObject({
-      pid: z.number().int().positive(),
-      created: z.string().regex(/^\d+$/),
-      executable: z.string().min(1).max(32768),
-    }),
+    managedSessionIdentity: identitySchema,
   }),
   z.strictObject({
     action: z.literal('resume'),
     ticket: z.string().uuid(),
     sourceId: z.string().uuid(),
-    managedSessionIdentity: z.strictObject({
-      pid: z.number().int().positive(),
-      created: z.string().regex(/^\d+$/),
-      executable: z.string().min(1).max(32768),
-    }),
+    managedSessionIdentity: identitySchema,
+  }),
+  z.strictObject({
+    action: z.literal('rebind'),
+    ticket: z.string().uuid(),
+    sourceId: z.string().uuid(),
+    managedSessionIdentity: identitySchema,
   }),
   z.strictObject({
     action: z.literal('cancel'),
@@ -84,6 +87,7 @@ export function registerManagedSourceRoutes(
   let active: Prepared | undefined;
   let retirement: Retirement | undefined;
   let completedRetirement: string | undefined;
+  const retiredSources = new Set<string>();
   let retired = false;
   let activated = false;
   const binding = () => options.controller?.getActiveBinding();
@@ -114,18 +118,37 @@ export function registerManagedSourceRoutes(
     const parsed = sourceRequest.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'managed_source_invalid' });
     const body = parsed.data;
+    const clearDanglingRetirement = () => {
+      if (retirement && retirement.sourceId === null && !active) retirement = undefined;
+    };
+    const conflictContext = () => ({
+      ...(active ? { activeSourceId: active.sourceId } : {}),
+      ...(retirement
+        ? { retirementTicket: retirement.ticket, retirementSourceId: retirement.sourceId }
+        : {}),
+    });
+    const activateEntry = (
+      ticket: string,
+      sourceId: string,
+      requestId: string,
+      identity?: string,
+    ): Prepared => ({
+      ticket,
+      sourceId,
+      requestId,
+      matchId: binding()?.context.matchId ?? null,
+      productionSession: options.productionSession(),
+      plan: plan(),
+      ...(identity !== undefined ? { identity } : {}),
+    });
     if (body.action === 'prepare') {
+      clearDanglingRetirement();
       if (active || retirement)
-        return reply.code(409).send({ error: 'managed_source_not_retired' });
+        return reply.code(409).send({ error: 'managed_source_not_retired', ...conflictContext() });
       if (pending && pending.requestId !== body.requestId)
         return reply.code(409).send({ error: 'managed_source_pending' });
       pending ??= {
-        ticket: randomUUID(),
-        sourceId: randomUUID(),
-        requestId: body.requestId,
-        matchId: binding()?.context.matchId ?? null,
-        productionSession: options.productionSession(),
-        plan: plan(),
+        ...activateEntry(randomUUID(), randomUUID(), body.requestId),
         ...(body.preparationId ? { preparationId: body.preparationId } : {}),
       };
       if (!sameSelection(pending))
@@ -149,27 +172,62 @@ export function registerManagedSourceRoutes(
           return { ok: true };
         return reply.code(409).send({ error: 'managed_source_identity_changed' });
       }
-      if (pending || retirement || retired)
-        return reply.code(409).send({ error: 'managed_source_resume_unavailable' });
+      if (pending || retirement || retiredSources.has(body.sourceId))
+        return reply
+          .code(409)
+          .send({ error: 'managed_source_resume_unavailable', ...conflictContext() });
       // The authenticated Host independently verifies PID, creation time, executable and CFG.
       // Map continuity qualifies result restoration, not whether fresh input may be received.
       const execution = options.runtime.resumeManagedSource(body.sourceId, currentMatch);
-      active = {
-        ticket: body.ticket,
-        sourceId: body.sourceId,
-        requestId: '',
-        matchId: currentMatch,
-        productionSession: options.productionSession(),
-        plan: plan(),
-        identity,
-      };
+      active = activateEntry(body.ticket, body.sourceId, '', identity);
       activated = true;
       retired = false;
       options.onRuntimeCommit(execution.snapshot);
       return { ok: true, executionRestored: execution.restored };
     }
+    if (body.action === 'rebind') {
+      clearDanglingRetirement();
+      if (retirement)
+        return reply
+          .code(409)
+          .send({ error: 'managed_retirement_in_progress', ...conflictContext() });
+      if (retiredSources.has(body.sourceId))
+        return reply.code(409).send({ error: 'managed_source_already_retired' });
+      const identity = JSON.stringify(body.managedSessionIdentity);
+      if (
+        active &&
+        (active.sourceId !== body.sourceId || (active.identity && active.identity !== identity))
+      )
+        return reply
+          .code(409)
+          .send({ error: 'managed_source_identity_changed', ...conflictContext() });
+      if (pending && pending.sourceId !== body.sourceId)
+        return reply.code(409).send({ error: 'managed_source_pending' });
+      const previous = active;
+      const next = activateEntry(
+        body.ticket,
+        body.sourceId,
+        (active ?? pending)?.requestId ?? '',
+        identity,
+      );
+      const reconcilesRuntime =
+        activated &&
+        Boolean(previous) &&
+        (previous!.matchId !== next.matchId || previous!.plan !== next.plan);
+      const execution = reconcilesRuntime
+        ? options.runtime.resumeManagedSource(body.sourceId, next.matchId)
+        : undefined;
+      active = next;
+      pending = undefined;
+      retired = false;
+      if (execution) options.onRuntimeCommit(execution.snapshot);
+      return execution ? { ok: true, executionRestored: execution.restored } : { ok: true };
+    }
     if (body.action === 'commit') {
-      if (retirement) return reply.code(409).send({ error: 'managed_retirement_in_progress' });
+      if (retirement)
+        return reply
+          .code(409)
+          .send({ error: 'managed_retirement_in_progress', ...conflictContext() });
       const item = active?.ticket === body.ticket ? active : pending;
       if (!item || item.ticket !== body.ticket || !sameSelection(item))
         return reply.code(409).send({ error: 'managed_source_selection_changed' });
@@ -265,6 +323,8 @@ export function registerManagedSourceRoutes(
       retirement.sequence !== (current.lastAccepted?.sequence ?? null)
     )
       return reply.code(409).send({ error: 'managed_retirement_changed' });
+    const retiredId = active?.sourceId ?? retirement.sourceId;
+    if (retiredId) retiredSources.add(retiredId);
     const committed = options.runtime.retireManagedSource();
     active = undefined;
     pending = undefined;

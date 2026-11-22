@@ -434,19 +434,10 @@ pub(crate) fn open(
         ))
     }
 }
-pub(crate) fn identity(
+pub(crate) fn process_created(
     process: &Process,
     log: &crate::startup_log::DesktopLog,
-) -> Result<(u64, PathBuf), String> {
-    read_identity(process, log)?
-        .ok_or_else(|| "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into())
-}
-/// A temporarily unreadable image is unknown, never proof that the process is absent.
-/// Only the submitted-launch observer may wait for another complete observation.
-pub(crate) fn read_identity(
-    process: &Process,
-    log: &crate::startup_log::DesktopLog,
-) -> Result<Option<(u64, PathBuf)>, String> {
+) -> Result<u64, String> {
     let mut created = FileTime::default();
     let mut exit = FileTime::default();
     let mut kernel = FileTime::default();
@@ -460,24 +451,39 @@ pub(crate) fn read_identity(
             None,
         ));
     }
+    Ok(((created.high as u64) << 32) | created.low as u64)
+}
+pub(crate) fn identity(
+    process: &Process,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<(u64, PathBuf), String> {
+    read_identity(process, log)?
+        .ok_or_else(|| "进程程序路径暂时无法读取，请稍后重试；原启动和配置记录仍保留。".into())
+}
+/// A temporarily unreadable image is unknown, never proof that the process is absent.
+/// Only the submitted-launch observer may wait for another complete observation.
+pub(crate) fn read_identity(
+    process: &Process,
+    log: &crate::startup_log::DesktopLog,
+) -> Result<Option<(u64, PathBuf)>, String> {
+    let created = process_created(process, log)?;
     let mut buffer = vec![0u16; 32768];
     let mut len = buffer.len() as u32;
     if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut len) } == 0 {
         let code = unsafe { GetLastError() };
-        let message = identity_failure(
+        if code == 5 && unsafe { WaitForSingleObject(process.0, 0) } == 258 {
+            return Ok(None);
+        }
+        return Err(identity_failure(
             log,
             process,
             "QueryFullProcessImageNameW",
             "无法确认进程程序路径。",
-            Some(((created.high as u64) << 32) | created.low as u64),
-        );
-        if code == 5 && unsafe { WaitForSingleObject(process.0, 0) } == 258 {
-            return Ok(None);
-        }
-        return Err(message);
+            Some(created),
+        ));
     }
     Ok(Some((
-        ((created.high as u64) << 32) | created.low as u64,
+        created,
         PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])),
     )))
 }
@@ -692,10 +698,31 @@ pub struct WorkspaceProcess {
     process: Arc<Process>,
     pub pid: u32,
     pub created: u64,
+    pub executable: PathBuf,
 }
 impl WorkspaceProcess {
     pub fn is_running(&self) -> bool {
         unsafe { WaitForSingleObject(self.process.0, 0) == 258 }
+    }
+    /// Reuse already-verified process identity via its pinned OS handle when image path reads are transiently denied.
+    pub(crate) fn matches_held(
+        &self,
+        expected: &crate::cs2_process_identity::ProcessIdentity,
+        log: &crate::startup_log::DesktopLog,
+    ) -> Result<bool, String> {
+        if self.pid != expected.pid
+            || self.created != expected.created
+            || !same_executable(&self.executable, &expected.executable)
+        {
+            return Ok(false);
+        }
+        if !self
+            .process
+            .running(log, "无法确认 CS2 是否退出，备份仍保留。")?
+        {
+            return Ok(false);
+        }
+        Ok(process_created(&self.process, log)? == self.created)
     }
 }
 
@@ -746,11 +773,17 @@ pub(crate) fn launch_timestamp() -> u64 {
 }
 impl WorkspaceProcess {
     /// The caller has verified PID, creation time and installation with this held handle.
-    pub(crate) fn hold_verified(process: Process, pid: u32, created: u64) -> Self {
+    pub(crate) fn hold_verified(
+        process: Process,
+        pid: u32,
+        created: u64,
+        executable: PathBuf,
+    ) -> Self {
         Self {
             process: Arc::new(process),
             pid,
             created,
+            executable,
         }
     }
 }
@@ -786,6 +819,7 @@ pub(crate) fn verified_process(
         process,
         expected.pid,
         created,
+        executable,
     )))
 }
 impl WorkspaceProcess {

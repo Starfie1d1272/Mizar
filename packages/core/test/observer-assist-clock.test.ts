@@ -373,3 +373,34 @@ it('unlocks round-0 live execution fence when Program progresses past round 0 wi
   ).toBe('source-execution-ahead');
   expect(timeline.getDiagnostics().ended).toMatchObject({ 'source-execution': 2 });
 });
+
+it('keeps generation/execution continuity invariant whether consume() or project() observes reconnect first', () => {
+  const runOrder = (consumeFirst: boolean) => {
+    const timeline = new ObserverHintTimeline();
+    timeline.project(program(0), settings, 0, early, 1);
+    timeline.consume(death(1, 1, 1000));
+    const reconnected = { ...early, generation: 2 };
+    const newKill = {
+      ...death(2, 1, 50_000),
+      cursor: { ...death(2, 1, 50_000).cursor, sourceMapExecution: 0 },
+    };
+    if (consumeFirst) {
+      timeline.consume(newKill);
+      timeline.project(program(116000), settings, 116000, reconnected, 0);
+    } else {
+      timeline.project(program(50_000), settings, 50_000, reconnected, 0);
+      timeline.consume(newKill);
+    }
+    return {
+      at116: timeline.project(program(116000), settings, 116000, reconnected, 0).observer,
+      at165: timeline.project(program(165000), settings, 165000, reconnected, 0).observer,
+    };
+  };
+  const projectFirst = runOrder(false);
+  const consumeFirst = runOrder(true);
+  expect(consumeFirst.at116?.waitingReason).toBe(projectFirst.at116?.waitingReason);
+  expect(consumeFirst.at116?.hints.map((h) => h.id)).toEqual(['1:1']);
+  expect(projectFirst.at116?.hints.map((h) => h.id)).toEqual(['1:1']);
+  expect(consumeFirst.at165?.hints.map((h) => h.id)).toEqual(['2:1']);
+  expect(projectFirst.at165?.hints.map((h) => h.id)).toEqual(['2:1']);
+});
