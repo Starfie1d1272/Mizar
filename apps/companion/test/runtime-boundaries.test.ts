@@ -317,6 +317,17 @@ test('rehearsal binding reaches production projections, retires, and can be load
   }
 });
 
+function withEnv(t: TestContext, entries: Record<string, string>) {
+  for (const [key, value] of Object.entries(entries)) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+}
+
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'mizar-runtime-boundaries-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -437,17 +448,7 @@ test('a failed consumer close still releases the local writer and withholds the 
   const { directory, options } = await fixture(t);
   const instanceId = randomUUID();
   const outboxPath = join(directory, 'outbox.json');
-  for (const [key, value] of Object.entries({
-    MIZAR_STATE_ROOT: directory,
-    MIZAR_PRODUCT_INSTANCE: instanceId,
-  })) {
-    const previous = process.env[key];
-    process.env[key] = value;
-    t.after(() => {
-      if (previous === undefined) delete process.env[key];
-      else process.env[key] = previous;
-    });
-  }
+  withEnv(t, { MIZAR_STATE_ROOT: directory, MIZAR_PRODUCT_INSTANCE: instanceId });
   const failure = new Error('consumer could not close');
   const app = buildApp({
     ...options,
@@ -501,17 +502,7 @@ test('an overdue website shutdown releases the real SQLite writer before the loc
   const path = join(state, 'reliable-outbox.json');
   await mkdir(state);
   const receipt = join(state, `runtime-flush-${instanceId}.json`);
-  for (const [key, value] of Object.entries({
-    MIZAR_STATE_ROOT: directory,
-    MIZAR_PRODUCT_INSTANCE: instanceId,
-  })) {
-    const previous = process.env[key];
-    process.env[key] = value;
-    t.after(() => {
-      if (previous === undefined) delete process.env[key];
-      else process.env[key] = previous;
-    });
-  }
+  withEnv(t, { MIZAR_STATE_ROOT: directory, MIZAR_PRODUCT_INSTANCE: instanceId });
   let resolveRemote!: () => void;
   const remote = new Promise<void>((resolve) => {
     resolveRemote = resolve;
@@ -634,17 +625,7 @@ test('entering workspace bounds broadcast wait and BusinessJournal failure does 
   const artifactSha256 = 'b'.repeat(64);
   const dataDir = join(directory, 'data');
   await mkdir(dataDir);
-  for (const [key, value] of Object.entries({
-    MIZAR_STATE_ROOT: directory,
-    MIZAR_PRODUCT_INSTANCE: instanceId,
-  })) {
-    const previous = process.env[key];
-    process.env[key] = value;
-    t.after(() => {
-      if (previous === undefined) delete process.env[key];
-      else process.env[key] = previous;
-    });
-  }
+  withEnv(t, { MIZAR_STATE_ROOT: directory, MIZAR_PRODUCT_INSTANCE: instanceId });
 
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const production = createProduction({

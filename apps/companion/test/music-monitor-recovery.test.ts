@@ -375,311 +375,203 @@ test('offline OBS produces zero automatic RPCs or failure diagnostics, aggregate
   assert.equal(diagnostics.filter((d) => d.stage === 'music_operation_recovered').length, 1);
 });
 
-test('monitor(true) leaves monitorConfigured unset while relationship is unknown, requires readback before persisting, and applies once relationship becomes different', async (t) => {
-  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-confirm-'));
+async function createMusicRig(
+  t: import('node:test').TestContext,
+  truth: () => MusicTruth,
+  overrides: Partial<MusicDevice> & { epoch?: () => number } = {},
+) {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-rig-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new MusicStore(directory);
   await store.load();
-  await store.update((state) => {
-    state.sources.bgm = 'bgm-uuid';
-    state.sourceScopes.bgm = 'owned-collection';
-  });
-  let relationship: 'unknown' | 'different' = 'unknown';
-  let actualMode: MusicMonitorMode = 'off';
-  let failReadback = true;
-  const writes: MusicMonitorMode[] = [];
   const device: Partial<MusicDevice> = {
-    hasSource: async (_store, layer) => layer === 'bgm',
-    monitorRelationship: async () => relationship,
+    hasSource: async () => true,
+    monitorRelationship: async () => 'independent',
     monitorSafe: async () => true,
-    readManagedMonitorModes: async () => [actualMode],
-    mediaStatus: async () => ({ state: 'stopped' as const, cursorMs: 0, durationMs: 0 }),
+    monitorMode: async () => 'monitor-and-output',
+    setMonitorMode: async () => {},
+    readManagedMonitorModes: async () => ['monitor-and-output'],
+    mediaStatus: async () => ({ state: 'stopped', cursorMs: 0, durationMs: 0 }),
     mute: async () => false,
     volume: async () => 1,
     mediaFile: async () => '',
+    loadMedia: async () => {},
     controlMedia: async () => {},
     setVolume: async () => {},
     setMute: async () => {},
     verifyPlayback: async () => {},
+    ...overrides,
     checkCalls: () => device as unknown as MusicDevice,
-    setMonitorMode: async ({ mode }) => {
-      writes.push(mode);
-      if (!failReadback) actualMode = mode;
-    },
-    monitorMode: async () => actualMode,
-  } satisfies Partial<MusicDevice>;
-  const provider: MusicDeviceProvider = {
-    collectionRevision: 1,
-    session: (run) => run(device as unknown as MusicDevice, 1),
-    close: async () => {},
   };
-  const truth = (): MusicTruth => ({
-    active: 'waiting',
-    production: true,
-    program: {
-      map: { name: 'de_test', phase: null },
-      cursor: { mapEpoch: 1 },
-      match: null,
-      clock: null,
-      status: { telemetry: 'fresh' },
-    } as MusicTruth['program'],
-  });
   let now = 1000;
-  const director = new MusicDirector(store, provider, truth, () => now);
+  const director = new MusicDirector(
+    store,
+    {
+      collectionRevision: 1,
+      session: (run) => run(device as unknown as MusicDevice, overrides.epoch?.() ?? 1),
+      close: async () => {},
+    },
+    truth,
+    () => now,
+  );
+  return { store, director, tick: (stepMs = 500) => ((now += stepMs), director.tick()) };
+}
 
-  // Unknown relationship with monitor(true): keeps monitorPending=true, does not force 'off' or mark configured.
-  await director.monitor(true);
+test('monitor(true) leaves monitorConfigured unset while unknown, requires readback, and applies once different', async (t) => {
+  let relationship: 'unknown' | 'different' = 'unknown';
+  let actualMode: MusicMonitorMode = 'off';
+  let failReadback = true;
+  const writes: MusicMonitorMode[] = [];
+  const rig = await createMusicRig(
+    t,
+    () => ({
+      active: 'waiting',
+      production: true,
+      program: {
+        map: { name: 'de_test', phase: null },
+        cursor: { mapEpoch: 1 },
+        match: null,
+        clock: null,
+        status: { telemetry: 'fresh' },
+      } as MusicTruth['program'],
+    }),
+    {
+      hasSource: async (_s, layer) => layer === 'bgm',
+      monitorRelationship: async () => relationship,
+      readManagedMonitorModes: async () => [actualMode],
+      monitorMode: async () => actualMode,
+      setMonitorMode: async ({ mode }) => {
+        writes.push(mode);
+        if (!failReadback) actualMode = mode;
+      },
+    },
+  );
+  await rig.store.update((s) => {
+    s.sources.bgm = 'bgm-uuid';
+    s.sourceScopes.bgm = 'owned-collection';
+  });
+  await rig.director.monitor(true);
   assert.deepEqual(writes, []);
-  assert.equal(store.state.monitorConfigured.bgm, null);
-  assert.equal(director.get().monitor, 'unknown');
-  assert.equal(director.get().monitorPending, true);
+  assert.equal(rig.store.state.monitorConfigured.bgm, null);
+  assert.equal(rig.director.get().monitorPending, true);
 
-  // Relationship becomes 'different' but readback fails: must NOT mark monitorConfigured.
   relationship = 'different';
-  director.noteMonitorSettingsChanged();
-  now += 500;
-  await director.tick();
+  rig.director.noteMonitorSettingsChanged();
+  await rig.tick();
   assert.deepEqual(writes, ['monitor-and-output']);
-  assert.equal(store.state.monitorConfigured.bgm, null);
+  assert.equal(rig.store.state.monitorConfigured.bgm, null);
 
-  // Next check with working readback applies, confirms, and persists monitorConfigured.
   failReadback = false;
-  director.noteMonitorSettingsChanged();
-  now += 500;
-  await director.tick();
-  assert.equal(actualMode, 'monitor-and-output');
-  assert.equal(store.state.monitorConfigured.bgm, 'bgm-uuid');
-  assert.equal(director.get().monitor, 'enabled');
-  assert.equal(director.get().monitorPending, false);
+  rig.director.noteMonitorSettingsChanged();
+  await rig.tick();
+  assert.equal(rig.store.state.monitorConfigured.bgm, 'bgm-uuid');
+  assert.equal(rig.director.get().monitor, 'enabled');
+  assert.equal(rig.director.get().monitorPending, false);
 });
 
-test('transient media states and stinger external control do not falsely hold automatic BGM', async (t) => {
-  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-hold-isolation-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new MusicStore(directory);
-  await store.load();
-  await store.update((state) => {
-    state.sources.bgm = 'bgm-uuid';
-    state.sources.stinger = 'stinger-uuid';
-    state.sourceScopes.bgm = 'owned-collection';
-    state.sourceScopes.stinger = 'owned-collection';
-    state.bgm = {
-      group: 'waiting',
-      key: 'waiting:m1',
-      track: {
-        id: `${'a'.repeat(64)}.mp3`,
-        name: 'Track 1',
-        startMs: 0,
-        endMs: null,
-        gain: 1,
-      },
-      configRevision: state.configRevision,
-      finished: false,
-      suspended: false,
-      cursorMs: 0,
-    };
-  });
-
+test('transient media states and stinger control isolate stingerHeld without falsely holding BGM, and drift requires two independent ticks', async (t) => {
+  const track = { id: `${'b'.repeat(64)}.mp3`, name: 'Track', startMs: 0, endMs: null, gain: 1 };
   let bgmState: 'opening' | 'playing' | 'paused' = 'opening';
   let bgmVolume = 0;
-  let stingerPaused = false;
+  let stingerState: 'stopped' | 'paused' = 'stopped';
   let epoch = 1;
-  const device: Partial<MusicDevice> = {
-    hasSource: async () => true,
-    monitorRelationship: async () => 'independent' as const,
-    monitorSafe: async () => true,
-    monitorMode: async () => 'off' as const,
-    mediaStatus: async ({ sourceId }) =>
-      sourceId === 'stinger-uuid'
-        ? {
-            state: stingerPaused ? ('paused' as const) : ('stopped' as const),
-            cursorMs: 0,
-            durationMs: 0,
-          }
-        : { state: bgmState, cursorMs: 0, durationMs: 10_000 },
-    mute: async () => false,
-    volume: async ({ sourceId }) => (sourceId === 'stinger-uuid' ? 1 : bgmVolume),
-    mediaFile: async () => '',
-    setVolume: async ({ gain }) => {
-      bgmVolume = gain;
+  let phase: 'warmup' | 'live' = 'live';
+  let active: 'waiting' | 'gameplay' = 'gameplay';
+  const rig = await createMusicRig(
+    t,
+    () => ({
+      active,
+      production: true,
+      program: {
+        map: { name: 'de_test', phase, roundNumber: 0, score: { ct: 0, t: 0 } },
+        cursor: { mapEpoch: 1 },
+        match: { matchId: 'm1' },
+        series: {
+          bindingState: 'bound',
+          currentMapOrder: 1,
+          entrants: { a: { entryId: 'a' }, b: { entryId: 'b' } },
+        },
+        clock: { phase: 'live' },
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+      } as MusicTruth['program'],
+    }),
+    {
+      epoch: () => epoch,
+      mediaStatus: async ({ sourceId }) =>
+        sourceId === 'stinger-uuid'
+          ? { state: stingerState, cursorMs: 0, durationMs: 5000 }
+          : { state: bgmState, cursorMs: 0, durationMs: 10_000 },
+      volume: async ({ sourceId }) => (sourceId === 'stinger-uuid' ? 1 : bgmVolume),
+      mediaFile: async () => '/tmp/fake-track.mp3',
+      setVolume: async ({ sourceId, gain }) => {
+        if (sourceId === 'bgm-uuid') bgmVolume = gain;
+      },
+      controlMedia: async ({ sourceId, action }) => {
+        if (sourceId === 'stinger-uuid' && action === 'restart') stingerState = 'paused';
+      },
     },
-    setMute: async () => {},
-    controlMedia: async () => {},
-    verifyPlayback: async () => {},
-    checkCalls: () => device as unknown as MusicDevice,
-  } satisfies Partial<MusicDevice>;
-  const provider: MusicDeviceProvider = {
-    collectionRevision: 1,
-    session: (run) => run(device as unknown as MusicDevice, epoch),
-    close: async () => {},
-  };
-  const truth = (): MusicTruth => ({
-    active: 'gameplay',
-    production: true,
-    program: {
-      map: { name: 'de_test', phase: 'live' },
-      cursor: { mapEpoch: 1 },
-      match: { matchId: 'm1' },
-      clock: { phase: 'live' },
-      status: { telemetry: 'fresh' },
-    } as MusicTruth['program'],
-  });
-  let now = 1000;
-  const director = new MusicDirector(store, provider, truth, () => now);
-
-  // 1. Opening state with mismatched volume does not falsely enter external hold.
-  await director.tick();
-  assert.equal(director.get().held, false);
-  assert.equal(store.state.held, false);
-
-  // 2. Single-poll volume drift during playing does not hold; reconnect does not hold.
-  bgmState = 'playing';
-  bgmVolume = 0.2;
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().held, false);
-  epoch = 2; // reconnect clears transient drift counter
-  bgmVolume = store.state.master;
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().held, false);
-
-  // 3. External pause on stinger holds ONLY stinger, leaving BGM automatic.
-  stingerPaused = true;
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().stingerHeld, true);
-  assert.equal(director.get().held, false);
-  assert.equal(store.state.held, false);
-
-  // 4. Real external pause on BGM holds BGM without locking automatic intent permanently on stinger unless already held.
-  await store.hold(false);
-  stingerPaused = false;
-  bgmState = 'paused';
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().held, true);
-  assert.equal(store.state.holdReason, 'external');
-  assert.equal(director.get().stingerHeld, false);
-});
-
-test('single-tick volume drift does not hold active BGM, two independent ticks do, and stinger waitAfterRestart pause isolates stingerHeld', async (t) => {
-  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-music-drift-isolation-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new MusicStore(directory);
-  await store.load();
-  store.trackPath = async () => '/tmp/fake-track.mp3';
-  const track = {
-    id: `${'b'.repeat(64)}.mp3`,
-    name: 'Waiting Track',
-    startMs: 0,
-    endMs: null,
-    gain: 1,
-  };
-  await store.update((state) => {
-    state.sources.bgm = 'bgm-uuid';
-    state.sources.stinger = 'stinger-uuid';
-    state.sourceScopes.bgm = 'owned-collection';
-    state.sourceScopes.stinger = 'owned-collection';
-    state.config.groups.waiting = {
-      ...state.config.groups.waiting,
-      enabled: true,
-      tracks: [track],
-    };
-    state.config.groups.opening = {
-      ...state.config.groups.opening,
-      enabled: true,
-      tracks: [track],
-    };
-    state.bgm = {
+  );
+  rig.store.trackPath = async () => '/tmp/fake-track.mp3';
+  await rig.store.update((s) => {
+    s.sources.bgm = 'bgm-uuid';
+    s.sources.stinger = 'stinger-uuid';
+    s.sourceScopes.bgm = 'owned-collection';
+    s.sourceScopes.stinger = 'owned-collection';
+    s.config.groups.waiting = { ...s.config.groups.waiting, enabled: true, tracks: [track] };
+    s.config.groups.opening = { ...s.config.groups.opening, enabled: true, tracks: [track] };
+    s.bgm = {
       group: 'waiting',
       key: 'waiting:m1',
       track,
-      configRevision: state.configRevision,
+      configRevision: s.configRevision,
       finished: false,
       suspended: false,
       cursorMs: 0,
     };
   });
 
-  let bgmVolume = 1;
-  let stingerState: 'stopped' | 'paused' = 'stopped';
-  const device: Partial<MusicDevice> = {
-    hasSource: async () => true,
-    monitorRelationship: async () => 'independent' as const,
-    monitorSafe: async () => true,
-    monitorMode: async () => 'monitor-and-output' as const,
-    setMonitorMode: async () => {},
-    readManagedMonitorModes: async () => ['monitor-and-output'],
-    mediaStatus: async ({ sourceId }) =>
-      sourceId === 'stinger-uuid'
-        ? { state: stingerState, cursorMs: 0, durationMs: 5000 }
-        : { state: 'playing' as const, cursorMs: 100, durationMs: 10_000 },
-    mute: async () => false,
-    volume: async ({ sourceId }) => (sourceId === 'stinger-uuid' ? 1 : bgmVolume),
-    mediaFile: async () => await store.trackPath(track.id),
-    loadMedia: async () => {},
-    setVolume: async ({ sourceId, gain }) => {
-      if (sourceId === 'bgm-uuid') bgmVolume = gain;
-    },
-    setMute: async () => {},
-    controlMedia: async ({ sourceId, action }) => {
-      if (sourceId === 'stinger-uuid' && action === 'restart') {
-        stingerState = 'paused';
-      }
-    },
-    verifyPlayback: async () => {},
-    checkCalls: () => device as unknown as MusicDevice,
-  } satisfies Partial<MusicDevice>;
-  const provider: MusicDeviceProvider = {
-    collectionRevision: 1,
-    session: (run) => run(device as unknown as MusicDevice, 1),
-    close: async () => {},
-  };
-  const truth = (): MusicTruth => ({
-    active: 'waiting',
-    production: true,
-    program: {
-      map: { name: 'de_test', phase: 'warmup', roundNumber: 0, score: { ct: 0, t: 0 } },
-      cursor: { mapEpoch: 1 },
-      match: { matchId: 'm1' },
-      series: {
-        bindingState: 'bound',
-        currentMapOrder: 1,
-        entrants: { a: { entryId: 'a' }, b: { entryId: 'b' } },
-      },
-      clock: { phase: 'live' },
-      status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
-    } as MusicTruth['program'],
-  });
-  let now = 1000;
-  const director = new MusicDirector(store, provider, truth, () => now);
+  // Opening/buffering mismatch and single-tick drift do not hold; reconnect clears drift counter.
+  await rig.tick();
+  assert.equal(rig.director.get().held, false);
+  bgmState = 'playing';
+  bgmVolume = 0.2;
+  await rig.tick();
+  assert.equal(rig.director.get().held, false);
+  epoch = 2;
+  bgmVolume = rig.store.state.master;
+  await rig.tick();
+  assert.equal(rig.director.get().held, false);
 
-  // Establish applied volume on bgm.
-  await director.tick();
-  assert.equal(director.get().held, false);
+  // External pause on stinger holds ONLY stinger; real pause on BGM holds BGM cleanly.
+  stingerState = 'paused';
+  await rig.tick();
+  assert.equal(rig.director.get().stingerHeld, true);
+  assert.equal(rig.director.get().held, false);
 
-  // 1. Single tick with volume drift across both observeManualControls() and layer() must NOT hold.
+  await rig.store.hold(false);
+  stingerState = 'stopped';
+  bgmState = 'paused';
+  await rig.tick();
+  assert.equal(rig.director.get().held, true);
+  assert.equal(rig.director.get().stingerHeld, false);
+
+  // Active BGM cue: 1 tick of drift across observeManualControls()+layer() does NOT hold, 2nd tick holds; stinger waitAfterRestart pause stays isolated.
+  await rig.director.command('resume');
+  active = 'waiting';
+  phase = 'warmup';
+  bgmState = 'playing';
+  bgmVolume = 1;
+  await rig.tick();
   bgmVolume = 0.25;
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().held, false);
+  await rig.tick();
+  assert.equal(rig.director.get().held, false);
+  await rig.tick();
+  assert.equal(rig.director.get().held, true);
 
-  // 2. Second independent tick with persistent drift DOES hold BGM.
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().held, true);
-  assert.equal(store.state.holdReason, 'external');
-
-  // 3. Stinger external pause during waitAfterRestart() holds ONLY stinger, never BGM.
-  bgmVolume = store.state.master;
-  await director.command('resume');
-  assert.equal(director.get().held, false);
-
-  director.opening('opening:1', track);
-  now += 500;
-  await director.tick();
-  assert.equal(director.get().stingerHeld, true);
-  assert.equal(director.get().held, false);
-  assert.equal(store.state.held, false);
+  bgmVolume = rig.store.state.master;
+  await rig.director.command('resume');
+  rig.director.opening('opening:1', track);
+  await rig.tick();
+  assert.equal(rig.director.get().stingerHeld, true);
+  assert.equal(rig.director.get().held, false);
 });
