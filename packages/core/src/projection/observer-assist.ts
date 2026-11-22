@@ -91,12 +91,9 @@ export class ObserverHintTimeline {
   private lastDeathSequence = -1;
   private lastAcceptedRound: number | undefined;
   private sourceExecution: number | undefined;
-  private sourceExecutionGeneration: number | undefined;
   private sourceExecutionFence: {
     sawNonLive: boolean;
-    lockedRound: number | null | undefined;
-    maxProgramRound: number | null;
-    priorExecutionHadRounds: boolean;
+    maxRound: number | null;
   } | null = null;
   private earliest = -Infinity;
   private lastNow = 0;
@@ -198,7 +195,6 @@ export class ObserverHintTimeline {
     this.sealedSource = undefined;
     this.lastAcceptedRound = undefined;
     this.sourceExecution = undefined;
-    this.sourceExecutionGeneration = undefined;
     this.sourceExecutionFence = null;
     this.nextDueMs = null;
     this.nextWindowMs = null;
@@ -243,15 +239,9 @@ export class ObserverHintTimeline {
       event.cursor.roundsCompleted < this.lastAcceptedRound
     ) {
       // A round regression proves the match restarted (e.g. during a disconnect).
-      const priorExecutionHadRounds = this.lastAcceptedRound > 0;
       this.replaceBuffered('source-execution');
       this.lastAcceptedRound = undefined;
-      this.sourceExecutionFence ??= {
-        sawNonLive: false,
-        lockedRound: undefined,
-        maxProgramRound: null,
-        priorExecutionHadRounds,
-      };
+      this.sourceExecutionFence ??= { sawNonLive: false, maxRound: null };
     }
     if (event.cursor.roundsCompleted !== undefined) {
       this.lastAcceptedRound =
@@ -442,47 +432,36 @@ export class ObserverHintTimeline {
       (program.map.phase === undefined && program.clock?.phase === 'live')
     );
   }
-  private engageExecutionFence(
-    program: ObserverProgramView,
-    priorExecutionHadRounds = (this.lastAcceptedRound ?? 0) > 0,
-  ) {
-    const round = program.map.roundNumber ?? null;
+  private engageExecutionFence(program: ObserverProgramView) {
     this.sourceExecutionFence = {
       sawNonLive: program.map.phase === 'warmup' || !this.isLivePhase(program),
-      lockedRound: round,
-      maxProgramRound: round,
-      priorExecutionHadRounds,
+      maxRound: program.map.roundNumber ?? null,
     };
   }
   private observeExecution(
     execution: number | undefined,
-    generation: number,
+    generationChanged: boolean,
     program: ObserverProgramView,
   ) {
     if (execution === undefined) return;
     if (
-      this.sourceExecutionGeneration === generation &&
       this.sourceExecution !== undefined &&
-      execution !== this.sourceExecution
+      execution !== this.sourceExecution &&
+      (!generationChanged || execution !== 0)
     ) {
-      const priorExecutionHadRounds = (this.lastAcceptedRound ?? 0) > 0;
       this.lastAcceptedRound = undefined;
-      this.engageExecutionFence(program, priorExecutionHadRounds);
+      this.engageExecutionFence(program);
       this.replaceBuffered('source-execution');
     }
     this.sourceExecution = execution;
-    this.sourceExecutionGeneration = generation;
   }
   private reconcileExecutionFence(program: ObserverProgramView) {
     const fence = this.sourceExecutionFence;
     if (!fence || program.status.telemetry !== 'fresh') return;
     const round = program.map.roundNumber ?? null;
-    if (fence.lockedRound === undefined) {
-      fence.lockedRound = round;
-      fence.maxProgramRound = round;
-    } else if (round !== null) {
-      fence.maxProgramRound =
-        fence.maxProgramRound === null ? round : Math.max(fence.maxProgramRound, round);
+    const previousMax = fence.maxRound;
+    if (round !== null) {
+      fence.maxRound = previousMax === null ? round : Math.max(previousMax, round);
     }
     if (program.map.phase === 'warmup' || !this.isLivePhase(program)) {
       fence.sawNonLive = true;
@@ -490,8 +469,9 @@ export class ObserverHintTimeline {
     }
     if (
       fence.sawNonLive ||
-      (fence.maxProgramRound !== null && fence.maxProgramRound > 0 && round === 0) ||
-      (fence.lockedRound === 0 && !fence.priorExecutionHadRounds && round !== null && round > 0)
+      (previousMax !== null &&
+        round !== null &&
+        (round < previousMax || (previousMax === 0 && round > 0)))
     ) {
       this.sourceExecutionFence = null;
     }
@@ -585,7 +565,6 @@ export class ObserverHintTimeline {
       this.reset('program-context', now, pending);
       if (pendingConflict) {
         this.sourceExecution = sourceExecution;
-        this.sourceExecutionGeneration = source.generation;
         this.engageExecutionFence(program);
       }
       this.pendingMap = null;
@@ -596,7 +575,8 @@ export class ObserverHintTimeline {
         map: program.map.name,
       };
     }
-    if (this.generation === undefined || source.generation > this.generation) {
+    const generationChanged = this.generation === undefined || source.generation > this.generation;
+    if (generationChanged) {
       this.advanceGeneration(source.generation, this.canRetainAcrossGeneration());
     }
     if (source.generation !== this.generation) {
@@ -605,7 +585,7 @@ export class ObserverHintTimeline {
     }
     if (!waitingForNextMap) this.releaseStaged(program, source, sourceExecution);
     if (source.sameMap === true) {
-      this.observeExecution(sourceExecution, source.generation, program);
+      this.observeExecution(sourceExecution, generationChanged, program);
     }
     this.reconcileExecutionFence(program);
     const scope = JSON.stringify([

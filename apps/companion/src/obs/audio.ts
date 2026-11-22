@@ -330,6 +330,7 @@ export async function syncManagedMicrophoneAcrossScenes(
   baseUrl: string,
   target?: { sceneName: string; sceneItemId: number; enabled: boolean },
   recordSelfWrite?: (sceneName: string, sceneItemId: number, enabled: boolean) => void,
+  clearSelfWrite?: (sceneName: string, sceneItemId: number, enabled: boolean) => void,
 ): Promise<boolean | null> {
   if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
     return null;
@@ -389,11 +390,16 @@ export async function syncManagedMicrophoneAcrossScenes(
       if (item.sourceUuid !== micUuid || (item.sceneItemEnabled !== false) === desiredEnabled)
         continue;
       recordSelfWrite?.(scene.sceneName, item.sceneItemId, desiredEnabled);
-      await obs.call('SetSceneItemEnabled', {
-        sceneName: scene.sceneName,
-        sceneItemId: item.sceneItemId,
-        sceneItemEnabled: desiredEnabled,
-      });
+      try {
+        await obs.call('SetSceneItemEnabled', {
+          sceneName: scene.sceneName,
+          sceneItemId: item.sceneItemId,
+          sceneItemEnabled: desiredEnabled,
+        });
+      } catch (error) {
+        clearSelfWrite?.(scene.sceneName, item.sceneItemId, desiredEnabled);
+        throw error;
+      }
     }
   }
   return desiredEnabled;

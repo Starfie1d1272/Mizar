@@ -527,25 +527,7 @@ export class ManagedObsResources {
           ].includes(role.kind)
         )
           continue;
-        let micEnabled = false;
         if (listed.inputs.some((input) => input.inputUuid === role.uuid)) {
-          if (name === '麦克风') {
-            for (const scene of listed.scenes) {
-              const items = rows(
-                (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
-              );
-              if (
-                items.some(
-                  (item) => item.sourceUuid === role.uuid && item.sceneItemEnabled === true,
-                )
-              ) {
-                micEnabled = true;
-                break;
-              }
-            }
-            role.enabled = micEnabled;
-            await this.save(registry!);
-          }
           const waiting = rows(
             (await raw.call('GetSceneItemList', { sceneName: desired[0]!.sceneName })).sceneItems,
           );
@@ -553,7 +535,7 @@ export class ManagedObsResources {
             await writer.call('CreateSceneItem', {
               sceneName: desired[0]!.sceneName,
               sourceName: name,
-              sceneItemEnabled: micEnabled,
+              sceneItemEnabled: false,
             });
           }
         } else
@@ -562,7 +544,7 @@ export class ManagedObsResources {
             inputName: name,
             inputKind: role.kind,
             inputSettings: role.settings ?? {},
-            sceneItemEnabled: name === '麦克风' && role.enabled !== false,
+            sceneItemEnabled: false,
           });
       }
       const { scenes } = await inventory();
@@ -795,21 +777,6 @@ export class ManagedObsResources {
               }
             }
           }
-          const microphone = registry?.roles['麦克风'];
-          const changesMicrophone =
-            type === 'SetSceneItemEnabled' &&
-            microphone &&
-            rows(
-              (
-                await raw.call(
-                  'GetSceneItemList',
-                  data?.sceneUuid ? { sceneUuid: data.sceneUuid } : { sceneName: data?.sceneName },
-                )
-              ).sceneItems,
-            ).some(
-              (item) =>
-                item.sceneItemId === data?.sceneItemId && item.sourceUuid === microphone.uuid,
-            );
           const result = await dispatch(type, data, onDispatch);
           if (type === 'CreateScene' || type === 'CreateInput') {
             const name = String(type === 'CreateScene' ? args?.sceneName : args?.inputName);
@@ -821,28 +788,9 @@ export class ManagedObsResources {
               uuid,
               kind,
               ...(type === 'CreateInput' && audio.has(name)
-                ? {
-                    settings: data?.inputSettings as Row,
-                    ...(name === '麦克风' ? { enabled: data?.sceneItemEnabled === true } : {}),
-                  }
+                ? { settings: data?.inputSettings as Row }
                 : {}),
             };
-            await this.save(registry!);
-          }
-          if (changesMicrophone && microphone) {
-            let enabled = false;
-            for (const scene of (await inventory()).scenes) {
-              const items = rows(
-                (await raw.call('GetSceneItemList', { sceneUuid: scene.sceneUuid })).sceneItems,
-              );
-              if (
-                items.some(
-                  (item) => item.sourceUuid === microphone.uuid && item.sceneItemEnabled === true,
-                )
-              )
-                enabled = true;
-            }
-            microphone.enabled = enabled;
             await this.save(registry!);
           }
           if (type === 'SetInputSettings') {

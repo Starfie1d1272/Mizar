@@ -99,12 +99,15 @@ describe('director transient failure recovery and OBS transition readback', () =
     expect(rig.director.get().mode).toBe('blocked');
     expect(rig.director.get().reason).toContain('OBS 场景切换未完成');
 
-    rig.state.now = 1500;
-    await rig.director.tick();
+    for (const ts of [1500, 3000, 7000, 14_000, 30_000]) {
+      rig.state.now = ts;
+      await rig.director.tick();
+    }
     expect(switched).toEqual([]);
 
+    // Still recovers automatically after >3 transient failures without permanent Infinity wait.
     obsReady = true;
-    rig.state.now = 3000;
+    rig.state.now = 65_000;
     await rig.director.tick();
     expect(switched).toEqual(['gameplay']);
     expect(rig.director.get().mode).toBe('auto');
