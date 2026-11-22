@@ -47,7 +47,13 @@ export class ProgramDirector {
     sceneElapsedMs: 0,
   };
   private manual = false;
-  private failure: string | null = null;
+  private retryBlock: {
+    message: string;
+    target: ProgramSceneId;
+    until: number;
+    attempts: number;
+    revision: string;
+  } | null = null;
   private inFlight: ProgramSceneId | null = null;
   private warmupChoice: 'waiting' | 'gameplay' = 'waiting';
   private warmupChoiceKey: SceneMatchScope | '' = '';
@@ -114,10 +120,11 @@ export class ProgramDirector {
   interrupt(): void {
     this.generation++;
     this.lastTime = this.now();
+    if (this.retryBlock) this.retryBlock.until = 0;
   }
   resume(): void {
     this.manual = false;
-    this.failure = null;
+    this.retryBlock = null;
     this.lastTime = this.now();
     this.generation++;
   }
@@ -265,10 +272,6 @@ export class ProgramDirector {
     if (!this.wasProduction) {
       this.wasProduction = true;
       if (!this.manual) this.interrupt();
-    }
-    if (this.failure && !this.manual) {
-      this.view = { ...this.view, mode: 'blocked', reason: this.failure, blockCause: null };
-      return;
     }
     const matchKey = sceneMatchScope(p);
     if (matchKey !== this.matchKey) {
@@ -462,6 +465,7 @@ export class ProgramDirector {
     // Manual hold keeps the recommendation live without issuing or consuming a Take.
     if (this.manual) return;
     if (target === active) {
+      this.retryBlock = null;
       if (finalBp) {
         this.bp.showFinal();
         this.introStarted = true;
@@ -479,6 +483,31 @@ export class ProgramDirector {
         this.elapsed = 0;
       }
       return;
+    }
+    const preconditionBlocked = this.scenes.automaticBlockedReason(target);
+    if (preconditionBlocked !== null) {
+      this.retryBlock = null;
+      this.view = {
+        ...this.view,
+        mode: 'blocked',
+        reason: preconditionBlocked,
+        blockCause: null,
+      };
+      return;
+    }
+    const sceneRevision = this.scenes.get().revision;
+    if (this.retryBlock && this.retryBlock.target === target) {
+      if (this.retryBlock.revision !== sceneRevision) {
+        this.retryBlock = null;
+      } else if (time < this.retryBlock.until) {
+        this.view = {
+          ...this.view,
+          mode: 'blocked',
+          reason: this.retryBlock.message,
+          blockCause: null,
+        };
+        return;
+      }
     }
     const resultAction =
       resultProgression && ['map_result', 'intermap', 'match_result'].includes(target);
@@ -537,9 +566,35 @@ export class ProgramDirector {
                     this.timings.shortIntroMs)))
         )
           return;
-        if (!this.manual) this.failure = result.message;
+        if (!this.manual) {
+          const retryable = 'retryable' in result ? result.retryable : true;
+          const attempts =
+            retryable && this.retryBlock && this.retryBlock.target === target
+              ? this.retryBlock.attempts + 1
+              : retryable
+                ? 1
+                : 0;
+          const until =
+            retryable && attempts <= 3
+              ? this.now() + Math.min(5000, 1500 * 2 ** (attempts - 1))
+              : Number.POSITIVE_INFINITY;
+          this.retryBlock = {
+            message: result.message,
+            target,
+            until,
+            attempts,
+            revision: this.scenes.get().revision,
+          };
+          this.view = {
+            ...this.view,
+            mode: 'blocked',
+            reason: result.message,
+            blockCause: null,
+          };
+        }
         return;
       }
+      this.retryBlock = null;
       this.scene = target;
       this.elapsed = 0;
       if (target === 'bp') {
