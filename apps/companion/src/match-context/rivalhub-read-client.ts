@@ -268,7 +268,12 @@ export class RivalHubReadClient {
       `schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     );
     if (installation !== this.installation) throw new Error('赛事连接已变化。');
-    if (!response.ok) throw new Error('赛事赛程暂时无法获取。');
+    if (!response.ok) {
+      const error = new Error('赛事赛程暂时无法获取。') as Error & { retryAfterMs?: number };
+      if (response.status === 429)
+        error.retryAfterMs = statsRetryDelay(response.headers.get('retry-after'));
+      throw error;
+    }
     const result = validateBroadcastScheduleWindow(await this.readJson(response));
     if (installation !== this.installation) throw new Error('赛事连接已变化。');
     if (!result.ok) throw new Error('赛事赛程格式不兼容。');
@@ -339,9 +344,9 @@ export class RivalHubReadClient {
     return this.browsingLibrary.value;
   }
 
-  async library() {
+  async library(fresh = false) {
     const installation = this.installation;
-    const result = await this.libraryForCurrentScope().view();
+    const result = await this.libraryForCurrentScope().view(fresh);
     if (this.installation !== installation) throw new Error('赛事连接已变化。');
     return {
       ...result,

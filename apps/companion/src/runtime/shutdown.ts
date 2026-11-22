@@ -108,7 +108,7 @@ export function registerCompanionShutdown(
       await recorder.finalize();
       recorder.assertDurableFinalized?.();
     });
-    await closeStep(async () => {
+    await closeDiagnostics(async () => {
       const businessJournal = owners.readBusinessJournal();
       await businessJournal?.close();
       if (

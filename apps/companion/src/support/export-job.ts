@@ -185,8 +185,20 @@ export class SupportExports {
       return bytes;
     };
     for (const name of await readdir(this.directory)) {
-      if (!idPattern.test(name)) throw new Error('export_cache_unknown_entry');
-      const path = await safePath(join(this.directory, name));
+      const entryPath = join(this.directory, name);
+      if (!idPattern.test(name)) {
+        // Retain unknown entries untouched and charge their safe byte footprint against budget.
+        const st = await lstat(entryPath);
+        if (
+          st.isSymbolicLink() ||
+          (st.isFile() && st.nlink !== 1) ||
+          (!st.isFile() && !st.isDirectory())
+        )
+          throw new Error('export_cache_unsafe');
+        used += st.isFile() ? st.size : await size(entryPath);
+        continue;
+      }
+      const path = await safePath(entryPath);
       const stat = await lstat(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('export_cache_unsafe');
       if (Date.now() - stat.mtimeMs > 15 * 60_000) {

@@ -291,16 +291,22 @@ export function createProduction(options: ProductionDependencies) {
     // A lost response must not turn an already committed entry into a new entry.
     if (body?.action === 'enter' && entryId && lastEnteredId === entryId && mode !== 'preparation')
       return { ok: true as const, value: view() };
-    if (body?.action === 'enter' && mode === 'preparation') {
+    if (body?.action === 'enter' && mode === 'preparation' && options.waitForBroadcast) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await options.waitForBroadcast?.();
+        await Promise.race([
+          options.waitForBroadcast(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('broadcast_sync_timeout')), 2500);
+          }),
+        ]);
       } catch (error) {
-        options.error({ stage: 'broadcast_owner_sync', err: error }, '播出配置同步失败');
-        return {
-          ok: false as const,
-          failure: 'broadcastSyncFailure' as const,
-          message: '播出配置同步失败，请重试使用方案。',
-        };
+        options.warn(
+          { stage: 'broadcast_owner_sync', err: error },
+          '播出配置同步尚未完成，已允许先进入工作台',
+        );
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     if (entryId && preparationCancelled(entryId))

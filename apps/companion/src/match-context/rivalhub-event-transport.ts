@@ -52,6 +52,8 @@ export type RivalHubTransportSource = ExactSource & {
   mapStartAttempt?: symbol;
   deliveryExecution?: string;
   paused?: boolean;
+  livePaused?: boolean;
+  reliableNeedsAuthorityCheck?: boolean;
   draining?: boolean;
   drainReliable?: boolean;
 };
@@ -59,6 +61,10 @@ export type RivalHubTransportSource = ExactSource & {
 export interface RivalHubEventTransportHost {
   readonly authorization: Pick<RivalHubAuthorization, 'request'>;
   readonly fetchImpl: typeof fetch;
+  confirmSourceAuthority: (
+    source: RivalHubTransportSource,
+    signal?: AbortSignal,
+  ) => Promise<'confirmed' | 'revoked' | 'unknown'>;
   canSendRetainedReliable: (identity: ExactSource) => Promise<boolean>;
   isRetainedSourceActive: (identity: ExactSource) => boolean;
   installation: () => { baseUrl: string; credential: string; installationId: string } | null;
@@ -310,7 +316,12 @@ export class RivalHubEventTransport {
     // Keep the disposable lane behind the reliable start acknowledgement, also
     // after re-claim, generation advance and map change. No old snapshot is queued.
     const source = this.host.source();
-    if (this.host.stoppedMatchId() === snapshot.matchId || source?.paused || source?.draining)
+    if (
+      this.host.stoppedMatchId() === snapshot.matchId ||
+      source?.paused ||
+      source?.livePaused ||
+      source?.draining
+    )
       return;
     if (
       !source ||
@@ -456,7 +467,8 @@ export class RivalHubEventTransport {
     if (this.host.source() !== source || source.deliveryExecution !== execution)
       throw new Error('rivalhub_live_unavailable');
     if (lostAuthority) {
-      source.paused = true;
+      source.livePaused = true;
+      source.reliableNeedsAuthorityCheck = true;
     }
     this.host.business('business_live', snapshot, {
       reason: accepted ? 'receiver_accepted' : reason,
@@ -591,11 +603,24 @@ export class RivalHubEventTransport {
     retainedIdentity?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
     this.host.requireSourceState();
-    if (
-      (this.host.stoppedMatchId() === event.matchId || this.host.source()?.paused) &&
-      !this.host.source()?.drainReliable
-    )
+    const active = this.host.source();
+    if ((this.host.stoppedMatchId() === event.matchId || active?.paused) && !active?.drainReliable)
       return 'retry';
+    if (active?.reliableNeedsAuthorityCheck && !active.drainReliable) {
+      const verdict = await this.host.confirmSourceAuthority(active, signal);
+      if (this.host.source() !== active || signal.aborted) return 'retry';
+      if (verdict === 'confirmed') {
+        active.reliableNeedsAuthorityCheck = false;
+      } else if (verdict === 'revoked') {
+        active.reliableNeedsAuthorityCheck = false;
+        active.paused = true;
+        return 'retry';
+      } else {
+        return 'retry';
+      }
+      if ((this.host.stoppedMatchId() === event.matchId || active.paused) && !active.drainReliable)
+        return 'retry';
+    }
     const source = this.host.source();
     // Durable recovery keeps the original producer evidence. A new claim cannot
     // authorize that old producer, even when the live session was restored.

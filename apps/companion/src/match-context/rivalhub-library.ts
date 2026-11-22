@@ -25,6 +25,7 @@ export class RivalHubLibrary {
   private discovered: Promise<void> | null = null;
   private markDiscovered: (() => void) | null = null;
   private attemptedAt = -Infinity;
+  private retryNotBefore = -Infinity;
   private error: string | null = null;
   constructor(
     private readonly path: string,
@@ -88,24 +89,41 @@ export class RivalHubLibrary {
     }
   }
 
-  async view() {
+  async view(fresh = false) {
     await (this.loading ??= this.load());
-    if (!this.running && this.now() - this.attemptedAt >= 60_000) {
-      this.attemptedAt = this.now();
-      this.discovered = new Promise<void>((resolve) => {
-        this.markDiscovered = resolve;
-      });
-      this.running = this.refresh()
-        .catch(() => {
-          this.error = '网站暂时无法连接，保留上次缓存。';
-        })
-        .finally(() => {
-          this.markDiscovered?.();
-          this.running = null;
+    const now = this.now();
+    const cooledDown = fresh || now - this.attemptedAt >= 60_000;
+    if (!this.running && cooledDown) {
+      if (now < this.retryNotBefore) {
+        this.error = '网站请求过于频繁，请稍后再试；当前保留上次缓存。';
+      } else {
+        this.attemptedAt = now;
+        this.discovered = new Promise<void>((resolve) => {
+          this.markDiscovered = resolve;
         });
+        this.running = this.refresh()
+          .catch((error: unknown) => {
+            const retryAfterMs = (error as { retryAfterMs?: unknown } | null)?.retryAfterMs;
+            if (
+              typeof retryAfterMs === 'number' &&
+              Number.isFinite(retryAfterMs) &&
+              retryAfterMs > 0
+            ) {
+              this.retryNotBefore = this.now() + retryAfterMs;
+              this.error = '网站请求过于频繁，请稍后再试；当前保留上次缓存。';
+            } else {
+              this.error = '网站暂时无法连接，保留上次缓存。';
+            }
+          })
+          .finally(() => {
+            this.markDiscovered?.();
+            this.running = null;
+          });
+      }
     }
-    // Initial discovery needs the schedule; subsequent reads remain responsive during refresh.
-    if (!this.saved) await this.discovered;
+    // Manual refresh and initial discovery await the active request; background reads return cache.
+    if (fresh && this.running) await this.running;
+    else if (!this.saved) await this.discovered;
     if (!this.saved) throw new Error('赛事赛程暂时无法获取。');
     const boundary = this.now();
     const matches = this.saved.schedule.matches.filter(
@@ -139,28 +157,35 @@ export class RivalHubLibrary {
       new Date(now + 14 * 86400_000).toISOString(),
     );
     if (schedule.competition.competitionId !== this.competitionId) throw new Error('赛事不匹配。');
+    this.retryNotBefore = -Infinity;
+    const ids = new Set(schedule.matches.map((row) => row.matchId));
+    const previousSyncedAt = this.saved?.syncedAt ?? null;
     this.saved = {
       schedule,
-      entries: this.saved?.entries ?? {},
-      syncedAt: this.saved?.syncedAt ?? null,
+      entries: Object.fromEntries(
+        Object.entries(this.saved?.entries ?? {}).filter(([id]) => ids.has(id)),
+      ),
+      syncedAt: new Date(this.now()).toISOString(),
     };
-    this.markDiscovered?.();
-    this.error = null;
-    const ids = new Set(schedule.matches.map((row) => row.matchId));
-    this.saved.entries = Object.fromEntries(
-      Object.entries(this.saved.entries).filter(([id]) => ids.has(id)),
-    );
     this.manifests = Object.fromEntries(
       Object.entries(this.manifests).filter(([id]) => ids.has(id)),
     );
-    this.saved.syncedAt = new Date(this.now()).toISOString();
-    await this.persist();
+    this.markDiscovered?.();
+    try {
+      await this.persist();
+      this.error = null;
+    } catch {
+      // Keep the verified online schedule visible without falsely advancing disk syncedAt.
+      this.saved.syncedAt = previousSyncedAt;
+      this.error = '已获取最新赛程，但本机缓存保存失败，请检查磁盘空间或权限。';
+    }
   }
 
   async detail(matchId: string, fresh = true) {
     await this.view();
     if (!this.saved?.schedule.matches.some((row) => row.matchId === matchId))
       throw new Error('比赛不在当前赛事赛程中。');
+    let entry: Entry;
     try {
       const valid = validateBroadcastManifest(await this.readManifest(matchId, fresh));
       if (
@@ -172,7 +197,7 @@ export class RivalHubLibrary {
       const checkedAt = new Date(this.now()).toISOString();
       const previous = this.saved.entries[matchId];
       const changed = JSON.stringify(this.manifests[matchId]) !== JSON.stringify(valid.value);
-      const entry = {
+      entry = {
         document: toMatchDocumentV1(valid.value),
         etag: null,
         checkedAt,
@@ -180,14 +205,21 @@ export class RivalHubLibrary {
       };
       this.manifests[matchId] = valid.value;
       this.saved.entries[matchId] = entry;
-      await this.persist();
-      return { entry, error: null };
     } catch {
       return {
         entry: this.saved.entries[matchId] ?? null,
         error: this.saved.entries[matchId]
           ? '网站暂时无法连接，显示上次浏览的资料；载入前会重新核对。'
           : '完整资料尚未缓存，离线时无法查看。请连接网站后重试。',
+      };
+    }
+    try {
+      await this.persist();
+      return { entry, error: null };
+    } catch {
+      return {
+        entry,
+        error: '已读取最新比赛资料，但本机缓存保存失败，重启后需重新联网读取。',
       };
     }
   }
