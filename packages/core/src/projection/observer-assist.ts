@@ -91,6 +91,7 @@ export class ObserverHintTimeline {
   private lastDeathSequence = -1;
   private lastAcceptedRound: number | undefined;
   private sourceExecution: number | undefined;
+  private sourceExecutionGeneration: number | undefined;
   private sourceExecutionFence: {
     sawNonLive: boolean;
     maxRound: number | null;
@@ -195,6 +196,7 @@ export class ObserverHintTimeline {
     this.sealedSource = undefined;
     this.lastAcceptedRound = undefined;
     this.sourceExecution = undefined;
+    this.sourceExecutionGeneration = undefined;
     this.sourceExecutionFence = null;
     this.nextDueMs = null;
     this.nextWindowMs = null;
@@ -212,8 +214,15 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
+      const execution = event.cursor.sourceMapExecution;
+      const executionCompatible =
+        this.sourceExecution === undefined ||
+        execution === undefined ||
+        execution === this.sourceExecution ||
+        execution === 0;
       const continuous =
         this.canRetainAcrossGeneration() &&
+        executionCompatible &&
         event.cursor.mapName === this.contextIdentity?.map &&
         (this.lastAcceptedRound === undefined ||
           event.cursor.roundsCompleted === undefined ||
@@ -440,10 +449,12 @@ export class ObserverHintTimeline {
   }
   private observeExecution(
     execution: number | undefined,
-    generationChanged: boolean,
+    generation: number,
     program: ObserverProgramView,
   ) {
     if (execution === undefined) return;
+    const generationChanged =
+      this.sourceExecutionGeneration === undefined || generation > this.sourceExecutionGeneration;
     if (
       this.sourceExecution !== undefined &&
       execution !== this.sourceExecution &&
@@ -451,9 +462,18 @@ export class ObserverHintTimeline {
     ) {
       this.lastAcceptedRound = undefined;
       this.engageExecutionFence(program);
-      this.replaceBuffered('source-execution');
+      // Retain kills already received on this new generation/execution regardless of consume/project order.
+      const retained = this.kills.filter(
+        (kill) =>
+          !kill.retired &&
+          kill.event.cursor.generation === generation &&
+          (kill.event.cursor.sourceMapExecution === undefined ||
+            kill.event.cursor.sourceMapExecution === execution),
+      );
+      this.replaceBuffered('source-execution', retained);
     }
     this.sourceExecution = execution;
+    this.sourceExecutionGeneration = generation;
   }
   private reconcileExecutionFence(program: ObserverProgramView) {
     const fence = this.sourceExecutionFence;
@@ -585,7 +605,7 @@ export class ObserverHintTimeline {
     }
     if (!waitingForNextMap) this.releaseStaged(program, source, sourceExecution);
     if (source.sameMap === true) {
-      this.observeExecution(sourceExecution, generationChanged, program);
+      this.observeExecution(sourceExecution, source.generation, program);
     }
     this.reconcileExecutionFence(program);
     const scope = JSON.stringify([
