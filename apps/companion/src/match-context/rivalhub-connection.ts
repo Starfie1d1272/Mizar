@@ -138,8 +138,26 @@ export class RivalHubConnection {
   private source: Source | null = null;
   private readonly sourceSettlements = new Map<string, Promise<boolean>>();
   private cleanupCursor = 0;
-  private readonly blockedStatusRetryAt = new Map<string, number>();
-  private readonly cleanupAttempts = new Map<string, { count: number; nextCycleAt: number }>();
+  private readonly retries = new Map<
+    string,
+    { attempts: number; nextAt: number; identity?: ExactSource }
+  >();
+  private retryReady(key: string, now = Date.now()): boolean {
+    return (this.retries.get(key)?.nextAt ?? 0) <= now;
+  }
+  private scheduleRetry(key: string, nextAt: number, attempts = 1, identity?: ExactSource): void {
+    this.retries.set(key, {
+      attempts,
+      nextAt,
+      ...(identity ? { identity } : {}),
+    });
+  }
+  private pruneRetries(prefix: string, validKeys: ReadonlySet<string>): void {
+    for (const key of this.retries.keys()) {
+      if (key.startsWith(prefix) && !validKeys.has(key.slice(prefix.length)))
+        this.retries.delete(key);
+    }
+  }
   private readonly confirmedSourcesAwaitingPersistence = new Map<string, ExactSource>();
   private readonly exitHandoffs = new Map<
     string,
@@ -154,7 +172,6 @@ export class RivalHubConnection {
   } | null = null;
   private readonly sourceState: RivalHubSourceState;
   private intentReconcileCursor = 0;
-  private readonly intentRetry = new Map<string, { attempts: number; nextAt: number }>();
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupScheduled = false;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
@@ -164,10 +181,6 @@ export class RivalHubConnection {
     ((identity: ExactSource, disposition?: 'revoked') => Promise<void>) | undefined;
   private activeReliableSources: (() => readonly ExactSource[]) | undefined;
   private readonly isolatedRevokedSources = new Map<string, ExactSource>();
-  private readonly revokedIsolationRetry = new Map<
-    string,
-    { identity: ExactSource; retryAt: number }
-  >();
   private resumeSource: ((scope: SourceScope) => void) | undefined;
   private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
@@ -796,9 +809,7 @@ export class RivalHubConnection {
     const state = await this.sourceState.snapshot();
     const intents = state.intents.filter((intent) => this.isCurrentInstallation(intent.scope));
     const pendingIds = new Set(intents.map((intent) => intent.id));
-    for (const id of this.intentRetry.keys()) {
-      if (!pendingIds.has(id)) this.intentRetry.delete(id);
-    }
+    this.pruneRetries('intent:', pendingIds);
     if (!intents.length) return;
     const start = this.intentReconcileCursor % intents.length;
     const ordered = [...intents.slice(start), ...intents.slice(0, start)];
@@ -807,9 +818,9 @@ export class RivalHubConnection {
     for (const intent of ordered) {
       if (examined >= 8 || Date.now() >= deadline) break;
       examined++;
-      const retry = this.intentRetry.get(intent.id);
-      if (!force && retry && Date.now() < retry.nextAt) continue;
-      const attempts = Math.min((retry?.attempts ?? 0) + 1, 6);
+      const retryKey = `intent:${intent.id}`;
+      if (!force && !this.retryReady(retryKey)) continue;
+      const attempts = Math.min((this.retries.get(retryKey)?.attempts ?? 0) + 1, 6);
       try {
         await this.reconcileIntentForState(
           intent,
@@ -821,10 +832,11 @@ export class RivalHubConnection {
       } catch (error) {
         this.onDiagnostic('source_status', error);
       } finally {
-        this.intentRetry.set(intent.id, {
+        this.scheduleRetry(
+          retryKey,
+          Date.now() + Math.min(300_000, 10_000 * 2 ** (attempts - 1)),
           attempts,
-          nextAt: Date.now() + Math.min(300_000, 10_000 * 2 ** (attempts - 1)),
-        });
+        );
       }
     }
     this.intentReconcileCursor = (start + examined) % intents.length;
@@ -1026,10 +1038,8 @@ export class RivalHubConnection {
       (record) => record.state === 'release_pending' || canCheckBlockedSource(record, force),
     );
     const pendingKeys = new Set(pending.map(({ identity }) => exactKey(identity)));
-    for (const key of this.blockedStatusRetryAt.keys())
-      if (!pendingKeys.has(key)) this.blockedStatusRetryAt.delete(key);
-    for (const key of this.cleanupAttempts.keys())
-      if (!pendingKeys.has(key)) this.cleanupAttempts.delete(key);
+    this.pruneRetries('status:', pendingKeys);
+    this.pruneRetries('cleanup:', pendingKeys);
 
     const start = !force && pending.length ? this.cleanupCursor % pending.length : 0;
     let examined = 0;
@@ -1047,24 +1057,22 @@ export class RivalHubConnection {
         continue;
       }
       if (record.state === 'blocked') {
-        if ((this.blockedStatusRetryAt.get(attemptKey) ?? 0) <= Date.now())
+        if (this.retryReady(`status:${attemptKey}`))
           await this.checkBlockedSource(record.identity, record.attempts, deadline);
         continue;
       }
       if (record.retryAfterAt && Date.parse(record.retryAfterAt) > Date.now()) continue;
-      const cycle = this.cleanupAttempts.get(attemptKey);
-      if (!force && cycle && cycle.count >= 8 && Date.now() < cycle.nextCycleAt) continue;
-      if (force || (cycle && cycle.count >= 8)) this.cleanupAttempts.delete(attemptKey);
+      const cleanupKey = `cleanup:${attemptKey}`;
+      const cycle = this.retries.get(cleanupKey);
+      if (!force && cycle && cycle.attempts >= 8 && Date.now() < cycle.nextAt) continue;
+      if (force || (cycle && cycle.attempts >= 8)) this.retries.delete(cleanupKey);
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
       const identity = record.identity;
       if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
       if (this.shutdownSignal?.aborted || Date.now() >= deadline) break;
-      const count = (this.cleanupAttempts.get(attemptKey)?.count ?? 0) + 1;
-      this.cleanupAttempts.set(attemptKey, {
-        count,
-        // A later bounded round probes for network recovery; no identity is discarded.
-        nextCycleAt: count >= 8 ? Date.now() + 600_000 : 0,
-      });
+      const count = (this.retries.get(cleanupKey)?.attempts ?? 0) + 1;
+      // A later bounded round probes for network recovery; no identity is discarded.
+      this.scheduleRetry(cleanupKey, count >= 8 ? Date.now() + 600_000 : 0, count);
       this.cleanupEvidence(identity, 'release_attempt', record.attempts + 1);
       let response: Response;
       try {
@@ -1104,7 +1112,7 @@ export class RivalHubConnection {
         if (this.source && sameExactSource(this.source, identity)) this.source = null;
         if (!(await this.persistConfirmedSource(identity))) continue;
         if (await this.archiveConfirmedSource(identity)) {
-          this.cleanupAttempts.delete(attemptKey);
+          this.retries.delete(`cleanup:${attemptKey}`);
           this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
         }
         continue;
@@ -1147,8 +1155,8 @@ export class RivalHubConnection {
     attempts: number,
     deadline: number,
   ): Promise<void> {
-    const key = exactKey(identity);
-    this.blockedStatusRetryAt.set(key, Date.now() + 60_000);
+    const retryKey = `status:${exactKey(identity)}`;
+    this.scheduleRetry(retryKey, Date.now() + 60_000);
     try {
       const response = await this.authorization.request(
         sourceStatusRequest(identity, identity.authorityRevision),
@@ -1156,7 +1164,7 @@ export class RivalHubConnection {
       );
       if (!response.ok) {
         const retryAt = serverRetryAt(response.headers.get('retry-after'), Date.now());
-        if (retryAt) this.blockedStatusRetryAt.set(key, Math.max(Date.now() + 60_000, retryAt));
+        if (retryAt) this.scheduleRetry(retryKey, Math.max(Date.now() + 60_000, retryAt));
         return;
       }
       const body: unknown = await readReliableBody(response);
@@ -1174,11 +1182,10 @@ export class RivalHubConnection {
   private async isolateRevokedSources(preferred: readonly ExactSource[] = []): Promise<void> {
     if (!this.archiveSource) return;
     const now = Date.now();
-    const cooling = [...this.revokedIsolationRetry.values()].filter((item) => item.retryAt > now);
-    const excluded = [
-      ...this.isolatedRevokedSources.values(),
-      ...cooling.map((item) => item.identity),
-    ];
+    const cooling = [...this.retries.entries()]
+      .filter(([key, item]) => key.startsWith('revoke:') && item.nextAt > now && item.identity)
+      .map(([, item]) => item.identity!);
+    const excluded = [...this.isolatedRevokedSources.values(), ...cooling];
     const candidates = new Map<string, ExactSource>();
     let backlog: readonly ExactSource[] = [];
     try {
@@ -1193,15 +1200,15 @@ export class RivalHubConnection {
     for (const identity of [...preferred, ...backlog]) candidates.set(exactKey(identity), identity);
     for (const identity of candidates.values()) {
       const key = exactKey(identity);
-      if (this.isolatedRevokedSources.has(key)) continue;
-      if ((this.revokedIsolationRetry.get(key)?.retryAt ?? 0) > now) continue;
+      const retryKey = `revoke:${key}`;
+      if (this.isolatedRevokedSources.has(key) || !this.retryReady(retryKey, now)) continue;
       try {
         await this.archiveSource(identity, 'revoked');
         this.isolatedRevokedSources.set(key, identity);
-        this.revokedIsolationRetry.delete(key);
+        this.retries.delete(retryKey);
       } catch (error) {
         // Source-state evidence remains the durable retry request.
-        this.revokedIsolationRetry.set(key, { identity, retryAt: now + 30_000 });
+        this.scheduleRetry(retryKey, now + 30_000, 1, identity);
         this.onDiagnostic('source_revoked_isolation', error);
       }
     }
