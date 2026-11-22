@@ -707,34 +707,38 @@ test('late async enqueue failure and known-source boundary loss stay isolated to
   );
   assert.equal(await outbox.sealCapture(sourceB, second.cursor), true);
 
-  // 2. Late async enqueue failure on Match A after operator switches to Match B only quarantines Match A.
+  // 2. Late async enqueue failures (including capacity exhaustion) on Match A after switching to Match B only quarantine Match A.
   const time = now;
-  let rejectNext = false;
-  const service = new OutputService({
-    outbox,
-    now: () => time,
-  });
-  cleanup.push(() => service.close());
-  const matchA = createProgramHarness(first, () => time);
-  const matchB = createProgramHarness(second, () => time);
+  let nextRejectError: Error | undefined;
   const origEnqueue = outbox.enqueue.bind(outbox);
   outbox.enqueue = (async (...args: Parameters<typeof outbox.enqueue>) => {
-    if (rejectNext) {
-      rejectNext = false;
-      throw new Error('late_async_enqueue_failure');
+    if (nextRejectError) {
+      const error = nextRejectError;
+      nextRejectError = undefined;
+      throw error;
     }
     return origEnqueue(...args);
   }) as typeof outbox.enqueue;
 
-  rejectNext = true;
-  matchA.observe(service);
-  // Immediately switch workbench to Match B before Match A's rejected promise settles.
-  service.setCurrent(matchB.bundle as never, matchB.binding as never);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
-  // Switching back to Match A shows Match A itself is quarantined.
-  service.setCurrent(matchA.bundle as never, matchA.binding as never);
-  assert.equal(service.currentStatus().snapshot, null);
-  assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
+  for (const errorMessage of [
+    'late_async_enqueue_failure',
+    'outbox_pending_enqueue_capacity_exhausted',
+  ]) {
+    const service = new OutputService({ outbox, now: () => time });
+    cleanup.push(() => service.close());
+    const matchA = createProgramHarness(first, () => time);
+    const matchB = createProgramHarness(second, () => time);
+    nextRejectError = new Error(errorMessage);
+    matchA.observe(service);
+    // Immediately switch workbench to Match B before Match A's rejected promise settles.
+    service.setCurrent(matchB.bundle as never, matchB.binding as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(nextRejectError, undefined);
+    assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
+    // Switching back to Match A shows Match A itself is quarantined.
+    service.setCurrent(matchA.bundle as never, matchA.binding as never);
+    assert.equal(service.currentStatus().snapshot, null);
+    assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
+  }
 });

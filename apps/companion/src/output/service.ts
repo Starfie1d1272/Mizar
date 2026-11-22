@@ -1289,7 +1289,14 @@ export class OutputService {
         .catch((error: unknown) => {
           if (captureSource && this.outbox?.getBoundaryCaptureRecovery().lost)
             this.captureFailures.add(sourceKey(captureSource));
-          this.reportBoundaryCaptureError(error);
+          const boundarySource = boundaryContext?.source ?? captureSource;
+          this.reportBoundaryCaptureError(
+            error,
+            this.faultScopeFor(
+              boundarySource?.matchId ?? outputScope?.matchId,
+              boundarySource ?? outputScope,
+            ),
+          );
         })
         .finally(() => {
           const remaining = (this.boundaryCommits.get(pendingKey) ?? 1) - 1;
@@ -1462,7 +1469,7 @@ export class OutputService {
             error instanceof Error &&
             error.message === 'outbox_pending_enqueue_capacity_exhausted'
           )
-            this.reportBoundaryCaptureError(error);
+            this.reportBoundaryCaptureError(error, this.faultScopeFor(event.matchId, event.cursor));
           this.onDiagnostic?.('outbox_enqueue_failed');
         })
         .finally(() => {
@@ -1592,7 +1599,7 @@ export class OutputService {
     }
   }
 
-  private reportBoundaryCaptureError(error: unknown): void {
+  private reportBoundaryCaptureError(error: unknown, scopeKey?: string): void {
     // The queue owns recoverable failures. Trial and unrelated fault isolation stay independent.
     if (!this.outbox?.getBoundaryCaptureRecovery().pending) {
       if (error instanceof BoundaryCaptureError) {
@@ -1608,7 +1615,7 @@ export class OutputService {
             : this.faultScopeFor(matchId, cursor),
         );
       } else {
-        this.quarantineFault('__global__');
+        this.quarantineFault(scopeKey ?? '__global__');
       }
     }
     try {
