@@ -52,7 +52,6 @@ export class ProgramDirector {
     target: ProgramSceneId;
     until: number;
     attempts: number;
-    obsEpoch: string;
     revision: string;
   } | null = null;
   private inFlight: ProgramSceneId | null = null;
@@ -496,10 +495,9 @@ export class ProgramDirector {
       };
       return;
     }
-    const obsEpoch = this.scenes.obsStateEpoch();
     const sceneRevision = this.scenes.get().revision;
     if (this.retryBlock && this.retryBlock.target === target) {
-      if (this.retryBlock.obsEpoch !== obsEpoch || this.retryBlock.revision !== sceneRevision) {
+      if (this.retryBlock.revision !== sceneRevision) {
         this.retryBlock = null;
       } else if (time < this.retryBlock.until) {
         this.view = {
@@ -585,7 +583,6 @@ export class ProgramDirector {
             target,
             until,
             attempts,
-            obsEpoch: this.scenes.obsStateEpoch(),
             revision: this.scenes.get().revision,
           };
           this.view = {

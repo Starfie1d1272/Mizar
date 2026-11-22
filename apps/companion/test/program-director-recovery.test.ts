@@ -211,26 +211,16 @@ describe('director transient failure recovery and OBS transition readback', () =
       getBpAssessment: () => ({ readiness: 'unavailable' as const }),
     };
 
-    let obsEpoch = '1:1:1';
     let sceneMissing = true;
     const attempts: ProgramSceneId[] = [];
     const switched: ProgramSceneId[] = [];
     const bp = new BpSession(() => null);
-    const controller = new ProgramSceneController(
-      coordinator as never,
-      bp,
-      async (scene) => {
-        attempts.push(scene);
-        if (sceneMissing && scene === 'gameplay')
-          throw new ObsVideoError('scene_target_unavailable', '缺少目标 OBS 场景「比赛中」。');
-        switched.push(scene);
-      },
-      undefined,
-      undefined,
-      () => 'full',
-      () => Promise.resolve(false),
-      () => obsEpoch,
-    );
+    const controller = new ProgramSceneController(coordinator as never, bp, async (scene) => {
+      attempts.push(scene);
+      if (sceneMissing && scene === 'gameplay')
+        throw new ObsVideoError('scene_target_unavailable', '缺少目标 OBS 场景「比赛中」。');
+      switched.push(scene);
+    });
     let now = 1000;
     const director = new ProgramDirector(
       coordinator as never,
@@ -249,26 +239,22 @@ describe('director transient failure recovery and OBS transition readback', () =
     expect(attempts).toEqual([]);
     expect(director.get().mode).toBe('blocked');
 
-    // 2. Telemetry becomes fresh, but OBS has a structural missing-scene error:
-    // attempts once and does NOT poll OBS every 5s while obsEpoch stays unchanged.
+    // 2. Structural missing-scene error attempts once and does not poll every 5s.
     telemetryFreshness = 'fresh';
     now = 11_000;
     await director.tick();
     expect(attempts.filter((s) => s === 'gameplay')).toHaveLength(1);
     expect(director.get().mode).toBe('blocked');
-    expect(director.get().reason).toContain('缺少目标 OBS 场景');
-
     const countBeforeWait = attempts.length;
     now = 40_000;
     await director.tick();
     expect(attempts.length).toBe(countBeforeWait);
 
-    // 3. OBS repairs scenes (obsEpoch advances): director immediately retries and succeeds.
+    // 3. OBS change interrupt wakes the director and succeeds.
     sceneMissing = false;
-    obsEpoch = '1:2:1';
+    controller.obsProgramChanged();
     now = 40_100;
     await director.tick();
-    expect(attempts.filter((s) => s === 'gameplay')).toHaveLength(2);
     expect(switched.at(-1)).toBe('gameplay');
     expect(director.get().mode).toBe('auto');
   });

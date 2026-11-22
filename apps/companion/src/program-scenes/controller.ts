@@ -104,7 +104,6 @@ export class ProgramSceneController {
     private readonly switchBpCompact?: (visible: boolean, valid?: () => boolean) => Promise<void>,
     private readonly bpPresentationMode: () => 'full' | 'compact' = () => 'full',
     private readonly gameBackgroundReady: () => Promise<boolean> = () => Promise.resolve(false),
-    private readonly readObsEpoch: () => string = () => '',
   ) {}
 
   /** External OBS control invalidates an in-flight Take, not Mizar's production intent. */
@@ -140,9 +139,6 @@ export class ProgramSceneController {
 
   automaticBlockedReason(id: ProgramSceneId): string | null {
     return this.blockedReason(id, true);
-  }
-  obsStateEpoch(): string {
-    return this.readObsEpoch();
   }
 
   private blockedReason(id: ProgramSceneId, automatic = false): string | null {
