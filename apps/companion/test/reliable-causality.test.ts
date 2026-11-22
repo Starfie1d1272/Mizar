@@ -740,5 +740,62 @@ test('late async enqueue failure and known-source boundary loss stay isolated to
     service.setCurrent(matchA.bundle as never, matchA.binding as never);
     assert.equal(service.currentStatus().snapshot, null);
     assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
+    // Retry alone does not clear a dropped-event fault; explicit resumeSource clears the scope cleanly.
+    await service.retry();
+    assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
+    service.resumeSource({
+      matchId: first.matchId,
+      producerInstanceId: first.cursor.producerInstanceId,
+      liveSessionId: first.cursor.liveSessionId!,
+    });
+    assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
   }
+
+  // 3. Recoverable boundary error clears automatically after retry() drains cleanly without restart.
+  const service = new OutputService({ outbox, now: () => time });
+  cleanup.push(() => service.close());
+  const matchA = createProgramHarness(first, () => time);
+  const origCapture = outbox.captureBoundaries.bind(outbox);
+  let failBoundary = true;
+  outbox.captureBoundaries = (async (...args: Parameters<typeof outbox.captureBoundaries>) => {
+    if (failBoundary) {
+      failBoundary = false;
+      throw new Error('transient_boundary_failure');
+    }
+    return origCapture(...args);
+  }) as typeof outbox.captureBoundaries;
+  service.setCurrent(matchA.bundle as never, matchA.binding as never);
+  matchA.cursor.mapEpoch += 1;
+  matchA.cursor.runtimeSeq += 1;
+  matchA.cursor.programReceiveSequence! += 1;
+  matchA.bundle.program.cursor = { ...matchA.cursor };
+  service.afterRuntimeMutation(
+    {
+      disposition: { kind: 'accepted', reason: 'contiguous' },
+      transitions: [
+        {
+          kind: 'map_execution_changed',
+          previousMapEpoch: matchA.cursor.mapEpoch - 1,
+          reason: 'map-change',
+          at: { utc: time.toISOString() },
+        },
+      ],
+      state: {
+        map: { name: first.mapName },
+        programSource: {
+          lastAccepted: {
+            generation: matchA.cursor.programSourceGeneration,
+            sequence: matchA.cursor.programReceiveSequence,
+          },
+        },
+        programTelemetry: { receive: { receivedAt: time.toISOString() } },
+      },
+    } as never,
+    matchA.bundle as never,
+    matchA.binding as never,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
+  await service.retry();
+  assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
 });

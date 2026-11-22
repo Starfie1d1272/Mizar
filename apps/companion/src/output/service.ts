@@ -103,7 +103,7 @@ export class OutputService {
   private readonly captureCursors = new Map<string, ReliableEventV1['cursor']>();
   private readonly captureFailures = new Set<string>();
   private trialQuarantined = false;
-  private readonly faultQuarantinedScopes = new Set<string>();
+  private readonly faultQuarantinedScopes = new Map<string, 'dropped' | 'boundary'>();
   private faultScopeFor(
     matchId: string | undefined,
     cursor: { producerInstanceId: string; liveSessionId?: string | null } | undefined,
@@ -120,8 +120,9 @@ export class OutputService {
       )
     );
   }
-  private quarantineFault(scopeKey: string): void {
-    this.faultQuarantinedScopes.add(scopeKey);
+  private quarantineFault(scopeKey: string, kind: 'dropped' | 'boundary' = 'dropped'): void {
+    if (kind === 'dropped' || !this.faultQuarantinedScopes.has(scopeKey))
+      this.faultQuarantinedScopes.set(scopeKey, kind);
   }
   private failProjection(
     source: ExactSource | null | undefined,
@@ -895,11 +896,12 @@ export class OutputService {
   /** Read-only explanation from the publisher, never a second runtime or a recovery command. */
   currentStatus(includeRadar = false): LiveSnapshotStatus {
     const cursor = this.bundle?.program.cursor;
+    const recovery = this.outbox?.getBoundaryCaptureRecovery();
+    const quarantined = this.trialQuarantined || this.faultQuarantined;
     const localPending =
       !this.outboxUnavailable &&
-      !this.trialQuarantined &&
-      !this.faultQuarantined &&
-      !this.outbox?.getBoundaryCaptureRecovery().lost &&
+      !quarantined &&
+      !recovery?.lost &&
       this.binding &&
       cursor?.liveSessionId &&
       this.outbox?.hasPendingEnqueues(
@@ -924,10 +926,7 @@ export class OutputService {
     if (this.localProjectionQuarantined)
       return result(
         null,
-        !this.trialQuarantined &&
-          !this.faultQuarantined &&
-          !this.outbox?.getBoundaryCaptureRecovery().lost &&
-          this.outbox?.getBoundaryCaptureRecovery().pending
+        !quarantined && !recovery?.lost && recovery?.pending
           ? 'output_persistence_pending'
           : 'output_quarantined',
       );
@@ -1495,7 +1494,46 @@ export class OutputService {
     });
     try {
       await this.outbox.retryPendingCaptures();
-      if (this.outbox.getBoundaryCaptureRecovery().pending) return;
+      const recovery = this.outbox.getBoundaryCaptureRecovery();
+      if (recovery.pending) return;
+      if (!recovery.lost) {
+        for (const [scopeKey, kind] of this.faultQuarantinedScopes) {
+          if (kind !== 'boundary') continue;
+          if (scopeKey === '__global__') {
+            if (!this.outbox.hasUnconfirmedWrites() && !this.outbox.hasBoundaryGap())
+              this.faultQuarantinedScopes.delete(scopeKey);
+            continue;
+          }
+          const [matchId, producerInstanceId, liveSessionId] = JSON.parse(scopeKey) as [
+            string,
+            string,
+            string | null,
+          ];
+          const scope: ReliableDeliveryScope = {
+            matchId,
+            producerInstanceId,
+            liveSessionId: liveSessionId ?? '',
+          };
+          const activeSource = this.options.exactSource?.();
+          const sourceReady =
+            !activeSource ||
+            activeSource.matchId !== matchId ||
+            activeSource.producerInstanceId !== producerInstanceId ||
+            activeSource.liveSessionId !== (liveSessionId ?? '') ||
+            this.outbox.canCapture(activeSource);
+          if (
+            sourceReady &&
+            !this.outbox.hasPendingBoundaryCaptures(scope) &&
+            !this.outbox.hasPendingEnqueues(scope) &&
+            !this.outbox.hasBoundaryGap({
+              matchId,
+              producerInstanceId,
+              ...(liveSessionId ? { liveSessionId } : {}),
+            })
+          )
+            this.faultQuarantinedScopes.delete(scopeKey);
+        }
+      }
       const start = this.pendingMapStart;
       if (
         start &&
@@ -1613,9 +1651,10 @@ export class OutputService {
                 liveSessionId: req.source.liveSessionId,
               })
             : this.faultScopeFor(matchId, cursor),
+          'boundary',
         );
       } else {
-        this.quarantineFault(scopeKey ?? '__global__');
+        this.quarantineFault(scopeKey ?? '__global__', 'boundary');
       }
     }
     try {
@@ -1639,15 +1678,16 @@ export class OutputService {
   }
 
   getBoundaryStatus(): 'continuity_chain_missing' | 'continuity_waiting' | null {
+    const recovery = this.outbox?.getBoundaryCaptureRecovery();
     if (
       this.trialQuarantined ||
       this.faultQuarantined ||
       this.outboxUnavailable ||
       (this.outbox !== undefined && !this.outbox.available) ||
-      this.outbox?.getBoundaryCaptureRecovery().lost
+      recovery?.lost
     )
       return 'continuity_chain_missing';
-    if (this.outbox?.getBoundaryCaptureRecovery().pending) return 'continuity_waiting';
+    if (recovery?.pending) return 'continuity_waiting';
     const active = this.options.exactSource?.();
     if (active && !this.outbox?.canCapture(active)) return 'continuity_chain_missing';
     const scope = this.boundaryScope(this.binding?.context.matchId, this.bundle?.program.cursor);
@@ -1708,15 +1748,25 @@ export class OutputService {
     return this.outbox?.getActiveSources() ?? [];
   }
 
+  private clearSourceMemoryState(
+    scope: Pick<ReliableDeliveryScope, 'matchId' | 'producerInstanceId' | 'liveSessionId'>,
+    exact?: ExactSource,
+  ): void {
+    this.faultQuarantinedScopes.delete(this.faultScopeFor(scope.matchId, scope));
+    if (exact) this.captureFailures.delete(sourceKey(exact));
+  }
+
   async archiveConfirmedSource(identity: ExactSource): Promise<void> {
     if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.archiveConfirmedSource(identity);
     this.captureCursors.delete(sourceKey(identity));
+    this.clearSourceMemoryState(identity, identity);
   }
 
   async isolateRevokedSource(identity: ExactSource): Promise<void> {
     if (this.outboxUnavailable) throw new Error('outbox_unavailable');
     await this.outbox?.isolateRevokedSource(identity);
+    this.clearSourceMemoryState(identity, identity);
   }
 
   /** Stop producing this scope, then wait for the existing owner to settle its queue. */
@@ -1729,14 +1779,16 @@ export class OutputService {
     const exact = 'authorityRevision' in scope ? parseSource(scope) : undefined;
     if (exact && !(await this.sealSourceCapture(exact))) return false;
     const frozenScope: BoundaryScope = { ...scope, ...(exact ? { source: exact } : {}) };
+    const hasPendingBoundary = async () =>
+      this.outbox!.hasPendingBoundaryCaptures(scope) ||
+      this.outbox!.hasBoundaryGap(frozenScope) ||
+      (await this.outbox!.lookupBoundaryIntents(frozenScope)).length > 0;
     // Tail settlement intentionally has no current authority or ephemeral
     // service-owner filter. All retained intents/gaps in the exact old delivery
     // scope must settle, including awaitingSource and previous-authority work.
     if (
       this.outbox.getRecovery()?.code === 'outbox_preserved_without_records' ||
-      this.outbox.hasPendingBoundaryCaptures(scope) ||
-      this.outbox.hasBoundaryGap(frozenScope) ||
-      (await this.outbox.lookupBoundaryIntents(frozenScope)).length
+      (await hasPendingBoundary())
     )
       return false;
     await this.outbox.flushPending();
@@ -1746,9 +1798,7 @@ export class OutputService {
     await this.outbox.flushPending();
     return (
       !this.outbox.hasPendingEnqueues(scope, exact) &&
-      !this.outbox.hasPendingBoundaryCaptures(scope) &&
-      !this.outbox.hasBoundaryGap(frozenScope) &&
-      (await this.outbox.lookupBoundaryIntents(frozenScope)).length === 0 &&
+      !(await hasPendingBoundary()) &&
       (await this.outbox.getScopeDisposition(scope, exact)).pending === 0
     );
   }
@@ -1757,6 +1807,7 @@ export class OutputService {
     this.retiringScopes.delete(
       this.scopeTupleKey(scope.matchId, scope.producerInstanceId, scope.liveSessionId),
     );
+    this.clearSourceMemoryState(scope);
   }
 
   getReliableRecords() {

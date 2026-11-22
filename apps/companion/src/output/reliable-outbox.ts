@@ -88,6 +88,12 @@ export class ReliableOutbox {
   >();
   private readonly sealRequests = new Set<string>();
   private readonly unknownCaptures = new Map<string, 'legacy' | 'unclean' | 'mismatch'>();
+  private isCaptureUnknown(key: string): boolean {
+    return this.unknownCaptures.has(key) || this.view.unknown.has(key);
+  }
+  private exceedsPendingBudget(count: number, totalBytes: number): boolean {
+    return count >= RELIABLE_OUTBOX_MAX_PENDING || totalBytes > 4_000_000;
+  }
   private readonly captureTickets = new Map<string, CaptureTicket>();
   private readonly captureOrder = new Map<string, number>();
   private nextCaptureOrder = 0;
@@ -112,15 +118,13 @@ export class ReliableOutbox {
         current &&
         !current.sealing &&
         !this.sealRequests.has(key) &&
-        !this.unknownCaptures.has(key) &&
-        !this.view.unknown.has(key) &&
+        !this.isCaptureUnknown(key) &&
         JSON.stringify(current.reference) === JSON.stringify(reference)
       )
         return;
       if (
         this.sealRequests.has(key) ||
-        this.unknownCaptures.has(key) ||
-        this.view.unknown.has(key) ||
+        this.isCaptureUnknown(key) ||
         current ||
         reference.storeId !== this.captureStoreId() ||
         this.view.intervalForSource(source)
@@ -145,8 +149,7 @@ export class ReliableOutbox {
       !current ||
       current.sealing ||
       this.sealRequests.has(key) ||
-      this.unknownCaptures.has(key) ||
-      this.view.unknown.has(key) ||
+      this.isCaptureUnknown(key) ||
       !this.available
     )
       throw new Error('capture_interval_not_activatable');
@@ -211,13 +214,14 @@ export class ReliableOutbox {
   }
 
   canCapture(source: ExactSource): boolean {
-    const current = this.captures.get(sourceKey(source));
+    const key = sourceKey(source);
+    const current = this.captures.get(key);
     return (
       this.available &&
       !!current?.activationCursor &&
       !current.sealing &&
-      !this.sealRequests.has(sourceKey(source)) &&
-      !this.unknownCaptures.has(sourceKey(source))
+      !this.sealRequests.has(key) &&
+      !this.isCaptureUnknown(key)
     );
   }
 
@@ -269,58 +273,63 @@ export class ReliableOutbox {
     }
     const end = current?.endCursor ?? structuredClone(endCursor);
     return (async () => {
-      if (!complete) {
-        await this.queue.run(() => this.quarantineIntervalInQueue(source, 'unclean', end));
-        return false;
-      }
-      await this.queue.flush();
-      if (this.captureCoverage(source).state === 'sealed') return true;
-      if (!current || this.captureCoverage(source).state === 'unknown') return false;
-      let phase: 'retry' | 'seal' = 'retry';
       try {
-        await this.retryPendingCaptures(true, source);
-        phase = 'seal';
-        return await this.queue.run(async () => {
-          // Release and tail settlement may request the same seal concurrently.
-          // Read its state under the same queue that commits the transition.
-          const coverage = this.captureCoverage(source);
-          if (coverage.state === 'sealed') return true;
-          if (!current || coverage.state === 'unknown') return false;
-          const scope = {
-            source,
-            matchId: source.matchId,
-            producerInstanceId: source.producerInstanceId,
-            liveSessionId: source.liveSessionId,
-          };
-          const intents = await this.readBoundaryIntents(scope);
-          if (
-            this.boundaryCaptureLost ||
-            this.lostCaptureSources.has(key) ||
-            this.hasUnconfirmedWritesFor(source) ||
-            this.hasStoredBoundaryGap(scope) ||
-            intents.length
-          ) {
-            await this.quarantineIntervalInQueue(source, 'unclean', end);
-            return false;
-          }
-          const interval = await this.repository().request(
-            'sealCaptureInterval',
-            current.reference.id,
-            current.nextSequence,
-            end,
-            current.activationCursor,
-          );
-          this.view.setInterval(interval);
-          return true;
-        });
-      } catch (error) {
-        this.reportCaptureFailure(error);
-        if (phase === 'seal' || !this.available || this.hasUnconfirmedWritesFor(source)) {
-          await this.queue
-            .run(() => this.quarantineIntervalInQueue(source, 'unclean', end))
-            .catch(() => undefined);
+        if (!complete) {
+          await this.queue.run(() => this.quarantineIntervalInQueue(source, 'unclean', end));
+          return false;
         }
-        return false;
+        await this.queue.flush();
+        if (this.captureCoverage(source).state === 'sealed') return true;
+        if (!current || this.captureCoverage(source).state === 'unknown') return false;
+        let phase: 'retry' | 'seal' = 'retry';
+        try {
+          await this.retryPendingCaptures(true, source);
+          phase = 'seal';
+          return await this.queue.run(async () => {
+            // Release and tail settlement may request the same seal concurrently.
+            // Read its state under the same queue that commits the transition.
+            const coverage = this.captureCoverage(source);
+            if (coverage.state === 'sealed') return true;
+            if (!current || coverage.state === 'unknown') return false;
+            const scope = {
+              source,
+              matchId: source.matchId,
+              producerInstanceId: source.producerInstanceId,
+              liveSessionId: source.liveSessionId,
+            };
+            const intents = await this.readBoundaryIntents(scope);
+            if (
+              this.boundaryCaptureLost ||
+              this.isCaptureUnknown(key) ||
+              this.hasUnconfirmedWritesFor(source) ||
+              this.hasStoredBoundaryGap(scope) ||
+              intents.length
+            ) {
+              await this.quarantineIntervalInQueue(source, 'unclean', end);
+              return false;
+            }
+            const interval = await this.repository().request(
+              'sealCaptureInterval',
+              current.reference.id,
+              current.nextSequence,
+              end,
+              current.activationCursor,
+            );
+            this.view.setInterval(interval);
+            return true;
+          });
+        } catch (error) {
+          this.reportCaptureFailure(error);
+          if (phase === 'seal' || !this.available || this.hasUnconfirmedWritesFor(source)) {
+            await this.queue
+              .run(() => this.quarantineIntervalInQueue(source, 'unclean', end))
+              .catch(() => undefined);
+          }
+          return false;
+        }
+      } finally {
+        if (this.view.intervalForSource(source)?.state === 'sealed' || this.isCaptureUnknown(key))
+          this.sealRequests.delete(key);
       }
     })();
   }
@@ -335,7 +344,11 @@ export class ReliableOutbox {
 
   private hasUnconfirmedWritesFor(source: ExactSource): boolean {
     const key = sourceKey(source);
-    if (this.database?.failed || this.boundaryCaptureLost || this.lostCaptureSources.has(key))
+    if (
+      this.database?.failed ||
+      this.boundaryCaptureLost ||
+      (this.unknownCaptures.has(key) && !this.view.unknown.has(key))
+    )
       return true;
     const scope: ReliableDeliveryScope = {
       matchId: source.matchId,
@@ -578,7 +591,6 @@ export class ReliableOutbox {
   private boundaryGaps: readonly BoundaryScope[] = [];
   private boundaryOverflowOwners: readonly string[] = [];
   private boundaryCaptureLost = false;
-  private readonly lostCaptureSources = new Set<string>();
   private readonly pendingBoundaryCaptures = new Map<string, BoundaryCaptureOperation>();
   private readonly durableBoundaryCaptures = new Set<string>();
   private activeBoundaryCapture: BoundaryCaptureOperation | undefined;
@@ -936,8 +948,7 @@ export class ReliableOutbox {
         async () =>
           this.available &&
           !this.view.intervalForSource(identity) &&
-          !this.unknownCaptures.has(key) &&
-          !this.view.unknown.has(key) &&
+          !this.isCaptureUnknown(key) &&
           !!(await this.repository().request('archivedInterval', identity)),
       );
       if (previouslyArchived) return;
@@ -1314,20 +1325,18 @@ export class ReliableOutbox {
       this.captureOrder.set(`boundary:${operation.id}`, this.captureOrder.get(requestKey)!);
       if (!this.pendingBoundaryCaptures.has(operation.id)) {
         if (
-          this.pendingBoundaryCaptures.size >= RELIABLE_OUTBOX_MAX_PENDING ||
-          durableJsonByteLength([...this.pendingBoundaryCaptures.values(), operation]) > 4_000_000
+          this.exceedsPendingBudget(
+            this.pendingBoundaryCaptures.size,
+            durableJsonByteLength([...this.pendingBoundaryCaptures.values(), operation]),
+          )
         )
           throw new Error('boundary_capture_capacity_exhausted');
         this.pendingBoundaryCaptures.set(operation.id, operation);
       }
     } catch (error) {
       // Attribute known-source capture losses to that source so independent matches keep working.
-      if (source) {
-        this.lostCaptureSources.add(sourceKey(source));
-        this.markCaptureUnknown(source);
-      } else {
-        this.boundaryCaptureLost = true;
-      }
+      if (source) this.markCaptureUnknown(source);
+      else this.boundaryCaptureLost = true;
       return Promise.reject(error);
     }
     return this.queue.run(() => this.captureBoundaryOperation(operation));
@@ -1513,7 +1522,7 @@ export class ReliableOutbox {
         await this.queue.run(() => this.repository().request('stageBoundaryCaptures', [], true));
         throw new Error('boundary_capture_input_lost');
       }
-      if (targetKey && this.lostCaptureSources.has(targetKey))
+      if (targetKey && this.isCaptureUnknown(targetKey))
         throw new Error('boundary_capture_input_lost');
       const matchesTarget = (source?: ExactSource | null) =>
         !targetKey || (Boolean(source) && sourceKey(source!) === targetKey);
@@ -1723,11 +1732,13 @@ export class ReliableOutbox {
             ) {
               const bytes = durableJsonByteLength([checkpoint, scope]);
               if (
-                this.pendingContinuities.size >= RELIABLE_OUTBOX_MAX_PENDING ||
-                [...this.pendingContinuities.values()].reduce(
-                  (total, entry) => total + entry.bytes,
-                  bytes,
-                ) > 4_000_000
+                this.exceedsPendingBudget(
+                  this.pendingContinuities.size,
+                  [...this.pendingContinuities.values()].reduce(
+                    (total, entry) => total + entry.bytes,
+                    bytes,
+                  ),
+                )
               ) {
                 this.boundaryCaptureLost = true;
                 throw new Error('outbox_pending_continuity_capacity_exhausted', { cause: error });
@@ -1884,12 +1895,21 @@ export class ReliableOutbox {
           if (capture) await this.commitCaptureOnly(capture);
           return false;
         }
+        const isEndResult = ['map_ended', 'map_player_snapshot', 'series_ended'].includes(
+          valid.kind,
+        );
+        const history =
+          checkStartHistory || isEndResult || recoveryKey !== undefined
+            ? await this.readHistory(deliveryScope(valid))
+            : undefined;
+        const boundaryIntents =
+          checkStartHistory || isEndResult ? await this.readBoundaryIntents(scope) : undefined;
+        const scopeGap = capture ? this.hasStoredBoundaryGap(scope) : this.hasBoundaryGap(scope);
         if (checkStartHistory) {
-          const history = await this.readHistory(deliveryScope(valid));
           const refusals = this.startRejections(valid, history);
           if (
-            (capture ? this.hasStoredBoundaryGap(scope) : this.hasBoundaryGap(scope)) ||
-            (await this.readBoundaryIntents(scope)).length ||
+            scopeGap ||
+            boundaryIntents!.length ||
             this.hasUnconfirmedBoundary(valid, history) ||
             (refusals.length > 0 &&
               (refusals.length !== 1 ||
@@ -1908,16 +1928,12 @@ export class ReliableOutbox {
           throw new Error('reliable_outbox_full');
         const at = now.toISOString();
         const unsafeResult =
-          ['map_ended', 'map_player_snapshot', 'series_ended'].includes(valid.kind) &&
-          ((capture ? this.hasStoredBoundaryGap(scope) : this.hasBoundaryGap(scope)) ||
-            (await this.readBoundaryIntents(scope)).some((intent) =>
-              dependsOnBoundary(valid, intent.event),
-            ) ||
+          isEndResult &&
+          (scopeGap ||
+            boundaryIntents!.some((intent) => dependsOnBoundary(valid, intent.event)) ||
             [
               ...this.records,
-              ...(await this.readHistory(deliveryScope(valid)))
-                .filter((item) => item.kind === 'record')
-                .map((item) => item.value),
+              ...history!.filter((item) => item.kind === 'record').map((item) => item.value),
             ].some(
               (record) =>
                 isContinuityBoundary(record.event) &&
@@ -1938,10 +1954,7 @@ export class ReliableOutbox {
         });
         let existing = this.records;
         if (recoveryKey !== undefined) {
-          const rejected = this.startRejections(
-            valid,
-            await this.readHistory(deliveryScope(valid)),
-          );
+          const rejected = this.startRejections(valid, history);
           if (
             valid.kind !== 'map_started' ||
             rejected.length !== 1 ||
@@ -2034,18 +2047,13 @@ export class ReliableOutbox {
           const bytes = durableJsonByteLength(retryArgs);
           if (
             !this.pendingEnqueues.has(operationKey) &&
-            (this.pendingEnqueues.size >= RELIABLE_OUTBOX_MAX_PENDING ||
-              [...this.pendingEnqueues.values()].reduce(
-                (total, item) => total + item.bytes,
-                bytes,
-              ) > 4_000_000)
+            this.exceedsPendingBudget(
+              this.pendingEnqueues.size,
+              [...this.pendingEnqueues.values()].reduce((total, item) => total + item.bytes, bytes),
+            )
           ) {
-            if (source) {
-              this.lostCaptureSources.add(sourceKey(source));
-              this.markCaptureUnknown(source);
-            } else {
-              this.boundaryCaptureLost = true;
-            }
+            if (source) this.markCaptureUnknown(source);
+            else this.boundaryCaptureLost = true;
             throw new Error('outbox_pending_enqueue_capacity_exhausted', { cause: error });
           }
           this.pendingEnqueues.set(operationKey, {

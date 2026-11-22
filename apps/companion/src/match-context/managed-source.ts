@@ -83,13 +83,13 @@ export function registerManagedSourceRoutes(
     onRuntimeCommit: (snapshot: ProgramRuntimeSnapshot) => void;
   },
 ) {
-  let pending: Prepared | undefined;
-  let active: Prepared | undefined;
+  let slot: (Prepared & { phase: 'pending' | 'active'; activated: boolean }) | undefined;
   let retirement: Retirement | undefined;
   let completedRetirement: string | undefined;
   const retiredSources = new Set<string>();
-  let retired = false;
-  let activated = false;
+  let everRetired = false;
+  const pendingSlot = () => (slot?.phase === 'pending' ? slot : undefined);
+  const activeSlot = () => (slot?.phase === 'active' ? slot : undefined);
   const binding = () => options.controller?.getActiveBinding();
   const source = () => options.runtime.getCurrentState().programSource;
   const plan = () =>
@@ -118,27 +118,33 @@ export function registerManagedSourceRoutes(
     const parsed = sourceRequest.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'managed_source_invalid' });
     const body = parsed.data;
+    const active = activeSlot();
+    const pending = pendingSlot();
     const clearDanglingRetirement = () => {
-      if (retirement && retirement.sourceId === null && !active) retirement = undefined;
+      if (retirement && retirement.sourceId === null && !activeSlot()) retirement = undefined;
     };
     const conflictContext = () => ({
-      ...(active ? { activeSourceId: active.sourceId } : {}),
+      ...(activeSlot() ? { activeSourceId: activeSlot()!.sourceId } : {}),
       ...(retirement
         ? { retirementTicket: retirement.ticket, retirementSourceId: retirement.sourceId }
         : {}),
     });
-    const activateEntry = (
+    const makeEntry = (
       ticket: string,
       sourceId: string,
       requestId: string,
+      phase: 'pending' | 'active',
+      activated: boolean,
       identity?: string,
-    ): Prepared => ({
+    ) => ({
       ticket,
       sourceId,
       requestId,
       matchId: binding()?.context.matchId ?? null,
       productionSession: options.productionSession(),
       plan: plan(),
+      phase,
+      activated,
       ...(identity !== undefined ? { identity } : {}),
     });
     if (body.action === 'prepare') {
@@ -147,16 +153,16 @@ export function registerManagedSourceRoutes(
         return reply.code(409).send({ error: 'managed_source_not_retired', ...conflictContext() });
       if (pending && pending.requestId !== body.requestId)
         return reply.code(409).send({ error: 'managed_source_pending' });
-      pending ??= {
-        ...activateEntry(randomUUID(), randomUUID(), body.requestId),
+      slot ??= {
+        ...makeEntry(randomUUID(), randomUUID(), body.requestId, 'pending', false),
         ...(body.preparationId ? { preparationId: body.preparationId } : {}),
       };
-      if (!sameSelection(pending))
+      if (!sameSelection(slot))
         return reply.code(409).send({ error: 'managed_source_selection_changed' });
       return {
-        ticket: pending.ticket,
-        sourceId: pending.sourceId,
-        gsiUri: `http://127.0.0.1:3000/gsi?source=${pending.sourceId}`,
+        ticket: slot.ticket,
+        sourceId: slot.sourceId,
+        gsiUri: `http://127.0.0.1:3000/gsi?source=${slot.sourceId}`,
       };
     }
     if (body.action === 'resume') {
@@ -179,9 +185,8 @@ export function registerManagedSourceRoutes(
       // The authenticated Host independently verifies PID, creation time, executable and CFG.
       // Map continuity qualifies result restoration, not whether fresh input may be received.
       const execution = options.runtime.resumeManagedSource(body.sourceId, currentMatch);
-      active = activateEntry(body.ticket, body.sourceId, '', identity);
-      activated = true;
-      retired = false;
+      slot = makeEntry(body.ticket, body.sourceId, '', 'active', true, identity);
+      everRetired = false;
       options.onRuntimeCommit(execution.snapshot);
       return { ok: true, executionRestored: execution.restored };
     }
@@ -203,23 +208,22 @@ export function registerManagedSourceRoutes(
           .send({ error: 'managed_source_identity_changed', ...conflictContext() });
       if (pending && pending.sourceId !== body.sourceId)
         return reply.code(409).send({ error: 'managed_source_pending' });
-      const previous = active;
-      const next = activateEntry(
+      const next = makeEntry(
         body.ticket,
         body.sourceId,
-        (active ?? pending)?.requestId ?? '',
+        slot?.requestId ?? '',
+        'active',
+        active?.activated ?? false,
         identity,
       );
       const reconcilesRuntime =
-        activated &&
-        Boolean(previous) &&
-        (previous!.matchId !== next.matchId || previous!.plan !== next.plan);
+        Boolean(active?.activated) &&
+        (active!.matchId !== next.matchId || active!.plan !== next.plan);
       const execution = reconcilesRuntime
         ? options.runtime.resumeManagedSource(body.sourceId, next.matchId)
         : undefined;
-      active = next;
-      pending = undefined;
-      retired = false;
+      slot = next;
+      everRetired = false;
       if (execution) options.onRuntimeCommit(execution.snapshot);
       return execution ? { ok: true, executionRestored: execution.restored } : { ok: true };
     }
@@ -228,23 +232,22 @@ export function registerManagedSourceRoutes(
         return reply
           .code(409)
           .send({ error: 'managed_retirement_in_progress', ...conflictContext() });
-      const item = active?.ticket === body.ticket ? active : pending;
-      if (!item || item.ticket !== body.ticket || !sameSelection(item))
+      const item = slot?.ticket === body.ticket ? slot : undefined;
+      if (!item || !sameSelection(item))
         return reply.code(409).send({ error: 'managed_source_selection_changed' });
       const identity = JSON.stringify(body.managedSessionIdentity);
       if (item.identity && item.identity !== identity)
         return reply.code(409).send({ error: 'managed_source_identity_changed' });
       item.identity = identity;
-      active = item;
-      pending = undefined;
-      retired = false;
+      item.phase = 'active';
+      everRetired = false;
       return { ok: true };
     }
     if (body.action === 'cancel') {
       if (!body.ticket && !body.requestId)
         return reply.code(400).send({ error: 'managed_source_invalid' });
       if (pending && (pending.ticket === body.ticket || pending.requestId === body.requestId))
-        pending = undefined;
+        slot = undefined;
       else if (active && (active.ticket === body.ticket || active.requestId === body.requestId))
         return reply.code(409).send({ error: 'managed_source_already_active' });
       return { ok: true };
@@ -252,7 +255,7 @@ export function registerManagedSourceRoutes(
     if (body.phase === 'prepare') {
       if (
         body.expectedSourceId &&
-        (active?.sourceId ?? pending?.sourceId ?? body.expectedSourceId) !== body.expectedSourceId
+        (slot?.sourceId ?? body.expectedSourceId) !== body.expectedSourceId
       )
         return reply.code(409).send({ error: 'managed_retirement_changed' });
       if (retirement) {
@@ -326,27 +329,27 @@ export function registerManagedSourceRoutes(
     const retiredId = active?.sourceId ?? retirement.sourceId;
     if (retiredId) retiredSources.add(retiredId);
     const committed = options.runtime.retireManagedSource();
-    active = undefined;
-    pending = undefined;
+    slot = undefined;
     retirement = undefined;
-    retired = true;
-    activated = false;
+    everRetired = true;
     completedRetirement = body.ticket;
     options.onRuntimeCommit(committed);
     return { ok: true };
   });
   return {
     classify(sourceId: string | undefined): 'managed' | 'external' | 'drop' {
+      const active = activeSlot();
       if (sourceId !== undefined) return active?.sourceId === sourceId ? 'managed' : 'drop';
       return active ? 'drop' : 'external';
     },
     ownerForFirstObservation(
       sourceId: string | undefined,
     ): { matchId: string; origin: 'fixture' | 'production' } | undefined {
+      const active = activeSlot();
       if (
         !active ||
         active.sourceId !== sourceId ||
-        activated ||
+        active.activated ||
         !sameOwnerPlan(active) ||
         (active.preparationId && preparationCancelled(active.preparationId)) ||
         !active.matchId
@@ -358,16 +361,18 @@ export function registerManagedSourceRoutes(
       };
     },
     confirmFirstObservation(sourceId: string): void {
-      if (active?.sourceId === sourceId) activated = true;
+      const active = activeSlot();
+      if (active?.sourceId === sourceId) active.activated = true;
     },
     sourceMatchesSelection(sourceId: string): boolean {
+      const active = activeSlot();
       return Boolean(
         active?.sourceId === sourceId &&
         active.matchId &&
         sameOwnerPlan(active) &&
-        (activated || !active.preparationId || !preparationCancelled(active.preparationId)),
+        (active.activated || !active.preparationId || !preparationCancelled(active.preparationId)),
       );
     },
-    unverifiedExternal: () => retired || pending !== undefined,
+    unverifiedExternal: () => everRetired || slot?.phase === 'pending',
   };
 }
