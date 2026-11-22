@@ -338,3 +338,32 @@ it('retains buffered kills across same-map, same-execution reconnects and drops 
       ?.waitingReason,
   ).toBe('source-execution-ahead');
 });
+
+it('unlocks round-0 live execution fence when Program progresses past round 0 without warmup', () => {
+  const timeline = new ObserverHintTimeline();
+  const roundProgram = (now: number, roundNumber: number): ObserverProgramView => ({
+    ...program(now, 2),
+    map: { name: 'de_test', roundNumber, phase: 'live' },
+    clock: { phase: 'live' },
+  });
+  timeline.project(roundProgram(0, 0), settings, 0, early, 0);
+  timeline.consume({
+    ...death(1, 1, 1000),
+    cursor: { ...death(1, 1, 1000).cursor, roundsCompleted: 0, sourceMapExecution: 0 },
+  });
+  // mp_restartgame during live round 0 increments lookahead execution 0 -> 1 without warmup.
+  expect(
+    timeline.project(roundProgram(2000, 0), settings, 2000, early, 1).observer?.waitingReason,
+  ).toBe('source-execution-ahead');
+  timeline.consume({
+    ...death(1, 2, 3000),
+    cursor: { ...death(1, 2, 3000).cursor, roundsCompleted: 1, sourceMapExecution: 1 },
+  });
+  // Once Program advances to round 1, it is unambiguously on the restarted execution.
+  expect(
+    timeline.project(roundProgram(119000, 1), settings, 119000, early, 1).observer,
+  ).toMatchObject({
+    state: 'ready',
+    hints: [{ id: '1:2', remainingSeconds: 4 }],
+  });
+});

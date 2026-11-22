@@ -96,8 +96,9 @@ export class ObserverHintTimeline {
     wasLive: boolean;
     sawWarmup: boolean;
     lockedRound: number | null | undefined;
+    maxProgramRound: number | null;
+    priorExecutionHadRounds: boolean;
   } | null = null;
-  private unverifiedReconnect = false;
   private earliest = -Infinity;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
@@ -200,7 +201,6 @@ export class ObserverHintTimeline {
     this.sourceExecution = undefined;
     this.sourceExecutionGeneration = undefined;
     this.sourceExecutionFence = null;
-    this.unverifiedReconnect = false;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
@@ -220,9 +220,6 @@ export class ObserverHintTimeline {
       const continuous =
         this.canRetainAcrossGeneration() &&
         event.cursor.mapName === this.contextIdentity?.map &&
-        (this.sourceExecution === undefined ||
-          event.cursor.sourceMapExecution === undefined ||
-          event.cursor.sourceMapExecution === this.sourceExecution) &&
         (this.lastAcceptedRound === undefined ||
           event.cursor.roundsCompleted === undefined ||
           event.cursor.roundsCompleted >= this.lastAcceptedRound);
@@ -247,10 +244,16 @@ export class ObserverHintTimeline {
       event.cursor.roundsCompleted < this.lastAcceptedRound
     ) {
       // A round regression proves the match restarted (e.g. during a disconnect).
+      const priorExecutionHadRounds = this.lastAcceptedRound > 0;
       this.replaceBuffered('source-execution');
       this.lastAcceptedRound = undefined;
-      this.unverifiedReconnect = false;
-      this.sourceExecutionFence ??= { wasLive: true, sawWarmup: false, lockedRound: undefined };
+      this.sourceExecutionFence ??= {
+        wasLive: true,
+        sawWarmup: false,
+        lockedRound: undefined,
+        maxProgramRound: null,
+        priorExecutionHadRounds,
+      };
     }
     if (event.cursor.roundsCompleted !== undefined) {
       this.lastAcceptedRound =
@@ -287,12 +290,7 @@ export class ObserverHintTimeline {
   private advanceGeneration(generation: number, retain = false) {
     this.generation = generation;
     this.lastDeathSequence = -1;
-    if (retain) {
-      this.unverifiedReconnect = true;
-    } else {
-      this.unverifiedReconnect = false;
-      this.replaceBuffered('source-generation');
-    }
+    if (!retain) this.replaceBuffered('source-generation');
   }
 
   private countReceived(event: GameEventObservation) {
@@ -440,15 +438,21 @@ export class ObserverHintTimeline {
     this.staged = null;
   }
 
-  private engageExecutionFence(program: ObserverProgramView) {
+  private engageExecutionFence(
+    program: ObserverProgramView,
+    priorExecutionHadRounds = (this.lastAcceptedRound ?? 0) > 0,
+  ) {
     const isWarmup = program.map.phase === 'warmup';
     const isLive =
       program.map.phase === 'live' ||
       (program.map.phase === undefined && program.clock?.phase === 'live');
+    const round = program.map.roundNumber ?? null;
     this.sourceExecutionFence = {
       wasLive: isLive,
       sawWarmup: isWarmup,
-      lockedRound: program.map.roundNumber ?? null,
+      lockedRound: round,
+      maxProgramRound: round,
+      priorExecutionHadRounds,
     };
   }
   private observeExecution(
@@ -462,16 +466,10 @@ export class ObserverHintTimeline {
       this.sourceExecution !== undefined &&
       execution !== this.sourceExecution
     ) {
-      this.engageExecutionFence(program);
-      this.unverifiedReconnect = false;
+      const priorExecutionHadRounds = (this.lastAcceptedRound ?? 0) > 0;
+      this.lastAcceptedRound = undefined;
+      this.engageExecutionFence(program, priorExecutionHadRounds);
       this.replaceBuffered('source-execution');
-    } else if (
-      this.unverifiedReconnect &&
-      this.sourceExecution !== undefined &&
-      execution !== this.sourceExecution
-    ) {
-      this.unverifiedReconnect = false;
-      this.replaceBuffered('source-generation');
     }
     this.sourceExecution = execution;
     this.sourceExecutionGeneration = generation;
@@ -479,11 +477,16 @@ export class ObserverHintTimeline {
   private reconcileExecutionFence(program: ObserverProgramView) {
     const fence = this.sourceExecutionFence;
     if (!fence || program.status.telemetry !== 'fresh') return;
+    const round = program.map.roundNumber ?? null;
     if (fence.lockedRound === undefined) {
-      fence.lockedRound = program.map.roundNumber ?? null;
+      fence.lockedRound = round;
+      fence.maxProgramRound = round;
       fence.wasLive =
         program.map.phase === 'live' ||
         (program.map.phase === undefined && program.clock?.phase === 'live');
+    } else if (round !== null) {
+      fence.maxProgramRound =
+        fence.maxProgramRound === null ? round : Math.max(fence.maxProgramRound, round);
     }
     if (program.map.phase === 'warmup') {
       fence.sawWarmup = true;
@@ -496,7 +499,8 @@ export class ObserverHintTimeline {
     if (
       !fence.wasLive ||
       fence.sawWarmup ||
-      (fence.lockedRound !== null && fence.lockedRound > 0 && program.map.roundNumber === 0)
+      (fence.maxProgramRound !== null && fence.maxProgramRound > 0 && round === 0) ||
+      (fence.lockedRound === 0 && !fence.priorExecutionHadRounds && round !== null && round > 0)
     ) {
       this.sourceExecutionFence = null;
     }
@@ -611,17 +615,6 @@ export class ObserverHintTimeline {
     if (!waitingForNextMap) this.releaseStaged(program, source, sourceExecution);
     if (source.sameMap === true) {
       this.observeExecution(sourceExecution, source.generation, program);
-      if (this.unverifiedReconnect && source.connected && source.fresh) {
-        this.unverifiedReconnect = false;
-      }
-    } else if (
-      this.unverifiedReconnect &&
-      source.sameMap === false &&
-      source.connected &&
-      source.fresh
-    ) {
-      this.unverifiedReconnect = false;
-      this.replaceBuffered('source-generation');
     }
     this.reconcileExecutionFence(program);
     const scope = JSON.stringify([
