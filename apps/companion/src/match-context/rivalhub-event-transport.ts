@@ -603,25 +603,17 @@ export class RivalHubEventTransport {
     retainedIdentity?: ExactSource,
   ): Promise<ReliableDeliveryResult> {
     this.host.requireSourceState();
-    const active = this.host.source();
-    if ((this.host.stoppedMatchId() === event.matchId || active?.paused) && !active?.drainReliable)
-      return 'retry';
-    if (active?.reliableNeedsAuthorityCheck && !active.drainReliable) {
-      const verdict = await this.host.confirmSourceAuthority(active, signal);
-      if (this.host.source() !== active || signal.aborted) return 'retry';
-      if (verdict === 'confirmed') {
-        active.reliableNeedsAuthorityCheck = false;
-      } else if (verdict === 'revoked') {
-        active.reliableNeedsAuthorityCheck = false;
-        active.paused = true;
-        return 'retry';
-      } else {
-        return 'retry';
-      }
-      if ((this.host.stoppedMatchId() === event.matchId || active.paused) && !active.drainReliable)
-        return 'retry';
-    }
     const source = this.host.source();
+    const blocked = (s = source) =>
+      (this.host.stoppedMatchId() === event.matchId || s?.paused) && !s?.drainReliable;
+    if (blocked()) return 'retry';
+    if (source?.reliableNeedsAuthorityCheck && !source.drainReliable) {
+      const verdict = await this.host.confirmSourceAuthority(source, signal);
+      if (this.host.source() !== source || signal.aborted || verdict === 'unknown') return 'retry';
+      source.reliableNeedsAuthorityCheck = false;
+      if (verdict === 'revoked') source.paused = true;
+      if (blocked(source)) return 'retry';
+    }
     // Durable recovery keeps the original producer evidence. A new claim cannot
     // authorize that old producer, even when the live session was restored.
     if (source && !sameSourceSession(source, event.cursor)) {

@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
-import { ensureManagedAudioSources, syncManagedMicrophoneAcrossScenes } from '../src/obs/audio.js';
+import {
+  checkObsAudio,
+  ensureManagedAudioSources,
+  syncManagedMicrophoneAcrossScenes,
+} from '../src/obs/audio.js';
 import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 
@@ -160,4 +164,22 @@ it('reconciles mismatched scenes toward active scene and preserves active scene 
         .sceneItemEnabled,
     ).toBe(true);
   }
+});
+
+it('returns structured scene_missing finding in checkObsAudio without probing missing scenes', async () => {
+  const calls: string[] = [];
+  const obs: ObsRpc = {
+    call: async (type) => {
+      calls.push(type);
+      if (type === 'GetSpecialInputs') return {};
+      if (type === 'GetSceneCollectionList') return { currentSceneCollectionName: OBS_COLLECTION };
+      if (type === 'GetSceneList') return { scenes: [{ sceneName: '比赛中' }] };
+      if (type === 'GetInputList') return { inputs: [] };
+      if (type === 'GetSceneItemList') throw new Error('600 missing scene');
+      return {};
+    },
+  };
+  const findings = await checkObsAudio(obs);
+  expect(findings.some((f) => f.code === 'scene_missing' && f.scene === '赛前等待')).toBe(true);
+  expect(calls).not.toContain('GetSceneItemList');
 });

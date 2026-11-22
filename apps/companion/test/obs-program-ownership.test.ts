@@ -46,11 +46,15 @@ async function rig() {
       string,
       { sceneItemId: number; sourceUuid: string; sourceName: string; sceneItemEnabled: boolean }[]
     >(),
+    inputSettings: new Map<string, Record<string, unknown>>(),
+    calls: [] as string[],
+    nextSceneOnScreenshot: undefined as string | undefined,
   };
   const writes: string[] = [];
   let notify: (type: string, data: object) => void = () => {};
   const rpc: ObsRpc = {
     call: async (type, data) => {
+      state.calls.push(type);
       if (/^(Set|Create|Start|Stop)/.test(type)) writes.push(type);
       if (type === 'GetVersion') {
         if (state.versionReadFailed) throw new Error('version unavailable');
@@ -121,6 +125,16 @@ async function rig() {
         state.scene = String(data!.sceneUuid);
         notify('CurrentProgramSceneChanged', { sceneUuid: state.scene, sceneName: state.scene });
       }
+      if (type === 'GetInputSettings') {
+        return {
+          inputSettings:
+            state.inputSettings.get(String(data?.inputUuid ?? data?.inputName ?? '')) ?? {},
+        };
+      }
+      if (type === 'GetSourceScreenshot') {
+        if (state.nextSceneOnScreenshot) state.scene = state.nextSceneOnScreenshot;
+        return { imageData: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==' };
+      }
       return {};
     },
   };
@@ -129,7 +143,7 @@ async function rig() {
   const sockets = new Set<{ send(data: string): void }>();
   notify = (eventType, eventData) => {
     for (const socket of sockets)
-      socket.send(JSON.stringify({ op: 5, d: { eventType, eventData, eventIntent: 4 } }));
+      socket.send(JSON.stringify({ op: 5, d: { eventType, eventData, eventIntent: 1023 } }));
   };
   server.get('/', { websocket: true }, (socket) => {
     sockets.add(socket);
@@ -171,7 +185,7 @@ async function rig() {
   });
   const bind = () =>
     new ManagedObsResources(path + '.collection.json').bind(rpc, endpoint, 'http://127.0.0.1:3000');
-  return { path, state, scenes, writes, bind, store, notify };
+  return { path, state, scenes, writes, bind, store, notify, server };
 }
 
 it('confirms an output already started on the observed connection without a second start', async () => {
@@ -487,30 +501,40 @@ it('production finish restores the original program and retries the website hand
   expect(production.get().mode).toBe('live');
 });
 
-it('syncs managed microphone across all scenes on OBS SceneItemEnableStateChanged without echo loops', async () => {
-  const f = await rig();
-  const managed = await f.bind();
-  await managed.prepareManagedCollection!(true, managed);
+async function seedManagedScenes(
+  f: Awaited<ReturnType<typeof rig>>,
+  extraRoles: Record<string, { uuid: string; kind: string }>,
+) {
   const desired = obsDesiredScenes('http://127.0.0.1:3000');
-  const micUuid = 'mic-uuid-live';
   f.scenes.set(
     OBS_COLLECTION,
     desired.map((s) => s.sceneName),
   );
   f.state.scene = desired[0]!.sceneName;
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const raw = JSON.parse(await readFile(f.path + '.collection.json', 'utf8')) as {
+    roles: Record<string, { uuid: string; kind: string }>;
+  }[];
+  Object.assign(raw[0]!.roles, extraRoles);
+  for (const s of desired) raw[0]!.roles[s.sceneName] = { uuid: s.sceneName, kind: 'scene' };
+  await writeFile(f.path + '.collection.json', JSON.stringify(raw));
+  return desired;
+}
+
+it('syncs managed microphone across all scenes on OBS SceneItemEnableStateChanged without echo loops', async () => {
+  const f = await rig();
+  const managed = await f.bind();
+  await managed.prepareManagedCollection!(true, managed);
+  const micUuid = 'mic-uuid-live';
+  const desired = await seedManagedScenes(f, {
+    麦克风: { uuid: micUuid, kind: 'wasapi_input_capture' },
+  });
   f.state.inputs = [{ inputUuid: micUuid, inputName: '麦克风', inputKind: 'wasapi_input_capture' }];
   for (const s of desired) {
     f.state.sceneItems.set(s.sceneName, [
       { sceneItemId: 6, sourceUuid: micUuid, sourceName: '麦克风', sceneItemEnabled: false },
     ]);
   }
-  const { readFile, writeFile } = await import('node:fs/promises');
-  const raw = JSON.parse(await readFile(f.path + '.collection.json', 'utf8')) as {
-    roles: Record<string, { uuid: string; kind: string }>;
-  }[];
-  raw[0]!.roles['麦克风'] = { uuid: micUuid, kind: 'wasapi_input_capture' };
-  for (const s of desired) raw[0]!.roles[s.sceneName] = { uuid: s.sceneName, kind: 'scene' };
-  await writeFile(f.path + '.collection.json', JSON.stringify(raw));
 
   const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
   cleanups.push(() => adapter.close());
@@ -530,4 +554,86 @@ it('syncs managed microphone across all scenes on OBS SceneItemEnableStateChange
     }
   });
   expect(f.writes.filter((w) => w === 'SetSceneItemEnabled')).toHaveLength(desired.length - 1);
+});
+
+it('returns structured preview reasons, deduplicates preview diagnostics, and wakes browser recovery when output stops', async () => {
+  const f = await rig();
+  const managed = await f.bind();
+  f.state.output = true;
+  const desired = obsDesiredScenes('http://127.0.0.1:3000');
+  f.state.output = false;
+  await managed.prepareManagedCollection!(true, managed);
+  await seedManagedScenes(
+    f,
+    Object.fromEntries(
+      desired.map((s) => [
+        s.browserInput,
+        { uuid: `uuid-${s.browserInput}`, kind: 'browser_source' },
+      ]),
+    ),
+  );
+  f.state.inputs = desired.map((s) => ({
+    inputUuid: `uuid-${s.browserInput}`,
+    inputName: s.browserInput,
+    inputKind: 'browser_source',
+  }));
+  for (const s of desired) {
+    f.state.inputSettings.set(`uuid-${s.browserInput}`, {
+      url: s.browserUrl,
+      width: 1920,
+      height: 1080,
+    });
+    f.state.sceneItems.set(s.sceneName, [
+      {
+        sceneItemId: 1,
+        sourceUuid: `uuid-${s.browserInput}`,
+        sourceName: s.browserInput,
+        sceneItemEnabled: true,
+      },
+    ]);
+  }
+  f.state.output = true;
+  const diagnostics: string[] = [];
+  const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000', (stage) =>
+    diagnostics.push(stage),
+  );
+  cleanups.push(() => adapter.close());
+  await adapter.outputStatus(false);
+
+  // Browser recovery stays silent while streaming and wakes when stream stops.
+  f.state.calls.length = 0;
+  adapter.startBrowserRecovery(() => true);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(f.state.calls).not.toContain('PressInputPropertiesButton');
+  expect(diagnostics.filter((d) => d === 'obs_browser_recovery')).toEqual([]);
+
+  f.state.output = false;
+  f.notify('StreamStateChanged', {
+    outputActive: false,
+    outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED',
+  });
+  f.notify('RecordStateChanged', {
+    outputActive: false,
+    outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED',
+  });
+  f.notify('ReplayBufferStateChanged', {
+    outputActive: false,
+    outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED',
+  });
+  f.notify('VirtualcamStateChanged', {
+    outputActive: false,
+    outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED',
+  });
+  await vi.waitFor(() => {
+    expect(f.state.calls).toContain('PressInputPropertiesButton');
+  });
+
+  // Preview reports structured reasons and deduplicates repeated failures.
+  expect((await adapter.confidencePreview()).preview?.scene).toBe('赛前等待');
+  f.state.nextSceneOnScreenshot = '比赛中';
+  expect(await adapter.confidencePreview()).toEqual({ preview: null, reason: 'scene_changing' });
+  await f.server.close();
+  expect(await adapter.confidencePreview()).toEqual({ preview: null, reason: 'disconnected' });
+  expect(await adapter.confidencePreview()).toEqual({ preview: null, reason: 'disconnected' });
+  expect(diagnostics.filter((s) => s === 'obs_confidence_preview')).toHaveLength(1);
 });
