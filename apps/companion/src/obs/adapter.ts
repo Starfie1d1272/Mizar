@@ -205,6 +205,7 @@ export class ObsAdapter {
           return;
         }
         if (kind === 'disconnected') {
+          this.ownMicWrites.clear();
           this.expectedScene = undefined;
           this.expectedCollection = undefined;
           this.programGeneration++;
@@ -271,6 +272,8 @@ export class ObsAdapter {
               target === 'reconcile' ? undefined : target,
               (sceneName, sceneItemId, enabled) =>
                 this.ownMicWrites.add(`${sceneName}\0${sceneItemId}\0${enabled}`),
+              (sceneName, sceneItemId, enabled) =>
+                this.ownMicWrites.delete(`${sceneName}\0${sceneItemId}\0${enabled}`),
             ),
           ).catch(() => undefined);
         }

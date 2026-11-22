@@ -574,10 +574,9 @@ export class ProgramDirector {
               : retryable
                 ? 1
                 : 0;
-          const until =
-            retryable && attempts <= 3
-              ? this.now() + Math.min(5000, 1500 * 2 ** (attempts - 1))
-              : Number.POSITIVE_INFINITY;
+          const until = retryable
+            ? this.now() + Math.min(30_000, 1500 * 2 ** Math.min(attempts - 1, 4))
+            : Number.POSITIVE_INFINITY;
           this.retryBlock = {
             message: result.message,
             target,

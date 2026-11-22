@@ -349,7 +349,7 @@ it('unlocks round-0 live execution fence when Program progresses past round 0 wi
   timeline.project(roundProgram(0, 0), settings, 0, early, 0);
   timeline.consume({
     ...death(1, 1, 1000),
-    cursor: { ...death(1, 1, 1000).cursor, roundsCompleted: 0, sourceMapExecution: 0 },
+    cursor: { ...death(1, 1, 1000).cursor, roundsCompleted: 2, sourceMapExecution: 0 },
   });
   // mp_restartgame during live round 0 increments lookahead execution 0 -> 1 without warmup.
   expect(
@@ -366,4 +366,10 @@ it('unlocks round-0 live execution fence when Program progresses past round 0 wi
     state: 'ready',
     hints: [{ id: '1:2', remainingSeconds: 4 }],
   });
+  // Cross-generation execution jump (gen 1 exec 1 -> gen 2 exec 2) drops old execution kills and fences.
+  expect(
+    timeline.project(roundProgram(120000, 1), settings, 120000, { ...early, generation: 2 }, 2)
+      .observer?.waitingReason,
+  ).toBe('source-execution-ahead');
+  expect(timeline.getDiagnostics().ended).toMatchObject({ 'source-execution': 2 });
 });
