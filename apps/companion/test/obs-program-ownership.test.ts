@@ -605,6 +605,11 @@ it('returns structured preview reasons, deduplicates preview diagnostics, and wa
     diagnostics.push(stage),
   );
   cleanups.push(() => adapter.close());
+  // Browser recovery stays silent while output status is unknown, and never calls PressInputPropertiesButton.
+  adapter.startBrowserRecovery(() => true);
+  await new Promise((r) => setTimeout(r, 30));
+  expect(f.state.calls).not.toContain('PressInputPropertiesButton');
+  expect(diagnostics.filter((d) => d === 'obs_browser_recovery')).toEqual([]);
   await adapter.outputStatus(false);
 
   // Browser recovery stays silent while streaming and wakes when stream stops.

@@ -230,8 +230,12 @@ export class ObsOutputController {
     return this.preparationConfigurationGeneration;
   }
 
+  hasConfirmedIdleOutputs(): boolean {
+    return this.captureWarmupBlockReason() === null;
+  }
+
   captureWarmupGeneration(): number | null {
-    return this.captureWarmupBlockReason() === null ? this.warmupGeneration : null;
+    return this.hasConfirmedIdleOutputs() ? this.warmupGeneration : null;
   }
 
   preparationOutputEpoch(): number {
@@ -310,7 +314,7 @@ export class ObsOutputController {
       delete next.health;
     }
     this.values[kind] = next;
-    if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
+    if (this.ready && this.hasConfirmedIdleOutputs()) this.observeProgram('outputs-idle');
   }
 
   private invalidate(client?: OBSWebSocket, retry = true): void {
@@ -488,7 +492,7 @@ export class ObsOutputController {
       this.warmupExtraOutputs[kind] =
         phase === 'idle' && event.outputActive !== false ? 'unknown' : phase;
       if (phase === 'starting' || phase === 'stopping') this.extraTransitionAt[kind] = Date.now();
-      if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
+      if (this.ready && this.hasConfirmedIdleOutputs()) this.observeProgram('outputs-idle');
     };
     client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
     client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
@@ -626,6 +630,7 @@ export class ObsOutputController {
         this.outputObservationGeneration++;
         this.hasConnected = true;
         this.onConfigurationChanged?.();
+        if (this.hasConfirmedIdleOutputs()) this.observeProgram('outputs-idle');
         if (reconnected && identity?.collection === OBS_COLLECTION)
           this.onCollectionSceneItemEvent?.({
             kind: 'collection-ready',
@@ -793,7 +798,11 @@ export class ObsOutputController {
     if (!client || !this.ready) throw new Error('OBS unavailable');
     if (!this.reading) {
       const task = this.refresh(client, this.generation).catch((error: unknown) => {
-        if (this.client === client) for (const kind of kinds) this.update(kind, 'unknown', null);
+        if (this.client === client) {
+          this.warmupExtraOutputs.replay = 'unknown';
+          this.warmupExtraOutputs.virtual = 'unknown';
+          for (const kind of kinds) this.update(kind, 'unknown', null);
+        }
         throw error;
       });
       this.reading = task;

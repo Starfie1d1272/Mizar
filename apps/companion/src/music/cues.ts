@@ -1,8 +1,14 @@
 import { completedSeriesMapForProgram, type ProgramProjection } from '@mizar/core/projection';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type { MusicGroup, MusicTrack } from '@mizar/protocol/music';
-import { musicMapScope } from '../scope/identities.js';
+import type { MusicGroup, MusicStatus, MusicTrack } from '@mizar/protocol/music';
+import { musicMapScope, musicOpeningScope } from '../scope/identities.js';
 import { hasFrozenMapResult, isRegulationHalftime } from '../program-scenes/presentation.js';
+import type {
+  MonitorRelationship,
+  MusicMediaState,
+  MusicMonitorMode,
+  MusicMonitorOriginals,
+} from './device.js';
 
 export interface MusicTruth {
   program: ProgramProjection;
@@ -93,4 +99,110 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
   // Formal play always wins over a stale waiting / result picture.
   if (p.map.phase === 'live') return null;
   return ['waiting', 'bp', 'intermap'].includes(active) ? waiting : null;
+}
+
+export function desiredMusicMonitorMode(
+  relationship: MonitorRelationship,
+  wanted: boolean,
+): MusicMonitorMode {
+  if (!wanted || relationship === 'unknown') return 'off';
+  return relationship === 'same' ? 'monitor-only' : 'monitor-and-output';
+}
+
+export function ownedMonitorApplied(
+  original: MusicMonitorOriginals['bgm'],
+): MusicMonitorMode | undefined {
+  if (!original) return undefined;
+  // v1.9.1 stored the pre-mix mode before changing it to monitor-only.
+  return original.applied ?? (original.mode === 'monitor-and-output' ? 'monitor-only' : undefined);
+}
+
+export function monitorRestoreTarget(
+  original: MusicMonitorOriginals['bgm'],
+  preference: boolean | null,
+): MusicMonitorMode | undefined {
+  if (!original) return undefined;
+  return !original.applied && preference === false ? 'off' : original.mode;
+}
+
+export function observedPlayback(state: MusicMediaState): MusicStatus['playback'] {
+  if (state === 'playing') return 'playing';
+  if (state === 'paused') return 'paused';
+  if (state === 'stopped' || state === 'ended') return 'stopped';
+  return 'unknown';
+}
+
+export function tailVolume(
+  track: MusicTrack,
+  cursor: number | null,
+  duration: number | null,
+  volume: number,
+  fadeOutMs: number,
+): number {
+  if (cursor === null || fadeOutMs <= 0) return volume;
+  const end = Math.min(
+    track.endMs ?? Infinity,
+    duration !== null && duration > 0 ? duration : Infinity,
+  );
+  if (!Number.isFinite(end)) return volume;
+  return volume * Math.min(1, Math.max(0, (end - cursor) / fadeOutMs));
+}
+
+export function resolveEffectiveBgmCue(options: {
+  readonly truth: MusicTruth;
+  readonly map: string;
+  readonly pauseId: string | null;
+  readonly current: {
+    readonly group: MusicGroup;
+    readonly key: string;
+    readonly finished: boolean;
+  } | null;
+  readonly consumed: readonly string[];
+}): MusicCue | null {
+  const { truth, map, pauseId, current, consumed } = options;
+  let cue = musicCue(truth, pauseId);
+  const waitingKey = `waiting:${truth.program.match?.matchId ?? ''}`;
+  if (
+    cue?.group === 'waiting' &&
+    truth.program.map.phase === 'gameover' &&
+    current?.group === 'mapVictory' &&
+    !current.finished &&
+    current.key === `mapVictory:${map}`
+  )
+    cue = { group: current.group, key: current.key };
+  if (cue?.group === 'mapVictory' && truth.active === 'intermap' && current?.key !== cue.key)
+    cue = { group: 'waiting', key: waitingKey };
+  if (cue?.key.startsWith('pause:') && current?.key === cue.key)
+    cue = { ...cue, group: current.group };
+  if (cue?.group === 'mapVictory' && current?.key === cue.key && current.finished)
+    cue = { group: 'waiting', key: waitingKey };
+  if (cue && consumed.includes(cue.key))
+    cue = cue.group === 'mapVictory' ? { group: 'waiting', key: waitingKey } : null;
+  return cue;
+}
+
+export function resolveRetainedStingerCue(options: {
+  readonly truth: MusicTruth;
+  readonly manual: boolean;
+  readonly held: boolean;
+  readonly stinger: {
+    readonly key: string;
+    readonly scope?: string | undefined;
+    readonly track: MusicTrack;
+    readonly finished: boolean;
+  } | null;
+}): MusicCue | null {
+  const { truth, manual, held, stinger } = options;
+  const safe =
+    !manual &&
+    truth.production &&
+    musicSafe(truth.program) &&
+    truth.program.status.telemetry === 'fresh' &&
+    !held;
+  return safe &&
+    stinger &&
+    !stinger.finished &&
+    (!stinger.scope || stinger.scope === musicOpeningScope(truth.program))
+    ? { group: 'opening', key: stinger.key, track: stinger.track }
+    : null;
 }

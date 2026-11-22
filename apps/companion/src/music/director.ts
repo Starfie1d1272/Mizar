@@ -29,56 +29,22 @@ import {
   writeMonitorOriginals,
 } from './monitor-journal.js';
 import {
+  desiredMusicMonitorMode,
+  monitorRestoreTarget,
   musicCue,
   musicMapKey,
   musicPause,
   musicSafe,
+  observedPlayback,
+  ownedMonitorApplied,
+  resolveEffectiveBgmCue,
+  resolveRetainedStingerCue,
+  tailVolume,
   type MusicCue,
   type MusicTruth,
 } from './cues.js';
 import { looping, type MusicStore, type Playback } from './store.js';
 import { MusicPreview } from './preview.js';
-function desiredMusicMonitorMode(
-  relationship: MonitorRelationship,
-  wanted: boolean,
-): MusicMonitorMode {
-  if (!wanted || relationship === 'unknown') return 'off';
-  return relationship === 'same' ? 'monitor-only' : 'monitor-and-output';
-}
-function ownedMonitorApplied(original: MusicMonitorOriginals['bgm']): MusicMonitorMode | undefined {
-  if (!original) return undefined;
-  // v1.9.1 stored the pre-mix mode before changing it to monitor-only.
-  return original.applied ?? (original.mode === 'monitor-and-output' ? 'monitor-only' : undefined);
-}
-function monitorRestoreTarget(
-  original: MusicMonitorOriginals['bgm'],
-  preference: boolean | null,
-): MusicMonitorMode | undefined {
-  if (!original) return undefined;
-  return !original.applied && preference === false ? 'off' : original.mode;
-}
-function observedPlayback(state: MusicMediaState): MusicStatus['playback'] {
-  if (state === 'playing') return 'playing';
-  if (state === 'paused') return 'paused';
-  if (state === 'stopped' || state === 'ended') return 'stopped';
-  return 'unknown';
-}
-
-function tailVolume(
-  track: MusicTrack,
-  cursor: number | null,
-  duration: number | null,
-  volume: number,
-  fadeOutMs: number,
-) {
-  if (cursor === null || fadeOutMs <= 0) return volume;
-  const end = Math.min(
-    track.endMs ?? Infinity,
-    duration !== null && duration > 0 ? duration : Infinity,
-  );
-  if (!Number.isFinite(end)) return volume;
-  return volume * Math.min(1, Math.max(0, (end - cursor) / fadeOutMs));
-}
 
 interface Fade {
   sourceId: string;
@@ -365,26 +331,13 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   private resolveAutomaticCue(truth: MusicTruth, map: string): MusicCue | null {
     if (!this.store.automaticEnabled || this.isHeld()) return null;
     if (this.manual) return this.manual.cue;
-    let cue = musicCue(truth, this.store.state.pause?.id ?? null);
-    const current = this.store.state.bgm;
-    const waitingKey = `waiting:${truth.program.match?.matchId ?? ''}`;
-    if (
-      cue?.group === 'waiting' &&
-      truth.program.map.phase === 'gameover' &&
-      current?.group === 'mapVictory' &&
-      !current.finished &&
-      current.key === `mapVictory:${map}`
-    )
-      cue = { group: current.group, key: current.key };
-    if (cue?.group === 'mapVictory' && truth.active === 'intermap' && current?.key !== cue.key)
-      cue = { group: 'waiting', key: waitingKey };
-    if (cue?.key.startsWith('pause:') && current?.key === cue.key)
-      cue = { ...cue, group: current.group };
-    if (cue?.group === 'mapVictory' && current?.key === cue.key && current.finished)
-      cue = { group: 'waiting', key: waitingKey };
-    if (cue && this.store.state.consumed.includes(cue.key))
-      cue = cue.group === 'mapVictory' ? { group: 'waiting', key: waitingKey } : null;
-    return cue;
+    return resolveEffectiveBgmCue({
+      truth,
+      map,
+      pauseId: this.store.state.pause?.id ?? null,
+      current: this.store.state.bgm,
+      consumed: this.store.state.consumed,
+    });
   }
   private computedLayerGain(
     layer: MusicLayer,
@@ -824,9 +777,10 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     obs: MusicDevice,
     valid: () => boolean,
     recheck = false,
+    modePending?: boolean,
   ): Promise<Map<MusicLayer, MusicMonitorMode | undefined>> {
     const known = new Map<MusicLayer, MusicMonitorMode | undefined>();
-    if (await this.audioModePending().catch(() => true)) return known;
+    if (modePending ?? (await this.audioModePending().catch(() => true))) return known;
     if (!valid()) return known;
     const wanted = this.store.state.monitorPreference;
     const pending = (['bgm', 'stinger'] as const).filter((layer) => {
@@ -840,12 +794,13 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     this.status.monitorPending = wanted === true && relationship === 'unknown';
     if (wanted === null) return known;
     if (wanted === true && relationship === 'unknown') return known;
-    const safe = await obs.monitorSafe().catch(() => false);
+    let routeVerified = await obs.monitorSafe().catch(() => false);
     if (!valid()) return known;
-    if (!safe) {
+    if (!routeVerified) {
       this.status.monitorPending = wanted;
       return known;
     }
+    let mutated = false;
     for (const layer of ['bgm', 'stinger'] as const) {
       if (layer === 'stinger' && (this.isStingerHeld() || this.preview.busy)) continue;
       const uuid = this.store.state.sources[layer];
@@ -858,12 +813,14 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       const observed = await obs.monitorMode({ sourceId: uuid });
       if (observed === undefined || !valid()) return known;
       known.set(layer, observed);
-      if (
-        !(await obs.monitorSafe().catch(() => false)) ||
-        (await obs.monitorRelationship().catch(() => 'unknown' as const)) !== relationship
-      ) {
-        if (valid()) this.status.monitorPending = wanted;
-        return known;
+      if (mutated) {
+        routeVerified =
+          (await obs.monitorSafe().catch(() => false)) &&
+          (await obs.monitorRelationship().catch(() => 'unknown' as const)) === relationship;
+        if (!routeVerified) {
+          if (valid()) this.status.monitorPending = wanted;
+          return known;
+        }
       }
       const desired = desiredMusicMonitorMode(relationship, wanted);
       if (
@@ -887,7 +844,10 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         relationship === 'independent',
         observed === desired,
       );
-      if (observed !== desired) known.set(layer, desired);
+      if (observed !== desired) {
+        known.set(layer, desired);
+        mutated = true;
+      }
     }
     return known;
   }
@@ -1153,7 +1113,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     this.pendingOpening = {
       key,
       expires: this.now() + 1000,
-      scope: musicOpeningScope(this.truth().program),
+      scope: musicOpeningScope(t.program),
       ...(track ? { track } : {}),
     };
   }
@@ -1237,7 +1197,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     // Invalidate synchronously even while an OBS request is awaiting its reply.
     const preliminary = JSON.stringify([
       truth.production,
-      musicOpeningScope(this.truth().program),
+      musicOpeningScope(truth.program),
       musicSafe(truth.program),
       truth.program.status.telemetry,
       map,
@@ -1365,19 +1325,20 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         }
         const previewOwned = this.preview.busy;
         if (configured || opening) this.preview.programPriority();
-        const p = this.truth().program;
+        const currentTruth = this.truth();
+        const p = currentTruth.program;
         const previewSafe =
           !this.pendingOpening &&
           !opening &&
           (p.map.phase !== 'live' ||
-            Boolean(musicCue(this.truth(), this.store.state.pause?.id ?? null))) &&
+            Boolean(musicCue(currentTruth, this.store.state.pause?.id ?? null))) &&
           (p.map.phase === null || (musicSafe(p) && p.status.telemetry === 'fresh'));
         await this.reconcilePreview(obs, epoch, valid, previewSafe);
         const monitorRecheck = reconnect || this.monitorSettingsChanged;
         this.monitorSettingsChanged = false;
         if (!valid()) return;
         if (this.preview.busy) {
-          const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck);
+          const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck, modePending);
           if (valid()) await this.readMonitor(obs, valid, known);
           return;
         }
@@ -1393,7 +1354,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         let stingerCue: MusicCue | null | undefined;
         if (
           opening &&
-          opening.scope === musicOpeningScope(this.truth().program) &&
+          opening.scope === musicOpeningScope(p) &&
           opening.expires >= this.now() &&
           valid() &&
           !this.isHeld()
@@ -1406,24 +1367,16 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             ...(opening.track ? { track: opening.track } : {}),
           };
         } else if (!previewOwned && !this.isStingerHeld()) {
-          const stinger = this.store.state.stinger;
-          const safe =
-            !this.manual &&
-            truth.production &&
-            musicSafe(truth.program) &&
-            truth.program.status.telemetry === 'fresh' &&
-            !this.isHeld();
-          stingerCue =
-            safe &&
-            stinger &&
-            !stinger.finished &&
-            (!stinger.scope || stinger.scope === musicOpeningScope(this.truth().program))
-              ? { group: 'opening', key: stinger.key, track: stinger.track }
-              : null;
+          stingerCue = resolveRetainedStingerCue({
+            truth,
+            manual: Boolean(this.manual),
+            held: this.isHeld(),
+            stinger: this.store.state.stinger,
+          });
         }
         if (stingerCue !== undefined)
           await this.layer(obs, 'stinger', stingerCue, valid, observed.get('stinger'));
-        const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck);
+        const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck, modePending);
         if (valid()) await this.readMonitor(obs, valid, known);
       });
       if (valid()) recovered();
