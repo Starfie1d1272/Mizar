@@ -223,9 +223,11 @@ export async function ensureManagedAudioSources(
     const microphoneEnabled =
       managed.name === '麦克风' &&
       (initializeMicrophone ||
-        sceneItems.some(({ items }) =>
-          items.some((item) => item.sourceUuid === uuid && item.sceneItemEnabled),
-        ));
+        (await resolveActiveMicrophoneEnabled(
+          obs,
+          uuid,
+          sceneItems.map(({ scene, items }) => ({ sceneName: scene.sceneName, items })),
+        )));
     for (const { scene, items } of sceneItems) {
       if (!items.some((item) => item.sourceUuid === uuid))
         await obs.call('CreateSceneItem', {
@@ -280,4 +282,113 @@ export async function setupObsAudio(obs: ObsRpc, baseUrl: string): Promise<void>
           sceneItemEnabled: true,
         });
   }
+}
+
+type SceneItemRow = {
+  sourceUuid: string;
+  sceneItemId: number;
+  sceneItemEnabled: boolean;
+};
+
+async function resolveActiveMicrophoneEnabled(
+  obs: ObsRpc,
+  micUuid: string,
+  perScene: readonly { sceneName: string; items: readonly SceneItemRow[] }[],
+): Promise<boolean> {
+  const activeScene = await obs
+    .call('GetCurrentProgramScene')
+    .then((result) =>
+      typeof result.currentProgramSceneName === 'string'
+        ? result.currentProgramSceneName
+        : undefined,
+    )
+    .catch(() => undefined);
+  const activeMatches = activeScene
+    ? (perScene
+        .find((entry) => entry.sceneName === activeScene)
+        ?.items.filter((item) => item.sourceUuid === micUuid) ?? [])
+    : [];
+  return activeMatches.length
+    ? activeMatches.some((item) => item.sceneItemEnabled !== false)
+    : perScene.some(({ items }) =>
+        items.some((item) => item.sourceUuid === micUuid && item.sceneItemEnabled !== false),
+      );
+}
+
+/**
+ * Keep the managed microphone's scene-item enabled intent consistent across all
+ * managed program scenes inside the owned dedicated collection.
+ */
+export async function syncManagedMicrophoneAcrossScenes(
+  obs: ObsRpc,
+  baseUrl: string,
+  target?: { sceneName: string; sceneItemId: number; enabled: boolean },
+  recordSelfWrite?: (sceneName: string, sceneItemId: number, enabled: boolean) => void,
+): Promise<boolean | null> {
+  if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION)
+    return null;
+  const managedIdentity = obs.managedInputIdentity
+    ? await obs.managedInputIdentity('麦克风')
+    : undefined;
+  const micUuid =
+    managedIdentity !== undefined
+      ? managedIdentity && AUDIO_KINDS.has(managedIdentity.kind)
+        ? managedIdentity.uuid
+        : undefined
+      : ((await obs.call('GetInputList')).inputs as Input[]).find(
+          (candidate) => candidate.inputName === '麦克风' && AUDIO_KINDS.has(candidate.inputKind),
+        )?.inputUuid;
+  if (!micUuid) return null;
+
+  const scenes = obsDesiredScenes(baseUrl);
+  const cachedItems = new Map<string, SceneItemRow[]>();
+  const readSceneItems = async (sceneName: string) => {
+    const cached = cachedItems.get(sceneName);
+    if (cached) return cached;
+    const raw = (await obs.call('GetSceneItemList', { sceneName })).sceneItems;
+    const items = Array.isArray(raw) ? (raw as SceneItemRow[]) : [];
+    cachedItems.set(sceneName, items);
+    return items;
+  };
+
+  let desiredEnabled: boolean;
+  if (target) {
+    if (!scenes.some((scene) => scene.sceneName === target.sceneName)) return null;
+    const toggled = (await readSceneItems(target.sceneName)).find(
+      (item) => item.sceneItemId === target.sceneItemId,
+    );
+    if (!toggled || toggled.sourceUuid !== micUuid) return null;
+    desiredEnabled = target.enabled;
+  } else {
+    const perScene = await Promise.all(
+      scenes.map(async (scene) => ({
+        sceneName: scene.sceneName,
+        items: await readSceneItems(scene.sceneName),
+      })),
+    );
+    const states = new Set(
+      perScene.flatMap(({ items }) =>
+        items
+          .filter((item) => item.sourceUuid === micUuid)
+          .map((item) => item.sceneItemEnabled !== false),
+      ),
+    );
+    if (states.size === 0) return null;
+    if (states.size === 1) return [...states][0]!;
+    desiredEnabled = await resolveActiveMicrophoneEnabled(obs, micUuid, perScene);
+  }
+
+  for (const scene of scenes) {
+    for (const item of await readSceneItems(scene.sceneName)) {
+      if (item.sourceUuid !== micUuid || (item.sceneItemEnabled !== false) === desiredEnabled)
+        continue;
+      recordSelfWrite?.(scene.sceneName, item.sceneItemId, desiredEnabled);
+      await obs.call('SetSceneItemEnabled', {
+        sceneName: scene.sceneName,
+        sceneItemId: item.sceneItemId,
+        sceneItemEnabled: desiredEnabled,
+      });
+    }
+  }
+  return desiredEnabled;
 }

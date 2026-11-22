@@ -116,6 +116,12 @@ export async function reconcileManagedAudio(
         });
     }
     const missing: { sceneName: string; input: Record<string, unknown> }[] = [];
+    const desktopMicRefs: {
+      sceneName: string;
+      sceneItemId: number;
+      sourceUuid: string;
+      enabled: boolean;
+    }[] = [];
     for (const { sceneName } of desired) {
       const items = records((await obs.call('GetSceneItemList', { sceneName })).sceneItems);
       for (const input of selected) {
@@ -136,14 +142,23 @@ export async function reconcileManagedAudio(
         )
           throw new Error('audio_response_unknown');
         const ref = { sceneName, sceneItemId: item.sceneItemId, sourceUuid: item.sourceUuid };
-        if (
-          wanted &&
-          !item.sceneItemEnabled &&
-          (!desktopUuid || item.sourceUuid !== ids.microphone)
-        )
+        if (desktopUuid && item.sourceUuid === ids.microphone) {
+          desktopMicRefs.push({ ...ref, enabled: item.sceneItemEnabled });
+        } else if (wanted && !item.sceneItemEnabled) {
           independent.push(ref);
+        }
         if (!wanted && item.sceneItemEnabled) desktop.push(ref);
       }
+    }
+    const desktopMicEnabled = desktopMicRefs.some((ref) => ref.enabled);
+    if (desktopMicEnabled) {
+      for (const ref of desktopMicRefs)
+        if (!ref.enabled)
+          independent.push({
+            sceneName: ref.sceneName,
+            sceneItemId: ref.sceneItemId,
+            sourceUuid: ref.sourceUuid,
+          });
     }
     for (const { sceneName, input } of missing) {
       await check();
@@ -168,7 +183,7 @@ export async function reconcileManagedAudio(
         item.sceneItemEnabled !== false
       )
         throw new Error('audio_selection_changed');
-      if (!desktopUuid || item.sourceUuid !== ids.microphone)
+      if (!desktopUuid || item.sourceUuid !== ids.microphone || desktopMicEnabled)
         independent.push({ sceneName, sceneItemId: item.sceneItemId, sourceUuid: item.sourceUuid });
       snapshots.set(key, JSON.stringify(items));
     }

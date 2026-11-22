@@ -9,7 +9,7 @@ import { ManagedObsResources } from '../src/obs/managed-resources.js';
 import { ObsConfigStore } from '../src/obs/config.js';
 import { ObsAdapter } from '../src/obs/adapter.js';
 import { ObsVideoTransaction } from '../src/obs/video-transaction.js';
-import { OBS_COLLECTION } from '../src/obs/desired-state.js';
+import { OBS_COLLECTION, obsDesiredScenes } from '../src/obs/desired-state.js';
 import { ProgramSceneController } from '../src/program-scenes/controller.js';
 import { ProgramDirector } from '../src/program-scenes/director.js';
 import { createProduction, type ProductionDependencies } from '../src/program-scenes/production.js';
@@ -41,6 +41,11 @@ async function rig() {
     output: false,
     marker: undefined as unknown,
     inputListReads: 0,
+    inputs: [] as { inputUuid: string; inputName: string; inputKind: string }[],
+    sceneItems: new Map<
+      string,
+      { sceneItemId: number; sourceUuid: string; sourceName: string; sceneItemEnabled: boolean }[]
+    >(),
   };
   const writes: string[] = [];
   let notify: (type: string, data: object) => void = () => {};
@@ -88,7 +93,19 @@ async function rig() {
         };
       if (type === 'GetInputList') {
         state.inputListReads++;
-        return { inputs: [] };
+        return { inputs: state.inputs };
+      }
+      if (type === 'GetSceneItemList') {
+        const sceneName = String(data?.sceneName ?? data?.sceneUuid ?? '');
+        return { sceneItems: state.sceneItems.get(sceneName) ?? [] };
+      }
+      if (type === 'SetSceneItemEnabled') {
+        const sceneName = String(data?.sceneName ?? data?.sceneUuid ?? '');
+        const sceneItemId = Number(data?.sceneItemId);
+        const sceneItemEnabled = Boolean(data?.sceneItemEnabled);
+        const found = state.sceneItems.get(sceneName)?.find((i) => i.sceneItemId === sceneItemId);
+        if (found) found.sceneItemEnabled = sceneItemEnabled;
+        notify('SceneItemEnableStateChanged', { sceneName, sceneItemId, sceneItemEnabled });
       }
       if (type === 'GetPersistentData') return { slotValue: state.marker };
       if (type === 'SetPersistentData') state.marker = data!.slotValue;
@@ -154,7 +171,7 @@ async function rig() {
   });
   const bind = () =>
     new ManagedObsResources(path + '.collection.json').bind(rpc, endpoint, 'http://127.0.0.1:3000');
-  return { path, state, scenes, writes, bind, store };
+  return { path, state, scenes, writes, bind, store, notify };
 }
 
 it('confirms an output already started on the observed connection without a second start', async () => {
@@ -468,4 +485,49 @@ it('production finish restores the original program and retries the website hand
     failure: 'productionConflict',
   });
   expect(production.get().mode).toBe('live');
+});
+
+it('syncs managed microphone across all scenes on OBS SceneItemEnableStateChanged without echo loops', async () => {
+  const f = await rig();
+  const managed = await f.bind();
+  await managed.prepareManagedCollection!(true, managed);
+  const desired = obsDesiredScenes('http://127.0.0.1:3000');
+  const micUuid = 'mic-uuid-live';
+  f.scenes.set(
+    OBS_COLLECTION,
+    desired.map((s) => s.sceneName),
+  );
+  f.state.scene = desired[0]!.sceneName;
+  f.state.inputs = [{ inputUuid: micUuid, inputName: '麦克风', inputKind: 'wasapi_input_capture' }];
+  for (const s of desired) {
+    f.state.sceneItems.set(s.sceneName, [
+      { sceneItemId: 6, sourceUuid: micUuid, sourceName: '麦克风', sceneItemEnabled: false },
+    ]);
+  }
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const raw = JSON.parse(await readFile(f.path + '.collection.json', 'utf8')) as {
+    roles: Record<string, { uuid: string; kind: string }>;
+  }[];
+  raw[0]!.roles['麦克风'] = { uuid: micUuid, kind: 'wasapi_input_capture' };
+  for (const s of desired) raw[0]!.roles[s.sceneName] = { uuid: s.sceneName, kind: 'scene' };
+  await writeFile(f.path + '.collection.json', JSON.stringify(raw));
+
+  const adapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
+  cleanups.push(() => adapter.close());
+  await adapter.outputStatus(false);
+  f.writes.length = 0;
+
+  f.state.sceneItems.get('比赛中')![0]!.sceneItemEnabled = true;
+  f.notify('SceneItemEnableStateChanged', {
+    sceneName: '比赛中',
+    sceneItemId: 6,
+    sceneItemEnabled: true,
+  });
+
+  await vi.waitFor(() => {
+    for (const s of desired) {
+      expect(f.state.sceneItems.get(s.sceneName)![0]!.sceneItemEnabled).toBe(true);
+    }
+  });
+  expect(f.writes.filter((w) => w === 'SetSceneItemEnabled')).toHaveLength(desired.length - 1);
 });

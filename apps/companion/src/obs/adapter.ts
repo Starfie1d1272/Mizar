@@ -60,7 +60,12 @@ import {
   isObsProcessRunning,
   type ObsConfig,
 } from './config.js';
-import { checkObsAudio, ensureManagedAudioSources, setupObsAudio } from './audio.js';
+import {
+  checkObsAudio,
+  ensureManagedAudioSources,
+  setupObsAudio,
+  syncManagedMicrophoneAcrossScenes,
+} from './audio.js';
 import {
   ObsExitSafetyError,
   checkObsConfiguration,
@@ -142,6 +147,10 @@ export class ObsAdapter {
   private browserRefreshSubmitted = false;
   private recoveryTask: Promise<void> | undefined;
   private readonly submittedBrowserRefreshes = new Set<string>();
+  private readonly ownMicWrites = new Set<string>();
+  private micSyncPending:
+    { sceneName: string; sceneItemId: number; enabled: boolean } | 'reconcile' | undefined;
+  private micSyncRunning = false;
   private readonly confidenceFailures = new RepeatedDiagnostic((stage, evidence) =>
     this.diagnostic(stage, evidence),
   );
@@ -224,7 +233,51 @@ export class ObsAdapter {
         this.programChanged('changed');
       },
       (event, data) => this.bpOwner.observePreparationEvent(event, data),
+      (event) => {
+        if (this.recoveryClosed) return;
+        if (event.kind === 'collection-ready') {
+          this.scheduleMicrophoneSync('reconcile');
+          return;
+        }
+        const key = `${event.sceneName}\0${event.sceneItemId}\0${event.sceneItemEnabled}`;
+        if (this.ownMicWrites.delete(key)) return;
+        if (!obsDesiredScenes(this.browserBaseUrl).some((s) => s.sceneName === event.sceneName))
+          return;
+        this.scheduleMicrophoneSync({
+          sceneName: event.sceneName,
+          sceneItemId: event.sceneItemId,
+          enabled: event.sceneItemEnabled,
+        });
+      },
     );
+  }
+
+  private scheduleMicrophoneSync(
+    next: { sceneName: string; sceneItemId: number; enabled: boolean } | 'reconcile',
+  ): void {
+    if (this.recoveryClosed) return;
+    if (next !== 'reconcile' || this.micSyncPending === undefined) this.micSyncPending = next;
+    if (this.micSyncRunning) return;
+    this.micSyncRunning = true;
+    void this.serial(async () => {
+      try {
+        while (this.micSyncPending && !this.recoveryClosed) {
+          const target = this.micSyncPending;
+          this.micSyncPending = undefined;
+          await this.withObs((obs) =>
+            syncManagedMicrophoneAcrossScenes(
+              obs,
+              this.browserBaseUrl,
+              target === 'reconcile' ? undefined : target,
+              (sceneName, sceneItemId, enabled) =>
+                this.ownMicWrites.add(`${sceneName}\0${sceneItemId}\0${enabled}`),
+            ),
+          ).catch(() => undefined);
+        }
+      } finally {
+        this.micSyncRunning = false;
+      }
+    }).catch(() => undefined);
   }
 
   /** Guard an explicit capture warmup against output, ownership and exit changes. */
@@ -555,6 +608,8 @@ export class ObsAdapter {
   }
   async close(): Promise<void> {
     this.recoveryClosed = true;
+    this.micSyncPending = undefined;
+    this.ownMicWrites.clear();
     if (this.commentaryTimer) clearTimeout(this.commentaryTimer);
     await this.commentaryTask;
     await this.outputs.close();
@@ -563,6 +618,7 @@ export class ObsAdapter {
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.recoveryTimer = undefined;
     await this.recoveryTask;
+    await this.queue;
   }
 
   private observationGeneration = 0;
