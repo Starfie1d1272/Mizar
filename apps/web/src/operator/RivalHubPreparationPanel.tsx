@@ -70,8 +70,14 @@ export function RivalHubPreparationPanel({
   const [refreshing, setRefreshing] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
-  const refresh = useCallback(async () => {
+  const manualAt = useRef(0);
+  const refresh = useCallback(async (manual = false) => {
     if (request.current) return;
+    if (manual) {
+      const now = Date.now();
+      if (now - manualAt.current < 1000) return;
+      manualAt.current = now;
+    }
     const controller = new AbortController();
     request.current = controller;
     setRefreshing(true);
@@ -88,10 +94,14 @@ export function RivalHubPreparationPanel({
       setConnection(next);
       if (next.pairing === 'pending') setPairing(true);
       if (next.paired) {
-        const scheduleResponse = await fetch('/local/v1/rivalhub-schedule', {
-          cache: 'no-store',
-          signal: controller.signal,
-        });
+        const scheduleResponse = await fetch(
+          manual ? '/operator/rivalhub/schedule/refresh' : '/local/v1/rivalhub-schedule',
+          {
+            method: manual ? 'POST' : 'GET',
+            cache: 'no-store',
+            signal: controller.signal,
+          },
+        );
         if (!scheduleResponse.ok) throw new Error('赛事赛程暂时无法获取，请刷新重试。');
         const nextSchedule = (await scheduleResponse.json()) as Schedule;
         if (!controller.signal.aborted) setSchedule(nextSchedule);
@@ -401,7 +411,7 @@ export function RivalHubPreparationPanel({
                   actionError={error}
                   activeMatchId={connection.activeMatchId}
                   refreshing={refreshing}
-                  onRefresh={() => void refresh()}
+                  onRefresh={() => void refresh(true)}
                   onSelect={(id) => void handleSelectMatch(id)}
                 />
               )}
@@ -415,7 +425,7 @@ export function RivalHubPreparationPanel({
           aria-label="刷新比赛"
           disabled={refreshing}
           loading={refreshing}
-          onClick={() => void refresh()}
+          onClick={() => void refresh(true)}
         >
           刷新比赛
         </Button>

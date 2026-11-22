@@ -37,7 +37,7 @@ export function ObsSettings() {
       'source_disabled',
     ].includes(item.code),
   );
-  const sceneRepairBlocked = obs?.findings.some((item) => item.code === 'source_kind_conflict');
+
   const [portOverride, setPortOverride] = useState<number | null>(null);
   const port = portOverride ?? obs?.port ?? 4455;
   const [password, setPassword] = useState('');
@@ -89,6 +89,15 @@ export function ObsSettings() {
 
   const preparation = useObsPreparation();
   const preparing = preparation.phase === 'running';
+  const ownershipMissing = Boolean(
+    obs?.findings.some((item) => item.code === 'resource_identity_missing') ||
+    (preparation.phase === 'failed' &&
+      preparation.message.includes('归属') &&
+      !obs?.findings.some((item) => item.code === 'collection_missing')),
+  );
+  const sceneRepairBlocked = Boolean(
+    obs?.findings.some((item) => item.code === 'source_kind_conflict') || ownershipMissing,
+  );
   const connected = obs?.connection === 'connected';
   const authenticationRequired =
     obs?.facts?.authentication === 'required' || obs?.facts?.authentication === 'rejected';
@@ -192,7 +201,7 @@ export function ObsSettings() {
       {preparing ? (
         <StatusBanner tone="info">{preparation.message} 无需逐项点击配置。</StatusBanner>
       ) : null}
-      {connected && !preparing && preparation.phase === 'failed' ? (
+      {connected && !preparing && preparation.phase === 'failed' && !ownershipMissing ? (
         <StatusBanner tone="warning">
           {preparation.message}
           <Button disabled={busy || outputBlocked} onClick={() => void action(prepareObs)}>
@@ -251,7 +260,11 @@ export function ObsSettings() {
               </StatusBanner>
             ) : null}
 
-            {!connected && !chooseExecutable && !processStopped && window.__TAURI_INTERNALS__ ? (
+            {!connected &&
+            !chooseExecutable &&
+            !processStopped &&
+            !listenerRefused &&
+            window.__TAURI_INTERNALS__ ? (
               <Button
                 disabled={busy || preparing}
                 onClick={() =>
@@ -471,26 +484,46 @@ export function ObsSettings() {
                     <StatusBanner tone={obs.findings.length ? 'warning' : 'success'}>
                       {(obs.streaming || obs.recording) && obs.findings.length > 0
                         ? 'OBS 正在输出，当前配置问题请在停止推流与录制后处理。'
-                        : obs.findings.some((item) => item.code === 'collection_inactive')
-                          ? '当前使用其他场景集合。可点击下方按钮配置 Mizar 场景。'
-                          : obs.findings.some((item) => item.code === 'source_kind_conflict')
-                            ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
-                            : sceneRepairNeeded
-                              ? 'Mizar 场景尚未就绪，可点击下方按钮配置并复查。'
-                              : obs.findings.some((item) => item.code === 'video_settings')
-                                ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
-                                : obs.findings.some((item) => item.code === 'transition_missing')
-                                  ? '请在 OBS「场景转场」中添加淡化和直接切换。'
-                                  : obs.findings.some((item) => item.code.startsWith('audio_game_'))
-                                    ? obs.findings.find((item) =>
-                                        item.code.startsWith('audio_game_'),
-                                      )?.message
-                                    : obs.findings.some((item) => item.code.includes('audio'))
-                                      ? '请到声音设置核对采集设备、静音与音频恢复；在 OBS 核对输出音轨并录制试听。'
-                                      : (obs.findings[0]?.message ??
-                                        'Mizar 配置检查通过，请核对实际音画。')}
+                        : ownershipMissing
+                          ? 'OBS 中已存在「Mizar 制播」集合，但本机归属记录缺失。请先在 OBS 顶部「场景集合」中重命名或删除旧「Mizar 制播」集合，再点击下方按钮新建 Mizar 场景。'
+                          : obs.findings.some((item) => item.code === 'collection_inactive')
+                            ? '当前使用其他场景集合。可点击下方按钮配置 Mizar 场景。'
+                            : obs.findings.some((item) => item.code === 'source_kind_conflict')
+                              ? 'Mizar 来源名称与自定义来源冲突，请先在 OBS 重命名冲突来源。'
+                              : sceneRepairNeeded
+                                ? 'Mizar 场景尚未就绪，可点击下方按钮配置并复查。'
+                                : obs.findings.some((item) => item.code === 'video_settings')
+                                  ? '请在 OBS「设置 → 视频」将画布和输出设为 1920×1080，常用 FPS 设为 60。返回后自动检查。'
+                                  : obs.findings.some((item) => item.code === 'transition_missing')
+                                    ? '请在 OBS「场景转场」中添加淡化和直接切换。'
+                                    : obs.findings.some((item) =>
+                                          item.code.startsWith('audio_game_'),
+                                        )
+                                      ? obs.findings.find((item) =>
+                                          item.code.startsWith('audio_game_'),
+                                        )?.message
+                                      : obs.findings.some((item) => item.code.includes('audio'))
+                                        ? '请到声音设置核对采集设备、静音与音频恢复；在 OBS 核对输出音轨并录制试听。'
+                                        : (obs.findings[0]?.message ??
+                                          'Mizar 配置检查通过，请核对实际音画。')}
                     </StatusBanner>
                   )}
+                  {ownershipMissing && !versionFinding && !preparing ? (
+                    <Button
+                      variant="primary"
+                      loading={busy || preparing}
+                      disabled={busy || preparing || outputBlocked}
+                      onClick={() =>
+                        void action(async () => {
+                          await obsCommand('check');
+                          await prepareObs();
+                          setMessage('已重新检测并建立「Mizar 制播」场景。');
+                        })
+                      }
+                    >
+                      已移除旧集合，新建 Mizar 场景
+                    </Button>
+                  ) : null}
                   {sceneRepairNeeded && !versionFinding && !sceneRepairBlocked && !preparing ? (
                     <Button
                       variant="primary"

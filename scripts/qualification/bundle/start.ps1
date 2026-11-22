@@ -106,7 +106,7 @@ while ((Get-Date) -lt $deadline) {
     if (-not (Test-ProcessRunning -ProcessId $supervisor.Id)) { throw "验收管理进程在服务就绪前退出；请查看 $supervisorErrorPath" }
     try {
         $health = Invoke-RestMethod -Method GET -Uri 'http://127.0.0.1:3000/health' -TimeoutSec 2 -ErrorAction Stop
-        if ($health.status -eq 'ok') { $ready = $true; break }
+        if ($health.status -in @('ok', 'degraded')) { $ready = $true; break }
     } catch { }
     Start-Sleep -Milliseconds 250
 }

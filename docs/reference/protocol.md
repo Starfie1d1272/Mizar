@@ -59,7 +59,8 @@ WebSocket 校验 Origin、子协议和消息大小，只允许服务端发送业
 
 | 入口 | 语义 |
 | --- | --- |
-| `GET /local/v1/rivalhub-schedule` | 授权赛程及已浏览库摘要，不预取整表详情 |
+| `GET /local/v1/rivalhub-schedule` | 授权赛程及已浏览库摘要，后台刷新按 60 秒节流，不预取整表详情 |
+| `POST /operator/rivalhub/schedule/refresh` | 用户主动刷新赛程列表，绕过后台 60 秒冷却并合并在途请求，仍遵守服务端限流；本地缓存写盘失败单独提示，不伪报网络故障 |
 | `GET /local/v1/rivalhub-library/:matchId` | 按需校验单场资料，失败区分浏览缓存与未缓存 |
 | `POST /operator/rivalhub/select` | 暂存候选；`activate: true` 则重新获取并按原修订原子激活，成功返回 `loaded/matchId` |
 | `POST /operator/rivalhub/refresh` | 使用已配对凭据刷新当前关联比赛，不接收任意 URL 或浏览器凭据 |
