@@ -1,7 +1,7 @@
 import { RepeatedDiagnostic } from '../support/repeated-diagnostic.js';
-import { AudioMeter } from './audio-meter.js';
+
 import { ObsObservationConnection } from './observation-connection.js';
-import type { AudioDeviceCommand } from './audio-device-settings.js';
+
 import {
   captureAudioCollectionTransfer,
   applyAudioCollectionTransfer,
@@ -36,22 +36,15 @@ import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { EventSubscription, OBSWebSocket } from 'obs-websocket-js';
 import type { ProgramSceneId } from '@mizar/protocol/program-scenes';
-import type {
-  ObsAudioBindCommand,
-  ObsOutputCommand,
-  ObsOutputPhase,
-  ObsOutputsStatus,
-} from '@mizar/protocol/obs';
+import type { ObsOutputCommand, ObsOutputPhase, ObsOutputsStatus } from '@mizar/protocol/obs';
 import type { ObsAudioRouting } from './audio-routing.js';
-import type { GameAudioController } from './audio-policy-controller.js';
-import type { MixerCommand, MixerCommandResult } from '@mizar/protocol/mixer';
 import type { RemoteCommentary } from './remote-commentary.js';
 import { readCommentarySwitch } from './commentary-switch.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 
 import { AudioMigration } from './audio-migration.js';
-import type { MusicAudioMode, MusicAudioRecovery } from '../music/device.js';
-import { AudioConfigurationConnection } from './audio-configuration-connection.js';
+import type { MusicAudioRecovery } from '../music/device.js';
+
 import { ObsOutputController, ObsOutputError } from './outputs.js';
 import { readObsProgramEvidence, type ObsProgramEvidence } from './program-evidence.js';
 import {
@@ -66,6 +59,7 @@ import {
   readDesiredSceneItems,
   setupObsAudio,
   syncManagedMicrophoneAcrossScenes,
+  type ObsInventorySnapshot,
 } from './audio.js';
 import {
   ObsExitSafetyError,
@@ -107,9 +101,7 @@ const PROGRAM_EVIDENCE_MS = 750;
 export class ObsAdapter {
   private readonly outputs: ObsOutputController;
   private readonly observations = new ObsObservationConnection();
-  private readonly audioConfiguration: AudioConfigurationConnection;
-  private readonly audioMeter: AudioMeter;
-  private readonly audioCoordinator: ObsAudioCoordinator;
+  readonly audio: ObsAudioCoordinator;
   private readonly bpOwner = new BpOverlayOwner();
   private programChanged: (kind: 'disconnected' | 'changed') => void = () => undefined;
   private configurationChanged: () => void = () => undefined;
@@ -148,8 +140,8 @@ export class ObsAdapter {
   private recoveryGeneration = 0;
   private recoveryPaused = false;
   private browserRecoveryPermission:
-    { recovery: number; program: number; production: () => boolean } | undefined;
-  private browserRefreshSubmitted = false;
+    | { recovery: number; program: number; production: () => boolean; submitted: boolean }
+    | undefined;
   private recoveryTask: Promise<void> | undefined;
   private readonly submittedBrowserRefreshes = new Set<string>();
   private micSyncPending:
@@ -172,18 +164,8 @@ export class ObsAdapter {
     private readonly captureWarmup?: ObsCaptureWarmup,
     private readonly buildId = process.env.MIZAR_APP_VERSION ?? 'development',
   ) {
-    this.audioConfiguration = new AudioConfigurationConnection(configStore);
-    this.audioMeter = new AudioMeter(configStore, undefined, undefined, (error, password) =>
-      this.diagnostic(
-        'obs_audio_meter',
-        password === undefined
-          ? { reason: 'audio_meter_unavailable', redactionContext: 'unavailable' }
-          : obsErrorEvidence(error, password),
-      ),
-    );
-    this.audioCoordinator = new ObsAudioCoordinator({
-      audioConfiguration: this.audioConfiguration,
-      audioMeter: this.audioMeter,
+    this.audio = new ObsAudioCoordinator({
+      configStore: this.configStore,
       audioRouting: this.audioRouting,
       commentary: this.commentary,
       browserBaseUrl: this.browserBaseUrl,
@@ -191,9 +173,9 @@ export class ObsAdapter {
       observe: (read) => this.observe(read),
       serial: (operation) => this.serial(operation),
       configurationMutation: (operation) => this.configurationMutation(operation),
-      withObs: (operation, timeoutMs, diagnosticStage, allowUncheckedCapture) =>
-        this.withObs(operation, timeoutMs, diagnosticStage, allowUncheckedCapture),
-      withReadObs: (operation, timeoutMs) => this.withReadObs(operation, timeoutMs),
+      withObs: (operation, options) => this.withObs(operation, options),
+      withReadObs: (operation, timeoutMs) =>
+        this.withReadObs(operation, timeoutMs === undefined ? undefined : { timeoutMs }),
       captureWarmupGuard: () => this.captureWarmupGuard(),
       observationValidity: () => this.observationValidity(),
       waitForAutomaticAudioConnection: () => this.waitForAutomaticAudioConnection(),
@@ -431,7 +413,7 @@ export class ObsAdapter {
     await this.bpOwner.close(true);
     await this.configStore.save(config);
     this.audioRouting?.invalidateSelections();
-    this.audioCoordinator.clearCommentaryChoices();
+    this.audio.clearCommentaryChoices();
     this.outputs.reset();
     this.observations.reset();
   }
@@ -482,8 +464,8 @@ export class ObsAdapter {
       recovery: this.recoveryGeneration,
       program: this.programGeneration,
       production,
+      submitted: false,
     };
-    this.browserRefreshSubmitted = false;
     this.runBrowserRecovery();
   }
 
@@ -491,7 +473,8 @@ export class ObsAdapter {
     if (
       this.recoveryClosed ||
       this.recoveryPaused ||
-      this.browserRefreshSubmitted ||
+      !this.browserRecoveryPermission ||
+      this.browserRecoveryPermission.submitted ||
       this.recoveryTask ||
       this.recoveryTimer
     )
@@ -520,15 +503,12 @@ export class ObsAdapter {
               this.submittedBrowserRefreshes,
               this.buildId,
             ),
-          TIMEOUT_MS,
-          undefined,
-          false,
-          true,
+          { timeoutMs: TIMEOUT_MS, observe: 'browser' },
         );
       })
         .then((complete) => {
           if (valid()) {
-            this.browserRefreshSubmitted = complete;
+            permission!.submitted = complete;
             if (complete) this.browserRecoveryFailures.clear();
           }
         })
@@ -540,7 +520,7 @@ export class ObsAdapter {
         })
         .finally(() => {
           this.recoveryTask = undefined;
-          if (valid() && !this.browserRefreshSubmitted && !this.outputs.hasRunningOutput()) {
+          if (valid() && !permission?.submitted && !this.outputs.hasRunningOutput()) {
             this.recoveryTimer = setTimeout(attempt, 15_000);
             this.recoveryTimer.unref();
           } else if (this.browserRecoveryPermission !== permission) {
@@ -580,7 +560,7 @@ export class ObsAdapter {
             if (!valid()) return;
             // Leave incomplete mode transactions for the next explicit
             // operator action. Recovery can itself change audible paths.
-            await this.audioCoordinator.queueIndependentCommentary(valid);
+            await this.audio.queueIndependentCommentary(valid);
             if (!valid()) return;
             // Switching the live mix remains an explicit operator action.
           } catch (error) {
@@ -599,13 +579,7 @@ export class ObsAdapter {
     };
     attempt();
   }
-  recoverAudioMode(
-    music: MusicAudioRecovery,
-    valid: () => boolean = () => true,
-    revision?: string,
-  ): Promise<void> {
-    return this.audioCoordinator.recoverAudioMode(music, valid, revision);
-  }
+
   async close(): Promise<void> {
     this.recoveryClosed = true;
     this.micSyncPending = undefined;
@@ -666,34 +640,36 @@ export class ObsAdapter {
 
   private withReadObs<T>(
     operation: (obs: ObsRpc, endpoint: string, recovery: ObsRpc) => Promise<T>,
-    timeoutMs = TIMEOUT_MS,
-    diagnosticStage?: string,
-    commitObservation?: (value: T) => void,
+    options: {
+      timeoutMs?: number;
+      diagnosticStage?: string;
+      commitObservation?: (value: T) => void;
+    } = {},
   ): Promise<T> {
-    return this.withObs(
-      operation,
-      timeoutMs,
-      diagnosticStage,
-      false,
-      false,
-      false,
-      true,
-      commitObservation,
-      true,
-    );
+    return this.withObs(operation, { ...options, observe: 'preparation', readOnly: true });
   }
 
   private async withObs<T>(
     operation: (obs: ObsRpc, endpoint: string, recovery: ObsRpc) => Promise<T>,
-    timeoutMs = TIMEOUT_MS,
-    diagnosticStage?: string,
-    observeAudioIdentity = false,
-    observeBrowserIdentity = false,
-    observeVideoIdentity = false,
-    observePreparationIdentity = false,
-    commitObservation?: (value: T) => void,
-    readOnly = false,
+    options: {
+      timeoutMs?: number;
+      diagnosticStage?: string;
+      observe?: 'audio' | 'browser' | 'video' | 'preparation';
+      commitObservation?: (value: T) => void;
+      readOnly?: boolean;
+    } = {},
   ): Promise<T> {
+    const {
+      timeoutMs = TIMEOUT_MS,
+      diagnosticStage,
+      observe,
+      commitObservation,
+      readOnly = false,
+    } = options;
+    const observeAudioIdentity = observe === 'audio';
+    const observeBrowserIdentity = observe === 'browser';
+    const observeVideoIdentity = observe === 'video';
+    const observePreparationIdentity = observe === 'preparation';
     const observation = this.observationGeneration;
     const config = await this.configStore.read();
     if (
@@ -897,11 +873,13 @@ export class ObsAdapter {
       this.outputs.observePreparationInputs(inputs, inputGeneration);
       observedInputs = true;
     };
+    const snapshot: ObsInventorySnapshot = {};
     const findings = await checkObsConfiguration(
       obs,
       this.browserBaseUrl,
       await this.bpOwner.hiddenHud(obs, this.browserBaseUrl),
       observeInputs,
+      snapshot,
     );
     if (!observedInputs) observeInputs((await obs.call('GetInputList')).inputs);
     if (
@@ -918,26 +896,35 @@ export class ObsAdapter {
       )
     )
       return findings;
-    return includeAudio ? [...findings, ...(await this.audioFindings(obs, endpoint))] : findings;
+    return includeAudio
+      ? [...findings, ...(await this.audioFindings(obs, endpoint, snapshot))]
+      : findings;
   }
 
   private audioCheckFailure(error: unknown): ObsFinding[] {
     this.diagnostic('obs_audio_check', obsErrorEvidence(error));
     return [
-      ...Object.values(this.audioCoordinator.warningSnapshot()),
+      ...Object.values(this.audio.warningSnapshot()),
       { code: 'audio_check_failed', message: 'OBS 音频检查未完成，请在声音设置和 OBS 中核对。' },
     ];
   }
 
-  private async audioFindings(obs: ObsRpc, endpoint: string): Promise<ObsFinding[]> {
+  private async audioFindings(
+    obs: ObsRpc,
+    endpoint: string,
+    snapshot?: ObsInventorySnapshot,
+  ): Promise<ObsFinding[]> {
     try {
-      const audio = [...(await checkObsAudio(obs)), ...(await this.bindingFindings(obs, endpoint))];
+      const audio = [
+        ...(await checkObsAudio(obs, snapshot)),
+        ...(await this.bindingFindings(obs, endpoint)),
+      ];
       if (await this.audioRouting?.modePending())
         audio.push({
           code: 'commentary_pending',
           message: '音频模式切换待核对，请在声音设置和 OBS 中检查。',
         });
-      const warnings = this.audioCoordinator.warningSnapshot();
+      const warnings = this.audio.warningSnapshot();
       if (
         warnings.routing?.code === 'audio_bindings_required' &&
         (await this.audioRouting?.managedBindings(obs, endpoint).catch(() => null))
@@ -1069,14 +1056,15 @@ export class ObsAdapter {
             ),
           ]);
         },
-        2500,
-        undefined,
-        () => {
-          // Commit before finishing this observation; the slower program evidence
-          // below cannot renew a configuration snapshot invalidated in the meantime.
-          if (preparationCurrent()) {
-            this.findings = [...findings];
-          }
+        {
+          timeoutMs: 2500,
+          commitObservation: () => {
+            // Commit before finishing this observation; the slower program evidence
+            // below cannot renew a configuration snapshot invalidated in the meantime.
+            if (preparationCurrent()) {
+              this.findings = [...findings];
+            }
+          },
         },
       );
     } catch (error) {
@@ -1135,8 +1123,7 @@ export class ObsAdapter {
       programEvidence = await Promise.race([
         this.withReadObs(
           (obs) => readObsProgramEvidence(obs, this.browserBaseUrl, status.currentScene),
-          PROGRAM_EVIDENCE_MS,
-          'obs_program_check',
+          { timeoutMs: PROGRAM_EVIDENCE_MS, diagnosticStage: 'obs_program_check' },
         ).catch(() => null),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), PROGRAM_EVIDENCE_MS + 50);
@@ -1195,14 +1182,7 @@ export class ObsAdapter {
         }
         return { preview: null, reason: 'unavailable' as const };
       },
-      TIMEOUT_MS,
-      undefined,
-      false,
-      false,
-      false,
-      false,
-      undefined,
-      false,
+      { timeoutMs: TIMEOUT_MS },
     )
       .catch((error) => {
         const kind = obsFailureKind(error);
@@ -1227,16 +1207,12 @@ export class ObsAdapter {
   check(): Promise<readonly ObsFinding[]> {
     return this.observe(async () => {
       const current = this.preparationValidity();
-      const findings = await this.withReadObs(
-        (obs, endpoint) => this.configurationFindings(obs, endpoint),
-        12_000,
-        undefined,
-        (findings) => {
-          if (!current()) return;
-          this.findings = findings;
+      return this.withReadObs((obs, endpoint) => this.configurationFindings(obs, endpoint), {
+        timeoutMs: 12_000,
+        commitObservation: (findings) => {
+          if (current()) this.findings = findings;
         },
-      );
-      return findings;
+      });
     });
   }
   recoverCaptureWarmup(valid: () => boolean, serialize = true): Promise<readonly ObsFinding[]> {
@@ -1247,78 +1223,21 @@ export class ObsAdapter {
         throw new ObsCaptureWarmupError('capture_warmup_unavailable', 'OBS 游戏画面检查不可用。');
       const pending = (await this.captureWarmup.status()) !== null;
       const lease = pending ? await this.captureWarmupGuard() : undefined;
-      this.findings = await this.withObs(async (obs, endpoint) => {
-        if (lease)
-          await this.captureWarmup!.recoverCurrentCollection(
-            obs,
-            endpoint,
-            () => valid() && lease(),
-          );
-        return this.configurationFindings(guardedObs(obs, valid), endpoint);
-      }, 12_000);
+      this.findings = await this.withObs(
+        async (obs, endpoint) => {
+          if (lease)
+            await this.captureWarmup!.recoverCurrentCollection(
+              obs,
+              endpoint,
+              () => valid() && lease(),
+            );
+          return this.configurationFindings(guardedObs(obs, valid), endpoint);
+        },
+        { timeoutMs: 12_000 },
+      );
       this.configurationChanged();
       return this.findings;
     }, serialize);
-  }
-  sampleAudioMeters(valid: () => boolean) {
-    return this.audioCoordinator.sampleAudioMeters(valid);
-  }
-  readAudioDevices() {
-    return this.audioCoordinator.readAudioDevices();
-  }
-  readAudioDeviceDiagnostics() {
-    return this.audioCoordinator.readAudioDeviceDiagnostics();
-  }
-  setAudioDevice(command: AudioDeviceCommand) {
-    return this.audioCoordinator.setAudioDevice(command);
-  }
-  readAudioRouting() {
-    return this.audioCoordinator.readAudioRouting();
-  }
-  cancelAudioWait(revision: string) {
-    return this.audioCoordinator.cancelAudioWait(revision);
-  }
-  requestIndependentMode(revision: string, music: MusicAudioMode) {
-    return this.audioCoordinator.requestIndependentMode(revision, music);
-  }
-  switchAudioMode(
-    revision: string,
-    mode: 'desktop' | 'independent',
-    desktopDeviceId: string | undefined,
-    music: MusicAudioMode,
-    preparedId?: string,
-  ) {
-    return this.audioCoordinator.switchAudioMode(
-      revision,
-      mode,
-      desktopDeviceId,
-      music,
-      preparedId,
-    );
-  }
-  mixerRead() {
-    return this.audioCoordinator.mixerRead();
-  }
-  mixerWrite(command: MixerCommand, gameAudio?: GameAudioController): Promise<MixerCommandResult> {
-    return this.audioCoordinator.mixerWrite(command, gameAudio);
-  }
-  bindAudio(command: ObsAudioBindCommand) {
-    return this.audioCoordinator.bindAudio(command);
-  }
-  readCommentary() {
-    return this.audioCoordinator.readCommentary();
-  }
-  prepareCommentaryAudio() {
-    return this.audioCoordinator.prepareCommentaryAudio();
-  }
-  listCommentaryApplications() {
-    return this.audioCoordinator.listCommentaryApplications();
-  }
-  selectCommentaryApplication(id: string, revision: string) {
-    return this.audioCoordinator.selectCommentaryApplication(id, revision);
-  }
-  setCommentaryMode(mode: 'autoTeamspeak' | 'disabled', revision: string) {
-    return this.audioCoordinator.setCommentaryMode(mode, revision);
   }
   videoPreflight(valid: () => boolean): Promise<void> {
     return this.observe(() =>
@@ -1335,11 +1254,7 @@ export class ObsAdapter {
           if (!valid() || !lease())
             throw new ObsVideoError('preparation_output_changed', 'OBS 输出状态已变化，请重试。');
         },
-        12000,
-        undefined,
-        false,
-        false,
-        true,
+        { timeoutMs: 12_000, observe: 'video' },
       ),
     );
   }
@@ -1433,11 +1348,7 @@ export class ObsAdapter {
           }
           return id;
         },
-        12000,
-        undefined,
-        false,
-        false,
-        true,
+        { timeoutMs: 12_000, observe: 'video' },
       ),
     );
   }
@@ -1458,11 +1369,7 @@ export class ObsAdapter {
             endpoint,
             id,
           ),
-        12000,
-        undefined,
-        false,
-        false,
-        true,
+        { timeoutMs: 12_000, observe: 'video' },
       );
     });
   }
@@ -1546,7 +1453,7 @@ export class ObsAdapter {
           code: 'audio_prepare_failed',
           message: '场景已准备，音频准备未确认，请在声音设置和 OBS 中核对。',
         };
-        this.audioCoordinator.setWarning('setup', warning);
+        this.audio.setWarning('setup', warning);
         return warning;
       };
       let audioBlocked: ObsFinding | undefined;
@@ -1560,7 +1467,7 @@ export class ObsAdapter {
                 endpoint,
                 this.commentary!.journal,
               ),
-            TIMEOUT_MS,
+            { timeoutMs: TIMEOUT_MS },
           );
         if (await this.audioRouting?.modePending())
           audioBlocked = {
@@ -1570,155 +1477,171 @@ export class ObsAdapter {
       } catch (error) {
         audioBlocked = audioFailure(error, 'obs_audio_transfer');
       }
-      const visualPreparation = await this.withObs(async (connection, endpoint, recovery) => {
-        const obs = preparationObs(connection);
-        await requireSupportedObs(obs);
-        // Select and prove the visual collection first. Unrelated old collections
-        // keep their recovery evidence but do not own this graph.
-        await obs.prepareManagedCollection?.(true, guardedPreparationWrites(obs));
-        await this.captureWarmup?.recoverCurrentCollection(
-          preparationObs(recovery),
-          endpoint,
-          () =>
-            current() &&
-            (!entry || entry.valid()) &&
-            this.outputs.preparationOutputEpoch() === outputEpoch,
-        );
-        const protectedItems: { sceneName: string; sceneItemId: number; sourceUuid: string }[] = [];
-        const protectedCaptureAudio = new Set<string>();
-        const protectedSourceUuids = new Set<string>();
-        let audioResponsibilityUnknown = false;
-        if (this.commentary) {
-          try {
-            const responsibility = await new AudioMigration(
-              `${this.commentary.journal}.migration`,
-            ).visualResponsibilities(
-              endpoint,
-              OBS_COLLECTION,
-              `${this.commentary.journal}.dedicated-mode`,
-            );
-            protectedItems.push(...responsibility.items);
-            for (const uuid of responsibility.sourceUuids) protectedSourceUuids.add(uuid);
-            for (const path of [this.commentary.journal, `${this.commentary.journal}.game`]) {
-              const pending = await readCommentarySwitch(`${path}.switch`);
-              if (pending?.endpoint === endpoint && pending.collection === OBS_COLLECTION) {
-                protectedSourceUuids.add(pending.uuid);
+      const visualPreparation = await this.withObs(
+        async (connection, endpoint, recovery) => {
+          const obs = preparationObs(connection);
+          await requireSupportedObs(obs);
+          // Select and prove the visual collection first. Unrelated old collections
+          // keep their recovery evidence but do not own this graph.
+          await obs.prepareManagedCollection?.(true, guardedPreparationWrites(obs));
+          await this.captureWarmup?.recoverCurrentCollection(
+            preparationObs(recovery),
+            endpoint,
+            () =>
+              current() &&
+              (!entry || entry.valid()) &&
+              this.outputs.preparationOutputEpoch() === outputEpoch,
+          );
+          const protectedItems: { sceneName: string; sceneItemId: number; sourceUuid: string }[] =
+            [];
+          const protectedCaptureAudio = new Set<string>();
+          const protectedSourceUuids = new Set<string>();
+          let audioResponsibilityUnknown = false;
+          if (this.commentary) {
+            try {
+              const responsibility = await new AudioMigration(
+                `${this.commentary.journal}.migration`,
+              ).visualResponsibilities(
+                endpoint,
+                OBS_COLLECTION,
+                `${this.commentary.journal}.dedicated-mode`,
+              );
+              protectedItems.push(...responsibility.items);
+              for (const uuid of responsibility.sourceUuids) protectedSourceUuids.add(uuid);
+              for (const path of [this.commentary.journal, `${this.commentary.journal}.game`]) {
+                const pending = await readCommentarySwitch(`${path}.switch`);
+                if (pending?.endpoint === endpoint && pending.collection === OBS_COLLECTION) {
+                  protectedSourceUuids.add(pending.uuid);
+                  audioBlocked ??= {
+                    code: 'audio_mode_pending',
+                    message: '音频切换尚未完成，请在声音设置中恢复。',
+                  };
+                }
+              }
+              for (const uuid of responsibility.captureAudio) protectedCaptureAudio.add(uuid);
+              if (responsibility.pending)
                 audioBlocked ??= {
                   code: 'audio_mode_pending',
                   message: '音频切换尚未完成，请在声音设置中恢复。',
                 };
+            } catch (error) {
+              audioResponsibilityUnknown = true;
+              audioBlocked = audioFailure(error, 'obs_audio_responsibility');
+              // Unknown audio duties cannot authorize source destruction. Preserve
+              // existing source lifetimes and shared enable fields, not other visuals.
+              const inputs = (await obs.call('GetInputList')).inputs as { inputUuid: string }[];
+              for (const input of inputs) protectedSourceUuids.add(input.inputUuid);
+              for (const { scene, items } of await readDesiredSceneItems(
+                obs,
+                this.browserBaseUrl,
+              )) {
+                for (const item of items)
+                  if (protectedSourceUuids.has(item.sourceUuid))
+                    protectedItems.push({
+                      sceneName: scene.sceneName,
+                      sceneItemId: item.sceneItemId,
+                      sourceUuid: item.sourceUuid,
+                    });
               }
             }
-            for (const uuid of responsibility.captureAudio) protectedCaptureAudio.add(uuid);
-            if (responsibility.pending)
-              audioBlocked ??= {
-                code: 'audio_mode_pending',
-                message: '音频切换尚未完成，请在声音设置中恢复。',
-              };
-          } catch (error) {
-            audioResponsibilityUnknown = true;
-            audioBlocked = audioFailure(error, 'obs_audio_responsibility');
-            // Unknown audio duties cannot authorize source destruction. Preserve
-            // existing source lifetimes and shared enable fields, not other visuals.
-            const inputs = (await obs.call('GetInputList')).inputs as { inputUuid: string }[];
-            for (const input of inputs) protectedSourceUuids.add(input.inputUuid);
-            for (const { scene, items } of await readDesiredSceneItems(obs, this.browserBaseUrl)) {
-              for (const item of items)
-                if (protectedSourceUuids.has(item.sourceUuid))
-                  protectedItems.push({
-                    sceneName: scene.sceneName,
-                    sceneItemId: item.sceneItemId,
-                    sourceUuid: item.sourceUuid,
-                  });
-            }
           }
-        }
-        const visualProtection = { items: protectedItems, sourceUuids: [...protectedSourceUuids] };
-        const visual = await repairObsConfiguration(obs, this.browserBaseUrl, visualProtection);
-        if (
-          visual.some((item) =>
-            [
-              'collection_missing',
-              'collection_inactive',
-              'scene_missing',
-              'source_kind_conflict',
-            ].includes(item.code),
+          const visualProtection = {
+            items: protectedItems,
+            sourceUuids: [...protectedSourceUuids],
+          };
+          const visual = await repairObsConfiguration(obs, this.browserBaseUrl, visualProtection);
+          if (
+            visual.some((item) =>
+              [
+                'collection_missing',
+                'collection_inactive',
+                'scene_missing',
+                'source_kind_conflict',
+              ].includes(item.code),
+            )
           )
-        )
-          return { findings: visual, ready: false, visualProtection };
-        if (entry)
-          await prepareCaptureAudio(
-            obs,
-            (uuid) => !audioResponsibilityUnknown && !protectedCaptureAudio.has(uuid),
-          );
-        return { findings: visual, ready: true, visualProtection };
-      }, 30_000);
+            return { findings: visual, ready: false, visualProtection };
+          if (entry)
+            await prepareCaptureAudio(
+              obs,
+              (uuid) => !audioResponsibilityUnknown && !protectedCaptureAudio.has(uuid),
+            );
+          return { findings: visual, ready: true, visualProtection };
+        },
+        { timeoutMs: 30_000 },
+      );
       // Audio owns a separate connection and deadline. Its timeout retires that
       // socket before we settle the warning; it cannot spend the visual budget.
       const prepared = { ...visualPreparation, audioReady: false };
       if (prepared.ready && audioBlocked) prepared.findings.push(audioBlocked);
       if (prepared.ready && !audioBlocked) {
         try {
-          const audio = await this.withObs(async (connection, endpoint) => {
-            const obs = preparationObs(connection);
-            const visualProtection = prepared.visualProtection;
-            const audioObs = guardedPreparationWrites(obs);
-            await obs.reconcileManagedAudioResources?.(audioObs, visualProtection);
-            if (this.audioRouting) {
-              await applyAudioCollectionTransfer(
-                audioObs,
-                this.audioRouting,
-                endpoint,
-                obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
-                async (bindings) => {
-                  const next = bindings.remoteCommentary;
-                  if (this.commentary && !next)
-                    throw new Error('audio_collection_transfer_commentary_missing');
-                  if (next && !(await this.syncCommentaryExistingBinding(endpoint, next.inputUuid)))
-                    throw new Error('audio_collection_transfer_commentary_changed');
-                },
-              ).catch((error: unknown) => {
-                throw audioCollectionTransferError(error);
-              });
-            }
-            if (this.audioRouting && (await this.audioRouting.hasNoEstablishedMode()))
-              await setupObsAudio(audioObs, this.browserBaseUrl);
-            else await ensureManagedAudioSources(audioObs, this.browserBaseUrl);
-            if (this.audioRouting && !(await this.audioRouting.modePending())) {
-              const previous = await this.audioRouting.commentaryBinding();
-              await this.audioRouting.refreshManagedBindings(
-                audioObs,
-                endpoint,
-                async (replacements) => {
-                  if (!this.commentary) return;
-                  await new AudioMigration(
-                    `${this.commentary.journal}.migration`,
-                  ).rebindCompletedInputs(
-                    audioObs,
-                    `${this.commentary.journal}.dedicated-mode`,
-                    endpoint,
-                    OBS_COLLECTION,
-                    replacements,
-                  );
-                },
-              );
-              const next = await this.audioRouting.commentaryBinding();
-              if (
-                previous.binding &&
-                next.binding &&
-                previous.binding.inputUuid !== next.binding.inputUuid
-              )
-                await this.syncCommentaryExistingBinding(
+          const audio = await this.withObs(
+            async (connection, endpoint) => {
+              const obs = preparationObs(connection);
+              const visualProtection = prepared.visualProtection;
+              const audioObs = guardedPreparationWrites(obs);
+              await obs.reconcileManagedAudioResources?.(audioObs, visualProtection);
+              if (this.audioRouting) {
+                await applyAudioCollectionTransfer(
+                  audioObs,
+                  this.audioRouting,
                   endpoint,
-                  next.binding.inputUuid,
-                  previous.binding.inputUuid,
+                  obsDesiredScenes(this.browserBaseUrl)[0]!.sceneName,
+                  async (bindings) => {
+                    const next = bindings.remoteCommentary;
+                    if (this.commentary && !next)
+                      throw new Error('audio_collection_transfer_commentary_missing');
+                    if (
+                      next &&
+                      !(await this.syncCommentaryExistingBinding(endpoint, next.inputUuid))
+                    )
+                      throw new Error('audio_collection_transfer_commentary_changed');
+                  },
+                ).catch((error: unknown) => {
+                  throw audioCollectionTransferError(error);
+                });
+              }
+              if (this.audioRouting && (await this.audioRouting.hasNoEstablishedMode()))
+                await setupObsAudio(audioObs, this.browserBaseUrl);
+              else await ensureManagedAudioSources(audioObs, this.browserBaseUrl);
+              if (this.audioRouting && !(await this.audioRouting.modePending())) {
+                const previous = await this.audioRouting.commentaryBinding();
+                await this.audioRouting.refreshManagedBindings(
+                  audioObs,
+                  endpoint,
+                  async (replacements) => {
+                    if (!this.commentary) return;
+                    await new AudioMigration(
+                      `${this.commentary.journal}.migration`,
+                    ).rebindCompletedInputs(
+                      audioObs,
+                      `${this.commentary.journal}.dedicated-mode`,
+                      endpoint,
+                      OBS_COLLECTION,
+                      replacements,
+                    );
+                  },
                 );
-              await this.audioRouting.establishDefaultDesktop(audioObs, endpoint);
-            }
-            const audio = await checkObsAudio(obs);
-            audio.push(...(await this.bindingFindings(obs, endpoint)));
-            return audio;
-          }, 30_000);
+                const next = await this.audioRouting.commentaryBinding();
+                if (
+                  previous.binding &&
+                  next.binding &&
+                  previous.binding.inputUuid !== next.binding.inputUuid
+                )
+                  await this.syncCommentaryExistingBinding(
+                    endpoint,
+                    next.binding.inputUuid,
+                    previous.binding.inputUuid,
+                  );
+                await this.audioRouting.establishDefaultDesktop(audioObs, endpoint);
+              }
+              const audio = await checkObsAudio(obs);
+              audio.push(...(await this.bindingFindings(obs, endpoint)));
+              return audio;
+            },
+            { timeoutMs: 30_000 },
+          );
           prepared.findings.push(...audio);
           prepared.audioReady = true;
         } catch (error) {
@@ -1727,7 +1650,7 @@ export class ObsAdapter {
       }
       if (!current()) throw new Error('OBS 准备请求已失效，请重试。');
       this.findings = prepared.findings;
-      await this.audioCoordinator.prepareProgramAudio({
+      await this.audio.prepareProgramAudio({
         prepared,
         current,
         checkOutput,
@@ -1757,12 +1680,7 @@ export class ObsAdapter {
       this.entryPermit = undefined;
       const findings = await this.withObs(
         (obs, endpoint) => this.configurationFindings(obs, endpoint, false),
-        12_000,
-        undefined,
-        false,
-        false,
-        false,
-        true,
+        { timeoutMs: 12_000, observe: 'preparation' },
       );
       findings.push(...audioFindings);
       this.findings = findings;
@@ -1818,13 +1736,7 @@ export class ObsAdapter {
       check();
     });
   }
-  repair(
-    activeScene: () => ProgramSceneId,
-    valid: () => boolean = () => false,
-    prepareMusic?: (valid: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => Promise<void>,
-  ): Promise<readonly ObsFinding[]> {
-    return this.ensure(activeScene, valid, undefined, prepareMusic);
-  }
+
   gameBackgroundReady(): Promise<boolean> {
     return this.observe(() =>
       this.withReadObs((obs) => gameBackgroundReady(obs)).catch(() => false),
@@ -1848,21 +1760,31 @@ export class ObsAdapter {
         recovery === this.recoveryGeneration &&
         outputEpoch === this.outputs.preparationOutputEpoch() &&
         this.outputs.captureWarmupBlockReason() === null;
-      return this.withObs(async (connection, endpoint) => {
-        if (!current())
-          throw new ObsCaptureWarmupError('capture_warmup_changed', 'OBS 准备请求已失效，请重试。');
-        await this.captureWarmup!.recoverCurrentCollection(connection, endpoint, preparationLease);
-        const obs = guardedObs(connection, current);
-        if (!(await prepareCaptureWindow(obs)))
-          return {
-            state: 'waiting' as const,
-            reason: 'target_unavailable' as const,
-            message: 'OBS 尚未发现可用的 CS2 窗口，请确认游戏已启动，再重试准备。',
-          };
-        // Our target write emits InputSettingsChanged. Acquire the warmup lease afterwards.
-        const lease = await this.captureWarmupGuard();
-        return this.captureWarmup!.begin(connection, endpoint, preparationId, current, lease);
-      }, 30_000);
+      return this.withObs(
+        async (connection, endpoint) => {
+          if (!current())
+            throw new ObsCaptureWarmupError(
+              'capture_warmup_changed',
+              'OBS 准备请求已失效，请重试。',
+            );
+          await this.captureWarmup!.recoverCurrentCollection(
+            connection,
+            endpoint,
+            preparationLease,
+          );
+          const obs = guardedObs(connection, current);
+          if (!(await prepareCaptureWindow(obs)))
+            return {
+              state: 'waiting' as const,
+              reason: 'target_unavailable' as const,
+              message: 'OBS 尚未发现可用的 CS2 窗口，请确认游戏已启动，再重试准备。',
+            };
+          // Our target write emits InputSettingsChanged. Acquire the warmup lease afterwards.
+          const lease = await this.captureWarmupGuard();
+          return this.captureWarmup!.begin(connection, endpoint, preparationId, current, lease);
+        },
+        { timeoutMs: 30_000 },
+      );
     });
   }
   releaseCaptureWarmup(id: string): Promise<void> {
@@ -1874,7 +1796,7 @@ export class ObsAdapter {
       const lease = await this.captureWarmupGuard();
       return this.withObs(
         (obs, endpoint) => this.captureWarmup!.release(obs, endpoint, id, lease),
-        12_000,
+        { timeoutMs: 12_000 },
       );
     });
   }
@@ -1996,20 +1918,23 @@ export class ObsAdapter {
     return this.configurationMutation(async () => {
       if ((await this.audioRouting?.enabled()) || (await this.audioRouting?.desktopBinding()))
         throw new ObsActionError('audio_routing_enabled');
-      await this.withObs(async (obs) => {
-        await setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
-        const findings = await checkObsAudio(obs);
-        if (
-          findings.some(
-            (item) =>
-              item.code === 'audio_missing' ||
-              item.code === 'game_audio_missing' ||
-              item.code.startsWith('audio_scene:'),
+      await this.withObs(
+        async (obs) => {
+          await setupObsAudio(guardedPreparationWrites(obs), this.browserBaseUrl);
+          const findings = await checkObsAudio(obs);
+          if (
+            findings.some(
+              (item) =>
+                item.code === 'audio_missing' ||
+                item.code === 'game_audio_missing' ||
+                item.code.startsWith('audio_scene:'),
+            )
           )
-        )
-          throw new Error('audio_setup_unconfirmed');
-      }, 12_000);
-      this.audioCoordinator.clearWarning('setup');
+            throw new Error('audio_setup_unconfirmed');
+        },
+        { timeoutMs: 12_000 },
+      );
+      this.audio.clearWarning('setup');
     });
   }
   async launchTarget(): Promise<string> {

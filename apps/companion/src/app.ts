@@ -584,7 +584,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     recordConfiguration,
     nativeSource,
     obs: async () => obsAdapter?.status(),
-    obsAudioDiagnostics: async () => obsAdapter?.readAudioDeviceDiagnostics(),
+    obsAudioDiagnostics: async () => obsAdapter?.audio.readAudioDeviceDiagnostics(),
     program: () => sceneController.get(),
     projection: () => projectionCoordinator.getCurrent(),
     gsiConfigured: options.gsiToken !== undefined,

@@ -1,7 +1,11 @@
 import { readFile, rm } from 'node:fs/promises';
 import { OBS_CAPTURE_INPUT, OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
 import { reconcileManagedAudio } from './managed-audio.js';
-import { ensureManagedAudioSources, readDesiredSceneItems } from './audio.js';
+import {
+  ensureManagedAudioSources,
+  obsRecordArray as records,
+  readDesiredSceneItems,
+} from './audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { createCommentaryProbe, isTeamspeak, RemoteCommentary } from './remote-commentary.js';
 import { prepareRemoteCommentary } from './remote-commentary-setup.js';
@@ -13,10 +17,19 @@ import {
   readOwnedCommentaryTarget,
 } from './commentary-owned-target.js';
 
-function records(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== 'object'))
-    throw new Error('audio_response_unknown');
-  return value as Record<string, unknown>[];
+export async function readOwnedCommentaryJournal(
+  journal: string,
+): Promise<{ endpoint?: string; collection?: string; uuid?: string } | undefined> {
+  try {
+    return JSON.parse(await readFile(journal, 'utf8')) as {
+      endpoint?: string;
+      collection?: string;
+      uuid?: string;
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 async function resolveGameCaptureTarget(
@@ -107,12 +120,7 @@ export async function configureIndependentAudio(
   });
   try {
     const rememberOwnedTarget = async (observedChange: () => boolean) => {
-      let owned: { endpoint?: string; collection?: string; uuid?: string } | undefined;
-      try {
-        owned = JSON.parse(await readFile(journal, 'utf8')) as typeof owned;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
+      const owned = await readOwnedCommentaryJournal(journal);
       if (
         owned?.endpoint !== endpoint ||
         owned.collection !== OBS_COLLECTION ||

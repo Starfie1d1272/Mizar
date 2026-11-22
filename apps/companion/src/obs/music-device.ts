@@ -276,11 +276,21 @@ export class ObsMusicProvider implements MusicDeviceProvider {
       });
     }
     const client = this.client!;
+    let cachedCollectionChanges = this.collectionChanges;
+    const readCache = new Map<string, Record<string, unknown>>();
     const rpc: ObsRpc = {
       call: async (name, data) => {
+        if (this.collectionChanges !== cachedCollectionChanges) {
+          cachedCollectionChanges = this.collectionChanges;
+          readCache.clear();
+        }
+        const cacheable =
+          (name === 'GetSceneCollectionList' || name === 'GetInputList') && data === undefined;
+        if (cacheable && readCache.has(name)) return readCache.get(name)!;
+        if (!/^Get[A-Z]/.test(name)) readCache.clear();
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          return await Promise.race([
+          const result = await Promise.race([
             (
               client.call as (
                 name: string,
@@ -291,6 +301,8 @@ export class ObsMusicProvider implements MusicDeviceProvider {
               timer = setTimeout(() => reject(new Error('music_obs_timeout')), 2000);
             }),
           ]);
+          if (cacheable) readCache.set(name, result);
+          return result;
         } catch (error) {
           this.trace(
             'music_obs_request',

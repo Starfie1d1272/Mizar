@@ -1,14 +1,14 @@
 import type { AudioMonitorChange } from './audio-monitor-contract.js';
-import { AUDIO_KINDS, assertManagedGlobalAudioSilent, readDesiredSceneItems } from './audio.js';
+import {
+  AUDIO_KINDS,
+  assertManagedGlobalAudioSilent,
+  obsRecordArray as records,
+  readDesiredSceneItems,
+} from './audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
 import { OBS_COLLECTION } from './desired-state.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRole } from '@mizar/protocol/obs';
-function records(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value) || value.some((item) => !item || typeof item !== 'object'))
-    throw new Error('audio_response_unknown');
-  return value as Record<string, unknown>[];
-}
 
 /** Apply the selected roles to direct paths in the dedicated collection. */
 export async function reconcileManagedAudio(
