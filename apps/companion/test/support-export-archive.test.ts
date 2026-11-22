@@ -161,7 +161,7 @@ test('SupportExports supports cancellation and retry', async (t) => {
   const logsDir = join(dir, 'logs');
   mkdirSync(logsDir);
   writeFileSync(
-    join(logsDir, 'companion-20261120.ndjson'),
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000020.ndjson'),
     JSON.stringify({
       schema: 'mizar-diagnostic-event/2',
       eventId: '00000000-0000-4000-8000-000000000020',
@@ -175,9 +175,55 @@ test('SupportExports supports cancellation and retry', async (t) => {
   await exports.cancel(first.exportId);
   await exports.whenSettled(first.exportId);
 
-  const retried = await exports.begin({}, null);
+  writeFileSync(
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000099.ndjson'),
+    JSON.stringify({
+      schema: 'mizar-diagnostic-event/2',
+      eventId: '00000000-0000-4000-8000-000000000099',
+      kind: 'session_started',
+      observedAt: '2026-11-15T10:00:00.000Z',
+    }) + '\n',
+  );
+  writeFileSync(
+    join(logsDir, 'retention-companion.json'),
+    JSON.stringify({
+      schema: 'mizar-retention/2',
+      producerId: 'companion',
+      segments: [
+        {
+          name: 'session-00000000-0000-4000-8000-000000000099.ndjson',
+          producerRunId: '00000000-0000-4000-8000-000000000099',
+          firstSequence: 1,
+          lastSequence: 1,
+          firstObservedAt: '2026-11-15T10:00:00.000Z',
+          lastObservedAt: '2026-11-15T10:00:00.000Z',
+          records: 1,
+          physicalId: '1:1:' + '0'.repeat(64),
+          bytes: 100,
+          sha256: '0'.repeat(64),
+          sealedAt: '2026-11-15T10:05:00.000Z',
+        },
+      ],
+      pins: [],
+      deleting: [],
+      removed: { files: 0, bytes: 0, lastAt: null },
+    }),
+  );
+
+  const retried = await exports.begin({ from: '2026-11-19T00:00:00.000Z' }, null);
   const settled = await exports.whenSettled(retried.exportId);
   assert.equal(settled?.phase, 'ready', `unexpected error: ${settled?.error}`);
+  const zip = unzipSync(readFileSync(join(exports.directory, retried.exportId, 'part-1.zip')));
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString('utf8')) as {
+    retainedRecords: number;
+    excludedSources: { source: string; reason: string }[];
+  };
+  assert.equal(coverage.retainedRecords, 1);
+  assert.ok(
+    coverage.excludedSources.some(
+      (entry) => entry.source === 'session-00000000-0000-4000-8000-000000000099.ndjson',
+    ),
+  );
 });
 
 test('needsEvidenceSanitize never misses JSON-escaped URLs, nested JSON, or unicode keys', () => {

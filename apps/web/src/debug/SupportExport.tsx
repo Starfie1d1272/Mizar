@@ -121,8 +121,14 @@ function download(job: ReadyExport) {
   link.remove();
 }
 
+function defaultExportFrom(now = Date.now()): string {
+  const date = new Date(now - 3 * 86_400_000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function SupportExport() {
-  const [from, setFrom] = useState('');
+  const [from, setFrom] = useState(() => defaultExportFrom());
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [savingLocal, setSavingLocal] = useState(false);
@@ -212,8 +218,10 @@ export function SupportExport() {
       );
       // Let synchronous snapshot failures join the fixed document prefix.
       await Promise.resolve();
-      const documentHandoff = await flushControlEvidence();
-      const host = desktop ? await boundedStatus(desktopInvoke('read_support_log_state')) : null;
+      const [documentHandoff, host] = await Promise.all([
+        flushControlEvidence(),
+        desktop ? boundedStatus(desktopInvoke('read_support_log_state')) : Promise.resolve(null),
+      ]);
       if (signal.aborted) throw new Error('export_cancelled');
       stage = 'generate';
       const requestBody = JSON.stringify({
@@ -352,16 +360,22 @@ export function SupportExport() {
       <details>
         <summary>导出时间范围</summary>
         <Field
-          label="开始时间（留空包含全部保留记录）"
+          label="开始时间（默认近 3 天，留空包含全部保留记录）"
           type="datetime-local"
           value={from}
-          onChange={(e) => setFrom(e.target.value)}
+          onChange={(e) => {
+            setFrom(e.target.value);
+            setReadyJob(null);
+          }}
         />
         <Field
           label="结束时间（留空至导出时）"
           type="datetime-local"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
+          onChange={(e) => {
+            setTo(e.target.value);
+            setReadyJob(null);
+          }}
         />
       </details>
       {busy && progress ? (

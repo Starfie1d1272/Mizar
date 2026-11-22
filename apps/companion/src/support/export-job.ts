@@ -15,7 +15,72 @@ import type { ArchiveWorkerData } from './archive-worker.js';
 const currentProcessLogs = /^(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?$/;
 const CACHE_LIMIT = 256 * 1024 * 1024;
 const MANIFEST_RESERVE = 1024 * 1024;
+const INDEX_READ_MAX = 4 * 1024 * 1024;
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+
+async function readBoundedIndex(
+  directory: string,
+  name: string,
+): Promise<Record<string, unknown> | null> {
+  let handle: FileHandle | undefined;
+  try {
+    const path = await safePath(directory, name);
+    const before = await lstat(path);
+    if (!before.isFile() || before.nlink !== 1 || before.size > INDEX_READ_MAX) return null;
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const stat = await handle.stat();
+    if (
+      stat.ino !== before.ino ||
+      stat.dev !== before.dev ||
+      stat.nlink !== 1 ||
+      stat.size > INDEX_READ_MAX
+    )
+      return null;
+    const parsed = JSON.parse(await handle.readFile('utf8')) as unknown;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readExcludedSourcesByRange(
+  logsDirectory: string,
+  rangeStart: number,
+): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  if (!Number.isFinite(rangeStart)) return excluded;
+  const [companionRetention, performanceRetention, deliveryState] = await Promise.all([
+    readBoundedIndex(logsDirectory, 'retention-companion.json'),
+    readBoundedIndex(logsDirectory, 'retention-performance.json'),
+    readBoundedIndex(join(logsDirectory, 'diagnostic-outbox'), 'state.json'),
+  ]);
+  for (const inventory of [companionRetention, performanceRetention]) {
+    if (!inventory || !Array.isArray(inventory.segments)) continue;
+    for (const seg of inventory.segments as unknown[]) {
+      if (!seg || typeof seg !== 'object') continue;
+      const entry = seg as { name?: unknown; lastObservedAt?: unknown };
+      if (typeof entry.name !== 'string' || typeof entry.lastObservedAt !== 'string') continue;
+      const lastMs = Date.parse(entry.lastObservedAt);
+      if (Number.isFinite(lastMs) && lastMs < rangeStart) excluded.add(entry.name);
+    }
+  }
+  if (deliveryState && Array.isArray(deliveryState.queue)) {
+    for (const item of deliveryState.queue as unknown[]) {
+      if (!item || typeof item !== 'object') continue;
+      const batch = item as { id?: unknown; index?: { to?: unknown } };
+      if (typeof batch.id !== 'string' || typeof batch.index?.to !== 'string') continue;
+      const toMs = Date.parse(batch.index.to);
+      if (Number.isFinite(toMs) && toMs < rangeStart) {
+        excluded.add(`diagnostic-outbox/${batch.id}.gz`);
+      }
+    }
+  }
+  return excluded;
+}
 /** Own only the lease created by this cleanup attempt, never a native saver or peer. */
 async function removeExpiredExport(path: string, directory: Stats): Promise<boolean> {
   const leasePath = join(path, 'saving.lease');
@@ -330,8 +395,28 @@ export class SupportExports {
         gap(prefix + name, 'read', error);
       }
     };
+    const excludedSources: { source: string; reason: string }[] = [];
+    const rangeStart = range.from ? Date.parse(range.from) : NaN;
+    const excludedByRange = await readExcludedSourcesByRange(this.logs, rangeStart).catch(
+      () => new Set<string>(),
+    );
     const addSource = (source: (typeof sources)[number] | undefined) => {
       if (source) sources.push(source);
+    };
+    const filterByRange = (names: readonly string[], prefix = '') => {
+      const kept: string[] = [];
+      for (const name of names) {
+        const key = prefix + name;
+        if (excludedByRange.has(key)) {
+          excludedSources.push({
+            source: key,
+            reason: 'outside-requested-range; original retained',
+          });
+        } else {
+          kept.push(name);
+        }
+      }
+      return kept;
     };
     const captureBatch = async (
       names: readonly string[],
@@ -383,8 +468,10 @@ export class SupportExports {
             cause: host,
           });
         await captureBatch(
-          names.filter(
-            (name) => diagnosticSegmentPattern.test(name) || currentProcessLogs.test(name),
+          filterByRange(
+            names.filter(
+              (name) => diagnosticSegmentPattern.test(name) || currentProcessLogs.test(name),
+            ),
           ),
           (name) => capture(this.logs, name, '', false, currentProcessLogs.test(name)),
         );
@@ -410,7 +497,10 @@ export class SupportExports {
         try {
           const directory = await safePath(join(this.logs, folder));
           await captureBatch(
-            (await readdir(directory)).filter((name) => pattern.test(name)).sort(),
+            filterByRange(
+              (await readdir(directory)).filter((name) => pattern.test(name)).sort(),
+              folder + '/',
+            ),
             (name) => capture(directory, name, folder + '/'),
           );
         } catch (error) {
@@ -456,22 +546,37 @@ export class SupportExports {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap('observer', 'enumerate', error);
       }
-      const nativeObs = await collectObsNativeEvidence({
-        includeRelatedLogs: true,
-        retainRelatedLog: async (source) => {
-          handles.push(source.handle);
-          sources.push({
-            name: `attachments/obs/${source.name}`,
-            fd: source.handle.fd,
-            bytes: source.bytes,
-            rawAttachment: true,
-            secrets: [...source.secrets],
-          });
-        },
-      }).catch((error: unknown) => {
-        gap('obs', 'collect', error);
-        return { status: 'unavailable' };
-      });
+      const maxLogAgeMs = Number.isFinite(rangeStart)
+        ? Math.min(14 * 86_400_000, Math.max(24 * 3_600_000, Date.now() - rangeStart + 60_000))
+        : 14 * 86_400_000;
+      const [nativeObs, resolvedSnapshot, frameRateLive] = await Promise.all([
+        collectObsNativeEvidence({
+          includeRelatedLogs: true,
+          maxLogAgeMs,
+          retainRelatedLog: async (source) => {
+            handles.push(source.handle);
+            sources.push({
+              name: `attachments/obs/${source.name}`,
+              fd: source.handle.fd,
+              bytes: source.bytes,
+              rawAttachment: true,
+              secrets: [...source.secrets],
+            });
+          },
+        }).catch((error: unknown) => {
+          gap('obs', 'collect', error);
+          return { status: 'unavailable' };
+        }),
+        typeof snapshot === 'function'
+          ? Promise.resolve()
+              .then(() => snapshot())
+              .catch((error: unknown) => {
+                gap('snapshot', 'collect', error);
+                return { status: 'unavailable' };
+              })
+          : Promise.resolve(snapshot),
+        this.frameRateSnapshot(gap),
+      ]);
       this.assertActive(job);
       const asOf = new Date().toISOString();
       const vector = {
@@ -485,17 +590,9 @@ export class SupportExports {
         host: { clientReported: true, state: host ?? null },
         sources: sources.map(({ name, bytes }) => ({ name, bytes })),
         current: {
-          snapshot:
-            typeof snapshot === 'function'
-              ? await Promise.resolve()
-                  .then(() => snapshot())
-                  .catch((error: unknown) => {
-                    gap('snapshot', 'collect', error);
-                    return { status: 'unavailable' };
-                  })
-              : snapshot,
+          snapshot: resolvedSnapshot,
           nativeObs,
-          frameRateLive: await this.frameRateSnapshot(gap),
+          frameRateLive,
         },
         unknown: [
           'cross-process snapshot is not atomic',
@@ -520,6 +617,7 @@ export class SupportExports {
           workerData: {
             sources,
             gaps,
+            excludedSources,
             output,
             exportId: job.exportId,
             range,

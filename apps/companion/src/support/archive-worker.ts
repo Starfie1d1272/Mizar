@@ -57,6 +57,7 @@ export function runArchiveWorker(
   const gaps = [...d.gaps];
   const rangeStart = timestamp(d.range.from);
   const rangeEnd = timestamp(d.range.to);
+  const hasRange = Number.isFinite(rangeStart) || Number.isFinite(rangeEnd);
   const scratch = Buffer.allocUnsafe(65_536);
   const excludedSources: { source: string; reason: string }[] = [...(d.excludedSources ?? [])];
   const coverageFiles: { partIndex: number; name: string }[] = [];
@@ -340,6 +341,7 @@ export function runArchiveWorker(
               },
               source,
               at,
+              cleanRaw,
             )
           )
             refs.push(id);
@@ -362,10 +364,11 @@ export function runArchiveWorker(
           },
           source,
           offset,
+          cleanRaw,
         );
       }
     }
-    if (Number.isFinite(rangeStart) || Number.isFinite(rangeEnd)) {
+    if (hasRange) {
       const stamp = event.observedAt ?? event.time ?? event.recordedAt;
       let interval = event.sourceInterval;
       if (!interval && Array.isArray(object(event.evidence).samples)) {
@@ -529,7 +532,6 @@ export function runArchiveWorker(
             } else if (line) {
               let value: unknown;
               let cleanRaw = false;
-              const start = performance.now();
               try {
                 value = JSON.parse(line);
                 cleanRaw = !needsEvidenceSanitize(line);
@@ -539,10 +541,12 @@ export function runArchiveWorker(
                   coverage: { unknown: ['unstructured-source-time'] },
                 };
               }
-              stages.decodeMs += performance.now() - start;
               emit(value, source.name, offset, cleanRaw);
             }
           };
+          const ndjsonStarted = performance.now();
+          const readBefore = stages.readMs;
+          const encodeBefore = stages.encodeMs;
           while (position < source.bytes) {
             const raw = scratch.subarray(0, Math.min(scratch.length, source.bytes - position));
             const n = read(source.fd, raw, position);
@@ -557,6 +561,13 @@ export function runArchiveWorker(
               offset += lineBytes + 1;
             }
           }
+          stages.decodeMs += Math.max(
+            0,
+            performance.now() -
+              ndjsonStarted -
+              (stages.readMs - readBefore) -
+              (stages.encodeMs - encodeBefore),
+          );
           tail += decoder.end();
           if (source.rawAttachment) {
             if (tail) write(tail);
