@@ -799,3 +799,182 @@ test('late async enqueue failure and known-source boundary loss stay isolated to
   await service.retry();
   assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
 });
+
+test('scoped pending boundary capture on match A does not block independent match B snapshot or delivery', async (t) => {
+  const { outbox, event, cleanup } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+  const { ProgramRuntime } = await import('../src/runtime/program-runtime.js');
+  const { createProjectionCoordinator } =
+    await import('../src/projections/projection-coordinator.js');
+  const { createCstvSourceManagers } = await import('../src/telemetry/cstv-source-manager.js');
+  const { toMatchDocumentV1 } = await import('@mizar/rivalhub');
+  const manifestFixture = JSON.parse(
+    await readFile(
+      new URL(
+        '../../../packages/rivalhub/test/fixtures/broadcast-manifest-v1.valid.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  const sent: ReliableEventV1[] = [];
+  const service = new OutputService({
+    outbox,
+    now: () => now,
+    sink: {
+      async send(item) {
+        sent.push(item);
+        return 'accepted';
+      },
+    },
+  });
+  cleanup.push(() => service.close());
+
+  const makeLiveMatch = (matchId: string, liveSessionId: string, instanceId: string) => {
+    const manifest = {
+      ...manifestFixture,
+      revision: `rev-${matchId}`,
+      match: { ...manifestFixture.match, matchId },
+    };
+    const context = toMatchDocumentV1(manifest);
+    const runtime = new ProgramRuntime({
+      producerInstanceId: instanceId,
+      liveSession: { kind: 'bound', liveSessionId },
+    });
+    const binding = {
+      origin: 'online' as const,
+      freshness: 'fresh' as const,
+      manifest,
+      context,
+      diagnostics: [],
+    };
+    const committed = runtime.bindContext(context, 'online');
+    const coordinator = createProjectionCoordinator({
+      programRuntime: runtime,
+      cstvSources: createCstvSourceManagers({}),
+      nowMonotonicMs: () => 10,
+    });
+    coordinator.setMatchContextBinding(binding, committed);
+    cleanup.push(() => coordinator.close());
+    const players = [
+      ...context.entrants.a.players.slice(0, 5).map((p, i) => ({
+        sourcePlayerId: p.steam64!,
+        side: 'CT' as const,
+        activity: 'playing' as const,
+        observerSlot: i + 1,
+        state: {
+          health: 100,
+          armor: 100,
+          helmet: true,
+          defuseKit: true,
+          money: 3000,
+          equipValue: 2500,
+        },
+        matchStats: { kills: 0, assists: 0, deaths: 0, mvps: 0, score: 0 },
+        weapons: [{ sourceWeaponId: 'w0', name: 'weapon_ak47', state: 'active' as const }],
+      })),
+      ...context.entrants.b.players.slice(0, 5).map((p, i) => ({
+        sourcePlayerId: p.steam64!,
+        side: 'T' as const,
+        activity: 'playing' as const,
+        observerSlot: i + 6,
+        state: {
+          health: 100,
+          armor: 100,
+          helmet: true,
+          defuseKit: false,
+          money: 3000,
+          equipValue: 2500,
+        },
+        matchStats: { kills: 0, assists: 0, deaths: 0, mvps: 0, score: 0 },
+        weapons: [{ sourceWeaponId: 'w0', name: 'weapon_ak47', state: 'active' as const }],
+      })),
+    ];
+    const observeFrame = (sequence: number, mapName: string, phase: 'warmup' | 'live') => {
+      const result = runtime.acceptObservation({
+        receive: { sequence, receivedAt: now.toISOString(), receivedMonotonicMs: sequence },
+        source: { kind: 'cs2-gsi' },
+        coverage: {
+          provider: 'present',
+          map: 'present',
+          round: 'present',
+          phaseCountdowns: 'absent',
+          player: 'absent',
+          allPlayers: 'present',
+          bomb: 'absent',
+          grenades: 'absent',
+        },
+        telemetry: {
+          map: { name: mapName, phase, roundNumber: phase === 'live' ? 1 : 0 },
+          round: { phase: 'live' },
+          allPlayers: players,
+        },
+      });
+      coordinator.afterRuntimeMutation(result);
+      return { result, bundle: coordinator.getCurrent() };
+    };
+    return { binding, observeFrame };
+  };
+
+  // Persistently fail Match A's boundary capture staging while letting Match B write cleanly.
+  const db = (
+    outbox as unknown as { database: { request: (...args: unknown[]) => Promise<unknown> } }
+  ).database;
+  const origRequest = db.request.bind(db);
+  db.request = (async (method: string, ...args: unknown[]) => {
+    if (method === 'stageBoundaryCaptures' && JSON.stringify(args).includes('match-a'))
+      throw new Error('match_a_disk_unavailable');
+    return origRequest(method, ...args);
+  }) as typeof db.request;
+  cleanup.unshift(async () => {
+    db.request = origRequest;
+  });
+
+  const matchA = makeLiveMatch('match-a', 'session-a', 'inst-a');
+  const firstA = matchA.observeFrame(1, 'de_mirage', 'warmup');
+  service.beforeRuntimeMutation({
+    bundle: firstA.bundle,
+    binding: matchA.binding,
+    source: undefined,
+    authority: undefined,
+  });
+  service.afterRuntimeMutation(firstA.result, firstA.bundle, matchA.binding);
+  const boundaryA = matchA.observeFrame(2, 'de_ancient', 'live');
+  service.afterRuntimeMutation(boundaryA.result, boundaryA.bundle, matchA.binding);
+  await outbox.flushPending();
+  assert.equal(outbox.getBoundaryCaptureRecovery().pending, 1);
+
+  // Switch to independent Match B: snapshot is readable, boundary status is clean, and delivery succeeds.
+  const matchB = makeLiveMatch('match-b', 'session-b', 'inst-b');
+  const firstB = matchB.observeFrame(1, 'de_mirage', 'live');
+  service.setCurrent(firstB.bundle, matchB.binding);
+  assert.notEqual(service.currentStatus().snapshot, null);
+  assert.equal(service.currentStatus().blockedReason, null);
+
+  service.afterRuntimeMutation(firstB.result, firstB.bundle, matchB.binding);
+  await outbox.flushPending();
+  await service.retry();
+  assert.equal(service.getBoundaryStatus(), null);
+  assert.ok(sent.some((item) => item.matchId === 'match-b'));
+  assert.equal(outbox.getBoundaryCaptureRecovery().pending, 1);
+
+  // Switching back to Match A preserves Match A's pending persistence block.
+  service.setCurrent(boundaryA.bundle, matchA.binding);
+  assert.equal(service.currentStatus().snapshot, null);
+  assert.equal(service.currentStatus().blockedReason, 'output_persistence_pending');
+
+  // Verify P2: sealCapture on an unarmed source releases its in-flight seal marker without blocking armCapture.
+  const ref = event('map_started', 'unarmed');
+  const unarmedSource = {
+    baseUrl: 'https://example.com',
+    competitionId: ref.competitionId,
+    installationId: 'installation-1',
+    authorityRevision: 1,
+    matchId: 'match-unarmed',
+    producerInstanceId: ref.cursor.producerInstanceId,
+    liveSessionId: 'session-unarmed',
+  };
+  assert.equal(await outbox.sealCapture(unarmedSource, ref.cursor, true), false);
+  await outbox.armCapture(unarmedSource, outbox.createCaptureReference(ref.cursor));
+  assert.equal(outbox.captureCoverage(unarmedSource).state, 'armed');
+});

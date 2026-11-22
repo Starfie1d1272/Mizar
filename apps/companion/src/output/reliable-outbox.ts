@@ -86,7 +86,7 @@ export class ReliableOutbox {
       activationCursor?: ReliableEventV1['cursor'];
     }
   >();
-  private readonly sealRequests = new Set<string>();
+  private readonly sealRequests = new Map<string, number>();
   private readonly unknownCaptures = new Map<string, 'legacy' | 'unclean' | 'mismatch'>();
   private isCaptureUnknown(key: string): boolean {
     return this.unknownCaptures.has(key) || this.view.unknown.has(key);
@@ -264,7 +264,7 @@ export class ReliableOutbox {
   ): Promise<boolean> {
     source = parseSource(source);
     const key = sourceKey(source);
-    this.sealRequests.add(key);
+    this.sealRequests.set(key, (this.sealRequests.get(key) ?? 0) + 1);
     if (!complete) this.unknownCaptures.set(key, 'unclean');
     const current = this.captures.get(key);
     if (current) {
@@ -328,8 +328,9 @@ export class ReliableOutbox {
           return false;
         }
       } finally {
-        if (this.view.intervalForSource(source)?.state === 'sealed' || this.isCaptureUnknown(key))
-          this.sealRequests.delete(key);
+        const remaining = (this.sealRequests.get(key) ?? 1) - 1;
+        if (remaining > 0) this.sealRequests.set(key, remaining);
+        else this.sealRequests.delete(key);
       }
     })();
   }
@@ -380,7 +381,6 @@ export class ReliableOutbox {
   private markCaptureUnknown(source: ExactSource): void {
     const key = sourceKey(source);
     this.unknownCaptures.set(key, 'unclean');
-    this.sealRequests.add(key);
     const current = this.captures.get(key);
     if (current) current.sealing = true;
     // Even if this write fails or the process dies first, the already armed
@@ -439,7 +439,6 @@ export class ReliableOutbox {
   ): Promise<void> {
     const key = sourceKey(source);
     this.unknownCaptures.set(key, reason);
-    this.sealRequests.add(key);
     const current = this.captures.get(key);
     if (current) current.sealing = true;
     const interval = await this.repository().request(
@@ -594,13 +593,18 @@ export class ReliableOutbox {
   private readonly pendingBoundaryCaptures = new Map<string, BoundaryCaptureOperation>();
   private readonly durableBoundaryCaptures = new Set<string>();
   private activeBoundaryCapture: BoundaryCaptureOperation | undefined;
-  private get boundaryCaptureFailed(): boolean {
+  private boundaryCaptureFailedFor(scope?: ReliableDeliveryScope): boolean {
     return (
       this.boundaryCaptureLost ||
-      [...this.pendingBoundaryCaptures.keys()].some((id) =>
-        this.unconfirmedWrites.has(`boundary:${id}`),
+      [...this.pendingBoundaryCaptures.entries()].some(
+        ([id, op]) =>
+          this.unconfirmedWrites.has(`boundary:${id}`) &&
+          this.operationMatchesScope(op.request, scope),
       )
     );
+  }
+  private get boundaryCaptureFailed(): boolean {
+    return this.boundaryCaptureFailedFor();
   }
 
   getBoundaryCaptureRecovery(): { pending: number; durable: number; lost: boolean } {
@@ -1260,7 +1264,15 @@ export class ReliableOutbox {
   }
 
   hasBoundaryGap(scope?: BoundaryScope): boolean {
-    return this.boundaryCaptureFailed || this.hasStoredBoundaryGap(scope);
+    const delivery =
+      scope?.matchId !== undefined
+        ? {
+            matchId: scope.matchId,
+            producerInstanceId: scope.producerInstanceId,
+            liveSessionId: scope.liveSessionId ?? '',
+          }
+        : undefined;
+    return this.boundaryCaptureFailedFor(delivery) || this.hasStoredBoundaryGap(scope);
   }
 
   private hasStoredBoundaryGap(scope?: BoundaryScope): boolean {
@@ -1526,32 +1538,73 @@ export class ReliableOutbox {
         throw new Error('boundary_capture_input_lost');
       const matchesTarget = (source?: ExactSource | null) =>
         !targetKey || (Boolean(source) && sourceKey(source!) === targetKey);
+      const scopeId = (
+        value:
+          | { matchId?: string; producerInstanceId: string; liveSessionId?: string | null }
+          | undefined,
+      ) =>
+        value
+          ? JSON.stringify([
+              value.matchId ?? null,
+              value.producerInstanceId,
+              value.liveSessionId ?? null,
+            ])
+          : '__global__';
       const pending = [
         ...[...this.pendingBoundaryCaptures.values()]
           .filter((operation) => matchesTarget(operation.request.source))
-          .map((operation) => ({
-            order: this.captureOrder.get(`boundary:${operation.id}`) ?? 0,
-            retry: () => this.queue.run(() => this.captureBoundaryOperation(operation)),
-          })),
+          .map((operation) => {
+            const firstEvent = operation.request.events[0] ?? operation.request.intents[0]?.event;
+            const scopeKey = scopeId(
+              operation.request.scope ??
+                (firstEvent
+                  ? {
+                      matchId: firstEvent.matchId,
+                      producerInstanceId: firstEvent.cursor.producerInstanceId,
+                      liveSessionId: firstEvent.cursor.liveSessionId,
+                    }
+                  : undefined),
+            );
+            return {
+              order: this.captureOrder.get(`boundary:${operation.id}`) ?? 0,
+              scopeKey,
+              retry: () => this.queue.run(() => this.captureBoundaryOperation(operation)),
+            };
+          }),
         ...[...this.pendingEnqueues.entries()]
           .filter(([, value]) => matchesTarget(value.source))
           .map(([key, value]) => ({
             order: this.captureOrder.get(key) ?? 0,
+            scopeKey: scopeId({
+              matchId: value.event.matchId,
+              producerInstanceId: value.event.cursor.producerInstanceId,
+              liveSessionId: value.event.cursor.liveSessionId,
+            }),
             retry: value.retry,
           })),
         ...(targetKey
           ? []
           : [...this.pendingContinuities.entries()].map(([key, value]) => ({
               order: this.captureOrder.get(key) ?? 0,
+              scopeKey: '__global__',
               retry: value.retry,
             }))),
       ]
         .sort((a, b) => a.order - b.order)
         .slice(0, drain ? RELIABLE_OUTBOX_MAX_PENDING * 3 : 4);
+      const failedScopes = new Set<string>();
+      let firstError: unknown;
       for (const entry of pending) {
-        await entry.retry();
+        if (failedScopes.has('__global__') || failedScopes.has(entry.scopeKey)) continue;
+        try {
+          await entry.retry();
+        } catch (error) {
+          failedScopes.add(entry.scopeKey);
+          if (firstError === undefined) firstError = error;
+        }
         await setImmediate();
       }
+      if (firstError !== undefined) throw firstError;
     })();
     if (!onlySource) {
       this.orderedReplay = replay;
@@ -1588,7 +1641,11 @@ export class ReliableOutbox {
     return this.queue.run(async () => {
       await this.archiveLegacyTerminals();
       if (
-        this.boundaryCaptureFailed ||
+        this.boundaryCaptureFailedFor({
+          matchId: intent.event.matchId,
+          producerInstanceId: intent.event.cursor.producerInstanceId,
+          liveSessionId: intent.event.cursor.liveSessionId ?? '',
+        }) ||
         this.boundaryGap ||
         intent.expired ||
         !this.boundaryIntents.includes(intent)
@@ -1847,7 +1904,14 @@ export class ReliableOutbox {
         }
         // Retain legitimate one-shot results while their preceding boundary is unconfirmed.
         // Do not classify a transient write failure as a missing historical fact.
-        if (this.boundaryCaptureFailed && !capture) {
+        if (
+          !capture &&
+          this.boundaryCaptureFailedFor({
+            matchId: event.matchId,
+            producerInstanceId: event.cursor.producerInstanceId,
+            liveSessionId: event.cursor.liveSessionId ?? '',
+          })
+        ) {
           this.noteUnconfirmedWrite(operationKey);
           throw new Error('boundary_capture_pending');
         }
@@ -2091,8 +2155,13 @@ export class ReliableOutbox {
     );
   }
 
-  /** Captures are registered synchronously before their journal operation is queued. */
-  hasPendingBoundaryCaptures(scope: ReliableDeliveryScope): boolean {
+  private operationMatchesScope(
+    request: BoundaryCaptureOperation['request'],
+    scope?: ReliableDeliveryScope,
+  ): boolean {
+    if (!scope) return true;
+    // Without the prior execution scope, do not infer ownership from a newer binding.
+    if (!request.scope) return true;
     const matches = (value: {
       matchId?: string;
       producerInstanceId: string;
@@ -2101,18 +2170,21 @@ export class ReliableOutbox {
       (!value.matchId || value.matchId === scope.matchId) &&
       value.producerInstanceId === scope.producerInstanceId &&
       (!value.liveSessionId || value.liveSessionId === scope.liveSessionId);
-    return [...this.pendingBoundaryCaptures.values()].some(({ request }) => {
-      // Without the prior execution scope, do not infer ownership from a newer binding.
-      if (!request.scope) return true;
-      if (matches(request.scope)) return true;
-      return [...request.events, ...request.intents.map((intent) => intent.event)].some((event) =>
-        matches({
-          matchId: event.matchId,
-          producerInstanceId: event.cursor.producerInstanceId,
-          liveSessionId: event.cursor.liveSessionId,
-        }),
-      );
-    });
+    if (matches(request.scope)) return true;
+    return [...request.events, ...request.intents.map((intent) => intent.event)].some((event) =>
+      matches({
+        matchId: event.matchId,
+        producerInstanceId: event.cursor.producerInstanceId,
+        liveSessionId: event.cursor.liveSessionId,
+      }),
+    );
+  }
+
+  /** Captures are registered synchronously before their journal operation is queued. */
+  hasPendingBoundaryCaptures(scope: ReliableDeliveryScope): boolean {
+    return [...this.pendingBoundaryCaptures.values()].some(({ request }) =>
+      this.operationMatchesScope(request, scope),
+    );
   }
 
   hasPendingEnqueues(scope: ReliableDeliveryScope, source?: ExactSource): boolean {
@@ -2170,12 +2242,12 @@ export class ReliableOutbox {
       JSON.stringify([event.matchId, event.cursor.producerInstanceId, event.cursor.liveSessionId]);
     while (!this.closing) {
       const selected = await this.queue.run(async () => {
-        if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
+        if (this.boundaryCaptureLost) throw new Error('boundary_capture_blocked');
         const now = input.now ?? new Date();
         const pending = this.records.filter((record) => record.status === 'pending');
         if (!pending.length) return;
         const fence = await this.readFences(pending);
-        if (this.boundaryCaptureFailed) throw new Error('boundary_capture_blocked');
+        if (this.boundaryCaptureLost) throw new Error('boundary_capture_blocked');
         const retained = [...this.records, ...this.historyRecords];
         let changed = false;
         const unconfirmedBoundaries = retained.filter(
@@ -2209,9 +2281,14 @@ export class ReliableOutbox {
             next.push(record);
             continue;
           }
-          // An original fact still waiting for a local write cannot be overtaken by
-          // a later boundary/start in the same delivery scope. Other scopes continue.
+          // An original fact or boundary capture still pending in this delivery scope
+          // cannot be overtaken by later sends in the same scope. Other scopes continue.
           if (
+            this.boundaryCaptureFailedFor({
+              matchId: record.event.matchId,
+              producerInstanceId: record.event.cursor.producerInstanceId,
+              liveSessionId: record.event.cursor.liveSessionId ?? '',
+            }) ||
             [...this.pendingEnqueues.values()].some(
               (pending) =>
                 pending.event.kind !== 'map_player_snapshot' &&
@@ -2219,6 +2296,7 @@ export class ReliableOutbox {
                 pending.event.cursor.runtimeSeq <= record.event.cursor.runtimeSeq,
             )
           ) {
+            if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
             next.push(record);
             continue;
           }
@@ -2728,7 +2806,10 @@ export class ReliableOutbox {
         throw new Error('outbox_continuity_pending');
     }
     if (
-      this.boundaryCaptureFailed &&
+      (this.boundaryCaptureLost ||
+        [...this.pendingBoundaryCaptures.entries()].some(
+          ([id, op]) => !op.request.scope && this.unconfirmedWrites.has(`boundary:${id}`),
+        )) &&
       !this.activeBoundaryCapture &&
       !this.activeOrdinaryCapture &&
       !this.activeContinuity
