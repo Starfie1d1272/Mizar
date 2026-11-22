@@ -59,6 +59,12 @@ export class ManagedObsResources {
   async hasPendingReturn(): Promise<boolean> {
     return (await this.load()).some((item) => item.returnTo !== undefined);
   }
+  async hasRole(endpoint: string, roleName: string): Promise<boolean> {
+    const saved = await this.load();
+    const record = saved.find((item) => item.endpoint === endpoint);
+    if (record) return roleName in record.roles;
+    return saved.some((item) => !item.creating && roleName in item.roles);
+  }
   private async load(): Promise<Registry[]> {
     try {
       return z.array(registrySchema).parse(JSON.parse(await readFile(this.path, 'utf8')));

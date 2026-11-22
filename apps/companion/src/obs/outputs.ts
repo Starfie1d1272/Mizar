@@ -9,6 +9,7 @@ import type {
   ObsOutputStatus,
 } from '@mizar/protocol/obs';
 import type { ObsConfigStore } from './config.js';
+import { OBS_COLLECTION } from './desired-state.js';
 
 const REQUEST_MS = 4000;
 const CONFIRM_MS = 8000;
@@ -146,6 +147,16 @@ export class ObsOutputController {
       event: string,
       data: Record<string, unknown>,
     ) => boolean = () => false,
+    private readonly onCollectionSceneItemEvent?: (
+      event:
+        | {
+            kind: 'scene-item-enabled';
+            sceneName: string;
+            sceneItemId: number;
+            sceneItemEnabled: boolean;
+          }
+        | { kind: 'collection-ready'; collectionName: string },
+    ) => void,
   ) {}
 
   get busy(): boolean {
@@ -433,6 +444,11 @@ export class ObsOutputController {
         if (this.programIdentity)
           this.programIdentity = { ...this.programIdentity, collection: event.sceneCollectionName };
         this.observeProgram('collection', event.sceneCollectionName);
+        if (event.sceneCollectionName === OBS_COLLECTION)
+          this.onCollectionSceneItemEvent?.({
+            kind: 'collection-ready',
+            collectionName: event.sceneCollectionName,
+          });
       }
     });
     client.on('CurrentSceneCollectionChanging', (event) => {
@@ -487,8 +503,29 @@ export class ObsOutputController {
       'CurrentProfileChanged',
     ] as const)
       client.on(event, (data) => {
+        if (!current()) return;
         if (
-          current() &&
+          event === 'SceneItemEnableStateChanged' &&
+          (!this.programIdentity || this.programIdentity.collection === OBS_COLLECTION)
+        ) {
+          const item = data as unknown as {
+            sceneName?: unknown;
+            sceneItemId?: unknown;
+            sceneItemEnabled?: unknown;
+          };
+          if (
+            typeof item.sceneName === 'string' &&
+            typeof item.sceneItemId === 'number' &&
+            typeof item.sceneItemEnabled === 'boolean'
+          )
+            this.onCollectionSceneItemEvent?.({
+              kind: 'scene-item-enabled',
+              sceneName: item.sceneName,
+              sceneItemId: item.sceneItemId,
+              sceneItemEnabled: item.sceneItemEnabled,
+            });
+        }
+        if (
           (event !== 'InputSettingsChanged' || this.preparationSettingsChanged(data)) &&
           !this.ownedPreparationEvent(event, data as unknown as Record<string, unknown>)
         )
@@ -579,6 +616,11 @@ export class ObsOutputController {
         this.reconnectDelay = RETRY_MS;
         this.outputObservationGeneration++;
         this.hasConnected = true;
+        if (identity?.collection === OBS_COLLECTION)
+          this.onCollectionSceneItemEvent?.({
+            kind: 'collection-ready',
+            collectionName: identity.collection,
+          });
       } catch (error) {
         this.diagnostic(error, config.password);
         if (current()) this.invalidate(client);
