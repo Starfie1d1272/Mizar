@@ -763,13 +763,14 @@ export class RivalHubConnection {
   private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
     if (!this.settleSource) return false;
     const key = exactKey(identity);
+    const abort = new AbortController();
     const drain = async () => {
       // The output owner fences new events synchronously on entry. Only after
       // that fence exists may a paused source deliver its already queued tail.
       const disposition = this.settleSource!(identity).catch(() => false);
       const source = this.source;
       if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
-      await this.eventTransport.awaitLiveInFlight(identity);
+      await this.eventTransport.awaitLiveInFlight(identity, abort.signal);
       return disposition;
     };
     let operation = this.sourceSettlements.get(key);
@@ -780,13 +781,25 @@ export class RivalHubConnection {
         if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
       });
     }
-    return Promise.race([
-      operation,
-      new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), Math.max(1, budgetMs));
-        timer.unref();
-      }),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(
+            () => {
+              abort.abort();
+              if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
+              resolve(false);
+            },
+            Math.max(1, budgetMs),
+          );
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async retireCurrent(cause: 'finish' | 'switch' | 'shutdown'): Promise<void> {

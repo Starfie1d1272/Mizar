@@ -953,8 +953,10 @@ test('scoped pending boundary capture on match A does not block independent matc
 
   service.afterRuntimeMutation(firstB.result, firstB.bundle, matchB.binding);
   await outbox.flushPending();
-  await service.retry();
+  await service.retry({ localOnly: true });
   assert.equal(service.getBoundaryStatus(), null);
+  assert.equal(service.isPersistenceConfirmed(), true);
+  await service.retry();
   assert.ok(sent.some((item) => item.matchId === 'match-b'));
   assert.equal(outbox.getBoundaryCaptureRecovery().pending, 1);
 
@@ -962,6 +964,7 @@ test('scoped pending boundary capture on match A does not block independent matc
   service.setCurrent(boundaryA.bundle, matchA.binding);
   assert.equal(service.currentStatus().snapshot, null);
   assert.equal(service.currentStatus().blockedReason, 'output_persistence_pending');
+  assert.equal(service.isPersistenceConfirmed(), false);
 
   // Verify P2: sealCapture on an unarmed source releases its in-flight seal marker without blocking armCapture.
   const ref = event('map_started', 'unarmed');

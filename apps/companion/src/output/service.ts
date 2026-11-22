@@ -1745,11 +1745,13 @@ export class OutputService {
   }
 
   isPersistenceConfirmed(): boolean {
+    const scope = this.currentDeliveryScope();
+    const source = this.options.exactSource?.();
     return (
       this.outbox !== undefined &&
       !this.outboxUnavailable &&
       !this.quarantined &&
-      !this.outbox.hasUnconfirmedWrites() &&
+      !this.outbox.hasUnconfirmedWrites(scope, source) &&
       this.getBoundaryStatus() !== 'continuity_chain_missing'
     );
   }
