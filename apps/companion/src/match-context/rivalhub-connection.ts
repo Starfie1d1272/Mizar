@@ -340,11 +340,8 @@ export class RivalHubConnection {
     ++this.bindingGeneration;
     this.stoppedMatchId = matchId;
     this.syncWatch = null;
-    if (this.source && (!matchId || this.source.matchId === matchId)) {
-      this.source.draining = true;
-      this.source.paused = true;
-      this.sealCapture(this.sourceIdentity(this.source));
-    }
+    if (this.source && (!matchId || this.source.matchId === matchId))
+      this.freezeSource(this.source);
   }
 
   /** Local delivery identity only; never includes installation credentials. */
@@ -470,6 +467,12 @@ export class RivalHubConnection {
     }
   }
 
+  private freezeSource(source: Source): void {
+    source.draining = true;
+    source.paused = true;
+    this.sealCapture(this.sourceIdentity(source));
+  }
+
   private sealCapture(identity: ExactSource): void {
     // The lifecycle fences synchronously, before any JSON/network await.
     try {
@@ -578,11 +581,7 @@ export class RivalHubConnection {
 
   bindingChanged(matchId: string | null): void {
     const generation = ++this.bindingGeneration;
-    if (this.source && this.source.matchId !== matchId) {
-      this.source.draining = true;
-      this.source.paused = true;
-      this.sealCapture(this.sourceIdentity(this.source));
-    }
+    if (this.source && this.source.matchId !== matchId) this.freezeSource(this.source);
     void this.sourceCommands
       .run(async () => {
         if (
@@ -781,9 +780,7 @@ export class RivalHubConnection {
     const source = this.source;
     if (!source) return;
     const identity = this.sourceIdentity(source);
-    source.draining = true;
-    source.paused = true;
-    this.sealCapture(identity);
+    this.freezeSource(source);
     await this.sourceState.handoff(identity, cause);
     await this.updateCleanupSummary();
     // Durable handoff owns the old scope. Pending network delivery does not block a new match.
@@ -1523,68 +1520,50 @@ export class RivalHubConnection {
         if (!Number.isSafeInteger(result.authorityRevision) || result.authorityRevision <= 0)
           throw new Error('数据源授权响应无效，等待核对。');
         const identity = await this.sourceState.confirmClaim(intent.id, result.authorityRevision);
-        if (claimedFrom && this.source === claimedFrom && !sameExactSource(claimedFrom, identity)) {
-          claimedFrom.draining = true;
-          claimedFrom.paused = true;
-          this.sealCapture(this.sourceIdentity(claimedFrom));
-        }
+        if (claimedFrom && this.source === claimedFrom && !sameExactSource(claimedFrom, identity))
+          this.freezeSource(claimedFrom);
         if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
-        if (this.captureLifecycle) {
+        const guardStaleClaim = async (failureMessage: string, run: () => Promise<void> | void) => {
           try {
-            const reference = await this.confirmedCapture(identity);
-            if (!reference) throw new Error('source_capture_legacy_coverage_unknown');
-            await this.captureLifecycle.arm(identity, reference);
+            await run();
           } catch (error) {
             try {
               await this.handoffStaleClaim(identity, claimedFrom, installation);
             } catch (handoffError) {
-              throw new AggregateError([error, handoffError], '数据采集区间启用未确认。', {
+              throw new AggregateError([error, handoffError], failureMessage, {
                 cause: handoffError,
               });
             }
             throw error;
           }
+        };
+        if (this.captureLifecycle) {
+          await guardStaleClaim('数据采集区间启用未确认。', async () => {
+            const reference = await this.confirmedCapture(identity);
+            if (!reference) throw new Error('source_capture_legacy_coverage_unknown');
+            await this.captureLifecycle!.arm(identity, reference);
+          });
           if (generation !== this.bindingGeneration || !isCurrent()) {
             await this.handoffStaleClaim(identity, claimedFrom, installation);
             throw new Error('比赛已变化，原数据源待释放。');
           }
         }
-        try {
-          // An accepted claim has no capture interval until arm completes.
-          // Do not publish that transient absence as unknown historical coverage.
-          await this.updateCleanupSummary();
-        } catch (error) {
-          try {
-            await this.handoffStaleClaim(identity, claimedFrom, installation);
-          } catch (handoffError) {
-            throw new AggregateError([error, handoffError], '数据源交接未确认。', {
-              cause: handoffError,
-            });
-          }
-          throw error;
-        }
+        // An accepted claim has no capture interval until arm completes.
+        // Do not publish that transient absence as unknown historical coverage.
+        await guardStaleClaim('数据源交接未确认。', () => this.updateCleanupSummary());
         // Exit can invalidate the claim while the summary is read.
         if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
         if (this.captureLifecycle) {
-          try {
-            // No await between this actual capture-start cut and source publication.
-            this.captureLifecycle.activate(identity);
-          } catch (error) {
-            try {
-              await this.handoffStaleClaim(identity, claimedFrom, installation);
-            } catch (handoffError) {
-              throw new AggregateError([error, handoffError], '数据采集区间启用未确认。', {
-                cause: handoffError,
-              });
-            }
-            throw error;
-          }
+          // No await between this actual capture-start cut and source publication.
+          await guardStaleClaim('数据采集区间启用未确认。', () =>
+            this.captureLifecycle!.activate(identity),
+          );
         }
         this.resumeSource?.(scope);
         this.stoppedMatchId = null;
@@ -1638,9 +1617,7 @@ export class RivalHubConnection {
       claimedFrom.liveSessionId === identity.liveSessionId
     ) {
       // confirmClaim may also have retired the previous authority of this scope.
-      claimedFrom.draining = true;
-      claimedFrom.paused = true;
-      this.sealCapture(this.sourceIdentity(claimedFrom));
+      this.freezeSource(claimedFrom);
     }
   }
 

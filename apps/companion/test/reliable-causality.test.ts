@@ -46,10 +46,67 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     await rm(dir, { recursive: true, force: true });
   });
   await owner.load();
+  const createProgramHarness = (reference: ReliableEventV1, timeFn: () => Date) => {
+    const cursor = { ...reference.cursor };
+    const players = Array.from({ length: 10 }, (_, i) => ({
+      lineupEvidence: 'current',
+      sourcePlayerId: String(76561198000000000n + BigInt(i)),
+      canonicalPlayerId: null,
+    }));
+    const binding = {
+      origin: 'online',
+      freshness: 'fresh',
+      manifest: { revision: reference.contextRevision },
+      context: {
+        matchId: reference.matchId,
+        competition: { competitionId: reference.competitionId },
+        entrants: { a: { entryId: reference.entryAId }, b: { entryId: reference.entryBId } },
+      },
+    };
+    const bundle = {
+      program: {
+        cursor: { ...cursor },
+        match: { matchId: reference.matchId },
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+        map: { phase: 'live', name: reference.mapName },
+        players,
+        series: { status: 'live', currentMapOrder: 1, maps: [] },
+      },
+      operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'mismatch' } },
+      identity: { issues: [] },
+    };
+    const observe = (service: {
+      setCurrent: (b: never, m: never) => void;
+      afterRuntimeMutation: (r: never, b: never, m: never) => void;
+    }) => {
+      bundle.program.cursor = { ...cursor };
+      service.setCurrent(bundle as never, binding as never);
+      service.afterRuntimeMutation(
+        {
+          disposition: { kind: 'accepted', reason: 'contiguous' },
+          transitions: [],
+          state: {
+            map: { name: reference.mapName },
+            programSource: {
+              lastAccepted: {
+                generation: cursor.programSourceGeneration,
+                sequence: cursor.programReceiveSequence,
+              },
+            },
+            programTelemetry: { receive: { receivedAt: timeFn().toISOString() } },
+          },
+        } as never,
+        bundle as never,
+        binding as never,
+      );
+    };
+    return { cursor, binding, bundle, observe };
+  };
   return {
     outbox: owner,
     event,
     cleanup,
+    createProgramHarness,
     restart: async () => {
       await owner.close();
       owner = new ReliableOutbox(path);
@@ -216,7 +273,7 @@ test('classified rejection persists and diagnostic evidence discards raw respons
 
 for (const change of ['none', 'authority'] as const)
   test(`context refusal recovers only in its original live scope: ${change}`, async (t) => {
-    const { outbox, event, cleanup, restart } = await setup(t);
+    const { outbox, event, cleanup, createProgramHarness, restart } = await setup(t);
     const { OutputService } = await import('../src/output/service.js');
     let time = now;
     let outcome: 'reject' | 'accept' = 'reject';
@@ -237,57 +294,13 @@ for (const change of ['none', 'authority'] as const)
       },
     });
     cleanup.push(() => service.close());
-    const reference = event('map_started', 'template');
-    const cursor = { ...reference.cursor };
-    const players = Array.from({ length: 10 }, (_, i) => ({
-      lineupEvidence: 'current',
-      sourcePlayerId: String(76561198000000000n + BigInt(i)),
-      canonicalPlayerId: null,
-    }));
-    const binding = {
-      origin: 'online',
-      freshness: 'fresh',
-      manifest: { revision: reference.contextRevision },
-      context: {
-        matchId: reference.matchId,
-        competition: { competitionId: reference.competitionId },
-        entrants: { a: { entryId: reference.entryAId }, b: { entryId: reference.entryBId } },
-      },
-    };
-    const bundle = {
-      program: {
-        cursor: { ...cursor },
-        match: { matchId: reference.matchId },
-        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
-        map: { phase: 'live', name: reference.mapName },
-        players,
-        series: { status: 'live', currentMapOrder: 1, maps: [] },
-      },
-      operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'mismatch' } },
-      identity: { issues: [] },
-    };
-    const observe = () => {
-      bundle.program.cursor = { ...cursor };
-      service.setCurrent(bundle as never, binding as never);
-      service.afterRuntimeMutation(
-        {
-          disposition: { kind: 'accepted', reason: 'contiguous' },
-          transitions: [],
-          state: {
-            map: { name: reference.mapName },
-            programSource: {
-              lastAccepted: {
-                generation: cursor.programSourceGeneration,
-                sequence: cursor.programReceiveSequence,
-              },
-            },
-            programTelemetry: { receive: { receivedAt: time.toISOString() } },
-          },
-        } as never,
-        bundle as never,
-        binding as never,
-      );
-    };
+    const {
+      cursor,
+      binding,
+      bundle,
+      observe: observeBase,
+    } = createProgramHarness(event('map_started', 'template'), () => time);
+    const observe = () => observeBase(service);
     service.setContextRecoveryHandler(async () => {
       refreshes++;
       if (change === 'authority') authority = 'authority-2';
@@ -347,7 +360,7 @@ for (const [fence, boundaryPresent] of [
   ['epoch_fence', false],
 ] as const)
   test(`${fence} requires its own pending boundary ACK: ${boundaryPresent}`, async (t) => {
-    const { outbox, event, cleanup } = await setup(t);
+    const { outbox, event, cleanup, createProgramHarness } = await setup(t);
     const { OutputService } = await import('../src/output/service.js');
     const start = event('map_started', 'old-start');
     const lineup = Array.from({ length: 10 }, (_, i) => String(76561198000000000n + BigInt(i)));
@@ -371,34 +384,7 @@ for (const [fence, boundaryPresent] of [
         ),
         now,
       );
-    const cursor = { ...start.cursor };
-    const players = lineup.map((id) => ({
-      lineupEvidence: 'current',
-      sourcePlayerId: id,
-      canonicalPlayerId: null,
-    }));
-    const binding = {
-      origin: 'online',
-      freshness: 'fresh',
-      manifest: { revision: start.contextRevision },
-      context: {
-        matchId: start.matchId,
-        competition: { competitionId: start.competitionId },
-        entrants: { a: { entryId: start.entryAId }, b: { entryId: start.entryBId } },
-      },
-    };
-    const bundle = {
-      program: {
-        cursor: { ...cursor },
-        match: { matchId: start.matchId },
-        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
-        map: { phase: 'live', name: start.mapName },
-        players,
-        series: { status: 'live', currentMapOrder: 1, maps: [] },
-      },
-      operator: { activeLineup: { ctCount: 5, tCount: 5 }, identity: { state: 'mismatch' } },
-      identity: { issues: [] },
-    };
+    const { cursor, binding, bundle, observe } = createProgramHarness(start, () => now);
     const sent: string[] = [];
     const progress: string[] = [];
     const service = new OutputService({
@@ -425,26 +411,7 @@ for (const [fence, boundaryPresent] of [
     if (!boundaryPresent) assert.ok(progress.includes('continuity_chain_missing'));
     cursor.runtimeSeq++;
     cursor.programReceiveSequence!++;
-    bundle.program.cursor = { ...cursor };
-    service.setCurrent(bundle as never, binding as never);
-    service.afterRuntimeMutation(
-      {
-        disposition: { kind: 'accepted', reason: 'contiguous' },
-        transitions: [],
-        state: {
-          map: { name: start.mapName },
-          programSource: {
-            lastAccepted: {
-              generation: cursor.programSourceGeneration,
-              sequence: cursor.programReceiveSequence,
-            },
-          },
-          programTelemetry: { receive: { receivedAt: now.toISOString() } },
-        },
-      } as never,
-      bundle as never,
-      binding as never,
-    );
+    observe(service);
     await outbox.flushPending();
     await service.retry();
     assert.equal(sent.length, boundaryPresent ? 2 : 0);
@@ -635,4 +602,139 @@ test('missing worker reply fails the active owner and later operations report th
   await check;
   await assert.rejects(client.request('captureCapacity'), /outbox_worker_reply_timeout:load/);
   assert.deepEqual(failures, ['outbox_worker_reply_timeout:load']);
+});
+
+test('unconfirmed capture interval transitions to durable unknown without blocking subsequent independent matches', async (t) => {
+  const { outbox, event, restart } = await setup(t);
+  const first = event('map_started', 'match-1');
+  const source1 = {
+    baseUrl: 'https://example.com',
+    competitionId: first.competitionId,
+    installationId: 'installation-1',
+    authorityRevision: 1,
+    matchId: first.matchId,
+    producerInstanceId: first.cursor.producerInstanceId,
+    liveSessionId: first.cursor.liveSessionId!,
+  };
+  await outbox.armCapture(source1, outbox.createCaptureReference(first.cursor));
+  outbox.activateCapture(source1, first.cursor);
+  await outbox.isolateRevokedSource(source1);
+  // Reserving a capture ticket against a revoked source fails without committing to SQLite.
+  await assert.rejects(
+    outbox.enqueue(first, now, undefined, undefined, undefined, undefined, source1),
+    /outbox_source_revoked/,
+  );
+  // Sealing reconciles the unconfirmable interval into durable unknown instead of wedging armed forever.
+  assert.equal(await outbox.sealCapture(source1, first.cursor), false);
+  assert.equal(outbox.captureCoverage(source1).state, 'unknown');
+  assert.equal(outbox.hasDurableUnknownCapture(source1), true);
+
+  // A subsequent independent match arms, captures, and seals cleanly.
+  const secondBase = event('map_started', 'match-2');
+  const second = {
+    ...secondBase,
+    matchId: 'match-2',
+    cursor: { ...secondBase.cursor, liveSessionId: 'session-2' },
+  };
+  const source2 = { ...source1, matchId: 'match-2', liveSessionId: 'session-2' };
+  await outbox.armCapture(source2, outbox.createCaptureReference(second.cursor));
+  outbox.activateCapture(source2, second.cursor);
+  assert.equal(
+    await outbox.enqueue(second, now, undefined, undefined, undefined, undefined, source2),
+    true,
+  );
+  assert.equal(await outbox.sealCapture(source2, second.cursor), true);
+  assert.equal(outbox.captureCoverage(source2).state, 'sealed');
+
+  const restored = await restart();
+  assert.equal(restored.captureCoverage(source1).state, 'unknown');
+  assert.equal(restored.captureCoverage(source2).state, 'sealed');
+});
+
+test('late async enqueue failure and known-source boundary loss stay isolated to the failing match', async (t) => {
+  const { outbox, event, cleanup, createProgramHarness } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+
+  // 1. Known-source boundary capture loss on sourceA does not block sourceB capture/seal.
+  const first = event('map_started', 'match-a');
+  const sourceA = {
+    baseUrl: 'https://example.com',
+    competitionId: first.competitionId,
+    installationId: 'installation-1',
+    authorityRevision: 1,
+    matchId: first.matchId,
+    producerInstanceId: first.cursor.producerInstanceId,
+    liveSessionId: first.cursor.liveSessionId!,
+  };
+  await outbox.armCapture(sourceA, outbox.createCaptureReference(first.cursor));
+  outbox.activateCapture(sourceA, first.cursor);
+  // Known-source boundary capture failure transitions sourceA to unknown without setting global boundaryCaptureLost.
+  await assert.rejects(
+    outbox.captureBoundaries(
+      [{ invalid: true }] as never,
+      [],
+      undefined,
+      false,
+      now,
+      {
+        matchId: first.matchId,
+        producerInstanceId: first.cursor.producerInstanceId,
+        liveSessionId: first.cursor.liveSessionId!,
+        ownerFingerprint: 'owner-a',
+        runtimeSeq: first.cursor.runtimeSeq,
+        programSourceGeneration: first.cursor.programSourceGeneration,
+        mapEpoch: first.cursor.mapEpoch,
+        authorityFingerprint: 'auth-a',
+      },
+      sourceA,
+    ),
+  );
+  assert.equal(outbox.getBoundaryCaptureRecovery().lost, false);
+  assert.equal(await outbox.sealCapture(sourceA, first.cursor), false);
+  assert.equal(outbox.captureCoverage(sourceA).state, 'unknown');
+  const sourceB = { ...sourceA, matchId: 'match-b', liveSessionId: 'session-b' };
+  const secondBase = event('map_started', 'match-b');
+  const second = {
+    ...secondBase,
+    matchId: 'match-b',
+    cursor: { ...secondBase.cursor, liveSessionId: 'session-b' },
+  };
+  await outbox.armCapture(sourceB, outbox.createCaptureReference(second.cursor));
+  outbox.activateCapture(sourceB, second.cursor);
+  assert.equal(
+    await outbox.enqueue(second, now, undefined, undefined, undefined, undefined, sourceB),
+    true,
+  );
+  assert.equal(await outbox.sealCapture(sourceB, second.cursor), true);
+
+  // 2. Late async enqueue failure on Match A after operator switches to Match B only quarantines Match A.
+  const time = now;
+  let rejectNext = false;
+  const service = new OutputService({
+    outbox,
+    now: () => time,
+  });
+  cleanup.push(() => service.close());
+  const matchA = createProgramHarness(first, () => time);
+  const matchB = createProgramHarness(second, () => time);
+  const origEnqueue = outbox.enqueue.bind(outbox);
+  outbox.enqueue = (async (...args: Parameters<typeof outbox.enqueue>) => {
+    if (rejectNext) {
+      rejectNext = false;
+      throw new Error('late_async_enqueue_failure');
+    }
+    return origEnqueue(...args);
+  }) as typeof outbox.enqueue;
+
+  rejectNext = true;
+  matchA.observe(service);
+  // Immediately switch workbench to Match B before Match A's rejected promise settles.
+  service.setCurrent(matchB.bundle as never, matchB.binding as never);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.notEqual(service.currentStatus().blockedReason, 'output_quarantined');
+  // Switching back to Match A shows Match A itself is quarantined.
+  service.setCurrent(matchA.bundle as never, matchA.binding as never);
+  assert.equal(service.currentStatus().snapshot, null);
+  assert.equal(service.currentStatus().blockedReason, 'output_quarantined');
 });

@@ -103,7 +103,46 @@ export class OutputService {
   private readonly captureCursors = new Map<string, ReliableEventV1['cursor']>();
   private readonly captureFailures = new Set<string>();
   private trialQuarantined = false;
-  private faultQuarantined = false;
+  private readonly faultQuarantinedScopes = new Set<string>();
+  private faultScopeFor(
+    matchId: string | undefined,
+    cursor: { producerInstanceId: string; liveSessionId?: string | null } | undefined,
+  ): string {
+    return matchId && cursor
+      ? this.scopeTupleKey(matchId, cursor.producerInstanceId, cursor.liveSessionId ?? null)
+      : '__global__';
+  }
+  private get faultQuarantined(): boolean {
+    return (
+      this.faultQuarantinedScopes.has('__global__') ||
+      this.faultQuarantinedScopes.has(
+        this.faultScopeFor(this.binding?.context.matchId, this.bundle?.program.cursor),
+      )
+    );
+  }
+  private quarantineFault(scopeKey: string): void {
+    this.faultQuarantinedScopes.add(scopeKey);
+  }
+  private failProjection(
+    source: ExactSource | null | undefined,
+    matchId: string | undefined,
+    cursor: Pick<ReliableEventV1['cursor'], 'producerInstanceId' | 'liveSessionId'> | undefined,
+    diagnostic = 'event_projection_failed',
+  ): void {
+    this.quarantineFault(
+      source
+        ? this.faultScopeFor(source.matchId, {
+            producerInstanceId: source.producerInstanceId,
+            liveSessionId: source.liveSessionId,
+          })
+        : this.faultScopeFor(matchId, cursor),
+    );
+    if (source) {
+      this.captureFailures.add(sourceKey(source));
+      void this.sealSourceCapture(source);
+    }
+    this.onDiagnostic?.(diagnostic);
+  }
   private get quarantined(): boolean {
     const recovery = this.outbox?.getBoundaryCaptureRecovery();
     return (
@@ -162,6 +201,43 @@ export class OutputService {
       mapEpoch: cursor.mapEpoch,
       authorityFingerprint,
     };
+  }
+  private scopeTupleKey(
+    matchId: string,
+    producerInstanceId: string,
+    liveSessionId: string | null,
+  ): string {
+    return JSON.stringify([matchId, producerInstanceId, liveSessionId]);
+  }
+  private mapEndedBlockers(
+    event: Extract<ReliableEventV1, { kind: 'map_ended' }>,
+    bundle: ProjectionBundle,
+    binding: MatchContextBinding | undefined,
+  ): string[] {
+    const blockers: string[] = [];
+    if (bundle.program.map.phase !== 'gameover') blockers.push('map_phase_not_gameover');
+    if (bundle.program.map.name !== event.mapName) blockers.push('map_name_changed');
+    if (
+      bundle.program.map.score.ct !== event.payload.scoreCT ||
+      bundle.program.map.score.t !== event.payload.scoreT
+    )
+      blockers.push('map_score_changed');
+    if (!(event.evidence.lineupMismatchOnly === true && hasLineupMismatchOnly(bundle, binding))) {
+      const series = bundle.program.series;
+      const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
+      const resultMap =
+        mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
+      if (resultMap?.status !== 'completed') blockers.push('map_result_not_completed');
+      if (
+        resultMap?.finalScore === null ||
+        resultMap?.mapId !== event.mapId ||
+        resultMap?.mapName !== event.mapName ||
+        resultMap?.finalScore.a !== event.payload.scoreA ||
+        resultMap?.finalScore.b !== event.payload.scoreB
+      )
+        blockers.push('canonical_result_changed');
+    }
+    return blockers;
   }
   private boundaryScopeKey(scope: BoundaryScope | undefined): string {
     return scope
@@ -585,14 +661,17 @@ export class OutputService {
     this.binding = binding;
   }
 
-  createCaptureReference(cursor: ReliableEventV1['cursor']): CaptureReference {
+  private requireOutbox(): ReliableOutbox {
     if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
-    return this.outbox.createCaptureReference(cursor);
+    return this.outbox;
+  }
+
+  createCaptureReference(cursor: ReliableEventV1['cursor']): CaptureReference {
+    return this.requireOutbox().createCaptureReference(cursor);
   }
 
   async armSourceCapture(identity: ExactSource, reference: CaptureReference): Promise<void> {
-    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
-    await this.outbox.armCapture(identity, reference);
+    await this.requireOutbox().armCapture(identity, reference);
     if (!this.captureCursors.has(sourceKey(identity)))
       this.captureCursors.set(sourceKey(identity), reference.startCursor);
   }
@@ -633,8 +712,7 @@ export class OutputService {
     identity: ExactSource,
     reference: CaptureReference | undefined,
   ): Promise<void> {
-    if (this.outboxUnavailable || !this.outbox) throw new Error('outbox_unavailable');
-    await this.outbox.restoreCaptureReference(identity, reference);
+    await this.requireOutbox().restoreCaptureReference(identity, reference);
     if (reference && !this.captureCursors.has(sourceKey(identity)))
       this.captureCursors.set(sourceKey(identity), reference.startCursor);
   }
@@ -972,10 +1050,12 @@ export class OutputService {
           sameSourceSession(active, before.cursor) &&
           this.outbox?.canCapture(active)
         ) {
-          this.faultQuarantined = true;
-          this.captureFailures.add(sourceKey(active));
-          void this.sealSourceCapture(active);
-          this.onDiagnostic?.('outbox_boundary_owner_unconfirmed');
+          this.failProjection(
+            active,
+            active.matchId,
+            { producerInstanceId: active.producerInstanceId, liveSessionId: active.liveSessionId },
+            'outbox_boundary_owner_unconfirmed',
+          );
         }
         return;
       }
@@ -984,10 +1064,13 @@ export class OutputService {
     if (
       binding &&
       cursor.liveSessionId &&
-      !result.transitions.some((transition) => transition.kind === 'map_execution_changed') &&
-      result.disposition.reason !== 'source-generation-advanced' &&
+      !crossesExecution &&
       this.retiringScopes.has(
-        JSON.stringify([binding.context.matchId, cursor.producerInstanceId, cursor.liveSessionId]),
+        this.scopeTupleKey(
+          binding.context.matchId,
+          cursor.producerInstanceId,
+          cursor.liveSessionId,
+        ),
       )
     )
       return;
@@ -1080,12 +1163,12 @@ export class OutputService {
           );
         })
         .catch(() => {
-          this.faultQuarantined = true;
-          if (captureSource) {
-            this.captureFailures.add(sourceKey(captureSource));
-            void this.sealSourceCapture(captureSource);
-          }
-          this.onDiagnostic?.('outbox_supersede_failed');
+          this.failProjection(
+            captureSource,
+            binding?.context.matchId,
+            cursor,
+            'outbox_supersede_failed',
+          );
         });
     }
     const newMapObservation =
@@ -1107,13 +1190,12 @@ export class OutputService {
             ),
           ];
     } catch {
-      if (captureSource) this.captureFailures.add(sourceKey(captureSource));
-      this.onDiagnostic?.('event_projection_failed');
       if (!hasBoundary) {
-        this.faultQuarantined = true;
-        if (captureSource) void this.sealSourceCapture(captureSource);
+        this.failProjection(captureSource, binding?.context.matchId, cursor);
         return;
       }
+      if (captureSource) this.captureFailures.add(sourceKey(captureSource));
+      this.onDiagnostic?.('event_projection_failed');
       candidates = [];
       projectionFailed = true;
     }
@@ -1231,12 +1313,7 @@ export class OutputService {
       try {
         candidates.push(buildMapPlayerSnapshotV1(ended, this.playerSnapshot.players));
       } catch {
-        this.faultQuarantined = true;
-        if (captureSource) {
-          this.captureFailures.add(sourceKey(captureSource));
-          void this.sealSourceCapture(captureSource);
-        }
-        this.onDiagnostic?.('event_projection_failed');
+        this.failProjection(captureSource, binding?.context.matchId, cursor);
         return;
       }
     }
@@ -1261,12 +1338,7 @@ export class OutputService {
           ...(previousSourceGeneration === undefined ? {} : { previousSourceGeneration }),
         });
       } catch {
-        if (captureSource) {
-          this.faultQuarantined = true;
-          this.captureFailures.add(sourceKey(captureSource));
-          void this.sealSourceCapture(captureSource);
-        }
-        this.onDiagnostic?.('event_projection_failed');
+        this.failProjection(captureSource, binding?.context.matchId, cursor);
         return;
       }
       if (candidate !== null) candidates.push(candidate);
@@ -1380,7 +1452,7 @@ export class OutputService {
         })
         .catch((error: unknown) => {
           if (!this.outbox?.hasPendingEnqueue(event.idempotencyKey)) {
-            this.faultQuarantined = true;
+            this.quarantineFault(this.faultScopeFor(event.matchId, event.cursor));
             if (eventSource) {
               this.captureFailures.add(sourceKey(eventSource));
               void this.sealSourceCapture(eventSource);
@@ -1456,9 +1528,7 @@ export class OutputService {
             if (!allowed) {
               try {
                 const bundle = this.bundle;
-                const series = bundle?.program.series;
-                const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
-                const resultMap = series?.maps.find((map) => map.mapOrder === mapOrder);
+
                 // Explain the failed existing decision without changing its result.
                 const blockers = [
                   ...(this.quarantined ? ['quarantined'] : []),
@@ -1467,31 +1537,8 @@ export class OutputService {
                   ...(!this.isCurrentForRetry(event, lineup) ? ['scope_not_current'] : []),
                 ];
                 if (bundle && blockers.length === 0) {
-                  if (event.kind === 'map_ended') {
-                    if (bundle.program.map.phase !== 'gameover')
-                      blockers.push('map_phase_not_gameover');
-                    if (bundle.program.map.name !== event.mapName)
-                      blockers.push('map_name_changed');
-                    if (
-                      bundle.program.map.score.ct !== event.payload.scoreCT ||
-                      bundle.program.map.score.t !== event.payload.scoreT
-                    )
-                      blockers.push('map_score_changed');
-                    if (!(
-                      event.evidence.lineupMismatchOnly === true &&
-                      hasLineupMismatchOnly(bundle, this.binding)
-                    )) {
-                      if (resultMap?.status !== 'completed')
-                        blockers.push('map_result_not_completed');
-                      if (
-                        resultMap?.mapId !== event.mapId ||
-                        resultMap?.mapName !== event.mapName ||
-                        resultMap?.finalScore?.a !== event.payload.scoreA ||
-                        resultMap?.finalScore?.b !== event.payload.scoreB
-                      )
-                        blockers.push('canonical_result_changed');
-                    }
-                  }
+                  if (event.kind === 'map_ended')
+                    blockers.push(...this.mapEndedBlockers(event, bundle, this.binding));
                   if (event.kind === 'identity_mismatch' || event.kind === 'lineup_mismatch') {
                     if (!['mismatch', 'degraded'].includes(bundle.program.status.identity))
                       blockers.push('mismatch_no_longer_current');
@@ -1547,7 +1594,23 @@ export class OutputService {
 
   private reportBoundaryCaptureError(error: unknown): void {
     // The queue owns recoverable failures. Trial and unrelated fault isolation stay independent.
-    if (!this.outbox?.getBoundaryCaptureRecovery().pending) this.faultQuarantined = true;
+    if (!this.outbox?.getBoundaryCaptureRecovery().pending) {
+      if (error instanceof BoundaryCaptureError) {
+        const req = error.request;
+        const matchId = req.continuity?.matchId ?? req.events[0]?.matchId ?? req.scope?.matchId;
+        const cursor = req.continuity?.cursor ?? req.events[0]?.cursor ?? req.scope;
+        this.quarantineFault(
+          req.source
+            ? this.faultScopeFor(req.source.matchId, {
+                producerInstanceId: req.source.producerInstanceId,
+                liveSessionId: req.source.liveSessionId,
+              })
+            : this.faultScopeFor(matchId, cursor),
+        );
+      } else {
+        this.quarantineFault('__global__');
+      }
+    }
     try {
       this.options.onBoundaryCaptureError?.(
         error,
@@ -1652,7 +1715,7 @@ export class OutputService {
   /** Stop producing this scope, then wait for the existing owner to settle its queue. */
   async settleSourceForRelease(scope: ReliableDeliveryScope): Promise<boolean> {
     this.retiringScopes.add(
-      JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
+      this.scopeTupleKey(scope.matchId, scope.producerInstanceId, scope.liveSessionId),
     );
     if (this.outboxUnavailable) return false;
     if (!this.outbox) return true;
@@ -1685,7 +1748,7 @@ export class OutputService {
 
   resumeSource(scope: ReliableDeliveryScope): void {
     this.retiringScopes.delete(
-      JSON.stringify([scope.matchId, scope.producerInstanceId, scope.liveSessionId]),
+      this.scopeTupleKey(scope.matchId, scope.producerInstanceId, scope.liveSessionId),
     );
   }
 
@@ -1707,17 +1770,19 @@ export class OutputService {
         bundle.program.cursor.liveSessionId !== event.cursor.liveSessionId)
     )
       return true;
-    // Preserve a captured result while later source generations are queued.
-    // The receiver still validates its original cursor and authority.
-    if (
-      retained?.status === 'pending' &&
-      (event.kind === 'map_ended' || event.kind === 'map_player_snapshot') &&
+    const sameActiveSessionAhead =
       binding.context.matchId === event.matchId &&
       bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
       event.cursor.liveSessionId !== null &&
       bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
       bundle.program.cursor.programSourceGeneration >= event.cursor.programSourceGeneration &&
-      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
+      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch;
+    // Preserve a captured result while later source generations are queued.
+    // The receiver still validates its original cursor and authority.
+    if (
+      retained?.status === 'pending' &&
+      (event.kind === 'map_ended' || event.kind === 'map_player_snapshot') &&
+      sameActiveSessionAhead
     )
       return true;
     if (
@@ -1739,12 +1804,7 @@ export class OutputService {
     // original event and let the receiver acknowledge the chain in order.
     if (
       (event.kind === 'source_generation_changed' || event.kind === 'map_epoch_changed') &&
-      binding.context.matchId === event.matchId &&
-      bundle.program.cursor.producerInstanceId === event.cursor.producerInstanceId &&
-      event.cursor.liveSessionId !== null &&
-      bundle.program.cursor.liveSessionId === event.cursor.liveSessionId &&
-      bundle.program.cursor.programSourceGeneration >= event.cursor.programSourceGeneration &&
-      bundle.program.cursor.mapEpoch >= event.cursor.mapEpoch
+      sameActiveSessionAhead
     )
       return true;
     if (
@@ -1891,35 +1951,10 @@ export class OutputService {
         (event.evidence.identity === 'matched' || event.evidence.lineupMismatchOnly === true)
       );
     }
-    if (
-      event.kind === 'map_ended' &&
-      event.evidence.lineupMismatchOnly === true &&
-      hasLineupMismatchOnly(bundle, this.binding)
-    )
-      return (
-        bundle.program.map.phase === 'gameover' &&
-        bundle.program.map.name === event.mapName &&
-        bundle.program.map.score.ct === event.payload.scoreCT &&
-        bundle.program.map.score.t === event.payload.scoreT
-      );
     if (event.kind === 'map_ended') {
-      const series = bundle.program.series;
-      const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
-      const resultMap =
-        mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
-      if (
-        bundle.program.map.phase !== 'gameover' ||
-        bundle.program.map.name !== event.mapName ||
-        bundle.program.map.score.ct !== event.payload.scoreCT ||
-        bundle.program.map.score.t !== event.payload.scoreT ||
-        resultMap?.status !== 'completed' ||
-        resultMap.finalScore === null ||
-        resultMap.mapId !== event.mapId ||
-        resultMap.mapName !== event.mapName ||
-        resultMap.finalScore.a !== event.payload.scoreA ||
-        resultMap.finalScore.b !== event.payload.scoreB
-      )
-        return false;
+      if (this.mapEndedBlockers(event, bundle, this.binding).length > 0) return false;
+      if (event.evidence.lineupMismatchOnly === true && hasLineupMismatchOnly(bundle, this.binding))
+        return true;
     }
     if (event.kind === 'identity_mismatch' || event.kind === 'lineup_mismatch')
       return (

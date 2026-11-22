@@ -1164,111 +1164,32 @@ test('historical unnumbered intent recovery validates exact source, previousAuth
     }
   };
 
-  // 1. revision < previousAuthorityRevision -> blocked
-  {
+  const blockedCases: Parameters<typeof writeLegacyIntent>[1][] = [
+    { previousAuthorityRevision: 2, record: false },
+    { previousAuthorityRevision: 1, record: false },
+    { previousAuthorityRevision: 1, record: true, recordSessionId: 'other-session' },
+    { previousAuthorityRevision: 1, record: true, watermarkRevision: 1 },
+    { previousAuthorityRevision: 1, record: true, quarantineWatermarkRevision: 1 },
+    { previousAuthorityRevision: 1, idempotentAuthorityRevision: 2, record: true },
+  ];
+  for (const [index, spec] of blockedCases.entries()) {
     const h = await setup(t);
-    h.setIdempotent(true);
-    await h.connection.claim(h.snapshot, 'revision', false); // serverClaim at authorityRevision=1
-    await writeLegacyIntent(h, { previousAuthorityRevision: 2, record: false });
+    if (index === 0) h.setIdempotent(true);
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await writeLegacyIntent(h, spec);
     const restarted = await h.restart();
     await assert.rejects(restarted.release(), /待重试或核对/);
     assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-    assert.deepEqual(h.releases, []);
+    if (index <= 1) assert.deepEqual(h.releases, []);
   }
 
-  // 2. revision === previousAuthorityRevision, idempotentAuthorityRevision undefined, exact record absent -> blocked
-  {
+  for (const spec of [
+    { previousAuthorityRevision: 1, idempotentAuthorityRevision: 1, record: false },
+    { previousAuthorityRevision: 1, record: true },
+  ] satisfies Parameters<typeof writeLegacyIntent>[1][]) {
     const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, { previousAuthorityRevision: 1, record: false });
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release(), /待重试或核对/);
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-    assert.deepEqual(h.releases, []);
-  }
-
-  // 3. revision === previousAuthorityRevision, record has mismatched liveSessionId -> blocked
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      record: true,
-      recordSessionId: 'other-session',
-    });
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release(), /待重试或核对/);
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  }
-
-  // 4. revision === previousAuthorityRevision, exact record present, but state.watermarks blocks -> blocked
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      record: true,
-      watermarkRevision: 1,
-    });
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release(), /待重试或核对/);
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  }
-
-  // 5. revision === previousAuthorityRevision, exact record present, but quarantined watermark blocks -> blocked
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      record: true,
-      quarantineWatermarkRevision: 1,
-    });
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release(), /待重试或核对/);
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  }
-
-  // 6. revision === previousAuthorityRevision, idempotentAuthorityRevision !== revision (2) -> blocked even with record
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      idempotentAuthorityRevision: 2,
-      record: true,
-    });
-    const restarted = await h.restart();
-    await assert.rejects(restarted.release(), /待重试或核对/);
-    assert.equal(restarted.view().sourceCleanup.claimIntent, true);
-  }
-
-  // 7. revision === previousAuthorityRevision, idempotentAuthorityRevision === 1 -> recovers without record
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      idempotentAuthorityRevision: 1,
-      record: false,
-    });
-    const restarted = await h.restart();
-    await restarted.release();
-    assert.equal(restarted.view().sourceCleanup.claimIntent, false);
-    assert.deepEqual(
-      h.releases.map((item) => item.authority),
-      ['1'],
-    );
-  }
-
-  // 8. revision === previousAuthorityRevision, idempotentAuthorityRevision undefined, exact record present & no watermark -> recovers
-  {
-    const h = await setup(t);
-    await h.connection.claim(h.snapshot, 'revision', false); // rev 1
-    await writeLegacyIntent(h, {
-      previousAuthorityRevision: 1,
-      record: true,
-    });
+    await h.connection.claim(h.snapshot, 'revision', false);
+    await writeLegacyIntent(h, spec);
     const restarted = await h.restart();
     await restarted.release();
     assert.equal(restarted.view().sourceCleanup.claimIntent, false);
