@@ -171,11 +171,13 @@ function setCurrentMap(
   progress: SeriesProgress,
   mapOrder: number,
   mapEpoch: number | null,
+  mapName?: string,
 ): SeriesProgress {
   const maps = progress.maps.map((map) => {
     if (map.mapOrder === mapOrder) {
       return {
         ...map,
+        ...(mapName === undefined ? {} : { mapName }),
         status: 'current' as const,
         executionMapEpoch: mapEpoch,
       };
@@ -322,34 +324,26 @@ function ensureBinding(
         ? setCurrentMap(progress, knownExecution.mapOrder, executionEpoch)
         : progress;
     }
+    const completedSameMap = progress.maps.some(
+      (map) => map.status === 'completed' && map.mapName === actualMapName,
+    );
     const active = progress.maps.find(isPlayable);
-    if (active !== undefined && active.mapName === actualMapName) {
-      return setCurrentMap(progress, active.mapOrder, executionEpoch);
-    }
     if (
       active !== undefined &&
-      active.executionMapEpoch === null &&
-      knownExecution === undefined &&
-      allowMapCreation &&
-      !progress.maps.some((map) => map.status === 'completed' && map.mapName === actualMapName) &&
-      progress.sourcePlan.allowedMaps.includes(actualMapName)
+      (active.mapName === actualMapName ||
+        (active.executionMapEpoch === null &&
+          knownExecution === undefined &&
+          allowMapCreation &&
+          !completedSameMap &&
+          progress.sourcePlan.allowedMaps.includes(actualMapName)))
     ) {
-      return {
-        ...progress,
-        currentMapOrder: active.mapOrder,
-        bindingState: 'bound',
-        maps: progress.maps.map((map) =>
-          map.mapOrder === active.mapOrder
-            ? { ...map, mapName: actualMapName, executionMapEpoch: executionEpoch }
-            : map,
-        ),
-      };
+      return setCurrentMap(progress, active.mapOrder, executionEpoch, actualMapName);
     }
     // A different map is not evidence that the previous game has a result.
     if (
       knownExecution !== undefined ||
       active !== undefined ||
-      progress.maps.some((map) => map.status === 'completed' && map.mapName === actualMapName) ||
+      completedSameMap ||
       progress.maps.length >= progress.requiredWins * 2 - 1 ||
       !progress.sourcePlan.allowedMaps.includes(actualMapName)
     ) {
@@ -1078,13 +1072,33 @@ export function reconcileSeriesProgressResults(
   return next;
 }
 
+export function hasSeriesExecutionFacts(progress: SeriesProgress): boolean {
+  return (
+    progress.score.a > 0 ||
+    progress.score.b > 0 ||
+    progress.maps.some(
+      (map) =>
+        map.executionMapEpoch !== null ||
+        map.status === 'completed' ||
+        map.status === 'not_played' ||
+        map.finalScore !== null ||
+        map.roundHistory.rounds.length > 0,
+    )
+  );
+}
+
 export function syncSeriesProgress(
   progress: SeriesProgress,
   input: SeriesProgressSyncInput,
 ): SeriesProgressReduceResult {
-  const hasExecutionEvent = input.events.some(
-    (event) => event.kind === 'round-ended' || event.kind === 'map-ended',
-  );
+  const hasExecutionEvent =
+    input.observation !== null &&
+    input.events.some(
+      (event) =>
+        (event.kind === 'round-ended' || event.kind === 'map-ended') &&
+        event.sourceGeneration === input.observation!.sourceGeneration &&
+        event.mapEpoch === input.observation!.mapEpoch,
+    );
   let next = ensureBinding(progress, input.observation, input.allowMapCreation, hasExecutionEvent);
   if (input.restore && input.observation !== null) {
     next = reconcileRestoredState(next, input.observation);

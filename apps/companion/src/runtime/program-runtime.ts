@@ -29,6 +29,7 @@ import {
 import {
   addSeriesProgressIssue,
   createSeriesProgress,
+  hasSeriesExecutionFacts,
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   refreshSeriesProgressMetadata,
@@ -52,19 +53,6 @@ export const PRODUCTION_RUNTIME_CONTINUITY_POLICY: RuntimeContinuityPolicy = Obj
   staleAfterMs: 20_000,
   objectiveClockLeaseMs: DEFAULT_OBJECTIVE_CLOCK_LEASE_MS,
 });
-
-function hasSeriesFacts(progress: SeriesProgress): boolean {
-  return (
-    progress.currentMapOrder !== null ||
-    progress.maps.some(
-      (map) =>
-        map.executionMapEpoch !== null ||
-        map.status !== 'pending' ||
-        map.finalScore !== null ||
-        map.roundHistory.rounds.length > 0,
-    )
-  );
-}
 
 export interface ProgramRuntimeOptions {
   readonly producerInstanceId: string;
@@ -444,9 +432,11 @@ export class ProgramRuntime {
             if (!this.executionOwner) this.executionOwnerUnknown = true;
           } else {
             const unverified = checkpoint.unverifiedProgress ?? checkpoint.progress;
-            this.unverifiedSeriesProgress = hasSeriesFacts(unverified) ? unverified : undefined;
+            this.unverifiedSeriesProgress = hasSeriesExecutionFacts(unverified)
+              ? unverified
+              : undefined;
             this.restorePending = false;
-            if (hasSeriesFacts(checkpoint.progress)) {
+            if (hasSeriesExecutionFacts(checkpoint.progress)) {
               this.executionOwnerUnknown = true;
               this.unknownNewExecution = false;
             }
@@ -454,7 +444,7 @@ export class ProgramRuntime {
           this.restoredExecutionProof = checkpoint.executionOwner;
           this.restoredExecutionMatchId = checkpoint.identity.matchId;
         } else {
-          if (checkpoint.executionOwner || hasSeriesFacts(checkpoint.progress)) {
+          if (checkpoint.executionOwner || hasSeriesExecutionFacts(checkpoint.progress)) {
             this.executionOwnerUnknown = true;
             this.unknownNewExecution = false;
           }
@@ -578,19 +568,7 @@ export class ProgramRuntime {
   }
 
   canUpdateSeriesPlan(): boolean {
-    if (!this.seriesProgress) return true;
-    return (
-      this.seriesProgress.currentMapOrder === null &&
-      this.seriesProgress.score.a === 0 &&
-      this.seriesProgress.score.b === 0 &&
-      this.seriesProgress.maps.every(
-        (map) =>
-          map.executionMapEpoch === null &&
-          map.status === 'pending' &&
-          map.finalScore === null &&
-          map.roundHistory.rounds.length === 0,
-      )
-    );
+    return !this.seriesProgress || !hasSeriesExecutionFacts(this.seriesProgress);
   }
 
   getExecutionOwnership(matchId: string): {

@@ -1,6 +1,7 @@
 export {
   addSeriesProgressIssue,
   createSeriesProgress,
+  hasSeriesExecutionFacts,
   isSeriesProgressCheckpointCompatible,
   makeSeriesProgressCheckpoint,
   refreshSeriesProgressMetadata,
