@@ -725,7 +725,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
     input.presentationRole === 'gameplay' &&
     telemetryFreshness === 'fresh' &&
     map?.name !== undefined &&
-    (input.seriesProgress?.bindingState !== 'bound' || input.identity.state === 'mismatch');
+    input.identity.state === 'mismatch';
   const activeLineup = input.activeLineup;
   const activeLineupIsCurrent =
     activeLineup.sourceGeneration === input.runtime.cursor.programSourceGeneration &&

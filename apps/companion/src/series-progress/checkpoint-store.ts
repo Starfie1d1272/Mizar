@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, unlink, writeFile } from 'node:fs/promises';
 
 import {
+  hasSeriesExecutionFacts,
   isSeriesProgressCheckpoint,
   type SeriesProgressCheckpoint,
   type SeriesProgressCheckpointStore,
@@ -103,15 +104,7 @@ export class JsonSeriesProgressCheckpointStore implements SeriesProgressCheckpoi
           previous &&
           previous.identity.matchId !== checkpoint.identity.matchId &&
           (previous.unverifiedProgress ||
-            (!previous.executionOwner &&
-              (previous.progress.currentMapOrder !== null ||
-                previous.progress.maps.some(
-                  (map) =>
-                    map.executionMapEpoch !== null ||
-                    map.status !== 'pending' ||
-                    map.finalScore !== null ||
-                    map.roundHistory.rounds.length > 0,
-                ))))
+            (!previous.executionOwner && hasSeriesExecutionFacts(previous.progress)))
         ) {
           const serialized = JSON.stringify(previous);
           const identity = createHash('sha256')
