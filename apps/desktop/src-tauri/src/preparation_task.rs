@@ -1367,7 +1367,7 @@ pub(crate) async fn cancel_entry(
     let task = if let Some(id) = &entry_id {
         preparation_gate::cancel_preparation(&app, id)?;
         let intent = app.state::<EntryIntent>();
-        let is_pre_cancel = |task: &Option<Task>| task.as_ref().is_none_or(|t| t.id != *id);
+        let is_pre_cancel = |task: &Option<Task>| task.is_none();
         let (matched, task) = intent.cancel_with(id, snapshot, is_pre_cancel)?;
         if !matched && task.as_ref().is_some_and(|task| task.id != *id) {
             return Err("准备任务已变化，请重新取消。".into());

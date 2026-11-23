@@ -233,7 +233,7 @@ pub(crate) fn entry_document(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     window_presentation::check_demo_main(&window)?;
-    app.state::<EntryIntent>().generation()
+    app.state::<EntryIntent>().issue_document()
 }
 
 pub(crate) fn cancel_entry_intent(

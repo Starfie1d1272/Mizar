@@ -3,13 +3,11 @@
 use std::sync::Mutex;
 use tauri::Manager;
 
-const MAX_ENTRY_CANCELLED_IDS: usize = 256;
-
 #[derive(Default)]
 struct EntryIntentState {
     document: u64,
+    entry_epoch: u64,
     active: Option<(String, bool)>,
-    cancelled: std::collections::VecDeque<String>,
 }
 #[derive(Default)]
 pub(crate) struct EntryIntent(Mutex<EntryIntentState>);
@@ -21,6 +19,10 @@ impl EntryIntent {
             .map_err(|_| "进入状态不可用。")?
             .document
             .to_string())
+    }
+    pub(crate) fn issue_document(&self) -> Result<String, String> {
+        let state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        Ok(format!("{}:{}", state.document, state.entry_epoch))
     }
     pub(crate) fn try_generation(&self) -> Option<u64> {
         self.0.try_lock().ok().map(|state| state.document)
@@ -39,17 +41,22 @@ impl EntryIntent {
     }
     fn begin(&self, id: String, document: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
-        if document != state.document.to_string() {
-            state.cancelled.retain(|item| item != &id);
+        let Some((doc, epoch)) = document.split_once(':') else {
+            return Err("进入页面已变化，请重新进入。".into());
+        };
+        let (Ok(doc), Ok(epoch)) = (doc.parse::<u64>(), epoch.parse::<u64>()) else {
+            return Err("进入页面已变化，请重新进入。".into());
+        };
+        if doc != state.document {
             return Err("进入页面已变化，请重新进入。".into());
         }
-        if state.cancelled.iter().any(|existing| existing == &id) {
-            state.cancelled.retain(|item| item != &id);
+        if epoch != state.entry_epoch {
             return Err("进入已取消。".into());
         }
         if state.active.is_some() {
             return Err("正在进入工作台，请稍候。".into());
         }
+        state.entry_epoch = state.entry_epoch.wrapping_add(1);
         state.active = Some((id, false));
         Ok(())
     }
@@ -71,14 +78,9 @@ impl EntryIntent {
             false
         };
         let value = read()?;
-        if !matched
-            && record_pre_cancel(&value)
-            && !state.cancelled.iter().any(|existing| existing == id)
-        {
-            if state.cancelled.len() >= MAX_ENTRY_CANCELLED_IDS {
-                state.cancelled.pop_front();
-            }
-            state.cancelled.push_back(id.to_owned());
+        // Only bump the unstarted entry epoch when no intent or task owns an entry.
+        if !matched && state.active.is_none() && record_pre_cancel(&value) {
+            state.entry_epoch = state.entry_epoch.wrapping_add(1);
         }
         Ok((matched, value))
     }
@@ -94,7 +96,6 @@ impl EntryIntent {
             {
                 state.active = None;
             }
-            state.cancelled.retain(|item| item != id);
         }
     }
     pub(crate) fn cancel_all(&self) {
@@ -102,8 +103,8 @@ impl EntryIntent {
         if let Some((_, cancelled)) = state.active.as_mut() {
             *cancelled = true;
         }
-        state.cancelled.clear();
         state.document = state.document.wrapping_add(1);
+        state.entry_epoch = state.entry_epoch.wrapping_add(1);
     }
     pub(crate) fn commit<T>(
         &self,
@@ -175,33 +176,39 @@ mod tests {
     use crate::preparation_gate::PreparationGate;
 
     #[test]
-    fn active_intent_and_gate_reject_stale_and_replaced_commits_across_300_cancels() {
+    fn pre_cancelled_and_replaced_requests_are_rejected_after_300_cancels() {
         let intent = EntryIntent::default();
         let gate = PreparationGate::default();
-        let doc = intent.generation().unwrap();
 
-        assert!(intent
-            .begin_with_gate(Some(&gate), "id-0".into(), &doc)
-            .is_ok());
-        assert!(intent.cancel("id-0").is_ok());
-        assert!(intent.commit("id-0", false, || Ok(())).is_err());
-        intent.finish("id-0");
-        gate.retire("id-0");
-
+        // 1. Cancel before begin(), followed by 300 subsequent pre-cancellations: late A must still fail.
+        let token_a = intent.issue_document().unwrap();
+        assert!(intent.cancel("req-a").is_ok());
         for i in 1..=300 {
-            let id = format!("id-{i}");
-            assert!(intent
-                .begin_with_gate(Some(&gate), id.clone(), &doc)
-                .is_ok());
-            // Task cancel after handoff must not pollute pre-cancel history.
-            let cancelled = intent.cancel_with(&id, || Ok(()), |_| false);
-            assert!(cancelled.unwrap().0);
-            intent.finish(&id);
-            gate.retire(&id);
+            assert!(intent.cancel(&format!("pre-{i}")).is_ok());
         }
+        assert!(intent
+            .begin_with_gate(Some(&gate), "req-a".into(), &token_a)
+            .is_err());
+        assert!(gate.commit(Some("req-a"), || Ok(())).is_err());
 
-        assert!(intent.commit("id-0", false, || Ok(())).is_err());
-        assert!(gate.commit(Some("id-0"), || Ok(())).is_err());
-        assert!(intent.begin("stale".into(), "999").is_err());
+        // 2. Fresh entry after pre-cancellations succeeds, and invalid cancel while task B exists does not pollute epoch.
+        let token_b = intent.issue_document().unwrap();
+        assert!(intent
+            .begin_with_gate(Some(&gate), "req-b".into(), &token_b)
+            .is_ok());
+        intent.finish("req-b");
+        let token_c = intent.issue_document().unwrap();
+        let cancelled = intent.cancel_with("unrelated", || Ok(()), |_| false);
+        assert!(!cancelled.unwrap().0);
+        assert!(intent
+            .begin_with_gate(Some(&gate), "req-c".into(), &token_c)
+            .is_ok());
+        intent.finish("req-c");
+        gate.retire("req-b");
+        gate.retire("req-c");
+
+        // 3. Replaying an already-consumed token or stale page generation fails.
+        assert!(intent.begin("replay".into(), &token_c).is_err());
+        assert!(intent.begin("stale".into(), "999:0").is_err());
     }
 }
