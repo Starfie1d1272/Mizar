@@ -89,6 +89,16 @@ function matchesScopeTuple(value: DeliveryScopeTuple, scope: DeliveryScopeTuple)
   );
 }
 
+function sameDeliveryScope(
+  a: { event: ReliableEventV1; source?: ExactSource | null },
+  b: { event: ReliableEventV1; source?: ExactSource | null },
+): boolean {
+  return (
+    matchesScopeTuple(eventDeliveryScope(a.event), eventDeliveryScope(b.event)) &&
+    (!a.source || !b.source || sourceKey(a.source) === sourceKey(b.source))
+  );
+}
+
 function scopeKeyTuple(scope: DeliveryScopeTuple | undefined): string {
   return scope
     ? JSON.stringify([scope.matchId ?? null, scope.producerInstanceId, scope.liveSessionId ?? null])
@@ -100,6 +110,19 @@ function isBoundaryFenceRecord(record: ReliableOutboxRecord): boolean {
     ['rejected', 'expired', 'superseded'].includes(record.status) ||
     record.receiverOutcome === 'needs_attention'
   );
+}
+
+function expireOrSupersedeRecord(
+  record: ReliableOutboxRecord,
+  expired: boolean,
+  now: Date,
+): ReliableOutboxRecord {
+  return {
+    ...record,
+    status: expired ? 'expired' : 'superseded',
+    ...(!expired ? { supersessionReason: 'current_scope_failed' as const } : {}),
+    updatedAt: now.toISOString(),
+  };
 }
 
 function sameStartExecution(a: ReliableEventV1, b: ReliableEventV1): boolean {
@@ -1125,6 +1148,13 @@ export class ReliableOutbox {
     return this.runDurable(`bind:${sourceKey(source)}`, bind, undefined, { scope: source, source });
   }
 
+  private allScopeRecords(history: readonly HistoryRow[]): ReliableOutboxRecord[] {
+    return [
+      ...this.records,
+      ...history.filter((item) => item.kind === 'record').map((item) => item.value),
+    ];
+  }
+
   hasUnconfirmedBoundary(
     event: ReliableEventV1,
     history = this.view.get(deliveryScope(event)) ?? [],
@@ -1135,10 +1165,7 @@ export class ReliableOutbox {
       )
     )
       return true;
-    return [
-      ...this.records,
-      ...history.filter((item) => item.kind === 'record').map((item) => item.value),
-    ].some(
+    return this.allScopeRecords(history).some(
       (record) =>
         (record.status !== 'accepted' || record.receiverOutcome === 'needs_attention') &&
         isContinuityBoundary(record.event) &&
@@ -1153,10 +1180,7 @@ export class ReliableOutbox {
   ): readonly ReliableOutboxRecord[] {
     const c = event.cursor;
     const seen = new Set<string>();
-    return [
-      ...this.records,
-      ...history.filter((item) => item.kind === 'record').map((item) => item.value),
-    ].filter((record) => {
+    return this.allScopeRecords(history).filter((record) => {
       if (seen.has(record.event.idempotencyKey)) return false;
       seen.add(record.event.idempotencyKey);
       const previous = record.event;
@@ -2068,7 +2092,7 @@ export class ReliableOutbox {
         const before = existing.findIndex(
           (record) =>
             record.status === 'pending' &&
-            this.sameDeliveryScope(record, next) &&
+            sameDeliveryScope(record, next) &&
             record.event.cursor.runtimeSeq > valid.cursor.runtimeSeq,
         );
         const records = this.trim(
@@ -2152,16 +2176,6 @@ export class ReliableOutbox {
         }
         throw error;
       },
-    );
-  }
-
-  private sameDeliveryScope(
-    a: { event: ReliableEventV1; source?: ExactSource | null },
-    b: { event: ReliableEventV1; source?: ExactSource | null },
-  ): boolean {
-    return (
-      matchesScopeTuple(eventDeliveryScope(a.event), eventDeliveryScope(b.event)) &&
-      (!a.source || !b.source || sourceKey(a.source) === sourceKey(b.source))
     );
   }
 
@@ -2315,7 +2329,7 @@ export class ReliableOutbox {
             [...this.pendingEnqueues.values()].some(
               (pending) =>
                 pending.event.kind !== 'map_player_snapshot' &&
-                this.sameDeliveryScope(pending, record) &&
+                sameDeliveryScope(pending, record) &&
                 pending.event.cursor.runtimeSeq <= record.event.cursor.runtimeSeq,
             ) ||
             hasDisposition(recordFence, 'revoked', record.source) ||
@@ -2382,12 +2396,7 @@ export class ReliableOutbox {
             now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
           if (expired || !input.isCurrent(record.event, record.lineupSteam64)) {
             if (isContinuityBoundary(record.event)) blockedBoundaries.push(record.event);
-            next.push({
-              ...record,
-              status: expired ? 'expired' : 'superseded',
-              ...(!expired ? { supersessionReason: 'current_scope_failed' as const } : {}),
-              updatedAt: now.toISOString(),
-            });
+            next.push(expireOrSupersedeRecord(record, expired, now));
             changed = true;
             continue;
           }
@@ -2655,12 +2664,7 @@ export class ReliableOutbox {
         const expired =
           now.getTime() - Date.parse(record.event.observedAt) >= RELIABLE_OUTBOX_RETENTION_MS;
         if (!expired && isCurrent(record.event, record.lineupSteam64)) return record;
-        return {
-          ...record,
-          status: expired ? 'expired' : 'superseded',
-          ...(!expired ? { supersessionReason: 'current_scope_failed' as const } : {}),
-          updatedAt: now.toISOString(),
-        };
+        return expireOrSupersedeRecord(record, expired, now);
       });
       const changed = next.filter((record, index) => record !== this.records[index]);
       if (changed.length) await this.commitStatusChanges(changed, this.trim(next));
