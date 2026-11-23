@@ -1,42 +1,27 @@
 //! Serializes cancellation with the irreversible submission of a preparation step.
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::Mutex,
-};
+use std::{collections::VecDeque, sync::Mutex};
 use tauri::Manager;
 
 const MAX_CANCELLED_IDS: usize = 256;
 
 #[derive(Default)]
-struct GateState {
-    cancelled: HashSet<String>,
-    order: VecDeque<String>,
-}
-
-#[derive(Default)]
-pub struct PreparationGate(Mutex<GateState>);
+pub struct PreparationGate(Mutex<VecDeque<String>>);
 
 impl PreparationGate {
     pub fn cancel(&self, id: String) -> Result<(), String> {
-        let mut state = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
-        if state.cancelled.insert(id.clone()) {
-            state.order.push_back(id);
-            while state.cancelled.len() > MAX_CANCELLED_IDS {
-                let Some(oldest) = state.order.pop_front() else {
-                    break;
-                };
-                state.cancelled.remove(&oldest);
+        let mut cancelled = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
+        if !cancelled.iter().any(|existing| existing == &id) {
+            if cancelled.len() >= MAX_CANCELLED_IDS {
+                cancelled.pop_front();
             }
+            cancelled.push_back(id);
         }
         Ok(())
     }
 
     pub fn retire(&self, id: &str) {
-        let Ok(mut state) = self.0.lock() else {
-            return;
-        };
-        if state.cancelled.remove(id) {
-            state.order.retain(|item| item != id);
+        if let Ok(mut cancelled) = self.0.lock() {
+            cancelled.retain(|item| item != id);
         }
     }
 
@@ -49,8 +34,8 @@ impl PreparationGate {
         id: Option<&str>,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let state = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
-        if id.is_some_and(|id| state.cancelled.contains(id)) {
+        let cancelled = self.0.lock().map_err(|_| "启动取消状态不可用。")?;
+        if id.is_some_and(|id| cancelled.iter().any(|existing| existing == id)) {
             return Err("本次启动已取消，请重新启动工作台。".into());
         }
         // Cancellation cannot return while this submission is in progress.

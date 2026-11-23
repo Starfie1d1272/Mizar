@@ -9,8 +9,7 @@ const MAX_ENTRY_CANCELLED_IDS: usize = 256;
 struct EntryIntentState {
     document: u64,
     active: Option<(String, bool)>,
-    cancelled: std::collections::HashSet<String>,
-    cancelled_order: std::collections::VecDeque<String>,
+    cancelled: std::collections::VecDeque<String>,
 }
 #[derive(Default)]
 pub(crate) struct EntryIntent(Mutex<EntryIntentState>);
@@ -29,10 +28,11 @@ impl EntryIntent {
     fn begin(&self, id: String, document: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
         if document != state.document.to_string() {
-            state.cancelled.remove(&id);
+            state.cancelled.retain(|item| item != &id);
             return Err("进入页面已变化，请重新进入。".into());
         }
-        if state.cancelled.remove(&id) {
+        if state.cancelled.iter().any(|existing| existing == &id) {
+            state.cancelled.retain(|item| item != &id);
             return Err("进入已取消。".into());
         }
         if state.active.is_some() {
@@ -57,14 +57,11 @@ impl EntryIntent {
         } else {
             false
         };
-        if !matched && state.cancelled.insert(id.to_owned()) {
-            state.cancelled_order.push_back(id.to_owned());
-            while state.cancelled.len() > MAX_ENTRY_CANCELLED_IDS {
-                let Some(oldest) = state.cancelled_order.pop_front() else {
-                    break;
-                };
-                state.cancelled.remove(&oldest);
+        if !matched && !state.cancelled.iter().any(|existing| existing == id) {
+            if state.cancelled.len() >= MAX_ENTRY_CANCELLED_IDS {
+                state.cancelled.pop_front();
             }
+            state.cancelled.push_back(id.to_owned());
         }
         Ok((matched, read()?))
     }
@@ -80,9 +77,7 @@ impl EntryIntent {
             {
                 state.active = None;
             }
-            if state.cancelled.remove(id) {
-                state.cancelled_order.retain(|item| item != id);
-            }
+            state.cancelled.retain(|item| item != id);
         }
     }
     pub(crate) fn cancel_all(&self) {
@@ -91,7 +86,6 @@ impl EntryIntent {
             *cancelled = true;
         }
         state.cancelled.clear();
-        state.cancelled_order.clear();
         state.document = state.document.wrapping_add(1);
     }
     pub(crate) fn commit<T>(
