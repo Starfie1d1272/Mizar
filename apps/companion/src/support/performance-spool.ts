@@ -1,4 +1,4 @@
-import { ProducerRetention, type IncidentParticipant } from './retention.js';
+import { ProducerRetention, segmentMaxObservedAt, type IncidentParticipant } from './retention.js';
 import { performanceSegmentPattern } from './segments.js';
 import { constants } from 'node:fs';
 import { mkdir, open, opendir, lstat, unlink, link, readFile } from 'node:fs/promises';
@@ -479,6 +479,7 @@ export class PerformanceSpool {
       lastSequence: records.at(-1)!.source.recordSequence,
       firstObservedAt: records[0]!.source.time,
       lastObservedAt: records.at(-1)!.source.time,
+      maxObservedAt: segmentMaxObservedAt(records.map(performanceRecordEvent)),
       records: records.length,
     });
   }

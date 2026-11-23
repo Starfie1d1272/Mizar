@@ -61,20 +61,25 @@ async function readExcludedByRange(logsDir: string, rangeStart: number): Promise
   ]);
   for (const inv of [companion, perf]) {
     if (!Array.isArray(inv?.segments)) continue;
-    for (const s of inv.segments as { name?: unknown; lastObservedAt?: unknown }[]) {
+    for (const s of inv.segments as { name?: unknown; maxObservedAt?: unknown }[]) {
       if (
         typeof s?.name === 'string' &&
-        typeof s.lastObservedAt === 'string' &&
-        Date.parse(s.lastObservedAt) < rangeStart
+        typeof s.maxObservedAt === 'string' &&
+        Date.parse(s.maxObservedAt) < rangeStart
       )
         excluded.add(s.name);
     }
   }
   if (Array.isArray(delivery?.queue)) {
-    for (const b of delivery.queue as { id?: unknown; index?: { to?: unknown } }[]) {
+    for (const b of delivery.queue as {
+      id?: unknown;
+      index?: { to?: unknown; sourceTimeUnknownRecords?: unknown; stages?: unknown };
+    }[]) {
       if (
         typeof b?.id === 'string' &&
         typeof b.index?.to === 'string' &&
+        b.index.sourceTimeUnknownRecords === 0 &&
+        (!Array.isArray(b.index.stages) || !b.index.stages.includes('cs2_console_records')) &&
         Date.parse(b.index.to) < rangeStart
       )
         excluded.add(`diagnostic-outbox/${b.id}.gz`);
