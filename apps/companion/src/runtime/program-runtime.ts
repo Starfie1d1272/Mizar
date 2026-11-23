@@ -1021,6 +1021,7 @@ export class ProgramRuntime {
       mapName: this.deliveryRestoreAwaitingTelemetry
         ? null
         : (map?.name ?? this.state.map.name ?? null),
+      competitiveObserved: this.state.map.competitiveObserved === true,
       mapEnded: map?.phase === 'gameover',
       roundNumber: map?.roundNumber ?? null,
       score: {

@@ -106,6 +106,7 @@ export interface SeriesMapObservation {
   readonly sourceGeneration: number;
   readonly mapEpoch: number;
   readonly mapName: string | null;
+  readonly competitiveObserved?: boolean;
   readonly mapEnded?: boolean;
   readonly roundNumber: number | null;
   readonly score: { readonly ct: number | null; readonly t: number | null };
