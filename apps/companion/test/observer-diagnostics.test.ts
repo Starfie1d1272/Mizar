@@ -9,7 +9,12 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 import { unzipSync, zipSync } from 'fflate';
+import Fastify from 'fastify';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
+import {
+  registerWorkspaceObserver,
+  type WorkspaceObserver,
+} from '../src/telemetry/observer-workspace.js';
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { SessionJournal } from '../src/support/session-journal.js';
@@ -615,4 +620,93 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
       ({ source, reason }) => source === 'host' && reason === 'host_memory_only_or_unreported_loss',
     ),
   );
+});
+
+test('registerWorkspaceObserver reopens stall recovery after new valid cursor data and does not loop without data or on normalDrain', async (t) => {
+  const settings = new ObserverSettingsStore();
+  await settings.configure({ ...settings.settings, enabled: true });
+  settings.setMapConnection('m1', 'connect', {
+    earlyEndpoint: '127.0.0.25:27025',
+    programEndpoint: '127.0.0.25:27026',
+    password: 'pw',
+  });
+  let active = false;
+  let stopReason: 'connection-changed' | null = null;
+  let starts = 0;
+  let lastReceiveMonotonicMs: number | undefined;
+  let normalDrain = false;
+  const mockObserver = {
+    view: () => ({ active, failed: false, stopReason }),
+    source: {
+      getHealth: () => ({
+        state: 'live',
+        ...(normalDrain ? { normalDrain: true } : {}),
+        ...(lastReceiveMonotonicMs === undefined ? {} : { lastReceiveMonotonicMs }),
+      }),
+      subscribeEvidence: () => () => {},
+    },
+    subscribeEvidence: () => () => {},
+    pulse: () => {},
+    start: async () => {
+      starts++;
+      active = true;
+      stopReason = null;
+      lastReceiveMonotonicMs = undefined;
+    },
+    stop: async (reason?: 'connection-changed') => {
+      active = false;
+      stopReason = reason ?? 'connection-changed';
+    },
+  };
+  const app = Fastify();
+  registerWorkspaceObserver(
+    app,
+    mockObserver as unknown as WorkspaceObserver,
+    'test-token',
+    () => true,
+    settings,
+  );
+  t.after(() => app.close());
+  const post = (body: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/operator/runtime/observer',
+      headers: { 'x-runtime-token': 'test-token' },
+      payload: body,
+    });
+  const prep = await post({ action: 'prepare', game: 'g1', job: 'j1' });
+  const started = await post({
+    action: 'start-configured',
+    game: 'g1',
+    job: 'j1',
+    executable: 'cs2.exe',
+    revision: (prep.json() as { revision: string }).revision,
+  });
+  const leaseToken = (started.json() as { leaseToken: string }).leaseToken;
+  assert.equal(starts, 1);
+
+  // First 45s stall triggers one restart; continuing with no new data does not loop.
+  lastReceiveMonotonicMs = performance.now() - 50_000;
+  await post({ action: 'pulse', leaseToken });
+  await delay(20);
+  assert.equal(starts, 2);
+  assert.equal(lastReceiveMonotonicMs, undefined);
+  await post({ action: 'pulse', leaseToken });
+  await delay(20);
+  assert.equal(starts, 2);
+
+  // Fresh cursor data reopens stall recovery quota; a second independent stall recovers too.
+  lastReceiveMonotonicMs = performance.now();
+  await post({ action: 'pulse', leaseToken });
+  lastReceiveMonotonicMs = performance.now() - 50_000;
+  await post({ action: 'pulse', leaseToken });
+  await delay(20);
+  assert.equal(starts, 3);
+
+  // Normal drain never triggers stall recovery even if receive timestamp ages.
+  normalDrain = true;
+  lastReceiveMonotonicMs = performance.now() - 50_000;
+  await post({ action: 'pulse', leaseToken });
+  await delay(20);
+  assert.equal(starts, 3);
 });

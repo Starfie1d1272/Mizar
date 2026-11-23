@@ -59,6 +59,7 @@ type ObserverHistory = ObserverAttemptEvidence & {
 type Owner = ReturnType<typeof startObserverProcess<'lookahead'>>;
 const HOST_LEASE_MS = 6000;
 const HOST_RECOVERY_MS = 30_000;
+const DATA_STALL_RECOVERY_MS = 45_000;
 
 /** The stable source facade keeps existing private consumers subscribed across attempts. */
 export class WorkspaceObserver {
@@ -432,10 +433,23 @@ export function registerWorkspaceObserver(
   let host: Host | undefined;
   let hostLease = 0;
   // This is a capability for the accepted Host intent, not another process owner.
-  let lease: { token: string; recoveryUsed: boolean; recovering: boolean } | undefined;
+  let lease:
+    | {
+        token: string;
+        recoveryUsed: boolean;
+        stallRecoveryUsed: boolean;
+        stallRecoveredReceiveMs?: number | undefined;
+        recovering: boolean;
+      }
+    | undefined;
   const acceptLease = () => {
     hostLease = performance.now();
-    lease = { token: randomUUID(), recoveryUsed: false, recovering: false };
+    lease = {
+      token: randomUUID(),
+      recoveryUsed: false,
+      stallRecoveryUsed: false,
+      recovering: false,
+    };
     return lease.token;
   };
   let prepared: { identity: string; settingsRevision: string; token: string } | undefined;
@@ -962,61 +976,94 @@ export function registerWorkspaceObserver(
           if (observer.view().active) await observer.stop('lease-expired');
           return { ok: true, enabled: false };
         }
+        const view = observer.view();
+        const health = observer.source.getHealth();
+        const receiveAgeMs =
+          health.lastReceiveMonotonicMs === undefined
+            ? null
+            : Math.max(0, performance.now() - health.lastReceiveMonotonicMs);
         const expired =
+          !lease.recovering && (age > HOST_LEASE_MS || view.stopReason === 'lease-expired');
+        if (
+          !expired &&
+          lease.stallRecoveryUsed &&
           !lease.recovering &&
-          (age > HOST_LEASE_MS || observer.view().stopReason === 'lease-expired');
-        if (expired) {
+          view.active &&
+          !view.stopReason &&
+          !view.failed &&
+          health.state === 'live' &&
+          !health.normalDrain &&
+          health.lastReceiveMonotonicMs !== undefined &&
+          health.lastReceiveMonotonicMs !== lease.stallRecoveredReceiveMs
+        ) {
+          lease.stallRecoveryUsed = false;
+          lease.stallRecoveredReceiveMs = undefined;
+        }
+        const stalled =
+          !expired &&
+          !lease.recovering &&
+          !lease.stallRecoveryUsed &&
+          view.active &&
+          !view.stopReason &&
+          !view.failed &&
+          health.state === 'live' &&
+          !health.normalDrain &&
+          receiveAgeMs !== null &&
+          receiveAgeMs >= DATA_STALL_RECOVERY_MS;
+        if (expired || stalled) {
           if (
-            !host ||
-            !settings ||
-            lease.recoveryUsed ||
-            observer.view().failed ||
-            (!observer.view().active && observer.view().stopReason !== 'lease-expired')
+            expired &&
+            (!host ||
+              !settings ||
+              lease.recoveryUsed ||
+              view.failed ||
+              (!view.active && view.stopReason !== 'lease-expired'))
           ) {
             lease = undefined;
-            if (observer.view().active) await observer.stop('lease-expired');
+            if (view.active) await observer.stop('lease-expired');
             return { ok: true, enabled: false };
           }
-          lease.recoveryUsed = true;
+          if (expired) lease.recoveryUsed = true;
+          else {
+            lease.stallRecoveryUsed = true;
+            lease.stallRecoveredReceiveMs = health.lastReceiveMonotonicMs;
+          }
           lease.recovering = true;
           const accepted = lease;
-          const value = host;
+          const value = host!;
           const attempt = epoch;
-          const revision = settings.revision;
+          const revision = settings!.revision;
+          const stage = expired ? 'observer_lease_recovery' : 'observer_stall_recovery';
           hostLease = performance.now();
-          const stopped = observer.stop('lease-expired');
+          if (!expired) observer.pulse();
+          const stopped = observer.stop(expired ? 'lease-expired' : 'connection-changed');
           const current = () =>
             lease === accepted &&
             host === value &&
             attempt === epoch &&
-            settings.revision === revision &&
+            settings?.revision === revision &&
             leased() &&
             canStart();
           app.log.info(
-            { stage: 'observer_lease', reason: 'lease-expired', elapsedMs: Math.round(age) },
+            {
+              stage: expired ? 'observer_lease' : 'observer_stall',
+              reason: expired ? 'lease-expired' : 'source-stale',
+              elapsedMs: Math.round(expired ? age : (receiveAgeMs ?? 0)),
+            },
             '提前提示接收正在恢复',
           );
           void serialize(async () => {
             await stopped;
-            // The watchdog may already be finalizing this owner. A second,
-            // now-empty stop cannot turn its late cleanup failure into permission
-            // to launch another process.
-            if (!current() || settings.receiverPaused || observer.view().failed) return;
+            if (!current() || settings?.receiverPaused || observer.view().failed) return;
             await startAssist(value, current);
-            if (current() && !settings.receiverPaused) {
+            if (current() && !settings?.receiverPaused) {
               lastError = null;
-              app.log.info(
-                { stage: 'observer_lease_recovery', result: 'started' },
-                '提前提示接收已重新启动',
-              );
+              app.log.info({ stage, result: 'started' }, '提前提示接收已重新启动');
             }
           })
             .catch((error: unknown) => {
-              if (current() && !settings.receiverPaused) lastError = 'observer_operation_failed';
-              app.log.error(
-                { stage: 'observer_lease_recovery', err: error },
-                '提前提示接收恢复未完成',
-              );
+              if (current() && !settings?.receiverPaused) lastError = 'observer_operation_failed';
+              app.log.error({ stage, err: error }, '提前提示接收恢复未完成');
             })
             .finally(() => {
               accepted.recovering = false;

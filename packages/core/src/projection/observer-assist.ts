@@ -66,6 +66,31 @@ interface StagedExecution {
 const STAGED_CAPACITY = 512;
 const STAGED_MAX_AGE_MS = 15 * 60_000;
 
+function isExecutionCompatible(
+  previous: number | undefined,
+  next: number | undefined,
+  allowResetZero = false,
+): boolean {
+  return (
+    previous === undefined ||
+    next === undefined ||
+    next === previous ||
+    (allowResetZero && next === 0)
+  );
+}
+
+function isPendingMapConflict(
+  pending: { execution: number | undefined; generation: number; conflicted: boolean },
+  generation: number,
+  execution: number | undefined,
+): boolean {
+  return (
+    pending.conflicted ||
+    pending.generation !== generation ||
+    (pending.execution !== undefined && execution !== undefined && pending.execution !== execution)
+  );
+}
+
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
   private staged: StagedExecution | null = null;
@@ -214,15 +239,9 @@ export class ObserverHintTimeline {
       return;
     }
     if (this.generation !== event.cursor.generation) {
-      const execution = event.cursor.sourceMapExecution;
-      const executionCompatible =
-        this.sourceExecution === undefined ||
-        execution === undefined ||
-        execution === this.sourceExecution ||
-        execution === 0;
       const continuous =
         this.canRetainAcrossGeneration() &&
-        executionCompatible &&
+        isExecutionCompatible(this.sourceExecution, event.cursor.sourceMapExecution, true) &&
         event.cursor.mapName === this.contextIdentity?.map &&
         (this.lastAcceptedRound === undefined ||
           event.cursor.roundsCompleted === undefined ||
@@ -455,11 +474,7 @@ export class ObserverHintTimeline {
     if (execution === undefined) return;
     const generationChanged =
       this.sourceExecutionGeneration === undefined || generation > this.sourceExecutionGeneration;
-    if (
-      this.sourceExecution !== undefined &&
-      execution !== this.sourceExecution &&
-      (!generationChanged || execution !== 0)
-    ) {
+    if (!isExecutionCompatible(this.sourceExecution, execution, generationChanged)) {
       this.lastAcceptedRound = undefined;
       this.engageExecutionFence(program);
       // Retain kills already received on this new generation/execution regardless of consume/project order.
@@ -562,12 +577,7 @@ export class ObserverHintTimeline {
         prior?.match === program.match.matchId &&
         prior.session === program.cursor.liveSessionId &&
         this.pendingMap?.name === program.map.name &&
-        (this.pendingMap.conflicted ||
-          this.pendingMap.generation !== source.generation ||
-          (this.pendingMap.execution !== undefined &&
-            sourceExecution !== undefined &&
-            this.pendingMap.generation === source.generation &&
-            this.pendingMap.execution !== sourceExecution));
+        isPendingMapConflict(this.pendingMap, source.generation, sourceExecution);
       const pending =
         prior &&
         prior.match === program.match.matchId &&
@@ -653,12 +663,7 @@ export class ObserverHintTimeline {
             generation: source.generation,
             conflicted: false,
           };
-        } else if (
-          this.pendingMap.generation !== source.generation ||
-          (this.pendingMap.execution !== undefined &&
-            sourceExecution !== undefined &&
-            this.pendingMap.execution !== sourceExecution)
-        ) {
+        } else if (isPendingMapConflict(this.pendingMap, source.generation, sourceExecution)) {
           this.pendingMap.conflicted = true;
         }
       }

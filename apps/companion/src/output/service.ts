@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { BoundaryCaptureError } from './boundary-capture.js';
+import { completedSeriesMapForProgram } from '@mizar/core/projection';
 import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import type { ProgramCommitResult } from '../runtime/program-runtime.js';
 import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
@@ -242,17 +243,14 @@ export class OutputService {
     )
       blockers.push('map_score_changed');
     if (!(event.evidence.lineupMismatchOnly === true && hasLineupMismatchOnly(bundle, binding))) {
-      const series = bundle.program.series;
-      const mapOrder = series?.currentMapOrder ?? series?.roundHistory?.mapOrder ?? null;
-      const resultMap =
-        mapOrder === null ? undefined : series?.maps.find((map) => map.mapOrder === mapOrder);
-      if (resultMap?.status !== 'completed') blockers.push('map_result_not_completed');
+      const resultMap = completedSeriesMapForProgram(bundle.program);
+      if (!resultMap) blockers.push('map_result_not_completed');
       if (
-        resultMap?.finalScore === null ||
-        resultMap?.mapId !== event.mapId ||
-        resultMap?.mapName !== event.mapName ||
-        resultMap?.finalScore.a !== event.payload.scoreA ||
-        resultMap?.finalScore.b !== event.payload.scoreB
+        !resultMap?.finalScore ||
+        resultMap.mapId !== event.mapId ||
+        resultMap.mapName !== event.mapName ||
+        resultMap.finalScore.a !== event.payload.scoreA ||
+        resultMap.finalScore.b !== event.payload.scoreB
       )
         blockers.push('canonical_result_changed');
     }

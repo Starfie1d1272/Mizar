@@ -373,6 +373,23 @@ function seriesPresentationScore(context: MatchContext, progress: SeriesProgress
   return { a: context.scoreA, b: context.scoreB };
 }
 
+/** Resolve the completed map for the current execution, including when series completion clears currentMapOrder. */
+export function completedSeriesMapForProgram(
+  program: Pick<ProgramProjection, 'map' | 'series'>,
+): ProgramSeriesMap | undefined {
+  const series = program.series;
+  if (!series || program.map.phase !== 'gameover') return undefined;
+  const targetOrder =
+    series.currentMapOrder ??
+    [...series.maps].reverse().find((map) => map.status === 'completed')?.mapOrder ??
+    null;
+  if (targetOrder === null) return undefined;
+  const map = series.maps.find((item) => item.mapOrder === targetOrder);
+  return map && map.status === 'completed' && map.mapName === program.map.name && map.finalScore
+    ? map
+    : undefined;
+}
+
 export function projectSeries(
   context: MatchContext | undefined,
   progress: SeriesProgress | null | undefined,

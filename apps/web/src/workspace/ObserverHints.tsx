@@ -63,6 +63,27 @@ export function ObserverHints() {
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
   const waitingNextMap = awaitingProgramMap || runtime?.terminal?.reason === 'source-hltv-stop';
+  const sourceStale = observer?.waitingReason === 'source-stale';
+  const reconnectButton = (label: string, retryingLabel: string) =>
+    window.__TAURI_INTERNALS__ ? (
+      <Button
+        disabled={retrying || !runtime?.retryAvailable}
+        aria-busy={retrying}
+        onClick={() => {
+          if (retrying || runtime?.pending || !runtime?.retryAvailable) return;
+          setRetrying(true);
+          setError('');
+          void resumeObserverReceiver(configuration!)
+            .then((result) => setError(result?.warning ?? ''))
+            .catch((reason: unknown) =>
+              setError(reason instanceof Error ? reason.message : '提前提示重试未完成，请重试。'),
+            )
+            .finally(() => setRetrying(false));
+        }}
+      >
+        {retrying ? retryingLabel : label}
+      </Button>
+    ) : null;
   const showPanel =
     enabled &&
     configuration?.connection &&
@@ -160,27 +181,7 @@ export function ObserverHints() {
               ? '辅助操作未完成，请核对本场连接后重试。'
               : observerFailureReason(runtime!)}
           </p>
-          {window.__TAURI_INTERNALS__ ? (
-            <Button
-              disabled={retrying || !runtime?.retryAvailable}
-              aria-busy={retrying}
-              onClick={() => {
-                if (retrying || runtime?.pending || !runtime?.retryAvailable) return;
-                setRetrying(true);
-                setError('');
-                void resumeObserverReceiver(configuration)
-                  .then((result) => setError(result?.warning ?? ''))
-                  .catch((reason: unknown) =>
-                    setError(
-                      reason instanceof Error ? reason.message : '提前提示重试未完成，请重试。',
-                    ),
-                  )
-                  .finally(() => setRetrying(false));
-              }}
-            >
-              {retrying ? '正在重试…' : '重新连接'}
-            </Button>
-          ) : null}
+          {reconnectButton('重新连接', '正在重试…')}
         </>
       ) : waitingNextMap ? (
         <StatusPill tone="info">
@@ -188,6 +189,11 @@ export function ObserverHints() {
             ? '已接收下一图数据，等待节目切图'
             : '等待下一图的 GoTV 连接'}
         </StatusPill>
+      ) : sourceStale ? (
+        <>
+          <StatusPill tone="warning">GoTV 数据中断，暂未收到新数据</StatusPill>
+          {reconnectButton('重新连接', '正在重试…')}
+        </>
       ) : reconnecting || connecting || !observer || observer.state !== 'ready' ? (
         <StatusPill tone="info">
           {reconnecting
@@ -196,7 +202,14 @@ export function ObserverHints() {
               ? '正在连接提前提示'
               : observer?.state === 'paused'
                 ? '比赛暂停'
-                : '正在接收比赛数据…'}
+                : ((
+                    {
+                      'source-disconnected': 'GoTV 观察连接已断开',
+                      'program-stale': '正在等待节目端比赛数据…',
+                      'source-map-mismatch': 'GoTV 与当前节目地图不一致',
+                      'source-execution-ahead': '等待节目对齐新对局…',
+                    } as Record<string, string>
+                  )[observer?.waitingReason ?? ''] ?? '正在接收比赛数据…')}
         </StatusPill>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
