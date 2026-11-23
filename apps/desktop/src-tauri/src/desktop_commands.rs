@@ -231,9 +231,11 @@ pub(crate) async fn resume_demo_test(
 pub(crate) fn entry_document(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
+    intent_id: String,
 ) -> Result<String, String> {
     window_presentation::check_demo_main(&window)?;
-    app.state::<EntryIntent>().issue_document()
+    crate::entry_intent::validate_id(&intent_id)?;
+    app.state::<EntryIntent>().issue_document(intent_id)
 }
 
 pub(crate) fn cancel_entry_intent(
@@ -242,13 +244,7 @@ pub(crate) fn cancel_entry_intent(
     intent_id: String,
 ) -> Result<(), String> {
     window_presentation::check_demo_main(&window)?;
-    if intent_id.len() != 36
-        || !intent_id
-            .bytes()
-            .all(|c| c.is_ascii_hexdigit() || c == b'-')
-    {
-        return Err("进入请求无效。".into());
-    }
+    crate::entry_intent::validate_id(&intent_id)?;
     app.state::<EntryIntent>().cancel(&intent_id)
 }
 

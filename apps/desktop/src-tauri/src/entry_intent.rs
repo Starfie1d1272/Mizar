@@ -6,7 +6,8 @@ use tauri::Manager;
 #[derive(Default)]
 struct EntryIntentState {
     document: u64,
-    entry_epoch: u64,
+    pending: Option<(String, u64)>,
+    next_epoch: u64,
     active: Option<(String, bool)>,
 }
 #[derive(Default)]
@@ -20,9 +21,15 @@ impl EntryIntent {
             .document
             .to_string())
     }
-    pub(crate) fn issue_document(&self) -> Result<String, String> {
-        let state = self.0.lock().map_err(|_| "进入状态不可用。")?;
-        Ok(format!("{}:{}", state.document, state.entry_epoch))
+    pub(crate) fn issue_document(&self, id: String) -> Result<String, String> {
+        let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
+        if state.active.is_some() {
+            return Err("正在进入工作台，请稍候。".into());
+        }
+        let epoch = state.next_epoch;
+        state.next_epoch = state.next_epoch.wrapping_add(1);
+        state.pending = Some((id, epoch));
+        Ok(format!("{}:{epoch}", state.document))
     }
     pub(crate) fn try_generation(&self) -> Option<u64> {
         self.0.try_lock().ok().map(|state| state.document)
@@ -50,13 +57,17 @@ impl EntryIntent {
         if doc != state.document {
             return Err("进入页面已变化，请重新进入。".into());
         }
-        if epoch != state.entry_epoch {
-            return Err("进入已取消。".into());
-        }
         if state.active.is_some() {
             return Err("正在进入工作台，请稍候。".into());
         }
-        state.entry_epoch = state.entry_epoch.wrapping_add(1);
+        if !state
+            .pending
+            .as_ref()
+            .is_some_and(|(owner, issued)| owner == &id && *issued == epoch)
+        {
+            return Err("进入已取消。".into());
+        }
+        state.pending = None;
         state.active = Some((id, false));
         Ok(())
     }
@@ -64,7 +75,6 @@ impl EntryIntent {
         &self,
         id: &str,
         read: impl FnOnce() -> Result<T, String>,
-        record_pre_cancel: impl FnOnce(&T) -> bool,
     ) -> Result<(bool, T), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
         let matched = if let Some((active, cancelled)) = state.active.as_mut() {
@@ -74,18 +84,20 @@ impl EntryIntent {
             } else {
                 false
             }
+        } else if state
+            .pending
+            .as_ref()
+            .is_some_and(|(pending_id, _)| pending_id == id)
+        {
+            state.pending = None;
+            true
         } else {
             false
         };
-        let value = read()?;
-        // Only bump the unstarted entry epoch when no intent or task owns an entry.
-        if !matched && state.active.is_none() && record_pre_cancel(&value) {
-            state.entry_epoch = state.entry_epoch.wrapping_add(1);
-        }
-        Ok((matched, value))
+        Ok((matched, read()?))
     }
     pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
-        self.cancel_with(id, || Ok(()), |_| true).map(|_| ())
+        self.cancel_with(id, || Ok(())).map(|_| ())
     }
     pub(crate) fn finish(&self, id: &str) {
         if let Ok(mut state) = self.0.lock() {
@@ -96,6 +108,13 @@ impl EntryIntent {
             {
                 state.active = None;
             }
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|(pending_id, _)| pending_id == id)
+            {
+                state.pending = None;
+            }
         }
     }
     pub(crate) fn cancel_all(&self) {
@@ -103,8 +122,8 @@ impl EntryIntent {
         if let Some((_, cancelled)) = state.active.as_mut() {
             *cancelled = true;
         }
+        state.pending = None;
         state.document = state.document.wrapping_add(1);
-        state.entry_epoch = state.entry_epoch.wrapping_add(1);
     }
     pub(crate) fn commit<T>(
         &self,
@@ -146,13 +165,7 @@ impl EntryIntent {
     }
 }
 
-pub(crate) fn begin(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    intent_id: String,
-    document: String,
-) -> Result<(), String> {
-    crate::window_presentation::check_demo_main(&window)?;
+pub(crate) fn validate_id(intent_id: &str) -> Result<(), String> {
     if intent_id.len() != 36
         || !intent_id
             .bytes()
@@ -160,6 +173,17 @@ pub(crate) fn begin(
     {
         return Err("进入请求无效。".into());
     }
+    Ok(())
+}
+
+pub(crate) fn begin(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    intent_id: String,
+    document: String,
+) -> Result<(), String> {
+    crate::window_presentation::check_demo_main(&window)?;
+    validate_id(&intent_id)?;
     app.state::<EntryIntent>().begin_with_gate(
         Some(
             app.state::<crate::preparation_gate::PreparationGate>()
@@ -176,39 +200,36 @@ mod tests {
     use crate::preparation_gate::PreparationGate;
 
     #[test]
-    fn pre_cancelled_and_replaced_requests_are_rejected_after_300_cancels() {
+    fn pre_cancellation_and_late_cancel_are_scoped_to_specific_request_identity() {
         let intent = EntryIntent::default();
         let gate = PreparationGate::default();
 
-        // 1. Cancel before begin(), followed by 300 subsequent pre-cancellations: late A must still fail.
-        let token_a = intent.issue_document().unwrap();
+        // 1. Delayed cancel A -> B issues token -> A cancel arrives -> B still begins; late A fails.
+        let token_a = intent.issue_document("req-a".into()).unwrap();
+        let token_b = intent.issue_document("req-b".into()).unwrap();
         assert!(intent.cancel("req-a").is_ok());
-        for i in 1..=300 {
-            assert!(intent.cancel(&format!("pre-{i}")).is_ok());
-        }
         assert!(intent
             .begin_with_gate(Some(&gate), "req-a".into(), &token_a)
             .is_err());
-        assert!(gate.commit(Some("req-a"), || Ok(())).is_err());
-
-        // 2. Fresh entry after pre-cancellations succeeds, and invalid cancel while task B exists does not pollute epoch.
-        let token_b = intent.issue_document().unwrap();
         assert!(intent
             .begin_with_gate(Some(&gate), "req-b".into(), &token_b)
             .is_ok());
         intent.finish("req-b");
-        let token_c = intent.issue_document().unwrap();
-        let cancelled = intent.cancel_with("unrelated", || Ok(()), |_| false);
-        assert!(!cancelled.unwrap().0);
+        gate.retire("req-b");
+
+        // 2. Cancel before begin(), followed by 300 unrelated cancels: late req-c must still fail.
+        let token_c = intent.issue_document("req-c".into()).unwrap();
+        assert!(intent.cancel("req-c").is_ok());
+        for i in 1..=300 {
+            assert!(intent.cancel(&format!("pre-{i}")).is_ok());
+        }
         assert!(intent
             .begin_with_gate(Some(&gate), "req-c".into(), &token_c)
-            .is_ok());
-        intent.finish("req-c");
-        gate.retire("req-b");
-        gate.retire("req-c");
+            .is_err());
+        assert!(gate.commit(Some("req-c"), || Ok(())).is_err());
 
-        // 3. Replaying an already-consumed token or stale page generation fails.
-        assert!(intent.begin("replay".into(), &token_c).is_err());
+        // 3. Replaying a consumed token or stale page generation fails.
+        assert!(intent.begin("replay".into(), &token_b).is_err());
         assert!(intent.begin("stale".into(), "999:0").is_err());
     }
 }

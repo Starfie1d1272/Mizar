@@ -230,7 +230,10 @@ const GsiStatus = z.object({
 });
 
 export const desktopIpc = {
-  entry_document: { args: z.undefined(), result: z.string() },
+  entry_document: {
+    args: z.strictObject({ intentId: z.string() }),
+    result: z.string(),
+  },
   enter_workspace: {
     args: z.strictObject({
       preparationId: z.string(),
