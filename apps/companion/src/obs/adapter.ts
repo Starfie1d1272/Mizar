@@ -490,11 +490,15 @@ export class ObsAdapter {
         permission.program === this.programGeneration &&
         permission.production();
       this.recoveryTimer = undefined;
-      if (!valid() || this.outputs.hasRunningOutput()) return;
+      if (!valid()) return;
+      if (!this.outputs.hasConfirmedIdleOutputs()) {
+        this.outputs.waitForAutomaticAudioConnection();
+        return;
+      }
       this.recoveryTask = this.serial(async () => {
         // Keep the existing program observer connected across recovery retries.
         await this.outputs.read();
-        if (!valid() || this.outputs.hasRunningOutput()) return false;
+        if (!valid() || !this.outputs.hasConfirmedIdleOutputs()) return false;
         return this.withObs(
           (obs) =>
             refreshObsBrowserSources(
@@ -513,14 +517,14 @@ export class ObsAdapter {
           }
         })
         .catch((error) => {
-          if (!this.outputs.hasRunningOutput()) {
+          if (this.outputs.hasConfirmedIdleOutputs()) {
             const kind = obsFailureKind(error);
             this.browserRecoveryFailures.record('obs_browser_recovery', kind, { kind });
           }
         })
         .finally(() => {
           this.recoveryTask = undefined;
-          if (valid() && !permission?.submitted && !this.outputs.hasRunningOutput()) {
+          if (valid() && !permission?.submitted && this.outputs.hasConfirmedIdleOutputs()) {
             this.recoveryTimer = setTimeout(attempt, 15_000);
             this.recoveryTimer.unref();
           } else if (this.browserRecoveryPermission !== permission) {

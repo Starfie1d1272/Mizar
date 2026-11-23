@@ -230,8 +230,12 @@ export class ObsOutputController {
     return this.preparationConfigurationGeneration;
   }
 
+  hasConfirmedIdleOutputs(): boolean {
+    return this.captureWarmupBlockReason() === null;
+  }
+
   captureWarmupGeneration(): number | null {
-    return this.captureWarmupBlockReason() === null ? this.warmupGeneration : null;
+    return this.hasConfirmedIdleOutputs() ? this.warmupGeneration : null;
   }
 
   preparationOutputEpoch(): number {
@@ -298,9 +302,20 @@ export class ObsOutputController {
     this.values[kind] = { ...this.values[kind], result };
   }
 
-  private update(kind: ObsOutputKind, phase: ObsOutputPhase, active: boolean | null): void {
+  private notifyOutputsIdle(wasIdle: boolean): void {
+    if (this.ready && !wasIdle && this.hasConfirmedIdleOutputs())
+      this.observeProgram('outputs-idle');
+  }
+
+  private update(
+    kind: ObsOutputKind,
+    phase: ObsOutputPhase,
+    active: boolean | null,
+    suppressIdleNotice = false,
+  ): void {
     const previous = this.values[kind];
     if (previous.phase === phase && previous.active === active) return;
+    const wasIdle = this.hasConfirmedIdleOutputs();
     this.outputObservationGeneration++;
     this.preparationOutputGeneration++;
     this.warmupGeneration++;
@@ -310,7 +325,7 @@ export class ObsOutputController {
       delete next.health;
     }
     this.values[kind] = next;
-    if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
+    if (!suppressIdleNotice) this.notifyOutputsIdle(wasIdle);
   }
 
   private invalidate(client?: OBSWebSocket, retry = true): void {
@@ -484,11 +499,12 @@ export class ObsOutputController {
         OBS_WEBSOCKET_OUTPUT_RECONNECTING: 'active',
         OBS_WEBSOCKET_OUTPUT_RECONNECTED: 'active',
       };
+      const wasIdle = this.hasConfirmedIdleOutputs();
       const phase = phases[event.outputState] ?? 'unknown';
       this.warmupExtraOutputs[kind] =
         phase === 'idle' && event.outputActive !== false ? 'unknown' : phase;
       if (phase === 'starting' || phase === 'stopping') this.extraTransitionAt[kind] = Date.now();
-      if (this.ready && !this.hasRunningOutput()) this.observeProgram('outputs-idle');
+      this.notifyOutputsIdle(wasIdle);
     };
     client.on('ReplayBufferStateChanged', (event) => extraOutput('replay', event));
     client.on('VirtualcamStateChanged', (event) => extraOutput('virtual', event));
@@ -626,6 +642,7 @@ export class ObsOutputController {
         this.outputObservationGeneration++;
         this.hasConnected = true;
         this.onConfigurationChanged?.();
+        if (this.hasConfirmedIdleOutputs()) this.observeProgram('outputs-idle');
         if (reconnected && identity?.collection === OBS_COLLECTION)
           this.onCollectionSceneItemEvent?.({
             kind: 'collection-ready',
@@ -656,6 +673,7 @@ export class ObsOutputController {
   }
 
   private async refresh(client: OBSWebSocket, generation: number): Promise<void> {
+    const wasIdle = this.hasConfirmedIdleOutputs();
     const versions = { ...this.events };
     const extraVersion = this.warmupGeneration;
     const [stream, record, replay, virtual] = await Promise.all([
@@ -675,6 +693,8 @@ export class ObsOutputController {
       ),
       this.query(client.call('GetVirtualCamStatus')),
     ]);
+    if (this.client !== client || this.generation !== generation || this.closed)
+      throw new Error('OBS connection superseded');
     const extrasCurrent = extraVersion === this.warmupGeneration;
     for (const [kind, value] of [
       ['replay', replay],
@@ -700,14 +720,12 @@ export class ObsOutputController {
         this.warmupExtraOutputs[kind] = phase;
       }
     }
-    if (this.client !== client || this.generation !== generation || this.closed)
-      throw new Error('OBS connection superseded');
     for (const kind of kinds) {
       // Events received while reading are newer than this snapshot.
       if (this.events[kind] !== versions[kind]) continue;
       const value = kind === 'stream' ? stream : record;
       if (!value || typeof value.outputActive !== 'boolean') {
-        this.update(kind, 'unknown', null);
+        this.update(kind, 'unknown', null, true);
         continue;
       }
       const previous = this.values[kind].phase;
@@ -750,9 +768,9 @@ export class ObsOutputController {
       )
         continue;
       if ((this.unconfirmedStart[kind] || previous === 'starting') && !value.outputActive)
-        this.update(kind, 'unknown', null);
+        this.update(kind, 'unknown', null, true);
       else {
-        this.update(kind, phase, value.outputActive);
+        this.update(kind, phase, value.outputActive, true);
         if (kind === 'stream' && phase === 'active' && stream) {
           const at = performance.now();
           const durationMs = nonnegative(stream.outputDuration);
@@ -785,6 +803,7 @@ export class ObsOutputController {
         }
       }
     }
+    this.notifyOutputsIdle(wasIdle);
   }
 
   async read(): Promise<ObsOutputsStatus> {
@@ -793,7 +812,11 @@ export class ObsOutputController {
     if (!client || !this.ready) throw new Error('OBS unavailable');
     if (!this.reading) {
       const task = this.refresh(client, this.generation).catch((error: unknown) => {
-        if (this.client === client) for (const kind of kinds) this.update(kind, 'unknown', null);
+        if (this.client === client) {
+          this.warmupExtraOutputs.replay = 'unknown';
+          this.warmupExtraOutputs.virtual = 'unknown';
+          for (const kind of kinds) this.update(kind, 'unknown', null);
+        }
         throw error;
       });
       this.reading = task;
