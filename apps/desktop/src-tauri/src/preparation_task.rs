@@ -1702,7 +1702,11 @@ pub(crate) async fn enter(
     .map_err(|_| "进入工作台未完成。".to_string())
     .and_then(|result| result);
     intent_app.state::<EntryIntent>().finish(&intent_id);
-    if snapshot().ok().flatten().is_none_or(|task| task.id != intent_id) {
+    if snapshot()
+        .ok()
+        .flatten()
+        .is_none_or(|task| task.id != intent_id)
+    {
         preparation_gate::retire_preparation(&intent_app, &intent_id);
     }
     result

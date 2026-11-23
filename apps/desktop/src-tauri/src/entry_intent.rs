@@ -160,7 +160,10 @@ pub(crate) fn begin(
         return Err("进入请求无效。".into());
     }
     app.state::<EntryIntent>().begin_with_gate(
-        Some(app.state::<crate::preparation_gate::PreparationGate>().inner()),
+        Some(
+            app.state::<crate::preparation_gate::PreparationGate>()
+                .inner(),
+        ),
         intent_id,
         &document,
     )
@@ -187,7 +190,9 @@ mod tests {
 
         for i in 1..=300 {
             let id = format!("id-{i}");
-            assert!(intent.begin_with_gate(Some(&gate), id.clone(), &doc).is_ok());
+            assert!(intent
+                .begin_with_gate(Some(&gate), id.clone(), &doc)
+                .is_ok());
             // Task cancel after handoff must not pollute pre-cancel history.
             let cancelled = intent.cancel_with(&id, || Ok(()), |_| false);
             assert!(cancelled.unwrap().0);
