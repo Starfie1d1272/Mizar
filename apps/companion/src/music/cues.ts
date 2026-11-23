@@ -148,18 +148,13 @@ export function tailVolume(
   return volume * Math.min(1, Math.max(0, (end - cursor) / fadeOutMs));
 }
 
-export function resolveEffectiveBgmCue(options: {
-  readonly truth: MusicTruth;
-  readonly map: string;
-  readonly pauseId: string | null;
-  readonly current: {
-    readonly group: MusicGroup;
-    readonly key: string;
-    readonly finished: boolean;
-  } | null;
-  readonly consumed: readonly string[];
-}): MusicCue | null {
-  const { truth, map, pauseId, current, consumed } = options;
+export function resolveEffectiveBgmCue(
+  truth: MusicTruth,
+  map: string,
+  pauseId: string | null,
+  current: { readonly group: MusicGroup; readonly key: string; readonly finished: boolean } | null,
+  consumed: readonly string[],
+): MusicCue | null {
   let cue = musicCue(truth, pauseId);
   const waitingKey = `waiting:${truth.program.match?.matchId ?? ''}`;
   if (
@@ -181,18 +176,17 @@ export function resolveEffectiveBgmCue(options: {
   return cue;
 }
 
-export function resolveRetainedStingerCue(options: {
-  readonly truth: MusicTruth;
-  readonly manual: boolean;
-  readonly held: boolean;
-  readonly stinger: {
+export function resolveRetainedStingerCue(
+  truth: MusicTruth,
+  manual: boolean,
+  held: boolean,
+  stinger: {
     readonly key: string;
     readonly scope?: string | undefined;
     readonly track: MusicTrack;
     readonly finished: boolean;
-  } | null;
-}): MusicCue | null {
-  const { truth, manual, held, stinger } = options;
+  } | null,
+): MusicCue | null {
   const safe =
     !manual &&
     truth.production &&

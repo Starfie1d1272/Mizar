@@ -330,14 +330,16 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
   }
   private resolveAutomaticCue(truth: MusicTruth, map: string): MusicCue | null {
     if (!this.store.automaticEnabled || this.isHeld()) return null;
-    if (this.manual) return this.manual.cue;
-    return resolveEffectiveBgmCue({
-      truth,
-      map,
-      pauseId: this.store.state.pause?.id ?? null,
-      current: this.store.state.bgm,
-      consumed: this.store.state.consumed,
-    });
+    return (
+      this.manual?.cue ??
+      resolveEffectiveBgmCue(
+        truth,
+        map,
+        this.store.state.pause?.id ?? null,
+        this.store.state.bgm,
+        this.store.state.consumed,
+      )
+    );
   }
   private computedLayerGain(
     layer: MusicLayer,
@@ -607,62 +609,69 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     if (this.status.connection !== 'connected' || !this.manual)
       throw new Error('music_play_unconfirmed');
   }
+  private async runBgmCommand(
+    current: () => boolean,
+    withDetails: boolean,
+    initialWriting: boolean,
+    fn: (obs: MusicDevice, epoch: number, markWriting: () => void) => Promise<void>,
+  ) {
+    this.invalidate();
+    return this.acquireCommand(current, async () => {
+      let writing = initialWriting;
+      try {
+        await this.provider.session((obs, epoch) => fn(obs, epoch, () => (writing = true)));
+      } catch (error) {
+        if (writing && current()) {
+          await this.provider
+            .session((obs) => this.refreshBgmPlaybackStatus(obs, current, withDetails))
+            .catch(() => {
+              if (withDetails && current()) this.status.cursorMs = null;
+            });
+          if (current()) {
+            this.status.playback = 'unknown';
+            await this.markUnknownObsControl();
+          }
+        }
+        throw error;
+      }
+    });
+  }
   async manualPause(paused: boolean) {
     const manual = this.manual;
     if (!manual || this.closed) throw new Error('music_manual_inactive');
     const revision = ++this.commandRevision;
-    this.invalidate();
     const current = () =>
       !this.closed && revision === this.commandRevision && this.manual === manual;
-    return this.acquireCommand(current, async () => {
-      try {
-        await this.provider.session(async (obs, epoch) => {
-          if (!current() || manual.epoch !== epoch) throw new Error('music_cancelled');
-          const { uuid, media: before } = await this.readVerifiedBgmLayer(
-            obs,
-            manual.cue.track!.id,
-            current,
-          );
-          if (!current() || before.state !== (paused ? 'playing' : 'paused'))
-            throw new Error('music_state_changed');
-          const actionAt = this.now();
-          manual.paused = paused;
-          await obs.controlMedia({
-            sourceId: uuid,
-            action: paused ? 'pause' : 'play',
-          });
-          if (!current()) return;
-          let after = await obs.mediaStatus({ sourceId: uuid });
-          // OBS may acknowledge the command before its media thread reports the
-          // new state. Only wait while the previous state is still observable;
-          // never resend the command or overwrite another observed state.
-          for (let attempt = 0; attempt < 10 && after.state === before.state; attempt++) {
-            if (!current()) return;
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            if (!current()) return;
-            after = await obs.mediaStatus({ sourceId: uuid });
-          }
-          if (!current()) return;
-          this.status.playback = observedPlayback(after.state);
-          if (after.state !== (paused ? 'paused' : 'playing'))
-            throw new Error('music_state_unconfirmed');
-          if (paused) manual.pausedAt = actionAt;
-          else {
-            const fade = this.fades.bgm;
-            if (fade && !fade.stop && manual.pausedAt !== null)
-              fade.at += Math.max(0, this.now() - manual.pausedAt);
-            manual.pausedAt = null;
-          }
-        });
-      } catch (error) {
-        if (current()) {
-          this.status.playback = 'unknown';
-          await this.provider
-            .session((obs) => this.refreshBgmPlaybackStatus(obs, current))
-            .catch(() => undefined);
-          if (current()) await this.markUnknownObsControl();
-        }
-        throw error;
+    return this.runBgmCommand(current, false, true, async (obs, epoch) => {
+      if (!current() || manual.epoch !== epoch) throw new Error('music_cancelled');
+      const { uuid, media: before } = await this.readVerifiedBgmLayer(
+        obs,
+        manual.cue.track!.id,
+        current,
+      );
+      if (!current() || before.state !== (paused ? 'playing' : 'paused'))
+        throw new Error('music_state_changed');
+      const actionAt = this.now();
+      manual.paused = paused;
+      await obs.controlMedia({ sourceId: uuid, action: paused ? 'pause' : 'play' });
+      if (!current()) return;
+      let after = await obs.mediaStatus({ sourceId: uuid });
+      for (let attempt = 0; attempt < 10 && after.state === before.state; attempt++) {
+        if (!current()) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (!current()) return;
+        after = await obs.mediaStatus({ sourceId: uuid });
+      }
+      if (!current()) return;
+      this.status.playback = observedPlayback(after.state);
+      if (after.state !== (paused ? 'paused' : 'playing'))
+        throw new Error('music_state_unconfirmed');
+      if (paused) manual.pausedAt = actionAt;
+      else {
+        const fade = this.fades.bgm;
+        if (fade && !fade.stop && manual.pausedAt !== null)
+          fade.at += Math.max(0, this.now() - manual.pausedAt);
+        manual.pausedAt = null;
       }
     }).catch((error) => {
       if (error instanceof Error && error.message === 'music_cancelled') return;
@@ -676,66 +685,37 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     if (!saved || saved.key !== playbackId || saved.finished || saved.suspended || this.isHeld())
       throw new Error('music_seek_unavailable');
     const revision = ++this.commandRevision;
-    this.invalidate();
     const current = () =>
       !this.closed && revision === this.commandRevision && this.store.state.bgm?.key === saved.key;
-    return this.acquireCommand(current, async () => {
-      let writing = false;
-      try {
-        await this.provider.session(async (obs, epoch) => {
-          if (epoch !== this.epoch || !current()) throw new Error('music_cancelled');
-          const { uuid, media } = await this.readVerifiedBgmLayer(
-            obs,
-            saved.track.id,
-            current,
-            true,
-          );
-          const duration = media.durationMs;
-          const end = Math.min(saved.track.endMs ?? Infinity, duration ?? Infinity);
-          if (!current() || !['playing', 'paused'].includes(media.state))
-            throw new Error('music_seek_unavailable');
-          if (
-            duration === null ||
-            duration <= 0 ||
-            cursorMs < saved.track.startMs ||
-            cursorMs >= end
-          )
-            throw new Error('music_seek_invalid');
-          writing = true;
-          await obs.setMediaCursor({ sourceId: uuid, cursorMs: cursorMs });
-          if (!current()) return;
-          const observed = await obs.mediaStatus({ sourceId: uuid });
-          if (!current()) return;
-          this.status.cursorMs = observed.cursorMs;
-          this.status.durationMs = observed.durationMs;
-          if (this.status.cursorMs === null) throw new Error('music_seek_unconfirmed');
-          delete this.fades.bgm;
-          const spec = this.store.state.config.groups[saved.group];
-          const target = tailVolume(
-            saved.track,
-            this.status.cursorMs,
-            this.status.durationMs ?? duration,
-            this.effectiveVolume(saved.group, saved.track),
-            spec.fadeOutMs,
-          );
-          if (!current()) return;
-          await obs.setVolume({ sourceId: uuid, gain: target });
-          if (current()) this.appliedVolumes.set('bgm', target);
-        });
-      } catch (error) {
-        if (writing && current()) {
-          await this.provider
-            .session((obs) => this.refreshBgmPlaybackStatus(obs, current, true))
-            .catch(() => {
-              if (current()) this.status.cursorMs = null;
-            });
-          if (current()) {
-            this.status.playback = 'unknown';
-            await this.markUnknownObsControl();
-          }
-        }
-        throw error;
-      }
+    return this.runBgmCommand(current, true, false, async (obs, epoch, markWriting) => {
+      if (epoch !== this.epoch || !current()) throw new Error('music_cancelled');
+      const { uuid, media } = await this.readVerifiedBgmLayer(obs, saved.track.id, current, true);
+      const duration = media.durationMs;
+      const end = Math.min(saved.track.endMs ?? Infinity, duration ?? Infinity);
+      if (!current() || !['playing', 'paused'].includes(media.state))
+        throw new Error('music_seek_unavailable');
+      if (duration === null || duration <= 0 || cursorMs < saved.track.startMs || cursorMs >= end)
+        throw new Error('music_seek_invalid');
+      markWriting();
+      await obs.setMediaCursor({ sourceId: uuid, cursorMs });
+      if (!current()) return;
+      const observed = await obs.mediaStatus({ sourceId: uuid });
+      if (!current()) return;
+      this.status.cursorMs = observed.cursorMs;
+      this.status.durationMs = observed.durationMs;
+      if (this.status.cursorMs === null) throw new Error('music_seek_unconfirmed');
+      delete this.fades.bgm;
+      const spec = this.store.state.config.groups[saved.group];
+      const target = tailVolume(
+        saved.track,
+        this.status.cursorMs,
+        this.status.durationMs ?? duration,
+        this.effectiveVolume(saved.group, saved.track),
+        spec.fadeOutMs,
+      );
+      if (!current()) return;
+      await obs.setVolume({ sourceId: uuid, gain: target });
+      if (current()) this.appliedVolumes.set('bgm', target);
     });
   }
 
@@ -1367,12 +1347,12 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
             ...(opening.track ? { track: opening.track } : {}),
           };
         } else if (!previewOwned && !this.isStingerHeld()) {
-          stingerCue = resolveRetainedStingerCue({
+          stingerCue = resolveRetainedStingerCue(
             truth,
-            manual: Boolean(this.manual),
-            held: this.isHeld(),
-            stinger: this.store.state.stinger,
-          });
+            Boolean(this.manual),
+            this.isHeld(),
+            this.store.state.stinger,
+          );
         }
         if (stingerCue !== undefined)
           await this.layer(obs, 'stinger', stingerCue, valid, observed.get('stinger'));
@@ -1517,10 +1497,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         this.store.state.sources.bgm!,
       );
       if (!valid()) return;
-      this.status.playback = observedPlayback(media.state);
-      this.status.cursorMs = media.cursorMs;
-      this.status.durationMs = media.durationMs;
       const saved = this.store.state.bgm;
+      this.setBgmStatus(media, saved?.track);
       const path = saved ? await this.store.trackPath(saved.track.id).catch(() => null) : null;
       if (!valid()) return;
       const matches = path && settings === path;
@@ -1702,10 +1680,11 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         });
       if (saved && !saved.suspended)
         await this.store.update((s) => {
+          const program = this.truth().program;
           const finished =
             layer === 'stinger' ||
-            (this.truth().program.status.telemetry === 'fresh' &&
-              this.truth().program.map.phase === 'live' &&
+            (program.status.telemetry === 'fresh' &&
+              program.map.phase === 'live' &&
               ['mapVictory', 'matchVictory'].includes(saved!.group));
           if (finished)
             s.consumed = [...s.consumed.filter((key) => key !== saved!.key), saved!.key].slice(-64);
@@ -1730,13 +1709,12 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
           t.startMs === saved!.track.startMs &&
           t.endMs === saved!.track.endMs,
       );
-    if (matching && saved!.finished) {
-      if (active)
-        await controlMedia({
-          ...args,
-          action: 'stop',
-        });
+    const stopAndClear = async () => {
+      if (active) await controlMedia({ ...args, action: 'stop' });
       markStatus(null);
+    };
+    if (matching && saved!.finished) {
+      await stopAndClear();
       return;
     }
     if (matching && saved) {
@@ -1744,11 +1722,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       const file = settings;
       const expectedPath = await this.store.trackPath(saved.track.id).catch(() => null);
       if (!expectedPath || file !== expectedPath) {
-        if (active)
-          await controlMedia({
-            ...args,
-            action: 'stop',
-          });
+        await stopAndClear();
         await this.fail(layer, saved);
         return;
       }
