@@ -1317,9 +1317,12 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         const monitorRecheck = reconnect || this.monitorSettingsChanged;
         this.monitorSettingsChanged = false;
         if (!valid()) return;
-        if (this.preview.busy) {
+        const syncMonitor = async () => {
           const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck, modePending);
           if (valid()) await this.readMonitor(obs, valid, known);
+        };
+        if (this.preview.busy) {
+          await syncMonitor();
           return;
         }
         if (this.unknownControl) {
@@ -1356,8 +1359,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         }
         if (stingerCue !== undefined)
           await this.layer(obs, 'stinger', stingerCue, valid, observed.get('stinger'));
-        const known = await this.configureDefaultMonitor(obs, valid, monitorRecheck, modePending);
-        if (valid()) await this.readMonitor(obs, valid, known);
+        await syncMonitor();
       });
       if (valid()) recovered();
     } catch (error) {
@@ -1485,12 +1487,8 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     const name = await obs.hasSource(this.store, 'bgm', valid);
     if (!valid()) return;
     if (!name) {
-      this.status.playback = 'unknown';
       this.status.bgm = null;
-      this.status.cursorMs = null;
-      this.status.durationMs = null;
-      this.status.segmentStartMs = null;
-      this.status.segmentEndMs = null;
+      this.setBgmStatus({ state: 'unknown', cursorMs: null, durationMs: null }, null);
     } else {
       const { media, volume, mute, settings } = await this.readLayerMedia(
         obs,
@@ -1726,20 +1724,27 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         await this.fail(layer, saved);
         return;
       }
-      if (layer === 'bgm' && this.manual?.paused && state === 'paused') {
-        const target = this.computedLayerGain(
+      const syncVolume = async (at: number, clearFade: boolean) => {
+        const gain = this.computedLayerGain(
           layer,
-          saved,
+          saved!,
           media,
           targetVolume,
           spec!.fadeOutMs,
-          this.manual.pausedAt ?? this.now(),
+          at,
+          clearFade,
         );
-        if (Math.abs(target - Number(volume)) > 0.0001) {
-          await device.setVolume({ ...args, gain: target });
-          this.appliedVolumes.set(layer, target);
-        }
+        if (
+          valid() &&
+          (!clearFade || !this.externalDriftCounts.has(layer)) &&
+          Math.abs(gain - Number(volume)) > 0.0001
+        )
+          await device.setVolume({ ...args, gain });
+        if (valid()) this.appliedVolumes.set(layer, gain);
         markStatus(saved);
+      };
+      if (layer === 'bgm' && this.manual?.paused && state === 'paused') {
+        await syncVolume(this.manual.pausedAt ?? this.now(), false);
         return;
       }
       if (saved.suspended) {
@@ -1749,9 +1754,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
         if (active) {
           await device.setVolume({ ...args, gain: targetVolume });
           this.appliedVolumes.set(layer, targetVolume);
-        }
-        if (
-          !active &&
+        } else if (
           !(await this.startLayerPlayback(
             obs,
             layer,
@@ -1774,11 +1777,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
       }
       if (state === 'ended' || segmentEnded || (layer === 'bgm' && this.nextRequested)) {
         this.nextRequested = false;
-        if (segmentEnded || active)
-          await controlMedia({
-            ...args,
-            action: 'stop',
-          });
+        if (segmentEnded || active) await controlMedia({ ...args, action: 'stop' });
         if (!looping(saved.group)) {
           await this.store.update((s) => {
             s[layer] = { ...saved!, finished: true };
@@ -1789,25 +1788,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
           return;
         }
       } else if (active) {
-        // Tail gain follows the observed media cursor, not elapsed wall time. Seeking and
-        // pausing therefore cannot keep an obsolete fade-out timer alive.
-        const gain = this.computedLayerGain(
-          layer,
-          saved,
-          media,
-          targetVolume,
-          spec!.fadeOutMs,
-          this.now(),
-          true,
-        );
-        if (
-          valid() &&
-          !this.externalDriftCounts.has(layer) &&
-          Math.abs(gain - Number(volume)) > 0.0001
-        )
-          await device.setVolume({ ...args, gain: gain });
-        if (valid()) this.appliedVolumes.set(layer, gain);
-        markStatus(saved);
+        await syncVolume(this.now(), true);
         return; // Reconcile an existing source without Restart or seek.
       } else if (this.appliedVolumes.has(layer) || state !== 'stopped') return;
     }
