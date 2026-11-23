@@ -1546,8 +1546,7 @@ export class OutputService {
             this.outbox.canCapture(activeSource);
           if (
             sourceReady &&
-            !this.outbox.hasPendingBoundaryCaptures(scope) &&
-            !this.outbox.hasPendingEnqueues(scope) &&
+            !this.outbox.hasUnconfirmedWrites(scope) &&
             !this.outbox.hasBoundaryGap({
               matchId,
               producerInstanceId,
