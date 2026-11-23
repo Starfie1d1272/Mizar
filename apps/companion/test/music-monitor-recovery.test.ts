@@ -569,3 +569,58 @@ test('transient media states and stinger control isolate stingerHeld without fal
   assert.equal(rig.director.get().stingerHeld, true);
   assert.equal(rig.director.get().held, false);
 });
+
+test('manualPause and seek confirm playback transitions and fail closed to unknown control on write failure', async (t) => {
+  const track = { id: `${'c'.repeat(64)}.mp3`, name: 'Track', startMs: 0, endMs: null, gain: 1 };
+  let bgmState: 'playing' | 'paused' = 'playing';
+  let bgmCursor = 500;
+  let failSeek = false;
+  const rig = await createMusicRig(
+    t,
+    () => ({
+      active: 'waiting',
+      production: true,
+      program: {
+        map: { name: 'de_test', phase: 'warmup', roundNumber: 0, score: { ct: 0, t: 0 } },
+        cursor: { mapEpoch: 1 },
+        match: { matchId: 'm1' },
+        clock: null,
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+      } as MusicTruth['program'],
+    }),
+    {
+      hasSource: async (_s, layer) => layer === 'bgm',
+      mediaFile: async () => '/tmp/fake-track.mp3',
+      mediaStatus: async () => ({ state: bgmState, cursorMs: bgmCursor, durationMs: 10_000 }),
+      controlMedia: async ({ action }) => {
+        if (action === 'pause') bgmState = 'paused';
+        else if (action === 'play' || action === 'restart') bgmState = 'playing';
+      },
+      setMediaCursor: async ({ cursorMs }) => {
+        if (failSeek) throw new Error('obs_seek_lost');
+        bgmCursor = cursorMs;
+      },
+    },
+  );
+  rig.store.trackPath = async () => '/tmp/fake-track.mp3';
+  await rig.store.update((s) => {
+    s.sources.bgm = 'bgm-uuid';
+    s.sourceScopes.bgm = 'owned-collection';
+    s.config.groups.waiting = { ...s.config.groups.waiting, enabled: true, tracks: [track] };
+  });
+
+  await rig.director.manualPlay('waiting', track.id);
+  await rig.director.manualPause(true);
+  assert.equal(rig.director.get().playback, 'paused');
+  await rig.director.manualPause(false);
+  assert.equal(rig.director.get().playback, 'playing');
+
+  const key = rig.store.state.bgm!.key;
+  await rig.director.seek(3000, key);
+  assert.equal(rig.director.get().cursorMs, 3000);
+
+  failSeek = true;
+  await assert.rejects(rig.director.seek(4000, key), /obs_seek_lost/);
+  assert.equal(rig.director.get().playback, 'unknown');
+  assert.equal(rig.director.get().held, true);
+});
