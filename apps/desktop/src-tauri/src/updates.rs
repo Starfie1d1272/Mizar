@@ -95,7 +95,7 @@ impl PendingUpdate {
         request(log, "recheck", Some(&attempt))?;
         Ok(())
     }
-    pub fn cancel(&self, log: &DesktopLog) {
+    pub fn cancel(&self, log: &DesktopLog, notify_service: bool) {
         let (stage, attempt) = {
             let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
             // A retired GUI cannot cancel the replacement GUI's owner or stage.
@@ -113,7 +113,7 @@ impl PendingUpdate {
                 .lock()
                 .ok()
                 .and_then(|mut pending| pending.take());
-            let attempt = self.attempt.lock().ok().and_then(|owner| owner.clone());
+            let attempt = self.attempt.lock().ok().and_then(|mut owner| owner.take());
             (stage, attempt)
         };
         if let Some(stage) = stage {
@@ -121,13 +121,14 @@ impl PendingUpdate {
                 io_failure(log, "stage_cleanup", &error, "更新暂存清理失败。");
             }
         }
-        if let Some(attempt) = attempt {
-            if release_plan(log, &attempt).is_ok() {
-                if let Ok(mut owner) = self.attempt.lock() {
-                    if owner.as_deref() == Some(attempt.as_str()) {
-                        *owner = None;
-                    }
-                }
+        if notify_service {
+            if let Some(attempt) = attempt {
+                let bg_log = log.clone();
+                let _ = std::thread::Builder::new()
+                    .name("mizar-update-release".into())
+                    .spawn(move || {
+                        let _ = release_plan(&bg_log, &attempt);
+                    });
             }
         }
     }
@@ -235,7 +236,12 @@ fn request(log: &DesktopLog, action: &str, attempt: Option<&str>) -> Result<Valu
             );
             "本地服务身份校验失败，升级未启动。请重新打开 Mizar；再次失败时查看诊断。"
         })?;
-    let deadline = Instant::now() + Duration::from_secs(75);
+    let timeout = if action == "release" {
+        Duration::from_secs(3)
+    } else {
+        Duration::from_secs(75)
+    };
+    let deadline = Instant::now() + timeout;
     let address: SocketAddr = "127.0.0.1:3000".parse().unwrap();
     let mut stream =
         TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|error| {
@@ -724,8 +730,11 @@ pub fn recheck(app: &tauri::AppHandle) -> Result<(), String> {
     pending.recheck(&app.state::<DesktopLog>())
 }
 pub fn cancel(app: &tauri::AppHandle) {
+    let notify = !app
+        .state::<crate::production_exit::VerifiedStop>()
+        .complete();
     app.state::<PendingUpdate>()
-        .cancel(&app.state::<DesktopLog>());
+        .cancel(&app.state::<DesktopLog>(), notify);
 }
 pub fn launch(stage: &Path, log: &DesktopLog) -> Result<(), String> {
     if crate::host_runtime::health_matches(&crate::host_runtime::bundle_root()?) {

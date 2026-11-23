@@ -1004,7 +1004,10 @@ fn run_desktop(
                         })
                         .await;
                     }
-                    updates::cancel(&host);
+                    let cancel_host = host.clone();
+                    let _ =
+                        tauri::async_runtime::spawn_blocking(move || updates::cancel(&cancel_host))
+                            .await;
                     host.state::<DesktopLog>()
                         .event("cs2_exit_recovery", "failure", Some(&error));
                     host.state::<production_exit::ExitGate>().cancel();
@@ -1100,7 +1103,7 @@ fn start_gui(
         }
     })();
     let cleanup_stage = if outcome.is_err() {
-        pending_update.cancel(log);
+        pending_update.cancel(log, true);
         "startup_rollback"
     } else {
         "shutdown"
@@ -1131,7 +1134,7 @@ fn start_gui(
         Ok(())
     };
     if let Err(error) = stop_result {
-        pending_update.cancel(log);
+        pending_update.cancel(log, true);
         if error.starts_with("runtime_stop_timeout:") {
             // Explicit timeout is an abnormal recovery path, never a successful flush.
             let _ = job.terminate();
@@ -1335,7 +1338,7 @@ fn main() {
     // publish an exit intent into the next Host.
     let pending_update = updates::PendingUpdate::new(Arc::new(Mutex::new(None)));
     if let Err(error) = start_gui(&root, &log, &pending_update) {
-        pending_update.cancel(&log);
+        pending_update.cancel(&log, false);
         log.event("startup_failed", "failure", Some(&error));
         let retry = if error.starts_with("webview2_preflight:") {
             windows_startup::recover_webview(&log, webview_preflight)

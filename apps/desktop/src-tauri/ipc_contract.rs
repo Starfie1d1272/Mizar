@@ -142,7 +142,7 @@ macro_rules! desktop_ipc {
         });
 
         $command!(sync entry_document MAIN
-            (window: tauri::WebviewWindow, app: tauri::AppHandle) required [] ()
+            (window: tauri::WebviewWindow, app: tauri::AppHandle) required [intent_id: String] ()
             -> String = crate::desktop_commands::entry_document);
         $command!(async enter_workspace MAIN
             (window: tauri::WebviewWindow, app: tauri::AppHandle) required [

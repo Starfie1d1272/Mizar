@@ -264,7 +264,7 @@ async function enterDesktopWorkspace(
     void desktopInvoke('cancel_entry_intent', { intentId: preparationId }).catch(() => {});
   signal?.addEventListener('abort', cancel);
   try {
-    const document = await desktopInvoke('entry_document');
+    const document = await desktopInvoke('entry_document', { intentId: preparationId });
     if (signal?.aborted || window.location.href !== location) throw new Error('进入已取消。');
     await desktopInvoke(
       'enter_workspace',
