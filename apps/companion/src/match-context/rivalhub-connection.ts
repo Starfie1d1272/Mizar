@@ -763,30 +763,36 @@ export class RivalHubConnection {
   private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
     if (!this.settleSource) return false;
     const key = exactKey(identity);
-    const drain = async () => {
-      // The output owner fences new events synchronously on entry. Only after
-      // that fence exists may a paused source deliver its already queued tail.
-      const disposition = this.settleSource!(identity).catch(() => false);
-      const source = this.source;
-      if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
-      await this.eventTransport.awaitLiveInFlight(identity);
-      return disposition;
-    };
     let operation = this.sourceSettlements.get(key);
     if (!operation) {
-      operation = drain().catch(() => false);
+      const drain = async () => {
+        // The output owner fences new events synchronously on entry. Only after
+        // that fence exists may a paused source deliver its already queued tail.
+        const disposition = this.settleSource!(identity).catch(() => false);
+        const source = this.source;
+        if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
+        await this.eventTransport.awaitLiveInFlight(identity);
+        return disposition;
+      };
+      operation = drain()
+        .catch(() => false)
+        .finally(() => {
+          if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
+        });
       this.sourceSettlements.set(key, operation);
-      void operation.then(() => {
-        if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
-      });
     }
-    return Promise.race([
-      operation,
-      new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), Math.max(1, budgetMs));
-        timer.unref();
-      }),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(1, budgetMs));
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async retireCurrent(cause: 'finish' | 'switch' | 'shutdown'): Promise<void> {

@@ -1546,8 +1546,7 @@ export class OutputService {
             this.outbox.canCapture(activeSource);
           if (
             sourceReady &&
-            !this.outbox.hasPendingBoundaryCaptures(scope) &&
-            !this.outbox.hasPendingEnqueues(scope) &&
+            !this.outbox.hasUnconfirmedWrites(scope) &&
             !this.outbox.hasBoundaryGap({
               matchId,
               producerInstanceId,
@@ -1745,11 +1744,13 @@ export class OutputService {
   }
 
   isPersistenceConfirmed(): boolean {
+    const scope = this.currentDeliveryScope();
+    const source = this.options.exactSource?.();
     return (
       this.outbox !== undefined &&
       !this.outboxUnavailable &&
       !this.quarantined &&
-      !this.outbox.hasUnconfirmedWrites() &&
+      !this.outbox.hasUnconfirmedWrites(scope, source) &&
       this.getBoundaryStatus() !== 'continuity_chain_missing'
     );
   }

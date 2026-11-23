@@ -1277,3 +1277,45 @@ test('a LIVE 403 still delivers reliable terminal facts in-session when source-s
     assert.ok(h.statusQueries.length >= 1);
   }
 });
+
+test('settle preserves single-flight ownership across caller wait timeouts until the original operation completes', async (t) => {
+  const h = await setup(t);
+  await h.connection.claim(h.snapshot, 'revision', false);
+  const identity = h.connection.reliableExactSource()!;
+  let calls = 0;
+  let finishFirst!: (value: boolean) => void;
+  h.connection.setSourceSettlement(
+    async () => {
+      calls++;
+      if (calls === 1) {
+        return new Promise<boolean>((resolve) => {
+          finishFirst = resolve;
+        });
+      }
+      return true;
+    },
+    () => undefined,
+  );
+  const settle = (
+    h.connection as unknown as {
+      settle: (source: typeof identity, budgetMs?: number) => Promise<boolean>;
+    }
+  ).settle.bind(h.connection);
+
+  // Caller 1 times out waiting while the underlying settlement is still running.
+  assert.equal(await settle(identity, 10), false);
+  assert.equal(calls, 1);
+
+  // Caller 2 joins the same single-flight operation instead of launching a concurrent settlement.
+  const second = settle(identity, 10);
+  const third = settle(identity, 500);
+  assert.equal(await second, false);
+  assert.equal(calls, 1);
+
+  // Once the original operation completes, caller 3 succeeds and the slot is released for future rounds.
+  finishFirst(true);
+  assert.equal(await third, true);
+  assert.equal(calls, 1);
+  assert.equal(await settle(identity, 100), true);
+  assert.equal(calls, 2);
+});
