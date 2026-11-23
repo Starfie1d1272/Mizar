@@ -168,24 +168,11 @@ export class RivalHubEventTransport {
     };
   }
 
-  async awaitLiveInFlight(identity: ExactSource, signal?: AbortSignal): Promise<void> {
+  async awaitLiveInFlight(identity: ExactSource): Promise<void> {
     const requests = [...this.liveInFlight.entries()]
       .filter(([source]) => sameExactSource(source, identity))
       .flatMap(([, pending]) => [...pending]);
-    if (!requests.length || signal?.aborted) return;
-    const all = Promise.allSettled(requests).then(() => undefined);
-    if (!signal) {
-      await all;
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        signal.removeEventListener('abort', done);
-        resolve();
-      };
-      signal.addEventListener('abort', done, { once: true });
-      void all.then(done);
-    });
+    await Promise.allSettled(requests);
   }
 
   private async uploadReliable(
