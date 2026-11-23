@@ -141,11 +141,14 @@ export function SupportExport() {
   } | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
+  const rangeRef = useRef('');
+  rangeRef.current = `${from}\0${to}`;
   const [readyJob, setReadyJob] = useState<ReadyExport | null>(null);
   const hasReadyJob = readyJob !== null;
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
 
   async function exportBundle(regenerate = false) {
+    const exportRange = rangeRef.current;
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -297,7 +300,7 @@ export function SupportExport() {
         ...(job.downloadName === undefined ? {} : { downloadName: job.downloadName }),
         ...(job.cleanupStatus === 'unconfirmed' ? { cleanupStatus: job.cleanupStatus } : {}),
       };
-      setReadyJob(ready);
+      if (rangeRef.current === exportRange) setReadyJob(ready);
       stage = 'save';
       await save(ready);
     } catch (error) {
@@ -362,6 +365,7 @@ export function SupportExport() {
         <Field
           label="开始时间（默认近 3 天，留空包含全部保留记录）"
           type="datetime-local"
+          disabled={busy}
           value={from}
           onChange={(e) => {
             setFrom(e.target.value);
@@ -371,6 +375,7 @@ export function SupportExport() {
         <Field
           label="结束时间（留空至导出时）"
           type="datetime-local"
+          disabled={busy}
           value={to}
           onChange={(e) => {
             setTo(e.target.value);
