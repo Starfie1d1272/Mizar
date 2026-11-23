@@ -187,26 +187,12 @@ test('SupportExports supports cancellation and retry', async (t) => {
   writeFileSync(
     join(logsDir, 'retention-companion.json'),
     JSON.stringify({
-      schema: 'mizar-retention/2',
-      producerId: 'companion',
       segments: [
         {
           name: 'session-00000000-0000-4000-8000-000000000099.ndjson',
-          producerRunId: '00000000-0000-4000-8000-000000000099',
-          firstSequence: 1,
-          lastSequence: 1,
-          firstObservedAt: '2026-11-15T10:00:00.000Z',
           lastObservedAt: '2026-11-15T10:00:00.000Z',
-          records: 1,
-          physicalId: '1:1:' + '0'.repeat(64),
-          bytes: 100,
-          sha256: '0'.repeat(64),
-          sealedAt: '2026-11-15T10:05:00.000Z',
         },
       ],
-      pins: [],
-      deleting: [],
-      removed: { files: 0, bytes: 0, lastAt: null },
     }),
   );
 

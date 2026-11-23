@@ -18,65 +18,66 @@ const MANIFEST_RESERVE = 1024 * 1024;
 const INDEX_READ_MAX = 4 * 1024 * 1024;
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
-async function readBoundedIndex(
-  directory: string,
-  name: string,
-): Promise<Record<string, unknown> | null> {
-  let handle: FileHandle | undefined;
+async function openSafeRead(directory: string, name: string, maxBytes: number) {
+  const path = await safePath(directory, name);
+  const before = await lstat(path);
+  if (!before.isFile() || before.nlink !== 1 || before.size > maxBytes)
+    throw new Error('source_unsafe_or_oversize');
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    const path = await safePath(directory, name);
-    const before = await lstat(path);
-    if (!before.isFile() || before.nlink !== 1 || before.size > INDEX_READ_MAX) return null;
-    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const stat = await handle.stat();
     if (
       stat.ino !== before.ino ||
       stat.dev !== before.dev ||
       stat.nlink !== 1 ||
-      stat.size > INDEX_READ_MAX
+      stat.size > maxBytes
     )
-      return null;
-    const parsed = JSON.parse(await handle.readFile('utf8')) as unknown;
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  } finally {
-    await handle?.close().catch(() => undefined);
+      throw new Error('source_changed');
+    return { handle, stat };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
   }
 }
 
-async function readExcludedSourcesByRange(
-  logsDirectory: string,
-  rangeStart: number,
-): Promise<Set<string>> {
+async function readExcludedByRange(logsDir: string, rangeStart: number): Promise<Set<string>> {
   const excluded = new Set<string>();
   if (!Number.isFinite(rangeStart)) return excluded;
-  const [companionRetention, performanceRetention, deliveryState] = await Promise.all([
-    readBoundedIndex(logsDirectory, 'retention-companion.json'),
-    readBoundedIndex(logsDirectory, 'retention-performance.json'),
-    readBoundedIndex(join(logsDirectory, 'diagnostic-outbox'), 'state.json'),
+  const readJson = async (dir: string, name: string) => {
+    let handle: FileHandle | undefined;
+    try {
+      ({ handle } = await openSafeRead(dir, name, INDEX_READ_MAX));
+      return JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
+    } catch {
+      return null;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  };
+  const [companion, perf, delivery] = await Promise.all([
+    readJson(logsDir, 'retention-companion.json'),
+    readJson(logsDir, 'retention-performance.json'),
+    readJson(join(logsDir, 'diagnostic-outbox'), 'state.json'),
   ]);
-  for (const inventory of [companionRetention, performanceRetention]) {
-    if (!inventory || !Array.isArray(inventory.segments)) continue;
-    for (const seg of inventory.segments as unknown[]) {
-      if (!seg || typeof seg !== 'object') continue;
-      const entry = seg as { name?: unknown; lastObservedAt?: unknown };
-      if (typeof entry.name !== 'string' || typeof entry.lastObservedAt !== 'string') continue;
-      const lastMs = Date.parse(entry.lastObservedAt);
-      if (Number.isFinite(lastMs) && lastMs < rangeStart) excluded.add(entry.name);
+  for (const inv of [companion, perf]) {
+    if (!Array.isArray(inv?.segments)) continue;
+    for (const s of inv.segments as { name?: unknown; lastObservedAt?: unknown }[]) {
+      if (
+        typeof s?.name === 'string' &&
+        typeof s.lastObservedAt === 'string' &&
+        Date.parse(s.lastObservedAt) < rangeStart
+      )
+        excluded.add(s.name);
     }
   }
-  if (deliveryState && Array.isArray(deliveryState.queue)) {
-    for (const item of deliveryState.queue as unknown[]) {
-      if (!item || typeof item !== 'object') continue;
-      const batch = item as { id?: unknown; index?: { to?: unknown } };
-      if (typeof batch.id !== 'string' || typeof batch.index?.to !== 'string') continue;
-      const toMs = Date.parse(batch.index.to);
-      if (Number.isFinite(toMs) && toMs < rangeStart) {
-        excluded.add(`diagnostic-outbox/${batch.id}.gz`);
-      }
+  if (Array.isArray(delivery?.queue)) {
+    for (const b of delivery.queue as { id?: unknown; index?: { to?: unknown } }[]) {
+      if (
+        typeof b?.id === 'string' &&
+        typeof b.index?.to === 'string' &&
+        Date.parse(b.index.to) < rangeStart
+      )
+        excluded.add(`diagnostic-outbox/${b.id}.gz`);
     }
   }
   return excluded;
@@ -370,23 +371,16 @@ export class SupportExports {
       jsonAttachment = false,
     ) => {
       try {
-        const path = await safePath(directory, name);
-        const before = await lstat(path);
-        if (
-          !before.isFile() ||
-          before.nlink !== 1 ||
-          before.size > (jsonAttachment ? 128 * 1024 : 64 * 1024 * 1024)
-        )
-          throw new Error('source_unsafe_or_oversize');
-        const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        const { handle, stat } = await openSafeRead(
+          directory,
+          name,
+          jsonAttachment ? 128 * 1024 : 64 * 1024 * 1024,
+        );
         handles.push(handle);
-        const actual = await handle.stat();
-        if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
-          throw new Error('source_changed');
         return {
           name: prefix + name,
           fd: handle.fd,
-          bytes: actual.size,
+          bytes: stat.size,
           rawIndex,
           rawAttachment,
           jsonAttachment,
@@ -397,27 +391,17 @@ export class SupportExports {
     };
     const excludedSources: { source: string; reason: string }[] = [];
     const rangeStart = range.from ? Date.parse(range.from) : NaN;
-    const excludedByRange = await readExcludedSourcesByRange(this.logs, rangeStart).catch(
-      () => new Set<string>(),
-    );
+    const excludedByRange = await readExcludedByRange(this.logs, rangeStart);
     const addSource = (source: (typeof sources)[number] | undefined) => {
       if (source) sources.push(source);
     };
-    const filterByRange = (names: readonly string[], prefix = '') => {
-      const kept: string[] = [];
-      for (const name of names) {
+    const filterByRange = (names: readonly string[], prefix = '') =>
+      names.filter((name) => {
         const key = prefix + name;
-        if (excludedByRange.has(key)) {
-          excludedSources.push({
-            source: key,
-            reason: 'outside-requested-range; original retained',
-          });
-        } else {
-          kept.push(name);
-        }
-      }
-      return kept;
-    };
+        if (!excludedByRange.has(key)) return true;
+        excludedSources.push({ source: key, reason: 'outside-requested-range; original retained' });
+        return false;
+      });
     const captureBatch = async (
       names: readonly string[],
       captureSource: (name: string) => ReturnType<typeof capture>,
@@ -743,19 +727,9 @@ export class SupportExports {
     let file: FileHandle | undefined;
     try {
       const directory = await safePath(join(dirname(this.logs), 'data'));
-      const path = await safePath(directory, name);
-      const before = await lstat(path);
-      if (!before.isFile() || before.nlink !== 1 || before.size > 4096)
-        throw new Error('frame_rate_source_unsafe');
-      file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const stat = await file.stat();
-      if (
-        stat.ino !== before.ino ||
-        stat.dev !== before.dev ||
-        stat.nlink !== 1 ||
-        stat.size !== before.size
-      )
-        throw new Error('frame_rate_source_changed');
+      const opened = await openSafeRead(directory, name, 4096);
+      file = opened.handle;
+      const stat = opened.stat;
       const value = JSON.parse(
         await file.readFile('utf8'),
         (key: string, item: unknown, context?: { source?: string }) =>
