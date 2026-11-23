@@ -718,6 +718,7 @@ export interface ObsNativeOptions {
   readonly now?: () => number;
   readonly readProcesses?: () => Promise<readonly ObsNativeProcess[]>;
   readonly budgetMs?: number;
+  readonly maxLogAgeMs?: number;
   readonly includeRelatedLogs?: boolean;
   /** Trusted local exporter takes ownership of an already validated fixed OBS log handle. */
   readonly retainRelatedLog?: (source: {
@@ -1113,6 +1114,7 @@ export async function collectObsNativeEvidence(
             notSelected: orderedNames.length - selectedNames.length,
           });
         for (const [slot, name] of selectedNames.entries()) {
+          const maxLogAgeMs = options.maxLogAgeMs ?? OBS_NATIVE_LIMITS.logAgeMs;
           const tail = await read(
             root,
             ['logs', name],
@@ -1120,11 +1122,8 @@ export async function collectObsNativeEvidence(
             false,
             true,
           );
-          if (tail.mtime > now() + 60000 || now() - tail.mtime > OBS_NATIVE_LIMITS.logAgeMs)
-            continue;
-          const header = (
-            await read(root, ['logs', name], OBS_NATIVE_LIMITS.logHeaderBytes, false, true)
-          ).text;
+          if (tail.mtime > now() + 60000 || now() - tail.mtime > maxLogAgeMs) continue;
+          const header = tail.text;
           const sessionDate = new Date(
             name.slice(0, 10) + 'T' + name.slice(11, 19).replaceAll('-', ':'),
           );

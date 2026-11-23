@@ -9,6 +9,7 @@ import { unzipSync } from 'fflate';
 import { runArchiveWorker } from '../src/support/archive-worker.js';
 import { diagnosticEvidence, needsEvidenceSanitize } from '../src/support/diagnostic-value.js';
 import { SupportExports } from '../src/support/export-job.js';
+import { segmentMaxObservedAt } from '../src/support/retention.js';
 import { BOX_READ_TOKEN } from '../src/updates/contract.js';
 
 test('needsEvidenceSanitize fast-path matches diagnosticEvidence output on clean and sensitive events', () => {
@@ -161,7 +162,7 @@ test('SupportExports supports cancellation and retry', async (t) => {
   const logsDir = join(dir, 'logs');
   mkdirSync(logsDir);
   writeFileSync(
-    join(logsDir, 'companion-20261120.ndjson'),
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000020.ndjson'),
     JSON.stringify({
       schema: 'mizar-diagnostic-event/2',
       eventId: '00000000-0000-4000-8000-000000000020',
@@ -175,9 +176,96 @@ test('SupportExports supports cancellation and retry', async (t) => {
   await exports.cancel(first.exportId);
   await exports.whenSettled(first.exportId);
 
-  const retried = await exports.begin({}, null);
+  writeFileSync(
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000099.ndjson'),
+    JSON.stringify({
+      schema: 'mizar-diagnostic-event/2',
+      eventId: '00000000-0000-4000-8000-000000000099',
+      kind: 'session_started',
+      observedAt: '2026-11-15T10:00:00.000Z',
+    }) + '\n',
+  );
+  // Legacy segment without maxObservedAt and out-of-order segment with trailing spanning renewal must both be retained.
+  writeFileSync(
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000098.ndjson'),
+    [
+      {
+        schema: 'mizar-diagnostic-event/2',
+        eventId: '00000000-0000-4000-8000-000000000097',
+        kind: 'legacy_out_of_order',
+        observedAt: '2026-11-22T10:00:00.000Z',
+      },
+      {
+        schema: 'mizar-diagnostic-event/2',
+        eventId: '00000000-0000-4000-8000-000000000098',
+        kind: 'session_started',
+        observedAt: '2026-11-15T10:00:00.000Z',
+      },
+    ]
+      .map((e) => JSON.stringify(e))
+      .join('\n') + '\n',
+  );
+  const spanningEvents = [
+    {
+      schema: 'mizar-diagnostic-event/2',
+      eventId: '00000000-0000-4000-8000-000000000095',
+      kind: 'late_event',
+      observedAt: '2026-11-22T12:00:00.000Z',
+    },
+    {
+      schema: 'mizar-diagnostic-event/2',
+      eventId: '00000000-0000-4000-8000-000000000096',
+      kind: 'runtime_renewal',
+      observedAt: '2026-11-18T00:00:00.000Z',
+      sourceInterval: { from: '2026-11-18T00:00:00.000Z', to: '2026-11-22T11:00:00.000Z' },
+    },
+  ];
+  writeFileSync(
+    join(logsDir, 'session-00000000-0000-4000-8000-000000000096.ndjson'),
+    spanningEvents.map((e) => JSON.stringify(e)).join('\n') + '\n',
+  );
+  assert.equal(segmentMaxObservedAt(spanningEvents), '2026-11-22T12:00:00.000Z');
+  writeFileSync(
+    join(logsDir, 'retention-companion.json'),
+    JSON.stringify({
+      segments: [
+        {
+          name: 'session-00000000-0000-4000-8000-000000000099.ndjson',
+          lastObservedAt: '2026-11-15T10:00:00.000Z',
+          maxObservedAt: '2026-11-15T10:00:00.000Z',
+        },
+        {
+          name: 'session-00000000-0000-4000-8000-000000000098.ndjson',
+          lastObservedAt: '2026-11-15T10:00:00.000Z',
+        },
+        {
+          name: 'session-00000000-0000-4000-8000-000000000096.ndjson',
+          lastObservedAt: '2026-11-18T00:00:00.000Z',
+          maxObservedAt: segmentMaxObservedAt(spanningEvents),
+        },
+      ],
+    }),
+  );
+
+  const retried = await exports.begin({ from: '2026-11-20T00:00:00.000Z' }, null);
   const settled = await exports.whenSettled(retried.exportId);
   assert.equal(settled?.phase, 'ready', `unexpected error: ${settled?.error}`);
+  const zip = unzipSync(readFileSync(join(exports.directory, retried.exportId, 'part-1.zip')));
+  const coverage = JSON.parse(Buffer.from(zip['coverage.json']!).toString('utf8')) as {
+    retainedRecords: number;
+    excludedSources: { source: string; reason: string }[];
+  };
+  assert.equal(coverage.retainedRecords, 4);
+  assert.ok(
+    coverage.excludedSources.some(
+      (entry) => entry.source === 'session-00000000-0000-4000-8000-000000000099.ndjson',
+    ),
+  );
+  assert.ok(
+    !coverage.excludedSources.some((entry) =>
+      ['0098', '0096'].some((suffix) => entry.source.includes(suffix)),
+    ),
+  );
 });
 
 test('needsEvidenceSanitize never misses JSON-escaped URLs, nested JSON, or unicode keys', () => {

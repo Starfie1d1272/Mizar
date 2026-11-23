@@ -536,28 +536,28 @@ export function registerSupportRoutes(
         return reply.code(202).send(
           await exports.begin(
             range,
-            async () => ({
-              ...captureSnapshot(
-                record(body.desktop),
-                null,
-                await options.obs().catch(() => undefined),
-                (await options
+            async () => {
+              const [obs, obsAudio] = await Promise.all([
+                options.obs().catch(() => undefined),
+                options
                   .obsAudioDiagnostics?.()
                   .then((value) => value ?? { status: 'not_configured' })
-                  .catch(audioDiagnosticReadFailure)) ?? {
-                  status: 'not_configured',
+                  .catch(audioDiagnosticReadFailure) ??
+                  Promise.resolve({ status: 'not_configured' }),
+              ]);
+              return {
+                ...captureSnapshot(record(body.desktop), null, obs, obsAudio),
+                artifact: {
+                  gitSha: digest(options.artifact?.gitSha, 40),
+                  artifactSha256: digest(options.artifact?.artifactSha256, 64),
                 },
-              ),
-              artifact: {
-                gitSha: digest(options.artifact?.gitSha, 40),
-                artifactSha256: digest(options.artifact?.artifactSha256, 64),
-              },
-              pendingEvidence: {
-                included: false,
-                reason:
-                  'only persisted file prefixes were read; producer status records any observed pending work',
-              },
-            }),
+                pendingEvidence: {
+                  included: false,
+                  reason:
+                    'only persisted file prefixes were read; producer status records any observed pending work',
+                },
+              };
+            },
             body.documentHandoff as DocumentHandoffCoverage | undefined,
             host.data,
           ),

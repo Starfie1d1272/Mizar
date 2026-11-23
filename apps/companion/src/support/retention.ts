@@ -19,7 +19,53 @@ export interface SegmentMetadata {
   lastSequence: number | null;
   firstObservedAt: string | null;
   lastObservedAt: string | null;
+  /** True maximum event upper bound matching archive-worker range filtering, or null if unknown/unbounded. */
+  maxObservedAt?: string | null;
   records: number;
+}
+
+/** Compute the provable timestamp upper bound of a sealed segment, matching archive-worker range semantics. */
+export function segmentMaxObservedAt(events: readonly Record<string, unknown>[]): string | null {
+  if (!events.length) return null;
+  let max = -Infinity;
+  const addTime = (value: unknown): boolean => {
+    const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+    if (!Number.isFinite(ms)) return false;
+    if (ms > max) max = ms;
+    return true;
+  };
+  for (const event of events) {
+    if ((event.kind ?? event.stage) === 'cs2_console_records') return null;
+    const interval =
+      event.sourceInterval &&
+      typeof event.sourceInterval === 'object' &&
+      !Array.isArray(event.sourceInterval)
+        ? (event.sourceInterval as Record<string, unknown>)
+        : null;
+    if (interval) {
+      if (!addTime(interval.to)) return null;
+      continue;
+    }
+    const evidence =
+      event.evidence && typeof event.evidence === 'object' && !Array.isArray(event.evidence)
+        ? (event.evidence as Record<string, unknown>)
+        : null;
+    if (Array.isArray(evidence?.samples) && evidence.samples.length) {
+      const sampleTimes = (evidence.samples as unknown[])
+        .map((sample) =>
+          sample && typeof sample === 'object'
+            ? Date.parse(String((sample as Record<string, unknown>).time ?? ''))
+            : NaN,
+        )
+        .filter(Number.isFinite);
+      if (sampleTimes.length) {
+        for (const ms of sampleTimes) if (ms > max) max = ms;
+        continue;
+      }
+    }
+    if (!addTime(event.observedAt ?? event.time ?? event.recordedAt)) return null;
+  }
+  return Number.isFinite(max) ? new Date(max).toISOString() : null;
 }
 export interface RetainedSegment extends SegmentMetadata {
   name: string;

@@ -15,7 +15,78 @@ import type { ArchiveWorkerData } from './archive-worker.js';
 const currentProcessLogs = /^(?:supervisor\.ndjson|companion(?:\.stderr)?\.log)(?:\.[0-9]+)?$/;
 const CACHE_LIMIT = 256 * 1024 * 1024;
 const MANIFEST_RESERVE = 1024 * 1024;
+const INDEX_READ_MAX = 4 * 1024 * 1024;
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+
+async function openSafeRead(directory: string, name: string, maxBytes: number) {
+  const path = await safePath(directory, name);
+  const before = await lstat(path);
+  if (!before.isFile() || before.nlink !== 1 || before.size > maxBytes)
+    throw new Error('source_unsafe_or_oversize');
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = await handle.stat();
+    if (
+      stat.ino !== before.ino ||
+      stat.dev !== before.dev ||
+      stat.nlink !== 1 ||
+      stat.size > maxBytes
+    )
+      throw new Error('source_changed');
+    return { handle, stat };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readExcludedByRange(logsDir: string, rangeStart: number): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  if (!Number.isFinite(rangeStart)) return excluded;
+  const readJson = async (dir: string, name: string) => {
+    let handle: FileHandle | undefined;
+    try {
+      ({ handle } = await openSafeRead(dir, name, INDEX_READ_MAX));
+      return JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
+    } catch {
+      return null;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  };
+  const [companion, perf, delivery] = await Promise.all([
+    readJson(logsDir, 'retention-companion.json'),
+    readJson(logsDir, 'retention-performance.json'),
+    readJson(join(logsDir, 'diagnostic-outbox'), 'state.json'),
+  ]);
+  for (const inv of [companion, perf]) {
+    if (!Array.isArray(inv?.segments)) continue;
+    for (const s of inv.segments as { name?: unknown; maxObservedAt?: unknown }[]) {
+      if (
+        typeof s?.name === 'string' &&
+        typeof s.maxObservedAt === 'string' &&
+        Date.parse(s.maxObservedAt) < rangeStart
+      )
+        excluded.add(s.name);
+    }
+  }
+  if (Array.isArray(delivery?.queue)) {
+    for (const b of delivery.queue as {
+      id?: unknown;
+      index?: { to?: unknown; sourceTimeUnknownRecords?: unknown; stages?: unknown };
+    }[]) {
+      if (
+        typeof b?.id === 'string' &&
+        typeof b.index?.to === 'string' &&
+        b.index.sourceTimeUnknownRecords === 0 &&
+        (!Array.isArray(b.index.stages) || !b.index.stages.includes('cs2_console_records')) &&
+        Date.parse(b.index.to) < rangeStart
+      )
+        excluded.add(`diagnostic-outbox/${b.id}.gz`);
+    }
+  }
+  return excluded;
+}
 /** Own only the lease created by this cleanup attempt, never a native saver or peer. */
 async function removeExpiredExport(path: string, directory: Stats): Promise<boolean> {
   const leasePath = join(path, 'saving.lease');
@@ -305,23 +376,16 @@ export class SupportExports {
       jsonAttachment = false,
     ) => {
       try {
-        const path = await safePath(directory, name);
-        const before = await lstat(path);
-        if (
-          !before.isFile() ||
-          before.nlink !== 1 ||
-          before.size > (jsonAttachment ? 128 * 1024 : 64 * 1024 * 1024)
-        )
-          throw new Error('source_unsafe_or_oversize');
-        const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        const { handle, stat } = await openSafeRead(
+          directory,
+          name,
+          jsonAttachment ? 128 * 1024 : 64 * 1024 * 1024,
+        );
         handles.push(handle);
-        const actual = await handle.stat();
-        if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink !== 1)
-          throw new Error('source_changed');
         return {
           name: prefix + name,
           fd: handle.fd,
-          bytes: actual.size,
+          bytes: stat.size,
           rawIndex,
           rawAttachment,
           jsonAttachment,
@@ -330,9 +394,19 @@ export class SupportExports {
         gap(prefix + name, 'read', error);
       }
     };
+    const excludedSources: { source: string; reason: string }[] = [];
+    const rangeStart = range.from ? Date.parse(range.from) : NaN;
+    const excludedByRange = await readExcludedByRange(this.logs, rangeStart);
     const addSource = (source: (typeof sources)[number] | undefined) => {
       if (source) sources.push(source);
     };
+    const filterByRange = (names: readonly string[], prefix = '') =>
+      names.filter((name) => {
+        const key = prefix + name;
+        if (!excludedByRange.has(key)) return true;
+        excludedSources.push({ source: key, reason: 'outside-requested-range; original retained' });
+        return false;
+      });
     const captureBatch = async (
       names: readonly string[],
       captureSource: (name: string) => ReturnType<typeof capture>,
@@ -383,8 +457,10 @@ export class SupportExports {
             cause: host,
           });
         await captureBatch(
-          names.filter(
-            (name) => diagnosticSegmentPattern.test(name) || currentProcessLogs.test(name),
+          filterByRange(
+            names.filter(
+              (name) => diagnosticSegmentPattern.test(name) || currentProcessLogs.test(name),
+            ),
           ),
           (name) => capture(this.logs, name, '', false, currentProcessLogs.test(name)),
         );
@@ -410,7 +486,10 @@ export class SupportExports {
         try {
           const directory = await safePath(join(this.logs, folder));
           await captureBatch(
-            (await readdir(directory)).filter((name) => pattern.test(name)).sort(),
+            filterByRange(
+              (await readdir(directory)).filter((name) => pattern.test(name)).sort(),
+              folder + '/',
+            ),
             (name) => capture(directory, name, folder + '/'),
           );
         } catch (error) {
@@ -456,22 +535,37 @@ export class SupportExports {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') gap('observer', 'enumerate', error);
       }
-      const nativeObs = await collectObsNativeEvidence({
-        includeRelatedLogs: true,
-        retainRelatedLog: async (source) => {
-          handles.push(source.handle);
-          sources.push({
-            name: `attachments/obs/${source.name}`,
-            fd: source.handle.fd,
-            bytes: source.bytes,
-            rawAttachment: true,
-            secrets: [...source.secrets],
-          });
-        },
-      }).catch((error: unknown) => {
-        gap('obs', 'collect', error);
-        return { status: 'unavailable' };
-      });
+      const maxLogAgeMs = Number.isFinite(rangeStart)
+        ? Math.min(14 * 86_400_000, Math.max(24 * 3_600_000, Date.now() - rangeStart + 60_000))
+        : 14 * 86_400_000;
+      const [nativeObs, resolvedSnapshot, frameRateLive] = await Promise.all([
+        collectObsNativeEvidence({
+          includeRelatedLogs: true,
+          maxLogAgeMs,
+          retainRelatedLog: async (source) => {
+            handles.push(source.handle);
+            sources.push({
+              name: `attachments/obs/${source.name}`,
+              fd: source.handle.fd,
+              bytes: source.bytes,
+              rawAttachment: true,
+              secrets: [...source.secrets],
+            });
+          },
+        }).catch((error: unknown) => {
+          gap('obs', 'collect', error);
+          return { status: 'unavailable' };
+        }),
+        typeof snapshot === 'function'
+          ? Promise.resolve()
+              .then(() => snapshot())
+              .catch((error: unknown) => {
+                gap('snapshot', 'collect', error);
+                return { status: 'unavailable' };
+              })
+          : Promise.resolve(snapshot),
+        this.frameRateSnapshot(gap),
+      ]);
       this.assertActive(job);
       const asOf = new Date().toISOString();
       const vector = {
@@ -485,17 +579,9 @@ export class SupportExports {
         host: { clientReported: true, state: host ?? null },
         sources: sources.map(({ name, bytes }) => ({ name, bytes })),
         current: {
-          snapshot:
-            typeof snapshot === 'function'
-              ? await Promise.resolve()
-                  .then(() => snapshot())
-                  .catch((error: unknown) => {
-                    gap('snapshot', 'collect', error);
-                    return { status: 'unavailable' };
-                  })
-              : snapshot,
+          snapshot: resolvedSnapshot,
           nativeObs,
-          frameRateLive: await this.frameRateSnapshot(gap),
+          frameRateLive,
         },
         unknown: [
           'cross-process snapshot is not atomic',
@@ -520,6 +606,7 @@ export class SupportExports {
           workerData: {
             sources,
             gaps,
+            excludedSources,
             output,
             exportId: job.exportId,
             range,
@@ -645,19 +732,9 @@ export class SupportExports {
     let file: FileHandle | undefined;
     try {
       const directory = await safePath(join(dirname(this.logs), 'data'));
-      const path = await safePath(directory, name);
-      const before = await lstat(path);
-      if (!before.isFile() || before.nlink !== 1 || before.size > 4096)
-        throw new Error('frame_rate_source_unsafe');
-      file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const stat = await file.stat();
-      if (
-        stat.ino !== before.ino ||
-        stat.dev !== before.dev ||
-        stat.nlink !== 1 ||
-        stat.size !== before.size
-      )
-        throw new Error('frame_rate_source_changed');
+      const opened = await openSafeRead(directory, name, 4096);
+      file = opened.handle;
+      const stat = opened.stat;
       const value = JSON.parse(
         await file.readFile('utf8'),
         (key: string, item: unknown, context?: { source?: string }) =>

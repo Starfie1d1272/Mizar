@@ -1,6 +1,6 @@
 import { isDocumentDiagnosticEvent, type DiagnosticEvent } from '@mizar/protocol';
 import { diagnosticSegmentNames } from './segments.js';
-import { ProducerRetention, type IncidentParticipant } from './retention.js';
+import { ProducerRetention, segmentMaxObservedAt, type IncidentParticipant } from './retention.js';
 import { diagnosticEnvelope, diagnosticSourceUtc } from './envelope.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { diagnosticValue } from './diagnostic-value.js';
@@ -521,6 +521,7 @@ export class SessionJournal {
           lastSequence: events.at(-1)!.journal?.sequence ?? events.at(-1)!.sequence,
           firstObservedAt: events[0].observedAt,
           lastObservedAt: events.at(-1)!.observedAt,
+          maxObservedAt: segmentMaxObservedAt(events),
           records: events.length,
         });
       } catch {
@@ -557,6 +558,7 @@ export class SessionJournal {
       lastSequence: events.at(-1)?.journal?.sequence ?? events.at(-1)?.sequence ?? null,
       firstObservedAt: events[0]?.observedAt ?? null,
       lastObservedAt: events.at(-1)?.observedAt ?? null,
+      maxObservedAt: segmentMaxObservedAt(events),
       records: events.length,
     });
     // Only critical records occupy protected segments; ordinary observations
