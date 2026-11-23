@@ -215,6 +215,28 @@ describe('program director results, recovery, and OBS transition readback', () =
     const staleMap1 = makeProj(finalSeries, 'de_inferno', 'gameover', 1, 102, 13, 11, 'stale');
     expect(completedMapResult(staleMap1)).toBeUndefined();
     expect(hasFrozenMapResult(staleMap1, presentationStore.get())).toBe(false);
+    // Final map with cleared currentMapOrder resolves when it matches program.map.name.
+    expect(
+      completedMapResult(makeProj(finalSeries, 'de_anubis', 'gameover', 2, 102, 13, 7))?.mapOrder,
+    ).toBe(2);
+    // An uncompleted roundHistory.mapOrder must not shadow an already-completed map when currentMapOrder is null.
+    const uncompletedHistorySeries = {
+      ...finalSeries,
+      maps: finalSeries.maps.map((m) =>
+        m.mapOrder === 2 ? { ...m, status: 'current' as const, finalScore: null } : m,
+      ),
+      roundHistory: { mapOrder: 2, completeness: 'partial' as const, rounds: [] },
+    };
+    expect(
+      completedMapResult(
+        makeProj(uncompletedHistorySeries, 'de_inferno', 'gameover', 1, 102, 13, 11),
+      )?.mapOrder,
+    ).toBe(1);
+    expect(
+      completedMapResult(
+        makeProj(uncompletedHistorySeries, 'de_anubis', 'gameover', 2, 102, 12, 12),
+      ),
+    ).toBeUndefined();
 
     rig.state.now = 2000;
     await rig.director.tick();

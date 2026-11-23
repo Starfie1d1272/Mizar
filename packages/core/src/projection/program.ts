@@ -381,7 +381,6 @@ export function completedSeriesMapForProgram(
   if (!series || program.map.phase !== 'gameover') return undefined;
   const targetOrder =
     series.currentMapOrder ??
-    series.roundHistory?.mapOrder ??
     [...series.maps].reverse().find((map) => map.status === 'completed')?.mapOrder ??
     null;
   if (targetOrder === null) return undefined;

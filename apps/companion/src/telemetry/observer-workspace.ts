@@ -434,7 +434,13 @@ export function registerWorkspaceObserver(
   let hostLease = 0;
   // This is a capability for the accepted Host intent, not another process owner.
   let lease:
-    | { token: string; recoveryUsed: boolean; stallRecoveryUsed: boolean; recovering: boolean }
+    | {
+        token: string;
+        recoveryUsed: boolean;
+        stallRecoveryUsed: boolean;
+        stallRecoveredReceiveMs?: number | undefined;
+        recovering: boolean;
+      }
     | undefined;
   const acceptLease = () => {
     hostLease = performance.now();
@@ -978,6 +984,21 @@ export function registerWorkspaceObserver(
             : Math.max(0, performance.now() - health.lastReceiveMonotonicMs);
         const expired =
           !lease.recovering && (age > HOST_LEASE_MS || view.stopReason === 'lease-expired');
+        if (
+          !expired &&
+          lease.stallRecoveryUsed &&
+          !lease.recovering &&
+          view.active &&
+          !view.stopReason &&
+          !view.failed &&
+          health.state === 'live' &&
+          !health.normalDrain &&
+          health.lastReceiveMonotonicMs !== undefined &&
+          health.lastReceiveMonotonicMs !== lease.stallRecoveredReceiveMs
+        ) {
+          lease.stallRecoveryUsed = false;
+          lease.stallRecoveredReceiveMs = undefined;
+        }
         const stalled =
           !expired &&
           !lease.recovering &&
@@ -1003,7 +1024,10 @@ export function registerWorkspaceObserver(
             return { ok: true, enabled: false };
           }
           if (expired) lease.recoveryUsed = true;
-          else lease.stallRecoveryUsed = true;
+          else {
+            lease.stallRecoveryUsed = true;
+            lease.stallRecoveredReceiveMs = health.lastReceiveMonotonicMs;
+          }
           lease.recovering = true;
           const accepted = lease;
           const value = host!;
