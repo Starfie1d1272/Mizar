@@ -39,6 +39,7 @@ async function rig() {
     collection: '个人',
     scene: 'personal-program',
     output: false,
+    failVirtualCamStatus: false,
     marker: undefined as unknown,
     inputListReads: 0,
     inputs: [] as { inputUuid: string; inputName: string; inputKind: string }[],
@@ -63,6 +64,8 @@ async function rig() {
       if (type === 'GetVideoSettings') return { ...state.video };
       if (type === 'GetProfileList') return { currentProfileName: '个人' };
       if (type === 'SetVideoSettings') Object.assign(state.video, data);
+      if (type === 'GetVirtualCamStatus' && state.failVirtualCamStatus)
+        throw new Error('virtualcam status unavailable');
       if (
         [
           'GetStreamStatus',
@@ -639,6 +642,22 @@ it('returns structured preview reasons, deduplicates preview diagnostics, and wa
   await vi.waitFor(() => {
     expect(f.state.calls).toContain('PressInputPropertiesButton');
   });
+
+  // Unknown extra output stays silent, then wakes browser recovery via refresh() readback with zero OBS events.
+  f.state.failVirtualCamStatus = true;
+  const readbackAdapter = new ObsAdapter(f.store, 'http://127.0.0.1:3000');
+  cleanups.push(() => readbackAdapter.close());
+  await readbackAdapter.outputStatus(false);
+  f.state.calls.length = 0;
+  readbackAdapter.startBrowserRecovery(() => true);
+  await new Promise((r) => setTimeout(r, 30));
+  expect(f.state.calls).not.toContain('PressInputPropertiesButton');
+  f.state.failVirtualCamStatus = false;
+  await readbackAdapter.outputStatus(false);
+  await vi.waitFor(() => {
+    expect(f.state.calls).toContain('PressInputPropertiesButton');
+  });
+  await readbackAdapter.close();
 
   // Preview reports structured reasons and deduplicates repeated failures.
   expect((await adapter.confidencePreview()).preview?.scene).toBe('赛前等待');
