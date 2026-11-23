@@ -123,6 +123,14 @@ pub(crate) fn check_preparation(app: &tauri::AppHandle, id: Option<&str>) -> Res
     app.state::<PreparationGate>().check(id)
 }
 
+pub(crate) fn cancel_preparation(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    app.state::<PreparationGate>().cancel(id)
+}
+
+pub(crate) fn retire_preparation(app: &tauri::AppHandle, id: &str) {
+    app.state::<PreparationGate>().retire(id);
+}
+
 pub(crate) fn preparation_ticket(app: &tauri::AppHandle, id: &str) -> Result<u64, String> {
     app.state::<crate::host_state::HostState>()
         .entry_ticket

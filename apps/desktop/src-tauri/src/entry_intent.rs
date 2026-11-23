@@ -177,7 +177,9 @@ mod tests {
         let gate = PreparationGate::default();
         let doc = intent.generation().unwrap();
 
-        intent.begin_with_gate(Some(&gate), "id-0".into(), &doc).unwrap();
+        assert!(intent
+            .begin_with_gate(Some(&gate), "id-0".into(), &doc)
+            .is_ok());
         assert!(intent.cancel("id-0").is_ok());
         assert!(intent.commit("id-0", false, || Ok(())).is_err());
         intent.finish("id-0");
@@ -185,10 +187,10 @@ mod tests {
 
         for i in 1..=300 {
             let id = format!("id-{i}");
-            intent.begin_with_gate(Some(&gate), id.clone(), &doc).unwrap();
+            assert!(intent.begin_with_gate(Some(&gate), id.clone(), &doc).is_ok());
             // Task cancel after handoff must not pollute pre-cancel history.
-            let (matched, ()) = intent.cancel_with(&id, || Ok(()), |_| false).unwrap();
-            assert!(matched);
+            let cancelled = intent.cancel_with(&id, || Ok(()), |_| false);
+            assert!(cancelled.unwrap().0);
             intent.finish(&id);
             gate.retire(&id);
         }

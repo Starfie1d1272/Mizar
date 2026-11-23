@@ -145,7 +145,7 @@ impl CancellationOwner {
             }
         }
         if retired {
-            self.app.state::<preparation_gate::PreparationGate>().retire(&self.id);
+            preparation_gate::retire_preparation(&self.app, &self.id);
         }
         flight.complete(outcome);
     }
@@ -195,7 +195,7 @@ fn mark_run_finished(app: &tauri::AppHandle, id: &str) {
         }
     }
     if retired {
-        app.state::<preparation_gate::PreparationGate>().retire(id);
+        preparation_gate::retire_preparation(app, id);
     }
 }
 // Only the in-flight OBS ensure request is cancellable; cleanup requests must finish.
@@ -1096,7 +1096,7 @@ fn request_retirement() -> Option<String> {
 /// A successful native workspace exit retires its preparation owner for every caller.
 pub(crate) fn retire_after_exit(app: &tauri::AppHandle) {
     if let Some(id) = request_retirement() {
-        app.state::<preparation_gate::PreparationGate>().retire(&id);
+        preparation_gate::retire_preparation(app, &id);
     }
     if let Ok(mut active) = OBS_REQUEST.lock() {
         if let Some((_, stream)) = active.take() {
@@ -1296,7 +1296,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                     let host = app.clone();
                     let id = preparation_id.clone();
                     tauri::async_runtime::spawn_blocking(move || {
-                        host.state::<preparation_gate::PreparationGate>().cancel(&id)
+                        preparation_gate::cancel_preparation(&host, &id)
                     })
                     .await
                     .map_err(|_| "取消准备未完成。")??;
@@ -1365,10 +1365,10 @@ pub(crate) async fn cancel_entry(
     entry_id: Option<String>,
 ) -> Result<(), String> {
     let task = if let Some(id) = &entry_id {
-        app.state::<preparation_gate::PreparationGate>().cancel(id)?;
-        let (matched, task) = app
-            .state::<EntryIntent>()
-            .cancel_with(id, snapshot, |task| task.as_ref().is_none_or(|t| t.id != *id))?;
+        preparation_gate::cancel_preparation(&app, id)?;
+        let intent = app.state::<EntryIntent>();
+        let is_pre_cancel = |task: &Option<Task>| task.as_ref().is_none_or(|t| t.id != *id);
+        let (matched, task) = intent.cancel_with(id, snapshot, is_pre_cancel)?;
         if !matched && task.as_ref().is_some_and(|task| task.id != *id) {
             return Err("准备任务已变化，请重新取消。".into());
         }
@@ -1674,27 +1674,26 @@ pub(crate) async fn enter(
                 }
                 return present_entry(&app, &preparation_id, ticket, &expected_url);
             }
-            let retired_ids = app
-                .state::<preparation_gate::PreparationGate>()
-                .commit(Some(&preparation_id), || {
-                    app.state::<production_exit::ExitGate>().commit(ticket, || {
-                        app.state::<EntryIntent>()
-                            .commit(&preparation_id, true, || {
-                                preparation_start(
-                                    window,
-                                    app.clone(),
-                                    preparation_id.clone(),
-                                    view.revision,
-                                    preserve_settings,
-                                    external_pid,
-                                    external_created,
-                                    ticket,
-                                )
-                            })
-                    })
-                })?;
+            let gate = app.state::<preparation_gate::PreparationGate>();
+            let retired_ids = gate.commit(Some(&preparation_id), || {
+                app.state::<production_exit::ExitGate>().commit(ticket, || {
+                    app.state::<EntryIntent>()
+                        .commit(&preparation_id, true, || {
+                            preparation_start(
+                                window,
+                                app.clone(),
+                                preparation_id.clone(),
+                                view.revision,
+                                preserve_settings,
+                                external_pid,
+                                external_created,
+                                ticket,
+                            )
+                        })
+                })
+            })?;
             for old_id in retired_ids {
-                app.state::<preparation_gate::PreparationGate>().retire(&old_id);
+                preparation_gate::retire_preparation(&app, &old_id);
             }
             Ok(())
         })
@@ -1704,7 +1703,7 @@ pub(crate) async fn enter(
     .and_then(|result| result);
     intent_app.state::<EntryIntent>().finish(&intent_id);
     if snapshot().ok().flatten().is_none_or(|task| task.id != intent_id) {
-        intent_app.state::<preparation_gate::PreparationGate>().retire(&intent_id);
+        preparation_gate::retire_preparation(&intent_app, &intent_id);
     }
     result
 }
