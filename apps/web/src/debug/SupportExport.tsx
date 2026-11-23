@@ -142,7 +142,9 @@ export function SupportExport() {
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const rangeRef = useRef('');
-  rangeRef.current = `${from}\0${to}`;
+  useEffect(() => {
+    rangeRef.current = `${from}\0${to}`;
+  }, [from, to]);
   const [readyJob, setReadyJob] = useState<ReadyExport | null>(null);
   const hasReadyJob = readyJob !== null;
   const [result, setResult] = useState<{ error: boolean; message: string } | null>(null);
