@@ -202,15 +202,14 @@ export function ObserverHints() {
               ? '正在连接提前提示'
               : observer?.state === 'paused'
                 ? '比赛暂停'
-                : observer?.waitingReason === 'source-disconnected'
-                  ? 'GoTV 观察连接已断开'
-                  : observer?.waitingReason === 'program-stale'
-                    ? '正在等待节目端比赛数据…'
-                    : observer?.waitingReason === 'source-map-mismatch'
-                      ? 'GoTV 与当前节目地图不一致'
-                      : observer?.waitingReason === 'source-execution-ahead'
-                        ? '等待节目对齐新对局…'
-                        : '正在接收比赛数据…'}
+                : ((
+                    {
+                      'source-disconnected': 'GoTV 观察连接已断开',
+                      'program-stale': '正在等待节目端比赛数据…',
+                      'source-map-mismatch': 'GoTV 与当前节目地图不一致',
+                      'source-execution-ahead': '等待节目对齐新对局…',
+                    } as Record<string, string>
+                  )[observer?.waitingReason ?? ''] ?? '正在接收比赛数据…')}
         </StatusPill>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
