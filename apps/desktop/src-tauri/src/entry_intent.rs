@@ -25,6 +25,18 @@ impl EntryIntent {
     pub(crate) fn try_generation(&self) -> Option<u64> {
         self.0.try_lock().ok().map(|state| state.document)
     }
+    fn begin_with_gate(
+        &self,
+        gate: Option<&crate::preparation_gate::PreparationGate>,
+        id: String,
+        document: &str,
+    ) -> Result<(), String> {
+        // Keep lock order consistent with PreparationGate::commit -> EntryIntent::commit.
+        if let Some(gate) = gate {
+            return gate.register_with(id.clone(), || self.begin(id, document));
+        }
+        self.begin(id, document)
+    }
     fn begin(&self, id: String, document: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
         if document != state.document.to_string() {
@@ -45,6 +57,7 @@ impl EntryIntent {
         &self,
         id: &str,
         read: impl FnOnce() -> Result<T, String>,
+        record_pre_cancel: impl FnOnce(&T) -> bool,
     ) -> Result<(bool, T), String> {
         let mut state = self.0.lock().map_err(|_| "进入状态不可用。")?;
         let matched = if let Some((active, cancelled)) = state.active.as_mut() {
@@ -57,16 +70,20 @@ impl EntryIntent {
         } else {
             false
         };
-        if !matched && !state.cancelled.iter().any(|existing| existing == id) {
+        let value = read()?;
+        if !matched
+            && record_pre_cancel(&value)
+            && !state.cancelled.iter().any(|existing| existing == id)
+        {
             if state.cancelled.len() >= MAX_ENTRY_CANCELLED_IDS {
                 state.cancelled.pop_front();
             }
             state.cancelled.push_back(id.to_owned());
         }
-        Ok((matched, read()?))
+        Ok((matched, value))
     }
     pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
-        self.cancel_with(id, || Ok(())).map(|_| ())
+        self.cancel_with(id, || Ok(()), |_| true).map(|_| ())
     }
     pub(crate) fn finish(&self, id: &str) {
         if let Ok(mut state) = self.0.lock() {
@@ -142,5 +159,42 @@ pub(crate) fn begin(
     {
         return Err("进入请求无效。".into());
     }
-    app.state::<EntryIntent>().begin(intent_id, &document)
+    app.state::<EntryIntent>().begin_with_gate(
+        Some(app.state::<crate::preparation_gate::PreparationGate>().inner()),
+        intent_id,
+        &document,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EntryIntent;
+    use crate::preparation_gate::PreparationGate;
+
+    #[test]
+    fn active_intent_and_gate_reject_stale_and_replaced_commits_across_300_cancels() {
+        let intent = EntryIntent::default();
+        let gate = PreparationGate::default();
+        let doc = intent.generation().unwrap();
+
+        intent.begin_with_gate(Some(&gate), "id-0".into(), &doc).unwrap();
+        assert!(intent.cancel("id-0").is_ok());
+        assert!(intent.commit("id-0", false, || Ok(())).is_err());
+        intent.finish("id-0");
+        gate.retire("id-0");
+
+        for i in 1..=300 {
+            let id = format!("id-{i}");
+            intent.begin_with_gate(Some(&gate), id.clone(), &doc).unwrap();
+            // Task cancel after handoff must not pollute pre-cancel history.
+            let (matched, ()) = intent.cancel_with(&id, || Ok(()), |_| false).unwrap();
+            assert!(matched);
+            intent.finish(&id);
+            gate.retire(&id);
+        }
+
+        assert!(intent.commit("id-0", false, || Ok(())).is_err());
+        assert!(gate.commit(Some("id-0"), || Ok(())).is_err());
+        assert!(intent.begin("stale".into(), "999").is_err());
+    }
 }

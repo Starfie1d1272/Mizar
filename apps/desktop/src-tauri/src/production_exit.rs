@@ -529,7 +529,7 @@ pub(crate) async fn finish_workspace(
     diagnostic_operation_id: Option<String>,
     diagnostic_task_id: Option<String>,
     diagnostic_trigger: Option<String>,
-    retire_preparation: fn(),
+    retire_preparation: fn(&tauri::AppHandle),
 ) -> Result<(), String> {
     let diagnostic_log = app.state::<DesktopLog>().inner().clone();
     let command_log = diagnostic_log.clone();
@@ -618,7 +618,7 @@ pub(crate) async fn finish_workspace(
         });
         workspace_presentation::refresh_finished_window_feedback(&host, &cs2);
         drop(cs2);
-        if native_game_finished { retire_preparation(); }
+        if native_game_finished { retire_preparation(&host); }
         feedback.stage(WorkspaceExitStage::Presentation);
         // Retry presentation after cleanup; an earlier transient window failure
         // must not prevent returning to preparation once the game is finished.

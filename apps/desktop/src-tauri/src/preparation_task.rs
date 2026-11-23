@@ -116,6 +116,7 @@ fn retire_ready(task: &Task) -> bool {
         && (task.entered() || task.video_transaction.is_none())
 }
 struct CancellationOwner {
+    app: tauri::AppHandle,
     id: String,
     flight: Option<Arc<CancellationFlight>>,
 }
@@ -124,6 +125,7 @@ impl CancellationOwner {
         let Some(flight) = self.flight.take() else {
             return;
         };
+        let mut retired = false;
         if let Ok(mut state) = TASK.lock() {
             if let Some(task) = state.as_mut().filter(|task| {
                 task.id == self.id
@@ -138,8 +140,12 @@ impl CancellationOwner {
                 task.cancellation = None;
                 if retire_ready(task) {
                     *state = None;
+                    retired = true;
                 }
             }
+        }
+        if retired {
+            self.app.state::<preparation_gate::PreparationGate>().retire(&self.id);
         }
         flight.complete(outcome);
     }
@@ -174,7 +180,8 @@ fn claim_cancellation(id: &str) -> Result<CancellationClaim, String> {
     task.cancellation = Some(flight.clone());
     Ok(CancellationClaim::Start(flight))
 }
-fn mark_run_finished(id: &str) {
+fn mark_run_finished(app: &tauri::AppHandle, id: &str) {
+    let mut retired = false;
     if let Ok(mut state) = TASK.lock() {
         if let Some(task) = state.as_mut().filter(|task| task.id == id) {
             task.running = false;
@@ -183,8 +190,12 @@ fn mark_run_finished(id: &str) {
             }
             if retire_ready(task) {
                 *state = None;
+                retired = true;
             }
         }
+    }
+    if retired {
+        app.state::<preparation_gate::PreparationGate>().retire(id);
     }
 }
 // Only the in-flight OBS ensure request is cancellable; cleanup requests must finish.
@@ -1066,22 +1077,27 @@ fn spawn(app: tauri::AppHandle, id: String) {
                 json!({"entered":task.entered(),"obs":task.obs,"gsi":task.gsi,"capture":task.capture,"camera":task.camera,"message":task.message}),
             );
         }
-        mark_run_finished(&id);
+        mark_run_finished(&app, &id);
     });
 }
-fn request_retirement() {
+fn request_retirement() -> Option<String> {
     if let Ok(mut state) = TASK.lock() {
         if let Some(task) = state.as_mut() {
             task.retire_requested = true;
             if retire_ready(task) {
+                let id = task.id.clone();
                 *state = None;
+                return Some(id);
             }
         }
     }
+    None
 }
 /// A successful native workspace exit retires its preparation owner for every caller.
-pub(crate) fn retire_after_exit() {
-    request_retirement();
+pub(crate) fn retire_after_exit(app: &tauri::AppHandle) {
+    if let Some(id) = request_retirement() {
+        app.state::<preparation_gate::PreparationGate>().retire(&id);
+    }
     if let Ok(mut active) = OBS_REQUEST.lock() {
         if let Some((_, stream)) = active.take() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -1097,7 +1113,7 @@ fn preparation_start(
     external_pid: Option<u32>,
     external_created: Option<String>,
     ticket: u64,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     if window.label() != "main" {
         return Err("请在准备中心启动工作台。".into());
     }
@@ -1115,6 +1131,7 @@ fn preparation_start(
         _ => return Err("游戏实例标识不完整。".into()),
     };
     let mut state = TASK.lock().map_err(|_| "准备状态不可用。")?;
+    let mut retired_ids = Vec::new();
     // This entry path has already read Companion in preparation mode. An
     // entered task from a previous revision no longer owns the new entry.
     // Native launch and recovery still verify their own persisted ownership.
@@ -1124,7 +1141,9 @@ fn preparation_start(
             && task.cancellation.is_none()
             && task.revision != expected_revision
     }) {
-        *state = None;
+        if let Some(stale) = state.take() {
+            retired_ids.push(stale.id);
+        }
     }
     if let Some(existing) = state.as_mut() {
         if existing.retire_requested || existing.cancellation.is_some() {
@@ -1141,7 +1160,7 @@ fn preparation_start(
             app.state::<production_exit::ExitGate>()
                 .check_ticket(preparation_gate::preparation_ticket(&app, &existing.id)?)?;
             if existing.running {
-                return Ok(());
+                return Ok(retired_ids);
             }
             existing.preserve = preserve_settings;
             existing.running = true;
@@ -1150,7 +1169,7 @@ fn preparation_start(
             drop(state);
             publish(&app, &id, "正在重试准备…".into());
             spawn(app, id);
-            return Ok(());
+            return Ok(retired_ids);
         }
         if existing.running {
             return Err("原准备任务正在取消，请稍后重试。".into());
@@ -1159,15 +1178,15 @@ fn preparation_start(
             return Err("原准备任务取消或恢复未确认，请重试取消。".into());
         }
     }
-    let retired_id = state.as_ref().map(|task| task.id.clone());
+    if let Some(old) = state.as_ref() {
+        if old.id != preparation_id {
+            retired_ids.push(old.id.clone());
+        }
+    }
     *app.state::<HostState>()
         .entry_ticket
         .lock()
         .map_err(|_| "启动状态不可用。")? = Some((preparation_id.clone(), ticket));
-    if let Some(old_id) = retired_id.filter(|old_id| old_id != &preparation_id) {
-        app.state::<preparation_gate::PreparationGate>()
-            .retire(&old_id);
-    }
     *state = Some(Task {
         id: preparation_id.clone(),
         revision: expected_revision,
@@ -1192,7 +1211,7 @@ fn preparation_start(
     });
     drop(state);
     spawn(app, preparation_id);
-    Ok(())
+    Ok(retired_ids)
 }
 // The authenticated Host sends this only for its active game preparation. The
 // Companion checks the same entry identity, revision and cancellation owner.
@@ -1255,6 +1274,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
             let job_flight = flight.clone();
             tauri::async_runtime::spawn(async move {
                 let mut owner = CancellationOwner {
+                    app: app.clone(),
                     id: preparation_id.clone(),
                     flight: Some(job_flight),
                 };
@@ -1276,7 +1296,7 @@ async fn preparation_cancel(app: tauri::AppHandle, preparation_id: String) -> Re
                     let host = app.clone();
                     let id = preparation_id.clone();
                     tauri::async_runtime::spawn_blocking(move || {
-                        host.state::<preparation_gate::PreparationGate>().cancel(id)
+                        host.state::<preparation_gate::PreparationGate>().cancel(&id)
                     })
                     .await
                     .map_err(|_| "取消准备未完成。")??;
@@ -1345,9 +1365,10 @@ pub(crate) async fn cancel_entry(
     entry_id: Option<String>,
 ) -> Result<(), String> {
     let task = if let Some(id) = &entry_id {
-        app.state::<preparation_gate::PreparationGate>()
-            .cancel(id.clone())?;
-        let (matched, task) = app.state::<EntryIntent>().cancel_with(id, snapshot)?;
+        app.state::<preparation_gate::PreparationGate>().cancel(id)?;
+        let (matched, task) = app
+            .state::<EntryIntent>()
+            .cancel_with(id, snapshot, |task| task.as_ref().is_none_or(|t| t.id != *id))?;
         if !matched && task.as_ref().is_some_and(|task| task.id != *id) {
             return Err("准备任务已变化，请重新取消。".into());
         }
@@ -1653,7 +1674,8 @@ pub(crate) async fn enter(
                 }
                 return present_entry(&app, &preparation_id, ticket, &expected_url);
             }
-            app.state::<preparation_gate::PreparationGate>()
+            let retired_ids = app
+                .state::<preparation_gate::PreparationGate>()
                 .commit(Some(&preparation_id), || {
                     app.state::<production_exit::ExitGate>().commit(ticket, || {
                         app.state::<EntryIntent>()
@@ -1670,12 +1692,19 @@ pub(crate) async fn enter(
                                 )
                             })
                     })
-                })
+                })?;
+            for old_id in retired_ids {
+                app.state::<preparation_gate::PreparationGate>().retire(&old_id);
+            }
+            Ok(())
         })
     })
     .await
     .map_err(|_| "进入工作台未完成。".to_string())
     .and_then(|result| result);
     intent_app.state::<EntryIntent>().finish(&intent_id);
+    if snapshot().ok().flatten().is_none_or(|task| task.id != intent_id) {
+        intent_app.state::<preparation_gate::PreparationGate>().retire(&intent_id);
+    }
     result
 }
