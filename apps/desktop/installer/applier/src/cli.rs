@@ -9,7 +9,6 @@ pub enum ExitCode {
     WriterBusy = 10,
     AppRunning = 11,
     PayloadInvalid = 12,
-    ResourcesFailed = 13,
     IoError = 14,
     Cancelled = 15,
     RolledBack = 16,
@@ -23,7 +22,6 @@ impl ExitCode {
             Self::WriterBusy => "writer_busy",
             Self::AppRunning => "app_running",
             Self::PayloadInvalid => "payload_invalid",
-            Self::ResourcesFailed => "resources_failed",
             Self::IoError => "io_error",
             Self::Cancelled => "cancelled",
             Self::RolledBack => "launch_failed",
@@ -59,9 +57,6 @@ pub enum CommandMode {
         install_dir: PathBuf,
         state_root: Option<PathBuf>,
         expected_content_digest: Option<String>,
-        core_archive_sha256: Option<String>,
-        installer_sha256: Option<String>,
-        installer_bytes: Option<u64>,
         desktop_shortcut: bool,
         no_ui: bool,
         no_launch: bool,
@@ -72,9 +67,6 @@ pub enum CommandMode {
         install_dir: PathBuf,
         state_root: Option<PathBuf>,
         expected_content_digest: String,
-        core_archive_sha256: Option<String>,
-        installer_sha256: Option<String>,
-        installer_bytes: Option<u64>,
         host_pid: u32,
         host_start_time: u64,
         desktop_mutex_handle: Option<usize>,
@@ -132,9 +124,6 @@ pub fn parse_args() -> Result<CommandMode, String> {
     let mut install_dir = None;
     let mut state_root = None;
     let mut expected_content_digest = None;
-    let mut core_archive_sha256 = None;
-    let mut installer_sha256 = None;
-    let mut installer_bytes = None;
     let mut host_pid = None;
     let mut host_start_time = None;
     let mut desktop_mutex_handle = None;
@@ -153,12 +142,7 @@ pub fn parse_args() -> Result<CommandMode, String> {
             "--expected-content-digest" => {
                 expected_content_digest = Some(next_val(&args, &mut i, flag)?)
             }
-            "--core-archive-sha256" => core_archive_sha256 = Some(next_val(&args, &mut i, flag)?),
-            "--installer-sha256" => installer_sha256 = Some(next_val(&args, &mut i, flag)?),
-            "--installer-bytes" => {
-                let v = next_val(&args, &mut i, flag)?;
-                installer_bytes = Some(v.parse::<u64>().map_err(|_| format!("无效字节数：{v}"))?);
-            }
+
             "--host-pid" => {
                 let v = next_val(&args, &mut i, flag)?;
                 host_pid = Some(v.parse::<u32>().map_err(|_| format!("无效 PID：{v}"))?);
@@ -187,9 +171,6 @@ pub fn parse_args() -> Result<CommandMode, String> {
             install_dir: install_dir.ok_or("缺少 --install-dir")?,
             state_root,
             expected_content_digest,
-            core_archive_sha256,
-            installer_sha256,
-            installer_bytes,
             desktop_shortcut,
             no_ui,
             no_launch,
@@ -201,9 +182,6 @@ pub fn parse_args() -> Result<CommandMode, String> {
             state_root,
             expected_content_digest: expected_content_digest
                 .ok_or("apply-update 缺少 --expected-content-digest")?,
-            core_archive_sha256,
-            installer_sha256,
-            installer_bytes,
             host_pid: host_pid.ok_or("apply-update 缺少 --host-pid")?,
             host_start_time: host_start_time.ok_or("apply-update 缺少 --host-start-time")?,
             desktop_mutex_handle,

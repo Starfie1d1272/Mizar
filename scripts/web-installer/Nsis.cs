@@ -7,10 +7,6 @@ using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace Mizar.WebInstaller {
-  public sealed class InstallerRecoveryRequired : IOException {
-    public readonly string InstallDirectory;
-    public InstallerRecoveryRequired(string directory, string reason, Exception cause = null) : base(reason, cause) { InstallDirectory = directory; }
-  }
   public sealed class InstallerActionRequired : IOException {
     public readonly bool CanRetry;
     public InstallerActionRequired(string message, bool canRetry = false, Exception cause = null) : base(message, cause) { CanRetry = canRetry; }
@@ -78,8 +74,6 @@ namespace Mizar.WebInstaller {
       return ActiveInstallDir() == null;
     }
 
-
-
     internal static string SelectDestination(string directory) {
       directory = (directory ?? "").Trim();
       if (!System.Text.RegularExpressions.Regex.IsMatch(directory, @"^[A-Za-z]:[\\/]"))
@@ -112,52 +106,6 @@ namespace Mizar.WebInstaller {
       string executable = Path.Combine(target, "Mizar.exe");
       Downloader.NoReparse(executable);
       Process.Start(new ProcessStartInfo { FileName = executable, WorkingDirectory = target, UseShellExecute = false });
-    }
-
-    static string Timestamp() { return DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ"); }
-
-    static string ArchiveDirectory(string path, string suffix) {
-      string dest = path + "-" + suffix + "-" + Timestamp();
-      if (Directory.Exists(dest) || File.Exists(dest)) dest += "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
-      Directory.Move(path, dest);
-      return dest;
-    }
-
-    static void AssertNoActiveMizarOrWriter(Action action) {
-      if (Process.GetProcessesByName("Mizar").Length != 0) throw new InstallerActionRequired("请先正常退出 Mizar 后再试。", true);
-      using (var writer = new Mutex(false, @"Global\MizarUpdateWriter")) {
-        bool owned = false;
-        try {
-          try { owned = writer.WaitOne(0); } catch (AbandonedMutexException) { owned = true; }
-          if (!owned) throw new InstallerActionRequired("另一个安装或更新操作正在进行，请先关闭后重试。", true);
-          action();
-        } finally { if (owned) writer.ReleaseMutex(); }
-      }
-    }
-
-    internal static void RetireUpdateState() {
-      AssertNoActiveMizarOrWriter(() => {
-        string state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar");
-        Downloader.NoReparse(state);
-        string updates = Path.Combine(state, "updates");
-        if (Directory.Exists(updates)) ArchiveDirectory(updates, "retired");
-        if (ActiveInstallDir() == null) Registry.CurrentUser.DeleteSubKeyTree(@"Software\Mizar", false);
-      });
-    }
-
-    internal static void ResetMizarState(string target) {
-      AssertNoActiveMizarOrWriter(() => {
-        string state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mizar");
-        Downloader.NoReparse(state);
-        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Mizar", false);
-        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Mizar", false);
-        if (Directory.Exists(state)) ArchiveDirectory(state, "reset");
-        if (!String.IsNullOrEmpty(target) && Directory.Exists(target) && IsInstalledAt(target)) {
-          AssertSafeSelection(target);
-          ArchiveDirectory(target, "mizar-reset");
-        }
-        selectedDestination = null;
-      });
     }
 
     static async Task<int> RunProcessAsync(ProcessStartInfo psi, TimeSpan timeout, CancellationToken token, bool cancellable) {
@@ -209,9 +157,6 @@ namespace Mizar.WebInstaller {
 
         if (progress != null) progress.Report("installing-core");
         string args = "install --payload-dir \"" + extractDir + "\" --install-dir \"" + destination + "\" --expected-content-digest " + plan.contentDigest + " --no-launch --result-file \"" + resultPath + "\"";
-        if (plan.name.EndsWith("-Core-Setup.exe", StringComparison.Ordinal)) {
-          args += " --core-archive-sha256 " + plan.coreSha256 + " --installer-sha256 " + plan.sha256 + " --installer-bytes " + plan.bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
 
         // Applier's native window owns cancellation once launched; wait for process exit before cleanup.
         int applyCode = await RunProcessAsync(new ProcessStartInfo {
@@ -235,9 +180,8 @@ namespace Mizar.WebInstaller {
           case 10: throw new InstallerActionRequired(message ?? "另一个安装或更新操作正在进行，请稍后重试。", true);
           case 11: throw new InstallerActionRequired(message ?? "请先正常退出 Mizar 后重试安装。", true);
           case 12: throw new InstallerActionRequired(message ?? "安装包校验未通过，请重新下载官方安装包。", false);
-          case 13: throw new InstallerActionRequired(message ?? "素材准备未完成。请核对网络、缓存目录权限与剩余空间，或使用正式完整离线包。", true);
           case 15: throw new InstallerActionRequired("安装已取消，可以重新开始。", true);
-          default: throw new InstallerActionRequired(message ?? ("安装未完成（退出码：" + applyCode + "），请查看日志后重试。"), false);
+          default: throw new InstallerActionRequired(message ?? ("安装未完成（退出码：" + applyCode + "），请查看日志后重试。"), true);
         }
       } finally {
         try { if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true); } catch { }

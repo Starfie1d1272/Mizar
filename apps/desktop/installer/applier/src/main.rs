@@ -10,9 +10,7 @@ use mizar_common::{
     is_reparse_point, read_current_pointer, remove_dir_safe, replace_file_atomic,
     validate_install_dir, write_current_pointer_atomic, CurrentPointer,
 };
-use payload::{
-    move_or_copy_dir, prepare_core_resources, rollback_core_resources, sha256_file, verify_payload,
-};
+use payload::{move_or_copy_dir, sha256_file, verify_payload};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -24,8 +22,8 @@ use win32::{
     clear_legacy_run_once, create_shortcut, delete_install_registry, desktop_dir,
     find_running_mizar_under, launch_and_wait_ready, random_hex_16, remove_shortcuts,
     schedule_dir_delete, schedule_self_delete, show_message_box, start_menu_dir,
-    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry, DesktopMutexHandle,
-    LaunchOutcome, UpdateActiveEvent, WriterMutex,
+    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry,
+    DesktopMutexHandle, LaunchOutcome, UpdateActiveEvent, WriterMutex,
 };
 
 struct Logger {
@@ -38,11 +36,7 @@ impl Logger {
         let logs_dir = state_root.join("logs");
         let _ = fs::create_dir_all(&logs_dir);
         let path = logs_dir.join(format!("applier-{}.log", utc_compact_timestamp()));
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok();
+        let file = OpenOptions::new().create(true).append(true).open(&path).ok();
         Self {
             path,
             file: Mutex::new(file),
@@ -61,6 +55,76 @@ impl Logger {
     }
 }
 
+struct StepError {
+    code: ExitCode,
+    msg: String,
+}
+
+impl StepError {
+    fn new(code: ExitCode, msg: impl Into<String>) -> Self {
+        Self {
+            code,
+            msg: msg.into(),
+        }
+    }
+}
+
+struct StagingGuard(Option<PathBuf>);
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = remove_dir_safe(&p);
+        }
+    }
+}
+
+struct LegacyArchiveGuard {
+    install_dir: PathBuf,
+    archive: Option<PathBuf>,
+}
+impl Drop for LegacyArchiveGuard {
+    fn drop(&mut self) {
+        if let Some(arch) = self.archive.take() {
+            let _ = remove_dir_safe(&self.install_dir);
+            let _ = fs::rename(&arch, &self.install_dir);
+        }
+    }
+}
+
+struct PreCommitGuard {
+    desktop_mutex: Option<DesktopMutexHandle>,
+    active_event: Option<UpdateActiveEvent>,
+    relaunch_dir: Option<PathBuf>,
+}
+impl PreCommitGuard {
+    fn release_locks(&mut self) {
+        self.relaunch_dir = None;
+        if let Some(mut dm) = self.desktop_mutex.take() {
+            dm.release_now();
+        }
+        self.active_event.take();
+    }
+}
+impl Drop for PreCommitGuard {
+    fn drop(&mut self) {
+        if let Some(mut dm) = self.desktop_mutex.take() {
+            dm.release_now();
+        }
+        self.active_event.take();
+        if let Some(dir) = self.relaunch_dir.take() {
+            let exe = dir.join("Mizar.exe");
+            if exe.is_file() {
+                let _ = Command::new(&exe)
+                    .current_dir(&dir)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+            }
+        }
+    }
+}
+
 fn default_state_root() -> Result<PathBuf, String> {
     if let Some(v) = std::env::var_os("MIZAR_STATE_ROOT") {
         let p = PathBuf::from(v);
@@ -74,11 +138,9 @@ fn default_state_root() -> Result<PathBuf, String> {
 }
 
 fn copy_binary_with_retry(src: &Path, dst: &Path) -> Result<(), String> {
-    if let Ok(dst_hash) = sha256_file(dst) {
-        if let Ok(src_hash) = sha256_file(src) {
-            if dst_hash == src_hash {
-                return Ok(());
-            }
+    if let (Ok(dst_hash), Ok(src_hash)) = (sha256_file(dst), sha256_file(src)) {
+        if dst_hash == src_hash {
+            return Ok(());
         }
     }
     let tmp = dst.with_extension(format!("exe.{}.tmp", std::process::id()));
@@ -86,10 +148,7 @@ fn copy_binary_with_retry(src: &Path, dst: &Path) -> Result<(), String> {
     for attempt in 0..5 {
         match replace_file_atomic(&tmp, dst) {
             Ok(()) => return Ok(()),
-            Err(e) if attempt < 4 => {
-                let _ = e;
-                std::thread::sleep(Duration::from_millis(200));
-            }
+            Err(_) if attempt < 4 => std::thread::sleep(Duration::from_millis(200)),
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
                 return Err(format!("替换 {} 失败: {e}", dst.display()));
@@ -104,9 +163,7 @@ fn retire_legacy_update_state(state_root: &Path, log: &Logger) {
     let ts = utc_compact_timestamp();
     let pending = state_root.join("bootstrap-cache/fresh-install.pending");
     if pending.exists() {
-        let dest = state_root.join(format!(
-            "bootstrap-cache/fresh-install.pending.retired-{ts}"
-        ));
+        let dest = state_root.join(format!("bootstrap-cache/fresh-install.pending.retired-{ts}"));
         if let Err(e) = fs::rename(&pending, &dest) {
             log.log(&format!("warn: retire fresh-install.pending failed: {e}"));
         }
@@ -126,31 +183,14 @@ fn retire_legacy_update_state(state_root: &Path, log: &Logger) {
     }
 }
 
-fn relaunch_existing_mizar(install_dir: &Path, log: &Logger) {
-    let exe = install_dir.join("Mizar.exe");
-    if exe.is_file() {
-        log.log(&format!("relaunching existing Mizar: {}", exe.display()));
-        let _ = Command::new(&exe)
-            .current_dir(install_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    }
-}
-
 struct InstallParams {
     payload_dir: PathBuf,
     install_dir: PathBuf,
     state_root: PathBuf,
     expected_content_digest: Option<String>,
-    core_archive_sha256: Option<String>,
-    installer_sha256: Option<String>,
-    installer_bytes: Option<u64>,
     desktop_shortcut: bool,
     no_ui: bool,
     no_launch: bool,
-    result_file: Option<PathBuf>,
     apply_update: Option<(u32, u64, Option<usize>)>,
 }
 
@@ -159,40 +199,55 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     let mut prev_version_out: Option<String> = None;
     let mut cleanup_warning: Option<String> = None;
 
-    let make_result = |code: ExitCode,
-                       ver: Option<String>,
-                       prev: Option<String>,
-                       warn: Option<String>,
-                       msg: Option<String>| ApplierResult {
-        status: code.status_str(),
-        code: code.code_str(),
-        version: ver,
-        previous_version: prev,
-        cleanup_warning: warn,
-        log_path: log.path.to_string_lossy().into_owned(),
-        message: msg,
-    };
+    let res = execute_install_or_update(
+        &params,
+        log,
+        &mut version_out,
+        &mut prev_version_out,
+        &mut cleanup_warning,
+    );
 
-    // Phase 1: Acquire & UI
-    let _writer = match WriterMutex::try_acquire() {
-        Ok(Some(w)) => w,
-        Ok(None) => {
-            let msg = "另一个 Mizar 安装或更新事务正在进行中".to_string();
-            log.log(&msg);
-            return (
-                ExitCode::WriterBusy,
-                make_result(ExitCode::WriterBusy, None, None, None, Some(msg)),
-            );
-        }
+    if params.apply_update.is_some() {
+        schedule_dir_delete(&params.payload_dir);
+    }
+
+    let (code, msg) = match res {
+        Ok(()) => (ExitCode::Ok, None),
         Err(e) => {
-            let msg = format!("无法获取全局写入锁: {e}");
-            log.log(&msg);
-            return (
-                ExitCode::IoError,
-                make_result(ExitCode::IoError, None, None, None, Some(msg)),
-            );
+            log.log(&e.msg);
+            (e.code, Some(e.msg))
         }
     };
+    (
+        code,
+        ApplierResult {
+            status: code.status_str(),
+            code: code.code_str(),
+            version: version_out,
+            previous_version: prev_version_out,
+            cleanup_warning,
+            log_path: log.path.to_string_lossy().into_owned(),
+            message: msg,
+        },
+    )
+}
+
+fn execute_install_or_update(
+    params: &InstallParams,
+    log: &Logger,
+    version_out: &mut Option<String>,
+    prev_version_out: &mut Option<String>,
+    cleanup_warning: &mut Option<String>,
+) -> Result<(), StepError> {
+    // Phase 1: Acquire & UI
+    let _writer = WriterMutex::try_acquire()
+        .map_err(|e| StepError::new(ExitCode::IoError, format!("无法获取全局写入锁: {e}")))?
+        .ok_or_else(|| {
+            StepError::new(
+                ExitCode::WriterBusy,
+                "另一个 Mizar 安装或更新事务正在进行中",
+            )
+        })?;
 
     let active_event = match UpdateActiveEvent::acquire() {
         Ok(ev) => Some(ev),
@@ -202,109 +257,58 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         }
     };
 
-    let mut desktop_mutex = match &params.apply_update {
+    let desktop_mutex = match &params.apply_update {
         Some((_, _, Some(raw))) => DesktopMutexHandle::from_raw(*raw),
-        _ => match DesktopMutexHandle::acquire_or_create() {
-            Ok(m) => m,
-            Err(e) => {
-                let msg = format!("无法获取桌面互斥锁: {e}");
-                log.log(&msg);
-                return (
-                    ExitCode::IoError,
-                    make_result(ExitCode::IoError, None, None, None, Some(msg)),
-                );
-            }
-        },
+        _ => DesktopMutexHandle::acquire_or_create().map_err(|e| {
+            StepError::new(ExitCode::IoError, format!("无法获取桌面互斥锁: {e}"))
+        })?,
+    };
+
+    let mut guards = PreCommitGuard {
+        desktop_mutex: Some(desktop_mutex),
+        active_event,
+        relaunch_dir: params
+            .apply_update
+            .as_ref()
+            .map(|_| params.install_dir.clone()),
     };
 
     let ui = ProgressUi::start(params.no_ui, "正在校验安装包...");
 
-    // Helper for pre-commit failure in apply-update: release locks & relaunch old Mizar
-    let recover_old_on_precommit_fail =
-        |mut dm: DesktopMutexHandle, ae: Option<UpdateActiveEvent>| {
-            dm.release_now();
-            drop(ae);
-            if params.apply_update.is_some() {
-                relaunch_existing_mizar(&params.install_dir, log);
-            }
-        };
-
     // Phase 2: Stage (completely reversible, cancellable)
-    let install_dir = match validate_install_dir(&params.install_dir, &params.state_root) {
-        Ok(p) => p,
-        Err(msg) => {
-            log.log(&msg);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::IoError,
-                make_result(ExitCode::IoError, None, None, None, Some(msg)),
-            );
-        }
-    };
+    let install_dir = validate_install_dir(&params.install_dir, &params.state_root)
+        .map_err(|m| StepError::new(ExitCode::IoError, m))?;
 
-    let artifact = match verify_payload(
+    let artifact = verify_payload(
         &params.payload_dir,
         params.expected_content_digest.as_deref(),
         &|| ui.is_cancelled(),
-    ) {
-        Ok(a) => a,
-        Err(e) if e == "cancelled" => {
-            log.log("cancelled during payload verification");
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::Cancelled,
-                make_result(
-                    ExitCode::Cancelled,
-                    None,
-                    None,
-                    None,
-                    Some("用户取消安装".into()),
-                ),
-            );
+    )
+    .map_err(|msg| {
+        if msg == "cancelled" {
+            StepError::new(ExitCode::Cancelled, "用户取消安装")
+        } else {
+            StepError::new(ExitCode::PayloadInvalid, msg)
         }
-        Err(msg) => {
-            log.log(&format!("payload verification failed: {msg}"));
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::PayloadInvalid,
-                make_result(ExitCode::PayloadInvalid, None, None, None, Some(msg)),
-            );
-        }
-    };
-    version_out = Some(artifact.app_version.clone());
+    })?;
+
+    *version_out = Some(artifact.app_version.clone());
     log.log(&format!(
         "verified payload: version={} gitSha={} mode={}",
         artifact.app_version, artifact.git_sha, artifact.resource_mode
     ));
 
     if ui.is_cancelled() {
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::Cancelled,
-            make_result(
-                ExitCode::Cancelled,
-                version_out,
-                None,
-                None,
-                Some("用户取消安装".into()),
-            ),
-        );
+        return Err(StepError::new(ExitCode::Cancelled, "用户取消安装"));
     }
 
     let is_legacy_layout = (install_dir.join("installed.flag").exists()
-        || install_dir
-            .join("resources/metadata/artifact.json")
-            .exists())
+        || install_dir.join("resources/metadata/artifact.json").exists())
         && !install_dir.join("current.json").exists();
 
     let mut version_id = format!("{}-{}", artifact.app_version, &artifact.git_sha[..8]);
     if !is_legacy_layout && install_dir.join("versions").join(&version_id).exists() {
-        let nonce6 = &random_hex_16()[..6];
-        version_id = format!("{version_id}-{nonce6}");
+        version_id = format!("{version_id}-{}", &random_hex_16()[..6]);
     }
 
     let staging_dir = if is_legacy_layout {
@@ -325,113 +329,27 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     if staging_dir.exists() {
         let _ = remove_dir_safe(&staging_dir);
     }
-    if let Err(e) = move_or_copy_dir(&params.payload_dir, &staging_dir) {
-        let msg = format!("暂存新版本文件失败: {e}");
-        log.log(&msg);
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::IoError,
-            make_result(ExitCode::IoError, version_out, None, None, Some(msg)),
-        );
-    }
-    if let Err(e) = fs::write(staging_dir.join("installed.flag"), b"mizar.install.v2\n") {
-        let msg = format!("写入 installed.flag 失败: {e}");
-        log.log(&msg);
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::IoError,
-            make_result(ExitCode::IoError, version_out, None, None, Some(msg)),
-        );
-    }
+    let mut staging_guard = StagingGuard(Some(staging_dir.clone()));
+
+    move_or_copy_dir(&params.payload_dir, &staging_dir)
+        .map_err(|e| StepError::new(ExitCode::IoError, format!("暂存新版本文件失败: {e}")))?;
+    fs::write(staging_dir.join("installed.flag"), b"mizar.install.v2\n")
+        .map_err(|e| StepError::new(ExitCode::IoError, format!("写入 installed.flag 失败: {e}")))?;
 
     // Phase 3: Quiesce
     ui.set_stage("正在等待旧版程序退出...");
     if let Some((host_pid, host_start_time, _)) = params.apply_update {
-        if let Err(msg) = wait_host_exit(host_pid, host_start_time, Duration::from_secs(60)) {
-            log.log(&msg);
-            let _ = remove_dir_safe(&staging_dir);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::AppRunning,
-                make_result(ExitCode::AppRunning, version_out, None, None, Some(msg)),
-            );
-        }
+        wait_host_exit(host_pid, host_start_time, Duration::from_secs(60))
+            .map_err(|m| StepError::new(ExitCode::AppRunning, m))?;
     } else if find_running_mizar_under(&install_dir) {
-        let msg = "检测到当前目录的 Mizar 仍在运行，请先退出后再安装".to_string();
-        log.log(&msg);
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        return (
+        return Err(StepError::new(
             ExitCode::AppRunning,
-            make_result(ExitCode::AppRunning, version_out, None, None, Some(msg)),
-        );
+            "检测到当前目录的 Mizar 仍在运行，请先退出后再安装",
+        ));
     }
 
     if ui.is_cancelled() {
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::Cancelled,
-            make_result(
-                ExitCode::Cancelled,
-                version_out,
-                None,
-                None,
-                Some("用户取消安装".into()),
-            ),
-        );
-    }
-
-    if artifact.resource_mode == "core" {
-        ui.set_stage("正在准备官方素材包...");
-        match prepare_core_resources(
-            &staging_dir,
-            &params.state_root,
-            &artifact,
-            params.core_archive_sha256.as_deref(),
-            params.installer_sha256.as_deref(),
-            params.installer_bytes,
-        ) {
-            Ok(out) => log.log(&format!("core resources ready: {out}")),
-            Err(msg) => {
-                log.log(&msg);
-                let _ = remove_dir_safe(&staging_dir);
-                ui.close();
-                recover_old_on_precommit_fail(desktop_mutex, active_event);
-                return (
-                    ExitCode::ResourcesFailed,
-                    make_result(
-                        ExitCode::ResourcesFailed,
-                        version_out,
-                        None,
-                        None,
-                        Some(msg),
-                    ),
-                );
-            }
-        }
-    }
-
-    if ui.is_cancelled() {
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::Cancelled,
-            make_result(
-                ExitCode::Cancelled,
-                version_out,
-                None,
-                None,
-                Some("用户取消安装".into()),
-            ),
-        );
+        return Err(StepError::new(ExitCode::Cancelled, "用户取消安装"));
     }
 
     // Phase 4: Switch & Commit (atomic commit point, cancel disabled)
@@ -439,18 +357,14 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     ui.set_stage("正在切换版本...");
 
     let old_pointer = read_current_pointer(&install_dir);
-    prev_version_out = old_pointer
+    *prev_version_out = old_pointer
         .as_ref()
         .map(|p| p.current.split('-').next().unwrap_or(&p.current).to_owned());
 
-    let mut legacy_archive: Option<PathBuf> = None;
-    let rollback_legacy = |archive: &Option<PathBuf>| {
-        if let Some(arch) = archive {
-            let _ = remove_dir_safe(&install_dir);
-            let _ = fs::rename(arch, &install_dir);
-        }
+    let mut legacy_guard = LegacyArchiveGuard {
+        install_dir: install_dir.clone(),
+        archive: None,
     };
-
     if is_legacy_layout {
         let arch = install_dir.with_file_name(format!(
             "{}-legacy-{}",
@@ -461,97 +375,34 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
             utc_compact_timestamp()
         ));
         log.log(&format!("archiving legacy dir to {}", arch.display()));
-        if let Err(e) = fs::rename(&install_dir, &arch) {
-            let msg = format!("归档旧安装目录失败: {e}");
-            log.log(&msg);
-            let _ = remove_dir_safe(&staging_dir);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    version_out,
-                    prev_version_out,
-                    None,
-                    Some(msg),
-                ),
-            );
-        }
-        legacy_archive = Some(arch);
-    }
-
-    let target_ver_dir = install_dir.join("versions").join(&version_id);
-    if let Err(e) = fs::create_dir_all(install_dir.join("versions"))
-        .and_then(|_| move_or_copy_dir(&staging_dir, &target_ver_dir))
-    {
-        let msg = format!("移动版本目录失败: {e}");
-        log.log(&msg);
-        rollback_legacy(&legacy_archive);
-        let _ = remove_dir_safe(&staging_dir);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::IoError,
-            make_result(
-                ExitCode::IoError,
-                version_out,
-                prev_version_out,
-                None,
-                Some(msg),
-            ),
-        );
-    }
-    if legacy_archive.is_some() {
-        retire_legacy_update_state(&params.state_root, log);
+        fs::rename(&install_dir, &arch)
+            .map_err(|e| StepError::new(ExitCode::IoError, format!("归档旧安装目录失败: {e}")))?;
+        legacy_guard.archive = Some(arch);
     }
 
     let ver_dir = install_dir.join("versions").join(&version_id);
-    let launcher_dst = install_dir.join("Mizar.exe");
-    let launcher_required = legacy_archive.is_some() || !launcher_dst.is_file();
-    if let Err(err) = copy_binary_with_retry(&ver_dir.join("mizar-launcher.exe"), &launcher_dst) {
-        if launcher_required {
-            log.log(&err);
-            rollback_legacy(&legacy_archive);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    version_out,
-                    prev_version_out,
-                    None,
-                    Some(err),
-                ),
-            );
-        }
-        log.log(&format!("warn: {err}"));
-        cleanup_warning = Some(err);
+    fs::create_dir_all(install_dir.join("versions"))
+        .and_then(|_| move_or_copy_dir(&staging_dir, &ver_dir))
+        .map_err(|e| StepError::new(ExitCode::IoError, format!("移动版本目录失败: {e}")))?;
+    staging_guard.0 = None;
+    if legacy_guard.archive.is_some() {
+        retire_legacy_update_state(&params.state_root, log);
     }
 
-    let uninst_dst = install_dir.join("Uninstall.exe");
-    let uninst_required = legacy_archive.is_some() || !uninst_dst.is_file();
-    if let Err(err) = copy_binary_with_retry(&ver_dir.join("mizar-applier.exe"), &uninst_dst) {
-        if uninst_required {
-            log.log(&err);
-            rollback_legacy(&legacy_archive);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    version_out,
-                    prev_version_out,
-                    None,
-                    Some(err),
-                ),
-            );
-        }
-        log.log(&format!("warn: {err}"));
-        if cleanup_warning.is_none() {
-            cleanup_warning = Some(err);
+    for (src_name, dst_name) in [
+        ("mizar-launcher.exe", "Mizar.exe"),
+        ("mizar-applier.exe", "Uninstall.exe"),
+    ] {
+        let dst = install_dir.join(dst_name);
+        let required = legacy_guard.archive.is_some() || !dst.is_file();
+        if let Err(err) = copy_binary_with_retry(&ver_dir.join(src_name), &dst) {
+            if required {
+                return Err(StepError::new(ExitCode::IoError, err));
+            }
+            log.log(&format!("warn: {err}"));
+            if cleanup_warning.is_none() {
+                *cleanup_warning = Some(err);
+            }
         }
     }
 
@@ -562,30 +413,16 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         previous: previous_id.clone(),
         updated_at: utc_iso8601(),
     };
-    if let Err(e) = write_current_pointer_atomic(&install_dir, &new_pointer) {
-        let msg = format!("写入 current.json 失败: {e}");
-        log.log(&msg);
-        rollback_legacy(&legacy_archive);
-        ui.close();
-        recover_old_on_precommit_fail(desktop_mutex, active_event);
-        return (
-            ExitCode::IoError,
-            make_result(
-                ExitCode::IoError,
-                version_out,
-                prev_version_out,
-                cleanup_warning,
-                Some(msg),
-            ),
-        );
-    }
+    write_current_pointer_atomic(&install_dir, &new_pointer)
+        .map_err(|e| StepError::new(ExitCode::IoError, format!("写入 current.json 失败: {e}")))?;
+    legacy_guard.archive = None;
     log.log(&format!("committed current.json -> {version_id}"));
 
     if let Err(e) = write_install_registry(&install_dir, &params.state_root, &artifact.app_version)
     {
         log.log(&format!("warn: registry write failed: {e}"));
         if cleanup_warning.is_none() {
-            cleanup_warning = Some(e);
+            *cleanup_warning = Some(e);
         }
     }
     if let Some(sm) = start_menu_dir() {
@@ -611,11 +448,8 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     }
 
     // Phase 5: Post (release locks, launch & verify, best-effort cleanup)
-    desktop_mutex.release_now();
-    drop(active_event);
+    guards.release_locks();
 
-    let mut final_code = ExitCode::Ok;
-    let mut launch_msg: Option<String> = None;
     if !params.no_launch {
         ui.set_stage("正在启动新版 Mizar...");
         let target_exe = ver_dir.join("Mizar.exe");
@@ -635,16 +469,9 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         };
         if let Some(reason) = launch_failed {
             log.log(&reason);
-            let mut rolled_back = false;
             if let Some(prev_id) = &previous_id {
-                let prev_ver_dir = install_dir.join("versions").join(prev_id);
-                let prev_exe = prev_ver_dir.join("Mizar.exe");
+                let prev_exe = install_dir.join("versions").join(prev_id).join("Mizar.exe");
                 if prev_exe.is_file() {
-                    if artifact.resource_mode == "core" {
-                        if let Err(e) = rollback_core_resources(&prev_ver_dir, &params.state_root) {
-                            log.log(&format!("warn: {e}"));
-                        }
-                    }
                     let rollback_ptr = CurrentPointer {
                         schema_version: 2,
                         current: prev_id.clone(),
@@ -661,71 +488,46 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
                             .stdout(Stdio::null())
                             .stderr(Stdio::null())
                             .spawn();
-                        final_code = ExitCode::RolledBack;
-                        rolled_back = true;
+                        return Err(StepError::new(
+                            ExitCode::RolledBack,
+                            "新版启动失败，已自动回退到上一版本",
+                        ));
                     }
                 }
             }
-            if !rolled_back {
-                final_code = ExitCode::IoError;
-                launch_msg = Some(reason);
-            }
+            return Err(StepError::new(ExitCode::IoError, reason));
         }
     }
 
     // Best-effort delayed cleanup of older versions & staging
-    if final_code == ExitCode::Ok {
-        let versions_dir = install_dir.join("versions");
-        if let Ok(entries) = fs::read_dir(&versions_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                let keep =
-                    name_str == version_id || previous_id.as_deref() == Some(name_str.as_ref());
-                if !keep {
-                    let p = entry.path();
-                    if let Err(e) = remove_dir_safe(&p) {
-                        let w = format!("清理旧版本 {} 失败: {e}", name_str);
-                        log.log(&format!("warn: {w}"));
-                        if cleanup_warning.is_none() {
-                            cleanup_warning = Some(w);
-                        }
+    if let Ok(entries) = fs::read_dir(install_dir.join("versions")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str != version_id && previous_id.as_deref() != Some(name_str.as_ref()) {
+                if let Err(e) = remove_dir_safe(&entry.path()) {
+                    let w = format!("清理旧版本 {name_str} 失败: {e}");
+                    log.log(&format!("warn: {w}"));
+                    if cleanup_warning.is_none() {
+                        *cleanup_warning = Some(w);
                     }
                 }
             }
         }
-        let staging_root = install_dir.join("staging");
-        if staging_root.exists() {
-            if let Err(e) = remove_dir_safe(&staging_root) {
-                let w = format!("清理 staging 失败: {e}");
-                log.log(&format!("warn: {w}"));
-                if cleanup_warning.is_none() {
-                    cleanup_warning = Some(w);
-                }
+    }
+    let staging_root = install_dir.join("staging");
+    if staging_root.exists() {
+        if let Err(e) = remove_dir_safe(&staging_root) {
+            let w = format!("清理 staging 失败: {e}");
+            log.log(&format!("warn: {w}"));
+            if cleanup_warning.is_none() {
+                *cleanup_warning = Some(w);
             }
         }
     }
 
-    if params.apply_update.is_some() {
-        schedule_dir_delete(&params.payload_dir);
-    }
-
     ui.close();
-    let msg = if final_code == ExitCode::RolledBack {
-        Some("新版启动失败，已自动回退到上一版本".into())
-    } else {
-        launch_msg
-    };
-    (
-        final_code,
-        make_result(
-            final_code,
-            version_out,
-            prev_version_out,
-            cleanup_warning,
-            msg,
-        ),
-    )
+    Ok(())
 }
 
 fn run_uninstall(
@@ -734,12 +536,12 @@ fn run_uninstall(
     no_ui: bool,
     log: &Logger,
 ) -> (ExitCode, ApplierResult) {
-    let make_result = |code: ExitCode, warn: Option<String>, msg: Option<String>| ApplierResult {
+    let make_result = |code: ExitCode, msg: Option<String>| ApplierResult {
         status: code.status_str(),
         code: code.code_str(),
         version: None,
         previous_version: None,
-        cleanup_warning: warn,
+        cleanup_warning: None,
         log_path: log.path.to_string_lossy().into_owned(),
         message: msg,
     };
@@ -751,7 +553,6 @@ fn run_uninstall(
                 ExitCode::WriterBusy,
                 make_result(
                     ExitCode::WriterBusy,
-                    None,
                     Some("另一个安装或更新事务正在进行中".into()),
                 ),
             );
@@ -759,11 +560,7 @@ fn run_uninstall(
         Err(e) => {
             return (
                 ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    None,
-                    Some(format!("无法获取写入锁: {e}")),
-                ),
+                make_result(ExitCode::IoError, Some(format!("无法获取写入锁: {e}"))),
             );
         }
     };
@@ -774,22 +571,17 @@ fn run_uninstall(
         if !no_ui {
             show_message_box("卸载 Mizar", &msg);
         }
-        return (
-            ExitCode::AppRunning,
-            make_result(ExitCode::AppRunning, None, Some(msg)),
-        );
+        return (ExitCode::AppRunning, make_result(ExitCode::AppRunning, Some(msg)));
     }
 
     let ui = ProgressUi::start(no_ui, "正在卸载 Mizar...");
     ui.enter_commit();
 
     if let Ok(true) = is_reparse_point(&install_dir) {
-        ui.close();
         return (
             ExitCode::IoError,
             make_result(
                 ExitCode::IoError,
-                None,
                 Some("安装目录是重解析点，拒绝卸载删除".into()),
             ),
         );
@@ -801,11 +593,7 @@ fn run_uninstall(
             if let Err(e) = remove_dir_safe(&p) {
                 let msg = format!("清理 {sub} 失败: {e}");
                 log.log(&msg);
-                ui.close();
-                return (
-                    ExitCode::IoError,
-                    make_result(ExitCode::IoError, None, Some(msg)),
-                );
+                return (ExitCode::IoError, make_result(ExitCode::IoError, Some(msg)));
             }
         }
     }
@@ -815,20 +603,14 @@ fn run_uninstall(
             if let Err(e) = fs::remove_file(&p) {
                 let msg = format!("删除 {file} 失败: {e}");
                 log.log(&msg);
-                ui.close();
-                return (
-                    ExitCode::IoError,
-                    make_result(ExitCode::IoError, None, Some(msg)),
-                );
+                return (ExitCode::IoError, make_result(ExitCode::IoError, Some(msg)));
             }
         }
     }
 
     remove_shortcuts();
     delete_install_registry();
-    let warn: Option<String> = None;
 
-    // If we are running as <install_dir>/Uninstall.exe, schedule self-delete
     if let Ok(cur_exe) = std::env::current_exe() {
         if cur_exe.parent() == Some(install_dir.as_path()) {
             schedule_self_delete(&cur_exe, &install_dir);
@@ -841,9 +623,9 @@ fn run_uninstall(
         }
     }
 
-    let _ = state_root; // Explicitly never delete user data under %LOCALAPPDATA%\Mizar
+    let _ = state_root;
     ui.close();
-    (ExitCode::Ok, make_result(ExitCode::Ok, warn, None))
+    (ExitCode::Ok, make_result(ExitCode::Ok, None))
 }
 
 fn main() {
@@ -874,9 +656,6 @@ fn main() {
             payload_dir,
             install_dir,
             expected_content_digest,
-            core_archive_sha256,
-            installer_sha256,
-            installer_bytes,
             desktop_shortcut,
             no_ui,
             no_launch,
@@ -889,13 +668,9 @@ fn main() {
                     install_dir,
                     state_root: state_root.clone(),
                     expected_content_digest,
-                    core_archive_sha256,
-                    installer_sha256,
-                    installer_bytes,
                     desktop_shortcut,
                     no_ui,
                     no_launch,
-                    result_file: result_file.clone(),
                     apply_update: None,
                 },
                 &log,
@@ -906,9 +681,6 @@ fn main() {
             payload_dir,
             install_dir,
             expected_content_digest,
-            core_archive_sha256,
-            installer_sha256,
-            installer_bytes,
             host_pid,
             host_start_time,
             desktop_mutex_handle,
@@ -922,13 +694,9 @@ fn main() {
                     install_dir,
                     state_root: state_root.clone(),
                     expected_content_digest: Some(expected_content_digest),
-                    core_archive_sha256,
-                    installer_sha256,
-                    installer_bytes,
                     desktop_shortcut: false,
                     no_ui,
                     no_launch: false,
-                    result_file: result_file.clone(),
                     apply_update: Some((host_pid, host_start_time, desktop_mutex_handle)),
                 },
                 &log,

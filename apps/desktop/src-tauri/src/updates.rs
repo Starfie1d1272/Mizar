@@ -23,9 +23,6 @@ pub struct ReadyUpdate {
     pub extract_dir: PathBuf,
     pub install_dir: PathBuf,
     pub content_digest: String,
-    pub core_archive_sha256: Option<String>,
-    pub installer_sha256: String,
-    pub installer_bytes: u64,
 }
 
 #[derive(Clone)]
@@ -203,14 +200,6 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             .as_str()
             .ok_or("安装包摘要无效，升级未启动。")?
             .to_owned();
-        let installer_sha256 = plan["installerSha256"]
-            .as_str()
-            .ok_or("安装包校验和无效，升级未启动。")?
-            .to_owned();
-        let installer_bytes = plan["installerBytes"]
-            .as_u64()
-            .ok_or("安装包大小无效，升级未启动。")?;
-        let core_archive_sha256 = plan["coreArchiveSha256"].as_str().map(str::to_owned);
 
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -253,9 +242,6 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
                 extract_dir: extract_dir.clone(),
                 install_dir,
                 content_digest,
-                core_archive_sha256,
-                installer_sha256,
-                installer_bytes,
             });
             log.event("update_install", "prepared", None);
             host.exit(0);
@@ -304,7 +290,7 @@ pub fn launch_applier(
         .open(log_dir.join("applier-launch.log"))
         .map_err(|e| format!("无法创建更新启动日志：{e}"))?;
 
-    let mut args = vec![
+    let args = vec![
         "apply-update".to_string(),
         "--payload-dir".to_string(),
         ready.extract_dir.to_string_lossy().into_owned(),
@@ -314,10 +300,6 @@ pub fn launch_applier(
         log.state_root.to_string_lossy().into_owned(),
         "--expected-content-digest".to_string(),
         ready.content_digest.clone(),
-        "--installer-sha256".to_string(),
-        ready.installer_sha256.clone(),
-        "--installer-bytes".to_string(),
-        ready.installer_bytes.to_string(),
         "--host-pid".to_string(),
         std::process::id().to_string(),
         "--host-start-time".to_string(),
@@ -325,10 +307,6 @@ pub fn launch_applier(
         "--desktop-mutex-handle".to_string(),
         (desktop_mutex.raw_handle() as usize).to_string(),
     ];
-    if let Some(core_sha) = &ready.core_archive_sha256 {
-        args.push("--core-archive-sha256".to_string());
-        args.push(core_sha.clone());
-    }
 
     windows_startup::spawn_applier_with_inherited_mutex(&applier, &args, desktop_mutex, &log_file)
         .map_err(|e| format!("无法启动新版本安装执行器：{e}"))?;

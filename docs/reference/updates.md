@@ -21,7 +21,7 @@ Stable 使用 `update-manifest.json`（结构标识 `mizar.update.v1`），包�
 
 用户可主动检查 Mizar 和 MulNX，自动检查在桌面启动时及每 6 小时复查一次，检查不自动下载或安装。下载前先认证发行身份，再对 GitHub 原资产与 GH-Proxy 进行有界响应探测（最多 3 秒、64 KiB），实际下载按已认证清单的大小与 SHA-256 校验全部字节；取消、失败及重试清理不完整文件。
 
-EPL 官方资源通过 `distribution/resources.ts` 编排目录获取、SDK 认证和 ZIP 下载校验；安装阶段由新载荷内的 `installed-entry.mjs` 直接调用 `ResourceStore.open()` 与 `createRuntimeVerifier` 完成素材授权与激活，无需启动完整 Fastify 应用。
+EPL 官方资源通过 `distribution/resources.ts` 与 Companion 内置的 `ResourceStore` 在软件启动后独立完成目录获取、SDK 认证、下载校验与重试修复；素材下载或校验失败绝不阻断 Mizar 软件的安装或更新。
 
 ## 安装与恢复
 
