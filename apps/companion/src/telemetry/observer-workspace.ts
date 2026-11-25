@@ -342,25 +342,21 @@ export function installedWorkspaceObserver(
       const component = join(root, 'resources/observer');
       const manifest = z
         .object({
+          schema: z.literal('cs2-headless-observer-package/5'),
           componentVersion: z.string(),
           sourceSha: z.string(),
-          distribution: z.string(),
           nativeAbi: z.literal(observerComponent.nativeAbi),
-          parserIpc: z.literal(observerComponent.parserIpc),
           managedProtocol: z.literal(observerComponent.managedProtocol),
           entrypoints: z.strictObject({
-            python: z.literal('runtime/python/python.exe'),
-            driver: z.literal('client/driver.py'),
-            native: z.literal('client/cs2_observer.dll'),
-            worker: z.literal('client/parser_worker.mjs'),
+            executable: z.literal('cs2-headless-observer.exe'),
+            native: z.literal('cs2_observer.dll'),
           }),
           filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
         })
         .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
         manifest.componentVersion !== OBSERVER_VERSION ||
-        manifest.sourceSha !== observerComponent.sourceSha ||
-        manifest.distribution !== 'external-node'
+        manifest.sourceSha !== observerComponent.sourceSha
       )
         throw new Error('observer_component_version');
       for (const entry of Object.values(manifest.entrypoints)) {
@@ -382,11 +378,8 @@ export function installedWorkspaceObserver(
       const outputParent = await prepareObserverOutputParent(state);
       return {
         role: 'lookahead',
-        python: join(component, 'runtime/python/python.exe'),
-        driver: join(component, 'client/driver.py'),
-        native: join(component, 'client/cs2_observer.dll'),
-        parserWorker: join(component, 'client/parser_worker.mjs'),
-        node: process.execPath,
+        executable: join(component, 'cs2-headless-observer.exe'),
+        native: join(component, 'cs2_observer.dll'),
         steamApi: join(dirname(executable), 'steam_api64.dll'),
         hostVersion: Number(patch.replaceAll('.', '')),
         outputDirectory: join(outputParent, randomUUID()),

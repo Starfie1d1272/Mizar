@@ -12,9 +12,11 @@ import { unzipSync, zipSync } from 'fflate';
 import Fastify from 'fastify';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import {
+  installedWorkspaceObserver,
   registerWorkspaceObserver,
   type WorkspaceObserver,
 } from '../src/telemetry/observer-workspace.js';
+import observerComponent from '../src/telemetry/observer-component.json' with { type: 'json' };
 import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { SessionJournal } from '../src/support/session-journal.js';
@@ -230,20 +232,18 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(10, begin, 2);
   write(11, { ...cursor, observedAt: Date.now() - 3000 }, 2);
   write(12, fixture, 2);
-  assert.equal(manager.getHealth().state, 'connecting');
-  write(13, cursor, 2);
-  write(14, fixture, 2);
-  assert.deepEqual(seen, [4, 8, 14]);
+  assert.equal(manager.getHealth().state, 'live');
+  assert.deepEqual(seen, [4, 8, 12]);
   assert.equal(manager.getRecentGameEvents().at(-1)?.cursor.sourceArrivalMonotonicMs, undefined);
   const live = manager.getHealth();
-  write(15, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
-  write(16, fixture, 2);
+  write(13, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
+  write(14, fixture, 2);
   manager.disconnectObserver('ended');
   assert.equal(manager.getHealth().normalDrain, undefined);
   manager.confirmObserverDrain();
   assert.equal(manager.getHealth().normalDrain, true);
   assert.equal(manager.getHealth().generation, live.generation);
-  assert.deepEqual(seen, [4, 8, 14]);
+  assert.deepEqual(seen, [4, 8, 12]);
 
   write(17, begin, 3);
   write(18, cursor, 3);
@@ -258,20 +258,17 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
     3,
   );
   write(20, fixture, 3);
-  assert.equal(manager.getHealth().state, 'connecting');
-  assert.equal(manager.getHealth().lastErrorCode, 'observer-residence-limit');
-  assert.deepEqual(seen, [4, 8, 14]);
-  write(21, cursor, 3);
-  write(22, fixture, 3);
-  assert.deepEqual(seen, [4, 8, 14, 22]);
+  assert.equal(manager.getHealth().state, 'live');
+  assert.equal(manager.getHealth().lastErrorCode, undefined);
+  assert.deepEqual(seen, [4, 8, 12, 19, 20]);
   await manager.stop();
   assert.equal(manager.getHealth().normalDrain, undefined);
   write(23, fixture, 3);
-  assert.deepEqual(seen, [4, 8, 14, 22]);
+  assert.deepEqual(seen, [4, 8, 12, 19, 20]);
 });
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-evidence-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-evidence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -282,12 +279,9 @@ test('component failure survives local journal and actual support ZIP without cr
   const password = 'diagnostic-test-private-password';
   const owner = startObserverProcess({
     role: 'lookahead',
-    python: process.execPath,
-    driver,
+    executable: driver,
     native: driver,
     steamApi: driver,
-    node: process.execPath,
-    parserWorker: driver,
     outputDirectory,
     hostVersion: 14197,
     endpoint: '127.0.0.25:27020',
@@ -296,7 +290,7 @@ test('component failure survives local journal and actual support ZIP without cr
   t.after(() => owner.stop());
   const result = await owner.closed;
   assert.equal(result.failed, true);
-  assert.match(result.terminal.detail ?? '', /unsupported serializer test_field/);
+  assert.match(result.terminal.detail ?? '', /native-start-failed/);
   assert.match(result.terminal.detail ?? '', /root-cause-at-end/);
   assert(!JSON.stringify(result.terminal).includes(password));
   assert.equal(result.terminal.hostVersion, 14197);
@@ -338,12 +332,14 @@ test('component failure survives local journal and actual support ZIP without cr
   await writeFile(
     join(reports, oldId, 'report.json'),
     JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reason: 'ordered-parser-error: historical_field',
+      schema: 'cs2-observer-report/2',
+      outcome: 'failed',
+      reason: 'native-start-failed',
+      lastOutputSequence: 0,
       password,
-      native_boot_code: 5,
-      steam_init_result: 0,
       cleanupCompleted: true,
+      reportWritten: true,
+      health: null,
     }),
   );
   const exports = new SupportExports(logs);
@@ -358,7 +354,7 @@ test('component failure survives local journal and actual support ZIP without cr
   const report = entries[`attachments/observer/${oldId}/report.json`];
   assert(report, Buffer.from(entries['coverage.json']!).toString());
   const attachment = JSON.parse(Buffer.from(report).toString());
-  assert.equal(attachment.reason, 'ordered-parser-error: historical_field');
+  assert.equal(attachment.reason, 'native-start-failed');
   assert.equal(attachment.password, '[redacted]');
   const events = Object.entries(entries)
     .filter(([name]) => name.startsWith('events/'))
@@ -370,7 +366,7 @@ test('component failure survives local journal and actual support ZIP without cr
         .map((line) => JSON.parse(line)),
     );
   const terminal = events.find((event) => event.kind === 'observer_attempt_terminal');
-  assert.match(terminal.evidence.detail, /unsupported serializer test_field/);
+  assert.match(terminal.evidence.detail, /native-start-failed/);
   assert.match(terminal.evidence.detail, /root-cause-at-end/);
   const context = events.find((event) => event.kind === 'local_diagnostic_context').evidence;
   assert.equal(context.outputTokenConfigured, true);
@@ -398,11 +394,11 @@ test('component failure survives local journal and actual support ZIP without cr
   );
   const cloud = technicalProjection(terminal, '2020-01-01T00:00:00Z');
   assert.deepEqual(cloud.evidence, terminal.evidence);
-  assert.match(JSON.stringify(cloud), /unsupported serializer/);
+  assert.match(JSON.stringify(cloud), /native-start-failed/);
 });
 
 test('pre-report and protocol failures survive the real export; overflow retains a prefix and a gap', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-stream-evidence-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-stream-evidence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -412,15 +408,12 @@ test('pre-report and protocol failures survive the real export; overflow retains
   const password = 'diagnostic-stream-private-password';
   const journal = new SessionJournal(logs);
   t.after(() => journal.close());
-  for (const host of [13, 26, 27, 28]) {
+  for (const host of [13, 26, 27, 28, 29]) {
     const owner = startObserverProcess({
       role: 'lookahead',
-      python: process.execPath,
-      driver,
+      executable: driver,
       native: driver,
       steamApi: driver,
-      node: process.execPath,
-      parserWorker: driver,
       outputDirectory: join(reports, randomUUID()),
       hostVersion: 14197,
       endpoint: `127.0.0.${host}:27020`,
@@ -451,8 +444,10 @@ test('pre-report and protocol failures survive the real export; overflow retains
     .filter((event) => event.kind === 'observer_attempt_terminal')
     .map((event) => event.evidence);
   assert(
-    failures.some((failure) =>
-      failure.stderr.text.includes('Traceback private path and [redacted]'),
+    failures.some(
+      (failure) =>
+        failure.reason === 'configuration-boundary' &&
+        failure.stderr.text.includes('private diagnostic [redacted]'),
     ),
   );
   assert(
@@ -466,15 +461,20 @@ test('pre-report and protocol failures survive the real export; overflow retains
   const supervisor = failures.find((failure) => failure.reason === 'reconnect-budget-exhausted');
   assert.equal(supervisor?.report, 'received');
   assert.equal(supervisor?.supervisor.state, 'backoff');
+  assert.equal(supervisor?.supervisor.sdkQueueAgeUs, 420);
+  assert.equal(supervisor?.supervisor.decodeUs, 180);
   assert.equal(supervisor?.lastOutputSequence, 1);
   assert.equal(supervisor?.stderr.truncated, true);
+  const earlyNullHealth = failures.find((failure) => failure.reason === 'native-start-failed');
+  assert.equal(earlyNullHealth?.report, 'received');
+  assert.equal(earlyNullHealth?.supervisor, undefined);
   const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
   assert(coverage.gaps.some((gap: { reason: string }) => gap.reason === 'observer_stderr_budget'));
   assert(!Object.values(entries).some((bytes) => Buffer.from(bytes).includes(password)));
 });
 
 test('support export rejects hard-linked or invalid observer reports and records the gaps', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-report-boundary-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-report-boundary-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -709,4 +709,85 @@ test('registerWorkspaceObserver reopens stall recovery after new valid cursor da
   await post({ action: 'pulse', leaseToken });
   await delay(20);
   assert.equal(starts, 3);
+});
+
+test('installedWorkspaceObserver accepts package/5 manifest and rejects package/4', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-workspace-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resources = join(root, 'resources', 'observer');
+  const state = join(root, 'state');
+  const game = join(root, 'game');
+  const bin = join(game, 'game', 'bin', 'win64');
+  await mkdir(resources, { recursive: true });
+  await mkdir(state, { recursive: true });
+  await mkdir(join(game, 'game', 'csgo'), { recursive: true });
+  await mkdir(bin, { recursive: true });
+  const cs2Exe = join(bin, 'cs2.exe');
+  await writeFile(cs2Exe, 'stub-cs2');
+  await writeFile(join(game, 'game', 'csgo', 'steam.inf'), 'PatchVersion=1.41.9.1\n');
+
+  const childFixture = await readFile(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const dllBytes = Buffer.from('stub-dll');
+  await writeFile(join(resources, 'cs2-headless-observer.exe'), childFixture, { mode: 0o755 });
+  await writeFile(join(resources, 'cs2_observer.dll'), dllBytes);
+  const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+  // Legacy package/4 manifest must be rejected.
+  await writeFile(
+    join(resources, 'manifest.json'),
+    JSON.stringify({
+      schema: 'cs2-headless-observer-package/4',
+      componentVersion: observerComponent.version,
+      sourceSha: observerComponent.sourceSha,
+      distribution: 'external-node',
+      nativeAbi: observerComponent.nativeAbi,
+      parserIpc: 4,
+      managedProtocol: observerComponent.managedProtocol,
+      entrypoints: {
+        python: 'runtime/python/python.exe',
+        driver: 'client/driver.py',
+        native: 'client/cs2_observer.dll',
+        worker: 'client/parser_worker.mjs',
+      },
+      filesSha256: {},
+    }),
+  );
+  const legacyObserver = installedWorkspaceObserver(
+    root,
+    state,
+    cs2Exe,
+    'Local\\MizarObserver-test',
+  );
+  t.after(() => legacyObserver.close());
+  await assert.rejects(
+    legacyObserver.start(cs2Exe, '127.0.0.13:27020', 'pw'),
+    /preparation-failed/,
+  );
+
+  // Valid package/5 manifest launches standalone executable + native dll.
+  await writeFile(
+    join(resources, 'manifest.json'),
+    JSON.stringify({
+      schema: 'cs2-headless-observer-package/5',
+      componentVersion: observerComponent.version,
+      sourceSha: observerComponent.sourceSha,
+      nativeAbi: observerComponent.nativeAbi,
+      managedProtocol: observerComponent.managedProtocol,
+      entrypoints: {
+        executable: 'cs2-headless-observer.exe',
+        native: 'cs2_observer.dll',
+      },
+      filesSha256: {
+        'cs2-headless-observer.exe': sha(childFixture),
+        'cs2_observer.dll': sha(dllBytes),
+      },
+    }),
+  );
+  const observer = installedWorkspaceObserver(root, state, cs2Exe, 'Local\\MizarObserver-test');
+  t.after(() => observer.close());
+  // Launch reaches startObserverProcess (fails only because stub launcher isn't a real Job launcher).
+  await observer.start(cs2Exe, '127.0.0.13:27020', 'pw');
+  await delay(100);
+  const view = observer.view();
+  assert.notEqual(view.terminal?.stage, 'component-verification');
 });

@@ -102,11 +102,7 @@ export function observerFailureReason(view: ObserverRuntimeView) {
     return '提前提示输出目录不可用，请检查 Mizar 数据目录是否可写，再重试。';
   if (code === 'configuration-boundary')
     return '提前提示未接受连接配置，请重新填写本场观战连接；若仍失败，请导出诊断。';
-  if (code?.startsWith('node-runtime-'))
-    return '提前提示运行环境检查失败，请检查安装包完整性并导出诊断。';
   if (view.terminal?.stage === 'spawn')
     return '提前提示进程未能启动，请检查安装包与系统访问权限，并导出诊断。';
-  if (view.terminal?.stage === 'parser-initialization')
-    return '提前提示未能开始接收数据，请重试；仍失败时请导出诊断。';
   return '提前提示接收未完成，请重试；仍失败时请导出诊断。';
 }

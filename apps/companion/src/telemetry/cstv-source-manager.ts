@@ -371,16 +371,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
       this.resetObserverContinuity(this.observerChannelOpen ? 'connecting' : 'reconnecting');
       return;
     }
-    if (
-      this.role === 'lookahead' &&
-      typeof row.observedAt === 'number' &&
-      Number.isFinite(row.observedAt) &&
-      Date.now() - row.observedAt >= 2000
-    ) {
-      // Wall-clock age qualifies private data. It never becomes the scheduling clock.
-      if (this.state === 'live') this.resetObserverContinuity();
-      return;
-    }
     if (row.kind === 'cursor') {
       if (
         typeof row.tick !== 'number' ||
@@ -448,10 +438,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSou
     }
     if (!SUPPORTED_CSTV_GAME_EVENT_NAMES.some((name) => name === kind)) return;
     const residenceUs = this.role === 'lookahead' ? observerResidenceUs(row) : undefined;
-    if (residenceUs !== undefined && residenceUs >= 2_000_000) {
-      this.resetObserverContinuity('connecting', 'observer-residence-limit');
-      return;
-    }
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),

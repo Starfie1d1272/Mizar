@@ -12,12 +12,9 @@ import { diagnosticValue } from '../support/session-journal.js';
 /** Runtime paths come from the local installed artifact owner, never match metadata. */
 export interface ObserverProcessOptions<R extends GameEventSourceRole> {
   readonly role: R;
-  readonly python: string;
-  readonly driver: string;
+  readonly executable: string;
   readonly native: string;
   readonly steamApi: string;
-  readonly node: string;
-  readonly parserWorker: string;
   readonly outputDirectory: string;
   readonly hostVersion: number;
   readonly endpoint: string;
@@ -112,7 +109,8 @@ function supervisorHealth(input: unknown, source: string, password: string) {
     forwardMaxUs: integer(value.forwardMaxUs),
     stdoutOldestAgeUs: integer(object(value.output).oldestAgeUs),
     deliveredSequence: integer(object(value.output).lastDeliveredSequence),
-    sdkQueueAgeUs: integer(object(value.attempt).sdkQueueAgeUs),
+    sdkQueueAgeUs: integer(value.sdkQueueAgeUs) ?? integer(object(value.attempt).sdkQueueAgeUs),
+    decodeUs: integer(value.decodeUs),
     ...(reason
       ? {
           lastFault: {
@@ -128,7 +126,8 @@ function supervisorHealth(input: unknown, source: string, password: string) {
 
 function v2Report(input: unknown, source: string, password: string) {
   const row = object(input);
-  const supervisor = supervisorHealth(row.health, source, password);
+  const supervisor =
+    row.health === null ? undefined : supervisorHealth(row.health, source, password);
   if (
     row.schema !== 'cs2-observer-report/2' ||
     !['failed', 'closed', 'incomplete'].includes(String(row.outcome)) ||
@@ -136,7 +135,7 @@ function v2Report(input: unknown, source: string, password: string) {
     typeof row.reportWritten !== 'boolean' ||
     integer(row.lastOutputSequence) === undefined ||
     typeof row.reason !== 'string' ||
-    !supervisor
+    (row.health !== null && !supervisor)
   )
     return;
   const detail = String(diagnosticValue(row.reason, '', new Set(), [password]));
@@ -150,7 +149,7 @@ function v2Report(input: unknown, source: string, password: string) {
     lastOutputSequence: integer(row.lastOutputSequence)!,
     phase: undefined,
     finalizationFailures: row.reportWritten ? [] : ['write-report'],
-    supervisor,
+    ...(supervisor ? { supervisor } : {}),
   };
 }
 
@@ -163,9 +162,7 @@ function captureDiagnostics(stream: NodeJS.ReadableStream, source: string, passw
   let retainedBytes = 0;
   let sawOversizeLine = false;
   let observedBytes = 0;
-  let report:
-    | ReturnType<typeof v2Report>
-    | Extract<ReturnType<typeof terminalEvidence>, { report: 'received' }>;
+  let report: ReturnType<typeof v2Report>;
   let health: ReturnType<typeof supervisorHealth>;
   const consume = (complete = true) => {
     const oversized = lineBytes >= lineBudget;
@@ -183,13 +180,8 @@ function captureDiagnostics(stream: NodeJS.ReadableStream, source: string, passw
         )
           health = sample;
         const terminal = complete ? v2Report(row, source, password) : undefined;
-        const legacy =
-          object(row).schema === 'cs2-observer-report/1'
-            ? terminalEvidence(text, password)
-            : undefined;
         if (terminal) report = terminal;
-        else if (!report && legacy?.report === 'received') report = legacy;
-        structured = Boolean(sample || terminal || legacy?.report === 'received');
+        structured = Boolean(sample || terminal);
       } catch {
         // Native noise is neither a report nor a transport error.
       }
@@ -221,7 +213,7 @@ function captureDiagnostics(stream: NodeJS.ReadableStream, source: string, passw
     consume(false);
     const truncated = observedBytes > retainedBytes;
     let text = prefix.subarray(0, retainedBytes).toString('utf8');
-    const startup = terminalEvidence(text, password);
+    const startup = terminalEvidence(text);
     if (truncated && password) {
       for (let length = password.length; length > 0; length--) {
         if (text.endsWith(password.slice(0, length))) {
@@ -236,9 +228,7 @@ function captureDiagnostics(stream: NodeJS.ReadableStream, source: string, passw
       report,
       health,
       startup:
-        sawOversizeLine && startup.report !== 'received' && !('reason' in startup)
-          ? { report: 'over-budget' as const }
-          : startup,
+        sawOversizeLine && !('reason' in startup) ? { report: 'over-budget' as const } : startup,
       stderr: {
         text: String(diagnosticValue(text, '', new Set(), [password])),
         observedBytes,
@@ -268,131 +258,13 @@ async function persistedReport(directory: string, source: string, password: stri
   }
 }
 
-/** Retain the structured report's cause; unrelated stderr and configuration stay private. */
-function terminalEvidence(prefix: string, password = '') {
+/** Retain pre-report bootstrap causes; unrelated stderr and configuration stay private. */
+function terminalEvidence(prefix: string) {
   const text = prefix.trim();
   if (!text) return { report: 'missing' as const };
-  const preReport = [
-    'output-directory-unavailable',
-    'configuration-boundary',
-    'node-runtime-probe-invalid',
-    'node-runtime-version-invalid',
-    'node-runtime-requires-24-or-newer',
-    'node-runtime-capabilities-missing',
-    'node-runtime-not-found',
-    'node-runtime-probe-failed',
-  ];
-  const token = text
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^ValueError: /, ''))
-    .find((line) => preReport.includes(line));
-  const absentReport = () =>
-    token ? { report: 'missing' as const, reason: token } : { report: 'invalid' as const };
-  for (const line of text.split(/\r?\n/).reverse()) {
-    try {
-      const value: unknown = JSON.parse(line);
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) continue;
-      const row = value as Record<string, unknown>;
-      if (
-        !(
-          row.schema === 'cs2-observer-report/1' &&
-          typeof row.reachedFull === 'boolean' &&
-          typeof row.drainCompleted === 'boolean' &&
-          typeof row.cleanupCompleted === 'boolean'
-        ) ||
-        !['failed', 'incomplete', 'closed'].includes(String(row.outcome))
-      )
-        continue;
-      const reasons = [
-        'owner-stopped',
-        'duration-limit-incomplete',
-        'native-start-failed',
-        'operation-failed-details-omitted',
-        'interrupted',
-        'addon-initialization-required',
-        'new-string-table-callbacks-required',
-        'prespawn-initialization-required',
-        'initialization-timeout',
-        'phase-timeout',
-        'native-session-closed',
-        'source-hltv-stop',
-        'source-drain-timeout',
-        'source-drain-native-failed',
-        'output-backpressure',
-        'output-closed',
-        'configuration-boundary',
-        'ordered-parser-exited',
-        'ordered-parser-not-running',
-        'ordered-parser-protocol-version',
-        'ordered-parser-identity',
-        'ordered-parser-creation-sequence',
-        'ordered-parser-checkpoint-order',
-        'ordered-parser-checkpoint-shape',
-        'ordered-parser-input-backpressure',
-        'spawn-before-parser-initialization',
-        'receipt-before-parser-checkpoint',
-      ];
-      const integer = (v: unknown) =>
-        typeof v === 'number' && Number.isSafeInteger(v) ? v : undefined;
-      return {
-        report: 'received' as const,
-        detail:
-          typeof row.reason === 'string'
-            ? String(diagnosticValue(row.reason, '', new Set(), [password]))
-            : undefined,
-        phase:
-          typeof row.phase === 'string' &&
-          [
-            'transport',
-            'challenge',
-            'ticket',
-            'connection',
-            'channel',
-            'draining',
-            'closed',
-            'blocked',
-          ].includes(row.phase)
-            ? row.phase
-            : undefined,
-        outcome: row.outcome as 'failed' | 'incomplete' | 'closed',
-        reason:
-          typeof row.reason === 'string' &&
-          /^(?:ordered-parser-error|ordered-parser-input-failed|ordered-parser-output-failed|ordered-parser-world-reinitialization): /.test(
-            row.reason,
-          )
-            ? 'ordered-parser-error-details-omitted'
-            : typeof row.reason === 'string' && reasons.includes(row.reason)
-              ? row.reason
-              : 'unclassified',
-        nativeBootCode: integer(row.native_boot_code),
-        steamInitResult: integer(row.steam_init_result),
-        remoteEndReason: integer(row.remote_end_reason),
-        drainCompleted: typeof row.drainCompleted === 'boolean' ? row.drainCompleted : undefined,
-        cleanupCompleted:
-          typeof row.cleanupCompleted === 'boolean' ? row.cleanupCompleted : undefined,
-        finalizationFailures: Array.isArray(row.finalization_failures)
-          ? row.finalization_failures
-              .filter(
-                (v): v is string =>
-                  typeof v === 'string' &&
-                  [
-                    'close-session',
-                    'close-parser',
-                    'close-events',
-                    'close-samples',
-                    'close-output',
-                    'close-input',
-                    'write-report',
-                  ].includes(v),
-              )
-              .slice(0, 8)
-          : [],
-      };
-    } catch {
-      continue;
-    }
-  }
-  return absentReport();
+  const preReport = ['output-directory-unavailable', 'configuration-boundary'];
+  const token = text.split(/\r?\n/).find((line) => preReport.includes(line));
+  return token ? { report: 'missing' as const, reason: token } : { report: 'invalid' as const };
 }
 
 /** Explicit composition only. The released supervisor owns connection retry. */
@@ -420,15 +292,9 @@ export function startObserverProcess<R extends GameEventSourceRole>(
       (!isAbsolute(options.launcher) ||
         !/^Local\\MizarObserver-[a-zA-Z0-9-]+$/.test(options.job ?? ''))) ||
     (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds < 1)) ||
-    ![
-      options.python,
-      options.driver,
-      options.native,
-      options.steamApi,
-      options.node,
-      options.parserWorker,
-      options.outputDirectory,
-    ].every(isAbsolute) ||
+    ![options.executable, options.native, options.steamApi, options.outputDirectory].every(
+      isAbsolute,
+    ) ||
     (process.env.SteamAppId !== undefined && process.env.SteamAppId !== '730')
   ) {
     throw new Error('Invalid observer launch configuration');
@@ -437,7 +303,7 @@ export function startObserverProcess<R extends GameEventSourceRole>(
   const sourceId = randomUUID().replaceAll('-', '');
   const identity = { source: `${role}:${sourceId}`, role, channel: 0, world: 1 } as const;
   const manager = createObserverSourceManager({ role: options.role, identity });
-  const env: NodeJS.ProcessEnv = { SteamAppId: '730', PYTHONDONTWRITEBYTECODE: '1' };
+  const env: NodeJS.ProcessEnv = { SteamAppId: '730' };
   for (const key of [
     'PATH',
     'SystemRoot',
@@ -453,18 +319,11 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
   const args = [
-    options.driver,
     '--managed',
-    '--managed-protocol',
-    '2',
     '--native',
     options.native,
     '--steam-api',
     options.steamApi,
-    '--node',
-    options.node,
-    '--parser-worker',
-    options.parserWorker,
     '--source-role',
     role,
     '--source-id',
@@ -476,10 +335,10 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     options.outputDirectory,
   ];
   const child = spawn(
-    options.launcher ?? options.python,
-    options.launcher ? ['--observer-process', options.job!, options.python, ...args] : args,
+    options.launcher ?? options.executable,
+    options.launcher ? ['--observer-process', options.job!, options.executable, ...args] : args,
     {
-      cwd: dirname(options.driver),
+      cwd: dirname(options.executable),
       env,
       shell: false,
       windowsHide: true,
@@ -557,32 +416,24 @@ export function startObserverProcess<R extends GameEventSourceRole>(
         ? 'output-directory'
         : reason === 'configuration-boundary'
           ? 'configuration'
-          : reason?.startsWith('node-runtime-')
-            ? 'node-probe'
-            : report.report === 'received' &&
-                (report.cleanupCompleted === false || report.finalizationFailures.length > 0)
-              ? 'cleanup'
-              : reason === 'native-start-failed'
-                ? 'native-boot'
-                : reason?.startsWith('ordered-parser-') ||
-                    reason?.includes('parser-initialization') ||
-                    reason === 'receipt-before-parser-checkpoint'
-                  ? ready
-                    ? 'parser-runtime'
-                    : 'parser-initialization'
-                  : output.status === 'failed'
-                    ? 'stdout-protocol'
-                    : startupTimedOut
-                      ? 'readiness-timeout'
-                      : stoppingRequested
-                        ? 'cancelled'
-                        : report.report === 'received' && report.phase
-                          ? report.phase
-                          : reason === 'operation-failed-details-omitted'
-                            ? 'component-initialization'
-                            : report.report === 'received'
-                              ? 'session'
-                              : 'eof';
+          : report.report === 'received' &&
+              (report.cleanupCompleted === false || report.finalizationFailures.length > 0)
+            ? 'cleanup'
+            : reason === 'native-start-failed'
+              ? 'native-boot'
+              : output.status === 'failed'
+                ? 'stdout-protocol'
+                : startupTimedOut
+                  ? 'readiness-timeout'
+                  : stoppingRequested
+                    ? 'cancelled'
+                    : report.report === 'received' && report.phase
+                      ? report.phase
+                      : reason === 'operation-failed-details-omitted'
+                        ? 'component-initialization'
+                        : report.report === 'received'
+                          ? 'session'
+                          : 'eof';
     const terminal: ObserverAttemptEvidence = {
       ...report,
       attemptId,
