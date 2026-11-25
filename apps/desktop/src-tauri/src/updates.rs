@@ -176,11 +176,13 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         return Err("正在准备升级，请稍候。".into());
     }
     let log = app.state::<DesktopLog>().inner().clone();
+    let task_log = log.clone();
     let operation = Preparation(pending.clone());
     let host = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = operation;
+        let log = task_log;
         pending.gui_current()?;
         let root = crate::host_runtime::bundle_root()?;
         if !root.join("installed.flag").is_file() {
@@ -218,8 +220,7 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             .state_root
             .join("updates")
             .join(format!("extract-{}-{nonce:x}", std::process::id()));
-        fs::create_dir_all(&extract_dir)
-            .map_err(|e| format!("无法创建更新解包目录：{e}"))?;
+        fs::create_dir_all(&extract_dir).map_err(|e| format!("无法创建更新解包目录：{e}"))?;
 
         let extract_status = Command::new(&installer)
             .arg("/S")
@@ -241,17 +242,12 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
         }
 
         let commit_res = (|| -> Result<(), String> {
-            let _publication = pending
-                .publication
-                .lock()
-                .map_err(|_| "更新状态不可用。")?;
+            let _publication = pending.publication.lock().map_err(|_| "更新状态不可用。")?;
             pending.gui_current()?;
             host.state::<crate::production_exit::ExitGate>().check()?;
-            if host
-                .webview_windows()
-                .iter()
-                .any(|(label, window)| label.starts_with("tool-") && window.is_visible().unwrap_or(true))
-            {
+            if host.webview_windows().iter().any(|(label, window)| {
+                label.starts_with("tool-") && window.is_visible().unwrap_or(true)
+            }) {
                 return Err("请先保存并关闭编辑和预览窗口。".into());
             }
             *pending.ready.lock().map_err(|_| "更新状态不可用。")? = Some(ReadyUpdate {

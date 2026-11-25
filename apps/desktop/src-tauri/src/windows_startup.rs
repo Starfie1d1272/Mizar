@@ -389,7 +389,12 @@ pub fn spawn_applier_with_inherited_mutex(
         }
     }
     let mut cmd_wide: Vec<u16> = cmdline.encode_utf16().chain(Some(0)).collect();
-    let app_wide: Vec<u16> = exe.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let app_wide: Vec<u16> = exe
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
 
     let si = StartupInfoExW {
         startup_info: StartupInfoW {
@@ -816,7 +821,6 @@ pub fn failure_dialog(message: &str, logs: Option<&Path>) {
     }
 }
 
-
 pub fn set_window_app_user_model(hwnd: isize, bundle_root: &Path) {
     if !bundle_root.join("installed.flag").is_file() {
         return;
@@ -857,7 +861,11 @@ pub fn set_window_app_user_model(hwnd: isize, bundle_root: &Path) {
         get_count: usize,
         get_at: usize,
         get_value: usize,
-        set_value: unsafe extern "system" fn(*mut c_void, *const PropertyKey, *const PropVariantStr) -> i32,
+        set_value: unsafe extern "system" fn(
+            *mut c_void,
+            *const PropertyKey,
+            *const PropVariantStr,
+        ) -> i32,
         commit: unsafe extern "system" fn(*mut c_void) -> i32,
     }
     #[link(name = "shell32")]

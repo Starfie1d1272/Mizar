@@ -1329,11 +1329,13 @@ fn main() {
             if let Err(error) = updates::launch_applier(&ready, &_mutex, &log) {
                 log.event("update_handoff_failed", "failure", Some(&error));
                 drop(_mutex);
-                let _ = Command::new(std::env::current_exe().unwrap_or_else(|_| root.join("Mizar.exe")))
-                    .args(&args)
-                    .current_dir(&root)
-                    .creation_flags(0x08000000)
-                    .spawn();
+                let _ = Command::new(
+                    std::env::current_exe().unwrap_or_else(|_| root.join("Mizar.exe")),
+                )
+                .args(&args)
+                .current_dir(&root)
+                .creation_flags(0x08000000)
+                .spawn();
             }
         }
         Ok(None) => (),
