@@ -192,61 +192,28 @@ export class UpdateManager {
     try {
       const result = z
         .object({
-          status: z.enum(['installed', 'restored', 'recovery-required', 'cancelled', 'failed']),
-          version: z.unknown().optional(),
-          recoveryDirectory: z.unknown().optional(),
+          status: z.enum(['installed', 'rolled_back', 'cancelled', 'failed']),
+          version: z.string().nullable().optional(),
         })
-        .parse(JSON.parse(await readFile(join(this.root, 'result.json'), 'utf8')));
-      this.lastResult = result.status;
-      // Completed attempts describe a particular installed payload, not all future
-      // installations using this state directory. Keep uncertain recovery visible.
-      const recoveryDirectory = result.recoveryDirectory;
+        .parse(
+          JSON.parse(
+            await readFile(
+              join(this.options.stateRoot, 'logs', 'last-applier-result.json'),
+              'utf8',
+            ),
+          ),
+        );
+      this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
       if (
-        result.status !== 'recovery-required' &&
-        typeof recoveryDirectory === 'string' &&
-        /^install-[a-f0-9]{32}$/.test(recoveryDirectory)
+        result.status === 'installed' &&
+        result.version === this.options.version &&
+        this.ready?.manifest.version === result.version
       ) {
-        try {
-          const stage = join(this.root, recoveryDirectory);
-          const stageInfo = await lstat(stage);
-          const planPath = join(stage, 'plan.json');
-          const planInfo = await lstat(planPath);
-          if (
-            !stageInfo.isDirectory() ||
-            stageInfo.isSymbolicLink() ||
-            !planInfo.isFile() ||
-            planInfo.isSymbolicLink()
-          )
-            throw new Error('update_result_plan_invalid');
-          const plan = z
-            .object({
-              version: z.string().regex(/^\d+\.\d+\.\d+$/),
-              contentDigest: z.string().regex(/^[a-f0-9]{64}$/),
-              previousContentDigest: z.string().regex(/^[a-f0-9]{64}$/),
-            })
-            .parse(JSON.parse(await readFile(planPath, 'utf8')));
-          if (plan.version !== result.version) throw new Error('update_result_plan_mismatch');
-          const resultDigest =
-            result.status === 'installed' ? plan.contentDigest : plan.previousContentDigest;
-          if (resultDigest !== this.options.currentContentDigest) this.lastResult = null;
-          else if (
-            result.status === 'installed' &&
-            this.ready?.manifest.version === plan.version &&
-            this.ready.manifest.installer.contentDigest === resultDigest
-          ) {
-            // Only consume the download proven to be this completed installation.
-            // Keep other candidates and all recovery records/backups untouched.
-            this.ready = null;
-            this.completedReadyCleanup = true;
-            await this.cleanupDownloads();
-          }
-        } catch (error) {
-          /* No reliable payload identity: retain the recorded result. */
-          this.failure('result_identity_load', error);
-        }
+        this.ready = null;
+        this.completedReadyCleanup = true;
+        await this.cleanupDownloads();
       }
     } catch (error) {
-      /* No completed attempt. */
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }
   }
@@ -261,7 +228,8 @@ export class UpdateManager {
     }
     try {
       for (const name of names ?? (await readdir(this.root))) {
-        if (!/^download-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory) continue;
+        if (!/^(?:download|extract)-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory)
+          continue;
         try {
           await rm(join(this.root, name), { recursive: true, force: true });
         } catch (cause) {

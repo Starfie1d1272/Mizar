@@ -395,6 +395,9 @@ pub fn spawn_applier_with_inherited_mutex(
         .encode_utf16()
         .chain(Some(0))
         .collect();
+    let dir_wide: Option<Vec<u16>> = exe
+        .parent()
+        .map(|p| p.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect());
 
     let si = StartupInfoExW {
         startup_info: StartupInfoW {
@@ -413,7 +416,7 @@ pub fn spawn_applier_with_inherited_mutex(
             w_show_window: 0,
             cb_reserved2: 0,
             lp_reserved2: std::ptr::null_mut(),
-            h_std_input: -10,
+            h_std_input: 0,
             h_std_output: log_handle,
             h_std_error: log_handle,
         },
@@ -435,7 +438,7 @@ pub fn spawn_applier_with_inherited_mutex(
             1,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
             std::ptr::null(),
-            std::ptr::null(),
+            dir_wide.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
             &si,
             &mut pi,
         )

@@ -220,28 +220,27 @@ pub async fn prepare(app: tauri::AppHandle) -> Result<(), String> {
             .state_root
             .join("updates")
             .join(format!("extract-{}-{nonce:x}", std::process::id()));
-        fs::create_dir_all(&extract_dir).map_err(|e| format!("无法创建更新解包目录：{e}"))?;
-
-        let extract_status = Command::new(&installer)
-            .arg("/S")
-            .arg(format!("/MIZAREXTRACT={}", extract_dir.display()))
-            .creation_flags(0x0800_0000)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-
-        let extract_ok = match extract_status {
-            Ok(s) if s.success() && extract_dir.join("mizar-applier.exe").is_file() => true,
-            _ => false,
-        };
-        if !extract_ok {
-            let _ = fs::remove_dir_all(&extract_dir);
-            let _ = post_install_plan(&log, json!({ "action": "release" }), 3);
-            return Err("新版安装包解包失败，旧版仍可用，请从正式发布页下载。".into());
-        }
 
         let commit_res = (|| -> Result<(), String> {
+            fs::create_dir_all(&extract_dir).map_err(|e| format!("无法创建更新解包目录：{e}"))?;
+
+            let extract_status = Command::new(&installer)
+                .arg("/S")
+                .raw_arg(format!("/MIZAREXTRACT=\"{}\"", extract_dir.display()))
+                .creation_flags(0x0800_0000)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            let extract_ok = matches!(
+                extract_status,
+                Ok(s) if s.success() && extract_dir.join("mizar-applier.exe").is_file()
+            );
+            if !extract_ok {
+                return Err("新版安装包解包失败，旧版仍可用，请从正式发布页下载。".into());
+            }
+
             let _publication = pending.publication.lock().map_err(|_| "更新状态不可用。")?;
             pending.gui_current()?;
             host.state::<crate::production_exit::ExitGate>().check()?;

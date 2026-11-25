@@ -248,3 +248,29 @@ pub fn prepare_core_resources(
     }
     Ok(format!("stdout={stdout}; stderr={stderr}"))
 }
+
+pub fn rollback_core_resources(ver_dir: &Path, state_root: &Path) -> Result<(), String> {
+    let entry = ver_dir.join("resources/app/dist/web-installer/installed-entry.mjs");
+    let node_exe = ver_dir.join("resources/runtime/node.exe");
+    if !entry.is_file() || !node_exe.is_file() {
+        return Ok(());
+    }
+    let mut cmd = Command::new(&node_exe);
+    cmd.arg(&entry)
+        .arg("--rollback")
+        .env("MIZAR_STATE_ROOT", state_root)
+        .current_dir(ver_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("无法启动资源回退进程 node.exe: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(format!("Core 资源回退失败: {stderr}"));
+    }
+    Ok(())
+}

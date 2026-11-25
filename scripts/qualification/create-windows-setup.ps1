@@ -53,7 +53,10 @@ $brandSource = Join-Path $PSScriptRoot ('../../' + $assetManifest.source)
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $brandSource).Hash.ToLowerInvariant() -ne $assetManifest.sourceSha256) { throw 'Installer brand source differs' }
 $icon = Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico'
 Invoke-SetupPhase 'compile' {
-  & $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" $script
+  $nsisArgs = @('/INPUTCHARSET', 'UTF8', "/DPAYLOAD=$source", "/DOUTPUT=$archive", "/DVERSION=$($manifest.appVersion)", "/DICON=$icon", "/DINSTALLER_ASSETS=$assets")
+  if ($ManifestName -eq 'core-release-manifest.json') { $nsisArgs += '/DCORE_SETUP' }
+  $nsisArgs += $script
+  & $compiler @nsisArgs
   if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
 }
 function Install-Setup {

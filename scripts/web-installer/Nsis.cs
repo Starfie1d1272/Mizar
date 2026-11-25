@@ -78,9 +78,7 @@ namespace Mizar.WebInstaller {
       return ActiveInstallDir() == null;
     }
 
-    internal static bool HasPending() {
-      return false;
-    }
+
 
     internal static string SelectDestination(string directory) {
       directory = (directory ?? "").Trim();
@@ -162,14 +160,14 @@ namespace Mizar.WebInstaller {
       });
     }
 
-    static async Task<int> RunProcessAsync(ProcessStartInfo psi, TimeSpan timeout, CancellationToken token) {
+    static async Task<int> RunProcessAsync(ProcessStartInfo psi, TimeSpan timeout, CancellationToken token, bool cancellable) {
       using (var child = Process.Start(psi)) {
         if (child == null) throw new IOException("无法启动安装子进程：" + psi.FileName);
         var clock = Stopwatch.StartNew();
         while (!child.HasExited) {
-          token.ThrowIfCancellationRequested();
+          if (cancellable) token.ThrowIfCancellationRequested();
           if (clock.Elapsed >= timeout) throw new TimeoutException("安装程序执行超时。");
-          await Task.Delay(100, token).ConfigureAwait(false);
+          await Task.Delay(100).ConfigureAwait(false);
         }
         return child.ExitCode;
       }
@@ -200,7 +198,7 @@ namespace Mizar.WebInstaller {
           Arguments = "/S /MIZAREXTRACT=\"" + extractDir + "\"",
           UseShellExecute = false,
           CreateNoWindow = true,
-        }, TimeSpan.FromMinutes(5), token).ConfigureAwait(false);
+        }, TimeSpan.FromMinutes(5), token, true).ConfigureAwait(false);
         if (extractCode != 0) throw new InstallerActionRequired("安装包解包失败（退出码：" + extractCode + "）。", true);
 
         string applier = Path.Combine(extractDir, "mizar-applier.exe");
@@ -208,17 +206,18 @@ namespace Mizar.WebInstaller {
         if (!File.Exists(applier)) throw new InstallerActionRequired("安装包缺少 mizar-applier.exe，请重新下载。", false);
 
         if (progress != null) progress.Report("installing-core");
-        string args = "install --payload-dir \"" + extractDir + "\" --install-dir \"" + destination + "\" --expected-content-digest " + plan.contentDigest + " --no-ui --no-launch --result-file \"" + resultPath + "\"";
+        string args = "install --payload-dir \"" + extractDir + "\" --install-dir \"" + destination + "\" --expected-content-digest " + plan.contentDigest + " --no-launch --result-file \"" + resultPath + "\"";
         if (plan.name.EndsWith("-Core-Setup.exe", StringComparison.Ordinal)) {
           args += " --core-archive-sha256 " + plan.coreSha256 + " --installer-sha256 " + plan.sha256 + " --installer-bytes " + plan.bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        // Applier's native window owns cancellation once launched; wait for process exit before cleanup.
         int applyCode = await RunProcessAsync(new ProcessStartInfo {
           FileName = applier,
           Arguments = args,
           UseShellExecute = false,
           CreateNoWindow = true,
-        }, TimeSpan.FromMinutes(10), token).ConfigureAwait(false);
+        }, TimeSpan.FromMinutes(10), token, false).ConfigureAwait(false);
 
         if (applyCode == 0) return destination;
 

@@ -424,7 +424,7 @@ namespace Mizar.WebInstaller {
       amount.SetBounds(32,232,526,24); amount.ForeColor=Color.FromArgb(80,92,110);
       launchChoice.SetBounds(32,200,220,28); launchChoice.Text="启动 Mizar"; launchChoice.Checked=true; launchChoice.Visible=false;
       launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
-      action.SetBounds(347,270,100,32); action.Text=Nsis.HasPending() ? "恢复安装" : "安装";action.TabIndex=2;
+      action.SetBounds(347,270,100,32); action.Text="安装";action.TabIndex=2;
       action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
       keepDataReinstall.SetBounds(216,270,116,32); keepDataReinstall.Text="保留资料重装"; keepDataReinstall.Visible=false; keepDataReinstall.TabIndex=6;
       keepDataReinstall.Click += async (s,e)=>await RecoverByRetire();

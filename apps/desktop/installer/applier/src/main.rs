@@ -10,7 +10,9 @@ use mizar_common::{
     is_reparse_point, read_current_pointer, remove_dir_safe, replace_file_atomic,
     validate_install_dir, write_current_pointer_atomic, CurrentPointer,
 };
-use payload::{move_or_copy_dir, prepare_core_resources, sha256_file, verify_payload};
+use payload::{
+    move_or_copy_dir, prepare_core_resources, rollback_core_resources, sha256_file, verify_payload,
+};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -440,8 +442,16 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         .as_ref()
         .map(|p| p.current.split('-').next().unwrap_or(&p.current).to_owned());
 
+    let mut legacy_archive: Option<PathBuf> = None;
+    let rollback_legacy = |archive: &Option<PathBuf>| {
+        if let Some(arch) = archive {
+            let _ = remove_dir_safe(&install_dir);
+            let _ = fs::rename(arch, &install_dir);
+        }
+    };
+
     if is_legacy_layout {
-        let legacy_archive = install_dir.with_file_name(format!(
+        let arch = install_dir.with_file_name(format!(
             "{}-legacy-{}",
             install_dir
                 .file_name()
@@ -449,11 +459,8 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
                 .to_string_lossy(),
             utc_compact_timestamp()
         ));
-        log.log(&format!(
-            "archiving legacy dir to {}",
-            legacy_archive.display()
-        ));
-        if let Err(e) = fs::rename(&install_dir, &legacy_archive) {
+        log.log(&format!("archiving legacy dir to {}", arch.display()));
+        if let Err(e) = fs::rename(&install_dir, &arch) {
             let msg = format!("归档旧安装目录失败: {e}");
             log.log(&msg);
             let _ = remove_dir_safe(&staging_dir);
@@ -470,67 +477,80 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
                 ),
             );
         }
-        let target_ver_dir = install_dir.join("versions").join(&version_id);
-        if let Err(e) = fs::create_dir_all(install_dir.join("versions"))
-            .and_then(|_| move_or_copy_dir(&staging_dir, &target_ver_dir))
-        {
-            let msg = format!("重建安装目录失败，已回退旧目录: {e}");
-            log.log(&msg);
-            let _ = remove_dir_safe(&install_dir);
-            let _ = fs::rename(&legacy_archive, &install_dir);
-            let _ = remove_dir_safe(&staging_dir);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
+        legacy_archive = Some(arch);
+    }
+
+    let target_ver_dir = install_dir.join("versions").join(&version_id);
+    if let Err(e) = fs::create_dir_all(install_dir.join("versions"))
+        .and_then(|_| move_or_copy_dir(&staging_dir, &target_ver_dir))
+    {
+        let msg = format!("移动版本目录失败: {e}");
+        log.log(&msg);
+        rollback_legacy(&legacy_archive);
+        let _ = remove_dir_safe(&staging_dir);
+        ui.close();
+        recover_old_on_precommit_fail(desktop_mutex, active_event);
+        return (
+            ExitCode::IoError,
+            make_result(
                 ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    version_out,
-                    prev_version_out,
-                    None,
-                    Some(msg),
-                ),
-            );
-        }
+                version_out,
+                prev_version_out,
+                None,
+                Some(msg),
+            ),
+        );
+    }
+    if legacy_archive.is_some() {
         retire_legacy_update_state(&params.state_root, log);
-    } else {
-        let target_ver_dir = install_dir.join("versions").join(&version_id);
-        if let Err(e) = fs::create_dir_all(install_dir.join("versions"))
-            .and_then(|_| move_or_copy_dir(&staging_dir, &target_ver_dir))
-        {
-            let msg = format!("移动版本目录失败: {e}");
-            log.log(&msg);
-            let _ = remove_dir_safe(&staging_dir);
-            ui.close();
-            recover_old_on_precommit_fail(desktop_mutex, active_event);
-            return (
-                ExitCode::IoError,
-                make_result(
-                    ExitCode::IoError,
-                    version_out,
-                    prev_version_out,
-                    None,
-                    Some(msg),
-                ),
-            );
-        }
     }
 
     let ver_dir = install_dir.join("versions").join(&version_id);
-    if let Err(warn) = copy_binary_with_retry(
-        &ver_dir.join("mizar-launcher.exe"),
-        &install_dir.join("Mizar.exe"),
-    ) {
-        log.log(&format!("warn: {warn}"));
-        cleanup_warning = Some(warn);
+    let launcher_dst = install_dir.join("Mizar.exe");
+    let launcher_required = legacy_archive.is_some() || !launcher_dst.is_file();
+    if let Err(err) = copy_binary_with_retry(&ver_dir.join("mizar-launcher.exe"), &launcher_dst) {
+        if launcher_required {
+            log.log(&err);
+            rollback_legacy(&legacy_archive);
+            ui.close();
+            recover_old_on_precommit_fail(desktop_mutex, active_event);
+            return (
+                ExitCode::IoError,
+                make_result(
+                    ExitCode::IoError,
+                    version_out,
+                    prev_version_out,
+                    None,
+                    Some(err),
+                ),
+            );
+        }
+        log.log(&format!("warn: {err}"));
+        cleanup_warning = Some(err);
     }
-    if let Err(warn) = copy_binary_with_retry(
-        &ver_dir.join("mizar-applier.exe"),
-        &install_dir.join("Uninstall.exe"),
-    ) {
-        log.log(&format!("warn: {warn}"));
+
+    let uninst_dst = install_dir.join("Uninstall.exe");
+    let uninst_required = legacy_archive.is_some() || !uninst_dst.is_file();
+    if let Err(err) = copy_binary_with_retry(&ver_dir.join("mizar-applier.exe"), &uninst_dst) {
+        if uninst_required {
+            log.log(&err);
+            rollback_legacy(&legacy_archive);
+            ui.close();
+            recover_old_on_precommit_fail(desktop_mutex, active_event);
+            return (
+                ExitCode::IoError,
+                make_result(
+                    ExitCode::IoError,
+                    version_out,
+                    prev_version_out,
+                    None,
+                    Some(err),
+                ),
+            );
+        }
+        log.log(&format!("warn: {err}"));
         if cleanup_warning.is_none() {
-            cleanup_warning = Some(warn);
+            cleanup_warning = Some(err);
         }
     }
 
@@ -544,6 +564,7 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     if let Err(e) = write_current_pointer_atomic(&install_dir, &new_pointer) {
         let msg = format!("写入 current.json 失败: {e}");
         log.log(&msg);
+        rollback_legacy(&legacy_archive);
         ui.close();
         recover_old_on_precommit_fail(desktop_mutex, active_event);
         return (
@@ -593,44 +614,59 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     drop(active_event);
 
     let mut final_code = ExitCode::Ok;
+    let mut launch_msg: Option<String> = None;
     if !params.no_launch {
         ui.set_stage("正在启动新版 Mizar...");
         let target_exe = ver_dir.join("Mizar.exe");
-        match launch_and_wait_ready(&target_exe, Duration::from_secs(60)) {
+        let launch_failed = match launch_and_wait_ready(&target_exe, Duration::from_secs(60)) {
             Ok(LaunchOutcome::Ready) => {
                 log.log("new version confirmed ready");
+                None
             }
             Ok(LaunchOutcome::Timeout) => {
                 log.log("warn: launch readiness timed out after 60s, keeping new version");
+                None
             }
             Ok(LaunchOutcome::ExitedEarly(code)) => {
-                log.log(&format!("new version exited early (code={code:?})"));
-                if let Some(prev_id) = &previous_id {
-                    let prev_exe = install_dir.join("versions").join(prev_id).join("Mizar.exe");
-                    if prev_exe.is_file() {
-                        let rollback_ptr = CurrentPointer {
-                            schema_version: 2,
-                            current: prev_id.clone(),
-                            previous: None,
-                            updated_at: utc_iso8601(),
-                        };
-                        if let Err(e) = write_current_pointer_atomic(&install_dir, &rollback_ptr) {
-                            log.log(&format!("rollback current.json failed: {e}"));
-                        } else {
-                            log.log(&format!("rolled back current.json -> {prev_id}"));
-                            let _ = Command::new(&prev_exe)
-                                .current_dir(prev_exe.parent().unwrap_or(&install_dir))
-                                .stdin(Stdio::null())
-                                .stdout(Stdio::null())
-                                .stderr(Stdio::null())
-                                .spawn();
-                            final_code = ExitCode::RolledBack;
+                Some(format!("新版启动后提前退出 (code={code:?})"))
+            }
+            Err(e) => Some(format!("新版启动失败: {e}")),
+        };
+        if let Some(reason) = launch_failed {
+            log.log(&reason);
+            let mut rolled_back = false;
+            if let Some(prev_id) = &previous_id {
+                let prev_exe = install_dir.join("versions").join(prev_id).join("Mizar.exe");
+                if prev_exe.is_file() {
+                    if artifact.resource_mode == "core" {
+                        if let Err(e) = rollback_core_resources(&ver_dir, &params.state_root) {
+                            log.log(&format!("warn: {e}"));
                         }
+                    }
+                    let rollback_ptr = CurrentPointer {
+                        schema_version: 2,
+                        current: prev_id.clone(),
+                        previous: None,
+                        updated_at: utc_iso8601(),
+                    };
+                    if let Err(e) = write_current_pointer_atomic(&install_dir, &rollback_ptr) {
+                        log.log(&format!("rollback current.json failed: {e}"));
+                    } else {
+                        log.log(&format!("rolled back current.json -> {prev_id}"));
+                        let _ = Command::new(&prev_exe)
+                            .current_dir(prev_exe.parent().unwrap_or(&install_dir))
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .spawn();
+                        final_code = ExitCode::RolledBack;
+                        rolled_back = true;
                     }
                 }
             }
-            Err(e) => {
-                log.log(&format!("launch failed: {e}"));
+            if !rolled_back {
+                final_code = ExitCode::IoError;
+                launch_msg = Some(reason);
             }
         }
     }
@@ -672,7 +708,7 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
     let msg = if final_code == ExitCode::RolledBack {
         Some("新版启动失败，已自动回退到上一版本".into())
     } else {
-        None
+        launch_msg
     };
     (
         final_code,
