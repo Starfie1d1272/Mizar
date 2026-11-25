@@ -188,6 +188,10 @@ export class UpdateManager {
     } catch (cause) {
       this.disableInitialization('directory_scan', cause);
     }
+    if (this.ready && this.ready.manifest.version === this.options.version) {
+      this.ready = null;
+      this.completedReadyCleanup = true;
+    }
     await this.cleanupDownloads(names);
     try {
       const result = z
@@ -204,15 +208,6 @@ export class UpdateManager {
           ),
         );
       this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
-      if (
-        result.status === 'installed' &&
-        result.version === this.options.version &&
-        this.ready?.manifest.version === result.version
-      ) {
-        this.ready = null;
-        this.completedReadyCleanup = true;
-        await this.cleanupDownloads();
-      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }
@@ -228,8 +223,7 @@ export class UpdateManager {
     }
     try {
       for (const name of names ?? (await readdir(this.root))) {
-        if (!/^(?:download|extract)-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory)
-          continue;
+        if (!/^download-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory) continue;
         try {
           await rm(join(this.root, name), { recursive: true, force: true });
         } catch (cause) {

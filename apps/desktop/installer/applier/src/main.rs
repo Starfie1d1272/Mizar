@@ -23,8 +23,9 @@ use ui::ProgressUi;
 use win32::{
     clear_legacy_run_once, create_shortcut, delete_install_registry, desktop_dir,
     find_running_mizar_under, launch_and_wait_ready, random_hex_16, remove_shortcuts,
-    schedule_self_delete, start_menu_dir, utc_compact_timestamp, utc_iso8601, wait_host_exit,
-    write_install_registry, DesktopMutexHandle, LaunchOutcome, UpdateActiveEvent, WriterMutex,
+    schedule_dir_delete, schedule_self_delete, show_message_box, start_menu_dir,
+    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry,
+    DesktopMutexHandle, LaunchOutcome, UpdateActiveEvent, WriterMutex,
 };
 
 struct Logger {
@@ -636,10 +637,11 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
             log.log(&reason);
             let mut rolled_back = false;
             if let Some(prev_id) = &previous_id {
-                let prev_exe = install_dir.join("versions").join(prev_id).join("Mizar.exe");
+                let prev_ver_dir = install_dir.join("versions").join(prev_id);
+                let prev_exe = prev_ver_dir.join("Mizar.exe");
                 if prev_exe.is_file() {
                     if artifact.resource_mode == "core" {
-                        if let Err(e) = rollback_core_resources(&ver_dir, &params.state_root) {
+                        if let Err(e) = rollback_core_resources(&prev_ver_dir, &params.state_root) {
                             log.log(&format!("warn: {e}"));
                         }
                     }
@@ -704,6 +706,10 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         }
     }
 
+    if params.apply_update.is_some() {
+        schedule_dir_delete(&params.payload_dir);
+    }
+
     ui.close();
     let msg = if final_code == ExitCode::RolledBack {
         Some("新版启动失败，已自动回退到上一版本".into())
@@ -764,13 +770,13 @@ fn run_uninstall(
     let _active = UpdateActiveEvent::acquire().ok();
 
     if find_running_mizar_under(&install_dir) {
+        let msg = "请先正常退出 Mizar 后再卸载。用户资料将保留。".to_string();
+        if !no_ui {
+            show_message_box("卸载 Mizar", &msg);
+        }
         return (
             ExitCode::AppRunning,
-            make_result(
-                ExitCode::AppRunning,
-                None,
-                Some("请先正常退出 Mizar 后再卸载".into()),
-            ),
+            make_result(ExitCode::AppRunning, None, Some(msg)),
         );
     }
 
@@ -789,26 +795,38 @@ fn run_uninstall(
         );
     }
 
-    remove_shortcuts();
-    delete_install_registry();
-
-    let mut warn: Option<String> = None;
     for sub in ["versions", "staging"] {
         let p = install_dir.join(sub);
         if p.exists() {
             if let Err(e) = remove_dir_safe(&p) {
-                let w = format!("清理 {sub} 失败: {e}");
-                log.log(&w);
-                warn = Some(w);
+                let msg = format!("清理 {sub} 失败: {e}");
+                log.log(&msg);
+                ui.close();
+                return (
+                    ExitCode::IoError,
+                    make_result(ExitCode::IoError, None, Some(msg)),
+                );
             }
         }
     }
     for file in ["current.json", "Mizar.exe", "installed.flag"] {
         let p = install_dir.join(file);
         if p.exists() {
-            let _ = fs::remove_file(&p);
+            if let Err(e) = fs::remove_file(&p) {
+                let msg = format!("删除 {file} 失败: {e}");
+                log.log(&msg);
+                ui.close();
+                return (
+                    ExitCode::IoError,
+                    make_result(ExitCode::IoError, None, Some(msg)),
+                );
+            }
         }
     }
+
+    remove_shortcuts();
+    delete_install_registry();
+    let warn: Option<String> = None;
 
     // If we are running as <install_dir>/Uninstall.exe, schedule self-delete
     if let Ok(cur_exe) = std::env::current_exe() {

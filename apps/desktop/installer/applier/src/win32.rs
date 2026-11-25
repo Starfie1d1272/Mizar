@@ -519,6 +519,34 @@ pub fn remove_shortcuts() {
     }
 }
 
+pub fn show_message_box(title: &str, text: &str) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    }
+    let title_w = to_wide(title);
+    let text_w = to_wide(text);
+    unsafe {
+        MessageBoxW(0, text_w.as_ptr(), title_w.as_ptr(), 0x30);
+    }
+}
+
+pub fn schedule_dir_delete(dir: &Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let cmd = format!(
+        "ping -n 2 127.0.0.1 >nul & rmdir /s /q \"{}\"",
+        dir.display()
+    );
+    let _ = Command::new("cmd.exe")
+        .args(["/C", &cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 pub fn schedule_self_delete(exe_path: &Path, install_dir: &Path) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;

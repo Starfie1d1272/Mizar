@@ -2,7 +2,7 @@ use mizar_common::{to_wide, UPDATE_WINDOW_TITLE};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
-use std::thread::JoinHandle;
+
 use std::time::Instant;
 
 const WM_DESTROY: u32 = 0x0002;
@@ -186,7 +186,6 @@ pub struct ProgressUi {
     hwnd: Arc<AtomicIsize>,
     cancelled: Arc<AtomicBool>,
     committed: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
 }
 
 impl ProgressUi {
@@ -199,14 +198,13 @@ impl ProgressUi {
                 hwnd: hwnd_atomic,
                 cancelled,
                 committed,
-                thread: None,
             };
         }
         let h_clone = hwnd_atomic.clone();
         let c_clone = cancelled.clone();
         let m_clone = committed.clone();
         let stage_str = initial_stage.to_owned();
-        let thread = std::thread::Builder::new()
+        let _ = std::thread::Builder::new()
             .name("mizar-applier-ui".into())
             .spawn(move || {
                 let icc = InitCommonControls {
@@ -364,7 +362,6 @@ impl ProgressUi {
             hwnd: hwnd_atomic,
             cancelled,
             committed,
-            thread,
         }
     }
 
@@ -391,13 +388,10 @@ impl ProgressUi {
         }
     }
 
-    pub fn close(mut self) {
+    pub fn close(self) {
         let hwnd = self.hwnd.swap(0, Ordering::AcqRel);
         if hwnd != 0 {
             unsafe { PostMessageW(hwnd, WM_APP_CLOSE, 0, 0) };
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
         }
     }
 }
@@ -407,9 +401,6 @@ impl Drop for ProgressUi {
         let hwnd = self.hwnd.swap(0, Ordering::AcqRel);
         if hwnd != 0 {
             unsafe { PostMessageW(hwnd, WM_APP_CLOSE, 0, 0) };
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
         }
     }
 }

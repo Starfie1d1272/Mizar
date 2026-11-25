@@ -165,8 +165,10 @@ namespace Mizar.WebInstaller {
         if (child == null) throw new IOException("无法启动安装子进程：" + psi.FileName);
         var clock = Stopwatch.StartNew();
         while (!child.HasExited) {
-          if (cancellable) token.ThrowIfCancellationRequested();
-          if (clock.Elapsed >= timeout) throw new TimeoutException("安装程序执行超时。");
+          if (cancellable) {
+            token.ThrowIfCancellationRequested();
+            if (clock.Elapsed >= timeout) throw new TimeoutException("安装程序执行超时。");
+          }
           await Task.Delay(100).ConfigureAwait(false);
         }
         return child.ExitCode;
