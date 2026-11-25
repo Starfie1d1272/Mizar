@@ -275,7 +275,7 @@ it('rechecks after an OBS upgrade, prepares video on the supported major, and pe
   );
   cleanups.push(() => adapter.close());
   f.state.version = '30.2.3';
-  expect((await adapter.status()).findings).toContainEqual({
+  expect(await adapter.check()).toContainEqual({
     code: 'obs_version_unsupported',
     message: expect.stringContaining('OBS 32'),
   });

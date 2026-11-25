@@ -184,7 +184,9 @@ export async function verifyResourceCatalogReceipt({
     descriptorBundleBytes: decode(receipt.descriptorBundleBase64, RECEIPT_MAX_BYTES),
     catalogBundleBytes: decode(receipt.catalogBundleBase64, RECEIPT_MAX_BYTES),
   };
-  const parsed = parse(bytes, { ...expectedCore }, purpose);
+  const cacheReusable = purpose === 'cache' || purpose === 'rollback';
+  if (!cacheReusable) requireValue(expectedCore, '资源目录必须绑定当前 Core');
+  const parsed = parse(bytes, expectedCore ? { ...expectedCore } : undefined, purpose);
   signal?.throwIfAborted();
   verifyProofs(
     bytes,

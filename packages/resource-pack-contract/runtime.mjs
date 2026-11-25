@@ -143,6 +143,8 @@ export async function verifyResourceReceipt({
   receipt = JSON.parse(serialized);
   requireValue(receipt?.schemaVersion === 'mizar.resource-receipt.v1', '缓存 receipt 版本无效');
   policy = policy && { ...policy };
+  const compatibilityCoreVersion =
+    policy?.coreVersion ?? expectedCore?.appVersion?.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, '');
   let catalogIdentity;
   if (receipt.catalog !== undefined) {
     const corePin =
@@ -182,20 +184,22 @@ export async function verifyResourceReceipt({
     const selected = matching[0] ?? parsedCatalogs[parsedCatalogs.length - 1];
     const authorization = await verifyResourceCatalogReceipt({
       receipt: selected.item,
-      expectedCore: matching.length > 0 ? corePin : selected.descriptor.core,
+      ...(matching.length > 0 ? { expectedCore: corePin } : {}),
       purpose,
       tufCachePath,
       signal,
     });
     const pinned = getResourceAuthorization(authorization);
     catalogIdentity = pinned;
+    const policyKeys =
+      cacheReusable && matching.length === 0
+        ? ['packVersion', 'sourceSha', 'promotionSha']
+        : ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'];
     if (policy)
       requireValue(
         Number.isSafeInteger(policy.minimumSequence) &&
           policy.minimumSequence >= 0 &&
-          ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'].every(
-            (key) => policy[key] === pinned.policy[key],
-          ),
+          policyKeys.every((key) => policy[key] === pinned.policy[key]),
         '资源缓存目录不等于当前受信任策略',
       );
     policy = {
@@ -286,7 +290,7 @@ export async function verifyResourceReceipt({
     authorize(publicationVerifier, archiveVerifier);
   }
   const manifest = parsePackManifest(JSON.parse(manifestBytes.toString('utf8')), {
-    coreVersion: policy.coreVersion,
+    coreVersion: compatibilityCoreVersion ?? policy.coreVersion,
   });
   assertPublicationContent(statement, { manifest, manifestSha256: sha256(manifestBytes) });
   return manifest;

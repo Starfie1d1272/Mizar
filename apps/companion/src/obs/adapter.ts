@@ -1020,20 +1020,6 @@ export class ObsAdapter {
               },
             ),
             query(
-              'version_query_failed',
-              'OBS 已连接，但版本检查未完成。请重新检查。',
-              async () => {
-                try {
-                  await requireSupportedObs(obs);
-                } catch (error) {
-                  if (!(error instanceof ObsVideoError)) throw error;
-                  this.diagnostic('obs_version_check', obsErrorEvidence(error));
-                  findings.push({ code: error.code, message: error.message });
-                  facts = { ...facts, resources: 'needs_configuration' };
-                }
-              },
-            ),
-            query(
               'video_query_failed',
               'OBS 已连接，但视频设置尚未确认。请重新检查。',
               async () => {
