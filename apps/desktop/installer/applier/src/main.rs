@@ -22,8 +22,8 @@ use win32::{
     clear_legacy_run_once, create_shortcut, delete_install_registry, desktop_dir,
     find_running_mizar_under, launch_and_wait_ready, random_hex_16, remove_shortcuts,
     schedule_dir_delete, schedule_self_delete, show_message_box, start_menu_dir,
-    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry,
-    DesktopMutexHandle, LaunchOutcome, UpdateActiveEvent, WriterMutex,
+    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry, DesktopMutexHandle,
+    LaunchOutcome, UpdateActiveEvent, WriterMutex,
 };
 
 struct Logger {
@@ -36,7 +36,11 @@ impl Logger {
         let logs_dir = state_root.join("logs");
         let _ = fs::create_dir_all(&logs_dir);
         let path = logs_dir.join(format!("applier-{}.log", utc_compact_timestamp()));
-        let file = OpenOptions::new().create(true).append(true).open(&path).ok();
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
         Self {
             path,
             file: Mutex::new(file),
@@ -163,7 +167,9 @@ fn retire_legacy_update_state(state_root: &Path, log: &Logger) {
     let ts = utc_compact_timestamp();
     let pending = state_root.join("bootstrap-cache/fresh-install.pending");
     if pending.exists() {
-        let dest = state_root.join(format!("bootstrap-cache/fresh-install.pending.retired-{ts}"));
+        let dest = state_root.join(format!(
+            "bootstrap-cache/fresh-install.pending.retired-{ts}"
+        ));
         if let Err(e) = fs::rename(&pending, &dest) {
             log.log(&format!("warn: retire fresh-install.pending failed: {e}"));
         }
@@ -259,9 +265,8 @@ fn execute_install_or_update(
 
     let desktop_mutex = match &params.apply_update {
         Some((_, _, Some(raw))) => DesktopMutexHandle::from_raw(*raw),
-        _ => DesktopMutexHandle::acquire_or_create().map_err(|e| {
-            StepError::new(ExitCode::IoError, format!("无法获取桌面互斥锁: {e}"))
-        })?,
+        _ => DesktopMutexHandle::acquire_or_create()
+            .map_err(|e| StepError::new(ExitCode::IoError, format!("无法获取桌面互斥锁: {e}")))?,
     };
 
     let mut guards = PreCommitGuard {
@@ -303,7 +308,9 @@ fn execute_install_or_update(
     }
 
     let is_legacy_layout = (install_dir.join("installed.flag").exists()
-        || install_dir.join("resources/metadata/artifact.json").exists())
+        || install_dir
+            .join("resources/metadata/artifact.json")
+            .exists())
         && !install_dir.join("current.json").exists();
 
     let mut version_id = format!("{}-{}", artifact.app_version, &artifact.git_sha[..8]);
@@ -571,7 +578,10 @@ fn run_uninstall(
         if !no_ui {
             show_message_box("卸载 Mizar", &msg);
         }
-        return (ExitCode::AppRunning, make_result(ExitCode::AppRunning, Some(msg)));
+        return (
+            ExitCode::AppRunning,
+            make_result(ExitCode::AppRunning, Some(msg)),
+        );
     }
 
     let ui = ProgressUi::start(no_ui, "正在卸载 Mizar...");

@@ -6,7 +6,6 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
 
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactMetadata {
@@ -197,5 +196,3 @@ pub fn move_or_copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
 }
-
-
