@@ -1,5 +1,5 @@
 import { SessionJournal, diagnosticValue } from './support/session-journal.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { SteamAvatars } from './media/steam-avatars.js';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, lstat } from 'node:fs/promises';
@@ -21,11 +21,7 @@ import {
   type CaptureRecorder,
   type RecorderDiagnostic,
 } from './telemetry/capture-recorder.js';
-import {
-  createCstvSourceManagers,
-  parseCstvSourceUrl,
-  type CstvSourceManagers,
-} from './telemetry/cstv-source-manager.js';
+
 import { PRODUCTION_GSI_CONFIG } from './telemetry/gsi-ingress.js';
 import { parseAllowedOrigins } from './local-web/origin-policy.js';
 import { HudConfigStore } from './hud-config/store.js';
@@ -81,29 +77,7 @@ try {
   httpOutputConfigError = 'HTTP 输出配置不完整或不安全';
 }
 
-let cstvSourceConfig: CstvSourceManagers | undefined;
-let programCstvUrl: string | undefined;
-let cstvSourceConfigError: string | undefined;
 let receiverSequence = 0;
-try {
-  const programUrl = parseCstvSourceUrl(process.env.PROGRAM_CSTV_URL, 'PROGRAM_CSTV_URL');
-  programCstvUrl = programUrl;
-  const lookaheadUrl = parseCstvSourceUrl(process.env.LOOKAHEAD_CSTV_URL, 'LOOKAHEAD_CSTV_URL');
-  cstvSourceConfig = createCstvSourceManagers({
-    ...(programUrl === undefined ? {} : { programUrl }),
-    ...(lookaheadUrl === undefined ? {} : { lookaheadUrl }),
-  });
-} catch (error: unknown) {
-  console.error(
-    JSON.stringify({
-      stage: 'cstv_source_configuration',
-      result: 'failure',
-      error: diagnosticValue(error),
-    }),
-  );
-  cstvSourceConfigError =
-    error instanceof Error ? error.message : 'CSTV source configuration invalid';
-}
 
 function logRecorderDiagnostic(diagnostic: RecorderDiagnostic): void {
   const fields = {
@@ -141,9 +115,6 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
   process.exitCode = 1;
 } else if (httpOutputConfigError !== undefined) {
   console.error(`Companion 启动失败：${httpOutputConfigError}`);
-  process.exitCode = 1;
-} else if (cstvSourceConfigError !== undefined) {
-  console.error(`Companion 启动失败：${cstvSourceConfigError}`);
   process.exitCode = 1;
 } else {
   let recorder: CaptureRecorder;
@@ -262,8 +233,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     liveOutputUrl: process.env.MIZAR_LIVE_OUTPUT_URL ?? null,
     reliableOutputUrl: process.env.MIZAR_RELIABLE_OUTPUT_URL ?? null,
     outputTokenConfigured: Boolean(process.env.MIZAR_OUTPUT_TOKEN),
-    programCstvUrl: programCstvUrl ?? null,
-    lookaheadCstvUrl: process.env.LOOKAHEAD_CSTV_URL ?? null,
+
     gsiTokenConfigured: Boolean(gsiToken),
   });
   let updates: UpdateManager | undefined;
@@ -296,7 +266,6 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
           resolve(captureDir, '../..'),
           process.env.MIZAR_OBSERVER_HOST,
           process.env.MIZAR_OBSERVER_JOB,
-          cstvSourceConfig?.lookahead,
         )
       : undefined;
   const app = buildApp({
@@ -367,7 +336,7 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
     port,
     localWebLanMode,
     localWebAllowedOrigins,
-    ...(cstvSourceConfig === undefined ? {} : { cstvSources: cstvSourceConfig }),
+
     qualificationMode,
     ...(qualificationControlToken === undefined ? {} : { qualificationControlToken }),
     matchManifestPath: join(captureDir, '..', 'match-context.json'),
@@ -426,14 +395,6 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
           },
         }
       : {}),
-    ...(programCstvUrl === undefined
-      ? {}
-      : {
-          objectiveReferenceSource: {
-            artifactId: 'program-cstv-endpoint',
-            artifactSha256: createHash('sha256').update(programCstvUrl, 'utf8').digest('hex'),
-          },
-        }),
   });
   let shutdownPromise: Promise<void> | undefined;
 
@@ -468,8 +429,6 @@ if (gsiToken === undefined || gsiToken.trim().length === 0) {
 
   try {
     await app.listen({ host, port });
-    cstvSourceConfig?.program.start();
-    cstvSourceConfig?.lookahead.start();
     app.log.info({ host, port }, 'Companion 正在监听');
   } catch (error: unknown) {
     app.log.error(error, 'Companion 启动失败');

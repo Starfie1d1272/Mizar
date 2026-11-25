@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import process from 'node:process';
 import { setInterval } from 'node:timers';
 import { URL } from 'node:url';
@@ -8,10 +9,8 @@ const args = process.argv.slice(2);
 const arg = (name) => args[args.indexOf(name) + 1];
 import { createInterface } from 'node:readline';
 const inputLines = createInterface({ input: process.stdin });
-let cleanupFailure = false;
 for await (const text of inputLines) {
   const input = JSON.parse(text);
-  cleanupFailure = input.endpoint === '127.0.0.5:27020';
   if (
     process.argv.some(
       (value) =>
@@ -32,81 +31,44 @@ for await (const text of inputLines) {
     setInterval(() => {}, 1000);
     await new Promise(() => {});
   }
-  // Match pinned driver: create only the unique leaf, never its ancestors.
   try {
     fs.mkdirSync(arg('--output'), { mode: 0o700 });
   } catch {
     process.stderr.write('output-directory-unavailable\n');
     process.exit(1);
   }
-  const validReport = (reason) =>
+  const v3Report = (reason, extra = {}) =>
     JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reachedFull: false,
-      drainCompleted: false,
-      cleanupCompleted: true,
+      schema: 'cs2-observer-report/3',
       outcome: 'failed',
       reason,
+      channel: 1,
+      world: 1,
+      lastOutputSequence: 0,
+      reconnects: 0,
+      faults: [],
+      ...extra,
     });
   const earlyFailures = {
-    '127.0.0.25:27020': validReport(
-      'ordered-parser-error: unsupported serializer test_field; ' +
-        'context '.repeat(700) +
-        'root-cause-at-end; password=' +
-        input.password,
-    ),
+    '127.0.0.25:27020': v3Report('native-start-failed', {
+      nativeBootCode: 5,
+      steamInitResult: 0,
+      phase: 'native-boot',
+    }),
     '127.0.0.26:27020': 'interpreter-failure-prefix\n' + 'x'.repeat(64 * 1024) + input.password,
-    '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic interpreter shutdown diagnostic',
+    '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic shutdown diagnostic',
     '127.0.0.12:27020': 'configuration-boundary',
-    '127.0.0.13:27020':
-      'Traceback private path and ' + input.password + '\nValueError: node-runtime-probe-failed',
+    '127.0.0.13:27020': 'Traceback private path and ' + input.password + '\nconfiguration-boundary',
     '127.0.0.14:27020': '',
     '127.0.0.15:27020': '{"schema":',
     '127.0.0.16:27020': 'private unknown stderr ' + input.password,
-    '127.0.0.17:27020': JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reachedFull: false,
-      drainCompleted: false,
-      cleanupCompleted: true,
-      outcome: 'failed',
-      reason: input.password,
-    }),
-    '127.0.0.18:27020': JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reachedFull: false,
-      drainCompleted: false,
-      cleanupCompleted: true,
-      outcome: 'failed',
-      reason: 'ordered-parser-exited',
-    }),
-    '127.0.0.19:27020':
-      'output-directory-unavailable\n' +
-      JSON.stringify({
-        schema: 'cs2-observer-report/1',
-        reachedFull: false,
-        drainCompleted: false,
-        cleanupCompleted: true,
-        outcome: 'failed',
-        reason: 'native-start-failed',
-        native_boot_code: 2,
-      }),
-    '127.0.0.21:27020': validReport('native-start-failed') + '\nSynthetic shutdown diagnostic',
-    '127.0.0.22:27020': validReport('native-start-failed') + '\n{"malformed":',
-    '127.0.0.23:27020':
-      validReport('native-start-failed') + '\n' + validReport('ordered-parser-exited'),
-    '127.0.0.24:27020':
-      validReport('native-start-failed') +
-      '\n' +
-      JSON.stringify({
-        online_success: 'INCONCLUSIVE',
-        outcome: 'failed',
-        reason: input.password,
-      }) +
-      '\nprivate trailing path ' +
-      input.password,
+    '127.0.0.17:27020': v3Report(input.password),
+    '127.0.0.21:27020': v3Report('native-start-failed') + '\nSynthetic shutdown diagnostic',
+    '127.0.0.22:27020': v3Report('native-start-failed') + '\n{"malformed":',
+    '127.0.0.23:27020': v3Report('native-start-failed') + '\n' + v3Report('initialization-timeout'),
   };
   if (Object.hasOwn(earlyFailures, input.endpoint)) {
-    process.stderr.write(earlyFailures[input.endpoint]);
+    process.stderr.write(earlyFailures[input.endpoint] + '\n');
     process.exitCode = 1;
     inputLines.close();
     process.stdin.destroy();
@@ -120,23 +82,23 @@ for await (const text of inputLines) {
     break;
   }
   if (input.endpoint === '127.0.0.28:27020') {
-    const source = `ahead:${arg('--source-id')}`;
     const health = {
-      type: 'cs2-observer-health/2',
-      source,
+      type: 'cs2-observer-health/3',
       channel: 1,
       world: 1,
-      state: 'backoff',
-      ready: false,
+      state: 'failed',
+      reason: 'reconnect-budget-exhausted',
       reconnects: 0,
     };
     const report = {
-      schema: 'cs2-observer-report/2',
+      schema: 'cs2-observer-report/3',
       outcome: 'failed',
       reason: 'reconnect-budget-exhausted',
+      channel: 1,
+      world: 1,
       lastOutputSequence: 1,
-      cleanupCompleted: true,
-      reportWritten: true,
+      reconnects: 0,
+      faults: [],
       health,
     };
     await new Promise((resolve) =>
@@ -145,26 +107,6 @@ for await (const text of inputLines) {
     process.stderr.write(JSON.stringify(health) + '\n');
     process.stderr.write(JSON.stringify(report) + '\n');
     process.exitCode = 1;
-    inputLines.close();
-    process.stdin.destroy();
-    break;
-  }
-  if (input.endpoint === '127.0.0.2:27020') {
-    process.stderr.write(
-      JSON.stringify({
-        schema: 'cs2-observer-report/1',
-        reachedFull: false,
-        drainCompleted: false,
-        cleanupCompleted: true,
-        outcome: 'failed',
-        reason: 'native-start-failed',
-        native_boot_code: 2,
-        steam_init_result: 1,
-        finalization_failures: ['close-session', input.password],
-        privateInput: input,
-      }),
-    );
-    process.exitCode = 7;
     inputLines.close();
     process.stdin.destroy();
     break;
@@ -181,111 +123,40 @@ for await (const text of inputLines) {
     setInterval(() => {}, 1000);
     await new Promise(() => {});
   }
-  const source = arg('--source-role') + ':' + arg('--source-id');
-  const supervised = /^127\.0\.0\.(6|7|8|9|10|20):27020$/.test(input.endpoint);
-  const retrying = path.basename(arg('--output')).startsWith('retry-');
-  if (supervised) {
-    const directory = arg('--output');
-    fs.writeFileSync(
-      path.join(directory, 'child.json'),
-      JSON.stringify({ source, pid: process.pid }),
-    );
-  }
-  const terminal = (outcome, reason, remote = 0) => {
-    process.stderr.write('Synthetic SDK diagnostic before the final report\n');
-    process.stderr.write(
-      JSON.stringify({
-        schema: 'cs2-observer-report/1',
-        reachedFull: true,
-        drainCompleted: outcome === 'closed',
-        cleanupCompleted: true,
-        outcome,
-        reason,
-        remote_end_reason: remote,
-        finalization_failures: [],
-      }) + '\n',
-    );
-    process.exitCode = outcome === 'closed' ? 0 : 1;
-    inputLines.close();
-    process.stdin.destroy();
-  };
-  if ((input.endpoint === '127.0.0.7:27020' && !retrying) || input.endpoint === '127.0.0.8:27020') {
-    terminal('failed', 'initialization-timeout');
-    break;
-  }
-  if (input.endpoint === '127.0.0.9:27020') {
-    terminal('failed', 'native-session-closed', 2033);
-    break;
-  }
   const event = JSON.parse(
     fs.readFileSync(new URL('./observer-event.json', import.meta.url), 'utf8'),
   );
   const cursor = {
     kind: 'cursor',
-    source,
     channel: 1,
     world: 1,
     sequence: 6,
-    tick: 99,
+    committedTick: 99,
     tickInterval: 1 / 64,
     map: 'de_test',
+    warmup: false,
+    round: 6,
   };
+  process.stdout.write(JSON.stringify({ kind: 'session-start', protocol: 3, channel: 1, world: 1, sequence: 1 }) + '\n');
   process.stdout.write(JSON.stringify(cursor) + '\n');
-  process.stdout.write(JSON.stringify({ ...event, source, world: 1 }) + '\n');
-  if (input.endpoint === '127.0.0.25:27020') {
-    process.stdout.write(
-      JSON.stringify({
-        ...cursor,
-        kind: 'round_freeze_end',
-        type: 'raw-event',
-        name: 'round_freeze_end',
-        sequence: 9,
-        tick: 100,
-        committedTick: 100,
-        round: 6,
-      }) + '\n',
-    );
-    process.stdout.write(
-      JSON.stringify({
-        ...cursor,
-        sequence: 10,
-        tick: 164,
-        round: 6,
-        warmup: false,
-        roundClock: {
-          status: 'available',
-          totalRoundsPlayed: 6,
-          committedTick: 164,
-          freezePeriod: false,
-          warmupPeriod: false,
-          bombPlanted: false,
-          startTime: 100 / 64,
-          duration: 115,
-          pause: { active: false, totalPausedTicks: 0 },
-        },
-      }) + '\n',
-    );
-  }
-  if (input.endpoint === '127.0.0.6:27020' && !retrying) {
-    terminal('failed', 'native-session-closed', 1000);
-    break;
-  }
+  process.stdout.write(JSON.stringify({ ...event, world: 1, sequence: 7 }) + '\n');
   if (input.endpoint === '127.0.0.10:27020') {
-    terminal('closed', 'source-hltv-stop', 1038);
+    process.stderr.write(
+      JSON.stringify({
+        schema: 'cs2-observer-report/3',
+        outcome: 'closed',
+        reason: 'source-hltv-stop',
+        channel: 1,
+        world: 1,
+        lastOutputSequence: 7,
+        reconnects: 0,
+        faults: [],
+      }) + '\n',
+    );
+    process.exitCode = 0;
+    inputLines.close();
+    process.stdin.destroy();
     break;
   }
-}
-if (cleanupFailure) {
-  process.stderr.write(
-    JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reachedFull: false,
-      drainCompleted: false,
-      cleanupCompleted: true,
-      outcome: 'failed',
-      reason: 'owner-stopped',
-      finalization_failures: ['close-session'],
-    }),
-  );
 }
 process.exitCode ??= 2;

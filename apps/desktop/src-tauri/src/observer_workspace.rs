@@ -98,7 +98,7 @@ pub(crate) fn try_cleanup_operation() -> Option<std::sync::MutexGuard<'static, (
 
 fn request(log: &DesktopLog, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let token = crate::companion_http::runtime_token(log)?;
-    // v2 gets 15 seconds to stop, followed by bounded relay and Job cleanup.
+    // v3 gets 15 seconds to stop, followed by bounded relay and Job cleanup.
     let timeout = if body["action"] == "pulse" { 1 } else { 25 };
     let (code, value) = crate::companion_http::request_with_identity(
         log,

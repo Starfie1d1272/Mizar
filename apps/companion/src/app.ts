@@ -196,7 +196,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
         : { nowMonotonicMs: projectionNowMonotonicMs }),
       onDiagnostic: runtimeDiagnostics.recordProjection,
       onProjection: (bundle) => {
-        observerAssist.observe(bundle.program, () => projectionCoordinator.resetObserverAssist());
+        observerAssist.observe(bundle.program);
         outputService.setCurrent(bundle, outputBinding);
       },
     });
@@ -422,7 +422,6 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
           sceneController,
           presentation,
           production,
-          readMapConfirmed: () => observerAssist.mapConfirmed,
           readDemo: () => demoTest,
           updates: options.updates,
           record: (stage, evidence) => sessionJournal?.record(stage, evidence),

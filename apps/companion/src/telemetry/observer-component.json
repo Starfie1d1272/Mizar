@@ -1,9 +1,8 @@
 {
-  "version": "3.0.1",
-  "sourceSha": "34e79f8780630b0d87391b935c0ce48958388c98",
-  "asset": "cs2-headless-observer-3.0.1-windows-x64-external-node.zip",
-  "sha256": "82d0f2d2e7a778ee797ea09135bd05660928b486d3c0f45c74ef54c6958d98d3",
+  "version": "4.1.0",
+  "sourceSha": "0000000000000000000000000000000000000000",
+  "asset": "cs2-headless-observer-4.1.0-windows-x64.zip",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "nativeAbi": 4,
-  "parserIpc": 4,
-  "managedProtocol": "cs2-observer-managed-json/2"
+  "managedProtocol": "cs2-observer-managed-json/3"
 }

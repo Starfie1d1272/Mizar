@@ -63,7 +63,6 @@ export function registerBroadcastOwners(
     sceneController: ProgramSceneController;
     presentation: ProgramPresentationStore;
     production: ReturnType<typeof createProduction>;
-    readMapConfirmed: () => boolean;
     readDemo: () => DemoTestController;
     updates: UpdateManager | undefined;
     record: (stage: string, evidence: unknown) => void;
@@ -204,9 +203,7 @@ export function registerBroadcastOwners(
       active: sceneController.get().active,
       production:
         production.sessionAllowed() &&
-        options.readMapConfirmed() &&
         projectionCoordinator.getCurrent().operator.matchContext.origin !== 'fixture',
-      mapConfirmed: options.readMapConfirmed(),
       demoAudition: options.readDemo().get().active
         ? options.readDemo().canUseCamera('audition')
         : undefined,

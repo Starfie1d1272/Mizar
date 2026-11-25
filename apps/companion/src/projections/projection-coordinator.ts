@@ -68,7 +68,6 @@ export interface ProjectionCoordinatorOptions {
     nicknameSource?: 'game' | 'website';
     leadSeconds: number;
     delaySeconds: number;
-    waitingForNextMap?: boolean;
   };
   readonly onObserverDiagnostics?: (
     diagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']>,
@@ -242,6 +241,14 @@ export class ProjectionCoordinator {
         this.observerTimeline.consume(event);
         this.refreshAssist();
       }),
+      ...(this.cstvSources.lookahead.subscribeTimelineReset
+        ? [
+            this.cstvSources.lookahead.subscribeTimelineReset(() => {
+              if (!this.observerSettings?.().enabled) return;
+              this.resetObserverAssist();
+            }),
+          ]
+        : []),
     ];
   }
 
@@ -580,7 +587,7 @@ export class ProjectionCoordinator {
     if (!settings) return projectObserverAssist(selectProgramSafeRuntimeView(snapshot.current));
     const health = this.cstvSources.lookahead.getHealth();
     const received = health.lastReceiveMonotonicMs;
-    const sourceMapName = health.mapName ?? health.lastSync?.mapName;
+    const sourceMapName = health.mapName;
     const receiveAgeMs = received === undefined || received > now ? null : now - received;
     const freshness =
       receiveAgeMs === null
@@ -588,26 +595,18 @@ export class ProjectionCoordinator {
         : receiveAgeMs <= snapshot.continuityPolicy.staleAfterMs
           ? 'fresh'
           : 'stale';
-    return this.observerTimeline.project(
-      program,
-      settings,
-      now,
-      {
-        connected: health.state === 'live',
-        state: health.state,
-        ...(health.normalDrain ? { normalDrain: true } : {}),
-        ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
-        generation: health.generation,
-        sameMap: sourceMapName !== undefined && sourceMapName === program.map.name,
-        ...(sourceMapName === undefined ? {} : { mapName: sourceMapName }),
-        fresh: freshness === 'fresh',
-        freshness,
-        lastReceiveMonotonicMs: received ?? null,
-        receiveAgeMs,
-      },
-      health.mapExecution,
-      settings.waitingForNextMap,
-    );
+    return this.observerTimeline.project(program, settings, now, {
+      connected: health.state === 'live',
+      state: health.state,
+      ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
+      generation: health.generation,
+      sameMap: sourceMapName !== undefined && sourceMapName === program.map.name,
+      ...(sourceMapName === undefined ? {} : { mapName: sourceMapName }),
+      fresh: freshness === 'fresh',
+      freshness,
+      lastReceiveMonotonicMs: received ?? null,
+      receiveAgeMs,
+    });
   }
   refreshAssist(): void {
     if (this.closed || !this.current) return;
