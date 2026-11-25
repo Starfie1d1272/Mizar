@@ -990,7 +990,6 @@ test('map_started is sent once per mapEpoch across intermission, lineup dips, an
   const service = new OutputService({
     outbox,
     now: () => time,
-    retryIntervalMs: 60_000,
     sink: {
       send: async (item) => {
         sent.push(item);
