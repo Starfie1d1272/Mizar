@@ -154,30 +154,35 @@ export async function verifyResourceReceipt({
       '缓存目录历史无效',
     );
     const catalogs = [...(receipt.catalogHistory ?? []), receipt.catalog];
-    const matching = catalogs.filter((item) => {
+    const parsedCatalogs = catalogs.map((item) => {
       requireValue(
         item?.schemaVersion === 'mizar.resource-catalog-receipt.v1',
         '资源目录 receipt 版本无效',
       );
-      const descriptor = JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8'));
-      return (
-        descriptor.core?.appVersion === corePin.appVersion &&
-        descriptor.core?.gitSha === corePin.gitSha
-      );
+      return {
+        item,
+        descriptor: JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8')),
+      };
     });
-    if (matching.length === 0)
+    const matching = parsedCatalogs.filter(
+      ({ descriptor }) =>
+        descriptor.core?.appVersion === corePin.appVersion &&
+        descriptor.core?.gitSha === corePin.gitSha,
+    );
+    const cacheReusable = purpose === 'cache' || purpose === 'rollback';
+    if (matching.length === 0 && !cacheReusable)
       throw Object.assign(new Error('缓存没有当前 Core 授权；需要重新准备受信素材'), {
         code: 'resource_authorization_required',
       });
-    requireValue(
-      matching.length >= 1 &&
-        matching.length <= 2 &&
-        (matching.length === 1 || matching[1] === receipt.catalog),
-      '缓存没有唯一当前 Core 授权',
-    );
+    if (matching.length > 0)
+      requireValue(
+        matching.length <= 2 && (matching.length === 1 || matching[1].item === receipt.catalog),
+        '缓存没有唯一当前 Core 授权',
+      );
+    const selected = matching[0] ?? parsedCatalogs[parsedCatalogs.length - 1];
     const authorization = await verifyResourceCatalogReceipt({
-      receipt: matching[0],
-      expectedCore: corePin,
+      receipt: selected.item,
+      expectedCore: matching.length > 0 ? corePin : selected.descriptor.core,
       purpose,
       tufCachePath,
       signal,
