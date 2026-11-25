@@ -59,6 +59,9 @@ Function LaunchInstalled
   Exec '"$INSTDIR\Mizar.exe"'
 FunctionEnd
 
+Section /o "桌面快捷方式" SecDesktop
+SectionEnd
+
 Section "-Mizar" SecMain
   SectionIn RO
   StrCmp $ExtractTarget "" normal_install
@@ -95,7 +98,4 @@ normal_install:
   Abort "安装已取消。"
   Abort "安装未完成（错误码：$0）。请保留现场并查看 %LOCALAPPDATA%\Mizar\logs 中的日志。"
 install_ok:
-SectionEnd
-
-Section /o "桌面快捷方式" SecDesktop
 SectionEnd
