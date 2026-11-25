@@ -4,12 +4,23 @@ import type { MatchContext } from '../src/match-context/types.js';
 
 const context: MatchContext = {
   matchId: 'match-1',
-  competitionId: 'comp-1',
+  competition: null,
+  status: 'in_progress',
   format: 'bo1',
+  stage: null,
+  round: null,
+  entryRound: null,
+  scheduledAt: null,
+  startedAt: null,
+  completedAt: null,
+  scoreA: null,
+  scoreB: null,
+  isForfeit: false,
   entrants: {
-    a: { entryId: 'entry-a', name: 'Team A', shortName: 'A', logoUrl: null, roster: [] },
-    b: { entryId: 'entry-b', name: 'Team B', shortName: 'B', logoUrl: null, roster: [] },
+    a: { entryId: 'entry-a', name: 'Team A', logoUrl: null, rosterId: null, players: [] },
+    b: { entryId: 'entry-b', name: 'Team B', logoUrl: null, rosterId: null, players: [] },
   },
+  mapPool: ['de_dust2'],
   maps: [
     {
       mapId: 'map-1',
@@ -19,12 +30,11 @@ const context: MatchContext = {
       teamAStartSide: null,
       scoreA: null,
       scoreB: null,
-      status: 'pending',
+      completedAt: null,
     },
   ],
   veto: [],
-  mapPool: ['de_dust2'],
-  updatedAt: '2026-11-25T12:00:00.000Z',
+  commentators: [],
 };
 
 it('backfills winnerEntryId on an existing round when sideProof becomes valid without duplicating rounds', () => {
@@ -37,7 +47,7 @@ it('backfills winnerEntryId on an existing round when sideProof becomes valid wi
     roundNumber: 1,
     score: { ct: 1, t: 0 },
     roundWins: [
-      { roundNumber: 1, winnerSide: 'ct' as const, winCondition: 'elimination' as const },
+      { roundNumber: 1, winnerSide: 'CT' as const, winCondition: 'elimination' as const },
     ],
   };
 
@@ -47,7 +57,7 @@ it('backfills winnerEntryId on an existing round when sideProof becomes valid wi
       {
         kind: 'round-ended',
         roundNumber: 1,
-        winnerSide: 'ct',
+        winnerSide: 'CT',
         winCondition: 'elimination',
         sourceGeneration: 1,
         mapEpoch: 1,
@@ -66,7 +76,7 @@ it('backfills winnerEntryId on an existing round when sideProof becomes valid wi
       {
         kind: 'round-ended',
         roundNumber: 1,
-        winnerSide: 'ct',
+        winnerSide: 'CT',
         winCondition: 'elimination',
         sourceGeneration: 1,
         mapEpoch: 1,
@@ -75,8 +85,8 @@ it('backfills winnerEntryId on an existing round when sideProof becomes valid wi
     sideProof: {
       sourceGeneration: 1,
       mapEpoch: 1,
-      a: 'ct',
-      b: 't',
+      a: 'CT',
+      b: 'T',
       displayOnly: false,
     },
     allowMapCreation: false,
