@@ -207,7 +207,6 @@ export function ObserverHints() {
                       'source-disconnected': 'GoTV 观察连接已断开',
                       'program-stale': '正在等待节目端比赛数据…',
                       'source-map-mismatch': 'GoTV 与当前节目地图不一致',
-                      'source-execution-ahead': '等待节目对齐新对局…',
                     } as Record<string, string>
                   )[observer?.waitingReason ?? ''] ?? '正在接收比赛数据…')}
         </StatusPill>
