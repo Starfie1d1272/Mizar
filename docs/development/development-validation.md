@@ -48,7 +48,7 @@ pnpm --filter @mizar/companion... --fail-if-no-match run build
 
 ## 验证层次
 
-按改动风险选择检查，保留能独立证明边界的最少验证，不为每次修改扩大矩阵。
+按改动风险选择检查，保留能独立证明边界的最少验证，不为每次修改扩大矩阵。**本地默认只跑改动相关的轻量格式（如 `pnpm format:prettier:check`、`pnpm format:rust:check`）、轻量静态检查（`pnpm exec eslint <改动文件> --max-warnings=0`，避免 `pnpm lint` 误触发全量 `build:packages`）与必要定向测试；全量 `pnpm build`、`product` 测试、`pnpm typecheck`、`pnpm lint`、`pnpm local-web:production-smoke` 及 Windows 原生编译默认交给 CI。**
 
 | 改动面                 | 必要核对                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------ |
@@ -99,9 +99,10 @@ node scripts/ci/tests.mjs scripts
 pnpm build
 node scripts/ci/tests.mjs product
 pnpm typecheck
-pnpm format:check
+pnpm format:check   # 覆盖 Prettier、.github/**/*.{yml,yaml} 与两套 Rust workspace 的 cargo fmt --check
 pnpm lint
 pnpm architecture:check
+pnpm local-web:production-smoke
 ```
 
 `quality` 运行脚本组，`build` 完成生产构建后运行产品组。Windows 常规作业执行 build/clippy；涉及原生准备、取消或恢复的行为，以目标环境的实际验证记录为准。安装器源码或构建流程改变时，同一 Windows 作业使用正式 .NET Framework 编译器和引用编译 C#，不运行安装器。
