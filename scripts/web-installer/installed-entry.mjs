@@ -3,14 +3,15 @@ import { safeLogText } from '../../../scripts/product-logs.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { access } from 'node:fs/promises';
-import { randomUUID, randomBytes } from 'node:crypto';
 import { createCancelControl } from './cancel-control.mjs';
 import { verifyPayload, writableRoot } from '../../../scripts/product-runtime.mjs';
 
 // This executable entry is shipped inside Core and invoked by its embedded Node.
-// It imports the actual product App only after the whole Core passes verification.
+// It uses ResourceStore directly without starting Fastify.
 const coreRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const [version, gitSha, contentDigest, coreSha256, sha256, installerBytes] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const isRollback = argv[0] === '--rollback';
+const [version, gitSha, contentDigest, coreSha256, sha256, installerBytes] = argv;
 const nativePlan = {
   version,
   gitSha,
@@ -29,8 +30,33 @@ process.stdin.on(
   'data',
   createCancelControl(() => cancellation.abort()),
 );
-let app;
+let store;
 try {
+  const { ResourceStore, defaultResourceRoot } = await import('../resource-store/store.js');
+  const { createRuntimeVerifier } = await import('../resource-store/runtime-adapter.js');
+  if (isRollback) {
+    const artifact = await verifyPayload(coreRoot);
+    store = await ResourceStore.open({
+      root: defaultResourceRoot(),
+      diagnostic: (packId, error) => {
+        process.stderr.write(
+          `${safeLogText(`[${packId}] ${inspect(error, { depth: 6, customInspect: false, getters: false })}`).slice(0, 4096)}\n`,
+        );
+      },
+      verifyTrustedPack: createRuntimeVerifier(undefined, undefined, {
+        appVersion: artifact.appVersion,
+        gitSha: artifact.gitSha,
+      }),
+      activateWhenSafe: async (commit) => {
+        await commit();
+        return true;
+      },
+    });
+    await store.rollback('official:epl-default');
+    await store.shutdown();
+    store = undefined;
+    process.exit(0);
+  }
   if (
     !version ||
     !/^[a-f0-9]{40}$/.test(gitSha) ||
@@ -50,28 +76,28 @@ try {
     artifact.artifactSha256 !== contentDigest
   )
     throw new Error('Installed Core differs from authenticated native plan');
-  const { buildApp } = await import('../app.js');
-  const { defaultResourceRoot } = await import('../resource-store/store.js');
   const { authenticatePublishedBootstrap, restoreResourceAuthorization } =
     await import('./published-bootstrap.mjs');
   const { installOfficialPack } = await import('./install-official-pack.mjs');
   const { getResourceAuthorization } = await import('@mizar/resource-pack-contract/runtime');
   const stateRoot = writableRoot(coreRoot);
   const tufCachePath = join(stateRoot, 'updates', 'trust');
-  app = buildApp({
-    resources: { root: defaultResourceRoot(), required: true },
-    productRuntime: {
+  store = await ResourceStore.open({
+    root: defaultResourceRoot(),
+    diagnostic: (packId, error) => {
+      process.stderr.write(
+        `${safeLogText(`[${packId}] ${inspect(error, { depth: 6, customInspect: false, getters: false })}`).slice(0, 4096)}\n`,
+      );
+    },
+    verifyTrustedPack: createRuntimeVerifier(undefined, undefined, {
       appVersion: artifact.appVersion,
       gitSha: artifact.gitSha,
-      artifactSha256: artifact.artifactSha256,
-      instanceId: randomUUID(),
-      controlToken: randomBytes(32).toString('hex'),
-      stop: () => cancellation.abort(),
+    }),
+    activateWhenSafe: async (commit) => {
+      await commit();
+      return true;
     },
   });
-  await app.ready();
-  const store = app.getDecorator('getResourceStore')();
-  if (!store) throw new Error('Actual product resource Store is unavailable');
   let authorization, loadVerified;
   try {
     authorization = await restoreResourceAuthorization({
@@ -105,9 +131,8 @@ try {
     core: { version, gitSha, contentDigest },
     resources,
   };
-  // Release the exact product Store writer before the native host starts Mizar.
-  await app.close();
-  app = undefined;
+  await store.shutdown();
+  store = undefined;
   signal.throwIfAborted();
   process.stdout.write(
     `${JSON.stringify({ schemaVersion: 'mizar.bootstrap-result.v1', ...result })}\n`,
@@ -118,6 +143,6 @@ try {
   );
   process.exitCode = 1;
 } finally {
-  await app?.close();
+  await store?.shutdown();
   process.stdin.destroy();
 }

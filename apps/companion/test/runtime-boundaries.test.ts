@@ -142,6 +142,7 @@ test('update staging survives unavailable OBS and only a known active output blo
       prepare: async () => ({ version: '1.11.21' }),
       status: () => ({ phase: 'installing' }),
       release: () => {},
+      failure: () => {},
       close: () => {},
     } as unknown as Options['manager'],
     production: {
@@ -166,19 +167,18 @@ test('update staging survives unavailable OBS and only a known active output blo
       return { stream, record: { ...stream, active: null }, preparation: 'cleanup_pending' };
     },
   });
-  const command = (action: string) =>
+  const command = (action?: string) =>
     app.inject({
       method: 'POST',
       url: '/operator/updates/install-plan',
       headers: { 'x-runtime-token': 'update-test-token' },
-      payload: { action, attemptId: randomAttempt },
+      payload: action ? { action } : {},
     });
-  const randomAttempt = randomUUID();
-  assert.equal((await command('prepare')).statusCode, 200);
+  assert.equal((await command()).statusCode, 409);
   assert.equal(reserved, false);
   active = null;
-  assert.equal((await command('commit')).statusCode, 200);
-  assert.equal((await command('recheck')).statusCode, 200);
+  assert.equal((await command()).statusCode, 200);
+  assert.equal(reserved, true);
   assert.equal(await routes.beforeStop(), null);
   active = true;
   assert.match((await routes.beforeStop()) ?? '', /推流或录制/);

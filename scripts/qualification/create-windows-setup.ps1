@@ -38,12 +38,6 @@ function Invoke-SetupPhase([string]$Name, [scriptblock]$Operation) {
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Setup ${Name}: $duration ms ($status)" }
   }
 }
-# NSIS has its own escaping rules. Never interpolate a payload path as instructions.
-function Escape-Nsis([string]$text) { $text.Replace('$', '$$').Replace('"', '$\"') }
-$remove = Join-Path $output 'setup-remove.nsh'
-$lines = @($files | ForEach-Object { 'Delete "$INSTDIR\' + (Escape-Nsis ([IO.Path]::GetRelativePath($source, $_.FullName))) + '"' })
-$lines += @(Get-ChildItem -LiteralPath $source -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object { 'RMDir "$INSTDIR\' + (Escape-Nsis ([IO.Path]::GetRelativePath($source, $_.FullName))) + '"' })
-$lines | Set-Content -LiteralPath $remove -Encoding utf8
 $script = Join-Path $PSScriptRoot 'windows-setup.nsi'
 $assets = Join-Path $PSScriptRoot 'installer-assets'
 $assetManifestPath = Join-Path $assets 'sources.json'
@@ -59,7 +53,10 @@ $brandSource = Join-Path $PSScriptRoot ('../../' + $assetManifest.source)
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $brandSource).Hash.ToLowerInvariant() -ne $assetManifest.sourceSha256) { throw 'Installer brand source differs' }
 $icon = Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico'
 Invoke-SetupPhase 'compile' {
-  & $compiler /INPUTCHARSET UTF8 "/DPAYLOAD=$source" "/DOUTPUT=$archive" "/DVERSION=$($manifest.appVersion)" "/DICON=$icon" "/DINSTALLER_ASSETS=$assets" "/DREMOVE_FILES=$remove" $script
+  $nsisArgs = @('/INPUTCHARSET', 'UTF8', "/DPAYLOAD=$source", "/DOUTPUT=$archive", "/DVERSION=$($manifest.appVersion)", "/DICON=$icon", "/DINSTALLER_ASSETS=$assets")
+  if ($ManifestName -eq 'core-release-manifest.json') { $nsisArgs += '/DCORE_SETUP' }
+  $nsisArgs += $script
+  & $compiler @nsisArgs
   if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
 }
 function Install-Setup {
@@ -69,16 +66,16 @@ function Install-Setup {
 if (!$BuildOnly) {
 Invoke-SetupPhase 'first-install' { Install-Setup }
 Invoke-SetupPhase 'first-payload-verification' {
-  # Verify exact qualified payload before running anything from the installation.
+  # Verify v2 side-by-side layout: current.json, root Mizar.exe (launcher), Uninstall.exe (applier), and versions/<id>/*
+  $pointer = Get-Content -Raw -LiteralPath (Join-Path $target 'current.json') | ConvertFrom-Json
+  if ($pointer.schemaVersion -ne 2 -or !$pointer.current) { throw 'Invalid current.json' }
+  $versionDir = Join-Path (Join-Path $target 'versions') $pointer.current
   foreach ($file in $files) {
     $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $relative)).Hash) { throw "Setup payload differs: $relative" }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $versionDir $relative)).Hash) { throw "Setup payload differs: $relative" }
   }
-  $extra = @(Get-ChildItem -LiteralPath $target -Recurse -File | Where-Object {
-    $relative = [IO.Path]::GetRelativePath($target, $_.FullName)
-    $relative -notin @('installed.flag', 'Uninstall.exe') -and !(Test-Path -LiteralPath (Join-Path $source $relative))
-  })
-  if ($extra.Count) { throw 'Unexpected Setup payload files' }
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'mizar-launcher.exe')).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target 'Mizar.exe')).Hash) { throw 'Root Mizar.exe differs from mizar-launcher.exe' }
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'mizar-applier.exe')).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target 'Uninstall.exe')).Hash) { throw 'Root Uninstall.exe differs from mizar-applier.exe' }
 }
 }
 $licenseName = 'NSIS-LICENSE.txt'

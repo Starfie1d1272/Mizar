@@ -219,39 +219,244 @@ impl Drop for EventHandle {
     }
 }
 
-/// The Host retains DesktopMutex until the helper acknowledges its own handle.
-/// This event only coordinates that handoff; it never authorizes installation.
-pub struct UpdateHandoff {
-    event: EventHandle,
-    name: String,
+impl DesktopMutex {
+    pub fn raw_handle(&self) -> isize {
+        self.0
+    }
 }
-impl UpdateHandoff {
-    pub fn new() -> io::Result<Self> {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_nanos();
-        let name = format!("Global\\MizarUpdateReady-{}-{nonce}", std::process::id());
-        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
-        if handle == 0 {
+
+pub fn current_process_start_time() -> u64 {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetProcessTimes(
+            process: isize,
+            creation: *mut u64,
+            exit: *mut u64,
+            kernel: *mut u64,
+            user: *mut u64,
+        ) -> i32;
+    }
+    let mut creation = 0u64;
+    let mut exit = 0u64;
+    let mut kernel = 0u64;
+    let mut user = 0u64;
+    if unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } != 0
+    {
+        creation
+    } else {
+        0
+    }
+}
+
+pub fn spawn_applier_with_inherited_mutex(
+    exe: &Path,
+    args: &[String],
+    desktop_mutex: &DesktopMutex,
+    log_file: &std::fs::File,
+) -> io::Result<()> {
+    #[repr(C)]
+    struct StartupInfoW {
+        cb: u32,
+        lp_reserved: *mut u16,
+        lp_desktop: *mut u16,
+        lp_title: *mut u16,
+        dw_x: u32,
+        dw_y: u32,
+        dw_x_size: u32,
+        dw_y_size: u32,
+        dw_x_count_chars: u32,
+        dw_y_count_chars: u32,
+        dw_fill_attribute: u32,
+        dw_flags: u32,
+        w_show_window: u16,
+        cb_reserved2: u16,
+        lp_reserved2: *mut u8,
+        h_std_input: isize,
+        h_std_output: isize,
+        h_std_error: isize,
+    }
+    #[repr(C)]
+    struct StartupInfoExW {
+        startup_info: StartupInfoW,
+        lp_attribute_list: *mut c_void,
+    }
+    #[repr(C)]
+    struct ProcessInformation {
+        h_process: isize,
+        h_thread: isize,
+        dw_process_id: u32,
+        dw_thread_id: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetHandleInformation(object: isize, mask: u32, flags: u32) -> i32;
+        fn InitializeProcThreadAttributeList(
+            list: *mut c_void,
+            count: u32,
+            flags: u32,
+            size: *mut usize,
+        ) -> i32;
+        fn UpdateProcThreadAttribute(
+            list: *mut c_void,
+            flags: u32,
+            attribute: usize,
+            value: *const c_void,
+            size: usize,
+            previous: *mut c_void,
+            return_size: *mut usize,
+        ) -> i32;
+        fn DeleteProcThreadAttributeList(list: *mut c_void);
+        fn CreateProcessW(
+            application_name: *const u16,
+            command_line: *mut u16,
+            process_attrs: *const c_void,
+            thread_attrs: *const c_void,
+            inherit_handles: i32,
+            creation_flags: u32,
+            environment: *const c_void,
+            current_dir: *const u16,
+            startup_info: *const StartupInfoExW,
+            process_info: *mut ProcessInformation,
+        ) -> i32;
+    }
+
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
+
+    let mutex_handle = desktop_mutex.raw_handle();
+    let log_handle = log_file.as_raw_handle() as isize;
+    unsafe {
+        if SetHandleInformation(mutex_handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self {
-            event: EventHandle(handle),
-            name,
-        })
-    }
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-    pub fn ready(&self) -> io::Result<bool> {
-        match unsafe { WaitForSingleObject(self.event.0, 0) } {
-            0 => Ok(true),
-            258 => Ok(false),
-            _ => Err(io::Error::last_os_error()),
+        if SetHandleInformation(log_handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+            return Err(io::Error::last_os_error());
         }
     }
+
+    let mut handles = [mutex_handle, log_handle];
+    let mut size: usize = 0;
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+    let mut attr_buf = vec![0u8; size];
+    let attr_list = attr_buf.as_mut_ptr() as *mut c_void;
+    if unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut size) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let update_ok = unsafe {
+        UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            handles.as_mut_ptr() as *const c_void,
+            std::mem::size_of_val(&handles),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if update_ok == 0 {
+        let err = io::Error::last_os_error();
+        unsafe { DeleteProcThreadAttributeList(attr_list) };
+        return Err(err);
+    }
+
+    let mut cmdline = format!("\"{}\"", exe.display());
+    for arg in args {
+        cmdline.push(' ');
+        if arg.contains([' ', '\t', '"']) {
+            cmdline.push('"');
+            for ch in arg.chars() {
+                if ch == '"' {
+                    cmdline.push_str("\\\"");
+                } else {
+                    cmdline.push(ch);
+                }
+            }
+            cmdline.push('"');
+        } else {
+            cmdline.push_str(arg);
+        }
+    }
+    let mut cmd_wide: Vec<u16> = cmdline.encode_utf16().chain(Some(0)).collect();
+    let app_wide: Vec<u16> = exe
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let dir_wide: Option<Vec<u16>> = exe.parent().map(|p| {
+        p.as_os_str()
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect()
+    });
+
+    let si = StartupInfoExW {
+        startup_info: StartupInfoW {
+            cb: std::mem::size_of::<StartupInfoExW>() as u32,
+            lp_reserved: std::ptr::null_mut(),
+            lp_desktop: std::ptr::null_mut(),
+            lp_title: std::ptr::null_mut(),
+            dw_x: 0,
+            dw_y: 0,
+            dw_x_size: 0,
+            dw_y_size: 0,
+            dw_x_count_chars: 0,
+            dw_y_count_chars: 0,
+            dw_fill_attribute: 0,
+            dw_flags: STARTF_USESTDHANDLES,
+            w_show_window: 0,
+            cb_reserved2: 0,
+            lp_reserved2: std::ptr::null_mut(),
+            h_std_input: 0,
+            h_std_output: log_handle,
+            h_std_error: log_handle,
+        },
+        lp_attribute_list: attr_list,
+    };
+    let mut pi = ProcessInformation {
+        h_process: 0,
+        h_thread: 0,
+        dw_process_id: 0,
+        dw_thread_id: 0,
+    };
+
+    let ok = unsafe {
+        CreateProcessW(
+            app_wide.as_ptr(),
+            cmd_wide.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+            std::ptr::null(),
+            dir_wide.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
+            &si,
+            &mut pi,
+        )
+    };
+    let err = io::Error::last_os_error();
+    unsafe { DeleteProcThreadAttributeList(attr_list) };
+    if ok == 0 {
+        return Err(err);
+    }
+    unsafe {
+        CloseHandle(pi.h_thread);
+        CloseHandle(pi.h_process);
+    }
+    Ok(())
 }
 
 pub fn update_in_progress() -> io::Result<bool> {
@@ -620,6 +825,121 @@ pub fn failure_dialog(message: &str, logs: Option<&Path>) {
                 );
             }
         }
+    }
+}
+
+pub fn set_window_app_user_model(hwnd: isize, bundle_root: &Path) {
+    if !bundle_root.join("installed.flag").is_file() {
+        return;
+    }
+    let install_dir = bundle_root
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == "versions"))
+        .and_then(Path::parent)
+        .unwrap_or(bundle_root);
+    let launcher = install_dir.join("Mizar.exe");
+
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+    #[repr(C)]
+    struct PropertyKey {
+        fmtid: Guid,
+        pid: u32,
+    }
+    #[repr(C)]
+    struct PropVariantStr {
+        vt: u16,
+        reserved1: u16,
+        reserved2: u16,
+        reserved3: u16,
+        pwsz_val: *const u16,
+        pad: usize,
+    }
+    #[repr(C)]
+    struct IPropertyStoreVtbl {
+        query_interface: usize,
+        add_ref: usize,
+        release: unsafe extern "system" fn(*mut c_void) -> u32,
+        get_count: usize,
+        get_at: usize,
+        get_value: usize,
+        set_value: unsafe extern "system" fn(
+            *mut c_void,
+            *const PropertyKey,
+            *const PropVariantStr,
+        ) -> i32,
+        commit: unsafe extern "system" fn(*mut c_void) -> i32,
+    }
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SHGetPropertyStoreForWindow(
+            hwnd: isize,
+            riid: *const Guid,
+            ppv: *mut *mut c_void,
+        ) -> i32;
+    }
+
+    const IID_IPROPERTYSTORE: Guid = Guid {
+        data1: 0x886d8eeb,
+        data2: 0x8cf2,
+        data3: 0x4446,
+        data4: [0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99],
+    };
+    const AUMID_FMTID: Guid = Guid {
+        data1: 0x9f4c2855,
+        data2: 0x9f79,
+        data3: 0x4b39,
+        data4: [0xa8, 0xd0, 0xe1, 0xd4, 0x2d, 0xe1, 0xd5, 0xf3],
+    };
+    const PKEY_APPUSERMODEL_ID: PropertyKey = PropertyKey {
+        fmtid: AUMID_FMTID,
+        pid: 5,
+    };
+    const PKEY_APPUSERMODEL_RELAUNCH_COMMAND: PropertyKey = PropertyKey {
+        fmtid: AUMID_FMTID,
+        pid: 2,
+    };
+
+    let mut store: *mut c_void = std::ptr::null_mut();
+    if unsafe { SHGetPropertyStoreForWindow(hwnd, &IID_IPROPERTYSTORE, &mut store) } != 0
+        || store.is_null()
+    {
+        return;
+    }
+    unsafe {
+        let vtbl = &*(*(store as *const *const IPropertyStoreVtbl));
+        let aumid: Vec<u16> = "Starfie1d1272.Mizar\0".encode_utf16().collect();
+        let pv_id = PropVariantStr {
+            vt: 31, // VT_LPWSTR
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+            pwsz_val: aumid.as_ptr(),
+            pad: 0,
+        };
+        let _ = (vtbl.set_value)(store, &PKEY_APPUSERMODEL_ID, &pv_id);
+
+        let relaunch: Vec<u16> = launcher
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let pv_relaunch = PropVariantStr {
+            vt: 31,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+            pwsz_val: relaunch.as_ptr(),
+            pad: 0,
+        };
+        let _ = (vtbl.set_value)(store, &PKEY_APPUSERMODEL_RELAUNCH_COMMAND, &pv_relaunch);
+        let _ = (vtbl.commit)(store);
+        let _ = (vtbl.release)(store);
     }
 }
 
