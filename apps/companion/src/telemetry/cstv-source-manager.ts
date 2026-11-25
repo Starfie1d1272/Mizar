@@ -102,21 +102,8 @@ function appendBounded<T>(items: T[], item: T, max: number): void {
 }
 
 function observerResidenceUs(row: Readonly<Record<string, unknown>>): number | undefined {
-  const stages = [
-    row.sdkQueueAgeUs,
-    row.dequeueToSubmitUs,
-    row.submitToObservedUs,
-    row.supervisorForwardUs ?? 0,
-  ];
-  if (
-    !stages.every(
-      (value): value is number =>
-        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0,
-    )
-  )
-    return undefined;
-  // resultQueueUs is already included in submitToObservedUs.
-  return stages.reduce((total, duration) => total + duration, 0);
+  const value = row.sdkQueueAgeUs;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 class DefaultCstvSourceManager<R extends GameEventSourceRole> implements CstvSourceManager<R> {

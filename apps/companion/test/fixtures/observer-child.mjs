@@ -64,7 +64,10 @@ for await (const text of inputLines) {
     });
   const earlyFailures = {
     '127.0.0.25:27020': v2Report(
-      'native-start-failed: ' + 'context '.repeat(700) + 'root-cause-at-end; password=' + input.password,
+      'native-start-failed: ' +
+        'context '.repeat(700) +
+        'root-cause-at-end; password=' +
+        input.password,
     ),
     '127.0.0.26:27020': 'interpreter-failure-prefix\n' + 'x'.repeat(64 * 1024) + input.password,
     '127.0.0.11:27020': 'output-directory-unavailable\nSynthetic shutdown diagnostic',
@@ -75,12 +78,10 @@ for await (const text of inputLines) {
     '127.0.0.16:27020': 'private unknown stderr ' + input.password,
     '127.0.0.17:27020': v2Report(input.password),
     '127.0.0.18:27020': v2Report('native-start-failed'),
-    '127.0.0.19:27020':
-      'output-directory-unavailable\n' + v2Report('native-start-failed'),
+    '127.0.0.19:27020': 'output-directory-unavailable\n' + v2Report('native-start-failed'),
     '127.0.0.21:27020': v2Report('native-start-failed') + '\nSynthetic shutdown diagnostic',
     '127.0.0.22:27020': v2Report('native-start-failed') + '\n{"malformed":',
-    '127.0.0.23:27020':
-      v2Report('native-start-failed') + '\n' + v2Report('initialization-timeout'),
+    '127.0.0.23:27020': v2Report('native-start-failed') + '\n' + v2Report('initialization-timeout'),
     '127.0.0.24:27020':
       v2Report('native-start-failed') +
       '\n' +
@@ -92,7 +93,12 @@ for await (const text of inputLines) {
       '\nprivate trailing path ' +
       input.password,
     // Rust 4.0 early failure can emit cs2-observer-report/2 with health: null.
-    '127.0.0.29:27020': v2Report('native-start-failed', { health: null }),
+    '127.0.0.29:27020': v2Report('native-start-failed', {
+      health: null,
+      nativeBootCode: 5,
+      steamInitResult: 1,
+      lastAttemptEnd: { phase: 'native-boot' },
+    }),
   };
   if (Object.hasOwn(earlyFailures, input.endpoint)) {
     process.stderr.write(earlyFailures[input.endpoint] + '\n');
@@ -111,7 +117,10 @@ for await (const text of inputLines) {
   if (input.endpoint === '127.0.0.28:27020') {
     const health = v2Health({
       sdkQueueAgeUs: 420,
+      sdkMaxAgeUs: 950,
       decodeUs: 180,
+      decodeMaxUs: 310,
+      lastDeliveredCursor: { sequence: 1 },
     });
     const report = {
       schema: 'cs2-observer-report/2',

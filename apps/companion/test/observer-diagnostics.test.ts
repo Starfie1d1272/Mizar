@@ -209,11 +209,7 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(3, cursor);
   write(4, {
     ...fixture,
-    sdkQueueAgeUs: 700,
-    dequeueToSubmitUs: 100,
-    submitToObservedUs: 1000,
-    resultQueueUs: 300,
-    supervisorForwardUs: 200,
+    sdkQueueAgeUs: 2000,
   });
   write(4, fixture);
   assert.deepEqual(seen, [4]);
@@ -252,8 +248,6 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
     {
       ...fixture,
       sdkQueueAgeUs: 2_000_000,
-      dequeueToSubmitUs: 100,
-      submitToObservedUs: 1000,
     },
     3,
   );
@@ -462,12 +456,19 @@ test('pre-report and protocol failures survive the real export; overflow retains
   assert.equal(supervisor?.report, 'received');
   assert.equal(supervisor?.supervisor.state, 'backoff');
   assert.equal(supervisor?.supervisor.sdkQueueAgeUs, 420);
+  assert.equal(supervisor?.supervisor.sdkMaxAgeUs, 950);
   assert.equal(supervisor?.supervisor.decodeUs, 180);
+  assert.equal(supervisor?.supervisor.decodeMaxUs, 310);
+  assert.equal(supervisor?.supervisor.deliveredSequence, 1);
   assert.equal(supervisor?.lastOutputSequence, 1);
   assert.equal(supervisor?.stderr.truncated, true);
   const earlyNullHealth = failures.find((failure) => failure.reason === 'native-start-failed');
   assert.equal(earlyNullHealth?.report, 'received');
   assert.equal(earlyNullHealth?.supervisor, undefined);
+  assert.equal(earlyNullHealth?.nativeBootCode, 5);
+  assert.equal(earlyNullHealth?.steamInitResult, 1);
+  assert.equal(earlyNullHealth?.phase, 'native-boot');
+  assert.equal(earlyNullHealth?.stage, 'native-boot');
   const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
   assert(coverage.gaps.some((gap: { reason: string }) => gap.reason === 'observer_stderr_budget'));
   assert(!Object.values(entries).some((bytes) => Buffer.from(bytes).includes(password)));

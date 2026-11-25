@@ -106,11 +106,11 @@ function supervisorHealth(input: unknown, source: string, password: string) {
     ready: value.ready,
     reconnects: integer(value.reconnects),
     retryInMs: integer(value.retryInMs),
-    forwardMaxUs: integer(value.forwardMaxUs),
-    stdoutOldestAgeUs: integer(object(value.output).oldestAgeUs),
-    deliveredSequence: integer(object(value.output).lastDeliveredSequence),
-    sdkQueueAgeUs: integer(value.sdkQueueAgeUs) ?? integer(object(value.attempt).sdkQueueAgeUs),
+    deliveredSequence: integer(object(value.lastDeliveredCursor).sequence),
+    sdkQueueAgeUs: integer(value.sdkQueueAgeUs),
+    sdkMaxAgeUs: integer(value.sdkMaxAgeUs),
     decodeUs: integer(value.decodeUs),
+    decodeMaxUs: integer(value.decodeMaxUs),
     ...(reason
       ? {
           lastFault: {
@@ -139,6 +139,13 @@ function v2Report(input: unknown, source: string, password: string) {
   )
     return;
   const detail = String(diagnosticValue(row.reason, '', new Set(), [password]));
+  const rawPhase = object(row.lastAttemptEnd).phase;
+  const phase =
+    typeof rawPhase === 'string' && /^[a-z0-9-]{1,40}$/.test(rawPhase) ? rawPhase : undefined;
+  const signedInteger = (value: unknown) =>
+    typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
+  const nativeBootCode = signedInteger(row.nativeBootCode);
+  const steamInitResult = signedInteger(row.steamInitResult);
   return {
     report: 'received' as const,
     outcome: row.outcome as 'failed' | 'closed' | 'incomplete',
@@ -147,7 +154,9 @@ function v2Report(input: unknown, source: string, password: string) {
     cleanupCompleted: row.cleanupCompleted,
     reportWritten: row.reportWritten,
     lastOutputSequence: integer(row.lastOutputSequence)!,
-    phase: undefined,
+    phase,
+    ...(nativeBootCode === undefined ? {} : { nativeBootCode }),
+    ...(steamInitResult === undefined ? {} : { steamInitResult }),
     finalizationFailures: row.reportWritten ? [] : ['write-report'],
     ...(supervisor ? { supervisor } : {}),
   };
