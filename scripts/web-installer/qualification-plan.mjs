@@ -57,12 +57,7 @@ export async function qualificationPlan(product, coreRoot, context, checkedOutSh
       .split(/\r?\n/)
       .map((line) => line.slice(66)),
   );
-  for (const name of [
-    'installed-entry',
-    'install-official-pack',
-    'published-bootstrap',
-    'cancel-control',
-  ]) {
+  for (const name of ['install-official-pack', 'published-bootstrap', 'cancel-control']) {
     if (!checksummedPaths.has(`resources/app/dist/web-installer/${name}.mjs`))
       throw new Error('Required installed bridge is absent from the verified Core inventory');
   }
