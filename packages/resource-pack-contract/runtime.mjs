@@ -143,6 +143,8 @@ export async function verifyResourceReceipt({
   receipt = JSON.parse(serialized);
   requireValue(receipt?.schemaVersion === 'mizar.resource-receipt.v1', '缓存 receipt 版本无效');
   policy = policy && { ...policy };
+  const compatibilityCoreVersion =
+    policy?.coreVersion ?? expectedCore?.appVersion?.replace(/-(?:alpha|beta|rc)\.[1-9]\d*$/, '');
   let catalogIdentity;
   if (receipt.catalog !== undefined) {
     const corePin =
@@ -154,43 +156,50 @@ export async function verifyResourceReceipt({
       '缓存目录历史无效',
     );
     const catalogs = [...(receipt.catalogHistory ?? []), receipt.catalog];
-    const matching = catalogs.filter((item) => {
+    const parsedCatalogs = catalogs.map((item) => {
       requireValue(
         item?.schemaVersion === 'mizar.resource-catalog-receipt.v1',
         '资源目录 receipt 版本无效',
       );
-      const descriptor = JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8'));
-      return (
-        descriptor.core?.appVersion === corePin.appVersion &&
-        descriptor.core?.gitSha === corePin.gitSha
-      );
+      return {
+        item,
+        descriptor: JSON.parse(receiptBytes(item.descriptorBase64, 65536).toString('utf8')),
+      };
     });
-    if (matching.length === 0)
+    const matching = parsedCatalogs.filter(
+      ({ descriptor }) =>
+        descriptor.core?.appVersion === corePin.appVersion &&
+        descriptor.core?.gitSha === corePin.gitSha,
+    );
+    const cacheReusable = purpose === 'cache' || purpose === 'rollback';
+    if (matching.length === 0 && !cacheReusable)
       throw Object.assign(new Error('缓存没有当前 Core 授权；需要重新准备受信素材'), {
         code: 'resource_authorization_required',
       });
-    requireValue(
-      matching.length >= 1 &&
-        matching.length <= 2 &&
-        (matching.length === 1 || matching[1] === receipt.catalog),
-      '缓存没有唯一当前 Core 授权',
-    );
+    if (matching.length > 0)
+      requireValue(
+        matching.length <= 2 && (matching.length === 1 || matching[1].item === receipt.catalog),
+        '缓存没有唯一当前 Core 授权',
+      );
+    const selected = matching[0] ?? parsedCatalogs[parsedCatalogs.length - 1];
     const authorization = await verifyResourceCatalogReceipt({
-      receipt: matching[0],
-      expectedCore: corePin,
+      receipt: selected.item,
+      ...(matching.length > 0 ? { expectedCore: corePin } : {}),
       purpose,
       tufCachePath,
       signal,
     });
     const pinned = getResourceAuthorization(authorization);
     catalogIdentity = pinned;
+    const policyKeys =
+      cacheReusable && matching.length === 0
+        ? ['packVersion', 'sourceSha', 'promotionSha']
+        : ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'];
     if (policy)
       requireValue(
         Number.isSafeInteger(policy.minimumSequence) &&
           policy.minimumSequence >= 0 &&
-          ['packVersion', 'sourceSha', 'promotionSha', 'coreVersion'].every(
-            (key) => policy[key] === pinned.policy[key],
-          ),
+          policyKeys.every((key) => policy[key] === pinned.policy[key]),
         '资源缓存目录不等于当前受信任策略',
       );
     policy = {
@@ -281,7 +290,7 @@ export async function verifyResourceReceipt({
     authorize(publicationVerifier, archiveVerifier);
   }
   const manifest = parsePackManifest(JSON.parse(manifestBytes.toString('utf8')), {
-    coreVersion: policy.coreVersion,
+    coreVersion: compatibilityCoreVersion ?? policy.coreVersion,
   });
   assertPublicationContent(statement, { manifest, manifestSha256: sha256(manifestBytes) });
   return manifest;

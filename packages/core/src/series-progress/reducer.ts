@@ -512,8 +512,14 @@ function addRound(
     }
     const nextCondition =
       existing.winCondition === 'unknown' ? event.winCondition : existing.winCondition;
-    if (nextCondition === existing.winCondition) return progress;
-    rounds[existingIndex] = { ...existing, winCondition: nextCondition };
+    const nextWinnerEntryId = existing.winnerEntryId ?? winnerEntryId;
+    if (nextCondition === existing.winCondition && nextWinnerEntryId === existing.winnerEntryId)
+      return progress;
+    rounds[existingIndex] = {
+      ...existing,
+      winnerEntryId: nextWinnerEntryId,
+      winCondition: nextCondition,
+    };
   } else {
     rounds.push({
       roundNumber: event.roundNumber,

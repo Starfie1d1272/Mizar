@@ -981,3 +981,58 @@ test('scoped pending boundary capture on match A does not block independent matc
   await outbox.armCapture(unarmedSource, outbox.createCaptureReference(ref.cursor));
   assert.equal(outbox.captureCoverage(unarmedSource).state, 'armed');
 });
+
+test('map_started is sent once per mapEpoch across intermission, lineup dips, and context revisions', async (t) => {
+  const { outbox, event, cleanup, createProgramHarness } = await setup(t);
+  const { OutputService } = await import('../src/output/service.js');
+  const sent: ReliableEventV1[] = [];
+  let time = new Date('2026-10-01T00:00:00.000Z');
+  const service = new OutputService({
+    outbox,
+    now: () => time,
+    sink: {
+      send: async (item) => {
+        sent.push(item);
+        return 'accepted';
+      },
+    },
+  });
+  cleanup.push(() => service.close());
+  const { cursor, binding, bundle, observe } = createProgramHarness(
+    event('map_started', 'scope'),
+    () => time,
+  );
+  const step = async () => {
+    cursor.runtimeSeq++;
+    cursor.programReceiveSequence!++;
+    time = new Date(time.getTime() + 10);
+    observe(service);
+    await outbox.flushPending();
+    await service.retry();
+  };
+
+  observe(service);
+  await outbox.flushPending();
+  await service.retry();
+  assert.equal(sent.filter((item) => item.kind === 'map_started').length, 1);
+
+  // Halftime intermission, brief player drop (<10), and context revision bump must not clear publishedMapStart.
+  bundle.program.map.phase = 'intermission';
+  await step();
+  bundle.program.map.phase = 'live';
+  bundle.program.players = bundle.program.players.slice(0, 9);
+  await step();
+  bundle.program.players = createProgramHarness(
+    event('map_started', 'scope'),
+    () => time,
+  ).bundle.program.players;
+  binding.manifest.revision = 'rev-2';
+  await step();
+  assert.equal(sent.filter((item) => item.kind === 'map_started').length, 1);
+
+  // Advancing to the next mapEpoch starts a new map execution and sends map_started again.
+  cursor.mapEpoch = 2;
+  bundle.program.map.name = 'de_mirage';
+  await step();
+  assert.equal(sent.filter((item) => item.kind === 'map_started').length, 2);
+});

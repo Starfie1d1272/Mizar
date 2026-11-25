@@ -192,6 +192,7 @@ export class OutputService {
     }
   }
   private mapStartScope: string | undefined;
+  private mapStartReady = false;
   private mapStartRevision = 0;
   private publishedMapStart: { revision: number; key: string } | undefined;
   private pendingMapStart:
@@ -381,7 +382,8 @@ export class OutputService {
       bundle.program.match?.matchId !== event.matchId ||
       !sameMatchIdentity(binding.context, event) ||
       bundle.program.map.name !== event.mapName ||
-      !this.mapStartScope
+      !this.mapStartScope ||
+      !this.mapStartReady
     )
       return undefined;
     const c = bundle.program.cursor;
@@ -708,6 +710,7 @@ export class OutputService {
     if (!active) {
       this.captureCursors.set(sourceKey(identity), cursor);
       this.mapStartScope = undefined;
+      this.mapStartReady = false;
       this.publishedMapStart = undefined;
       this.pendingMapStart = undefined;
       this.lastMapObservation = cursor;
@@ -832,20 +835,11 @@ export class OutputService {
     const scope =
       binding !== undefined &&
       binding.origin !== 'fixture' &&
-      binding.freshness === 'fresh' &&
-      program.status.context === 'fresh' &&
       program.match?.matchId === binding.context.matchId &&
-      program.status.telemetry === 'fresh' &&
-      (program.status.identity === 'matched' || hasLineupMismatchOnly(bundle, binding)) &&
-      program.map.phase === 'live' &&
       program.map.name !== null &&
-      program.cursor.mapEpoch > 0 &&
-      players.length === 10 &&
-      operator.activeLineup.ctCount === 5 &&
-      operator.activeLineup.tCount === 5
+      program.cursor.mapEpoch > 0
         ? JSON.stringify([
             binding.context.matchId,
-            binding.manifest.revision,
             binding.origin,
             program.cursor.producerInstanceId,
             program.cursor.liveSessionId,
@@ -853,10 +847,19 @@ export class OutputService {
             program.cursor.mapEpoch,
             program.map.name,
             program.series?.currentMapOrder ?? null,
-            players.map((player) => [player.sourcePlayerId, player.canonicalPlayerId]).sort(),
             this.options.authorityScope?.() ?? null,
           ])
         : undefined;
+    this.mapStartReady =
+      scope !== undefined &&
+      binding?.freshness === 'fresh' &&
+      program.status.context === 'fresh' &&
+      program.status.telemetry === 'fresh' &&
+      (program.status.identity === 'matched' || hasLineupMismatchOnly(bundle, binding)) &&
+      program.map.phase === 'live' &&
+      players.length === 10 &&
+      operator.activeLineup.ctCount === 5 &&
+      operator.activeLineup.tCount === 5;
     if (scope !== this.mapStartScope) {
       this.mapStartScope = scope;
       this.mapStartRevision += 1;
@@ -1379,6 +1382,7 @@ export class OutputService {
       !this.outbox?.hasBoundaryGap(outputScope) &&
       !this.outbox?.getBoundaryIntents(outputScope).length &&
       this.mapStartScope !== undefined &&
+      this.mapStartReady &&
       this.publishedMapStart?.revision !== this.mapStartRevision &&
       this.pendingMapStart?.revision !== this.mapStartRevision &&
       this.outbox !== undefined

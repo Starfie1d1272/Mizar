@@ -943,7 +943,6 @@ export class ObsAdapter {
   }
 
   private async readStatus(): Promise<ObsStatus> {
-    const preparationCurrent = this.preparationValidity();
     const config = await this.configStore.read();
     let facts: ObsConnectionFacts = {
       executable: 'unknown',
@@ -978,13 +977,18 @@ export class ObsAdapter {
     };
     try {
       await this.withReadObs(
-        async (obs, endpoint) => {
+        async (obs) => {
           status = { ...status, connection: 'connected' };
           facts = {
             ...facts,
             process: 'running',
             listener: 'reachable',
             authentication: 'accepted',
+            resources: this.findings.some((item) => item.code === 'configuration_unchecked')
+              ? 'unknown'
+              : obsFindingReadiness(this.findings).blockingFindings.length
+                ? 'needs_configuration'
+                : 'ready',
           };
           await Promise.all([
             query(
@@ -1044,32 +1048,9 @@ export class ObsAdapter {
                 };
               },
             ),
-            query(
-              'configuration_check_failed',
-              'OBS 已连接，但场景或音频检查未完成。请重新检查。',
-              async () => {
-                const configuration = await this.configurationFindings(obs, endpoint);
-                findings.push(...configuration);
-                facts = {
-                  ...facts,
-                  resources: obsFindingReadiness(configuration).blockingFindings.length
-                    ? 'needs_configuration'
-                    : 'ready',
-                };
-              },
-            ),
           ]);
         },
-        {
-          timeoutMs: 2500,
-          commitObservation: () => {
-            // Commit before finishing this observation; the slower program evidence
-            // below cannot renew a configuration snapshot invalidated in the meantime.
-            if (preparationCurrent()) {
-              this.findings = [...findings];
-            }
-          },
-        },
+        { timeoutMs: 2500 },
       );
     } catch (error) {
       // A failed observation cannot revoke a newer confirmed snapshot. The
@@ -1148,7 +1129,12 @@ export class ObsAdapter {
         outputPending: outputs.stream.pending !== null || outputs.record.pending !== null,
       };
     }
-    return { ...status, facts, findings: [...findings], programEvidence };
+    return {
+      ...status,
+      facts,
+      findings: status.connection === 'connected' ? [...this.findings, ...findings] : [...findings],
+      programEvidence,
+    };
   }
 
   private previewPending: Promise<{

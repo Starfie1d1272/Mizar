@@ -190,14 +190,15 @@ export function parseResourceCatalogBytes(descriptorBytes, catalogBytes, expecte
     ...(raw.schemaVersion === 'mizar.resource-descriptor.v2' ? { origin: raw.origin } : {}),
   });
   requireValue(descriptorBytes.equals(jsonBytes(descriptor)), '资源资格目录不是固定规范字节');
-  requireValue(
-    expectedCore &&
-      descriptor.core.appVersion === expectedCore.appVersion &&
-      descriptor.core.gitSha === expectedCore.gitSha &&
-      (expectedCore.archiveSha256 === undefined ||
-        descriptor.core.archiveSha256 === expectedCore.archiveSha256),
-    '资源目录不属于已认证 Core',
-  );
+  if (expectedCore !== undefined)
+    requireValue(
+      expectedCore &&
+        descriptor.core.appVersion === expectedCore.appVersion &&
+        descriptor.core.gitSha === expectedCore.gitSha &&
+        (expectedCore.archiveSha256 === undefined ||
+          descriptor.core.archiveSha256 === expectedCore.archiveSha256),
+      '资源目录不属于已认证 Core',
+    );
   const rawCatalog = JSON.parse(catalogBytes.toString('utf8'));
   const catalog = createResourceCatalog(
     descriptor,

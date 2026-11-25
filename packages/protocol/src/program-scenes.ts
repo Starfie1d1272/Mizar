@@ -14,7 +14,7 @@ export const PROGRAM_SCENES = [
   { id: 'waiting', title: '赛前等待', path: '/program/waiting', mode: 'full_screen_graphic' },
   { id: 'matchup', title: '对阵', path: '/program/matchup', mode: 'gameplay_overlay' },
   { id: 'bp', title: 'BP', path: '/program/bp', mode: 'full_screen_graphic' },
-  { id: 'gameplay', title: '比赛中', path: '/program', mode: 'gameplay_overlay' },
+  { id: 'gameplay', title: '游戏画面', path: '/program', mode: 'gameplay_overlay' },
   { id: 'halftime', title: '半场', path: '/program/halftime', mode: 'full_screen_graphic' },
   { id: 'map_result', title: '单图结果', path: '/program/map-result', mode: 'full_screen_graphic' },
   { id: 'intermap', title: '图间', path: '/program/intermap', mode: 'full_screen_graphic' },
