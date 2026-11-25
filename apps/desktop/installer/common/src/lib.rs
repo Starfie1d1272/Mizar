@@ -36,7 +36,9 @@ pub fn is_valid_version_id(id: &str) -> bool {
         Some(nonce6) => {
             parts.next().is_none()
                 && nonce6.len() == 6
-                && nonce6.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                && nonce6
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
         }
     }
 }

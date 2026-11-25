@@ -23,9 +23,7 @@ pub struct ArtifactMetadata {
 }
 
 fn is_hex(s: &str, len: usize) -> bool {
-    s.len() == len
-        && s.bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 pub fn sha256_file(path: &Path) -> io::Result<String> {
@@ -140,8 +138,7 @@ pub fn verify_payload(
             return Err("cancelled".into());
         }
         let file_path = payload_dir.join(rel);
-        let actual = sha256_file(&file_path)
-            .map_err(|e| format!("校验文件失败 {rel}: {e}"))?;
+        let actual = sha256_file(&file_path).map_err(|e| format!("校验文件失败 {rel}: {e}"))?;
         if actual != *expected_hash {
             return Err(format!("文件摘要不匹配：{rel}"));
         }

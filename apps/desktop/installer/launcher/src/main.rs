@@ -65,8 +65,7 @@ fn main() {
     let is_stop = has_flag("--stop");
     let is_app_version = has_flag("--app-version");
     let is_headless = has_flag("--no-browser");
-    let is_synchronous =
-        is_stop || is_app_version || is_headless || has_flag("--export-logs");
+    let is_synchronous = is_stop || is_app_version || is_headless || has_flag("--export-logs");
 
     if !is_stop && !is_app_version {
         #[cfg(windows)]

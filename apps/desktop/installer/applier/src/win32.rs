@@ -1,4 +1,6 @@
-use mizar_common::{normalize_for_compare, to_wide, DESKTOP_MUTEX, UPDATE_ACTIVE_EVENT, UPDATE_WRITER_MUTEX};
+use mizar_common::{
+    normalize_for_compare, to_wide, DESKTOP_MUTEX, UPDATE_ACTIVE_EVENT, UPDATE_WRITER_MUTEX,
+};
 use sha2::{Digest, Sha256};
 use std::ffi::c_void;
 use std::fs;
@@ -300,12 +302,10 @@ pub fn write_install_registry(
     fn set_sz(key: HKEY, name: &str, val: &str) -> Result<(), String> {
         let name_w = to_wide(name);
         let val_w = to_wide(val);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(val_w.as_ptr() as *const u8, val_w.len() * 2)
-        };
-        let status = unsafe {
-            RegSetValueExW(key, PCWSTR(name_w.as_ptr()), Some(0), REG_SZ, Some(bytes))
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(val_w.as_ptr() as *const u8, val_w.len() * 2) };
+        let status =
+            unsafe { RegSetValueExW(key, PCWSTR(name_w.as_ptr()), Some(0), REG_SZ, Some(bytes)) };
         if status.0 != 0 {
             return Err(format!("写入注册表 {name} 失败: {}", status.0));
         }
@@ -316,7 +316,13 @@ pub fn write_install_registry(
         let name_w = to_wide(name);
         let bytes = val.to_le_bytes();
         let status = unsafe {
-            RegSetValueExW(key, PCWSTR(name_w.as_ptr()), Some(0), REG_DWORD, Some(&bytes))
+            RegSetValueExW(
+                key,
+                PCWSTR(name_w.as_ptr()),
+                Some(0),
+                REG_DWORD,
+                Some(&bytes),
+            )
         };
         if status.0 != 0 {
             return Err(format!("写入注册表 {name} 失败: {}", status.0));
@@ -346,7 +352,9 @@ pub fn write_install_registry(
         set_sz(key, "InstallDir", &install_dir.to_string_lossy())?;
         set_sz(key, "StateRoot", &state_root.to_string_lossy())
     })();
-    unsafe { let _ = RegCloseKey(key); };
+    unsafe {
+        let _ = RegCloseKey(key);
+    };
     res?;
 
     let uninst_subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mizar");
@@ -368,7 +376,10 @@ pub fn write_install_registry(
         return Err(format!("创建 Uninstall 注册表项失败: {}", status.0));
     }
     let mizar_exe = install_dir.join("Mizar.exe").to_string_lossy().into_owned();
-    let uninst_exe = format!("\"{}\"", install_dir.join("Uninstall.exe").to_string_lossy());
+    let uninst_exe = format!(
+        "\"{}\"",
+        install_dir.join("Uninstall.exe").to_string_lossy()
+    );
     let res = (|| {
         set_sz(ukey, "DisplayName", "Mizar")?;
         set_sz(ukey, "DisplayVersion", version)?;
@@ -379,7 +390,9 @@ pub fn write_install_registry(
         set_dword(ukey, "NoModify", 1)?;
         set_dword(ukey, "NoRepair", 1)
     })();
-    unsafe { let _ = RegCloseKey(ukey); };
+    unsafe {
+        let _ = RegCloseKey(ukey);
+    };
     res
 }
 
