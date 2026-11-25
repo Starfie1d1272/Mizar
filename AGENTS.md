@@ -1,18 +1,18 @@
 # Mizar Agent 工作约定
 
-在既有产品与架构边界内完成可验证的工作。先读 [贡献指南](CONTRIBUTING.md)，涉及产品行为时读 [产品定位](docs/guide/product.md)，涉及模块职责或运行行为时读 [架构](docs/reference/architecture.md)，其余规范按下表和改动范围读取。同一任务中已读且未变化的内容无需重复读取。
+在既有产品与架构边界内完成可验证的工作。动手前按改动范围读对应权威文档（先读 [贡献指南](CONTRIBUTING.md)，涉及产品行为读 [产品定位](docs/guide/product.md)，涉及模块职责或运行行为读 [架构](docs/reference/architecture.md)，涉及检查与交付读 [开发验证](docs/development/development-validation.md)），其余规范按下表读取；同一任务中已读且未变化的内容无需重复读取。
 
 ## 权威入口
 
-| 任务 | 必须遵循 |
-| --- | --- |
-| 文档或用户文本 | [内容归属与维护](docs/README.md)、[中文与术语](docs/development/terminology.md) |
-| 运行时、身份、恢复、数据隔离 | [架构](docs/reference/architecture.md)及相关 [ADR](docs/decisions/README.md) |
-| GSI / CSTV / 游戏计时 | [游戏数据语义](docs/reference/telemetry.md) |
-| 接口、控制面、数据输出 | [协议](docs/reference/protocol.md) |
-| 任何界面或视觉变更 | [设计系统](docs/design/README.md)，回答其审查项 |
-| 安装或更新依赖 | [依赖维护](docs/development/dependency-maintenance.md) |
-| 检查与交付 | [开发验证](docs/development/development-validation.md)；仅在准备候选、实机验收或正式发布时另读 [RC 与发布](docs/development/release-readiness.md) |
+| 任务                         | 必须遵循                                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文档或用户文本               | [内容归属与维护](docs/README.md)、[中文与术语](docs/development/terminology.md)                                                                   |
+| 运行时、身份、恢复、数据隔离 | [架构](docs/reference/architecture.md)及相关 [ADR](docs/decisions/README.md)                                                                      |
+| GSI / CSTV / 游戏计时        | [游戏数据语义](docs/reference/telemetry.md)                                                                                                       |
+| 接口、控制面、数据输出       | [协议](docs/reference/protocol.md)                                                                                                                |
+| 任何界面或视觉变更           | [设计系统](docs/design/README.md)，回答其审查项                                                                                                   |
+| 安装或更新依赖               | [依赖维护](docs/development/dependency-maintenance.md)                                                                                            |
+| 检查与交付                   | [开发验证](docs/development/development-validation.md)；仅在准备候选、实机验收或正式发布时另读 [RC 与发布](docs/development/release-readiness.md) |
 
 这些入口维护唯一规则，本文件不复制架构约束与测试清单。代码变更同一 PR 更新受影响当前文档；决策变化在 Issue / PR 记录理由与替代范围，并同步当前规范。
 
@@ -35,6 +35,6 @@
 
 ## 验证与交付
 
-- 保持代码和测试尽可能精简；优先复用既有验证，能通过已有测试证明时不新增测试。按 [测试职责与独立判定](docs/development/development-validation.md#测试职责与独立判定)保留关键风险覆盖，不因每次改动扩大验证矩阵。适用检查通过后，只有新改动、新失败或未解决的风险才触发补充验证。
+- 保持代码和测试尽可能精简；优先复用既有验证，能通过已有测试证明时不新增测试。本地默认只跑改动相关的轻量格式、静态检查与必要定向测试，全量构建、全量测试与跨平台编译交由 CI；按 [测试职责与独立判定](docs/development/development-validation.md#测试职责与独立判定)保留关键风险覆盖，只有新改动、新失败或未解决的风险才触发补充验证。
 - 区分实现、自动化与实机证据。缺少 Windows / CS2 / OBS 环境时，完成可执行部分并明确待验收项；只有任务包含候选交付或实机移交时，才按发布流程准备指定版本 RC。普通修改不自动扩展为发布任务，正式发布仍须满足全部适用门禁。
-- 交付说明实际改动、验证结果及剩余阻塞。用户要求的后续步骤属于任务范围；只完成草稿、建议或中间验证不能代替最终交付。外部写入、保存或发布仅在实际结果确认后宣称成功。
+- 交付说明实际改动、验证结果及剩余阻塞。涉及 PR 交付时，须确认推送成功并推进至最新提交的适用 CI 全绿；外部写入、保存或发布仅在实际结果确认后宣称成功。

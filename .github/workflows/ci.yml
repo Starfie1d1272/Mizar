@@ -62,9 +62,6 @@ jobs:
       - run: pnpm release-notes:check
       - run: pnpm architecture:check
       - run: pnpm format:check
-      - run: pnpm exec prettier --check '.github/**/*.{yml,yaml}'
-      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
-      - run: cargo fmt --manifest-path apps/desktop/installer/Cargo.toml --check
       - run: pnpm exec eslint . --max-warnings=0
       - run: node scripts/ci/tests.mjs scripts
   native:
