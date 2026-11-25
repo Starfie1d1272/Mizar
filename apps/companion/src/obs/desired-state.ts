@@ -26,8 +26,9 @@ export function obsObjects(value: unknown): Record<string, unknown>[] {
 }
 
 export function obsSceneName(sceneId: ProgramSceneId): string {
-  const scene = PROGRAM_SCENES.find((item) => item.id === sceneId)!;
-  return scene.id === 'bp' ? '地图禁选' : scene.title;
+  if (sceneId === 'bp') return '地图禁选';
+  if (sceneId === 'gameplay') return '比赛中';
+  return PROGRAM_SCENES.find((item) => item.id === sceneId)!.title;
 }
 
 export function obsBrowserInputName(sceneId: ProgramSceneId): string {

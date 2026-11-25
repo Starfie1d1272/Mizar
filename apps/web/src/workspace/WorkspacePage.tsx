@@ -633,7 +633,7 @@ function WorkspaceDockContent() {
           ))}
         </div>
         <div className="workspace-next-preview" aria-label="下一个场景预览">
-          {guidance?.phase === 'pre_match' ? (
+          {guidance?.phase === 'pre_match' || guidance?.phase === 'map_end' ? (
             <Select
               label="热身播出"
               disabled={busy || !sceneState?.director}
