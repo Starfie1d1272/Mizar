@@ -415,8 +415,8 @@ namespace Mizar.WebInstaller {
       detail.SetBounds(32,148,526,32);
       detail.Text="欢迎使用 Mizar，安装或更新后开始准备你的比赛。";
       destinationLabel.SetBounds(32,184,526,20);destinationLabel.Text="安装位置";
-      destination.SetBounds(32,207,416,24);destination.ReadOnly=!(Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag")));destination.TabStop=!destination.ReadOnly;destination.TabIndex=0;destination.Text=selectedTarget;destination.AccessibleName="安装位置";
-      browse.SetBounds(458,204,100,30);browse.Text="更改";browse.Enabled=Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));browse.TabIndex=1;
+      destination.SetBounds(32,207,416,24);destination.ReadOnly=!(Nsis.CanChooseDestination() && !Nsis.IsInstalledAt(selectedTarget));destination.TabStop=!destination.ReadOnly;destination.TabIndex=0;destination.Text=selectedTarget;destination.AccessibleName="安装位置";
+      browse.SetBounds(458,204,100,30);browse.Text="更改";browse.Enabled=Nsis.CanChooseDestination() && !Nsis.IsInstalledAt(selectedTarget);browse.TabIndex=1;
       browse.Click+=(s,e)=>{using(var dialog=new FolderBrowserDialog {Description="选择 Mizar 安装目录",SelectedPath=selectedTarget}) {if(dialog.ShowDialog(this)==DialogResult.OK) {try {selectedTarget=Nsis.SelectDestination(dialog.SelectedPath);destination.Text=selectedTarget;} catch(Exception error) {offlineDownload.Visible=false;detail.Text=error.Message;technicalDetails=ErrorDetails(error);}}}};
       openLocation.SetBounds(428,198,130,30);openLocation.Text="打开安装位置";openLocation.Visible=false;
       openLocation.Click+=(s,e)=>{try {Downloader.NoReparse(installedCore);if(!Directory.Exists(installedCore)) throw new IOException("安装目录已移动。");System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=installedCore,UseShellExecute=true});} catch(Exception error) {detail.Text="无法打开安装位置，请查看诊断。";technicalDetails=ErrorDetails(error);}};
@@ -595,7 +595,7 @@ namespace Mizar.WebInstaller {
         if(network && !invalid && !permission) {offlineDownload.Visible=true;detail.Text+=OfflineHint;}
         technicalDetails=ErrorDetails(error); action.Text="重试";
       } finally {
-        downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !File.Exists(Path.Combine(selectedTarget,"installed.flag"));destination.ReadOnly=!browse.Enabled;destination.TabStop=browse.Enabled;}
+        downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !Nsis.IsInstalledAt(selectedTarget);destination.ReadOnly=!browse.Enabled;destination.TabStop=browse.Enabled;}
         current.Dispose(); cancellation=null; action.Visible=!recoveryRequired; action.Enabled=!recoveryRequired; keepDataReinstall.Visible=recoveryRequired; resetReinstall.Visible=recoveryRequired; cancel.Enabled=true; cancel.Text="关闭";
       }
     }

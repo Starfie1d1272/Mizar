@@ -1,0 +1,11 @@
+[package]
+name = "mizar-launcher"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mizar-launcher"
+path = "src/main.rs"
+
+[dependencies]
+mizar-common = { path = "../common" }

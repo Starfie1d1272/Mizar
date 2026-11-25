@@ -475,7 +475,7 @@ fn run_desktop(
         .setup(move |app| {
             let handle = app.handle();
             let page_log = setup_log.clone();
-            setup_log.step("main_window", || {
+            let main_win = setup_log.step("main_window", || {
                 WebviewWindowBuilder::new(handle, "main", workspace_presentation::local_url("/"))
                     .title("Mizar")
                     .inner_size(1280.0, 860.0)
@@ -497,6 +497,9 @@ fn run_desktop(
                     })
                     .build()
             })?;
+            if let (Ok(hwnd), Ok(bundle_root)) = (main_win.hwnd(), host_runtime::bundle_root()) {
+                windows_startup::set_window_app_user_model(hwnd.0 as isize, &bundle_root);
+            }
             // Live-only windows are created transactionally by present_production.
             // A tray failure must not discard a successfully created Main window.
             let tray = setup_log.step("tray", || -> tauri::Result<()> {
@@ -901,13 +904,9 @@ fn run_desktop(
                 }
                 let cleanup_host = host.clone();
                 let result = tauri::async_runtime::spawn_blocking(move || {
-                    updates::recheck(&cleanup_host)?;
                     let installing = cleanup_host
                         .state::<updates::PendingUpdate>()
-                        .stage
-                        .lock()
-                        .map_err(|_| "更新状态不可用。")?
-                        .is_some();
+                        .is_installing();
                     // The gate is already closed; wait for an accepted launch,
                     // then keep its lock through safe production and game cleanup.
                     let _operation = observer_workspace::cleanup_operation();
@@ -989,7 +988,7 @@ fn run_desktop(
                             Some(&error),
                         );
                     }
-                    updates::recheck(&cleanup_host)
+                    Ok(())
                 })
                 .await
                 .unwrap_or_else(|_| Err("退出收尾未完成，请重试。".into()));
@@ -1064,8 +1063,7 @@ fn start_gui(
     root: &Path,
     log: &DesktopLog,
     pending_update: &updates::PendingUpdate,
-) -> Result<(), String> {
-    let update_stage = pending_update.stage.clone();
+) -> Result<Option<updates::ReadyUpdate>, String> {
     let scope = log.step("shutdown_scope", || shutdown_scope(root))?;
     let exit_signal = log.step("shutdown_signal", || ExitSignal::new(&scope))?;
     let _observer_job = log.step("observer_job", || observer_job::create(&log.session_id))?;
@@ -1165,16 +1163,7 @@ fn start_gui(
         }
     }
     log.event(cleanup_stage, "success", None);
-    if outcome.is_ok() {
-        if let Some(stage) = update_stage
-            .lock()
-            .map_err(|_| "更新安装状态不可用。")?
-            .take()
-        {
-            updates::launch(&stage, log)?;
-        }
-    }
-    outcome
+    outcome.map(|()| pending_update.take_ready())
 }
 
 fn main() {
@@ -1334,37 +1323,47 @@ fn main() {
         "success",
         Some(&windows_startup::windows_version()),
     );
-    // This Host owns update staging until it exits; cancelled work cannot
-    // publish an exit intent into the next Host.
-    let pending_update = updates::PendingUpdate::new(Arc::new(Mutex::new(None)));
-    if let Err(error) = start_gui(&root, &log, &pending_update) {
-        pending_update.cancel(&log, false);
-        log.event("startup_failed", "failure", Some(&error));
-        let retry = if error.starts_with("webview2_preflight:") {
-            windows_startup::recover_webview(&log, webview_preflight)
-        } else {
-            startup_recovery::show(&log, &error)
-        };
-        if retry {
-            // A retry needs a new startup identity and desktop event loop.
-            // Reusing this session reads its previous supervisor_error as a new failure.
-            drop(_mutex);
-            let restart = log.step("recovery_restart", || {
-                Command::new(std::env::current_exe()?)
-                    .args(args.iter().skip(1))
+    let pending_update = updates::PendingUpdate::new();
+    match start_gui(&root, &log, &pending_update) {
+        Ok(Some(ready)) => {
+            if let Err(error) = updates::launch_applier(&ready, &_mutex, &log) {
+                log.event("update_handoff_failed", "failure", Some(&error));
+                drop(_mutex);
+                let _ = Command::new(std::env::current_exe().unwrap_or_else(|_| root.join("Mizar.exe")))
+                    .args(&args)
                     .current_dir(&root)
                     .creation_flags(0x08000000)
-                    .spawn()
-            });
-            if let Err(error) = restart {
-                failure_dialog(
-                    &format!("无法重新启动 Mizar：{error}"),
-                    Some(&log.directory),
-                );
-                std::process::exit(1);
+                    .spawn();
             }
-            return;
         }
-        std::process::exit(1);
+        Ok(None) => (),
+        Err(error) => {
+            pending_update.cancel(&log, false);
+            log.event("startup_failed", "failure", Some(&error));
+            let retry = if error.starts_with("webview2_preflight:") {
+                windows_startup::recover_webview(&log, webview_preflight)
+            } else {
+                startup_recovery::show(&log, &error)
+            };
+            if retry {
+                drop(_mutex);
+                let restart = log.step("recovery_restart", || {
+                    Command::new(std::env::current_exe()?)
+                        .args(&args)
+                        .current_dir(&root)
+                        .creation_flags(0x08000000)
+                        .spawn()
+                });
+                if let Err(error) = restart {
+                    failure_dialog(
+                        &format!("无法重新启动 Mizar：{error}"),
+                        Some(&log.directory),
+                    );
+                    std::process::exit(1);
+                }
+                return;
+            }
+            std::process::exit(1);
+        }
     }
 }

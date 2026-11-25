@@ -356,11 +356,12 @@ async function main() {
   }
   const cargoAbort = new globalThis.AbortController();
   const desktopDir = join(rootDir, 'apps', 'desktop', 'src-tauri');
+  const installerDir = join(rootDir, 'apps', 'desktop', 'installer');
   // Attach a rejection handler immediately while independent assembly runs.
   const cargoResult =
     process.platform === 'win32' && !options.skipNodeRuntime
-      ? timed('desktop-cargo-build', () =>
-          runCommand(
+      ? timed('desktop-cargo-build', async () => {
+          await runCommand(
             'cargo',
             [
               'build',
@@ -371,8 +372,19 @@ async function main() {
               join(desktopDir, 'Cargo.toml'),
             ],
             { signal: cargoAbort.signal },
-          ),
-        ).then(
+          );
+          await runCommand(
+            'cargo',
+            [
+              'build',
+              '--profile',
+              options.desktopProfile,
+              '--manifest-path',
+              join(installerDir, 'Cargo.toml'),
+            ],
+            { signal: cargoAbort.signal },
+          );
+        }).then(
           () => ({ ok: true }),
           (error) => ({ ok: false, error }),
         )
@@ -388,6 +400,7 @@ async function main() {
       timed,
       cargoResult,
       desktopDir,
+      installerDir,
     });
   } finally {
     cargoAbort.abort();
@@ -405,6 +418,7 @@ async function assemble({
   timed,
   cargoResult,
   desktopDir,
+  installerDir,
 }) {
   if (!options.skipBuild)
     await timed('workspace-build', () =>
@@ -499,7 +513,6 @@ async function assemble({
       'install-gsi.ps1',
       'ensure-gsi.ps1',
       'restore-gsi.ps1',
-      'update-install.ps1',
       'start.ps1',
       'rotate.ps1',
       'mark.ps1',
@@ -573,6 +586,14 @@ async function assemble({
       await cp(
         join(desktopDir, 'target', options.desktopProfile, 'mizar-desktop.exe'),
         join(stagingDir, 'Mizar.exe'),
+      );
+      await cp(
+        join(installerDir, 'target', options.desktopProfile, 'mizar-launcher.exe'),
+        join(stagingDir, 'mizar-launcher.exe'),
+      );
+      await cp(
+        join(installerDir, 'target', options.desktopProfile, 'mizar-applier.exe'),
+        join(stagingDir, 'mizar-applier.exe'),
       );
     } else if (!options.skipNodeRuntime) {
       throw new Error(

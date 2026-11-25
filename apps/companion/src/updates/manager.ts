@@ -71,7 +71,6 @@ export class UpdateManager {
   private closed = false;
   private prepared = false;
   private planning = false;
-  private settingsInvalid = false;
   private initializationError: string | null = null;
   private completedReadyCleanup = false;
   private checkFailure: unknown;
@@ -169,9 +168,10 @@ export class UpdateManager {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.failure('settings_load', e);
-        this.error = 'update_settings_invalid';
-        this.phase = 'error';
-        this.settingsInvalid = true;
+        await rename(
+          join(this.root, 'settings.json'),
+          join(this.root, `settings.json.corrupt-${this.now()}`),
+        ).catch(() => {});
       }
     }
     try {
@@ -314,7 +314,6 @@ export class UpdateManager {
       !this.companionCheck ||
       this.companionRunning ||
       !this.config.automatic ||
-      this.settingsInvalid ||
       this.initializationError ||
       this.closed
     )
@@ -336,7 +335,7 @@ export class UpdateManager {
     }
   }
   private async automaticCheck(reason: 'startup' | 'periodic') {
-    if (!this.config.automatic || this.settingsInvalid || this.initializationError || this.closed) {
+    if (!this.config.automatic || this.initializationError || this.closed) {
       if (this.startupPending) this.event('check', 'update_check_startup_disabled');
       this.startupPending = false;
       return;
@@ -386,7 +385,6 @@ export class UpdateManager {
   setAutomatic(automatic: boolean) {
     const change = this.preferenceChange.then(async () => {
       this.requireInitialized();
-      if (this.settingsInvalid) throw new Error('update_settings_invalid');
       if (this.task || this.prepared || this.planning) throw new Error('update_busy');
       const previous = this.config.automatic;
       this.config.automatic = automatic;
@@ -403,7 +401,6 @@ export class UpdateManager {
   async check(internal = false, reason: 'manual' | 'startup' | 'periodic' = 'manual') {
     await this.preferenceChange;
     this.requireInitialized();
-    if (this.settingsInvalid) throw new Error('update_settings_invalid');
     if (this.task && this.phase === 'checking' && !this.prepared && !this.planning)
       return this.task;
     if (this.task || this.prepared || this.closed || (this.planning && !internal))

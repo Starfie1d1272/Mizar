@@ -27,12 +27,8 @@ export function registerUpdateRoutes(
   },
 ) {
   const { manager, production, scenes } = options;
-  let updateOwner: string | undefined;
-  let updatePreparing = false;
   let updateReserved = false;
-  const releaseOwner = (owner: string) => {
-    if (updateOwner !== owner) return;
-    updateOwner = undefined;
+  const releaseUpdate = () => {
     manager.release();
     if (updateReserved) {
       updateReserved = false;
@@ -104,8 +100,7 @@ export function registerUpdateRoutes(
         .send({ error: safeCode(e), failureDetails: manager.status().failureDetails });
     }
   });
-  // Only the Host holds the per-launch capability. Renderer-supplied paths,
-  // download URLs and executable arguments never cross this boundary.
+  // Single install-plan endpoint: checks OBS gating and returns the verified package plan.
   app.post('/operator/updates/install-plan', { bodyLimit: 1024 }, async (request, reply) => {
     const expected = Buffer.from(options.controlToken),
       token = request.headers['x-runtime-token'];
@@ -117,15 +112,10 @@ export function registerUpdateRoutes(
       !timingSafeEqual(expected, supplied)
     )
       return reply.code(403).send({ error: 'update_host_required' });
-    const body = request.body as {
-      action?: unknown;
-      sessionId?: unknown;
-      attemptId?: unknown;
-    } | null;
-    const action = body?.action;
-    if (action === 'startup') {
+    const body = request.body as { action?: unknown; sessionId?: unknown } | null;
+    if (body?.action === 'startup') {
       if (
-        typeof body?.sessionId !== 'string' ||
+        typeof body.sessionId !== 'string' ||
         !/^(?:[a-f0-9]{32}-[a-f0-9]{8}|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.test(
           body.sessionId,
         )
@@ -134,52 +124,22 @@ export function registerUpdateRoutes(
       manager.desktopStartup(body.sessionId);
       return { accepted: true };
     }
-    if (action === 'recover') return { attemptId: updateOwner ?? null };
-    if (!['prepare', 'commit', 'recheck', 'release'].includes(String(action)))
-      return reply.code(400).send({ error: 'update_action_invalid' });
-    const owner = body?.attemptId;
-    if (typeof owner !== 'string' || !/^[a-f0-9-]{32,96}$/.test(owner))
-      return reply.code(400).send({ error: 'update_action_invalid' });
-    const release = () => releaseOwner(owner);
-    if (action === 'prepare') {
-      if (updateOwner || updatePreparing)
-        return reply.code(409).send({ message: '更新已经在准备，请稍候。' });
-      updateOwner = owner;
-      updatePreparing = true;
-    } else if (action === 'release' && updateOwner === undefined) {
-      // An earlier response can be lost after release has already committed.
-      return { released: true };
-    } else if (updateOwner !== owner) {
-      return reply.code(409).send({ message: '更新准备状态已变化，请重新尝试。' });
-    }
-    if (action === 'release') {
-      release();
+    if (body?.action === 'release') {
+      releaseUpdate();
       return { released: true };
     }
     let blockedReason: string | null = null;
-    const current = () => updateOwner === owner && !request.raw.aborted && !reply.raw.destroyed;
     try {
-      if (action === 'prepare') {
-        const plan = await manager.prepare();
-        if (!current()) throw new Error('更新准备已取消，请重新尝试。');
-        return plan;
-      }
-      if (manager.status().phase !== 'installing')
-        throw new Error('更新准备状态已变化，请重新尝试。');
-      if (action === 'commit') {
-        if (updateReserved || !production.reserveUpdate()) {
-          blockedReason = '应用正在退出，请等当前操作结束。';
-          throw new Error(blockedReason);
-        }
-        updateReserved = true;
-        scenes.setUpdatePending(true);
-      } else if (!updateReserved) {
-        throw new Error('更新准备状态已变化，请重新尝试。');
-      }
       blockedReason = await assess();
       if (blockedReason) throw new Error(blockedReason);
-      if (!current()) throw new Error('更新准备已取消，请重新尝试。');
-      return { accepted: true };
+      const plan = await manager.prepare();
+      if (!production.reserveUpdate()) {
+        blockedReason = '应用正在退出，请等当前操作结束。';
+        throw new Error(blockedReason);
+      }
+      updateReserved = true;
+      scenes.setUpdatePending(true);
+      return plan;
     } catch (e) {
       const reason =
         e instanceof Error && e.message === 'update_recheck_required' && e.cause instanceof Error
@@ -187,15 +147,10 @@ export function registerUpdateRoutes(
           : e;
       manager.failure('install_plan', reason);
       const failure = updateFailure('install_plan', reason, '');
-      release();
-      // A cancelled prepare can finish after release, but no newer prepare may
-      // enter while this one is still running.
-      if (action === 'prepare' && updateOwner === undefined) manager.release();
+      releaseUpdate();
       return reply.code(409).send({
         message: blockedReason ?? `${failure.summary} ${failure.nextStep}`,
       });
-    } finally {
-      if (action === 'prepare') updatePreparing = false;
     }
   });
   app.addHook('onListen', () => {
@@ -204,17 +159,11 @@ export function registerUpdateRoutes(
   });
   app.addHook('onClose', () => manager.close());
   return {
-    // The Host has already completed normal cleanup when the runtime is stopped.
-    // Recheck outputs, not the preparation scene changed by that cleanup.
     beforeStop: async () => {
       if (!updateReserved) return null;
-      const owner = updateOwner;
       const reason = await assess();
-      const blocked =
-        reason ??
-        (updateOwner !== owner || !updateReserved ? '更新状态已变化，本次更新已取消。' : null);
-      if (blocked && owner) releaseOwner(owner);
-      return blocked;
+      if (reason) releaseUpdate();
+      return reason;
     },
   };
 }

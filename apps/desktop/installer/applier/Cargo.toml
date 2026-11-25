@@ -1,0 +1,15 @@
+[package]
+name = "mizar-applier"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mizar-applier"
+path = "src/main.rs"
+
+[dependencies]
+mizar-common = { path = "../common" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+windows = { workspace = true }
