@@ -381,7 +381,7 @@ namespace Mizar.WebInstaller {
     readonly Action<string> launch;
     internal readonly Label heading = new Label(), detail = new Label(), amount = new Label();
     internal readonly ProgressBar bar = new ProgressBar();
-    internal readonly Button action = new Button(), cancel = new Button(), keepDataReinstall = new Button(), resetReinstall = new Button();
+    internal readonly Button action = new Button(), cancel = new Button();
     internal readonly CheckBox launchChoice = new CheckBox();
     readonly LinkLabel details = new LinkLabel();
     internal readonly LinkLabel offlineDownload = new LinkLabel();
@@ -393,7 +393,7 @@ namespace Mizar.WebInstaller {
     string selectedTarget;
     CancellationTokenSource cancellation;
     string installedCore, technicalDetails, activePhase="checking-release";
-    bool finished, recoveryRequired, downloading, launchFailed;
+    bool finished, downloading, launchFailed;
     public Window(Plan value) : this(value,null,null,false) { }
     internal Window(Plan value,Func<IProgress<long>,IProgress<string>,CancellationToken,Task<string>> operation,Action<string> start,bool demonstration) {
       plan=value; selectedTarget=operation==null ? Nsis.ResolveDestination(value) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Mizar"); install=operation ?? ((bytes,stages,token)=>Task.Run(()=>Install(bytes,stages,token))); launch=start ?? (path=>Nsis.StartProduct(path));
@@ -426,10 +426,7 @@ namespace Mizar.WebInstaller {
       launchChoice.CheckedChanged += (s,e)=>{if(finished) action.Text=launchFailed && launchChoice.Checked ? "重试启动" : "完成";};
       action.SetBounds(347,270,100,32); action.Text="安装";action.TabIndex=2;
       action.Click += async (s,e)=>{if(finished) Finish(); else await Start();};
-      keepDataReinstall.SetBounds(216,270,116,32); keepDataReinstall.Text="保留资料重装"; keepDataReinstall.Visible=false; keepDataReinstall.TabIndex=6;
-      keepDataReinstall.Click += async (s,e)=>await RecoverByRetire();
-      resetReinstall.SetBounds(338,270,112,32); resetReinstall.Text="重置并重装"; resetReinstall.Visible=false; resetReinstall.TabIndex=7;
-      resetReinstall.Click += (s,e)=>ResetAndUnlock();
+
       cancel.SetBounds(458,270,100,32); cancel.Text="关闭";cancel.TabIndex=3;
       cancel.Click += (s,e)=>{if(cancellation!=null) RequestCancel(); else Close();};
       details.SetBounds(32,278,80,24); details.Text="详情";details.TabIndex=4;
@@ -438,7 +435,7 @@ namespace Mizar.WebInstaller {
       offlineDownload.SetBounds(120,278,136,24);offlineDownload.Text="下载完整离线包";offlineDownload.Visible=false;offlineDownload.TabIndex=5;
       offlineDownload.Links.Add(0,offlineDownload.Text.Length,OfflineDownloads);
       offlineDownload.LinkClicked += (s,e)=>{try {System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {FileName=OfflineDownloads,UseShellExecute=true});} catch(Exception error) {detail.Text="下载页面未能打开，请查看详情中的下载地址。";technicalDetails+="\r\n完整离线包："+OfflineDownloads+"\r\n"+DiagnosticText(error);}};
-      Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,keepDataReinstall,resetReinstall,cancel,details,offlineDownload,destinationLabel,destination,browse,openLocation});
+      Controls.AddRange(new Control[]{heading,detail,bar,amount,launchChoice,action,cancel,details,offlineDownload,destinationLabel,destination,browse,openLocation});
       if(demonstration) {
         var marker=new Label {Text="界面演示：未执行安装",ForeColor=Color.DarkRed,BackColor=Color.White,AutoSize=true,Location=new Point(32,83)};
         Controls.Add(marker); marker.BringToFront();
@@ -518,33 +515,9 @@ namespace Mizar.WebInstaller {
       if(cancellation==null) return;
       ShowStage("waiting-for-installer"); cancellation.Cancel(); cancel.Enabled=false;
     }
-    async Task RecoverByRetire() {
-      if(cancellation!=null || finished) return;
-      try {
-        Nsis.RetireUpdateState();
-        recoveryRequired=false; keepDataReinstall.Visible=false; resetReinstall.Visible=false; action.Visible=true;
-        selectedTarget=Nsis.ResolveDestination(plan); destination.Text=selectedTarget;
-        await Start();
-      } catch(Exception error) {
-        heading.Text="无法隔离旧更新记录"; detail.Text=error.Message; technicalDetails=ErrorDetails(error);
-      }
-    }
-    void ResetAndUnlock() {
-      if(cancellation!=null || finished) return;
-      if(MessageBox.Show(this,"将把原 %LOCALAPPDATA%\\Mizar 资料目录整体归档为 Mizar-reset-<时间>，并清除 Mizar 安装登记与旧快捷方式，随后重新安装。\n\nOBS 个人场景与系统文件不受影响。是否继续？","重置 Mizar 并重装",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
-      try {
-        Nsis.ResetMizarState(selectedTarget);
-        recoveryRequired=false; keepDataReinstall.Visible=false; resetReinstall.Visible=false; action.Visible=true; action.Enabled=true; action.Text="安装";
-        selectedTarget=Nsis.ResolveDestination(plan); destination.Text=selectedTarget;
-        browse.Enabled=true; destination.ReadOnly=false; destination.TabStop=true;
-        heading.Text="已归档旧配置，请确认安装位置"; detail.Text="你可以直接点击“安装”，或先点击“更改”重新选择目录。";
-      } catch(Exception error) {
-        heading.Text="未能重置 Mizar"; detail.Text=error.Message; technicalDetails=ErrorDetails(error);
-      }
-    }
     internal async Task Start() {
-      if(cancellation!=null || finished || recoveryRequired) return;
-      offlineDownload.Visible=false; keepDataReinstall.Visible=false; resetReinstall.Visible=false; action.Visible=true;
+      if(cancellation!=null || finished) return;
+      offlineDownload.Visible=false; action.Visible=true;
       if(!destination.ReadOnly) {
         activePhase="checking-installation";
         try {selectedTarget=Nsis.SelectDestination(destination.Text);destination.Text=selectedTarget;}
@@ -571,10 +544,8 @@ namespace Mizar.WebInstaller {
         heading.Text=current.IsCancellationRequested ? "已取消" : "操作超时";
         detail.Text=current.IsCancellationRequested ? "可以重新开始安装。" : (activePhase=="checking-release" ? "发布验证超时，请检查网络后重试。" : activePhase=="downloading-core" || activePhase=="connecting-download" ? "下载超时，请检查网络后重试。" : "当前操作超时，请查看诊断后重试。"); action.Text="重新开始";
         if(!current.IsCancellationRequested && (activePhase=="downloading-core" || activePhase=="connecting-download")) {offlineDownload.Visible=true;detail.Text+=OfflineHint;}
-      } catch(InstallerRecoveryRequired error) {
-        recoveryRequired=true; heading.Text="需要恢复安装"; detail.Text="已保留安装现场。请查看详情，确认旧安装操作已结束后重新打开此安装器。"; technicalDetails=ErrorDetails(error);
       } catch(InstallerActionRequired error) {
-        recoveryRequired=!error.CanRetry; heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=ErrorDetails(error); action.Text="重试";
+        heading.Text="无法继续安装"; detail.Text=error.Message; technicalDetails=ErrorDetails(error); action.Text="重试";
       } catch(UnauthorizedAccessException error) {
         heading.Text="无法写入安装文件"; detail.Text="请检查安装位置的访问权限后重试。"; technicalDetails=ErrorDetails(error); action.Text="重试";
       } catch(Exception error) {
@@ -596,7 +567,7 @@ namespace Mizar.WebInstaller {
         technicalDetails=ErrorDetails(error); action.Text="重试";
       } finally {
         downloading=false; if(!finished) {bar.Visible=false;amount.Text="";destinationLabel.Visible=true;destination.Visible=true;browse.Visible=true;browse.Enabled=installedCore==null && Nsis.CanChooseDestination() && !Nsis.IsInstalledAt(selectedTarget);destination.ReadOnly=!browse.Enabled;destination.TabStop=browse.Enabled;}
-        current.Dispose(); cancellation=null; action.Visible=!recoveryRequired; action.Enabled=!recoveryRequired; keepDataReinstall.Visible=recoveryRequired; resetReinstall.Visible=recoveryRequired; cancel.Enabled=true; cancel.Text="关闭";
+        current.Dispose(); cancellation=null; action.Visible=true; action.Enabled=true; cancel.Enabled=true; cancel.Text="关闭";
       }
     }
   }

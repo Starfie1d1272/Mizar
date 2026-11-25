@@ -134,20 +134,6 @@ pub fn is_reparse_point(path: &Path) -> io::Result<bool> {
     }
 }
 
-pub fn assert_no_reparse_ancestors(path: &Path) -> io::Result<()> {
-    let mut cur = Some(path);
-    while let Some(p) = cur {
-        if p.exists() && is_reparse_point(p)? {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("路径包含重解析点或符号链接：{}", p.display()),
-            ));
-        }
-        cur = p.parent();
-    }
-    Ok(())
-}
-
 /// Recursively remove a directory while refusing to traverse or delete any reparse point / junction.
 pub fn remove_dir_safe(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
@@ -195,7 +181,8 @@ pub fn remove_dir_safe(path: &Path) -> io::Result<()> {
 
 pub fn normalize_for_compare(path: &Path) -> String {
     let s = path.to_string_lossy().replace('/', "\\");
-    s.trim_end_matches('\\').to_ascii_lowercase()
+    let stripped = s.strip_prefix("\\\\?\\").unwrap_or(&s);
+    stripped.trim_end_matches('\\').to_ascii_lowercase()
 }
 
 pub fn validate_install_dir(install_dir: &Path, state_root: &Path) -> Result<PathBuf, String> {
@@ -203,7 +190,9 @@ pub fn validate_install_dir(install_dir: &Path, state_root: &Path) -> Result<Pat
         return Err("安装目录必须是绝对路径".into());
     }
     let raw = install_dir.to_string_lossy();
-    if raw.contains('"') || raw.contains('\r') || raw.contains('\n') || raw.starts_with("\\\\") {
+    let is_unc =
+        raw.starts_with("\\\\?\\UNC\\") || (raw.starts_with("\\\\") && !raw.starts_with("\\\\?\\"));
+    if raw.contains('"') || raw.contains('\r') || raw.contains('\n') || is_unc {
         return Err("安装目录格式无效或不支持网络路径".into());
     }
     for comp in install_dir.components() {
@@ -228,7 +217,6 @@ pub fn validate_install_dir(install_dir: &Path, state_root: &Path) -> Result<Pat
             return Err("不能安装到 Windows 系统目录".into());
         }
     }
-    assert_no_reparse_ancestors(install_dir).map_err(|e| e.to_string())?;
     Ok(install_dir.to_path_buf())
 }
 

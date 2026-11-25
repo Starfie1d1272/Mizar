@@ -70,11 +70,6 @@ Section "-Mizar" SecMain
   Return
 
 normal_install:
-  !ifdef CORE_SETUP
-    MessageBox MB_OK|MB_ICONINFORMATION "Core 包仅用于在线安装与自动更新，请使用官方轻量安装器或完整离线安装包。"
-    SetErrorLevel 13
-    Abort "Core 包仅用于在线安装与自动更新，请使用官方轻量安装器或完整离线安装包。"
-  !endif
   InitPluginsDir
   SetOutPath "$PLUGINSDIR\payload"
   File /r "${PAYLOAD}\*"

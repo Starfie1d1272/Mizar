@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,81 +195,4 @@ pub fn move_or_copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
             Ok(())
         }
     }
-}
-
-pub fn prepare_core_resources(
-    staging_dir: &Path,
-    state_root: &Path,
-    artifact: &ArtifactMetadata,
-    core_archive_sha256: Option<&str>,
-    installer_sha256: Option<&str>,
-    installer_bytes: Option<u64>,
-) -> Result<String, String> {
-    if artifact.resource_mode != "core" {
-        return Ok(String::new());
-    }
-    let entry = staging_dir.join("resources/app/dist/web-installer/installed-entry.mjs");
-    if !entry.is_file() {
-        return Err("Core 载荷缺少资源安装入口 installed-entry.mjs".into());
-    }
-    let node_exe = staging_dir.join("resources/runtime/node.exe");
-    let core_sha = core_archive_sha256.ok_or("Core 模式缺少 --core-archive-sha256")?;
-    let inst_sha = installer_sha256.ok_or("Core 模式缺少 --installer-sha256")?;
-    let inst_bytes = installer_bytes.ok_or("Core 模式缺少 --installer-bytes")?;
-
-    let mut cmd = Command::new(&node_exe);
-    cmd.arg(&entry)
-        .arg(&artifact.app_version)
-        .arg(&artifact.git_sha)
-        .arg(&artifact.artifact_sha256)
-        .arg(core_sha)
-        .arg(inst_sha)
-        .arg(inst_bytes.to_string())
-        .env("MIZAR_STATE_ROOT", state_root)
-        .current_dir(staging_dir);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("无法启动资源准备进程 node.exe: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if !output.status.success() {
-        return Err(format!(
-            "Core 资源准备失败 (code={:?}): {stderr}",
-            output.status.code()
-        ));
-    }
-    Ok(format!("stdout={stdout}; stderr={stderr}"))
-}
-
-pub fn rollback_core_resources(ver_dir: &Path, state_root: &Path) -> Result<(), String> {
-    let entry = ver_dir.join("resources/app/dist/web-installer/installed-entry.mjs");
-    let node_exe = ver_dir.join("resources/runtime/node.exe");
-    if !entry.is_file() || !node_exe.is_file() {
-        return Ok(());
-    }
-    let mut cmd = Command::new(&node_exe);
-    cmd.arg(&entry)
-        .arg("--rollback")
-        .env("MIZAR_STATE_ROOT", state_root)
-        .current_dir(ver_dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("无法启动资源回退进程 node.exe: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(format!("Core 资源回退失败: {stderr}"));
-    }
-    Ok(())
 }

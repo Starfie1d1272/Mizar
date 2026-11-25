@@ -485,7 +485,6 @@ async function assemble({
       for (const name of [
         'install-official-pack.mjs',
         'published-bootstrap.mjs',
-        'installed-entry.mjs',
         'cancel-control.mjs',
       ]) {
         await cp(join(rootDir, 'scripts', 'web-installer', name), join(bridgeDirectory, name));

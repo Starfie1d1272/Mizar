@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { registerStaticHost } from '../local-web/static-host.js';
 import type { ResourceTrustPolicy } from '@mizar/resource-pack-contract/runtime';
 import type { FastifyInstance } from 'fastify';
 import type { LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { ProductRuntime } from '../runtime/product-runtime.js';
 import { diagnosticValue } from '../support/session-journal.js';
+import { prepareCurrentResource } from './recovery.js';
 import { registerResourceRoutes } from './routes.js';
 import { createRuntimeVerifier, isOfficialWebResource, PACK_ID } from './runtime-adapter.js';
 import { ResourceStore } from './store.js';
@@ -69,6 +72,41 @@ export function registerResourceRuntime(
         activateWhenSafe: (commit) => options.activateWhenSafe(commit),
         ...(options.references ? { references: options.references } : {}),
       });
+      if (options.product?.appVersion && !resources.getStatus(PACK_ID).activeVersion) {
+        const bundleRoot = process.env.MIZAR_BUNDLE_ROOT;
+        let isCore = options.config.required === true;
+        if (!isCore && bundleRoot) {
+          try {
+            const mode = JSON.parse(
+              readFileSync(join(bundleRoot, 'resources/web/dist/web-resource-mode.json'), 'utf8'),
+            ) as { resourceMode?: unknown };
+            isCore = mode.resourceMode === 'core';
+          } catch {
+            // ignore missing or unreadable mode file
+          }
+        }
+        if (isCore) {
+          void resources
+            .repair(
+              PACK_ID,
+              prepareCurrentResource(
+                { appVersion: options.product.appVersion, gitSha: options.product.gitSha },
+                options.config.root,
+              ),
+            )
+            .catch((error: unknown) => {
+              app.log.warn(
+                {
+                  event: 'resource',
+                  stage: 'resource_auto_prepare',
+                  result: 'failure',
+                  diagnostic: { error: diagnosticValue(error) },
+                },
+                '官方素材自动准备失败，可稍后在素材库重试。',
+              );
+            });
+        }
+      }
     } catch (error) {
       app.log.warn(
         {
