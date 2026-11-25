@@ -395,9 +395,13 @@ pub fn spawn_applier_with_inherited_mutex(
         .encode_utf16()
         .chain(Some(0))
         .collect();
-    let dir_wide: Option<Vec<u16>> = exe
-        .parent()
-        .map(|p| p.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect());
+    let dir_wide: Option<Vec<u16>> = exe.parent().map(|p| {
+        p.as_os_str()
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect()
+    });
 
     let si = StartupInfoExW {
         startup_info: StartupInfoW {
