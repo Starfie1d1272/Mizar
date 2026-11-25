@@ -191,4 +191,4 @@ Windows 正式候选附带 [MulNX_CS2](https://github.com/Co1Swet/MulNX_CS2) 的
 
 ## CS2 Headless Observer
 
-Windows 桌面包使用 [CS2 Headless Observer](https://github.com/Starfie1d1272/cs2-headless-observer) 3.0.0 的 external-node 发行包，复用随 Mizar 提供的 Windows x64 Node 24。固定版本、源码和资产摘要见 `apps/companion/src/telemetry/observer-component.json`。组件自有代码采用 AGPL-3.0 并附 Steamworks SDK 链接例外。组件与修改过的解析器对应源码随包位于 `resources/observer/source`，组件及第三方许可原文位于 `resources/observer/licenses`。Steam SDK 运行库使用用户实际安装的 CS2 副本。
+Windows 桌面包使用 [CS2 Headless Observer](https://github.com/Starfie1d1272/cs2-headless-observer) 3.0.1 的 external-node 发行包，复用随 Mizar 提供的 Windows x64 Node 24。固定版本、源码和资产摘要见 `apps/companion/src/telemetry/observer-component.json`。组件自有代码采用 AGPL-3.0 并附 Steamworks SDK 链接例外。组件与修改过的解析器对应源码随包位于 `resources/observer/source`，组件及第三方许可原文位于 `resources/observer/licenses`。Steam SDK 运行库使用用户实际安装的 CS2 副本。
