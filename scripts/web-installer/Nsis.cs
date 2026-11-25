@@ -97,8 +97,10 @@ namespace Mizar.WebInstaller {
     }
 
     internal static string ResolveDestination(Plan plan = null) {
-      string active = ActiveInstallDir();
-      if (active != null) { AssertAllowedTarget(active); return active; }
+      try {
+        string active = ActiveInstallDir();
+        if (active != null) { AssertAllowedTarget(active); return active; }
+      } catch { }
       return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Mizar");
     }
 
