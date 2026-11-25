@@ -24,8 +24,8 @@ use win32::{
     clear_legacy_run_once, create_shortcut, delete_install_registry, desktop_dir,
     find_running_mizar_under, launch_and_wait_ready, random_hex_16, remove_shortcuts,
     schedule_dir_delete, schedule_self_delete, show_message_box, start_menu_dir,
-    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry,
-    DesktopMutexHandle, LaunchOutcome, UpdateActiveEvent, WriterMutex,
+    utc_compact_timestamp, utc_iso8601, wait_host_exit, write_install_registry, DesktopMutexHandle,
+    LaunchOutcome, UpdateActiveEvent, WriterMutex,
 };
 
 struct Logger {
