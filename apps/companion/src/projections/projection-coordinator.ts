@@ -1248,10 +1248,12 @@ function buildOperatorSemanticSnapshot(args: {
     lineupExtrasCount: activeLineup.extras.length,
     programSourceState: args.programSourceHealth.state,
     programSourceGen: args.programSourceHealth.generation,
-    programSourceTick: args.programSourceHealth.lastSync?.tick ?? null,
+    programSourceTick:
+      args.programSourceHealth.lastEventTick ?? args.programSourceHealth.tailTick ?? null,
     lookaheadSourceState: args.lookaheadSourceHealth.state,
     lookaheadSourceGen: args.lookaheadSourceHealth.generation,
-    lookaheadSourceTick: args.lookaheadSourceHealth.lastSync?.tick ?? null,
+    lookaheadSourceTick:
+      args.lookaheadSourceHealth.lastEventTick ?? args.lookaheadSourceHealth.tailTick ?? null,
     producerInstanceId: runtimeView.cursor.producerInstanceId,
     liveSessionId: runtimeView.cursor.liveSessionId,
     programSourceGeneration: runtimeView.cursor.programSourceGeneration,
@@ -1329,8 +1331,7 @@ function buildAssistSemanticSnapshot(args: {
     lookaheadState: args.lookaheadHealth.state,
     lookaheadGen: args.lookaheadHealth.generation,
     lookaheadErrorCode: args.lookaheadHealth.lastErrorCode ?? null,
-    lookaheadMapName:
-      args.lookaheadHealth.mapName ?? args.lookaheadHealth.lastSync?.mapName ?? null,
+    lookaheadMapName: args.lookaheadHealth.mapName ?? null,
     mapName: args.program.map.name,
     roundNumber: args.program.map.roundNumber,
     roundPhase: args.program.round?.phase ?? null,
