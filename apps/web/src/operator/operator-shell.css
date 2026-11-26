@@ -71,7 +71,7 @@
 .product-nav-badge {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--mizar-accent-primary);
   margin-left: auto;
   flex: none;
@@ -81,7 +81,7 @@
   display: grid;
   gap: var(--mizar-layout-compact);
   padding: var(--mizar-layout-padding);
-  background: var(--mizar-bg-elevated, var(--mizar-bg-canvas));
+  background: var(--mizar-bg-canvas);
   border: var(--mizar-line-border) solid var(--mizar-border-default);
   border-radius: var(--mizar-shape-control);
 }
