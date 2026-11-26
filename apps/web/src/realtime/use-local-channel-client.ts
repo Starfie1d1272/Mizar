@@ -13,10 +13,10 @@ export function useLocalChannelClient<C extends LocalSnapshotChannel>(
   channel: C,
   enabled = true,
 ): LocalChannelClient<C> {
-  const client = useMemo(
-    () => (enabled ? createLocalChannelClient(channel) : createLocalChannelClient(channel)),
-    [channel, enabled],
-  );
+  const client = useMemo(() => {
+    void enabled;
+    return createLocalChannelClient(channel);
+  }, [channel, enabled]);
   const pendingDisposal = useRef<{ client: LocalChannelClient<C>; timer: number } | null>(null);
 
   useEffect(() => {

@@ -2,19 +2,23 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PROGRAM_SCENES, type ProgramSceneState } from '@mizar/protocol/program-scenes';
+import type { ProgramSceneState } from '@mizar/protocol/program-scenes';
 import { NextSceneCard } from './NextSceneCard';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-function makeSceneState(director: NonNullable<ProgramSceneState['director']>): ProgramSceneState {
+type Director = NonNullable<ProgramSceneState['director']>;
+
+function makeDirector(overrides: Partial<Director>): Director {
   return {
-    schemaVersion: 'mizar.program-scenes.v1',
-    active: 'waiting',
-    revision: 'rev-1',
-    available: ['waiting', 'gameplay', 'bp'],
-    director,
-    blocked: {},
+    mode: 'auto',
+    next: 'gameplay',
+    nextStatus: 'predicted',
+    nextReason: null,
+    reason: null,
+    introDurationMs: 0,
+    sceneElapsedMs: 1000,
+    ...overrides,
   };
 }
 
@@ -44,20 +48,8 @@ describe('NextSceneCard', () => {
   }
 
   it('renders scene type badge, title, and reason in auto mode without an iframe', () => {
-    const gameplay = PROGRAM_SCENES.find((s) => s.id === 'gameplay')!;
     const el = renderCard(
-      <NextSceneCard
-        sceneState={makeSceneState({
-          mode: 'auto',
-          next: 'gameplay',
-          nextStatus: 'predicted',
-          nextReason: '选手已进入游戏',
-          reason: null,
-          introDurationMs: 0,
-          sceneElapsedMs: 1000,
-        })}
-        next={gameplay}
-      />,
+      <NextSceneCard director={makeDirector({ next: 'gameplay', nextReason: '选手已进入游戏' })} />,
     );
     expect(el.querySelector('iframe')).toBeNull();
     expect(el.textContent).toContain('游戏叠加');
@@ -67,22 +59,7 @@ describe('NextSceneCard', () => {
   });
 
   it('renders full-screen graphic badge and BP fallback reason when bpActive is true', () => {
-    const bp = PROGRAM_SCENES.find((s) => s.id === 'bp')!;
-    const el = renderCard(
-      <NextSceneCard
-        sceneState={makeSceneState({
-          mode: 'auto',
-          next: 'bp',
-          nextStatus: 'predicted',
-          nextReason: null,
-          reason: null,
-          introDurationMs: 0,
-          sceneElapsedMs: 1000,
-        })}
-        next={bp}
-        bpActive
-      />,
-    );
+    const el = renderCard(<NextSceneCard director={makeDirector({ next: 'bp' })} bpActive />);
     expect(el.textContent).toContain('全屏图文');
     expect(el.textContent).toContain('BP');
     expect(el.textContent).toContain('正在进行地图禁选');
@@ -90,18 +67,7 @@ describe('NextSceneCard', () => {
 
   it('switches to manual, blocked, and complete states accurately', () => {
     const el = renderCard(
-      <NextSceneCard
-        sceneState={makeSceneState({
-          mode: 'manual',
-          next: 'gameplay',
-          nextStatus: 'predicted',
-          nextReason: null,
-          reason: null,
-          introDurationMs: 0,
-          sceneElapsedMs: 1000,
-        })}
-        next={PROGRAM_SCENES.find((s) => s.id === 'gameplay')}
-      />,
+      <NextSceneCard director={makeDirector({ mode: 'manual', next: 'gameplay' })} />,
     );
     expect(el.textContent).toContain('手动保持');
     expect(el.textContent).toContain('自动推进已暂停');
@@ -110,16 +76,12 @@ describe('NextSceneCard', () => {
     act(() => {
       root?.render(
         <NextSceneCard
-          sceneState={makeSceneState({
+          director={makeDirector({
             mode: 'blocked',
             next: null,
             nextStatus: 'awaiting',
-            nextReason: null,
             reason: '等待遥测连接',
-            introDurationMs: 0,
-            sceneElapsedMs: 1000,
           })}
-          next={undefined}
         />,
       );
     });
@@ -129,18 +91,7 @@ describe('NextSceneCard', () => {
 
     act(() => {
       root?.render(
-        <NextSceneCard
-          sceneState={makeSceneState({
-            mode: 'auto',
-            next: null,
-            nextStatus: 'complete',
-            nextReason: null,
-            reason: null,
-            introDurationMs: 0,
-            sceneElapsedMs: 1000,
-          })}
-          next={undefined}
-        />,
+        <NextSceneCard director={makeDirector({ next: null, nextStatus: 'complete' })} />,
       );
     });
     expect(el.textContent).toContain('本场结束');

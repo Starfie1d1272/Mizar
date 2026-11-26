@@ -1,15 +1,14 @@
-import type { ProgramScene, ProgramSceneState } from '@mizar/protocol/program-scenes';
+import { PROGRAM_SCENES, type ProgramSceneState } from '@mizar/protocol/program-scenes';
 
 export interface NextSceneCardProps {
-  readonly sceneState: ProgramSceneState | null;
-  readonly next: ProgramScene | undefined;
+  readonly director: ProgramSceneState['director'] | undefined;
   readonly bpActive?: boolean;
 }
 
-export function NextSceneCard({ sceneState, next, bpActive = false }: NextSceneCardProps) {
-  const director = sceneState?.director;
+export function NextSceneCard({ director, bpActive = false }: NextSceneCardProps) {
   const mode = director?.mode;
   const paused = mode === 'manual' || mode === 'blocked';
+  const next = PROGRAM_SCENES.find((scene) => scene.id === director?.next);
 
   const typeLabel =
     mode === 'manual'

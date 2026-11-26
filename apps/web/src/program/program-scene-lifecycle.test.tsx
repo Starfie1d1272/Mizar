@@ -11,76 +11,54 @@ const sceneMock = vi.hoisted(() => ({
   scenes: null as ProgramSceneState | null,
   channelCalls: [] as Array<{ channel: string; enabled: boolean }>,
   presentationFetches: 0,
-  display: {
-    status: 'ready' as const,
-    current: null as unknown as {
-      activeRevision: string;
-      hud: {
-        renderer: 'native';
-        config: ReturnType<typeof getBuiltinResolvedPreset>;
-        overlays: {
-          pause: { enabled: boolean; visual: string };
-          chat: { enabled: boolean; placement: 'auto' };
-        };
-        accent: { source: 'theme' };
-      };
-      program: { themeId: 'mizar-pulse' };
-    },
-    reason: null,
-  },
+  hudCurrent: null as unknown as ReturnType<typeof getBuiltinResolvedPreset>,
 }));
 
 vi.mock('../realtime/broadcast-display-client', () => ({
-  useBroadcastDisplayConfig: () => sceneMock.display,
+  useBroadcastDisplayConfig: () => ({
+    status: 'ready',
+    current: {
+      activeRevision: 'bd-1',
+      hud: {
+        renderer: 'native',
+        config: sceneMock.hudCurrent,
+        overlays: {
+          pause: { enabled: false, visual: 'legacy' },
+          chat: { enabled: false, placement: 'auto' },
+        },
+        accent: { source: 'theme' },
+      },
+      program: { themeId: 'mizar-pulse' },
+    },
+    reason: null,
+  }),
 }));
-
 vi.mock('../realtime/hud-config-client', () => ({
   useHudConfigClient: () => ({
     status: 'ready',
-    current: getBuiltinResolvedPreset(),
-    etag: '"etag-1"',
-    activeRevision: 'hud-1',
+    current: sceneMock.hudCurrent,
+    etag: '"e1"',
+    activeRevision: 'h1',
     error: null,
     applyResponse: vi.fn(),
   }),
 }));
-
 vi.mock('../realtime', () => ({
   useLocalChannelClient: (channel: string, enabled = true) => {
     sceneMock.channelCalls.push({ channel, enabled });
-    const snapshot = {
-      state: enabled ? 'live' : 'idle',
-      current: null,
-      reset: null,
-      error: null,
-    };
-    return {
-      channel,
-      subscribe: () => () => {},
-      getSnapshot: () => snapshot,
-    };
+    const snapshot = { state: enabled ? 'live' : 'idle', current: null, reset: null, error: null };
+    return { channel, subscribe: () => () => {}, getSnapshot: () => snapshot };
   },
 }));
-
 vi.mock('../workspace/client', async () => {
   const actual = await vi.importActual<typeof import('../workspace/client')>('../workspace/client');
-  return {
-    ...actual,
-    useProgramScenes: () => sceneMock.scenes,
-  };
+  return { ...actual, useProgramScenes: () => sceneMock.scenes };
 });
-
-vi.mock('./broadcast-display', () => ({
-  pulseTokenStyle: () => undefined,
-}));
-
-vi.mock('./useStatsRotation', () => ({
-  useStatsRotation: () => null,
-}));
-
+vi.mock('./broadcast-display', () => ({ pulseTokenStyle: () => undefined }));
+vi.mock('./useStatsRotation', () => ({ useStatsRotation: () => null }));
 vi.mock('@mizar/hud-view', () => ({
-  ProgramView: () => <div data-testid="program-view" />,
-  StatsInsertView: () => <div data-testid="stats-insert" />,
+  ProgramView: () => null,
+  StatsInsertView: () => null,
 }));
 
 import { ProgramScenePage } from './ProgramScenePage';
@@ -113,19 +91,7 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    sceneMock.display.current = {
-      activeRevision: 'bd-1',
-      hud: {
-        renderer: 'native',
-        config: getBuiltinResolvedPreset(),
-        overlays: {
-          pause: { enabled: false, visual: 'legacy' },
-          chat: { enabled: false, placement: 'auto' },
-        },
-        accent: { source: 'theme' },
-      },
-      program: { themeId: 'mizar-pulse' },
-    };
+    sceneMock.hudCurrent = getBuiltinResolvedPreset();
     sceneMock.scenes = makeScenes('waiting', 'halftime');
     sceneMock.channelCalls = [];
     sceneMock.presentationFetches = 0;
@@ -136,11 +102,7 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
     });
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
-      value: () => ({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }),
+      value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
     });
     vi.stubGlobal(
       'fetch',
@@ -153,7 +115,7 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
               match: null,
               maps: [],
             }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } },
+            { status: 200 },
           );
         }
         return new Response(null, { status: 404 });
@@ -183,12 +145,11 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
       root?.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-
     expect(sceneMock.channelCalls).toContainEqual({ channel: 'program', enabled: false });
     expect(sceneMock.presentationFetches).toBe(0);
   });
 
-  it('pauses presentation polling and program/radar subscriptions when hidden in background, and resumes when active or next', async () => {
+  it('pauses presentation polling and subscriptions when hidden in OBS background, and resumes when next', async () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -196,21 +157,22 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
       root?.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-
     expect(sceneMock.presentationFetches).toBe(1);
-    expect(sceneMock.channelCalls).toContainEqual({ channel: 'program', enabled: true });
-    expect(sceneMock.channelCalls).toContainEqual({ channel: 'radar', enabled: true });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: true },
+      { channel: 'radar', enabled: true },
+    ]);
 
-    // OBS hides the background matchup source while waiting is active and halftime is next
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent('obsSourceActiveChanged', { detail: { active: false } }),
       );
       await Promise.resolve();
     });
-
-    expect(sceneMock.channelCalls.at(-2)).toEqual({ channel: 'program', enabled: false });
-    expect(sceneMock.channelCalls.at(-1)).toEqual({ channel: 'radar', enabled: false });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: false },
+      { channel: 'radar', enabled: false },
+    ]);
 
     const fetchesWhileHidden = sceneMock.presentationFetches;
     await act(async () => {
@@ -219,19 +181,19 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
     });
     expect(sceneMock.presentationFetches).toBe(fetchesWhileHidden);
 
-    // Scene becomes director.next -> immediately fetches presentation and resumes subscriptions
     sceneMock.scenes = makeScenes('waiting', 'matchup');
     await act(async () => {
       root?.render(<ProgramScenePage sceneId="matchup" />);
       await Promise.resolve();
     });
-
     expect(sceneMock.presentationFetches).toBeGreaterThan(fetchesWhileHidden);
-    expect(sceneMock.channelCalls.at(-2)).toEqual({ channel: 'program', enabled: true });
-    expect(sceneMock.channelCalls.at(-1)).toEqual({ channel: 'radar', enabled: true });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: true },
+      { channel: 'radar', enabled: true },
+    ]);
   });
 
-  it('relaxes useProgramScenes polling when document is hidden and refreshes immediately on visibility restore', async () => {
+  it('relaxes useProgramScenes polling when hidden and refreshes immediately on visibility restore', async () => {
     let sceneFetches = 0;
     let visibility = 'visible';
     Object.defineProperty(document, 'visibilityState', {
@@ -243,10 +205,7 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
       vi.fn(async (input: string) => {
         if (input === '/local/v1/program-scenes') {
           sceneFetches += 1;
-          return new Response(JSON.stringify(makeScenes('waiting', 'matchup')), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
+          return new Response(JSON.stringify(makeScenes('waiting', 'matchup')), { status: 200 });
         }
         return new Response(null, { status: 404 });
       }),
@@ -254,7 +213,6 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
 
     const { useProgramScenes: realUseProgramScenes } =
       await vi.importActual<typeof import('../workspace/client')>('../workspace/client');
-
     function Probe() {
       realUseProgramScenes();
       return null;
@@ -269,7 +227,6 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
     });
     expect(sceneFetches).toBe(1);
 
-    // Hide page -> next poll relaxes to 2000ms
     visibility = 'hidden';
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
@@ -278,14 +235,12 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
     });
     expect(sceneFetches).toBe(2);
 
-    // At 1000ms while hidden, no additional fetch should have fired yet
     await act(async () => {
       vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
     expect(sceneFetches).toBe(2);
 
-    // Restore visibility -> immediate refresh
     visibility = 'visible';
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));

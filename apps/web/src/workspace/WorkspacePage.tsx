@@ -568,7 +568,6 @@ function WorkspaceDockContent() {
   };
   const mode = sceneState?.director?.mode;
   const connected = obs?.connection === 'connected';
-  const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
   return (
     <main
       className="workspace-dock mizar-surface"
@@ -645,8 +644,7 @@ function WorkspaceDockContent() {
             </Select>
           ) : null}
           <NextSceneCard
-            sceneState={sceneState}
-            next={next}
+            director={sceneState?.director}
             bpActive={Boolean(bp && bp.state !== 'hidden')}
           />
         </div>

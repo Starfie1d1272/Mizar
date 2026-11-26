@@ -13,14 +13,7 @@ import { nativeSnapshot } from '../debug/control-journal';
 import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { ProgramCueRendererBridge } from './ProgramCueRendererBridge';
 import { ProgramPage } from './ProgramPage';
-
-function isSameOverlayPolicy(prev: OverlayPolicy, next: OverlayPolicy): boolean {
-  if (prev.revision !== next.revision || prev.enabled !== next.enabled) return false;
-  const prevKeys = Object.keys(prev.visibility);
-  const nextKeys = Object.keys(next.visibility);
-  if (prevKeys.length !== nextKeys.length) return false;
-  return prevKeys.every((key) => prev.visibility[key] === next.visibility[key]);
-}
+import { useProgramSurfaceActivity } from './useProgramSurfaceActivity';
 
 export function ProgramRoute() {
   const scenes = useProgramScenes();
@@ -43,13 +36,26 @@ export function ProgramRoute() {
   const desktop =
     window.__TAURI_INTERNALS__ !== undefined &&
     new URLSearchParams(window.location.search).get('host') === 'desktop';
+  const surfaceActive = useProgramSurfaceActivity({
+    sceneId: 'gameplay',
+    scenes,
+    desktop,
+  });
   const policyRead = useLocalReadWithTime<OverlayPolicy>(
     desktop ? '/local/v1/desktop-overlay' : null,
     desktop ? 1000 : 60000,
-    0,
-    isSameOverlayPolicy,
   );
-  const stablePolicy = policyRead.value;
+  const [stablePolicy, setStablePolicy] = useState<OverlayPolicy | null>(null);
+  const nextPolicy = policyRead.value;
+  if (
+    nextPolicy === null
+      ? stablePolicy !== null
+      : stablePolicy === null ||
+        stablePolicy.revision !== nextPolicy.revision ||
+        stablePolicy.enabled !== nextPolicy.enabled
+  ) {
+    setStablePolicy(nextPolicy);
+  }
   const resolved = useMemo(
     () =>
       desktop
@@ -83,14 +89,14 @@ export function ProgramRoute() {
   );
 
   const displayValid = !(display.status === 'unsupported' && display.current === null);
-  const needRadar = displayValid && resolved.layout.widgets.radar.visible === true;
+  const needRadar = surfaceActive && displayValid && resolved.layout.widgets.radar.visible === true;
   const hasNonRadarWidget = Object.entries(resolved.layout.widgets).some(
     ([id, placement]) => id !== 'radar' && placement.visible,
   );
   const hasEnabledOverlay = overlays?.pause.enabled === true || overlays?.chat.enabled === true;
   const needGg = scenes?.active === 'gameplay' && (scenes.director?.gg?.remainingMs ?? 0) > 0;
-  const needProgram = displayValid && (hasNonRadarWidget || hasEnabledOverlay || needGg);
-  const needCue = needProgram;
+  const needProgram =
+    surfaceActive && displayValid && (hasNonRadarWidget || hasEnabledOverlay || needGg);
 
   const radarClient = useLocalChannelClient('radar', needRadar);
   const radarSource = useRadarViewSource(radarClient, needRadar);
@@ -100,20 +106,15 @@ export function ProgramRoute() {
     programClient.getSnapshot,
     programClient.getSnapshot,
   );
-  const cueClient = useMemo(
-    () =>
-      needCue
-        ? createProgramCueClient({
-            getProgramSnapshot: () => programClient.getSnapshot().current,
-          })
-        : createProgramCueClient({
-            getProgramSnapshot: () => programClient.getSnapshot().current,
-          }),
-    [programClient, needCue],
-  );
+  const cueClient = useMemo(() => {
+    void needProgram;
+    return createProgramCueClient({
+      getProgramSnapshot: () => programClient.getSnapshot().current,
+    });
+  }, [programClient, needProgram]);
   const cueDisposal = useRef<{ client: typeof cueClient; timer: number } | null>(null);
   useEffect(() => {
-    if (!needCue) return;
+    if (!needProgram) return;
     if (cueDisposal.current?.client === cueClient) {
       window.clearTimeout(cueDisposal.current.timer);
       cueDisposal.current = null;
@@ -131,7 +132,7 @@ export function ProgramRoute() {
       }, 0);
       cueDisposal.current = { client: cueClient, timer };
     };
-  }, [cueClient, programClient, needCue]);
+  }, [cueClient, programClient, needProgram]);
 
   const [documentId, setDocumentId] = useState(window.__MIZAR_OVERLAY_DOCUMENT__);
   useEffect(() => {
