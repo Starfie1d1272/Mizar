@@ -1,5 +1,5 @@
 //! One bounded, process-scoped fps_max transaction. Uncertain writes are never replayed.
-use crate::{cs2_console, cs2_session, startup_log::DesktopLog};
+use crate::{cs2_console, cs2_session, desktop_types::FrameRateLimit, startup_log::DesktopLog};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -46,7 +46,11 @@ fn load(log: &DesktopLog) -> Result<Option<Value>, String> {
                 .as_f64()
                 .is_some_and(|v| v.is_finite() && (0.0..=10000.0).contains(&v))
         })
-        || !matches!(record["applied"].as_f64(), Some(30.0 | 60.0))
+        || !record["applied"].as_f64().is_some_and(|v| {
+            v.fract() == 0.0
+                && (0.0..=u16::MAX as f64).contains(&v)
+                && FrameRateLimit::try_from(v as u16).is_ok()
+        })
         || (record["phase"] == "restore_pending" && record.get("restoreAttemptId").is_none())
         || !record["attemptId"].as_str().is_some_and(valid_marker)
         || (record.get("restoreAttemptId").is_some()
@@ -146,9 +150,9 @@ pub(crate) fn control(
 ) -> Result<Value, String> {
     let _guard = TRANSACTION.lock().map_err(|_| "帧率恢复记录正忙。")?;
     if !matches!(action, "inspect" | "apply" | "restore")
-        || (action == "apply" && !matches!(target, Some(30 | 60)))
+        || (action == "apply" && target.is_none_or(|v| FrameRateLimit::try_from(v).is_err()))
     {
-        return Err("现场帧率仅支持读取、30/60帧应用及恢复。".into());
+        return Err("现场帧率仅支持读取、144/120/90/60/30/不限帧应用及恢复。".into());
     }
     let mut record = load(log)?;
     if record.as_ref().is_some_and(active)
@@ -285,7 +289,7 @@ pub(crate) fn control(
             "idle",
             true,
             false,
-            "已读回当前帧率上限，可选择30或60帧进行本次调整。",
+            "已读回当前帧率上限，可选择目标档位进行本次调整。",
         ));
     }
     let target = f64::from(target.unwrap());

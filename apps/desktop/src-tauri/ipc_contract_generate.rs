@@ -95,7 +95,18 @@ pub fn frontend_contract() -> String {
     macro_rules! number_enum {
         ($name:ident($number:ty) { $($variant:ident = $value:literal),+ $(,)? }) => {{
             let values = [$(concat!("z.literal(", stringify!($value), ")")),+];
-            writeln!(output, "const {} = z.union([{}]);", stringify!($name), values.join(", ")).unwrap();
+            let line = format!("const {} = z.union([{}]);", stringify!($name), values.join(", "));
+            if line.len() > 100 {
+                writeln!(
+                    output,
+                    "const {} = z.union([\n  {},\n]);",
+                    stringify!($name),
+                    values.join(",\n  ")
+                )
+                .unwrap();
+            } else {
+                writeln!(output, "{line}").unwrap();
+            }
         }};
     }
     macro_rules! literal {

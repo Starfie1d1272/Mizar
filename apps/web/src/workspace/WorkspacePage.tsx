@@ -14,7 +14,7 @@ import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import type { ObserverRuntimeView } from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
@@ -355,6 +355,16 @@ function ObsConfidence() {
   );
 }
 
+function useLiveRadarAvailability(
+  radar: ReturnType<typeof useLocalChannelClient<'radar'>>,
+): boolean {
+  const getSnapshot = useCallback(() => {
+    const current = radar.getSnapshot();
+    return hasRadarViewFrame(current.state === 'live' ? current.current : null);
+  }, [radar]);
+  return useSyncExternalStore(radar.subscribe, getSnapshot, getSnapshot);
+}
+
 function WorkspaceLeftContent() {
   const [musicError, setMusicError] = useState('');
   const observer = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
@@ -375,9 +385,8 @@ function WorkspaceLeftContent() {
     program.getSnapshot,
     program.getSnapshot,
   );
-  const radarState = useSyncExternalStore(radar.subscribe, radar.getSnapshot, radar.getSnapshot);
   const payload = state.state === 'live' ? (state.current?.payload ?? null) : null;
-  const liveRadar = hasRadarViewFrame(radarState.state === 'live' ? radarState.current : null);
+  const liveRadar = useLiveRadarAvailability(radar);
   const plannedMap =
     (guidance?.phase === 'map_end'
       ? payload?.seriesProgress?.maps.find((map) => map.status === 'pending')

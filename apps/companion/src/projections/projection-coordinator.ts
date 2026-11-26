@@ -7,11 +7,13 @@ import {
   type IdentityResolution,
 } from '@mizar/core/identity';
 import {
+  getProgramSafeRuntimeFreshness,
   projectObserverAssist,
   ObserverHintTimeline,
   inspectBp,
   projectProgram,
   selectProgramSafeRuntimeView,
+  shouldNeutralizeGameplayProjection,
   type ObserverAssistProjection,
   type ProgramProjection,
 } from '@mizar/core/projection';
@@ -299,6 +301,16 @@ export class ProjectionCoordinator {
           this.contextBinding.cachedFrom === 'online' ||
           this.contextBinding.localAuthoringMode === 'bound-overlay');
       const nowMonotonicMs = this.nowMonotonicMs();
+      const telemetryFreshness = getProgramSafeRuntimeFreshness(
+        runtimeView,
+        nowMonotonicMs,
+        runtimeSnapshot.continuityPolicy,
+      );
+      const needsNeutralGameplay = shouldNeutralizeGameplayProjection(
+        telemetryFreshness,
+        runtimeView.telemetry?.telemetry.map?.name,
+        identity.state,
+      );
       const programInput = {
         preferCanonicalPlayerNames,
         equipmentCatalog,
@@ -326,9 +338,9 @@ export class ProjectionCoordinator {
       });
       const baseProgram = projectProgram(programInput);
       const program = withAvatars(baseProgram);
-      const gameplay = withAvatars(
-        projectProgram({ ...programInput, presentationRole: 'gameplay' }),
-      );
+      const gameplay = needsNeutralGameplay
+        ? withAvatars(projectProgram({ ...programInput, presentationRole: 'gameplay' }))
+        : program;
       this.avatars?.request(
         baseProgram.players
           .filter((player) => player.avatarUrl === null)

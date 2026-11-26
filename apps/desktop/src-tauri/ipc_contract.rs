@@ -15,7 +15,7 @@ macro_rules! desktop_ipc {
             VeryHigh = "very-high", High = "high", Medium = "medium", Preserve = "preserve",
         });
         $string_enum!(BackupAction { Select = "select", Apply = "apply", ApplyHud = "apply-hud", Cancel = "cancel" });
-        $number_enum!(FrameRateLimit(u16) { Unlimited = 0, Fps30 = 30, Fps60 = 60 });
+        $number_enum!(FrameRateLimit(u16) { Unlimited = 0, Fps30 = 30, Fps60 = 60, Fps90 = 90, Fps120 = 120, Fps144 = 144 });
         $literal!(Busy, bool, true);
         $literal!(Ready, bool, false);
         $object!(PreparationSteps {

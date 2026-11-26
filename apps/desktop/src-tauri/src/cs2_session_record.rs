@@ -163,7 +163,7 @@ impl SessionRecord {
                 && (self.original.is_none() || self.applied.is_none() || self.owned.is_none()))
             || (self.version == 2
                 && (self.frame_rate_files.is_none()
-                    || !matches!(self.frame_rate_limit, Some(0 | 30 | 60))))
+                    || !matches!(self.frame_rate_limit, Some(0 | 30 | 60 | 90 | 120 | 144))))
         {
             return Err("CS2 恢复记录不完整，原备份仍保留。".into());
         }

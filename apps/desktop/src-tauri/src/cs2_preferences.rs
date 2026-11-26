@@ -28,7 +28,7 @@ impl Default for Preferences {
 impl Preferences {
     pub fn new(quality: &str, frame_rate_limit: u16) -> Result<Self, String> {
         if FrameRateLimit::try_from(frame_rate_limit).is_err() {
-            return Err("CS2 帧率仅支持 60、30 或不限帧。".into());
+            return Err("CS2 帧率选项无效。".into());
         }
         Ok(Self {
             quality: Quality::parse(quality)?,
@@ -69,5 +69,21 @@ impl Preferences {
     }
     pub fn json(self) -> Value {
         json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "preferMulnx": self.prefer_mulnx, "launchPreferenceVersion": 2})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_extended_frame_rate_limits() {
+        for limit in [0u16, 30, 60, 90, 120, 144] {
+            let prefs = Preferences::new("medium", limit).expect("valid frame rate limit");
+            assert_eq!(prefs.frame_rate_limit, limit);
+            let parsed = Preferences::from_json(&prefs.json()).expect("roundtrip json");
+            assert_eq!(parsed.frame_rate_limit, limit);
+        }
+        assert!(Preferences::new("medium", 75).is_err());
     }
 }
