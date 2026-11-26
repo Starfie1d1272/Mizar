@@ -3,7 +3,7 @@ import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/progra
 import type { MusicGroup, MusicStatus, MusicTrack } from '@mizar/protocol/music';
 import { musicMapScope, musicOpeningScope } from '../scope/identities.js';
 import { hasFrozenMapResult, isRegulationHalftime } from '../program-scenes/presentation.js';
-import type { MusicMediaState, MusicMonitorMode } from './device.js';
+import type { MusicDevice, MusicMediaState, MusicMonitorMode } from './device.js';
 
 export interface MusicTruth {
   program: ProgramProjection;
@@ -98,6 +98,31 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
 
 export function desiredMusicMonitorMode(wanted: boolean): MusicMonitorMode {
   return wanted ? 'monitor-and-output' : 'off';
+}
+
+export function isStoppedMediaState(state: MusicMediaState): boolean {
+  return ['stopped', 'ended', 'empty', 'error'].includes(state);
+}
+
+export async function stopMediaAndWait(
+  obs: MusicDevice,
+  sourceId: string,
+  valid: () => boolean,
+  beforeStop?: () => void,
+): Promise<MusicMediaState> {
+  if (!valid()) throw new Error('music_cancelled');
+  beforeStop?.();
+  await obs.controlMedia({ sourceId, action: 'stop' });
+  if (!valid()) throw new Error('music_cancelled');
+  let read = await obs.mediaStatus({ sourceId });
+  for (let attempt = 0; attempt < 10 && !isStoppedMediaState(read.state); attempt++) {
+    if (!valid()) throw new Error('music_cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!valid()) throw new Error('music_cancelled');
+    read = await obs.mediaStatus({ sourceId });
+  }
+  if (!valid()) throw new Error('music_cancelled');
+  return read.state;
 }
 
 export function observedPlayback(state: MusicMediaState): MusicStatus['playback'] {

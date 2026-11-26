@@ -38,7 +38,6 @@ const stateSchema = z
     master: z.number().finite().min(0).max(1).default(1),
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
-    monitorDisablePending: z.boolean().optional(),
     held: z.boolean(),
     holdReason: z.enum(['external', 'stop']).optional(),
     stingerHeld: z.boolean().optional(),
@@ -76,6 +75,7 @@ const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
 const legacyStateSchema = z
   .object({
     owner: z.string().uuid().optional(),
+    monitorDisablePending: z.unknown().optional(),
     previewMonitorLeases: z.unknown().optional(),
     desktopMonitorOriginal: z.unknown().optional(),
     monitorConfigured: z.unknown().optional(),
@@ -83,6 +83,7 @@ const legacyStateSchema = z
   .passthrough()
   .transform((value) => {
     delete value.owner;
+    delete value.monitorDisablePending;
     delete value.previewMonitorLeases;
     delete value.desktopMonitorOriginal;
     delete value.monitorConfigured;

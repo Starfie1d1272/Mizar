@@ -10,7 +10,7 @@ import {
   obsOutputCommandSchema,
 } from '@mizar/protocol/obs';
 import type { GameAudioController } from './audio-policy-controller.js';
-import type { MusicAudioMode } from '../music/device.js';
+import type { MusicAudioRecovery } from '../music/device.js';
 import { ObsOutputError } from './outputs.js';
 import { ObsActionError, obsActionMessage } from './action-error.js';
 import type { ObsNativeEvidence } from './native-evidence.js';
@@ -61,7 +61,7 @@ export function registerObsRoutes(
     readonly outputStartValidity?: () => () => boolean;
     readonly runtimeControlToken?: string;
     readonly gameAudio?: GameAudioController;
-    readonly musicAudio?: () => MusicAudioMode | undefined;
+    readonly musicAudio?: () => MusicAudioRecovery | undefined;
     readonly prepareMusic?: (valid: () => boolean, guard: (obs: ObsRpc) => ObsRpc) => Promise<void>;
     readonly readCaptureEvidence?: () => Promise<ObsNativeEvidence>;
   },

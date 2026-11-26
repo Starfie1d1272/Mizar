@@ -258,33 +258,8 @@ export class AudioMigration {
       throw new Error('audio_migration_identity_changed');
     if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
       throw new Error('audio_migration_identity_changed');
-    const inputs = (await obs.call('GetInputList')).inputs as {
-      inputUuid: string;
-      inputKind: string;
-    }[];
-    const fields: Field[] = [];
-    for (const entry of completed.fields) {
-      const replacement =
-        'kind' in entry ? replacements.find((item) => item.before === entry.inputUuid) : undefined;
-      if (!replacement) {
-        fields.push(entry);
-        continue;
-      }
-      if (
-        inputs.some((input) => input.inputUuid === replacement.before) ||
-        !inputs.some(
-          (input) => input.inputUuid === replacement.after && input.inputKind === replacement.kind,
-        )
-      )
-        throw new Error('audio_migration_identity_changed');
-      const current = (await obs.call('GetInputAudioMonitorType', { inputUuid: replacement.after }))
-        .monitorType;
-      // A newly recreated source can already be at the original value. That
-      // restoration duty is fulfilled; do not overwrite a differing user value.
-      if (current === entry.before) continue;
-      if (current !== entry.applied) throw new Error('audio_migration_external_change');
-      fields.push({ ...entry, inputUuid: replacement.after });
-    }
+    void replacements;
+    const fields = completed.fields.filter((entry) => !('kind' in entry));
     if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
       throw new Error('audio_migration_identity_changed');
     const temp = `${path}.${randomUUID()}.tmp`;
@@ -337,11 +312,10 @@ export class AudioMigration {
     extraDesktop: AudioMigrationPlan['desktop'] = [],
     allowedRestoredSources?: readonly string[],
   ): Promise<boolean> {
+    void managedMusicUuids;
     const completed = await this.readJournal(completedPath);
     if (!completed) return false;
-    const fields = completed.fields.filter(
-      (entry) => !('kind' in entry && managedMusicUuids.includes(entry.inputUuid)),
-    );
+    const fields = completed.fields.filter((entry) => !('kind' in entry));
     if (
       completed.endpoint !== endpoint ||
       fields.some((entry) => entry.externalChanged || entry.phase !== 'confirmed')

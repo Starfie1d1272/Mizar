@@ -10,7 +10,6 @@ import type {
   MusicDeviceProvider,
   MusicLayer,
   MusicMediaState,
-  MusicMonitorMode,
   MusicSourceSetup,
 } from '../music/device.js';
 import { readMonitorMode, writeMonitorMode } from '../music/monitor-journal.js';
@@ -34,29 +33,6 @@ const mediaSettings = (path: string) => ({
   restart_on_activate: false,
   close_when_inactive: false,
 });
-
-async function managedMonitorModes(obs: ObsRpc) {
-  if (!obs.managedInputIdentity) throw new Error('music_monitor_unavailable');
-  const { inputs } = await obs.call('GetInputList');
-  if (!Array.isArray(inputs)) throw new Error('music_monitor_unknown');
-  const modes: (MusicMonitorMode | undefined)[] = [];
-  for (const name of ['音乐', '音效']) {
-    const identity = await obs.managedInputIdentity(name);
-    const input = identity && inputs.find((item) => item.inputUuid === identity.uuid);
-    if (!input || !identity) {
-      if (inputs.some((item) => item.inputName === name))
-        throw new Error('music_monitor_source_changed');
-      continue;
-    }
-    if (input.inputKind !== 'ffmpeg_source' || identity.kind !== 'ffmpeg_source')
-      throw new Error('music_monitor_source_changed');
-    const { monitorType } = await obs.call('GetInputAudioMonitorType', {
-      inputUuid: identity.uuid,
-    });
-    modes.push(readMonitorMode(monitorType));
-  }
-  return modes;
-}
 
 export function createMusicDevice(obs: ObsRpc): MusicDevice {
   return {
@@ -133,7 +109,6 @@ export function createMusicDevice(obs: ObsRpc): MusicDevice {
         },
       }),
     ownershipScope: async () => obs.ownershipScope?.(),
-    readManagedMonitorModes: () => managedMonitorModes(obs),
     hasSource: async (store, layer, valid) =>
       Boolean(await findMusicInput(obs, store, layer, valid)),
     verifyPlayback: (store, layer, valid) => verifyMusicPlayback(obs, store, layer, valid),

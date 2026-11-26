@@ -33,7 +33,7 @@ import {
 } from './audio-setup.js';
 import { reconcileManagedAudio } from './managed-audio.js';
 import { AudioMigration, type MigrationObserver } from './audio-migration.js';
-import type { MusicAudioMode, MusicAudioRecovery } from '../music/device.js';
+import type { MusicAudioRecovery } from '../music/device.js';
 import {
   recoverAudioModeTransaction,
   switchAudioModeTransaction,
@@ -195,13 +195,7 @@ export class ObsAudioCoordinator {
       if (!state.transition && !pending?.modeId) return;
       await this.audioConfiguration.run((obs, endpoint, observer) =>
         music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(
-            guardedObs(obs, valid),
-            endpoint,
-            observer,
-            music,
-            valid,
-          ),
+          this.recoverAudioModeOnConnection(guardedObs(obs, valid), endpoint, observer, valid),
         ),
       );
     });
@@ -210,7 +204,6 @@ export class ObsAudioCoordinator {
     obs: ObsRpc,
     endpoint: string,
     observer: MigrationObserver,
-    music: MusicAudioRecovery,
     valid: () => boolean = () => true,
   ) {
     return recoverAudioModeTransaction(
@@ -222,7 +215,6 @@ export class ObsAudioCoordinator {
       obs,
       endpoint,
       observer,
-      music,
       valid,
     );
   }
@@ -290,7 +282,7 @@ export class ObsAudioCoordinator {
       );
     });
   }
-  async requestIndependentMode(revision: string, music: MusicAudioMode) {
+  async requestIndependentMode(revision: string, music: MusicAudioRecovery) {
     if (!this.host.audioRouting || !this.host.commentary)
       throw new Error('audio_routing_unavailable');
     await this.host.configurationMutation(() =>
@@ -299,7 +291,7 @@ export class ObsAudioCoordinator {
         if (before.revision !== revision) throw new Error('audio_revision_changed');
         if (before.transition) throw new Error('audio_mode_pending');
         await music.withAudioModeRecovery(() =>
-          this.recoverAudioModeOnConnection(obs, endpoint, observer, music),
+          this.recoverAudioModeOnConnection(obs, endpoint, observer),
         );
         const collection = (await obs.call('GetSceneCollectionList')).currentSceneCollectionName;
         if (typeof collection !== 'string') throw new Error('audio_setup_context_changed');
@@ -442,7 +434,7 @@ export class ObsAudioCoordinator {
     revision: string,
     mode: 'desktop' | 'independent',
     selectionId: string | undefined,
-    music: MusicAudioMode,
+    music: MusicAudioRecovery,
     waitId?: string,
     valid: () => boolean = () => true,
   ) {

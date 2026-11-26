@@ -247,15 +247,11 @@ export function MusicControls({
             onClick={() =>
               void send({
                 action: 'monitor',
-                enabled: status.monitor !== 'enabled' && !status.monitorDisablePending,
+                enabled: status.monitorPreference !== true,
               })
             }
           >
-            {status.monitorDisablePending
-              ? '重试关闭本机监听'
-              : status.monitor === 'enabled'
-                ? '关闭本机监听'
-                : '开启本机监听'}
+            {status.monitorPreference === true ? '关闭本机监听' : '开启本机监听'}
           </Button>
           <span role="status">监听：{monitorLabel}</span>
         </div>
@@ -263,11 +259,6 @@ export function MusicControls({
       <p className="music-player__hint">
         使用 OBS 监听设备（默认跟随系统默认播放设备），实际听感请在 OBS 核对。
       </p>
-      {status.monitorDisablePending ? (
-        <p className="music-player__hint">
-          已保存关闭监听的请求，Mizar 会在可控制 OBS 监听时继续，直到确认关闭。
-        </p>
-      ) : null}
       {status.stinger ? <span className="music-player__hint">音效：{status.stinger}</span> : null}
       <div className="music-player__notices">{notices}</div>
     </div>

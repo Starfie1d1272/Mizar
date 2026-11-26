@@ -20,13 +20,6 @@ export type MusicMediaState =
   | 'error'
   | 'unknown';
 
-export type MusicMonitorOriginal = {
-  sourceId: string;
-  mode: MusicMonitorMode;
-  applied?: MusicMonitorMode;
-};
-export type MusicMonitorOriginals = Record<MusicLayer, MusicMonitorOriginal | null>;
-
 export interface MusicDevice {
   mediaStatus(source: Source): Promise<{
     state: MusicMediaState;
@@ -50,7 +43,6 @@ export interface MusicDevice {
   guardWrites(guard: () => void): MusicDevice;
   checkCalls(guard: () => void, checkAfter?: boolean): MusicDevice;
   ownershipScope(): Promise<string | undefined>;
-  readManagedMonitorModes(): Promise<readonly (MusicMonitorMode | undefined)[]>;
   hasSource(store: SourceState, layer: MusicLayer, valid: () => boolean): Promise<boolean>;
   verifyPlayback(store: SourceState, layer: MusicLayer, valid: () => boolean): Promise<void>;
   prepareResources(store: MusicSourceSetup, layer: MusicLayer, valid: () => boolean): Promise<void>;
@@ -68,9 +60,7 @@ export interface MusicAudioRecovery {
   withAudioModeRecovery<T>(run: (current: () => boolean) => Promise<T>): Promise<T>;
 }
 
-export type MusicAudioMode = MusicAudioRecovery;
-
 export interface MusicMixerControl {
-  mixerStatus(): { channel: MixerChannelStatus; desktopIncludesMusic: boolean };
+  mixerStatus(): { channel: MixerChannelStatus };
   setMixer(volume: number | undefined, muted: boolean | undefined): Promise<boolean>;
 }

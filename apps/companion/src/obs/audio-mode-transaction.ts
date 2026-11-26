@@ -1,5 +1,5 @@
 import type { ObsAudioRole } from '@mizar/protocol/obs';
-import type { MusicAudioMode, MusicAudioRecovery } from '../music/device.js';
+import type { MusicAudioRecovery } from '../music/device.js';
 import type { ObsRpc } from './reconcile.js';
 import type { ObsAudioRouting } from './audio-routing.js';
 import type { RemoteCommentary } from './remote-commentary.js';
@@ -23,7 +23,6 @@ export async function recoverAudioModeTransaction(
   obs: ObsRpc,
   endpoint: string,
   observer: MigrationObserver,
-  music: MusicAudioRecovery,
   valid: () => boolean,
 ) {
   const state = await routing.modeRecoveryState();
@@ -155,7 +154,7 @@ export async function switchAudioModeTransaction(
     waitId: string | undefined;
     valid: () => boolean;
   },
-  music: MusicAudioMode,
+  music: MusicAudioRecovery,
 ) {
   const { routing, commentary, browserBaseUrl } = context;
   if (!valid()) throw new Error('OBS 准备请求已失效，请重试。');
@@ -175,7 +174,7 @@ export async function switchAudioModeTransaction(
   if (before.revision !== revision) throw new Error('audio_revision_changed');
   if (before.transition) throw new Error('audio_mode_pending');
   await music.withAudioModeRecovery(() =>
-    recoverAudioModeTransaction(context, obs, endpoint, observer, music, valid),
+    recoverAudioModeTransaction(context, obs, endpoint, observer, valid),
   );
   if (waitId) {
     const waiting = (await routing.modeRecoveryState()).waitingIndependent;
