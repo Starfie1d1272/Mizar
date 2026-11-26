@@ -13,6 +13,7 @@ import { closeWebsiteOutput } from '../src/output/website-lifecycle.js';
 import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { registerProductionReadiness } from '../src/program-scenes/readiness.js';
+import { ObsOutputController } from '../src/obs/outputs.js';
 import { ObsVideoError } from '../src/obs/video-transaction.js';
 import { registerUpdateRoutes } from '../src/updates/routes.js';
 import { UpdateManager } from '../src/updates/manager.js';
@@ -58,7 +59,7 @@ test('readiness retains local facts when a concurrent OBS change invalidates its
   assert.equal(items.find((item) => item.id === 'obs')?.reason, '正在刷新 OBS 状态');
 });
 
-test('install reuses a recent authenticated candidate, rechecks stale trust and rejects changed bytes', async (t) => {
+test('install authenticates local staged metadata offline, cleans legacy cache, and rejects changed bytes', async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-install-'));
   const updates = join(stateRoot, 'updates');
   const directory = 'download-fixture';
@@ -80,24 +81,48 @@ test('install reuses a recent authenticated candidate, rechecks stale trust and 
       contentDigest: 'b'.repeat(64),
     },
   });
+  const metadataBytes = Buffer.from(JSON.stringify(manifest));
   const installer = join(updates, directory, manifest.installer.name);
+  const metadataPath = join(updates, directory, 'machine-metadata.json');
   await mkdir(join(updates, directory), { recursive: true });
   await writeFile(installer, bytes);
   await writeFile(join(updates, 'ready.json'), JSON.stringify({ directory, manifest }));
-  let now = 100_000;
+
+  // Legacy cache without machine-metadata.json is cleaned on cold start.
+  const legacyManager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    source: { latest: async () => null, authenticateMetadata: async () => manifest },
+  });
+  await legacyManager.load();
+  assert.equal(legacyManager.status().staged, null);
+  await legacyManager.close();
+  await assert.rejects(readFile(installer), { code: 'ENOENT' });
+
+  // Complete cache with machine-metadata.json authenticates offline in prepare().
+  await mkdir(join(updates, directory), { recursive: true });
+  await writeFile(installer, bytes);
+  await writeFile(metadataPath, metadataBytes);
+  await writeFile(join(updates, 'ready.json'), JSON.stringify({ directory, manifest }));
   let checks = 0;
-  let online = true;
+  let localAuths = 0;
   const manager = new UpdateManager({
     stateRoot,
     bundleRoot: stateRoot,
     currentContentDigest: 'c'.repeat(64),
     installed: true,
     version: '1.11.20',
-    now: () => now,
     source: {
       latest: async () => {
         checks++;
-        if (!online) throw new Error('update_network_failed');
+        throw new Error('update_network_failed');
+      },
+      authenticateMetadata: async (carrier) => {
+        localAuths++;
+        assert.deepEqual(carrier, metadataBytes);
         return manifest;
       },
     },
@@ -107,31 +132,284 @@ test('install reuses a recent authenticated candidate, rechecks stale trust and 
     await rm(stateRoot, { recursive: true, force: true });
   });
   await manager.load();
-  await manager.check();
-  online = false;
+  assert.equal(manager.status().staged?.version, manifest.version);
   assert.equal((await manager.prepare()).version, manifest.version);
-  assert.equal(checks, 1);
+  assert.equal(checks, 0);
+  assert.equal(localAuths, 1);
   manager.release();
-  now += 60_001;
-  await assert.rejects(
-    manager.prepare(),
-    (error) =>
-      error instanceof Error &&
-      error.message === 'update_recheck_required' &&
-      error.cause instanceof Error &&
-      error.cause.message === 'update_network_failed',
-  );
-  assert.equal(checks, 2);
-  online = true;
-  await manager.check();
+
+  // Changed installer bytes fail verification and discard corrupt cache.
   await writeFile(installer, Buffer.alloc(bytes.length));
   await assert.rejects(manager.prepare(), /update_download_corrupt/);
-  assert.equal(checks, 3);
-  assert.equal(manager.status().phase, 'available');
+  assert.equal(manager.status().staged, null);
+  assert.equal(manager.status().activity, 'idle');
+  assert.equal(manager.status().lastError?.manual, true);
   await assert.rejects(readFile(installer), { code: 'ENOENT' });
 });
 
-test('update staging survives unavailable OBS and only a known active output blocks handoff', async (t) => {
+test('install priority cancels background check and allows staged version even when higher version is known', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-priority-'));
+  const updates = join(stateRoot, 'updates');
+  const directory = 'download-staged';
+  const bytes = Buffer.from('staged bytes');
+  const stagedManifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Staged',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  await mkdir(join(updates, directory), { recursive: true });
+  await writeFile(join(updates, directory, stagedManifest.installer.name), bytes);
+  await writeFile(
+    join(updates, directory, 'machine-metadata.json'),
+    Buffer.from(JSON.stringify(stagedManifest)),
+  );
+  await writeFile(
+    join(updates, 'ready.json'),
+    JSON.stringify({ directory, manifest: stagedManifest }),
+  );
+  await writeFile(
+    join(updates, 'settings.json'),
+    JSON.stringify({
+      automatic: true,
+      lastAttempt: 0,
+      highestVersion: '1.11.22',
+      highestIdentity: 'f'.repeat(64),
+    }),
+  );
+  let checkAborted = false;
+  let markCheckStarted!: () => void;
+  const checkStarted = new Promise<void>((resolve) => {
+    markCheckStarted = resolve;
+  });
+  let releaseCheck!: () => void;
+  const checkBlocked = new Promise<void>((resolve) => {
+    releaseCheck = resolve;
+  });
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    source: {
+      latest: async (signal) => {
+        markCheckStarted();
+        signal.addEventListener('abort', () => {
+          checkAborted = true;
+          releaseCheck();
+        });
+        await checkBlocked;
+        return null;
+      },
+      authenticateMetadata: async () => stagedManifest,
+    },
+  });
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  const bgCheck = manager.check('auto', 'periodic');
+  await checkStarted;
+  const plan = await manager.prepare();
+  assert.equal(checkAborted, true);
+  assert.equal(manager.status().staged?.version, '1.11.21');
+  assert.equal(plan.version, '1.11.21');
+  await bgCheck.catch(() => {});
+});
+
+test('prepare preserves staged on trust metadata refresh failure and discards on corrupt metadata', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-auth-err-'));
+  const updates = join(stateRoot, 'updates');
+  const directory = 'download-staged';
+  const bytes = Buffer.from('staged bytes');
+  const manifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Staged',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  const installer = join(updates, directory, manifest.installer.name);
+  await mkdir(join(updates, directory), { recursive: true });
+  await writeFile(installer, bytes);
+  await writeFile(
+    join(updates, directory, 'machine-metadata.json'),
+    Buffer.from(JSON.stringify(manifest)),
+  );
+  await writeFile(join(updates, 'ready.json'), JSON.stringify({ directory, manifest }));
+
+  let authErrorCode = 'update_trust_metadata_failed';
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    source: {
+      latest: async () => null,
+      authenticateMetadata: async () => {
+        throw new Error(authErrorCode);
+      },
+    },
+  });
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  await assert.rejects(manager.prepare(), /update_trust_metadata_failed/);
+  assert.equal(manager.status().staged?.version, '1.11.21');
+  assert.equal(await readFile(installer, 'utf8'), 'staged bytes');
+
+  authErrorCode = 'update_metadata_corrupt';
+  await assert.rejects(manager.prepare(), /update_metadata_corrupt/);
+  assert.equal(manager.status().staged, null);
+  await assert.rejects(readFile(installer), { code: 'ENOENT' });
+});
+
+test('auto-download yields on OBS busy and resumes when OBS returns idle even during cancellation settle', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-yield-resume-'));
+  const bytes = Buffer.from('installer payload');
+  const manifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Yield resume test',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  const metadataBytes = Buffer.from(JSON.stringify(manifest));
+
+  let downloadAttempts = 0;
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  let markFirstAborted!: () => void;
+  const firstAborted = new Promise<void>((resolve) => {
+    markFirstAborted = resolve;
+  });
+  let markSecondDone!: () => void;
+  const secondDone = new Promise<void>((resolve) => {
+    markSecondDone = resolve;
+  });
+
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes('github.com') && !url.includes('gh-proxy')) {
+      downloadAttempts++;
+      if (downloadAttempts === 1) {
+        markFirstStarted();
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener('abort', () => {
+                markFirstAborted();
+                controller.error(new Error('aborted'));
+              });
+            },
+          }),
+          { status: 200, headers: { 'content-length': String(bytes.length) } },
+        );
+      }
+      queueMicrotask(() => markSecondDone());
+      return new Response(bytes, {
+        status: 200,
+        headers: { 'content-length': String(bytes.length) },
+      });
+    }
+    return new Response('slow mirror', { status: 504 });
+  };
+
+  let obsBusy = false;
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    fetcher,
+    source: {
+      latest: async () => ({ manifest, metadataBytes }),
+      authenticateMetadata: async () => manifest,
+    },
+  });
+  manager.setCanAutoDownload(async () => !obsBusy);
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  await manager.check('auto', 'periodic');
+  await firstStarted;
+
+  obsBusy = true;
+  manager.yieldAutoDownload();
+  await firstAborted;
+
+  // Resume immediately while the cancelled download task may still be settling.
+  obsBusy = false;
+  await manager.resumeAutoDownload();
+  await secondDone;
+  for (let i = 0; i < 40 && manager.status().staged?.version !== '1.11.21'; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(manager.status().staged?.version, '1.11.21');
+  assert.equal(manager.status().lastError, null);
+});
+
+test('ObsOutputController emits idle activity when stream stops even while virtual cam remains active', () => {
+  const outputs = new ObsOutputController({} as never, () => {});
+  const events: boolean[] = [];
+  outputs.setOnOutputActivity((busy) => events.push(busy));
+
+  const internal = outputs as unknown as {
+    warmupExtraOutputs: { virtual: string; replay: string };
+    event: (
+      kind: 'stream' | 'record',
+      event: { outputState: string; outputActive: boolean },
+    ) => void;
+  };
+  internal.warmupExtraOutputs.virtual = 'active';
+  internal.event('stream', { outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED', outputActive: true });
+  internal.event('stream', { outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED', outputActive: false });
+
+  assert.deepEqual(events, [true, false]);
+});
+
+test('update staging survives unavailable OBS and rejects removed notification actions', async (t) => {
   const app = fastify();
   t.after(() => app.close());
   type Options = Parameters<typeof registerUpdateRoutes>[1];
@@ -140,7 +418,8 @@ test('update staging survives unavailable OBS and only a known active output blo
   const routes = registerUpdateRoutes(app, {
     manager: {
       prepare: async () => ({ version: '1.11.21' }),
-      status: () => ({ phase: 'installing' }),
+      status: () => ({ activity: 'installing', staged: null }),
+      setCanAutoDownload: () => {},
       release: () => {},
       failure: () => {},
       close: () => {},
@@ -183,6 +462,28 @@ test('update staging survives unavailable OBS and only a known active output blo
   active = true;
   assert.match((await routes.beforeStop()) ?? '', /推流或录制/);
   assert.equal(reserved, false);
+
+  const viewRes = await app.inject({ method: 'GET', url: '/local/v1/updates' });
+  assert.equal(viewRes.statusCode, 200);
+  const viewBody = viewRes.json<Record<string, unknown>>();
+  assert.equal('notificationPending' in viewBody, false);
+  assert.equal('notificationSafe' in viewBody, false);
+  assert.equal('mulnxNotificationPending' in viewBody, false);
+
+  for (const payload of [
+    { action: 'entry-check' },
+    { action: 'notify', version: '1.11.21' },
+    { action: 'dismiss-notification', version: '1.11.21' },
+    { action: 'dismiss-mulnx-notification', identity: 'id' },
+  ]) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/operator/updates',
+      headers: { origin },
+      payload,
+    });
+    assert.equal(res.statusCode, 400);
+  }
 });
 
 test('UpdateManager consumes only apply-update results from last-applier-result.json', async (t) => {
@@ -200,7 +501,12 @@ test('UpdateManager consumes only apply-update results from last-applier-result.
       currentContentDigest: 'c'.repeat(64),
       installed: true,
       version: '1.12.0',
-      source: { latest: async () => null },
+      source: {
+        latest: async () => null,
+        authenticateMetadata: async () => {
+          throw new Error('unused');
+        },
+      },
     });
 
   await writeFile(

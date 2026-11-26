@@ -202,7 +202,6 @@ export class MulnxTool {
   private downloadedBytes = 0;
   private downloadTotal = 0;
   private downloadAbort: AbortController | undefined;
-  private notifiedIdentity: string | null = null;
   constructor(
     readonly directory: string,
     readonly bundle: string,
@@ -230,14 +229,6 @@ export class MulnxTool {
       checkResult: this.checkResult,
       downloadedBytes: this.downloadedBytes,
       totalBytes: this.downloadTotal,
-      notificationIdentity:
-        this.installed &&
-        this.latest &&
-        !sameMulnxAsset(this.installed.release, this.latest) &&
-        this.checkResult === 'available'
-          ? `${this.latest.id}:${this.latest.assetId}:${this.latest.sha256}`
-          : null,
-      notifiedIdentity: this.notifiedIdentity,
       source: this.phase === 'downloading' || this.phase === 'verifying' ? this.sourceName : null,
       sourceMessage: this.sourceMessage,
       packs: this.installed?.packs ?? [],
@@ -534,12 +525,6 @@ export class MulnxTool {
       }
       return this.view();
     });
-  }
-  resetNotification() {
-    this.notifiedIdentity = null;
-  }
-  dismissNotification(identity: string) {
-    if (this.view().notificationIdentity === identity) this.notifiedIdentity = identity;
   }
   cancelDownload() {
     if (!this.downloadAbort) throw new Error('mulnx_download_not_active');

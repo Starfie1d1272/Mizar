@@ -37,22 +37,18 @@ export function registerUpdateRoutes(
     }
   };
   const assess = async () => outputBlockReason(await options.obs().catch(() => undefined));
+  manager.setCanAutoDownload(async () => {
+    if (production.get().mode !== 'preparation') return false;
+    return (await assess()) === null;
+  });
   const publicView = async () => {
     const status = manager.status();
     const tool = options.mulnx?.()?.view();
-    const reminderPhase = ['available', 'manual', 'ready'].includes(status.phase);
-    const mulnxPending = Boolean(
-      tool?.notificationIdentity && tool.notificationIdentity !== tool.notifiedIdentity,
-    );
-    const blocked =
-      status.phase === 'ready' || reminderPhase || mulnxPending ? await assess() : null;
-    const installBlockedReason = status.phase === 'ready' ? blocked : null;
+    const installBlockedReason = status.staged !== null ? await assess() : null;
     return {
       ...status,
       mulnx: tool ?? null,
-      mulnxNotificationPending: mulnxPending,
       installBlockedReason,
-      notificationSafe: status.automatic && (reminderPhase || mulnxPending) && blocked === null,
     };
   };
   app.get('/local/v1/updates', async (_request, reply) =>
@@ -67,31 +63,18 @@ export function registerUpdateRoutes(
     const body = request.body as {
       action?: unknown;
       enabled?: unknown;
-      version?: unknown;
-      identity?: unknown;
     } | null;
     try {
-      if (body?.action === 'check' || body?.action === 'entry-check') {
-        if (body.action === 'check' || manager.status().automatic)
-          await Promise.allSettled([
-            manager.check(),
-            options.mulnx?.()?.check() ?? Promise.resolve(),
-          ]);
+      if (body?.action === 'check') {
+        await Promise.allSettled([
+          manager.check('manual', 'manual'),
+          options.mulnx?.()?.check() ?? Promise.resolve(),
+        ]);
       } else if (body?.action === 'download') await manager.download();
       else if (body?.action === 'cancel') await manager.cancel();
       else if (body?.action === 'automatic' && typeof body.enabled === 'boolean')
         await manager.setAutomatic(body.enabled);
-      else if (body?.action === 'notify' && typeof body.version === 'string') {
-        const notification = (await assess()) === null ? manager.notification(body.version) : null;
-        return { ...(await publicView()), notification };
-      } else if (body?.action === 'dismiss-notification' && typeof body.version === 'string') {
-        manager.dismissNotification(body.version);
-      } else if (
-        body?.action === 'dismiss-mulnx-notification' &&
-        typeof body.identity === 'string'
-      ) {
-        options.mulnx?.()?.dismissNotification(body.identity);
-      } else return reply.code(400).send({ error: 'update_action_invalid' });
+      else return reply.code(400).send({ error: 'update_action_invalid' });
       return await publicView();
     } catch (e) {
       manager.failure('operator_action', e);
@@ -141,12 +124,8 @@ export function registerUpdateRoutes(
       scenes.setUpdatePending(true);
       return plan;
     } catch (e) {
-      const reason =
-        e instanceof Error && e.message === 'update_recheck_required' && e.cause instanceof Error
-          ? e.cause
-          : e;
-      manager.failure('install_plan', reason);
-      const failure = updateFailure('install_plan', reason, '');
+      manager.failure('install_plan', e);
+      const failure = updateFailure('install_plan', e, '');
       releaseUpdate();
       return reply.code(409).send({
         message: blockedReason ?? `${failure.summary} ${failure.nextStep}`,

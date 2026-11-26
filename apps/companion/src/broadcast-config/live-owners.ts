@@ -223,8 +223,7 @@ export function registerBroadcastOwners(
       try {
         await mulnxTool.load();
         catalogToolLoaded = true;
-        options.updates?.registerCompanionCheck(async (force) => {
-          if (force) mulnxTool.resetNotification();
+        options.updates?.registerCompanionCheck(async () => {
           if (mulnxTool.view().busy) return mulnxTool.view().phase === 'checking';
           await mulnxTool.check().catch(() => undefined);
           return true;

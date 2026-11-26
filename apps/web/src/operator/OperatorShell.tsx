@@ -1,5 +1,7 @@
 import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { SessionContext } from '../preparation/SessionContext';
+import { SidebarUpdateEntry } from '../preparation/SidebarUpdateEntry';
+import { UpdateStatusProvider, useUpdateStatus } from '../preparation/updates-client';
 import type { ReactNode } from 'react';
 import './operator-shell.css';
 
@@ -49,13 +51,16 @@ function NavigationIcon({ path }: { readonly path: string }) {
   );
 }
 
-export function OperatorShell({
+function OperatorShellLayout({
   active,
   children,
 }: {
   readonly active: string;
   readonly children: ReactNode;
 }) {
+  const updateContext = useUpdateStatus();
+  const mulnxAvailable = updateContext?.status?.mulnx?.checkResult === 'available';
+
   return (
     <DesktopCanvas kind="product">
       <div className="product-shell mizar-surface">
@@ -83,10 +88,18 @@ export function OperatorShell({
                 }
               >
                 <NavigationIcon path={path ?? '/'} />
-                {label}
+                <span>{label}</span>
+                {path === '/packages' && mulnxAvailable ? (
+                  <span
+                    className="product-nav-badge"
+                    aria-label="MulNX 有可用更新"
+                    title="MulNX 有可用更新"
+                  />
+                ) : null}
               </a>
             ))}
           </nav>
+          <SidebarUpdateEntry />
         </aside>
         <div className="product-content" id="product-content">
           <SessionContext />
@@ -94,5 +107,19 @@ export function OperatorShell({
         </div>
       </div>
     </DesktopCanvas>
+  );
+}
+
+export function OperatorShell({
+  active,
+  children,
+}: {
+  readonly active: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <UpdateStatusProvider>
+      <OperatorShellLayout active={active}>{children}</OperatorShellLayout>
+    </UpdateStatusProvider>
   );
 }
