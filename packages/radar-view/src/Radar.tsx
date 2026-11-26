@@ -90,25 +90,37 @@ export function RadarView({
   }, [presentationRevision, snapshot, paused, reducedMotion, staticFrame]);
 
   useEffect(() => {
-    const element = canvas.current;
-    const gl = element?.getContext('webgl2', {
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: true,
-      powerPreference: 'high-performance',
-    });
-    if (!element || !gl) return;
-
-    const renderer = new WebGL2RadarRenderer(gl);
-    const model = new RadarPresentation();
-    const images = new Map<string, HTMLImageElement>();
-    const emitDiagnostics = staticFrame || debugAttributes;
+    const maybeElement = canvas.current;
+    if (!maybeElement) return;
+    const element: HTMLCanvasElement = maybeElement;
 
     const setData = (key: string, value: string | undefined) => {
       if (element.dataset[key] === value) return;
       if (value === undefined) delete element.dataset[key];
       else element.dataset[key] = value;
     };
+
+    const gl = element.getContext('webgl2', {
+      alpha: true,
+      premultipliedAlpha: true,
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
+    if (!gl) {
+      setData('radarDiagnostic', 'webgl-unavailable');
+      return;
+    }
+
+    const renderer = new WebGL2RadarRenderer(gl);
+    if (!renderer.isReady()) {
+      setData('radarDiagnostic', 'webgl-init-failed');
+      renderer.dispose();
+      return;
+    }
+
+    const model = new RadarPresentation();
+    const images = new Map<string, HTMLImageElement>();
+    const emitDiagnostics = staticFrame || debugAttributes;
 
     let surfaceDirty = true;
     let backingSize = 1;
@@ -160,13 +172,18 @@ export function RadarView({
       }
     };
 
-    // Declare render and scheduling helpers before subscribing or loading assets
-    // so synchronous accept() / image callbacks never hit TDZ.
-    let accept: () => void = () => {};
-    let scheduleFrame: () => void = () => {};
-    let invalidateSurface: () => void = () => {};
+    function scheduleFrame() {
+      if (disposed || frame !== 0) return;
+      frame = requestAnimationFrame(render);
+    }
 
-    const imageFor = (url: string): HTMLImageElement | null => {
+    function invalidateSurface() {
+      surfaceDirty = true;
+      scheduleFrame();
+    }
+    redraw.current = invalidateSurface;
+
+    function imageFor(url: string): HTMLImageElement | null {
       let image = images.get(url);
       if (!image) {
         image = new Image();
@@ -175,11 +192,28 @@ export function RadarView({
         images.set(url, image);
       }
       return image.complete && image.naturalWidth > 0 ? image : null;
-    };
+    }
 
-    const render = () => {
+    function accept() {
+      if (!client) return;
+      const state = client.getSnapshot();
+      clearChangedPausedBoundary(state);
+      if (state === lastConnection || (currentPaused.current && state !== null)) return;
+      lastConnection = state;
+      model.accept(state, performance.now(), restoreStaticBoundary);
+      restoreStaticBoundary = false;
+      updateUtilityPhaseDataset();
+      if (isPageVisible() && !staticFrame) scheduleFrame();
+    }
+
+    function render() {
       if (disposed) return;
       frame = 0;
+
+      if (!renderer.isReady()) {
+        setData('radarDiagnostic', 'webgl-init-failed');
+        return;
+      }
 
       if (lastPresentationRevision !== currentPresentationRevision.current) {
         lastPresentationRevision = currentPresentationRevision.current;
@@ -396,8 +430,8 @@ export function RadarView({
           placement?.rect ?? null,
         );
         renderer.drawRect(point.x, point.y, 56, 56, '#f3ce22', 1);
-        const region = renderer.cache.glyph(label, '900 42px Inter, sans-serif', '#0b1119');
-        if (region) renderer.drawTexturedQuad(region, point.x, point.y, 44, 44, 1);
+        const region = renderer.cache.glyph(label, '900 64px Inter, sans-serif', '#0b1119');
+        if (region) renderer.drawTexturedQuad(region, point.x, point.y + 1, 32, 32, 1);
       };
       if (appearance !== 'esl' && geometry?.mapKey === 'de_ancient') {
         drawSiteBadge('A', { x: 0.302, y: 0.26 }, 'single');
@@ -437,6 +471,7 @@ export function RadarView({
           let pointCount = 0;
           let processedFlames = 0;
           const worldRadius = 52 * geometry.unitRadius;
+          const glowBlur = (5 * logicalSize) / (size * z.scale);
           for (const flame of marker.source.flames) {
             if (flameCount >= RADAR_PRESENTATION.maxFlames) break;
             flameCount += 1;
@@ -451,7 +486,14 @@ export function RadarView({
             totalY += point.y;
             totalOpacity += opacity;
             pointCount += 1;
-            renderer.drawFlameGlow(point.x, point.y, radius, '#e85f2f', alpha * opacity * 0.55);
+            renderer.drawFlameGlow(
+              point.x,
+              point.y,
+              radius,
+              glowBlur,
+              '#e85f2f',
+              alpha * opacity * 0.46,
+            );
           }
           let drawnFlames = 0;
           for (const flame of marker.source.flames) {
@@ -739,7 +781,7 @@ export function RadarView({
             );
             if (lbl) {
               const s = 64 / z.scale;
-              renderer.drawTexturedQuad(lbl, x, y, s, s, baseAlpha * 0.2);
+              renderer.drawTexturedQuad(lbl, x, y + 1, s, s, baseAlpha * 0.2);
             }
             continue;
           }
@@ -804,7 +846,7 @@ export function RadarView({
             );
             if (lbl) {
               const s = 64 / z.scale;
-              renderer.drawTexturedQuad(lbl, x, y, s, s, baseAlpha);
+              renderer.drawTexturedQuad(lbl, x, y + 1, s, s, baseAlpha);
             }
             continue;
           }
@@ -829,9 +871,9 @@ export function RadarView({
             renderer.drawCircle(x, y, 24, '#ffffff', flashRatio * 0.9);
           }
           const lblColor = flashRatio > 0.72 ? '#5d6670' : '#0b1119';
-          const lbl = renderer.cache.glyph(p.label ?? '', '800 42px Inter, sans-serif', lblColor);
+          const lbl = renderer.cache.glyph(p.label ?? '', '800 56px Inter, sans-serif', lblColor);
           if (lbl) {
-            renderer.drawTexturedQuad(lbl, x, y, 38, 38, baseAlpha);
+            renderer.drawTexturedQuad(lbl, x, y + 1, 32, 32, baseAlpha);
           }
           if (marker.damageUntil > now) {
             const damageAlpha = Math.max(
@@ -874,10 +916,12 @@ export function RadarView({
 
       renderer.endFrame();
 
-      const drawnSeq = String(model.snapshot?.sampleSequence ?? model.snapshot?.sequence ?? '');
-      if (drawnSeq !== lastDrawnSequence) {
-        lastDrawnSequence = drawnSeq;
-        setData('radarDrawnSequence', drawnSeq);
+      if (renderer.isReady()) {
+        const drawnSeq = String(model.snapshot?.sampleSequence ?? model.snapshot?.sequence ?? '');
+        if (drawnSeq !== lastDrawnSequence) {
+          lastDrawnSequence = drawnSeq;
+          setData('radarDrawnSequence', drawnSeq);
+        }
       }
 
       if (
@@ -888,30 +932,7 @@ export function RadarView({
       ) {
         scheduleFrame();
       }
-    };
-
-    scheduleFrame = () => {
-      if (disposed || frame !== 0) return;
-      frame = requestAnimationFrame(render);
-    };
-
-    invalidateSurface = () => {
-      surfaceDirty = true;
-      scheduleFrame();
-    };
-    redraw.current = invalidateSurface;
-
-    accept = () => {
-      if (!client) return;
-      const state = client.getSnapshot();
-      clearChangedPausedBoundary(state);
-      if (state === lastConnection || (currentPaused.current && state !== null)) return;
-      lastConnection = state;
-      model.accept(state, performance.now(), restoreStaticBoundary);
-      restoreStaticBoundary = false;
-      updateUtilityPhaseDataset();
-      if (isPageVisible() && !staticFrame) scheduleFrame();
-    };
+    }
 
     const handleVisibilityChange = () => {
       if (isPageVisible()) {
@@ -962,7 +983,13 @@ export function RadarView({
         eslFonts.add(bundledLegend);
       }
       const load = bundledLegend?.load() ?? eslFonts.load('900 48px ESLLegend');
-      void load.then(invalidateSurface, () => undefined);
+      void load.then(
+        () => {
+          renderer.cache.clearGlyphs();
+          invalidateSurface();
+        },
+        () => undefined,
+      );
     }
 
     const unsubscribe = client?.subscribe(accept);

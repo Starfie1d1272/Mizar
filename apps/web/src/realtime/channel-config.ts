@@ -1,12 +1,8 @@
-import type { AssistSnapshot } from '@mizar/protocol/assist';
-import type { OperatorSnapshot } from '@mizar/protocol/operator';
-import type { ProgramSnapshot } from '@mizar/protocol/program';
-import type { RadarSnapshot } from '@mizar/protocol/radar';
-import {
-  createChannelSnapshotValidator,
-  type SnapshotEnvelopeLike,
-  type SnapshotValidator,
-} from '@mizar/protocol/acceptance';
+import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
+import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
+import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
+import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
+import type { SnapshotEnvelopeLike, SnapshotSchema } from '@mizar/protocol/acceptance';
 import { LOCAL_PROTOCOL_SUBPROTOCOL, type LocalSnapshotChannel } from '@mizar/protocol/version';
 
 export { LOCAL_PROTOCOL_SUBPROTOCOL };
@@ -21,25 +17,25 @@ export type LocalChannelSnapshot<C extends LocalSnapshotChannel> = C extends 'pr
 
 export interface LocalChannelConfig<TSnapshot extends SnapshotEnvelopeLike> {
   readonly path: string;
-  readonly validator: SnapshotValidator<TSnapshot>;
+  readonly schema: SnapshotSchema<TSnapshot>;
 }
 
 export const localChannelConfigs = {
   program: {
     path: '/local/v1/program',
-    validator: createChannelSnapshotValidator<ProgramSnapshot>('program'),
+    schema: programSnapshotSchema,
   },
   radar: {
     path: '/local/v1/radar',
-    validator: createChannelSnapshotValidator<RadarSnapshot>('radar'),
+    schema: radarSnapshotSchema,
   },
   operator: {
     path: '/local/v1/operator',
-    validator: createChannelSnapshotValidator<OperatorSnapshot>('operator'),
+    schema: operatorSnapshotSchema,
   },
   assist: {
     path: '/local/v1/assist',
-    validator: createChannelSnapshotValidator<AssistSnapshot>('assist'),
+    schema: assistSnapshotSchema,
   },
 } satisfies {
   readonly [C in LocalSnapshotChannel]: LocalChannelConfig<LocalChannelSnapshot<C>>;

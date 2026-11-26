@@ -62,6 +62,15 @@ export class RadarTextureCache {
     this.entries.clear();
   }
 
+  clearGlyphs(): void {
+    for (const [key, entry] of this.entries) {
+      if (key.startsWith('grid:') || key.startsWith('lbl:')) {
+        this.deleteTexture(entry.texture);
+        this.entries.delete(key);
+      }
+    }
+  }
+
   private getOrCreate(
     key: string,
     width: number,
@@ -83,14 +92,18 @@ export class RadarTextureCache {
     if (this.scratchCanvas.width !== w || this.scratchCanvas.height !== h) {
       this.scratchCanvas.width = w;
       this.scratchCanvas.height = h;
-    } else {
+    }
+    ctx.save();
+    try {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      draw(ctx, w, h);
+    } finally {
+      ctx.restore();
     }
-    ctx.filter = 'none';
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    draw(ctx, w, h);
 
     const texture = this.uploadTexture(this.scratchCanvas);
     if (!texture) return null;
@@ -204,7 +217,7 @@ export class RadarTextureCache {
           ctx.fillText(
             GRID_GLYPHS[i]!,
             col * GRID_CELL + GRID_CELL * 0.5,
-            row * GRID_CELL + GRID_CELL * 0.5 + 1,
+            row * GRID_CELL + GRID_CELL * 0.5,
           );
         }
       });
@@ -232,7 +245,7 @@ export class RadarTextureCache {
         ctx.fillStyle = color;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(text, w / 2, h / 2 + 1);
+        ctx.fillText(text, w / 2, h / 2);
       },
     );
   }

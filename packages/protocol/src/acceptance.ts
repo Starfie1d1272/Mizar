@@ -1,9 +1,4 @@
-import {
-  LOCAL_PROTOCOL_VERSION,
-  LOCAL_SNAPSHOT_CHANNELS,
-  LOCAL_SNAPSHOT_VERSIONS,
-  type LocalSnapshotChannel,
-} from './version.js';
+import type { LocalSnapshotChannel } from './version.js';
 
 export interface SnapshotCursorLike {
   readonly producerInstanceId: string;
@@ -69,9 +64,6 @@ export interface SnapshotSchema<TSnapshot> {
   parse(input: unknown): TSnapshot;
 }
 
-export type SnapshotValidator<TSnapshot> =
-  SnapshotSchema<TSnapshot> | ((input: unknown) => TSnapshot | null);
-
 export function createSnapshotAcceptanceState(): SnapshotAcceptanceState {
   return {
     channel: null,
@@ -97,140 +89,15 @@ function rejected(
   return { kind: 'rejected', reason, state, reset: noResets() };
 }
 
-export interface SnapshotEnvelopeExpectation {
-  readonly channel?: LocalSnapshotChannel;
-  readonly protocolVersion?: number;
-  readonly schemaVersion?: number;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isNonNegativeInt(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
-}
-
-function isSnapshotChannel(value: unknown): value is LocalSnapshotChannel {
-  return (
-    typeof value === 'string' && (LOCAL_SNAPSHOT_CHANNELS as readonly string[]).includes(value)
-  );
-}
-
-function hasValidChannelPayload(
-  channel: LocalSnapshotChannel,
-  payload: Record<string, unknown>,
-): boolean {
-  switch (channel) {
-    case 'program':
-      return (
-        isPlainRecord(payload.status) &&
-        isPlainRecord(payload.teams) &&
-        isPlainRecord(payload.map) &&
-        Array.isArray(payload.players)
-      );
-    case 'radar':
-      return (
-        (payload.mapName === null || typeof payload.mapName === 'string') &&
-        Array.isArray(payload.players) &&
-        Array.isArray(payload.grenades)
-      );
-    case 'operator':
-      return (
-        isPlainRecord(payload.runtime) &&
-        isPlainRecord(payload.matchContext) &&
-        isPlainRecord(payload.identity) &&
-        isPlainRecord(payload.activeLineup) &&
-        isPlainRecord(payload.sources)
-      );
-    case 'assist':
-      return (
-        typeof payload.availability === 'string' &&
-        (payload.observer === undefined || isPlainRecord(payload.observer))
-      );
-  }
-}
-
-/**
- * Zero-copy structural validator for local WebSocket snapshot hot paths.
- * Validates envelope, cursor, and channel-specific top-level payload invariants
- * without allocating a deep-cloned object tree.
- */
-export function parseSnapshotEnvelope<TSnapshot extends SnapshotEnvelopeLike>(
-  input: unknown,
-  expected?: SnapshotEnvelopeExpectation,
-): TSnapshot | null {
-  if (!isPlainRecord(input) || input.type !== 'snapshot') return null;
-
-  const protocolVersion = input.protocolVersion;
-  if (typeof protocolVersion !== 'number' || !Number.isInteger(protocolVersion)) return null;
-  if (expected?.protocolVersion !== undefined && protocolVersion !== expected.protocolVersion) {
-    return null;
-  }
-
-  const channel = input.channel;
-  if (!isSnapshotChannel(channel)) return null;
-  if (expected?.channel !== undefined && channel !== expected.channel) return null;
-
-  const schemaVersion = input.schemaVersion;
-  if (typeof schemaVersion !== 'number' || !Number.isInteger(schemaVersion)) return null;
-  if (expected?.schemaVersion !== undefined && schemaVersion !== expected.schemaVersion) {
-    return null;
-  }
-
-  const channelSeq = input.channelSeq;
-  if (typeof channelSeq !== 'number' || !Number.isInteger(channelSeq) || channelSeq < 1) {
-    return null;
-  }
-
-  const cursor = input.cursor;
-  if (!isPlainRecord(cursor)) return null;
-  if (typeof cursor.producerInstanceId !== 'string' || cursor.producerInstanceId.length === 0) {
-    return null;
-  }
-  if (cursor.liveSessionId !== null && typeof cursor.liveSessionId !== 'string') {
-    return null;
-  }
-  if (!isNonNegativeInt(cursor.runtimeSeq)) return null;
-  if (!isNonNegativeInt(cursor.programSourceGeneration)) return null;
-  if (cursor.programReceiveSequence !== null && !isNonNegativeInt(cursor.programReceiveSequence)) {
-    return null;
-  }
-  if (!isNonNegativeInt(cursor.mapEpoch)) return null;
-
-  const payload = input.payload;
-  if (!isPlainRecord(payload) || !hasValidChannelPayload(channel, payload)) return null;
-
-  return input as unknown as TSnapshot;
-}
-
-export function createChannelSnapshotValidator<TSnapshot extends SnapshotEnvelopeLike>(
-  channel: LocalSnapshotChannel,
-): (input: unknown) => TSnapshot | null {
-  const expected: SnapshotEnvelopeExpectation = {
-    channel,
-    protocolVersion: LOCAL_PROTOCOL_VERSION,
-    schemaVersion: LOCAL_SNAPSHOT_VERSIONS[channel],
-  };
-  return (input: unknown) => parseSnapshotEnvelope<TSnapshot>(input, expected);
-}
-
 export function acceptSnapshot<TSnapshot extends SnapshotEnvelopeLike>(
   input: unknown,
-  validator: SnapshotValidator<TSnapshot>,
+  schema: SnapshotSchema<TSnapshot>,
   previous: SnapshotAcceptanceState = createSnapshotAcceptanceState(),
 ): SnapshotAcceptanceResult<TSnapshot> {
-  let snapshot: TSnapshot | null;
-  if (typeof validator === 'function') {
-    snapshot = validator(input);
-  } else {
-    try {
-      snapshot = validator.parse(input);
-    } catch {
-      snapshot = null;
-    }
-  }
-  if (snapshot === null) {
+  let snapshot: TSnapshot;
+  try {
+    snapshot = schema.parse(input);
+  } catch {
     return rejected(previous, 'schema-invalid');
   }
 
@@ -289,12 +156,12 @@ export interface SnapshotAcceptance<TSnapshot extends SnapshotEnvelopeLike> {
 }
 
 export function createSnapshotAcceptance<TSnapshot extends SnapshotEnvelopeLike>(
-  validator: SnapshotValidator<TSnapshot>,
+  schema: SnapshotSchema<TSnapshot>,
 ): SnapshotAcceptance<TSnapshot> {
   let state = createSnapshotAcceptanceState();
   return {
     accept(input) {
-      const result = acceptSnapshot(input, validator, state);
+      const result = acceptSnapshot(input, schema, state);
       if (result.kind === 'accepted') state = result.state;
       return result;
     },

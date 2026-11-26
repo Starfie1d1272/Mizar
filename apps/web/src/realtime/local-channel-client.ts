@@ -130,7 +130,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
   private connect(): void {
     if (this.disposed) return;
     const generation = ++this.connectionGeneration;
-    const acceptance = createSnapshotAcceptance(this.config.validator);
+    const acceptance = createSnapshotAcceptance(this.config.schema);
     this.acceptance = acceptance;
     this.store.setState('connecting');
 

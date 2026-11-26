@@ -83,16 +83,29 @@ function createMockCanvasAndGl() {
     },
   } as unknown as WebGL2RenderingContext;
 
+  let saveDepth = 0;
+  let clippedWhileSaved = false;
   const ctx2d = {
+    save: () => {
+      saveDepth += 1;
+    },
+    restore: () => {
+      saveDepth = Math.max(0, saveDepth - 1);
+      if (saveDepth === 0) clippedWhileSaved = false;
+    },
     setTransform: () => {},
     clearRect: () => {},
-    fillText: () => {},
+    fillText: () => {
+      expect(clippedWhileSaved).toBe(false);
+    },
     fillRect: () => {},
     drawImage: () => {},
     beginPath: () => {},
     arc: () => {},
     fill: () => {},
-    clip: () => {},
+    clip: () => {
+      if (saveDepth > 0) clippedWhileSaved = true;
+    },
     translate: () => {},
     createRadialGradient: () => ({ addColorStop: () => {} }),
     font: '',
@@ -169,28 +182,34 @@ describe('WebGL 2 radar renderer and scheduling', () => {
     cleanup = undefined;
   });
 
-  it('shares a single static glyph grid texture across 0-9 and A/B without corrupting batches', () => {
+  it('shares a single static glyph grid texture across 0-9 and A/B and isolates smoke clip state', () => {
     const mock = createMockCanvasAndGl();
     cleanup = mock.restore;
 
     const renderer = new WebGL2RadarRenderer(mock.gl);
+    expect(renderer.isReady()).toBe(true);
     renderer.beginFrame(512, 0.5, 0.5, 1);
 
-    const g1 = renderer.cache.glyph('1', '800 42px Inter, sans-serif', '#0b1119')!;
-    const g2 = renderer.cache.glyph('2', '800 42px Inter, sans-serif', '#0b1119')!;
-    const gA = renderer.cache.glyph('A', '800 42px Inter, sans-serif', '#0b1119')!;
+    // Smoke uses ctx.clip(); subsequent glyph generation must not inherit that clip.
+    const smokeTex = renderer.cache.smoke('smoke-1');
+    expect(smokeTex).not.toBeNull();
 
-    expect(mock.getCreatedTextures()).toBe(1);
+    const g1 = renderer.cache.glyph('1', '800 56px Inter, sans-serif', '#0b1119')!;
+    const g2 = renderer.cache.glyph('2', '800 56px Inter, sans-serif', '#0b1119')!;
+    const gA = renderer.cache.glyph('A', '800 56px Inter, sans-serif', '#0b1119')!;
+
+    expect(mock.getCreatedTextures()).toBe(2);
     expect(g1.texture).toBe(g2.texture);
     expect(g1.texture).toBe(gA.texture);
     expect(g1.u0).not.toBe(g2.u0);
 
-    renderer.drawTexturedQuad(g1, 100, 100, 38, 38, 1);
-    renderer.drawTexturedQuad(g2, 200, 200, 38, 38, 1);
-    renderer.drawTexturedQuad(gA, 300, 300, 38, 38, 1);
+    renderer.drawTexturedQuad(g1, 100, 100, 32, 32, 1);
+    renderer.drawTexturedQuad(g2, 200, 200, 32, 32, 1);
+    renderer.drawTexturedQuad(gA, 300, 300, 32, 32, 1);
+    renderer.drawFlameGlow(250, 250, 20, 5, '#e85f2f', 0.46);
+    renderer.drawLine(10, 10, 10.2, 10.2, 2, '#6aa8ff', 0.72, 13, 0);
     renderer.endFrame();
 
-    // All 3 glyphs share 1 texture and submit in a single instanced draw call.
     expect(mock.getDrawCalls()).toBe(1);
     renderer.dispose();
   });

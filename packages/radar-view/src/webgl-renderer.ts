@@ -113,10 +113,10 @@ void main() {
     float t = mod(ang + 1.57079632679 + 6.28318530718, 6.28318530718) / 6.28318530718;
 
     float sectorDisk = 1.0 - smoothstep(sectorR - aa, sectorR + aa, d);
-    vec4 base = premul(vec4(1.0, 1.0, 1.0, 0.18)) * sectorDisk;
+    vec4 base = premul(vec4(1.0, 1.0, 1.0, 0.18 * alpha)) * sectorDisk;
     if (remaining > 0.0) {
       float sectorActive = step(t, remaining) * sectorDisk;
-      vec4 bright = premul(vec4(1.0, 1.0, 1.0, 0.42)) * sectorActive;
+      vec4 bright = premul(vec4(1.0, 1.0, 1.0, 0.42 * alpha)) * sectorActive;
       base = bright + base * (1.0 - bright.a);
 
       float ringMask =
@@ -130,10 +130,10 @@ void main() {
       float capStart = 1.0 - smoothstep(arcHalf - aa, arcHalf + aa, length(v_local - pStart));
       float capEnd = 1.0 - smoothstep(arcHalf - aa, arcHalf + aa, length(v_local - pEnd));
       float arcMask = max(ringMask * step(t, remaining), max(capStart, capEnd));
-      vec4 arcCol = premul(vec4(v_color2.rgb, 0.96)) * arcMask;
+      vec4 arcCol = premul(vec4(v_color2.rgb, 0.96 * alpha)) * arcMask;
       base = arcCol + base * (1.0 - arcCol.a);
     }
-    outColor = base * alpha;
+    outColor = base;
     return;
   }
 
@@ -173,27 +173,36 @@ void main() {
   }
 
   if (mode == 5) {
+    float dashPeriod = v_params.z;
+    if (dashPeriod > 0.0) {
+      float logicalHalfW = max(0.0, v_halfSize.x - 1.0);
+      float logicalHalfH = max(0.1, v_halfSize.y - 1.0);
+      float lx = v_local.x * v_halfSize.x;
+      float ly = v_local.y * v_halfSize.y;
+      float posAlong = lx + logicalHalfW + v_params.w;
+      float inPeriod = mod(posAlong, dashPeriod);
+      float dxDash = max(0.0, max(-inPeriod, inPeriod - 7.0));
+      dxDash = min(dxDash, dashPeriod - inPeriod);
+      float dxSeg = max(0.0, abs(lx) - logicalHalfW);
+      float dist = length(vec2(max(dxDash, dxSeg), ly));
+      float mask = 1.0 - smoothstep(logicalHalfH - 0.75, logicalHalfH + 0.75, dist);
+      outColor = premul(v_color1) * mask * alpha;
+      return;
+    }
     vec2 box = v_params.xy;
     vec2 d = abs(v_local) - box;
     float aa = max(fwidth(max(d.x, d.y)), 0.004);
     float mask = 1.0 - smoothstep(-aa, aa, max(d.x, d.y));
-    float dashPeriod = v_params.z;
-    if (dashPeriod > 0.0) {
-      float segLen = v_halfSize.x * 2.0;
-      float posAlong = (v_local.x * 0.5 + 0.5) * segLen + v_params.w;
-      float phase = mod(posAlong, dashPeriod);
-      float dashOn = 7.0;
-      float dashMask = step(phase, dashOn);
-      mask *= dashMask;
-    }
     outColor = premul(v_color1) * mask * alpha;
     return;
   }
 
-  // mode == 6: soft radial flame glow
+  // mode == 6: soft radial flame glow (source-over premultiplied)
   float d = length(v_local);
-  float glow = exp(-d * d * 4.2) * (1.0 - smoothstep(0.68, 1.0, d));
-  outColor = vec4(v_color1.rgb, v_color1.a * glow * alpha);
+  float rCore = v_params.x;
+  float blurNorm = max(v_params.y, 0.01);
+  float glow = 1.0 - smoothstep(max(0.0, rCore - blurNorm), min(1.0, rCore + blurNorm), d);
+  outColor = premul(vec4(v_color1.rgb, v_color1.a * glow * alpha));
 }
 `;
 
@@ -307,6 +316,16 @@ export class WebGL2RadarRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
     return texture;
+  }
+
+  isReady(): boolean {
+    return (
+      !this.disposed &&
+      this.program !== null &&
+      this.vao !== null &&
+      this.instanceBuffer !== null &&
+      !this.gl.isContextLost()
+    );
   }
 
   getLastFrameStats(): { readonly drawCalls: number; readonly instances: number } {
@@ -442,10 +461,16 @@ export class WebGL2RadarRenderer {
     if (additive !== this.currentAdditive) {
       this.flush();
       this.currentAdditive = additive;
-      this.gl.blendFunc(
-        additive ? this.gl.SRC_ALPHA : this.gl.ONE,
-        additive ? this.gl.ONE : this.gl.ONE_MINUS_SRC_ALPHA,
-      );
+      if (additive) {
+        this.gl.blendFuncSeparate(
+          this.gl.ONE,
+          this.gl.ONE,
+          this.gl.ONE,
+          this.gl.ONE_MINUS_SRC_ALPHA,
+        );
+      } else {
+        this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+      }
     }
     if (texture !== null && texture !== this.currentTexture) {
       this.flush();
@@ -735,7 +760,7 @@ export class WebGL2RadarRenderer {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len = Math.hypot(dx, dy);
-    if (len < 0.5) return;
+    if (len <= 0) return;
     this.drawRect(
       (x1 + x2) * 0.5,
       (y1 + y2) * 0.5,
@@ -749,14 +774,23 @@ export class WebGL2RadarRenderer {
     );
   }
 
-  drawFlameGlow(cx: number, cy: number, radius: number, color: string, alpha: number): void {
-    this.setBatchState(null, true);
-    const glowR = radius * 1.95;
+  drawFlameGlow(
+    cx: number,
+    cy: number,
+    radius: number,
+    blurRadius: number,
+    color: string,
+    alpha: number,
+  ): void {
+    this.setBatchState(null, false);
+    const blur = Math.max(0.5, blurRadius);
+    const coreR = radius * 1.45;
+    const extent = coreR + blur * 3;
     this.pushInstance(
       cx,
       cy,
-      glowR,
-      glowR,
+      extent,
+      extent,
       1,
       0,
       alpha,
@@ -767,8 +801,8 @@ export class WebGL2RadarRenderer {
       1,
       parseCssColor(color),
       [0, 0, 0, 0],
-      0,
-      0,
+      coreR / extent,
+      (blur * 1.5) / extent,
       0,
       0,
     );
