@@ -19,6 +19,7 @@ import { useProgramScenes } from '../workspace/client';
 import { ProgramView, StatsInsertView, type ProgramSceneViewProps } from '@mizar/hud-view';
 import { useStatsRotation } from './useStatsRotation';
 import { radarMatchesProgram } from './program-radar';
+import { useProgramSurfaceActivity } from './useProgramSurfaceActivity';
 
 const motionQuery = '(prefers-reduced-motion: reduce)';
 const subscribeMotion = (notify: () => void) => {
@@ -27,55 +28,6 @@ const subscribeMotion = (notify: () => void) => {
   return () => query.removeEventListener('change', notify);
 };
 const readReducedMotion = () => window.matchMedia(motionQuery).matches;
-
-function usePageVisibility(): boolean {
-  const [docVisible, setDocVisible] = useState(() =>
-    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
-  );
-  const [obsState, setObsState] = useState<{ active: boolean | null; visible: boolean | null }>({
-    active: null,
-    visible: null,
-  });
-
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      setDocVisible(document.visibilityState !== 'hidden');
-    };
-    const onObsActive = (event: Event) => {
-      const active = (event as CustomEvent<{ active?: unknown }>).detail?.active;
-      if (typeof active === 'boolean') {
-        setObsState((prev) => (prev.active === active ? prev : { ...prev, active }));
-      }
-    };
-    const onObsVisible = (event: Event) => {
-      const visible = (event as CustomEvent<{ visible?: unknown }>).detail?.visible;
-      if (typeof visible === 'boolean') {
-        setObsState((prev) => (prev.visible === visible ? prev : { ...prev, visible }));
-      }
-    };
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibilityChange);
-    }
-    if (typeof window !== 'undefined') {
-      window.addEventListener('obsSourceActiveChanged', onObsActive);
-      window.addEventListener('obsSourceVisibleChanged', onObsVisible);
-    }
-    return () => {
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibilityChange);
-      }
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('obsSourceActiveChanged', onObsActive);
-        window.removeEventListener('obsSourceVisibleChanged', onObsVisible);
-      }
-    };
-  }, []);
-
-  if (obsState.active !== null || obsState.visible !== null) {
-    return docVisible && (Boolean(obsState.active) || Boolean(obsState.visible));
-  }
-  return docVisible;
-}
 
 function usePresentation(preview: boolean, enabled: boolean) {
   const [value, setValue] = useState<ProgramPresentation | null>(null);
@@ -112,14 +64,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
   const preview = params.get('preview') === '1';
   const scenes = useProgramScenes();
-  const pageVisible = usePageVisibility();
-  const sceneActive =
-    scenes === null ||
-    scenes.active === sceneId ||
-    scenes.preparing?.target === sceneId ||
-    scenes.director?.next === sceneId ||
-    scenes.director?.readyToTake === sceneId ||
-    pageVisible;
+  const sceneActive = useProgramSurfaceActivity({ sceneId, scenes });
   const liveData = usePresentation(preview, sceneActive);
   const variant = params.get('variant');
   const [sample, setSample] = useState<{

@@ -191,6 +191,59 @@ describe('ProgramScenePage & useProgramScenes lifecycle', () => {
       { channel: 'program', enabled: true },
       { channel: 'radar', enabled: true },
     ]);
+
+    // When scene is on-air (scenes.active === sceneId), it remains active even if OBS source event reports false
+    sceneMock.scenes = makeScenes('matchup', 'gameplay');
+    await act(async () => {
+      root?.render(<ProgramScenePage sceneId="matchup" />);
+      await Promise.resolve();
+    });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: true },
+      { channel: 'radar', enabled: true },
+    ]);
+  });
+
+  it('pauses and resumes on standalone browser visibilitychange', async () => {
+    let visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<ProgramScenePage sceneId="matchup" />);
+      await Promise.resolve();
+    });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: true },
+      { channel: 'radar', enabled: true },
+    ]);
+
+    visibility = 'hidden';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: false },
+      { channel: 'radar', enabled: false },
+    ]);
+
+    const fetchesWhileHidden = sceneMock.presentationFetches;
+    visibility = 'visible';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+    expect(sceneMock.presentationFetches).toBeGreaterThan(fetchesWhileHidden);
+    expect(sceneMock.channelCalls.slice(-2)).toEqual([
+      { channel: 'program', enabled: true },
+      { channel: 'radar', enabled: true },
+    ]);
   });
 
   it('relaxes useProgramScenes polling when hidden and refreshes immediately on visibility restore', async () => {
