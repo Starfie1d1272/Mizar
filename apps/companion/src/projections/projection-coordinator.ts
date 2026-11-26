@@ -931,27 +931,34 @@ export class ProjectionCoordinator {
   }
 }
 
-interface ProgramSemanticSnapshot {
-  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
-  readonly needsNeutralGameplay: boolean;
-  readonly preferCanonicalPlayerNames: boolean;
-  readonly context: unknown;
-  readonly contextFreshness: 'fresh' | 'stale' | undefined;
-  readonly identity: IdentityResolution;
-  readonly activeLineup: ActiveLineupResolution;
-  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
-  readonly bombDamageResource: unknown;
-  readonly producerInstanceId: string;
-  readonly liveSessionId: string | null;
-  readonly programSourceGeneration: number;
-  readonly mapEpoch: number;
-  readonly objectiveTimingActive: boolean;
-  readonly objectiveTiming: ProgramSafeRuntimeView['objectiveTiming'];
-  readonly playerStats: unknown;
-  readonly telemetry: ProgramSafeRuntimeView['telemetry'];
-  readonly chatLength: number;
-  readonly lastChatId: string | null;
+function shallowEqualRecord(a: object, b: object): boolean {
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  for (const key in ar) {
+    if (!Object.is(ar[key], br[key])) return false;
+  }
+  return true;
 }
+
+function deepEqualArrayOrObj(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (!deepEqualArrayOrObj(a[i], b[i])) return false;
+    return true;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const keys = Object.keys(ar);
+  if (keys.length !== Object.keys(br).length) return false;
+  for (const k of keys) if (!deepEqualArrayOrObj(ar[k], br[k])) return false;
+  return true;
+}
+
+type ProgramSemanticSnapshot = ReturnType<typeof buildProgramSemanticSnapshot>;
+type OperatorSemanticSnapshot = ReturnType<typeof buildOperatorSemanticSnapshot>;
+type AssistSemanticSnapshot = ReturnType<typeof buildAssistSemanticSnapshot>;
 
 function buildProgramSemanticSnapshot(args: {
   readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
@@ -965,19 +972,25 @@ function buildProgramSemanticSnapshot(args: {
   readonly bombDamageResource: unknown;
   readonly runtimeView: ProgramSafeRuntimeView;
   readonly chatSnapshot: NonNullable<ProgramSnapshot['payload']['allChat']> | undefined;
-}): ProgramSemanticSnapshot {
+}) {
   const { runtimeView, chatSnapshot } = args;
   const bombState = runtimeView.telemetry?.telemetry.bomb?.state;
-  const lastChat =
-    chatSnapshot && chatSnapshot.length > 0 ? chatSnapshot[chatSnapshot.length - 1] : undefined;
+  const lastChat = chatSnapshot?.[chatSnapshot.length - 1];
   return {
     telemetryFreshness: args.telemetryFreshness,
     needsNeutralGameplay: args.needsNeutralGameplay,
     preferCanonicalPlayerNames: args.preferCanonicalPlayerNames,
     context: args.context,
     contextFreshness: args.contextFreshness,
-    identity: args.identity,
-    activeLineup: args.activeLineup,
+    identityState: args.identity.state,
+    sideA: args.identity.sideMapping.a,
+    sideB: args.identity.sideMapping.b,
+    canonicalBranding: args.identity.capabilities.canonicalTeamBranding,
+    lineupGen: args.activeLineup.sourceGeneration,
+    lineupEpoch: args.activeLineup.mapEpoch,
+    lineupState: args.activeLineup.state,
+    lineupCtLen: args.activeLineup.ct.length,
+    lineupTLen: args.activeLineup.t.length,
     seriesProgress: args.seriesProgress,
     bombDamageResource: args.bombDamageResource,
     producerInstanceId: runtimeView.cursor.producerInstanceId,
@@ -986,11 +999,12 @@ function buildProgramSemanticSnapshot(args: {
     mapEpoch: runtimeView.cursor.mapEpoch,
     objectiveTimingActive:
       bombState === 'planting' || bombState === 'defusing' || bombState === 'planted',
-    objectiveTiming: runtimeView.objectiveTiming,
+    plantDuration: runtimeView.objectiveTiming.plantActionDurationSeconds,
+    defuseDuration: runtimeView.objectiveTiming.defuseActionDurationSeconds,
     playerStats: runtimeView.playerStats,
     telemetry: runtimeView.telemetry,
     chatLength: chatSnapshot?.length ?? 0,
-    lastChatId: lastChat ? lastChat.id : null,
+    lastChatId: lastChat?.id ?? null,
   };
 }
 
@@ -998,84 +1012,19 @@ function sameProgramSemantic(
   prev: ProgramSemanticSnapshot | undefined,
   next: ProgramSemanticSnapshot,
 ): boolean {
-  if (prev === undefined) return false;
-  if (
-    prev.telemetryFreshness !== next.telemetryFreshness ||
-    prev.needsNeutralGameplay !== next.needsNeutralGameplay ||
-    prev.preferCanonicalPlayerNames !== next.preferCanonicalPlayerNames ||
-    prev.context !== next.context ||
-    prev.contextFreshness !== next.contextFreshness ||
-    prev.seriesProgress !== next.seriesProgress ||
-    prev.bombDamageResource !== next.bombDamageResource ||
-    prev.producerInstanceId !== next.producerInstanceId ||
-    prev.liveSessionId !== next.liveSessionId ||
-    prev.programSourceGeneration !== next.programSourceGeneration ||
-    prev.mapEpoch !== next.mapEpoch ||
-    prev.objectiveTimingActive ||
-    next.objectiveTimingActive ||
-    prev.objectiveTiming.plantActionDurationSeconds !==
-      next.objectiveTiming.plantActionDurationSeconds ||
-    prev.objectiveTiming.defuseActionDurationSeconds !==
-      next.objectiveTiming.defuseActionDurationSeconds ||
-    prev.playerStats !== next.playerStats ||
-    prev.chatLength !== next.chatLength ||
-    prev.lastChatId !== next.lastChatId
-  ) {
-    return false;
-  }
-  if (
-    prev.identity !== next.identity &&
-    (prev.identity.state !== next.identity.state ||
-      prev.identity.sideMapping.a !== next.identity.sideMapping.a ||
-      prev.identity.sideMapping.b !== next.identity.sideMapping.b ||
-      prev.identity.capabilities.canonicalTeamBranding !==
-        next.identity.capabilities.canonicalTeamBranding)
-  ) {
-    return false;
-  }
-  if (
-    prev.activeLineup.sourceGeneration !== next.activeLineup.sourceGeneration ||
-    prev.activeLineup.mapEpoch !== next.activeLineup.mapEpoch ||
-    prev.activeLineup.state !== next.activeLineup.state ||
-    prev.activeLineup.ct.length !== next.activeLineup.ct.length ||
-    prev.activeLineup.t.length !== next.activeLineup.t.length
-  ) {
-    return false;
-  }
-  const prevObs = prev.telemetry;
-  const nextObs = next.telemetry;
+  if (!prev || prev.objectiveTimingActive || next.objectiveTimingActive) return false;
+  const { telemetry: prevObs, ...prevRest } = prev;
+  const { telemetry: nextObs, ...nextRest } = next;
+  if (!shallowEqualRecord(prevRest, nextRest)) return false;
   if (prevObs === nextObs) return true;
-  if (prevObs === null || nextObs === null) return false;
-  if (
-    prevObs.coverage.map !== nextObs.coverage.map ||
-    prevObs.coverage.round !== nextObs.coverage.round ||
-    prevObs.coverage.phaseCountdowns !== nextObs.coverage.phaseCountdowns ||
-    prevObs.coverage.player !== nextObs.coverage.player ||
-    prevObs.coverage.allPlayers !== nextObs.coverage.allPlayers ||
-    prevObs.coverage.bomb !== nextObs.coverage.bomb
-  ) {
-    return false;
-  }
+  if (!prevObs || !nextObs || !shallowEqualRecord(prevObs.coverage, nextObs.coverage)) return false;
+
   const pt = prevObs.telemetry;
   const nt = nextObs.telemetry;
   if (
-    pt.map?.name !== nt.map?.name ||
-    pt.map?.mode !== nt.map?.mode ||
-    pt.map?.phase !== nt.map?.phase ||
-    pt.map?.roundNumber !== nt.map?.roundNumber ||
-    pt.map?.sides?.ct?.score !== nt.map?.sides?.ct?.score ||
-    pt.map?.sides?.t?.score !== nt.map?.sides?.t?.score ||
-    pt.map?.sides?.ct?.name !== nt.map?.sides?.ct?.name ||
-    pt.map?.sides?.t?.name !== nt.map?.sides?.t?.name ||
-    pt.map?.sides?.ct?.timeoutsRemaining !== nt.map?.sides?.ct?.timeoutsRemaining ||
-    pt.map?.sides?.t?.timeoutsRemaining !== nt.map?.sides?.t?.timeoutsRemaining ||
-    pt.map?.sides?.ct?.consecutiveRoundLosses !== nt.map?.sides?.ct?.consecutiveRoundLosses ||
-    pt.map?.sides?.t?.consecutiveRoundLosses !== nt.map?.sides?.t?.consecutiveRoundLosses ||
-    (pt.map?.roundWins?.length ?? 0) !== (nt.map?.roundWins?.length ?? 0) ||
-    pt.round?.phase !== nt.round?.phase ||
-    pt.round?.winnerSide !== nt.round?.winnerSide ||
-    pt.phaseCountdowns?.phase !== nt.phaseCountdowns?.phase ||
-    pt.phaseCountdowns?.endsInSeconds !== nt.phaseCountdowns?.endsInSeconds ||
+    !deepEqualArrayOrObj(pt.map, nt.map) ||
+    !deepEqualArrayOrObj(pt.round, nt.round) ||
+    !deepEqualArrayOrObj(pt.phaseCountdowns, nt.phaseCountdowns) ||
     pt.player?.sourcePlayerId !== nt.player?.sourcePlayerId ||
     pt.bomb?.state !== nt.bomb?.state ||
     pt.bomb?.sourcePlayerId !== nt.bomb?.sourcePlayerId ||
@@ -1085,15 +1034,8 @@ function sameProgramSemantic(
   }
   const bombDamageSensitive =
     nt.round?.phase === 'live' && (nt.bomb?.state === 'planted' || nt.bomb?.state === 'defusing');
-  if (bombDamageSensitive) {
-    if (
-      pt.bomb?.position?.x !== nt.bomb?.position?.x ||
-      pt.bomb?.position?.y !== nt.bomb?.position?.y ||
-      pt.bomb?.position?.z !== nt.bomb?.position?.z
-    ) {
-      return false;
-    }
-  }
+  if (bombDamageSensitive && !deepEqualArrayOrObj(pt.bomb?.position, nt.bomb?.position))
+    return false;
   const pPlayers = pt.allPlayers;
   const nPlayers = nt.allPlayers;
   if (pPlayers === nPlayers) return true;
@@ -1106,112 +1048,18 @@ function sameProgramSemantic(
       pp.side !== np.side ||
       pp.displayName !== np.displayName ||
       pp.observerSlot !== np.observerSlot ||
-      pp.activity !== np.activity
+      pp.activity !== np.activity ||
+      (bombDamageSensitive &&
+        (!deepEqualArrayOrObj(pp.position, np.position) ||
+          !deepEqualArrayOrObj(pp.forward, np.forward))) ||
+      !deepEqualArrayOrObj(pp.state, np.state) ||
+      !deepEqualArrayOrObj(pp.matchStats, np.matchStats) ||
+      !deepEqualArrayOrObj(pp.weapons, np.weapons)
     ) {
       return false;
     }
-    if (bombDamageSensitive) {
-      if (
-        pp.position?.x !== np.position?.x ||
-        pp.position?.y !== np.position?.y ||
-        pp.position?.z !== np.position?.z ||
-        pp.forward?.x !== np.forward?.x ||
-        pp.forward?.y !== np.forward?.y ||
-        pp.forward?.z !== np.forward?.z
-      ) {
-        return false;
-      }
-    }
-    const ps = pp.state;
-    const ns = np.state;
-    if (ps !== ns) {
-      if (
-        !ps ||
-        !ns ||
-        ps.health !== ns.health ||
-        ps.armor !== ns.armor ||
-        ps.hasHelmet !== ns.hasHelmet ||
-        ps.hasDefuser !== ns.hasDefuser ||
-        ps.flashed !== ns.flashed ||
-        ps.smoked !== ns.smoked ||
-        ps.burning !== ns.burning ||
-        ps.money !== ns.money ||
-        ps.roundTotalDamage !== ns.roundTotalDamage ||
-        ps.roundKills !== ns.roundKills ||
-        ps.roundKillHeadshots !== ns.roundKillHeadshots ||
-        ps.equipValue !== ns.equipValue
-      ) {
-        return false;
-      }
-    }
-    const pm = pp.matchStats;
-    const nm = np.matchStats;
-    if (pm !== nm) {
-      if (
-        !pm ||
-        !nm ||
-        pm.kills !== nm.kills ||
-        pm.assists !== nm.assists ||
-        pm.deaths !== nm.deaths ||
-        pm.mvps !== nm.mvps ||
-        pm.score !== nm.score
-      ) {
-        return false;
-      }
-    }
-    const pw = pp.weapons;
-    const nw = np.weapons;
-    if (pw !== nw) {
-      if (!pw || !nw || pw.length !== nw.length) return false;
-      for (let j = 0; j < nw.length; j += 1) {
-        const pwj = pw[j]!;
-        const nwj = nw[j]!;
-        if (
-          pwj.sourceWeaponId !== nwj.sourceWeaponId ||
-          pwj.name !== nwj.name ||
-          pwj.paintKit !== nwj.paintKit ||
-          pwj.type !== nwj.type ||
-          pwj.ammoClip !== nwj.ammoClip ||
-          pwj.ammoClipMax !== nwj.ammoClipMax ||
-          pwj.ammoReserve !== nwj.ammoReserve ||
-          pwj.state !== nwj.state
-        ) {
-          return false;
-        }
-      }
-    }
   }
   return true;
-}
-
-interface OperatorSemanticSnapshot {
-  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
-  readonly mapName: string | null;
-  readonly lastDispositionKind: string | null;
-  readonly lastDispositionReason: string | null;
-  readonly transitionsLength: number;
-  readonly lastTransitionSeq: number | null;
-  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
-  readonly contextBinding: MatchContextBinding | undefined;
-  readonly identityState: IdentityResolution['state'];
-  readonly identityIssuesLen: number;
-  readonly identityResolvedCount: number;
-  readonly lineupState: ActiveLineupResolution['state'];
-  readonly lineupGen: number;
-  readonly lineupEpoch: number;
-  readonly lineupCtCount: number;
-  readonly lineupTCount: number;
-  readonly lineupExtrasCount: number;
-  readonly programSourceState: string;
-  readonly programSourceGen: number;
-  readonly programSourceTick: number | null;
-  readonly lookaheadSourceState: string;
-  readonly lookaheadSourceGen: number;
-  readonly lookaheadSourceTick: number | null;
-  readonly producerInstanceId: string;
-  readonly liveSessionId: string | null;
-  readonly programSourceGeneration: number;
-  readonly mapEpoch: number;
 }
 
 function buildOperatorSemanticSnapshot(args: {
@@ -1223,12 +1071,10 @@ function buildOperatorSemanticSnapshot(args: {
   readonly activeLineup: ActiveLineupResolution;
   readonly programSourceHealth: ReturnType<CstvSourceManagers['program']['getHealth']>;
   readonly lookaheadSourceHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
-}): OperatorSemanticSnapshot {
+}) {
   const { runtimeSnapshot, runtimeView, identity, activeLineup } = args;
   const lastTransition =
-    runtimeSnapshot.recentTransitions.length > 0
-      ? runtimeSnapshot.recentTransitions[runtimeSnapshot.recentTransitions.length - 1]
-      : undefined;
+    runtimeSnapshot.recentTransitions[runtimeSnapshot.recentTransitions.length - 1];
   return {
     telemetryFreshness: args.telemetryFreshness,
     mapName: runtimeView.telemetry?.telemetry.map?.name ?? null,
@@ -1266,50 +1112,7 @@ function sameOperatorSemantic(
   prev: OperatorSemanticSnapshot | undefined,
   next: OperatorSemanticSnapshot,
 ): boolean {
-  if (prev === undefined) return false;
-  return (
-    prev.telemetryFreshness === next.telemetryFreshness &&
-    prev.mapName === next.mapName &&
-    prev.lastDispositionKind === next.lastDispositionKind &&
-    prev.lastDispositionReason === next.lastDispositionReason &&
-    prev.transitionsLength === next.transitionsLength &&
-    prev.lastTransitionSeq === next.lastTransitionSeq &&
-    prev.seriesProgress === next.seriesProgress &&
-    prev.contextBinding === next.contextBinding &&
-    prev.identityState === next.identityState &&
-    prev.identityIssuesLen === next.identityIssuesLen &&
-    prev.identityResolvedCount === next.identityResolvedCount &&
-    prev.lineupState === next.lineupState &&
-    prev.lineupGen === next.lineupGen &&
-    prev.lineupEpoch === next.lineupEpoch &&
-    prev.lineupCtCount === next.lineupCtCount &&
-    prev.lineupTCount === next.lineupTCount &&
-    prev.lineupExtrasCount === next.lineupExtrasCount &&
-    prev.programSourceState === next.programSourceState &&
-    prev.programSourceGen === next.programSourceGen &&
-    prev.programSourceTick === next.programSourceTick &&
-    prev.lookaheadSourceState === next.lookaheadSourceState &&
-    prev.lookaheadSourceGen === next.lookaheadSourceGen &&
-    prev.lookaheadSourceTick === next.lookaheadSourceTick &&
-    prev.producerInstanceId === next.producerInstanceId &&
-    prev.liveSessionId === next.liveSessionId &&
-    prev.programSourceGeneration === next.programSourceGeneration &&
-    prev.mapEpoch === next.mapEpoch
-  );
-}
-
-interface AssistSemanticSnapshot {
-  readonly enabled: boolean;
-  readonly leadSeconds: number;
-  readonly delaySeconds: number;
-  readonly waitingForNextMap: boolean;
-  readonly lookaheadState: string;
-  readonly lookaheadGen: number;
-  readonly lookaheadErrorCode: string | null;
-  readonly lookaheadMapName: string | null;
-  readonly mapName: string | null;
-  readonly roundNumber: number | null;
-  readonly roundPhase: string | null;
+  return prev !== undefined && shallowEqualRecord(prev, next);
 }
 
 function buildAssistSemanticSnapshot(args: {
@@ -1323,7 +1126,7 @@ function buildAssistSemanticSnapshot(args: {
       }
     | undefined;
   readonly lookaheadHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
-}): AssistSemanticSnapshot {
+}) {
   return {
     enabled: args.observerSettings?.enabled ?? false,
     leadSeconds: args.observerSettings?.leadSeconds ?? 0,
@@ -1343,53 +1146,11 @@ function sameAssistSemantic(
   prev: AssistSemanticSnapshot | undefined,
   next: AssistSemanticSnapshot,
 ): boolean {
-  if (prev === undefined) return false;
-  return (
-    prev.enabled === next.enabled &&
-    prev.leadSeconds === next.leadSeconds &&
-    prev.delaySeconds === next.delaySeconds &&
-    prev.waitingForNextMap === next.waitingForNextMap &&
-    prev.lookaheadState === next.lookaheadState &&
-    prev.lookaheadGen === next.lookaheadGen &&
-    prev.lookaheadErrorCode === next.lookaheadErrorCode &&
-    prev.lookaheadMapName === next.lookaheadMapName &&
-    prev.mapName === next.mapName &&
-    prev.roundNumber === next.roundNumber &&
-    prev.roundPhase === next.roundPhase
-  );
+  return prev !== undefined && shallowEqualRecord(prev, next);
 }
 
 function sameAssistPayload(prev: AssistPayload | undefined, next: AssistPayload): boolean {
-  if (prev === undefined) return false;
-  if (prev.availability !== next.availability) return false;
-  const po = prev.observer;
-  const no = next.observer;
-  if (po === no) return true;
-  if (!po || !no) return false;
-  if (
-    po.state !== no.state ||
-    po.waitingReason !== no.waitingReason ||
-    po.nextWindowSeconds !== no.nextWindowSeconds ||
-    po.leadSeconds !== no.leadSeconds ||
-    po.hints.length !== no.hints.length
-  ) {
-    return false;
-  }
-  for (let i = 0; i < no.hints.length; i += 1) {
-    const ph = po.hints[i]!;
-    const nh = no.hints[i]!;
-    if (
-      ph.id !== nh.id ||
-      ph.remainingSeconds !== nh.remainingSeconds ||
-      ph.attacker.name !== nh.attacker.name ||
-      ph.attacker.observerSlot !== nh.attacker.observerSlot ||
-      ph.victim.name !== nh.victim.name ||
-      ph.victim.observerSlot !== nh.victim.observerSlot
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return prev !== undefined && deepEqualArrayOrObj(prev, next);
 }
 
 function sameStaleKey(

@@ -20,7 +20,6 @@ import {
   weaponVisualRole,
   type PlayerCardPresentation,
   type PlayerRailAsset,
-  type PlayerRailUtility,
   type PlayerRailWeapon,
 } from './presentation.js';
 
@@ -486,76 +485,24 @@ function PlayerBody({
   );
 }
 
-function sameRailWeapon(a: PlayerRailWeapon | null, b: PlayerRailWeapon | null): boolean {
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  return (
-    a.sourceWeaponId === b.sourceWeaponId &&
-    a.name === b.name &&
-    a.asset?.canonicalKey === b.asset?.canonicalKey &&
-    a.ammoReserve === b.ammoReserve &&
-    a.active === b.active &&
-    a.clipFill === b.clipFill
-  );
-}
-
-function sameUtilityList(
-  prev: readonly PlayerRailUtility[],
-  next: readonly PlayerRailUtility[],
-): boolean {
-  if (prev === next) return true;
-  if (prev.length !== next.length) return false;
-  for (let i = 0; i < next.length; i += 1) {
-    const a = prev[i]!;
-    const b = next[i]!;
-    if (!sameRailWeapon(a, b) || a.family !== b.family || a.count !== b.count) {
-      return false;
+function samePlayerCardPresentation(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!samePlayerCardPresentation(a[i], b[i])) return false;
     }
+    return true;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const keys = Object.keys(ar);
+  if (keys.length !== Object.keys(br).length) return false;
+  for (const k of keys) {
+    if (!samePlayerCardPresentation(ar[k], br[k])) return false;
   }
   return true;
-}
-
-function samePlayerCardPresentation(a: PlayerCardPresentation, b: PlayerCardPresentation): boolean {
-  if (a === b) return true;
-  if (
-    a.sourcePlayerId !== b.sourcePlayerId ||
-    a.side !== b.side ||
-    a.mode !== b.mode ||
-    a.lifeState !== b.lifeState ||
-    a.observed !== b.observed ||
-    a.observerSlot !== b.observerSlot ||
-    a.displayName !== b.displayName ||
-    a.avatarUrl !== b.avatarUrl ||
-    a.health !== b.health ||
-    a.healthPercent !== b.healthPercent ||
-    a.armorAsset?.canonicalKey !== b.armorAsset?.canonicalKey ||
-    a.lowArmor !== b.lowArmor ||
-    a.defuserAsset?.canonicalKey !== b.defuserAsset?.canonicalKey ||
-    a.c4Asset?.canonicalKey !== b.c4Asset?.canonicalKey ||
-    a.hasDefuser !== b.hasDefuser ||
-    a.hasC4 !== b.hasC4 ||
-    a.money !== b.money ||
-    a.roundMoneySpent !== b.roundMoneySpent ||
-    a.currentRoundDamage !== b.currentRoundDamage ||
-    a.roundKills !== b.roundKills ||
-    a.liveAdr !== b.liveAdr ||
-    a.completedAdr !== b.completedAdr ||
-    a.weaponsAvailable !== b.weaponsAvailable ||
-    a.stats.kills !== b.stats.kills ||
-    a.stats.assists !== b.stats.assists ||
-    a.stats.deaths !== b.stats.deaths ||
-    !sameRailWeapon(a.primaryWeapon, b.primaryWeapon) ||
-    !sameRailWeapon(a.secondaryWeapon, b.secondaryWeapon) ||
-    !sameRailWeapon(a.zeus, b.zeus)
-  ) {
-    return false;
-  }
-  return (
-    sameUtilityList(a.utility, b.utility) &&
-    a.statusEffects.flashed === b.statusEffects.flashed &&
-    a.statusEffects.burning === b.statusEffects.burning &&
-    a.statusEffects.smoked === b.statusEffects.smoked
-  );
 }
 
 export const PlayerCard = memo(
