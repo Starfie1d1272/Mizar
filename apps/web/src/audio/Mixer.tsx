@@ -17,7 +17,13 @@ const labels: Record<Channel, string> = {
 };
 const channels: Channel[] = ['game', 'remoteCommentary', 'microphone', 'music'];
 
-export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
+export function Mixer({
+  musicOnly = false,
+  embedded = false,
+}: {
+  musicOnly?: boolean;
+  embedded?: boolean;
+}) {
   const [refresh, setRefresh] = useState(0);
   const state = useLocalRead<MixerStatus>('/local/v1/mixer', 2000, refresh);
   const [busy, setBusy] = useState(false);
@@ -53,10 +59,10 @@ export function Mixer({ musicOnly = false }: { musicOnly?: boolean }) {
   }
   return (
     <section
-      className={`audio-mixer${musicOnly ? ' audio-mixer--music' : ''}`}
+      className={`audio-mixer${musicOnly || embedded ? ' audio-mixer--embedded' : ''}`}
       aria-label={musicOnly ? '音乐总控' : '音频混音'}
     >
-      {!musicOnly && (
+      {!musicOnly && !embedded && (
         <div className="audio-mixer__heading">
           <h2>音频混音</h2>
           <span>调整节目输出音量</span>

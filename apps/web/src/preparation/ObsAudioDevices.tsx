@@ -56,13 +56,16 @@ export function ObsAudioDevices({ disabled }: { disabled: boolean }) {
     setMessage('设备已保存，请录制试听。');
   }
   return (
-    <section>
-      <h3>采集设备</h3>
-      <p>
-        设置「桌面声音」和「麦克风」的实际设备。请先停止直播与录像；更换设备不会改变静音、音量或场景启用状态。
-      </p>
+    <details
+      className="sound-sources__advanced"
+      onToggle={(event) => {
+        if (event.currentTarget.open && !devices && !message && !disabled && !busy) void run(read);
+      }}
+    >
+      <summary>采集设备</summary>
+      {disabled && <p>OBS 就绪且输出停止后可更换设备。</p>}
       <Button disabled={disabled || busy} aria-busy={busy} onClick={() => void run(read)}>
-        读取设备
+        {busy ? '正在读取设备…' : '重新读取设备'}
       </Button>
       {devices?.desktopMode && (
         <p>
@@ -115,6 +118,6 @@ export function ObsAudioDevices({ disabled }: { disabled: boolean }) {
         </div>
       ))}
       {message && <p role="status">{message}</p>}
-    </section>
+    </details>
   );
 }

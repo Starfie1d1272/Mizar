@@ -1319,6 +1319,39 @@
 .sound-settings > [hidden] {
   display: none;
 }
+.sound-sources,
+.sound-sources__routing,
+.sound-sources__meter {
+  display: grid;
+  gap: var(--mizar-layout-padding);
+}
+.sound-sources h2 {
+  margin: 0;
+}
+.sound-sources__mode,
+.sound-sources__meter-heading,
+.sound-sources__recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mizar-layout-compact) var(--mizar-layout-padding);
+}
+.sound-sources__mode span,
+.sound-sources__meter-heading span {
+  color: var(--mizar-fg-muted);
+}
+.sound-sources__meter-heading {
+  justify-content: space-between;
+}
+.sound-sources__meter,
+.sound-sources__advanced {
+  border-top: var(--mizar-line-border) solid var(--mizar-border-default);
+  padding-block-start: var(--mizar-layout-padding);
+}
+.sound-sources__advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
 .game-audio-policy {
   display: grid;
   gap: var(--mizar-layout-gap);
