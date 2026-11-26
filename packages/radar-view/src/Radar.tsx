@@ -169,6 +169,7 @@ export function RadarView({
       ) {
         model.reset();
         updateUtilityPhaseDataset();
+        scheduleFrame();
       }
     };
 
@@ -917,6 +918,7 @@ export function RadarView({
       renderer.endFrame();
 
       if (renderer.isReady()) {
+        if (!emitDiagnostics) setData('radarDiagnostic', undefined);
         const drawnSeq = String(model.snapshot?.sampleSequence ?? model.snapshot?.sequence ?? '');
         if (drawnSeq !== lastDrawnSequence) {
           lastDrawnSequence = drawnSeq;

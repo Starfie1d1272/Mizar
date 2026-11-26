@@ -2,7 +2,7 @@ import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { AssetFonts, assetStyle, useAssetUrl } from './assets.js';
 import { presentationBoundaryKey } from './presentation-boundary.js';
 import type { RadarProps } from './widgets/radar/Radar.js';
-import { memo, useMemo, type CSSProperties, type ReactElement } from 'react';
+import { useMemo, type CSSProperties, type ReactElement } from 'react';
 
 import {
   HUD_WIDGET_REGISTRY,
@@ -273,7 +273,7 @@ export function GameplayHud({
   );
 }
 
-const FixedChat = memo(function FixedChat({
+function FixedChat({
   snapshot,
   placement,
   design,
@@ -292,8 +292,8 @@ const FixedChat = memo(function FixedChat({
       <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
     </div>
   );
-});
-const AutoChat = memo(function AutoChat({
+}
+function AutoChat({
   snapshot,
   resolvedPreset,
 }: {
@@ -313,4 +313,4 @@ const AutoChat = memo(function AutoChat({
       </section>
     </div>
   );
-});
+}

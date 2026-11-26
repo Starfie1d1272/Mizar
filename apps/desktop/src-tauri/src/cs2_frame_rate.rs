@@ -498,7 +498,7 @@ pub(crate) fn prepare_with_observer(
     limit: u16,
     observer: bool,
 ) -> Result<Vec<Value>, String> {
-    if ![0, 30, 60, 90, 120, 144].contains(&limit) {
+    if crate::desktop_types::FrameRateLimit::try_from(limit).is_err() {
         return Err("帧率选项无效。".into());
     }
     let directory = video.parent().ok_or("CS2 配置目录不可用。")?;

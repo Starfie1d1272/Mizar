@@ -59,6 +59,15 @@ function sampleSurfaces() {
       state.sequence = sequence;
       state.stalled = false;
     }
+    const diagnostic = element.dataset.radarDiagnostic;
+    if (diagnostic && diagnostic !== 'none') {
+      anomaly({
+        time: new Date().toISOString(),
+        kind: 'radar_diagnostic',
+        surfaceId: state.id,
+        diagnostic,
+      });
+    }
     const paused = element.dataset.radarPaused === 'true';
     const source = element.dataset.radarSource;
     const visible = document.visibilityState === 'visible' && element.getClientRects().length > 0;
@@ -92,6 +101,7 @@ function sampleSurfaces() {
       source,
       visible,
       stalled,
+      ...(diagnostic && diagnostic !== 'none' ? { diagnostic } : {}),
     });
   }
   return { observed: result, omittedSurfaces: Math.max(0, (elements?.length ?? 0) - 8) };

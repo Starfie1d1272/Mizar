@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 
+import { CS2_FRAME_RATE_OPTIONS, type Cs2FrameRateLimit } from './cs2-frame-rate-options';
 import { useCs2Status, type Cs2ConfigStatus } from './cs2-status';
 
 export function Cs2LaunchSettings() {
@@ -100,16 +101,15 @@ export function Cs2LaunchSettings() {
                   edit({
                     preferMulnx: preferences.preferMulnx ?? false,
                     qualityPreset: preferences.qualityPreset,
-                    frameRateLimit: Number(event.target.value) as Cs2ConfigStatus['frameRateLimit'],
+                    frameRateLimit: Number(event.target.value) as Cs2FrameRateLimit,
                   });
               }}
             >
-              <option value={60}>60 帧／秒（推荐）</option>
-              <option value={90}>90 帧／秒</option>
-              <option value={120}>120 帧／秒</option>
-              <option value={144}>144 帧／秒</option>
-              <option value={30}>30 帧／秒（省资源）</option>
-              <option value={0}>不限帧（可能导致雷达卡顿）</option>
+              {CS2_FRAME_RATE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.launchLabel}
+                </option>
+              ))}
             </Select>
           </div>
           {preferences?.preferMulnx ? (

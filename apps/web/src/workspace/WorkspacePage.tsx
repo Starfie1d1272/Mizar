@@ -358,13 +358,9 @@ function ObsConfidence() {
 function useLiveRadarAvailability(
   radar: ReturnType<typeof useLocalChannelClient<'radar'>>,
 ): boolean {
-  const lastRef = useRef<boolean | null>(null);
   const getSnapshot = useCallback(() => {
     const current = radar.getSnapshot();
-    const next = hasRadarViewFrame(current.state === 'live' ? current.current : null);
-    if (lastRef.current === next) return lastRef.current;
-    lastRef.current = next;
-    return next;
+    return hasRadarViewFrame(current.state === 'live' ? current.current : null);
   }, [radar]);
   return useSyncExternalStore(radar.subscribe, getSnapshot, getSnapshot);
 }

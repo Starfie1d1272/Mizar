@@ -280,8 +280,6 @@ export class WebGL2RadarRenderer {
   private instances: Float32Array;
   private capacity: number;
   private count = 0;
-  private drawCalls = 0;
-  private frameInstances = 0;
   private currentTexture: WebGLTexture | null = null;
   private currentAdditive = false;
   private disposed = false;
@@ -326,10 +324,6 @@ export class WebGL2RadarRenderer {
       this.instanceBuffer !== null &&
       !this.gl.isContextLost()
     );
-  }
-
-  getLastFrameStats(): { readonly drawCalls: number; readonly instances: number } {
-    return { drawCalls: this.drawCalls, instances: this.frameInstances };
   }
 
   initGl(): boolean {
@@ -407,8 +401,6 @@ export class WebGL2RadarRenderer {
     const gl = this.gl;
     if (this.disposed || !this.program || !this.vao || gl.isContextLost()) return;
     this.count = 0;
-    this.drawCalls = 0;
-    this.frameInstances = 0;
     this.currentTexture = null;
     this.currentAdditive = false;
 
@@ -452,8 +444,6 @@ export class WebGL2RadarRenderer {
       this.instances.subarray(0, this.count * FLOATS_PER_INSTANCE),
     );
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
-    this.drawCalls += 1;
-    this.frameInstances += this.count;
     this.count = 0;
   }
 

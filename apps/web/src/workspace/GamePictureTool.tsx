@@ -1,6 +1,10 @@
 import type { DesktopResult } from '@mizar/protocol/desktop-ipc';
 import { useState } from 'react';
 import { ControlTask } from '../debug/control-task';
+import {
+  CS2_FRAME_RATE_OPTIONS,
+  type Cs2FrameRateLimit,
+} from '../preparation/cs2-frame-rate-options';
 import { Cs2LaunchSettings } from '../preparation/Cs2LaunchSettings';
 import { Button, Panel, Select, StatusBanner } from '../ui';
 import { desktopInvoke } from './client';
@@ -13,7 +17,7 @@ type FrameRateReading = DesktopResult<'control_cs2_frame_rate'>;
 export function GamePictureTool() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [limit, setLimit] = useState<30 | 60>(60);
+  const [limit, setLimit] = useState<Cs2FrameRateLimit>(60);
   const [reading, setReading] = useState<FrameRateReading | null>(null);
   const desktop = Boolean(window.__TAURI_INTERNALS__);
   async function returnToGame() {
@@ -83,10 +87,13 @@ export function GamePictureTool() {
                   label="本次帧率上限"
                   value={limit}
                   disabled={busy}
-                  onChange={(event) => setLimit(Number(event.target.value) as 30 | 60)}
+                  onChange={(event) => setLimit(Number(event.target.value) as Cs2FrameRateLimit)}
                 >
-                  <option value={60}>60 帧／秒</option>
-                  <option value={30}>30 帧／秒</option>
+                  {CS2_FRAME_RATE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.liveLabel}
+                    </option>
+                  ))}
                 </Select>
                 <Button disabled={busy} onClick={() => void inspect('apply')}>
                   应用并核对

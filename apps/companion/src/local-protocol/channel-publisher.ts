@@ -35,8 +35,6 @@ export interface LocalChannelPublisher<
 export interface LocalChannelPublisherOptions<TSnapshot extends { readonly channelSeq: number }> {
   readonly id: string;
   readonly schema: SnapshotSchema<TSnapshot>;
-  /** Enable full Zod validation on publish (for unit/contract tests). Default false in production. */
-  readonly validateOnPublish?: boolean;
   readonly onDiagnostic?: (diagnostic: { readonly code: string }) => void;
 }
 
@@ -55,8 +53,6 @@ class DefaultLocalChannelPublisher<
   TSnapshot extends { readonly channelSeq: number },
 > implements LocalChannelPublisher<TSnapshot> {
   private readonly id: string;
-  private readonly schema: SnapshotSchema<TSnapshot>;
-  private readonly validateOnPublish: boolean;
   private readonly onDiagnostic: ((diagnostic: { readonly code: string }) => void) | undefined;
   private readonly subscribers = new Map<string, LatestWinsConsumer<TSnapshot>>();
   private current: TSnapshot | null = null;
@@ -68,29 +64,16 @@ class DefaultLocalChannelPublisher<
     if (options.id.trim().length === 0)
       throw new Error('Local channel publisher id must be non-empty');
     this.id = options.id;
-    this.schema = options.schema;
-    this.validateOnPublish = options.validateOnPublish ?? false;
+    void options.schema;
     this.onDiagnostic = options.onDiagnostic;
   }
 
   publish(snapshot: Omit<TSnapshot, 'channelSeq'>): void {
     if (this.closed) return;
-    const candidate = { ...snapshot, channelSeq: this.channelSeq + 1 } as TSnapshot;
-    let parsed: TSnapshot;
-    if (this.validateOnPublish) {
-      try {
-        parsed = this.schema.parse(candidate);
-      } catch {
-        report(this.onDiagnostic, 'schema-validation-failed');
-        return;
-      }
-    } else {
-      parsed = candidate;
-    }
-
+    const next = { ...snapshot, channelSeq: this.channelSeq + 1 } as TSnapshot;
     this.channelSeq += 1;
-    this.current = parsed;
-    for (const subscriber of this.subscribers.values()) subscriber.offer(parsed);
+    this.current = next;
+    for (const subscriber of this.subscribers.values()) subscriber.offer(next);
   }
 
   getHealth(): readonly LatestWinsConsumerHealth[] {
