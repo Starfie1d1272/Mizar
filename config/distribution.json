@@ -1,0 +1,17 @@
+{
+  "githubReleaseProxies": [
+    "https://gh-proxy.org/",
+    "https://gh-proxy.com/",
+    "https://ghproxy.net/"
+  ],
+  "probe": {
+    "sampleBytes": 262144,
+    "timeoutMs": 4000,
+    "cacheTtlMs": 21600000
+  },
+  "timeouts": {
+    "firstByteMs": 15000,
+    "stallMs": 30000,
+    "metadataMs": 15000
+  }
+}

@@ -26,7 +26,7 @@ export async function fetchPublishedResource(options: PublishedResourceOptions) 
 
 /** Installer may verify/reuse its active cache before invoking the same publication loader. */
 export async function authenticatePublishedResource(options: PublishedResourceOptions) {
-  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(600_000)]);
+  const signal = options.signal;
   const fetcher = options.fetcher ?? globalThis.fetch;
   const version = options.core.appVersion;
   const downloadResourceOriginal = createResourceOriginalDownloader();

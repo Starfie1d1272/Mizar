@@ -10,6 +10,8 @@ import { StringDecoder } from 'node:string_decoder';
 import { performance } from 'node:perf_hooks';
 import { Zip, type ZipInputFile } from 'fflate';
 
+const LEGACY_BOX_READ_TOKEN = 'b88f62e59ca365d27ccb48f55dfef3a78965341f';
+
 export interface ArchiveWorkerData {
   sources: {
     name: string;
@@ -416,7 +418,7 @@ export function runArchiveWorker(
       typeof occurrences === 'number' && Number.isFinite(occurrences) && occurrences > 0
         ? occurrences
         : 1;
-    const sanitized = cleanRaw ? event : object(redact(event));
+    const sanitized = cleanRaw ? event : object(redact(event, [LEGACY_BOX_READ_TOKEN]));
     const line =
       JSON.stringify({
         ...sanitized,
@@ -511,7 +513,7 @@ export function runArchiveWorker(
             if (source.rawAttachment) {
               for (const secret of source.secrets ?? [])
                 if (secret) line = line.split(secret).join('[redacted]');
-              line = String(redact(line)) + '\n';
+              line = String(redact(line, [LEGACY_BOX_READ_TOKEN])) + '\n';
               const lineBytes = Buffer.byteLength(line);
               if (lineBytes > ENTRY_MAX) {
                 gaps.push({
@@ -534,7 +536,7 @@ export function runArchiveWorker(
               let cleanRaw = false;
               try {
                 value = JSON.parse(line);
-                cleanRaw = !needsEvidenceSanitize(line);
+                cleanRaw = !needsEvidenceSanitize(line, [LEGACY_BOX_READ_TOKEN]);
               } catch {
                 value = {
                   evidence: { text: line },

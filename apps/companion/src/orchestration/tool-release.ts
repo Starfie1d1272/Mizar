@@ -4,8 +4,8 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { transfer } from '../distribution/transfer.js';
-import { sourceOrder, forgetSourceOrder, type SourceDiagnostic } from '../distribution/sources.js';
+import { downloadVerifiedAsset } from '../distribution/transfer.js';
+import type { DistributionSource, SourceDiagnostic } from '../distribution/sources.js';
 
 export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
 export const SEVEN_ZIP = {
@@ -80,49 +80,6 @@ export async function latestMulnxRelease(
   };
 }
 
-async function assetRequest(input: string, signal: AbortSignal, end?: number, proxy = false) {
-  const origin = new URL(input);
-  if (
-    origin.protocol !== 'https:' ||
-    origin.hostname !== 'github.com' ||
-    origin.username ||
-    origin.password ||
-    origin.port ||
-    origin.search ||
-    origin.hash ||
-    !(
-      origin.pathname.startsWith(`/${MULNX_REPOSITORY}/releases/download/`) ||
-      origin.href === SEVEN_ZIP.url
-    )
-  )
-    throw new Error('mulnx_url_forbidden');
-  const proxyUrl = `https://gh-proxy.com/${origin.href}`;
-  let current = new URL(proxy ? proxyUrl : origin.href);
-  for (let redirects = 0; redirects < 5; redirects++) {
-    const allowed =
-      current.href === origin.href ||
-      (proxy && current.href === proxyUrl) ||
-      (current.protocol === 'https:' &&
-        current.hostname === 'release-assets.githubusercontent.com' &&
-        !current.username &&
-        !current.password &&
-        !current.port &&
-        !current.hash);
-    if (!allowed) throw new Error('mulnx_url_forbidden');
-    const response = await fetch(current, {
-      redirect: 'manual',
-      signal,
-      ...(end === undefined ? {} : { headers: { Range: `bytes=0-${end}` } }),
-    });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    const location = response.headers.get('location');
-    await response.body?.cancel();
-    if (!location) throw new Error('mulnx_redirect_invalid');
-    current = new URL(location, current);
-  }
-  throw new Error('mulnx_redirect_limit');
-}
-
 export async function downloadVerified(
   url: string,
   target: string,
@@ -136,55 +93,39 @@ export async function downloadVerified(
   selectSources = false,
   report?: (diagnostic: SourceDiagnostic & { candidates: string[] }) => void,
 ) {
-  const isMulnx =
-    selectSources &&
-    expectedSize !== undefined &&
-    url.startsWith(`https://github.com/${MULNX_REPOSITORY}/releases/download/`);
-  const sources = [
-    {
-      name: 'GitHub',
-      request: (attempt: AbortSignal, end?: number) => assetRequest(url, attempt, end),
-    },
-    ...(isMulnx
-      ? [
-          {
-            name: 'GitHub 加速',
-            request: (attempt: AbortSignal, end?: number) => assetRequest(url, attempt, end, true),
-          },
-        ]
-      : []),
-    ...(mirror ? [{ name: '南大云盘', request: mirror }] : []),
-  ];
-  const key = `mulnx:${url}:${sha256}:${expectedSize ?? 0}:${sources.map((source) => source.name).join(',')}`;
-  const order = isMulnx
-    ? await sourceOrder(
-        key,
-        expectedSize,
-        signal,
-        sources.map((source) => source.request),
-        (diagnostic) => report?.({ ...diagnostic, candidates: sources.map((entry) => entry.name) }),
-      )
-    : sources.map((_, index) => index);
-  try {
-    await transfer({
-      target,
-      ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
-      maxBytes: MAX_ARCHIVE,
-      sha256,
-      integrityError: 'mulnx_download_integrity',
-      signal,
-      progress: (bytes, source) => progress?.(bytes, source, sources[order[source]!]!.name),
-      fallback: (error, source) => {
-        forgetSourceOrder(key);
-        fallback?.(error, sources[order[source]!]!.name);
-      },
-      verifying: () => verifying?.(),
-      sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
-    });
-  } catch (error) {
-    if (!signal.aborted) forgetSourceOrder(key);
-    throw error;
+  void selectSources;
+  const origin = new URL(url);
+  if (
+    origin.protocol !== 'https:' ||
+    origin.hostname !== 'github.com' ||
+    origin.username ||
+    origin.password ||
+    origin.port ||
+    origin.search ||
+    origin.hash ||
+    !(
+      origin.pathname.startsWith(`/${MULNX_REPOSITORY}/releases/download/`) ||
+      origin.href === SEVEN_ZIP.url
+    )
+  ) {
+    throw new Error('mulnx_url_forbidden');
   }
+  const extraSources: DistributionSource[] = mirror ? [{ name: '南大云盘', request: mirror }] : [];
+  await downloadVerifiedAsset({
+    origin: origin.href,
+    target,
+    ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
+    maxBytes: MAX_ARCHIVE,
+    sha256,
+    integrityError: 'mulnx_download_integrity',
+    extraSources,
+    signal,
+    cacheKey: `mulnx:${origin.href}:${sha256}:${expectedSize ?? 0}`,
+    onProgress: (bytes, source, sourceIndex) => progress?.(bytes, sourceIndex, source.name),
+    onFallback: (error, source) => fallback?.(error, source.name),
+    onVerifying: () => verifying?.(),
+    onDiagnostic: (diagnostic) => report?.(diagnostic),
+  });
 }
 
 export async function fileSha256(path: string): Promise<string> {

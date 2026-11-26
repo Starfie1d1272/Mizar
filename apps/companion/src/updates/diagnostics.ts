@@ -1,4 +1,3 @@
-import { BOX_READ_TOKEN } from './contract.js';
 import { diagnosticValue } from '../support/diagnostic-value.js';
 
 /** Fixed transport codes only; never treat arbitrary exception fields as diagnostics. */
@@ -23,7 +22,6 @@ export function diagnosticNetworkCode(value: unknown): string | undefined {
 
 export function redactDiagnosticText(value: string): string {
   const clean = value
-    .replaceAll(BOX_READ_TOKEN, '[redacted]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => {
       try {
         return new URL(url).origin + '/[redacted-url]';

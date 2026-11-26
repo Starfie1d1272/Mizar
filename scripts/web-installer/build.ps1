@@ -13,13 +13,16 @@ $exe = Join-Path $output "Mizar-v$($plan.version)-Windows-x64-WebInstaller.exe"
 if (Test-Path -LiteralPath $exe) { throw 'Refusing to replace an existing candidate' }
 $icon = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/icon.ico')).Path
 $brand = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../apps/desktop/src-tauri/icons/tray-icon.png')).Path
-$bootstrapSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Bootstrap.cs')).Path
+$distributionConfig = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../config/distribution.json')).Path
+$planSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Plan.cs')).Path
+$downloaderSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Downloader.cs')).Path
+$windowSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Window.cs')).Path
 $nsisSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'Nsis.cs')).Path
 $compilerArgs = @(
   '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu',
-  "/out:$exe", "/win32icon:$icon", "/resource:$planPath,plan.json", "/resource:$brand,brand.png",
+  "/out:$exe", "/win32icon:$icon", "/resource:$planPath,plan.json", "/resource:$brand,brand.png", "/resource:$distributionConfig,distribution.json",
   '/r:System.Net.Http.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll',
-  $bootstrapSource, $nsisSource
+  $planSource, $downloaderSource, $windowSource, $nsisSource
 )
 & $compiler @compilerArgs
 if ($LASTEXITCODE) { throw 'Formal bootstrap compilation failed' }

@@ -5,7 +5,10 @@ import { verifyAttestation } from './attestation.js';
 import type { Bundle, BundleVerifier } from 'sigstore';
 import { createTufVerifier } from '@mizar/resource-pack-contract/attestation';
 import { z } from 'zod';
-import { githubMetadata, type UpdateFetch } from './network.js';
+import { MACHINE_METADATA_MAX_BYTES } from '@mizar/resource-pack-contract/transport';
+import { DistributionHttpError, type FetchLike as UpdateFetch } from '../distribution/http.js';
+import { fetchVerifiedMetadata } from '../distribution/transfer.js';
+import { UpdateRequestError } from './diagnostics.js';
 import {
   compareVersions,
   UPDATE_REPOSITORY,
@@ -166,40 +169,81 @@ export class StableSource {
     );
     return { manifest, publication };
   }
-  private machine(version: string | undefined, signal: AbortSignal) {
+  private async fetchAndVerifyManifest(
+    version: string | undefined,
+    signal: AbortSignal,
+    verifyCarrier: (carrier: Buffer, attemptSignal: AbortSignal) => Promise<UpdateManifest>,
+  ): Promise<UpdateManifest> {
     const path = version === undefined ? 'latest/download' : `download/v${version}`;
-    return this.phase('github_metadata', signal, 30_000, (deadline) =>
-      githubMetadata(
-        `https://github.com/${UPDATE_REPOSITORY}/releases/${path}/${MACHINE_METADATA_NAME}`,
-        deadline,
-        this.fetcher,
-        this.diagnostic,
-      ),
-    );
+    const origin = `https://github.com/${UPDATE_REPOSITORY}/releases/${path}/${MACHINE_METADATA_NAME}`;
+    const began = Date.now();
+    try {
+      const manifest = await fetchVerifiedMetadata({
+        origin,
+        maxBytes: MACHINE_METADATA_MAX_BYTES,
+        signal,
+        fetcher: this.fetcher,
+        verify: verifyCarrier,
+        onDiagnostic: (stage, { index, error }) => {
+          if (stage === 'metadata_fallback') {
+            this.diagnostic?.(
+              index === 0 ? 'github_metadata_fallback' : 'proxy_metadata_failed',
+              error,
+            );
+          }
+        },
+      });
+      this.diagnostic?.('github_metadata', undefined, Date.now() - began);
+      return manifest;
+    } catch (error) {
+      const normalized = normalizeMetadataError(error);
+      this.diagnostic?.('github_metadata', normalized, Date.now() - began);
+      throw normalized;
+    }
   }
   async latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest> {
-    const carrier = await this.machine(undefined, signal);
-    const { manifest } = await this.authenticateIndex(
-      readMachineFile(carrier, 'update-index.json'),
-      signal,
-    );
-    if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
-      throw new Error('update_rollback_rejected');
-    return this.selectCore(manifest, signal, carrier);
+    return this.fetchAndVerifyManifest(undefined, signal, async (carrier, attemptSignal) => {
+      const { manifest } = await this.authenticateIndex(
+        readMachineFile(carrier, 'update-index.json'),
+        attemptSignal,
+      );
+      if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
+        throw new Error('update_rollback_rejected');
+      return this.selectCore(manifest, attemptSignal, carrier);
+    });
   }
   /** Fixed-version installers authenticate that version's original dual-signed index. */
   async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {
     if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
       throw new Error('update_version_invalid');
-    const carrier = await this.machine(version, signal);
-    const { manifest } = await this.authenticateIndex(
-      readMachineFile(carrier, 'update-index.json'),
-      signal,
-    );
-    if (manifest.version !== version) throw new Error('update_tag_mismatch');
-    return this.selectCore(manifest, signal, carrier);
+    return this.fetchAndVerifyManifest(version, signal, async (carrier, attemptSignal) => {
+      const { manifest } = await this.authenticateIndex(
+        readMachineFile(carrier, 'update-index.json'),
+        attemptSignal,
+      );
+      if (manifest.version !== version) throw new Error('update_tag_mismatch');
+      return this.selectCore(manifest, attemptSignal, carrier);
+    });
   }
 }
+function normalizeMetadataError(error: unknown): unknown {
+  const cause = error instanceof AggregateError ? error.cause : error;
+  if (cause instanceof DistributionHttpError) {
+    const wrapped = new UpdateRequestError(
+      'update_network_failed',
+      cause.source,
+      cause.status,
+      error,
+    );
+    wrapped.rateLimited = cause.rateLimited;
+    return wrapped;
+  }
+  if (cause instanceof Error && /^update_[a-z_]{1,50}$/.test(cause.message)) {
+    return cause;
+  }
+  return error;
+}
+
 export function installerUrl(manifest: UpdateManifest): string {
   return `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${manifest.version}/${manifest.installer.name}`;
 }

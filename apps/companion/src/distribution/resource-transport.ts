@@ -1,31 +1,36 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sourceOrder, forgetSourceOrder } from './sources.js';
-import { transfer } from './transfer.js';
+import { downloadVerifiedAsset, fetchVerifiedMetadata } from './transfer.js';
 import { errorEvidence } from '../updates/diagnostics.js';
-import { MACHINE_METADATA_NAME, readMachineFile } from '@mizar/resource-pack-contract/transport';
+import {
+  MACHINE_METADATA_MAX_BYTES,
+  MACHINE_METADATA_NAME,
+  readMachineFile,
+} from '@mizar/resource-pack-contract/transport';
 import {
   RESOURCE_ASSET_NAMES,
   type ResourceCatalogIdentity,
 } from '@mizar/resource-pack-contract/runtime';
-import { updateRequest, githubMetadata } from '../updates/network.js';
 
 export function logBootstrapFallback(stage: string, error: unknown) {
   process.stderr.write(`${JSON.stringify({ stage, error: errorEvidence(error) })}\n`);
 }
+
 const fixedNames = new Set(Object.values(RESOURCE_ASSET_NAMES));
-export function mirrorResourcePath(version: string, name: string) {
+
+export function validateResourceAsset(version: string, name: string) {
   if (
     !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/.test(version) ||
     !(
       fixedNames.has(name) ||
       /^Mizar-official-epl-default-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.zip$/.test(name)
     )
-  )
+  ) {
     throw new Error('resource_mirror_path_invalid');
-  return `/Resources/v${version}/${name}`;
+  }
 }
+
 // Transport only. Original canonical catalog URLs and all publisher claims stay
 // unchanged; the existing SDK authenticates the returned original bytes.
 /** A transaction-local byte cache, not an authorization or persistent trust cache. */
@@ -51,9 +56,8 @@ async function downloadResourceOriginal(
   },
   carriers: Map<string, Buffer>,
 ) {
-  mirrorResourcePath(version, name);
+  validateResourceAsset(version, name);
   if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
-  const transportName = MACHINE_METADATA_NAME;
   const extract = (bytes: Buffer) => {
     const original = readMachineFile(bytes, name);
     if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
@@ -63,20 +67,26 @@ async function downloadResourceOriginal(
   const cached = carriers.get(key);
   signal.throwIfAborted();
   if (cached) return extract(cached);
-  const remember = (bytes: Buffer) => {
-    const original = extract(bytes);
-    carriers.set(key, bytes);
-    return original;
-  };
-  const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(30000)]);
-  return remember(
-    await githubMetadata(
-      `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${transportName}`,
-      deadline,
-      fetcher,
-      logBootstrapFallback,
-    ),
-  );
+
+  return fetchVerifiedMetadata<Buffer>({
+    origin: `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${MACHINE_METADATA_NAME}`,
+    maxBytes: MACHINE_METADATA_MAX_BYTES,
+    signal,
+    fetcher,
+    verify: (bytes) => {
+      const original = extract(bytes);
+      carriers.set(key, bytes);
+      return original;
+    },
+    onDiagnostic: (stage, { index, error }) => {
+      if (stage === 'metadata_fallback') {
+        logBootstrapFallback(
+          index === 0 ? 'github_metadata_fallback' : 'proxy_metadata_failed',
+          error,
+        );
+      }
+    },
+  });
 }
 
 /** Only the already authenticated catalog identity can enter this archive transport. */
@@ -93,27 +103,8 @@ export async function downloadResourceArchive({
   fetcher?: typeof fetch;
   onProgress?: ((bytes: number) => void) | undefined;
 }) {
-  mirrorResourcePath(version, archive.name);
+  validateResourceAsset(version, archive.name);
   const origin = `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${archive.name}`;
-  const deadline = globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(300000)]);
-  const sources = [
-    {
-      name: 'GitHub',
-      request: (attempt: AbortSignal, end?: number) =>
-        updateRequest(origin, attempt, fetcher, end === undefined ? undefined : { rangeEnd: end }),
-    },
-    {
-      name: 'GitHub 加速',
-      request: (attempt: AbortSignal, end?: number) =>
-        updateRequest(
-          `https://gh-proxy.com/${origin}`,
-          attempt,
-          fetcher,
-          end === undefined ? undefined : { rangeEnd: end },
-        ),
-    },
-  ];
-  const key = `epl:${origin}:${archive.sha256}:${archive.bytes}:${sources.map((source) => source.name).join(',')}`;
   const log = (stage: string, fields: Record<string, unknown> = {}) =>
     process.stderr.write(
       `${JSON.stringify({
@@ -122,46 +113,50 @@ export async function downloadResourceArchive({
         ...fields,
       })}\n`,
     );
-  const order = await sourceOrder(
-    key,
-    archive.bytes,
-    deadline,
-    sources.map((source) => source.request),
-    ({ error, source, order, ...diagnostic }) =>
-      log('resource_sources', {
-        ...diagnostic,
-        candidates: sources.map((entry) => entry.name),
-        source: source === undefined ? undefined : sources[source]!.name,
-        order: order?.map((index) => sources[index]!.name),
-        ...(error === undefined ? {} : { error: errorEvidence(error) }),
-      }),
-  );
   const directory = await mkdtemp(join(tmpdir(), 'mizar-resource-download-'));
   const target = join(directory, 'archive.zip');
   let selected: string | undefined;
   try {
-    await transfer({
+    const result = await downloadVerifiedAsset({
+      origin,
       target,
       bytes: archive.bytes,
       sha256: archive.sha256,
-      signal: deadline,
       integrityError: 'resource_archive_integrity',
-      sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
-      progress: (bytes, index) => {
+      fetcher,
+      signal,
+      cacheKey: `epl:${origin}:${archive.sha256}:${archive.bytes}`,
+      onDiagnostic: (diagnostic) =>
+        log('resource_sources', {
+          stage: diagnostic.stage,
+          candidates: diagnostic.candidates,
+          ...(diagnostic.elapsedMs === undefined ? {} : { elapsedMs: diagnostic.elapsedMs }),
+          ...(diagnostic.status === undefined ? {} : { status: diagnostic.status }),
+          ...(diagnostic.rangeIgnored === undefined
+            ? {}
+            : { rangeIgnored: diagnostic.rangeIgnored }),
+          ...(diagnostic.cacheHit === undefined ? {} : { cacheHit: diagnostic.cacheHit }),
+          ...(diagnostic.sourceName === undefined ? {} : { source: diagnostic.sourceName }),
+          ...(diagnostic.orderNames === undefined ? {} : { order: diagnostic.orderNames }),
+          ...(diagnostic.error === undefined ? {} : { error: errorEvidence(diagnostic.error) }),
+        }),
+      onProgress: (bytes, source) => {
         onProgress?.(bytes);
-        selected = sources[order[index]!]!.name;
+        selected = source.name;
         if (bytes === 0) log('resource_downloading', { source: selected });
       },
-      verifying: () => log('resource_verifying', { source: selected }),
-      fallback: (error) => {
-        forgetSourceOrder(key);
-        log('resource_fallback', { source: selected, error: errorEvidence(error) });
+      onVerifying: (source) => {
+        selected = source.name;
+        log('resource_verifying', { source: selected });
+      },
+      onFallback: (error, source) => {
+        log('resource_fallback', { source: source.name, error: errorEvidence(error) });
       },
     });
+    selected = result.source.name;
     log('resource_verified', { source: selected, bytes: archive.bytes, sha256: archive.sha256 });
     return await readFile(target);
   } catch (error) {
-    if (!signal.aborted) forgetSourceOrder(key);
     log('resource_download_failed', { source: selected, error: errorEvidence(error) });
     throw error;
   } finally {

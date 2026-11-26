@@ -10,7 +10,6 @@ import { runArchiveWorker } from '../src/support/archive-worker.js';
 import { diagnosticEvidence, needsEvidenceSanitize } from '../src/support/diagnostic-value.js';
 import { SupportExports } from '../src/support/export-job.js';
 import { segmentMaxObservedAt } from '../src/support/retention.js';
-import { BOX_READ_TOKEN } from '../src/updates/contract.js';
 
 test('needsEvidenceSanitize fast-path matches diagnosticEvidence output on clean and sensitive events', () => {
   const cleanEvent = {
@@ -33,7 +32,7 @@ test('needsEvidenceSanitize fast-path matches diagnosticEvidence output on clean
     { ...cleanEvent, evidence: { ticket: '11111111-1111-4111-8111-111111111111' } },
     { ...cleanEvent, evidence: { url: 'rtmp://live.example.com/app/stream-secret' } },
     { ...cleanEvent, evidence: { auth: 'Bearer rh_mizar_abc123' } },
-    { ...cleanEvent, evidence: { box: BOX_READ_TOKEN } },
+    { ...cleanEvent, evidence: { authorization: 'Token sample-box-token' } },
     { ...cleanEvent, evidence: { nested: '{"token":"abc"}' } },
     { ...cleanEvent, kind: 'program_all_chat', evidence: { text: 'hello' } },
     { ...cleanEvent, evidence: { stream: { key: 'live_key' } } },
@@ -57,6 +56,14 @@ test('needsEvidenceSanitize fast-path matches diagnosticEvidence output on clean
     assert.notDeepEqual(diagnosticEvidence(item), item, `expected redaction for ${raw}`);
   }
   assert.equal(needsEvidenceSanitize('{"\u0074oken":"secret"}'), true);
+  const legacyToken = 'b88f62e59ca365d27ccb48f55dfef3a78965341f';
+  const legacyEvent = { ...cleanEvent, evidence: { note: `Token ${legacyToken}` } };
+  assert.equal(needsEvidenceSanitize(JSON.stringify(legacyEvent), [legacyToken]), true);
+  assert.equal(
+    (diagnosticEvidence(legacyEvent, [legacyToken]) as { evidence: { note: string } }).evidence
+      .note,
+    'Token [redacted]',
+  );
 });
 
 test('runArchiveWorker covers single-file failures, active partial lines, rotated gzip segments, and disk budget', async (t) => {
