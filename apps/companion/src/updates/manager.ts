@@ -524,10 +524,12 @@ export class UpdateManager {
           name: 'GitHub 加速',
           stage: 'proxy_download',
           request: (attempt: AbortSignal, end?: number) =>
-            updateRequest(`https://gh-proxy.com/${origin}`, attempt, this.options.fetcher, {
-              proxyAsset: origin,
-              ...(end === undefined ? {} : { rangeEnd: end }),
-            }),
+            updateRequest(
+              `https://gh-proxy.com/${origin}`,
+              attempt,
+              this.options.fetcher,
+              end === undefined ? undefined : { rangeEnd: end },
+            ),
         },
       ];
       const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;

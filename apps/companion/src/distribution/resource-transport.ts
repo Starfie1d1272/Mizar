@@ -105,10 +105,12 @@ export async function downloadResourceArchive({
     {
       name: 'GitHub 加速',
       request: (attempt: AbortSignal, end?: number) =>
-        updateRequest(`https://gh-proxy.com/${origin}`, attempt, fetcher, {
-          proxyAsset: origin,
-          ...(end === undefined ? {} : { rangeEnd: end }),
-        }),
+        updateRequest(
+          `https://gh-proxy.com/${origin}`,
+          attempt,
+          fetcher,
+          end === undefined ? undefined : { rangeEnd: end },
+        ),
     },
   ];
   const key = `epl:${origin}:${archive.sha256}:${archive.bytes}:${sources.map((source) => source.name).join(',')}`;
