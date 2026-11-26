@@ -739,22 +739,23 @@ export class ProjectionCoordinator {
 
   private publishAssist(assist: ObserverAssistProjection): void {
     const payload = mapObserverAssistProjection(assist);
-    if (sameAssistPayload(this.lastPublishedAssistPayload, payload)) return;
-    const previous = this.publishers.assist.getCurrent()?.channelSeq;
-    this.publishChannel('assist', () => {
-      this.publishers.assist.publish({
-        type: 'snapshot',
-        protocolVersion: LOCAL_PROTOCOL_VERSION,
-        channel: 'assist',
-        schemaVersion: ASSIST_SCHEMA_VERSION,
-        cursor: assist.cursor,
-        payload,
+    if (!sameAssistPayload(this.lastPublishedAssistPayload, payload)) {
+      const previous = this.publishers.assist.getCurrent()?.channelSeq;
+      this.publishChannel('assist', () => {
+        this.publishers.assist.publish({
+          type: 'snapshot',
+          protocolVersion: LOCAL_PROTOCOL_VERSION,
+          channel: 'assist',
+          schemaVersion: ASSIST_SCHEMA_VERSION,
+          cursor: assist.cursor,
+          payload,
+        });
+        this.lastPublishedAssistPayload = payload;
+        const current = this.publishers.assist.getCurrent();
+        if (current && current.channelSeq !== previous && assist.observer?.hints.length)
+          this.observerTimeline.recordPublished(assist.observer.hints);
       });
-      this.lastPublishedAssistPayload = payload;
-      const current = this.publishers.assist.getCurrent();
-      if (current && current.channelSeq !== previous && assist.observer?.hints.length)
-        this.observerTimeline.recordPublished(assist.observer.hints);
-    });
+    }
     if (!this.observerSettings) return;
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
