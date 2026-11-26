@@ -96,10 +96,10 @@ export interface ProbeResult {
   elapsedMs: number;
   ok: boolean;
   status?: number | undefined;
-  rangeIgnored?: boolean;
-  contentType?: string;
-  contentRange?: string | null;
-  bytesReceived?: number;
+  rangeIgnored?: boolean | undefined;
+  contentType?: string | undefined;
+  contentRange?: string | null | undefined;
+  bytesReceived?: number | undefined;
   error?: unknown;
 }
 
