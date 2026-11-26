@@ -155,6 +155,46 @@ try {
   assert.equal(verOut.code, 0);
   assert.equal(verOut.stdout.trim(), '1.12.0');
 
+  // 1b. Pre-commit apply-update digest mismatch -> fails with 12, preserves current.json, relaunches versions/<current>/Mizar.exe
+  const payloadBad = join(work, 'payloadBad');
+  await makeStubPayload(payloadBad, { version: '1.12.1', gitSha: 'b2c3d4e5'.repeat(5) });
+  const exitedHost = await new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore', windowsHide: true });
+    const pid = child.pid;
+    child.on('error', reject);
+    child.on('close', () => resolvePromise(pid));
+  });
+  const resBad = join(work, 'resBad.json');
+  const rBad = await exec(applierBin, [
+    'apply-update',
+    '--payload-dir',
+    payloadBad,
+    '--install-dir',
+    installDir,
+    '--state-root',
+    stateRoot,
+    '--expected-content-digest',
+    '0'.repeat(64),
+    '--host-pid',
+    String(exitedHost),
+    '--host-start-time',
+    '0',
+    '--no-ui',
+    '--result-file',
+    resBad,
+  ]);
+  assert.equal(rBad.code, 12, rBad.stderr);
+  const lastBad = JSON.parse(
+    await readFile(join(stateRoot, 'logs', 'last-applier-result.json'), 'utf8'),
+  );
+  assert.equal(lastBad.operation, 'apply-update');
+  assert.equal(lastBad.status, 'failed');
+  assert.equal(lastBad.code, 'payload_invalid');
+  const ptrAfterBad = JSON.parse(await readFile(join(installDir, 'current.json'), 'utf8'));
+  assert.equal(ptrAfterBad.current, '1.12.0-a1b2c3d4');
+  const badLog = await readFile(lastBad.logPath, 'utf8');
+  assert.match(badLog, /versions[\\/]1\.12\.0-a1b2c3d4[\\/]Mizar\.exe -> ok=true/);
+
   // 2. Startup crash auto-rollback (v1.12.1 exits 1 before signaling ready -> rolls back to v1.12.0)
   const payload2 = join(work, 'payload2');
   const sha2 = 'e5f6a7b8'.repeat(5);
@@ -215,6 +255,101 @@ try {
   assert.equal(r4.code, 0, r4.stderr);
   assert.equal(await readFile(userMarker, 'utf8'), 'user-data-intact');
   await assert.rejects(stat(join(installDir, 'current.json')));
+
+  // 5. Capture real Windows rendered screenshots for each applier UI state
+  const outDir = join(repoRoot, '.agent-tmp', 'update-window');
+  await mkdir(outDir, { recursive: true });
+  const captureScript = join(work, 'capture-applier-ui.ps1');
+  await writeFile(
+    captureScript,
+    `param(
+  [Parameter(Mandatory = $true)][string]$Applier,
+  [Parameter(Mandatory = $true)][string]$State,
+  [Parameter(Mandatory = $true)][string]$OutputPng
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ApplierSnap {
+  public delegate bool EnumProc(IntPtr hwnd, IntPtr param);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback, IntPtr param);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
+  public static IntPtr FindByPid(uint processId) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, p) => {
+      uint id;
+      GetWindowThreadProcessId(h, out id);
+      if (id == processId && IsWindowVisible(h)) { found = h; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+}
+'@
+[ApplierSnap]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
+$proc = Start-Process -FilePath $Applier -ArgumentList @('preview', '--state', $State, '--hold-ms', '2200') -PassThru
+try {
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  $hwnd = [IntPtr]::Zero
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $hwnd = [ApplierSnap]::FindByPid($proc.Id)
+    if ($hwnd -ne [IntPtr]::Zero) { break }
+    if ($proc.HasExited) { throw "Applier preview ($State) exited before window appeared" }
+    Start-Sleep -Milliseconds 50
+  }
+  if ($hwnd -eq [IntPtr]::Zero) { throw "Timed out waiting for applier preview window ($State)" }
+  Start-Sleep -Milliseconds 350
+  $rect = New-Object ApplierSnap+Rect
+  if (![ApplierSnap]::GetWindowRect($hwnd, [ref]$rect)) { throw "GetWindowRect failed ($State)" }
+  $w = $rect.Right - $rect.Left
+  $h = $rect.Bottom - $rect.Top
+  if ($w -lt 400 -or $h -lt 160) { throw "Unexpected applier window size ($State): \${w}x\${h}" }
+  $bmp = New-Object System.Drawing.Bitmap $w, $h
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  try {
+    $dc = $g.GetHdc()
+    try { $ok = [ApplierSnap]::PrintWindow($hwnd, $dc, 2) } finally { $g.ReleaseHdc($dc) }
+    if (!$ok) { throw "PrintWindow failed ($State)" }
+    $bmp.Save($OutputPng, [System.Drawing.Imaging.ImageFormat]::Png)
+  } finally {
+    $g.Dispose()
+    $bmp.Dispose()
+  }
+  if (!$proc.WaitForExit(5000)) { $proc.Kill() }
+  Write-Output "Captured $State (\${w}x\${h}) -> $OutputPng"
+} finally {
+  if (!$proc.HasExited) { try { $proc.Kill() } catch {} }
+}
+`,
+  );
+
+  for (const state of ['verifying', 'commit', 'error', 'uninstall']) {
+    const pngPath = join(outDir, `${state}.png`);
+    const cap = await exec('pwsh', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      captureScript,
+      '-Applier',
+      applierBin,
+      '-State',
+      state,
+      '-OutputPng',
+      pngPath,
+    ]);
+    assert.equal(cap.code, 0, `capture ${state} failed: ${cap.stdout}\n${cap.stderr}`);
+    const info = await stat(pngPath);
+    assert.ok(info.size > 1000, `captured png too small for ${state}: ${info.size}`);
+    console.log(cap.stdout.trim());
+  }
 
   console.log('All Windows v2 installer/applier/launcher checks passed.');
 } finally {

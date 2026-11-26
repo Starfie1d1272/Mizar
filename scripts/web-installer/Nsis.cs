@@ -158,9 +158,9 @@ namespace Mizar.WebInstaller {
         if (!File.Exists(applier)) throw new InstallerActionRequired("安装包缺少 mizar-applier.exe，请重新下载。", false);
 
         if (progress != null) progress.Report("installing-core");
-        string args = "install --payload-dir \"" + extractDir + "\" --install-dir \"" + destination + "\" --expected-content-digest " + plan.contentDigest + " --no-launch --result-file \"" + resultPath + "\"";
+        string args = "install --payload-dir \"" + extractDir + "\" --install-dir \"" + destination + "\" --expected-content-digest " + plan.contentDigest + " --no-ui --no-launch --result-file \"" + resultPath + "\"";
 
-        // Applier's native window owns cancellation once launched; wait for process exit before cleanup.
+        // Applier runs headless under Bootstrap.cs; wait for process exit before cleanup.
         int applyCode = await RunProcessAsync(new ProcessStartInfo {
           FileName = applier,
           Arguments = args,

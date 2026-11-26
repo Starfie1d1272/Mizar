@@ -160,7 +160,17 @@ impl Drop for DesktopMutexHandle {
     }
 }
 
-pub fn wait_host_exit(pid: u32, expected_start_time: u64, timeout: Duration) -> Result<(), String> {
+pub enum HostExitOutcome {
+    Exited,
+    Cancelled,
+}
+
+pub fn wait_host_exit(
+    pid: u32,
+    expected_start_time: u64,
+    timeout: Duration,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<HostExitOutcome, String> {
     const SYNCHRONIZE: u32 = 0x0010_0000;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     let handle = unsafe { OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -168,7 +178,7 @@ pub fn wait_host_exit(pid: u32, expected_start_time: u64, timeout: Duration) -> 
         let err = unsafe { GetLastError() };
         if err == 87 {
             // ERROR_INVALID_PARAMETER: process already exited
-            return Ok(());
+            return Ok(HostExitOutcome::Exited);
         }
         return Err(format!("无法打开宿主进程 {pid} (os={err})"));
     }
@@ -179,15 +189,27 @@ pub fn wait_host_exit(pid: u32, expected_start_time: u64, timeout: Duration) -> 
     let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
     if ok != 0 && expected_start_time != 0 && creation != expected_start_time {
         unsafe { CloseHandle(handle) };
-        return Ok(());
+        return Ok(HostExitOutcome::Exited);
     }
-    let wait = unsafe { WaitForSingleObject(handle, timeout.as_millis() as u32) };
+
+    let deadline = Instant::now() + timeout;
+    let outcome = loop {
+        if is_cancelled() {
+            break Ok(HostExitOutcome::Cancelled);
+        }
+        let wait = unsafe { WaitForSingleObject(handle, 100) };
+        if wait == 0 {
+            break Ok(HostExitOutcome::Exited);
+        }
+        if is_cancelled() {
+            break Ok(HostExitOutcome::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            break Err(format!("等待旧版 Mizar (PID {pid}) 退出超时"));
+        }
+    };
     unsafe { CloseHandle(handle) };
-    if wait == 0 {
-        Ok(())
-    } else {
-        Err(format!("等待旧版 Mizar (PID {pid}) 退出超时"))
-    }
+    outcome
 }
 
 pub fn find_running_mizar_under(install_dir: &Path) -> bool {

@@ -75,6 +75,7 @@ export class UpdateManager {
   private completedReadyCleanup = false;
   private checkFailure: unknown;
   private lastResult: string | null = null;
+  private lastResultVersion: string | null = null;
   private operationId = randomUUID();
   private failureDetails: ReturnType<typeof updateFailure>[] = [];
   private recoveryFailures: ReturnType<typeof updateFailure>[] = [];
@@ -196,6 +197,7 @@ export class UpdateManager {
     try {
       const result = z
         .object({
+          operation: z.enum(['install', 'apply-update', 'uninstall']).optional(),
           status: z.enum(['installed', 'rolled_back', 'cancelled', 'failed']),
           version: z.string().nullable().optional(),
         })
@@ -207,7 +209,10 @@ export class UpdateManager {
             ),
           ),
         );
-      this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
+      if (result.operation === 'apply-update') {
+        this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
+        this.lastResultVersion = result.version ?? null;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }
@@ -342,6 +347,7 @@ export class UpdateManager {
         this.notifiedVersion !== this.candidate.version,
       releaseUrl: this.candidate ? `${RELEASES_URL}/tag/v${this.candidate.version}` : RELEASES_URL,
       lastResult: this.lastResult,
+      lastResultVersion: this.lastResultVersion,
     };
   }
   setAutomatic(automatic: boolean) {

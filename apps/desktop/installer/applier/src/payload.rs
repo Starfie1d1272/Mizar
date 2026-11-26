@@ -26,6 +26,15 @@ fn is_hex(s: &str, len: usize) -> bool {
 }
 
 pub fn sha256_file(path: &Path) -> io::Result<String> {
+    sha256_file_with_progress(path, &|| false, &mut |_| {})
+        .and_then(|opt| opt.ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "cancelled")))
+}
+
+fn sha256_file_with_progress(
+    path: &Path,
+    is_cancelled: &dyn Fn() -> bool,
+    on_bytes: &mut dyn FnMut(u64),
+) -> io::Result<Option<String>> {
     if is_reparse_point(path)? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -36,23 +45,31 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
+        if is_cancelled() {
+            return Ok(None);
+        }
         let n = file.read(&mut buf)?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
+        on_bytes(n as u64);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    ))
 }
 
 pub fn verify_payload(
     payload_dir: &Path,
     expected_content_digest: Option<&str>,
     is_cancelled: &dyn Fn() -> bool,
+    on_version: &dyn Fn(&str),
+    on_progress: &dyn Fn(u64, u64),
 ) -> Result<ArtifactMetadata, String> {
     if is_reparse_point(payload_dir).map_err(|e| format!("无法检查载荷目录: {e}"))? {
         return Err("载荷目录不能是重解析点".into());
@@ -84,6 +101,8 @@ pub fn verify_payload(
             ));
         }
     }
+
+    on_version(&artifact.app_version);
 
     let sums_path = payload_dir.join("resources/metadata/SHA256SUMS");
     let sums_text =
@@ -131,13 +150,33 @@ pub fn verify_payload(
         }
     }
 
+    let mut total_bytes: u64 = 0;
+    for (rel, _) in &entries {
+        if let Ok(meta) = fs::symlink_metadata(payload_dir.join(rel)) {
+            total_bytes = total_bytes.saturating_add(meta.len());
+        }
+    }
+    if total_bytes > 0 {
+        on_progress(0, total_bytes);
+    }
+
+    let mut done_bytes: u64 = 0;
     let mut digest = Sha256::new();
     for (rel, expected_hash) in &entries {
         if is_cancelled() {
             return Err("cancelled".into());
         }
         let file_path = payload_dir.join(rel);
-        let actual = sha256_file(&file_path).map_err(|e| format!("校验文件失败 {rel}: {e}"))?;
+        let actual = sha256_file_with_progress(&file_path, is_cancelled, &mut |chunk| {
+            done_bytes = done_bytes.saturating_add(chunk);
+            if total_bytes > 0 {
+                on_progress(done_bytes.min(total_bytes), total_bytes);
+            }
+        })
+        .map_err(|e| format!("校验文件失败 {rel}: {e}"))?;
+        let Some(actual) = actual else {
+            return Err("cancelled".into());
+        };
         if actual != *expected_hash {
             return Err(format!("文件摘要不匹配：{rel}"));
         }
@@ -158,12 +197,18 @@ pub fn verify_payload(
         return Err("载荷整体 contentDigest 校验失败".into());
     }
 
+    if total_bytes > 0 {
+        on_progress(total_bytes, total_bytes);
+    }
     Ok(artifact)
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+fn copy_dir_recursive(src: &Path, dst: &Path, is_cancelled: &dyn Fn() -> bool) -> io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
+        if is_cancelled() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+        }
         let entry = entry?;
         let s = entry.path();
         let d = dst.join(entry.file_name());
@@ -175,7 +220,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
         }
         let meta = fs::symlink_metadata(&s)?;
         if meta.is_dir() {
-            copy_dir_recursive(&s, &d)?;
+            copy_dir_recursive(&s, &d, is_cancelled)?;
         } else {
             fs::copy(&s, &d)?;
         }
@@ -183,14 +228,14 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub fn move_or_copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
+pub fn move_or_copy_dir(src: &Path, dst: &Path, is_cancelled: &dyn Fn() -> bool) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
     match fs::rename(src, dst) {
         Ok(()) => Ok(()),
         Err(_) => {
-            copy_dir_recursive(src, dst)?;
+            copy_dir_recursive(src, dst, is_cancelled)?;
             let _ = remove_dir_safe(src);
             Ok(())
         }

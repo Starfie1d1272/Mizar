@@ -3,6 +3,9 @@ name = "mizar-applier"
 version.workspace = true
 edition.workspace = true
 
+[features]
+ui-preview = []
+
 [[bin]]
 name = "mizar-applier"
 path = "src/main.rs"

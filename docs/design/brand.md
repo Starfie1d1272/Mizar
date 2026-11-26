@@ -4,7 +4,7 @@ Mizar 是制播主体，Alcor 是观察辅助方向的名称，两者采用相�
 
 产品入口与工具使用 [apps/web/public/brand](../../apps/web/public/brand) 的既有标志，保持比例、颜色和留白，不自行重绘。桌面图标由桌面资产源管理。
 
-Windows 安装器沿用 NSIS MUI2 原生中文向导。欢迎与完成页共用双星侧图，目录、快捷方式、进度和卸载页使用同一页眉标志；深蓝黑画面、冷白双星与少量暖金来自既有品牌和 Pulse 色彩。正文使用 Windows 自带的 Microsoft YaHei UI，选择区保留原生控件、焦点与键盘操作，快捷方式页只呈现可选项。安装器专属素材在 `scripts/qualification/installer-assets` 维护，图片不嵌入中文文案，避免缩放后影响文字可读性。
+Windows 完整离线安装器沿用 NSIS MUI2 原生中文向导，联网安装器使用 WinForms 单窗界面；两者启动 `mizar-applier.exe` 时均以 `--no-ui` 运行，不叠出第二窗口。欢迎与完成页共用双星侧图，目录、快捷方式、进度和卸载页使用同一页眉标志；深蓝黑画面、冷白双星与少量暖金来自既有品牌和 Pulse 色彩。正文使用 Windows 自带的 Microsoft YaHei UI，选择区保留原生控件、焦点与键盘操作，快捷方式页只呈现可选项。安装器专属素材在 `scripts/qualification/installer-assets` 维护，图片不嵌入中文文案，避免缩放后影响文字可读性。内置一键更新与独立卸载复用 `mizar-applier.exe` 原生深色 Graphite Instrument 窗口，直接加载桌面图标与系统字体、按 PerMonitorV2 DPI 缩放，在提交切换前允许取消，提交后禁闭取消与关闭入口并在无法自动重启旧版时保留错误与日志入口。
 
 播出画面以赛事名称、队伍、选手与赛事标志为主，Mizar 只作次级制作署名。缺媒体收拢或保留合适占位，不制造队标、赞助商或赛事身份。
 

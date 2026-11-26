@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 pub const UPDATE_WRITER_MUTEX: &str = "Global\\MizarUpdateWriter";
 pub const DESKTOP_MUTEX: &str = "Global\\MizarDesktop";
 pub const UPDATE_ACTIVE_EVENT: &str = "Global\\MizarUpdateActive";
+pub const UPDATE_WINDOW_CLASS: &str = "MizarApplierProgressWindow";
 pub const UPDATE_WINDOW_TITLE: &str = "Mizar 应用更新";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -263,8 +264,8 @@ pub fn focus_update_window() -> bool {
         fn SetForegroundWindow(hwnd: isize) -> i32;
         fn FlashWindowEx(info: *const FlashInfo) -> i32;
     }
-    let title = to_wide(UPDATE_WINDOW_TITLE);
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    let class_name = to_wide(UPDATE_WINDOW_CLASS);
+    let hwnd = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
     if hwnd == 0 {
         return false;
     }

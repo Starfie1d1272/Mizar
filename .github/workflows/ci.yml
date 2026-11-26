@@ -150,6 +150,8 @@ jobs:
         run: cargo build --profile ci --manifest-path apps/desktop/installer/Cargo.toml
       - if: steps.select.outputs.native == 'true'
         run: cargo clippy --profile ci --manifest-path apps/desktop/installer/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
+      - if: steps.select.outputs.native == 'true'
+        run: cargo check --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
       - name: Save Cargo caches on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.select.outputs.native == 'true'
         uses: ./.github/actions/save-cargo-cache
@@ -172,6 +174,8 @@ jobs:
         with:
           runtime: node@24
           install: false
+      - name: Build installer binaries
+        run: cargo build --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
       - name: Verify native update and recovery
         shell: pwsh
         run: |
