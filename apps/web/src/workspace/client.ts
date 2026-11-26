@@ -15,13 +15,26 @@ import {
 } from '@mizar/protocol/program-scenes';
 
 const PROGRAM_SCENE_COMMAND_TIMEOUT_MS = 12_000;
+const PROGRAM_SCENE_POLL_VISIBLE_MS = 250;
+const PROGRAM_SCENE_POLL_HIDDEN_MS = 2_000;
 
 export function useProgramScenes(): ProgramSceneState | null {
   const [state, setState] = useState<ProgramSceneState | null>(null);
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    const clearScheduled = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
     async function poll() {
+      if (!active || inFlight) return;
+      clearScheduled();
+      inFlight = true;
       try {
         const response = await fetch('/local/v1/program-scenes', {
           cache: 'no-store',
@@ -33,13 +46,32 @@ export function useProgramScenes(): ProgramSceneState | null {
       } catch {
         if (active) setState(null);
       } finally {
-        if (active) timer = setTimeout(() => void poll(), 250);
+        inFlight = false;
+        if (active) {
+          timer = setTimeout(
+            () => void poll(),
+            isHidden() ? PROGRAM_SCENE_POLL_HIDDEN_MS : PROGRAM_SCENE_POLL_VISIBLE_MS,
+          );
+        }
       }
+    }
+    const onVisibilityChange = () => {
+      if (!active) return;
+      if (!isHidden()) {
+        clearScheduled();
+        void poll();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
     }
     void poll();
     return () => {
       active = false;
-      clearTimeout(timer);
+      clearScheduled();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
     };
   }, []);
   return state;

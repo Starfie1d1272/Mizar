@@ -14,7 +14,7 @@ import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
 import type { ObserverRuntimeView } from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { PROGRAM_SCENES } from '@mizar/protocol/program-scenes';
 import type { ContextEnvelope } from '@mizar/core/match-context';
 import type { MatchDocumentV1 } from '@mizar/protocol/context';
@@ -59,10 +59,8 @@ import {
   useWorkspaceExitStatus,
   workspaceExitLabel,
 } from '../preparation/cs2-status';
-import { ScenePreviewViewport } from '../preparation/ScenePreviewViewport';
+import { NextSceneCard } from './NextSceneCard';
 import './workspace.css';
-
-const previewSettled = () => {};
 
 async function openPreparation(path: string) {
   if (window.__TAURI_INTERNALS__) {
@@ -570,14 +568,6 @@ function WorkspaceDockContent() {
   };
   const mode = sceneState?.director?.mode;
   const connected = obs?.connection === 'connected';
-  const next = PROGRAM_SCENES.find((scene) => scene.id === sceneState?.director?.next);
-  const nextFrame = useMemo(
-    () =>
-      mode === 'auto' && next
-        ? { key: next.id, scene: next.id, src: next.path, immediate: true }
-        : null,
-    [next, mode],
-  );
   return (
     <main
       className="workspace-dock mizar-surface"
@@ -653,24 +643,10 @@ function WorkspaceDockContent() {
               <option value="gameplay">游戏画面</option>
             </Select>
           ) : null}
-          {nextFrame ? <ScenePreviewViewport frame={nextFrame} onSettled={previewSettled} /> : null}
-          <div>
-            <small>{mode === 'manual' || mode === 'blocked' ? '自动推进已暂停' : '下一场景'}</small>
-            <strong>
-              {mode === 'manual'
-                ? '恢复自动后继续编排'
-                : mode === 'blocked'
-                  ? '处理问题后恢复自动'
-                  : (next?.title ??
-                    (sceneState?.director?.nextStatus === 'complete' ? '本场结束' : '待确认'))}
-            </strong>
-            {mode === 'auto' && sceneState?.director?.nextReason ? (
-              <small>{sceneState.director.nextReason}</small>
-            ) : null}
-            {mode === 'blocked' && sceneState?.director?.reason ? (
-              <small>{sceneState.director.reason}</small>
-            ) : null}
-          </div>
+          <NextSceneCard
+            director={sceneState?.director}
+            bpActive={Boolean(bp && bp.state !== 'hidden')}
+          />
         </div>
       </section>
       <section className="workspace-spectator" aria-label="观战控制">

@@ -13,6 +13,7 @@ import { nativeSnapshot } from '../debug/control-journal';
 import { desktopInvoke, useProgramScenes } from '../workspace/client';
 import { ProgramCueRendererBridge } from './ProgramCueRendererBridge';
 import { ProgramPage } from './ProgramPage';
+import { useProgramSurfaceActivity } from './useProgramSurfaceActivity';
 
 export function ProgramRoute() {
   const scenes = useProgramScenes();
@@ -22,14 +23,6 @@ export function ProgramRoute() {
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, []);
-  const radarClient = useLocalChannelClient('radar');
-  const radarSource = useRadarViewSource(radarClient);
-  const programClient = useLocalChannelClient('program');
-  const programConnection = useSyncExternalStore(
-    programClient.subscribe,
-    programClient.getSnapshot,
-    programClient.getSnapshot,
-  );
   const useCompanionConfig =
     import.meta.env.VITE_VISUAL_FIXTURES !== '1' ||
     new URLSearchParams(window.location.search).get('hud-config') === 'companion';
@@ -39,15 +32,89 @@ export function ProgramRoute() {
   );
   const activeHud = display.current?.hud.renderer === 'native' ? display.current.hud : null;
   const selectedHud = activeHud?.config ?? hudConfig.current;
-  const cueClient = useMemo(
-    () =>
-      createProgramCueClient({
-        getProgramSnapshot: () => programClient.getSnapshot().current,
-      }),
-    [programClient],
+
+  const desktop =
+    window.__TAURI_INTERNALS__ !== undefined &&
+    new URLSearchParams(window.location.search).get('host') === 'desktop';
+  const surfaceActive = useProgramSurfaceActivity({
+    sceneId: 'gameplay',
+    scenes,
+    desktop,
+  });
+  const policyRead = useLocalReadWithTime<OverlayPolicy>(
+    desktop ? '/local/v1/desktop-overlay' : null,
+    desktop ? 1000 : 60000,
   );
+  const [stablePolicy, setStablePolicy] = useState<OverlayPolicy | null>(null);
+  const nextPolicy = policyRead.value;
+  if (
+    nextPolicy === null
+      ? stablePolicy !== null
+      : stablePolicy === null ||
+        stablePolicy.revision !== nextPolicy.revision ||
+        stablePolicy.enabled !== nextPolicy.enabled
+  ) {
+    setStablePolicy(nextPolicy);
+  }
+  const resolved = useMemo(
+    () =>
+      desktop
+        ? {
+            ...selectedHud,
+            layout: {
+              ...selectedHud.layout,
+              widgets: Object.fromEntries(
+                Object.entries(selectedHud.layout.widgets).map(([id, placement]) => [
+                  id,
+                  {
+                    ...placement,
+                    visible: desktopWidgetVisible(stablePolicy, id, placement.visible),
+                  },
+                ]),
+              ) as typeof selectedHud.layout.widgets,
+            },
+          }
+        : selectedHud,
+    [desktop, selectedHud, stablePolicy],
+  );
+  const overlays = useMemo(
+    () =>
+      activeHud && desktop && (!stablePolicy || !overlayGroups(stablePolicy).hud)
+        ? {
+            pause: { ...activeHud.overlays.pause, enabled: false },
+            chat: { ...activeHud.overlays.chat, enabled: false },
+          }
+        : activeHud?.overlays,
+    [activeHud, desktop, stablePolicy],
+  );
+
+  const displayValid = !(display.status === 'unsupported' && display.current === null);
+  const needRadar = surfaceActive && displayValid && resolved.layout.widgets.radar.visible === true;
+  const hasNonRadarWidget = Object.entries(resolved.layout.widgets).some(
+    ([id, placement]) => id !== 'radar' && placement.visible,
+  );
+  const hasEnabledOverlay = overlays?.pause.enabled === true || overlays?.chat.enabled === true;
+  const needGg = scenes?.active === 'gameplay' && (scenes.director?.gg?.remainingMs ?? 0) > 0;
+  const needProgram =
+    surfaceActive && displayValid && (hasNonRadarWidget || hasEnabledOverlay || needGg);
+
+  const radarClient = useLocalChannelClient('radar', needRadar);
+  const radarSource = useRadarViewSource(radarClient, needRadar);
+  const programClient = useLocalChannelClient('program', needProgram);
+  const programConnection = useSyncExternalStore(
+    programClient.subscribe,
+    programClient.getSnapshot,
+    programClient.getSnapshot,
+  );
+  const cueClient = useMemo(() => {
+    void needProgram;
+    return createProgramCueClient({
+      getProgramSnapshot: () => programClient.getSnapshot().current,
+    });
+  }, [programClient, needProgram]);
   const cueDisposal = useRef<{ client: typeof cueClient; timer: number } | null>(null);
   useEffect(() => {
+    if (!needProgram) return;
     if (cueDisposal.current?.client === cueClient) {
       window.clearTimeout(cueDisposal.current.timer);
       cueDisposal.current = null;
@@ -65,16 +132,8 @@ export function ProgramRoute() {
       }, 0);
       cueDisposal.current = { client: cueClient, timer };
     };
-  }, [cueClient, programClient]);
+  }, [cueClient, programClient, needProgram]);
 
-  const desktop =
-    window.__TAURI_INTERNALS__ !== undefined &&
-    new URLSearchParams(window.location.search).get('host') === 'desktop';
-  const policyRead = useLocalReadWithTime<OverlayPolicy>(
-    desktop ? '/local/v1/desktop-overlay' : null,
-    desktop ? 1000 : 60000,
-  );
-  const policy = policyRead.value;
   const [documentId, setDocumentId] = useState(window.__MIZAR_OVERLAY_DOCUMENT__);
   useEffect(() => {
     const update = () => setDocumentId(window.__MIZAR_OVERLAY_DOCUMENT__);
@@ -101,8 +160,8 @@ export function ProgramRoute() {
         overlayGeneration: desktop ? (window.__MIZAR_OVERLAY_GENERATION__ ?? null) : null,
         overlayDocument: desktop ? (documentId ?? null) : null,
         policyRead: desktop ? policyRead.status : 'not_applicable',
-        policyRevision: policy?.revision ?? null,
-        policyEnabled: policy?.enabled ?? null,
+        policyRevision: stablePolicy?.revision ?? null,
+        policyEnabled: stablePolicy?.enabled ?? null,
         displayStatus: display.status,
         displaySource: display.current
           ? 'broadcast_display'
@@ -126,36 +185,12 @@ export function ProgramRoute() {
     desktop,
     documentId,
     policyRead.status,
-    policy?.revision,
-    policy?.enabled,
+    stablePolicy?.revision,
+    stablePolicy?.enabled,
     display,
     hudConfig.status,
     hudConfig.activeRevision,
   ]);
-  const resolved = desktop
-    ? {
-        ...selectedHud,
-        layout: {
-          ...selectedHud.layout,
-          widgets: Object.fromEntries(
-            Object.entries(selectedHud.layout.widgets).map(([id, placement]) => [
-              id,
-              {
-                ...placement,
-                visible: desktopWidgetVisible(policy, id, placement.visible),
-              },
-            ]),
-          ) as typeof selectedHud.layout.widgets,
-        },
-      }
-    : selectedHud;
-  const overlays =
-    activeHud && desktop && (!policy || !overlayGroups(policy).hud)
-      ? {
-          pause: { ...activeHud.overlays.pause, enabled: false },
-          chat: { ...activeHud.overlays.chat, enabled: false },
-        }
-      : activeHud?.overlays;
   const activeSnapshot = programConnection.current;
 
   const program = (

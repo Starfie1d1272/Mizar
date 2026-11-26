@@ -20,6 +20,9 @@ function createRadarViewSource(client: LocalChannelClient<'radar'>): RadarViewSo
 }
 
 /** Adapt the local channel at the host boundary; views consume only radar frames. */
-export function useRadarViewSource(client: LocalChannelClient<'radar'>): RadarViewSource {
-  return useMemo(() => createRadarViewSource(client), [client]);
+export function useRadarViewSource(
+  client: LocalChannelClient<'radar'>,
+  enabled = true,
+): RadarViewSource | undefined {
+  return useMemo(() => (enabled ? createRadarViewSource(client) : undefined), [client, enabled]);
 }
