@@ -167,12 +167,39 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
     expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 1);
     expect(operatorPub.getCurrent()!.payload.runtime.lastAccepted?.receiveSequence).toBe(6);
 
-    // CSTV source health change publishes operator immediately
+    // CSTV source control state change publishes operator immediately
     now = 2150;
     lookaheadHealth = { role: 'lookahead', state: 'live', generation: 1, mapName: 'de_ancient' };
     for (const listener of healthListeners) listener();
     expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 2);
     expect(operatorPub.getCurrent()!.payload.sources.cstvLookahead.state).toBe('live');
+
+    // CSTV cursor/event progress within 1000ms throttles broadcast while updating getCurrent()
+    now = 2160;
+    lookaheadHealth = {
+      ...lookaheadHealth,
+      tailTick: 100,
+      lastEventSequence: 10,
+      lastReceiveMonotonicMs: 2160,
+    };
+    for (const listener of healthListeners) listener();
+    now = 2170;
+    lookaheadHealth = {
+      ...lookaheadHealth,
+      tailTick: 200,
+      lastEventSequence: 11,
+      lastReceiveMonotonicMs: 2170,
+    };
+    for (const listener of healthListeners) listener();
+    expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 2);
+    expect(coordinator.getCurrent().operator.sources.cstvLookahead.lastEventSequence).toBe(11);
+
+    // CSTV control state change (mapName) within 1000ms publishes operator immediately
+    now = 2180;
+    lookaheadHealth = { ...lookaheadHealth, mapName: 'de_mirage' };
+    for (const listener of healthListeners) listener();
+    expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 3);
+    expect(coordinator.getCurrent().operator.sources.cstvLookahead.mapName).toBe('de_mirage');
 
     // Match context binding change publishes operator immediately
     now = 2200;
@@ -223,7 +250,7 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
       },
       committed,
     );
-    expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 3);
+    expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 4);
     expect(operatorPub.getCurrent()!.payload.matchContext.summary?.matchId).toBe('match-1');
 
     await coordinator.close();

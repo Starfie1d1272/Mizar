@@ -437,43 +437,7 @@ export class ProjectionCoordinator {
           report(this.onDiagnostic, 'presentation-projection-failed');
         }
       }
-      const operatorSignal = [
-        runtimeView.cursor.producerInstanceId,
-        runtimeView.cursor.liveSessionId ?? '',
-        runtimeView.cursor.programSourceGeneration,
-        runtimeView.cursor.mapEpoch,
-        telemetryFreshness,
-        runtimeView.telemetry?.telemetry.map?.name ?? '',
-        runtimeSnapshot.lastDisposition?.kind ?? '',
-        runtimeSnapshot.lastDisposition?.reason ?? '',
-        runtimeSnapshot.recentTransitions.length,
-        runtimeSnapshot.recentTransitions.at(-1)?.runtimeSeq ?? '',
-        this.contextBinding?.context.matchId ?? '',
-        this.contextBinding?.freshness ?? '',
-        runtimeSnapshot.seriesProgress?.bindingState ?? '',
-        runtimeSnapshot.seriesProgress?.score.a ?? '',
-        runtimeSnapshot.seriesProgress?.score.b ?? '',
-        runtimeSnapshot.seriesProgress?.currentMapOrder ?? '',
-        identity.state,
-        identity.players.length,
-        identity.sideMapping.a,
-        identity.sideMapping.b,
-        activeLineup.state,
-        activeLineup.ct.length,
-        activeLineup.t.length,
-        activeLineup.extras.length,
-      ].join('|');
-      const shouldPublishOperator =
-        forceOperator ||
-        this.lastOperatorPublishMs === undefined ||
-        operatorSignal !== this.lastOperatorSignal ||
-        nowMonotonicMs < this.lastOperatorPublishMs ||
-        nowMonotonicMs - this.lastOperatorPublishMs >= OPERATOR_HEARTBEAT_THROTTLE_MS;
-      this.publish(gameplay, radar, operator, assist, shouldPublishOperator);
-      if (shouldPublishOperator) {
-        this.lastOperatorPublishMs = nowMonotonicMs;
-        this.lastOperatorSignal = operatorSignal;
-      }
+      this.publish(gameplay, radar, operator, assist, nowMonotonicMs, forceOperator);
       this.lastPublishedProgram = gameplay;
       try {
         this.onProjection?.(this.current);
@@ -610,7 +574,8 @@ export class ProjectionCoordinator {
     radar: RadarFrame,
     operator: OperatorProjection,
     assist: ObserverAssistProjection,
-    shouldPublishOperator: boolean,
+    nowMonotonicMs: number,
+    forceOperator: boolean,
   ): void {
     this.publishChannel('program', () =>
       this.publishers.program.publish({
@@ -637,7 +602,7 @@ export class ProjectionCoordinator {
         payload: mapRadarFrame(radar),
       }),
     );
-    if (shouldPublishOperator) this.publishOperator(operator);
+    this.publishOperatorIfDue(operator, nowMonotonicMs, forceOperator);
     this.publishAssist(assist);
   }
 
@@ -716,12 +681,65 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
       });
       this.current = { ...this.current, operator };
-      this.publishOperator(operator);
-      this.lastOperatorPublishMs = nowMonotonicMs;
+      this.publishOperatorIfDue(operator, nowMonotonicMs);
       return this.current;
     } finally {
       this.refreshing = false;
     }
+  }
+
+  private publishOperatorIfDue(
+    operator: OperatorProjection,
+    nowMonotonicMs: number,
+    force = false,
+  ): void {
+    const signal = [
+      operator.cursor.producerInstanceId,
+      operator.cursor.liveSessionId ?? '',
+      operator.cursor.programSourceGeneration,
+      operator.cursor.mapEpoch,
+      operator.runtime.telemetryFreshness,
+      operator.runtime.mapName ?? '',
+      operator.runtime.lastDisposition?.kind ?? '',
+      operator.runtime.lastDisposition?.reason ?? '',
+      operator.runtime.recentTransitions.length,
+      operator.runtime.recentTransitions.at(-1)?.runtimeSeq ?? '',
+      operator.matchContext.state,
+      operator.matchContext.summary?.matchId ?? '',
+      operator.matchContext.freshness,
+      operator.seriesProgress?.bindingState ?? '',
+      operator.seriesProgress?.score.a ?? '',
+      operator.seriesProgress?.score.b ?? '',
+      operator.seriesProgress?.currentMapOrder ?? '',
+      operator.identity.state,
+      operator.identity.resolvedCount,
+      operator.identity.sideMapping.a,
+      operator.identity.sideMapping.b,
+      operator.activeLineup.state,
+      operator.activeLineup.ctCount,
+      operator.activeLineup.tCount,
+      operator.activeLineup.extras.length,
+      operator.sources.cstvProgram.state,
+      operator.sources.cstvProgram.mapName ?? '',
+      operator.sources.cstvProgram.generation,
+      operator.sources.cstvProgram.lastErrorCode ?? '',
+      operator.sources.cstvLookahead.state,
+      operator.sources.cstvLookahead.mapName ?? '',
+      operator.sources.cstvLookahead.generation,
+      operator.sources.cstvLookahead.lastErrorCode ?? '',
+    ].join('|');
+    if (
+      !force &&
+      this.lastOperatorPublishMs !== undefined &&
+      signal === this.lastOperatorSignal &&
+      nowMonotonicMs >= this.lastOperatorPublishMs &&
+      nowMonotonicMs - this.lastOperatorPublishMs < OPERATOR_HEARTBEAT_THROTTLE_MS
+    ) {
+      return;
+    }
+    this.publishOperator(operator);
+    this.lastOperatorPublishMs = nowMonotonicMs;
+    this.lastOperatorSignal = signal;
   }
 
   private publishOperator(operator: OperatorProjection): void {
