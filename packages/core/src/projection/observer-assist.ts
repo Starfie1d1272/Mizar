@@ -50,7 +50,7 @@ interface BufferedKill {
 
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
-  private sessionEpoch = 0;
+  private nextHintId = 0;
   private currentContext: {
     key: string;
     match: string;
@@ -117,7 +117,6 @@ export class ObserverHintTimeline {
     if (this.lastReset.reason !== reason || this.kills.length)
       this.lastReset = { reason, atMonotonicMs: now };
     this.kills = [];
-    this.sessionEpoch++;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
@@ -137,7 +136,7 @@ export class ObserverHintTimeline {
     this.acceptedDeaths++;
     if (event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
     this.kills.push({
-      id: `${this.sessionEpoch}:${event.cursor.generation}:${event.cursor.sequence}`,
+      id: String(++this.nextHintId),
       event,
       sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
       published: false,

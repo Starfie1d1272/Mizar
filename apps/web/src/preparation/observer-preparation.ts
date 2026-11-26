@@ -79,9 +79,7 @@ export type ObserverRuntimeView = {
 export function observerNeedsRecovery(view: ObserverRuntimeView) {
   if (view.error || view.failed || view.health.state === 'failed') return true;
   if (view.stopReason) return ['lease-expired', 'host-invalid'].includes(view.stopReason);
-  return (
-    ['stopped', 'ended'].includes(view.health.state) && view.terminal?.reason !== 'source-hltv-stop'
-  );
+  return view.health.state === 'stopped';
 }
 export function observerFailureReason(view: ObserverRuntimeView) {
   if (!view.failed && view.stopReason === 'lease-expired')
@@ -95,16 +93,11 @@ export function observerFailureReason(view: ObserverRuntimeView) {
     code === 'connection-timeout'
   )
     return '提前提示连接超时，请核对地址与服务器状态。';
-  if (
-    code === 'native-auth-failed' ||
-    code === 'ticket-rejected' ||
-    code === 'steam-ticket-failed' ||
-    code?.includes('ticket') ||
-    code?.includes('auth')
-  )
+  if (code === 'native-authentication-failed')
     return 'GoTV 观战认证未通过，请确认 Steam 登录状态及服务器密码后重试。';
-  if (code === 'untrusted-node' || code?.includes('untrusted'))
-    return '服务器拒绝了当前节点连接，请核对白名单或网络环境后重试。';
+  if (code === 'native-ticket-failed')
+    return 'GoTV 观战票据获取失败，请确认 Steam 登录状态并联网后重试。';
+  if (code === 'native-untrusted-peer') return '连接未通过安全校验，请核对服务器地址后重试。';
   if (code === 'source-hltv-stop') return '服务器已结束本次观战连接。';
   if (code === 'native-start-failed' && view.terminal?.nativeBootCode === 5)
     return 'Steam 当前未连接在线服务，请确认 Steam 已登录并联网后重试提前提示。';

@@ -91,7 +91,7 @@ it('displays lookahead hints with local residence compensation during lead windo
     waitingReason: null,
     hints: [
       {
-        id: '0:1:1',
+        id: '1',
         remainingSeconds: 4.5,
         attacker: { name: 'Player 0', observerSlot: 0 },
         victim: { name: 'Player 1', observerSlot: 1 },
@@ -118,7 +118,7 @@ it('continues showing cached hints when early source disconnects, fails, or ends
   ]) {
     expect(timeline.project(program(116500), settings, 116500, source).observer).toMatchObject({
       state: 'ready',
-      hints: [{ id: '0:1:1', remainingSeconds: 4.5 }],
+      hints: [{ id: '1', remainingSeconds: 4.5 }],
     });
   }
 });
@@ -134,10 +134,10 @@ it('retains cached kills across same-map reconnect and accepts new kills', () =>
 
   expect(
     timeline.project(program(116500), settings, 116500, reconnected).observer?.hints,
-  ).toMatchObject([{ id: '0:1:1' }]);
+  ).toMatchObject([{ id: '1' }]);
   expect(
     timeline.project(program(121500), settings, 121500, reconnected).observer?.hints,
-  ).toMatchObject([{ id: '0:2:1' }]);
+  ).toMatchObject([{ id: '2' }]);
 });
 
 it('relaxes 10-player requirement when attacker and victim are matched', () => {
@@ -161,7 +161,7 @@ it('relaxes 10-player requirement when attacker and victim are matched', () => {
     ).observer?.hints,
   ).toEqual([
     {
-      id: '0:1:1',
+      id: '1',
       remainingSeconds: 4.5,
       attacker: { name: 'Player 0', observerSlot: null },
       victim: { name: 'Player 1', observerSlot: null },
@@ -194,7 +194,7 @@ it('retains kill when player is temporarily missing and accepts lower generation
 
   // Player reappears on next frame -> hint is displayed
   expect(timeline.project(program(116600), settings, 116600, early).observer?.hints).toMatchObject([
-    { id: '0:5:20' },
+    { id: '1' },
   ]);
 
   // Switch to map 2 with a fresh observer process starting at generation 1, sequence 1
@@ -207,7 +207,7 @@ it('retains kill when player is temporarily missing and accepts lower generation
       233000,
       { connected: true, fresh: true, sameMap: true, generation: 1 },
     ).observer?.hints,
-  ).toMatchObject([{ id: '1:1:1' }]);
+  ).toMatchObject([{ id: '2' }]);
 });
 
 it('hides hints when disabled or when program match is paused', () => {
