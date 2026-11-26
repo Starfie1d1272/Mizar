@@ -11,16 +11,9 @@ import {
 
 const OFFICIAL_METADATA_TIMEOUT_MS = 8_000;
 
-export interface FormattedSourceDiagnostic {
-  stage: SourceDiagnostic['stage'];
+export type FormattedSourceDiagnostic = SourceDiagnostic & {
   candidates: string[];
-  source?: string;
-  order?: string[];
-  elapsedMs?: number;
-  status?: number | undefined;
-  rangeIgnored?: boolean;
-  error?: unknown;
-}
+};
 
 /** Download each authenticated source to a fresh file and verify every byte before returning. */
 export async function transfer(options: {
@@ -30,16 +23,16 @@ export async function transfer(options: {
   sha256: string;
   integrityError?: string;
   signal: AbortSignal;
-  sources: Array<(signal: AbortSignal) => Promise<Response>>;
-  progress?: (bytes: number, source: number) => void;
-  verifying?: () => void;
-  fallback?: (error: unknown, source: number) => void;
-}): Promise<{ sourceIndex: number; bytes: number }> {
+  sources: readonly DistributionSource[];
+  progress?: (bytes: number, source: DistributionSource, index: number) => void;
+  verifying?: (source: DistributionSource) => void;
+  fallback?: (error: unknown, source: DistributionSource, index: number) => void;
+}): Promise<{ source: DistributionSource; bytes: number }> {
   const { firstByteMs, stallMs } = getDistributionConfig().timeouts;
   let lastError: unknown;
   for (const [index, source] of options.sources.entries()) {
     options.signal.throwIfAborted();
-    options.progress?.(0, index);
+    options.progress?.(0, source, index);
     const timeout = new AbortController();
     const signal = AbortSignal.any([options.signal, timeout.signal]);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -54,7 +47,7 @@ export async function transfer(options: {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       arm(firstByteMs);
-      response = await source(signal);
+      response = await source.request(signal);
       if (!response.ok || !response.body) throw new Error(`transfer_http_${response.status}`);
       const length = response.headers.get('content-length');
       if (
@@ -91,10 +84,10 @@ export async function transfer(options: {
           localError = true;
           throw error;
         }
-        options.progress?.(bytes, index);
+        options.progress?.(bytes, source, index);
         arm(stallMs);
       }
-      options.verifying?.();
+      options.verifying?.(source);
       if (
         (options.bytes !== undefined && bytes !== options.bytes) ||
         hash.digest('hex') !== options.sha256
@@ -110,7 +103,7 @@ export async function transfer(options: {
         localError = true;
         throw error;
       }
-      return { sourceIndex: index, bytes };
+      return { source, bytes };
     } catch (error) {
       lastError = error;
       if (file) {
@@ -130,7 +123,7 @@ export async function transfer(options: {
       }
       options.signal.throwIfAborted();
       if (localError || index === options.sources.length - 1) throw lastError;
-      options.fallback?.(lastError, index);
+      options.fallback?.(lastError, source, index);
     } finally {
       clearTimeout(timer);
       if (reader) await reader.cancel().catch(() => undefined);
@@ -165,45 +158,25 @@ export async function downloadVerifiedAsset(
     options.fetcher,
   );
   const candidates = sources.map((entry) => entry.name);
-  const shouldProbe = options.bytes !== undefined && sources.length > 1;
-  const order = shouldProbe
-    ? await sourceOrder(
-        options.bytes!,
-        options.signal,
-        sources.map((s) => s.request),
-        ({ sourceIndex, orderIndices, ...rest }) =>
-          options.onDiagnostic?.({
-            ...rest,
-            candidates,
-            ...(sourceIndex === undefined ? {} : { source: sources[sourceIndex]!.name }),
-            ...(orderIndices === undefined
-              ? {}
-              : { order: orderIndices.map((idx) => sources[idx]!.name) }),
-          }),
-      )
-    : sources.map((_, idx) => idx);
+  const orderedSources =
+    options.bytes !== undefined && sources.length > 1
+      ? await sourceOrder(options.bytes, options.signal, sources, (diagnostic) =>
+          options.onDiagnostic?.({ ...diagnostic, candidates }),
+        )
+      : sources;
 
-  let currentSource = sources[order[0]!]!;
-  const result = await transfer({
+  return transfer({
     target: options.target,
     ...(options.bytes === undefined ? {} : { bytes: options.bytes }),
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     sha256: options.sha256,
     ...(options.integrityError === undefined ? {} : { integrityError: options.integrityError }),
     signal: options.signal,
-    sources: order.map((idx) => (attempt) => sources[idx]!.request(attempt)),
-    progress: (bytes, orderedIndex) => {
-      currentSource = sources[order[orderedIndex]!]!;
-      options.onProgress?.(bytes, currentSource, orderedIndex);
-    },
-    verifying: () => {
-      options.onVerifying?.(currentSource);
-    },
-    fallback: (error, orderedIndex) => {
-      options.onFallback?.(error, sources[order[orderedIndex]!]!, orderedIndex);
-    },
+    sources: orderedSources,
+    ...(options.onProgress === undefined ? {} : { progress: options.onProgress }),
+    ...(options.onVerifying === undefined ? {} : { verifying: options.onVerifying }),
+    ...(options.onFallback === undefined ? {} : { fallback: options.onFallback }),
   });
-  return { source: sources[order[result.sourceIndex]!]!, bytes: result.bytes };
 }
 
 export interface FetchVerifiedMetadataOptions<T> {

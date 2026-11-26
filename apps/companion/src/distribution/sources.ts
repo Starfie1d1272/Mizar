@@ -83,16 +83,15 @@ export function buildGitHubReleaseSources(
 
 export type SourceDiagnostic = {
   stage: 'probe' | 'selection';
-  sourceIndex?: number;
+  source?: string;
+  order?: string[];
   elapsedMs?: number;
   status?: number | undefined;
   rangeIgnored?: boolean;
   error?: unknown;
-  orderIndices?: number[];
 };
 
 export interface ProbeResult {
-  index: number;
   elapsedMs: number;
   ok: boolean;
   status?: number | undefined;
@@ -105,10 +104,9 @@ export interface ProbeResult {
 
 /** Probe a single candidate source with a bounded Range prefix. */
 export async function probeSource(
-  index: number,
   expectedBytes: number,
   signal: AbortSignal,
-  probe: (signal: AbortSignal, end: number) => Promise<Response>,
+  source: DistributionSource,
   report?: (diagnostic: SourceDiagnostic) => void,
 ): Promise<ProbeResult> {
   const config = getDistributionConfig();
@@ -128,7 +126,7 @@ export async function probeSource(
   let bytes = 0;
 
   try {
-    const pending = probe(attempt, sample - 1);
+    const pending = source.request(attempt, sample - 1);
     void pending.then(
       (response) => {
         if (attempt.aborted) void response.body?.cancel().catch(() => undefined);
@@ -159,17 +157,16 @@ export async function probeSource(
       if (chunk.done || !chunk.value.length) throw new Error('probe_incomplete');
       bytes += Math.min(chunk.value.length, sample - bytes);
     }
-    const elapsedMs = performance.now() - started;
+    const elapsedMs = Math.round(performance.now() - started);
     const rangeIgnored = status === 200;
     report?.({
       stage: 'probe',
-      sourceIndex: index,
+      source: source.name,
       elapsedMs,
       status,
       rangeIgnored,
     });
     return {
-      index,
       elapsedMs,
       ok: true,
       status,
@@ -179,17 +176,16 @@ export async function probeSource(
       bytesReceived: bytes,
     };
   } catch (error) {
-    const elapsedMs = performance.now() - started;
+    const elapsedMs = Math.round(performance.now() - started);
     report?.({
       stage: 'probe',
-      sourceIndex: index,
+      source: source.name,
       elapsedMs,
       status,
       error,
     });
     return {
-      index,
-      elapsedMs: Infinity,
+      elapsedMs,
       ok: false,
       status,
       contentType,
@@ -203,23 +199,31 @@ export async function probeSource(
   }
 }
 
-/** Measure a small prefix of the authenticated asset; this never authenticates its contents. */
+/** Measure a small prefix of each candidate source and return them ranked fastest-first. */
 export async function sourceOrder(
   expectedBytes: number,
   signal: AbortSignal,
-  probes: Array<(signal: AbortSignal, end: number) => Promise<Response>>,
+  sources: readonly DistributionSource[],
   report?: (diagnostic: SourceDiagnostic) => void,
-): Promise<number[]> {
+): Promise<DistributionSource[]> {
   signal.throwIfAborted();
-  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || probes.length < 1) {
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || sources.length < 1) {
     throw new Error('source_probe_invalid');
   }
   const measured = await Promise.all(
-    probes.map((probe, index) => probeSource(index, expectedBytes, signal, probe, report)),
+    sources.map(async (source, index) => ({
+      source,
+      index,
+      probe: await probeSource(expectedBytes, signal, source, report),
+    })),
   );
   signal.throwIfAborted();
-  measured.sort((a, b) => a.elapsedMs - b.elapsedMs || a.index - b.index);
-  const orderIndices = measured.map((item) => item.index);
-  report?.({ stage: 'selection', orderIndices: [...orderIndices] });
-  return orderIndices;
+  measured.sort((a, b) => {
+    if (a.probe.ok !== b.probe.ok) return a.probe.ok ? -1 : 1;
+    const byTime = a.probe.elapsedMs - b.probe.elapsedMs;
+    return byTime !== 0 ? byTime : a.index - b.index;
+  });
+  const ordered = measured.map((item) => item.source);
+  report?.({ stage: 'selection', order: ordered.map((s) => s.name) });
+  return ordered;
 }

@@ -79,28 +79,34 @@ test('sourceOrder supports >3 sources, filters text/html, and falls back on corr
   }
 });
 
-test('sourceOrder accepts more than 3 candidates and uses 256 KiB sample', async () => {
+test('sourceOrder accepts more than 3 candidates, uses 256 KiB sample, and returns DistributionSource[]', async () => {
   const config = getDistributionConfig();
   assert.equal(config.probe.sampleBytes, 262144);
   const delays = [40, 10, 30, 20];
   let observedRange = '';
-  const order = await sourceOrder(
+  const ordered = await sourceOrder(
     512 * 1024,
     new AbortController().signal,
-    delays.map((delay, idx) => async (_signal, end) => {
-      if (idx === 0) observedRange = `0-${end}`;
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return new Response(Buffer.alloc(end + 1, idx), {
-        status: 206,
-        headers: {
-          'content-type': 'application/octet-stream',
-          'content-range': `bytes 0-${end}/${512 * 1024}`,
-        },
-      });
-    }),
+    delays.map((delay, idx) => ({
+      name: `source-${idx}`,
+      request: async (_signal, end) => {
+        if (idx === 0) observedRange = `0-${end}`;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return new Response(Buffer.alloc((end ?? 0) + 1, idx), {
+          status: 206,
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-range': `bytes 0-${end}/${512 * 1024}`,
+          },
+        });
+      },
+    })),
   );
   assert.equal(observedRange, '0-262143');
-  assert.deepEqual(order, [1, 3, 2, 0]);
+  assert.deepEqual(
+    ordered.map((s) => s.name),
+    ['source-1', 'source-3', 'source-2', 'source-0'],
+  );
 });
 
 test('fetchHttps follows valid HTTPS 302 redirects and strips Authorization cross-origin', async () => {

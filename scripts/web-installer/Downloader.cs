@@ -462,6 +462,8 @@ namespace Mizar.WebInstaller {
                     } catch (OperationCanceledException error) {
                       token.ThrowIfCancellationRequested();
                       throw new HttpRequestException("下载源长时间无响应（已停滞）。", error);
+                    } finally {
+                      stallCts.CancelAfter(Timeout.Infinite);
                     }
                     if (count == 0) break;
                     if (count > plan.bytes - total) throw new InvalidDataException("下载文件超过大小上限。");
@@ -481,7 +483,10 @@ namespace Mizar.WebInstaller {
 
             token.ThrowIfCancellationRequested();
             if (stages != null) stages.Report("validating-download");
-            if (!await MatchesAsync(staging, plan, token).ConfigureAwait(false))
+            localIo = true;
+            bool matched = await MatchesAsync(staging, plan, token).ConfigureAwait(false);
+            localIo = false;
+            if (!matched)
               throw new InvalidDataException("文件校验失败。");
 
             token.ThrowIfCancellationRequested();

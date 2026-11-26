@@ -70,27 +70,15 @@ async function runFullSource(source, asset) {
       bytes: asset.size,
       sha256: asset.sha256,
       signal: globalThis.AbortSignal.timeout(120_000),
-      sources: [(signal) => source.request(signal)],
+      sources: [source],
     });
-    return {
-      source: source.name,
-      ok: true,
-      mode: 'full',
-      sha256Verified: true,
-      sha256Match: true,
-      elapsedMs: Date.now() - startedAt,
-    };
+    return { source: source.name, ok: true, elapsedMs: Date.now() - startedAt };
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    const integrity = msg === 'transfer_integrity';
     return {
       source: source.name,
       ok: false,
-      mode: 'full',
-      sha256Verified: integrity,
-      sha256Match: integrity ? false : null,
-      reason: msg,
       elapsedMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -122,25 +110,17 @@ async function main() {
   for (let round = 1; round <= options.rounds; round += 1) {
     if (round > 1) await delay(3000);
     const results = await Promise.all(
-      sources.map(async (source, idx) => {
+      sources.map(async (source) => {
         if (options.full) return runFullSource(source, asset);
-        const r = await probeSource(
-          idx,
-          asset.size,
-          new globalThis.AbortController().signal,
-          source.request,
-        );
+        const r = await probeSource(asset.size, new globalThis.AbortController().signal, source);
         const sample = Math.min(config.probe.sampleBytes, asset.size);
-        const elapsedMs = Number.isFinite(r.elapsedMs)
-          ? Math.round(r.elapsedMs)
-          : config.probe.timeoutMs;
         return {
           source: source.name,
           ok: r.ok,
           status: r.status ?? null,
           rangeIgnored: r.rangeIgnored ?? false,
-          elapsedMs,
-          kbps: r.ok && elapsedMs > 0 ? Math.round(sample / 1024 / (elapsedMs / 1000)) : null,
+          elapsedMs: r.elapsedMs,
+          kbps: r.ok && r.elapsedMs > 0 ? Math.round(sample / 1024 / (r.elapsedMs / 1000)) : null,
           reason: r.ok
             ? null
             : r.error instanceof Error
