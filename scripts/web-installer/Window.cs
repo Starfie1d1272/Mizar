@@ -432,11 +432,6 @@ namespace Mizar.WebInstaller {
         detail.Text = error.Message;
         technicalDetails = ErrorDetails(error);
         action.Text = "重试";
-      } catch (LocalStorageException error) {
-        heading.Text = "无法写入本地文件";
-        detail.Text = "请检查缓存或安装位置的磁盘空间与读写权限后重试。";
-        technicalDetails = ErrorDetails(error);
-        action.Text = "重试";
       } catch (UnauthorizedAccessException error) {
         heading.Text = "无法写入安装文件";
         detail.Text = "请检查安装位置的访问权限后重试。";

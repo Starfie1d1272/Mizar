@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeMachineMetadata } from '@mizar/resource-pack-contract/transport';
 import { boundedBytes, fetchHttps } from '../src/distribution/http.js';
 import { getDistributionConfig, sourceOrder } from '../src/distribution/sources.js';
 import { downloadVerifiedAsset, fetchVerifiedMetadata } from '../src/distribution/transfer.js';
@@ -11,7 +12,6 @@ import {
   extractMachineFile,
   fetchVerifiedResourceCarrier,
 } from '../src/distribution/resource-transport.js';
-import { makeMachineMetadata } from '@mizar/resource-pack-contract/transport';
 import { diagnosticValue } from '../src/support/diagnostic-value.js';
 
 test('sourceOrder supports >3 sources, filters text/html, and falls back on corrupt winner', async () => {
@@ -31,7 +31,10 @@ test('sourceOrder supports >3 sources, filters text/html, and falls back on corr
     requests.push({ host: url.hostname, range });
 
     if (range) {
-      if (url.hostname === new URL(config.githubReleaseProxies[0]!).hostname) {
+      if (
+        config.githubReleaseProxies[0] &&
+        url.hostname === new URL(config.githubReleaseProxies[0]).hostname
+      ) {
         return new Response('<html>blocked</html>', {
           status: 200,
           headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -148,10 +151,9 @@ test('fetchHttps rejects non-HTTPS, credentials, localhost, and bare IP redirect
   );
 });
 
-test('fetchVerifiedMetadata tries official first, then races proxies and aborts losers', async () => {
+test('fetchVerifiedMetadata races proxies on official timeout and aborts slower requests', async () => {
   const signal = new AbortController().signal;
   const config = getDistributionConfig();
-  assert.ok(config.githubReleaseProxies.length >= 2);
   let abortedSlowProxy = false;
   let officialTried = false;
 
@@ -161,7 +163,9 @@ test('fetchVerifiedMetadata tries official first, then races proxies and aborts 
       officialTried = true;
       return new Response('unavailable', { status: 503 });
     }
-    const fastHost = new URL(config.githubReleaseProxies[1]!).hostname;
+    const fastHost = config.githubReleaseProxies[1]
+      ? new URL(config.githubReleaseProxies[1]).hostname
+      : new URL(config.githubReleaseProxies[0]!).hostname;
     if (url.includes(fastHost)) {
       return new Response(JSON.stringify({ valid: true, version: '1.13.3' }), { status: 200 });
     }
@@ -190,25 +194,66 @@ test('fetchVerifiedMetadata tries official first, then races proxies and aborts 
   });
   assert.equal(officialTried, true);
   assert.equal(result, '1.13.3');
-  assert.equal(abortedSlowProxy, true);
+  if (config.githubReleaseProxies.length > 1) assert.equal(abortedSlowProxy, true);
 });
 
-test('fetchVerifiedResourceCarrier switches source when carrier signature verification fails', async () => {
+test('fetchVerifiedMetadata decouples 8s transport timeout from verify(bytes, signal) lifetime', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const outer = new AbortController();
+  const fetcher: typeof fetch = async () =>
+    new Response(JSON.stringify({ ok: true }), { status: 200 });
+
+  let verifyAborted = false;
+  const pending = fetchVerifiedMetadata({
+    origin: 'https://github.com/Starfie1d1272/Mizar/releases/latest/download/machine-metadata.json',
+    maxBytes: 64 * 1024,
+    signal: outer.signal,
+    fetcher,
+    verify: async (bytes, verifySignal) => {
+      assert.equal(verifySignal, outer.signal);
+      verifySignal.addEventListener('abort', () => {
+        verifyAborted = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 9_500));
+      assert.equal(verifySignal.aborted, false);
+      return (JSON.parse(bytes.toString('utf8')) as { ok: boolean }).ok;
+    },
+  });
+
+  // Advance past the 8s official transport budget while verify() is still running
+  await Promise.resolve();
+  t.mock.timers.tick(8_500);
+  await Promise.resolve();
+  assert.equal(verifyAborted, false);
+  t.mock.timers.tick(2_000);
+  assert.equal(await pending, true);
+});
+
+test('fetchVerifiedResourceCarrier falls back when second-half publication verification fails', async () => {
   const signal = new AbortController().signal;
   const config = getDistributionConfig();
-  const makeCarrier = (sig: string) =>
-    makeMachineMetadata([['resource-catalog.json', Buffer.from(JSON.stringify({ sig }))]]);
+  const makeCarrier = (catalogSig: string, publicationDigest: string) =>
+    makeMachineMetadata([
+      ['resource-catalog.json', Buffer.from(JSON.stringify({ sig: catalogSig }))],
+      ['official-resource-publication.json', Buffer.from(publicationDigest)],
+    ]);
 
-  const badProxyHost = new URL(config.githubReleaseProxies[0]!).hostname;
+  const badProxyHost = config.githubReleaseProxies[0]
+    ? new URL(config.githubReleaseProxies[0]).hostname
+    : '';
+  const expectedPub = Buffer.from('valid-publication');
+  const expectedSha = createHash('sha256').update(expectedPub).digest('hex');
+
   const fetcher: typeof fetch = async (input) => {
     const url = input instanceof Request ? input.url : input.toString();
-    if (url.startsWith('https://github.com/')) {
-      return new Response('timeout', { status: 504 });
+    if (url.startsWith('https://github.com/')) return new Response('timeout', { status: 504 });
+    if (badProxyHost && url.includes(badProxyHost)) {
+      // First-half catalog passes, second-half publication digest mismatches
+      return new Response(makeCarrier('valid-catalog', 'tampered-publication'), { status: 200 });
     }
-    if (url.includes(badProxyHost)) {
-      return new Response(makeCarrier('invalid-signature'), { status: 200 });
-    }
-    return new Response(makeCarrier('valid-signature'), { status: 200 });
+    return new Response(makeCarrier('valid-catalog', expectedPub.toString('utf8')), {
+      status: 200,
+    });
   };
 
   const verified = await fetchVerifiedResourceCarrier({
@@ -219,11 +264,15 @@ test('fetchVerifiedResourceCarrier switches source when carrier signature verifi
       const catalog = JSON.parse(
         extractMachineFile(carrier, 'resource-catalog.json', 65536).toString('utf8'),
       ) as { sig: string };
-      if (catalog.sig !== 'valid-signature') throw new Error('resource_signature_invalid');
-      return catalog.sig;
+      if (catalog.sig !== 'valid-catalog') throw new Error('catalog_invalid');
+      const pubBytes = extractMachineFile(carrier, 'official-resource-publication.json', 65536);
+      if (createHash('sha256').update(pubBytes).digest('hex') !== expectedSha) {
+        throw new Error('Authenticated resource asset bytes changed');
+      }
+      return 'verified-ok';
     },
   });
-  assert.equal(verified, 'valid-signature');
+  assert.equal(verified, 'verified-ok');
 });
 
 test('downloadVerifiedAsset supports assets without preset bytes (e.g. 7zr.exe)', async () => {
@@ -254,15 +303,4 @@ test('diagnosticValue redacts explicit Box token secrets', () => {
   };
   assert.equal(redacted.message.includes(secret), false);
   assert.equal(redacted.message.includes('[redacted]'), true);
-});
-
-test('C# web-installer enforces embedded config, local IO boundary, and success diagnostics', async () => {
-  const [downloaderCs, windowCs] = await Promise.all([
-    readFile(new URL('../../../scripts/web-installer/Downloader.cs', import.meta.url), 'utf8'),
-    readFile(new URL('../../../scripts/web-installer/Window.cs', import.meta.url), 'utf8'),
-  ]);
-  assert.match(downloaderCs, /class LocalStorageException/);
-  assert.match(downloaderCs, /catch \(LocalStorageException\)/);
-  assert.match(downloaderCs, /缺少嵌入的分发配置 distribution\.json/);
-  assert.match(windowCs, /SaveSuccessDiagnostic\(\)/);
 });

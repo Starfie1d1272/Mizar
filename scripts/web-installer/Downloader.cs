@@ -62,10 +62,6 @@ namespace Mizar.WebInstaller {
     }
   }
 
-  public sealed class LocalStorageException : IOException {
-    public LocalStorageException(string message, Exception inner) : base(message, inner) { }
-  }
-
   public sealed class Downloader {
     const int OfficialMetadataTimeoutMs = 8000;
     readonly HttpClient client;
@@ -127,6 +123,18 @@ namespace Mizar.WebInstaller {
             (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
           throw new IOException("缓存路径不能包含链接。");
       }
+    }
+
+    static void PrepareStaging(string staging) {
+      NoReparse(staging);
+      if (File.Exists(staging)) File.Delete(staging);
+    }
+
+    static void BestEffortCleanup(string staging) {
+      try {
+        NoReparse(staging);
+        if (File.Exists(staging)) File.Delete(staging);
+      } catch { }
     }
 
     static async Task<bool> MatchesAsync(string path, Plan plan, CancellationToken token) {
@@ -305,46 +313,63 @@ namespace Mizar.WebInstaller {
       var sources = BuildSources(new[] { origin });
       var failures = new List<Exception>();
 
-      // Official-first (8s), then parallel proxy race.
+      // Official-first (8s transport budget), then parallel proxy fetch + serial verify.
       string official = sources[0];
       int officialBudget = Math.Min(OfficialMetadataTimeoutMs, Config.metadataMs);
+      string officialJson = null;
       using (var officialCts = CancellationTokenSource.CreateLinkedTokenSource(token)) {
         officialCts.CancelAfter(officialBudget);
         try {
-          string json = await ReadMetadata(official, officialCts.Token).ConfigureAwait(false);
-          verify(json);
-          EmitDiagnostic("Metadata verified from: " + official);
-          return;
+          officialJson = await ReadMetadata(official, officialCts.Token).ConfigureAwait(false);
         } catch (Exception error) {
           token.ThrowIfCancellationRequested();
           failures.Add(error);
           EmitDiagnostic("Metadata attempt failed (" + official + "): " + error.Message);
         }
       }
+      if (officialJson != null) {
+        try {
+          verify(officialJson);
+          EmitDiagnostic("Metadata verified from: " + official);
+          return;
+        } catch (Exception error) {
+          token.ThrowIfCancellationRequested();
+          failures.Add(error);
+          EmitDiagnostic("Metadata verify failed (" + official + "): " + error.Message);
+        }
+      }
 
       if (sources.Length > 1) {
         using (var raceCts = CancellationTokenSource.CreateLinkedTokenSource(token)) {
           raceCts.CancelAfter(Config.metadataMs);
-          var pending = new List<Task<string>>();
+          var pending = new List<Task<KeyValuePair<string, string>>>();
           for (int i = 1; i < sources.Length; i++) {
             string proxySource = sources[i];
-            pending.Add(TryMetadataSourceAsync(proxySource, raceCts.Token, verify));
+            pending.Add(ReadMetadataSourceAsync(proxySource, raceCts.Token));
           }
 
           while (pending.Count > 0) {
-            Task<string> finished = await Task.WhenAny(pending).ConfigureAwait(false);
+            Task<KeyValuePair<string, string>> finished = await Task.WhenAny(pending).ConfigureAwait(false);
             pending.Remove(finished);
-            if (finished.Status == TaskStatus.RanToCompletion) {
-              raceCts.Cancel();
-              EmitDiagnostic("Metadata verified from: " + finished.Result);
-              return;
-            }
-            token.ThrowIfCancellationRequested();
-            if (finished.Exception != null) {
-              foreach (var inner in finished.Exception.InnerExceptions) {
-                failures.Add(inner);
-                EmitDiagnostic("Metadata proxy failed: " + inner.Message);
+            if (finished.Status != TaskStatus.RanToCompletion) {
+              token.ThrowIfCancellationRequested();
+              if (finished.Exception != null) {
+                foreach (var inner in finished.Exception.InnerExceptions) {
+                  failures.Add(inner);
+                  EmitDiagnostic("Metadata proxy failed: " + inner.Message);
+                }
               }
+              continue;
+            }
+            try {
+              verify(finished.Result.Value);
+              raceCts.Cancel();
+              EmitDiagnostic("Metadata verified from: " + finished.Result.Key);
+              return;
+            } catch (Exception error) {
+              token.ThrowIfCancellationRequested();
+              failures.Add(error);
+              EmitDiagnostic("Metadata verify failed (" + finished.Result.Key + "): " + error.Message);
             }
           }
         }
@@ -353,10 +378,9 @@ namespace Mizar.WebInstaller {
       throw new IOException("发布资料验证失败，请检查网络后重试。", new AggregateException(failures));
     }
 
-    async Task<string> TryMetadataSourceAsync(string source, CancellationToken token, Action<string> verify) {
+    async Task<KeyValuePair<string, string>> ReadMetadataSourceAsync(string source, CancellationToken token) {
       string json = await ReadMetadata(source, token).ConfigureAwait(false);
-      verify(json);
-      return source;
+      return new KeyValuePair<string, string>(source, json);
     }
 
     async Task<string> ReadMetadata(string url, CancellationToken token) {
@@ -379,44 +403,20 @@ namespace Mizar.WebInstaller {
       }
     }
 
-    static void DiscardFile(string path) {
-      try {
-        NoReparse(path);
-        if (File.Exists(path)) File.Delete(path);
-      } catch { }
-    }
-
     public async Task<string> Download(Plan plan, string cache, IProgress<long> progress, CancellationToken token, IProgress<string> stages = null) {
       if (stages != null) stages.Report("checking-cache");
       plan.Validate();
       token.ThrowIfCancellationRequested();
 
-      string target;
-      FileStream gate;
-      try {
-        cache = Path.GetFullPath(cache);
-        NoReparse(cache);
-        Directory.CreateDirectory(cache);
-        NoReparse(cache);
-        target = Path.Combine(cache, plan.sha256 + "-" + plan.name);
-        NoReparse(target + ".lock");
-        gate = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-      } catch (Exception error) {
-        if (error is UnauthorizedAccessException || error is IOException)
-          throw new LocalStorageException("无法访问或创建本地下载缓存目录。", error);
-        throw;
-      }
+      cache = Path.GetFullPath(cache);
+      NoReparse(cache);
+      Directory.CreateDirectory(cache);
+      NoReparse(cache);
+      string target = Path.Combine(cache, plan.sha256 + "-" + plan.name);
+      NoReparse(target + ".lock");
 
-      using (gate) {
-        bool cachedMatch;
-        try {
-          cachedMatch = await MatchesAsync(target, plan, token).ConfigureAwait(false);
-        } catch (Exception error) {
-          if (error is UnauthorizedAccessException || error is IOException)
-            throw new LocalStorageException("无法读取本地下载缓存。", error);
-          throw;
-        }
-        if (cachedMatch) {
+      using (var gate = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+        if (await MatchesAsync(target, plan, token).ConfigureAwait(false)) {
           token.ThrowIfCancellationRequested();
           progress.Report(plan.bytes);
           EmitDiagnostic("Reused verified installer cache: " + target);
@@ -424,7 +424,7 @@ namespace Mizar.WebInstaller {
         }
 
         string staging = target + ".part";
-        DiscardFile(staging);
+        PrepareStaging(staging);
 
         var sources = BuildSources(plan.urls);
         if (stages != null) stages.Report("connecting-download");
@@ -434,6 +434,7 @@ namespace Mizar.WebInstaller {
         foreach (int index in order) {
           string url = sources[index];
           token.ThrowIfCancellationRequested();
+          bool localIo = false;
           try {
             if (stages != null) stages.Report("connecting-download");
             using (var response = await Request(url, null, token).ConfigureAwait(false)) {
@@ -442,22 +443,17 @@ namespace Mizar.WebInstaller {
               if (response.Content.Headers.ContentRange != null)
                 throw new InvalidDataException("完整下载响应包含无效范围。");
 
-              FileStream output;
-              try {
-                output = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
-              } catch (Exception error) {
-                throw new LocalStorageException("无法创建本地暂存文件。", error);
-              }
-
               using (var stallCts = CancellationTokenSource.CreateLinkedTokenSource(token))
               using (var abortRead = stallCts.Token.Register(response.Dispose))
-              using (var input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-              using (output) {
-                if (stages != null) stages.Report("downloading-core");
-                progress.Report(0);
-                var buffer = new byte[65536];
-                long total = 0;
-                try {
+              using (var input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false)) {
+                localIo = true;
+                var output = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
+                localIo = false;
+                using (output) {
+                  if (stages != null) stages.Report("downloading-core");
+                  progress.Report(0);
+                  var buffer = new byte[65536];
+                  long total = 0;
                   for (;;) {
                     stallCts.CancelAfter(Config.stallMs);
                     int count;
@@ -469,61 +465,38 @@ namespace Mizar.WebInstaller {
                     }
                     if (count == 0) break;
                     if (count > plan.bytes - total) throw new InvalidDataException("下载文件超过大小上限。");
-                    try {
-                      await output.WriteAsync(buffer, 0, count, token).ConfigureAwait(false);
-                    } catch (Exception error) {
-                      if (error is UnauthorizedAccessException || error is IOException)
-                        throw new LocalStorageException("写入本地暂存文件失败。", error);
-                      throw;
-                    }
+                    localIo = true;
+                    await output.WriteAsync(buffer, 0, count, token).ConfigureAwait(false);
+                    localIo = false;
                     total += count;
                     progress.Report(total);
                   }
-                } finally {
-                  try { output.Flush(true); }
-                  catch (Exception error) {
-                    if (error is UnauthorizedAccessException || error is IOException)
-                      EmitDiagnostic("Local staging flush warning: " + error.Message);
-                  }
+                  localIo = true;
+                  output.Flush(true);
+                  localIo = false;
+                  if (total != plan.bytes) throw new IOException("下载文件不完整。");
                 }
-                if (total != plan.bytes) throw new IOException("下载文件不完整。");
               }
             }
 
             token.ThrowIfCancellationRequested();
             if (stages != null) stages.Report("validating-download");
-            bool verified;
-            try {
-              verified = await MatchesAsync(staging, plan, token).ConfigureAwait(false);
-            } catch (Exception error) {
-              if (error is UnauthorizedAccessException || error is IOException)
-                throw new LocalStorageException("校验本地暂存文件失败。", error);
-              throw;
-            }
-            if (!verified) throw new InvalidDataException("文件校验失败。");
+            if (!await MatchesAsync(staging, plan, token).ConfigureAwait(false))
+              throw new InvalidDataException("文件校验失败。");
 
             token.ThrowIfCancellationRequested();
-            try {
-              NoReparse(target);
-              if (File.Exists(target)) File.Delete(target);
-              File.Move(staging, target);
-            } catch (Exception error) {
-              if (error is UnauthorizedAccessException || error is IOException)
-                throw new LocalStorageException("无法保存已验证的安装包到本地缓存。", error);
-              throw;
-            }
+            localIo = true;
+            NoReparse(target);
+            if (File.Exists(target)) File.Delete(target);
+            File.Move(staging, target);
+            localIo = false;
 
             progress.Report(plan.bytes);
             EmitDiagnostic("Download verified from: " + url);
             return target;
-          } catch (LocalStorageException) {
-            DiscardFile(staging);
-            throw;
-          } catch (UnauthorizedAccessException error) {
-            DiscardFile(staging);
-            throw new LocalStorageException("本地文件访问被拒绝。", error);
           } catch (Exception error) {
-            DiscardFile(staging);
+            BestEffortCleanup(staging);
+            if (localIo || error is UnauthorizedAccessException) throw;
             token.ThrowIfCancellationRequested();
             failures.Add(error);
             EmitDiagnostic("Download failed (" + url + "): " + error.Message);

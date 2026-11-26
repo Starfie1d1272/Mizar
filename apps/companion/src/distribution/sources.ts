@@ -91,6 +91,118 @@ export type SourceDiagnostic = {
   orderIndices?: number[];
 };
 
+export interface ProbeResult {
+  index: number;
+  elapsedMs: number;
+  ok: boolean;
+  status?: number | undefined;
+  rangeIgnored?: boolean;
+  contentType?: string;
+  contentRange?: string | null;
+  bytesReceived?: number;
+  error?: unknown;
+}
+
+/** Probe a single candidate source with a bounded Range prefix. */
+export async function probeSource(
+  index: number,
+  expectedBytes: number,
+  signal: AbortSignal,
+  probe: (signal: AbortSignal, end: number) => Promise<Response>,
+  report?: (diagnostic: SourceDiagnostic) => void,
+): Promise<ProbeResult> {
+  const config = getDistributionConfig();
+  const sample = Math.min(expectedBytes, config.probe.sampleBytes);
+  const started = performance.now();
+  const attempt = AbortSignal.any([signal, AbortSignal.timeout(config.probe.timeoutMs)]);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    abortListener = () => reject(attempt.reason);
+    if (attempt.aborted) abortListener();
+    else attempt.addEventListener('abort', abortListener, { once: true });
+  });
+  let status: number | undefined;
+  let contentType: string | undefined;
+  let contentRange: string | null | undefined;
+  let bytes = 0;
+
+  try {
+    const pending = probe(attempt, sample - 1);
+    void pending.then(
+      (response) => {
+        if (attempt.aborted) void response.body?.cancel().catch(() => undefined);
+      },
+      () => undefined,
+    );
+    const response = await Promise.race([pending, aborted]);
+    status = response.status;
+    reader = response.body?.getReader();
+    if (!reader || ![200, 206].includes(response.status)) {
+      throw new Error(`probe_http_${response.status}`);
+    }
+    const encoding = response.headers.get('content-encoding');
+    contentType = response.headers.get('content-type') ?? '';
+    if (encoding && encoding !== 'identity') throw new Error('probe_encoding_invalid');
+    if (/text\/html/i.test(contentType)) throw new Error('probe_html');
+    const length = response.headers.get('content-length');
+    contentRange = response.headers.get('content-range');
+    if (response.status === 206 && contentRange !== `bytes 0-${sample - 1}/${expectedBytes}`) {
+      throw new Error('probe_range_invalid');
+    }
+    if (response.status === 200 && length && Number(length) !== expectedBytes) {
+      throw new Error('probe_size_invalid');
+    }
+    while (bytes < sample) {
+      const chunk = await Promise.race([reader.read(), aborted]);
+      attempt.throwIfAborted();
+      if (chunk.done || !chunk.value.length) throw new Error('probe_incomplete');
+      bytes += Math.min(chunk.value.length, sample - bytes);
+    }
+    const elapsedMs = performance.now() - started;
+    const rangeIgnored = status === 200;
+    report?.({
+      stage: 'probe',
+      sourceIndex: index,
+      elapsedMs,
+      status,
+      rangeIgnored,
+    });
+    return {
+      index,
+      elapsedMs,
+      ok: true,
+      status,
+      rangeIgnored,
+      contentType,
+      contentRange,
+      bytesReceived: bytes,
+    };
+  } catch (error) {
+    const elapsedMs = performance.now() - started;
+    report?.({
+      stage: 'probe',
+      sourceIndex: index,
+      elapsedMs,
+      status,
+      error,
+    });
+    return {
+      index,
+      elapsedMs: Infinity,
+      ok: false,
+      status,
+      contentType,
+      contentRange,
+      bytesReceived: bytes,
+      error,
+    };
+  } finally {
+    if (abortListener) attempt.removeEventListener('abort', abortListener);
+    void reader?.cancel().catch(() => undefined);
+  }
+}
+
 /** Measure a small prefix of the authenticated asset; this never authenticates its contents. */
 export async function sourceOrder(
   expectedBytes: number,
@@ -102,81 +214,11 @@ export async function sourceOrder(
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || probes.length < 1) {
     throw new Error('source_probe_invalid');
   }
-  const config = getDistributionConfig();
-  const sample = Math.min(expectedBytes, config.probe.sampleBytes);
   const measured = await Promise.all(
-    probes.map(async (probe, index) => {
-      const started = performance.now();
-      const attempt = AbortSignal.any([signal, AbortSignal.timeout(config.probe.timeoutMs)]);
-      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-      let abortListener: (() => void) | undefined;
-      const aborted = new Promise<never>((_, reject) => {
-        abortListener = () => reject(attempt.reason);
-        if (attempt.aborted) abortListener();
-        else attempt.addEventListener('abort', abortListener, { once: true });
-      });
-      let status: number | undefined;
-      try {
-        const pending = probe(attempt, sample - 1);
-        void pending.then(
-          (response) => {
-            if (attempt.aborted) void response.body?.cancel().catch(() => undefined);
-          },
-          () => undefined,
-        );
-        const response = await Promise.race([pending, aborted]);
-        status = response.status;
-        reader = response.body?.getReader();
-        if (!reader || ![200, 206].includes(response.status)) {
-          throw new Error(`probe_http_${response.status}`);
-        }
-        const encoding = response.headers.get('content-encoding');
-        const type = response.headers.get('content-type') ?? '';
-        if (encoding && encoding !== 'identity') throw new Error('probe_encoding_invalid');
-        if (/text\/html/i.test(type)) throw new Error('probe_html');
-        const length = response.headers.get('content-length');
-        if (
-          response.status === 206 &&
-          response.headers.get('content-range') !== `bytes 0-${sample - 1}/${expectedBytes}`
-        ) {
-          throw new Error('probe_range_invalid');
-        }
-        if (response.status === 200 && length && Number(length) !== expectedBytes) {
-          throw new Error('probe_size_invalid');
-        }
-        let bytes = 0;
-        while (bytes < sample) {
-          const chunk = await Promise.race([reader.read(), aborted]);
-          attempt.throwIfAborted();
-          if (chunk.done || !chunk.value.length) throw new Error('probe_incomplete');
-          bytes += Math.min(chunk.value.length, sample - bytes);
-        }
-        const elapsed = performance.now() - started;
-        report?.({
-          stage: 'probe',
-          sourceIndex: index,
-          elapsedMs: elapsed,
-          status,
-          rangeIgnored: status === 200,
-        });
-        return { index, elapsed };
-      } catch (error) {
-        report?.({
-          stage: 'probe',
-          sourceIndex: index,
-          elapsedMs: performance.now() - started,
-          status,
-          error,
-        });
-        return { index, elapsed: Infinity };
-      } finally {
-        if (abortListener) attempt.removeEventListener('abort', abortListener);
-        void reader?.cancel().catch(() => undefined);
-      }
-    }),
+    probes.map((probe, index) => probeSource(index, expectedBytes, signal, probe, report)),
   );
   signal.throwIfAborted();
-  measured.sort((a, b) => a.elapsed - b.elapsed || a.index - b.index);
+  measured.sort((a, b) => a.elapsedMs - b.elapsedMs || a.index - b.index);
   const orderIndices = measured.map((item) => item.index);
   report?.({ stage: 'selection', orderIndices: [...orderIndices] });
   return orderIndices;

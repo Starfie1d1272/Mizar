@@ -171,24 +171,15 @@ export async function downloadVerifiedAsset(
         options.bytes!,
         options.signal,
         sources.map((s) => s.request),
-        (diagnostic) => {
-          const formatted: FormattedSourceDiagnostic = {
-            stage: diagnostic.stage,
+        ({ sourceIndex, orderIndices, ...rest }) =>
+          options.onDiagnostic?.({
+            ...rest,
             candidates,
-          };
-          if (diagnostic.elapsedMs !== undefined) formatted.elapsedMs = diagnostic.elapsedMs;
-          if (diagnostic.status !== undefined) formatted.status = diagnostic.status;
-          if (diagnostic.rangeIgnored !== undefined)
-            formatted.rangeIgnored = diagnostic.rangeIgnored;
-          if (diagnostic.error !== undefined) formatted.error = diagnostic.error;
-          if (diagnostic.sourceIndex !== undefined) {
-            formatted.source = sources[diagnostic.sourceIndex]!.name;
-          }
-          if (diagnostic.orderIndices !== undefined) {
-            formatted.order = diagnostic.orderIndices.map((idx) => sources[idx]!.name);
-          }
-          options.onDiagnostic?.(formatted);
-        },
+            ...(sourceIndex === undefined ? {} : { source: sources[sourceIndex]!.name }),
+            ...(orderIndices === undefined
+              ? {}
+              : { order: orderIndices.map((idx) => sources[idx]!.name) }),
+          }),
       )
     : sources.map((_, idx) => idx);
 
@@ -209,8 +200,7 @@ export async function downloadVerifiedAsset(
       options.onVerifying?.(currentSource);
     },
     fallback: (error, orderedIndex) => {
-      const failed = sources[order[orderedIndex]!]!;
-      options.onFallback?.(error, failed, orderedIndex);
+      options.onFallback?.(error, sources[order[orderedIndex]!]!, orderedIndex);
     },
   });
   return { source: sources[order[result.sourceIndex]!]!, bytes: result.bytes };
@@ -230,8 +220,8 @@ export interface FetchVerifiedMetadataOptions<T> {
 }
 
 /**
- * Official-first (8s), then parallel proxy race:
- * the first proxy that passes the complete verify() callback wins and aborts all others.
+ * Official-first (8s transport budget), then parallel proxy byte-fetch + serial verify:
+ * transport timeouts apply only to HTTP + body read, never to verify(bytes, options.signal).
  */
 export async function fetchVerifiedMetadata<T>(
   options: FetchVerifiedMetadataOptions<T>,
@@ -245,13 +235,17 @@ export async function fetchVerifiedMetadata<T>(
   const failures: unknown[] = [];
 
   const official = sources[0]!;
-  const officialBudget = Math.min(OFFICIAL_METADATA_TIMEOUT_MS, metadataMs);
-  const officialSignal = AbortSignal.any([options.signal, AbortSignal.timeout(officialBudget)]);
+  const officialTransportSignal = AbortSignal.any([
+    options.signal,
+    AbortSignal.timeout(Math.min(OFFICIAL_METADATA_TIMEOUT_MS, metadataMs)),
+  ]);
   try {
     options.onDiagnostic?.('metadata_attempt', { source: official, index: 0 });
-    const response = await official.request(officialSignal);
-    const bytes = await boundedBytes(response, options.maxBytes);
-    const verified = await options.verify(bytes, officialSignal);
+    const bytes = await boundedBytes(
+      await official.request(officialTransportSignal),
+      options.maxBytes,
+    );
+    const verified = await options.verify(bytes, options.signal);
     options.onDiagnostic?.('metadata_verified', { source: official, index: 0 });
     return verified;
   } catch (error) {
@@ -263,37 +257,68 @@ export async function fetchVerifiedMetadata<T>(
   const proxies = sources.slice(1);
   if (proxies.length > 0) {
     const raceAbort = new AbortController();
-    const proxySignal = AbortSignal.any([
+    const proxyTransportSignal = AbortSignal.any([
       options.signal,
       raceAbort.signal,
       AbortSignal.timeout(metadataMs),
     ]);
+    type FetchOutcome =
+      | { slot: number; index: number; source: DistributionSource; ok: true; bytes: Buffer }
+      | { slot: number; index: number; source: DistributionSource; ok: false; error: unknown };
+
+    const pending = new Map<number, Promise<FetchOutcome>>();
+    proxies.forEach((source, offset) => {
+      const index = offset + 1;
+      options.onDiagnostic?.('metadata_attempt', { source, index });
+      const task = (async (): Promise<FetchOutcome> => {
+        try {
+          const bytes = await boundedBytes(
+            await source.request(proxyTransportSignal),
+            options.maxBytes,
+          );
+          return { slot: offset, index, source, ok: true, bytes };
+        } catch (error) {
+          return { slot: offset, index, source, ok: false, error };
+        }
+      })();
+      pending.set(offset, task);
+    });
+
     try {
-      return await Promise.any(
-        proxies.map(async (source, proxyOffset) => {
-          const index = proxyOffset + 1;
-          options.onDiagnostic?.('metadata_attempt', { source, index });
-          try {
-            const response = await source.request(proxySignal);
-            const bytes = await boundedBytes(response, options.maxBytes);
-            const verified = await options.verify(bytes, proxySignal);
-            raceAbort.abort();
-            options.onDiagnostic?.('metadata_verified', { source, index });
-            return verified;
-          } catch (error) {
-            if (!options.signal.aborted && !raceAbort.signal.aborted) {
-              options.onDiagnostic?.('metadata_fallback', { source, index, error });
-            }
-            throw error;
+      while (pending.size > 0) {
+        const outcome = await Promise.race(pending.values());
+        pending.delete(outcome.slot);
+        options.signal.throwIfAborted();
+
+        if (!outcome.ok) {
+          failures.push(outcome.error);
+          if (!raceAbort.signal.aborted) {
+            options.onDiagnostic?.('metadata_fallback', {
+              source: outcome.source,
+              index: outcome.index,
+              error: outcome.error,
+            });
           }
-        }),
-      );
-    } catch (error) {
-      options.signal.throwIfAborted();
-      if (error instanceof AggregateError) {
-        failures.push(...error.errors);
-      } else {
-        failures.push(error);
+          continue;
+        }
+
+        try {
+          const verified = await options.verify(outcome.bytes, options.signal);
+          raceAbort.abort();
+          options.onDiagnostic?.('metadata_verified', {
+            source: outcome.source,
+            index: outcome.index,
+          });
+          return verified;
+        } catch (error) {
+          options.signal.throwIfAborted();
+          failures.push(error);
+          options.onDiagnostic?.('metadata_fallback', {
+            source: outcome.source,
+            index: outcome.index,
+            error,
+          });
+        }
       }
     } finally {
       raceAbort.abort();
