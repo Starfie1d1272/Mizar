@@ -4,7 +4,7 @@
   gap: calc(var(--mizar-layout-padding) * 2);
   align-items: stretch;
   min-height: 0;
-  height: calc(var(--mizar-layout-target) * 23);
+  height: max(520px, calc(100dvh - 240px));
 }
 .library-browser,
 .library-detail {

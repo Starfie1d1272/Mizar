@@ -7,7 +7,7 @@ import { ReviewDialog, closeReviewWindow } from './ReviewDialog';
 import { PreflightReview } from './PreflightReview';
 import { PreviousScoreReminder } from './PreviousScoreReminder';
 import { RosterCapture } from '../preparation/RosterCapture';
-import { DesktopCanvas } from '../patterns/DesktopCanvas';
+import { AspectRatioCanvas, MinBudgetCanvas } from '../patterns/ScaledCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
@@ -959,29 +959,29 @@ function WorkspaceDockContent() {
 
 export function WorkspaceLeft() {
   return (
-    <DesktopCanvas kind="left">
+    <div className="workspace-viewport workspace-viewport--left">
       <WorkspaceLeftContent />
-    </DesktopCanvas>
+    </div>
   );
 }
 
 export function WorkspaceDock() {
   return (
-    <DesktopCanvas kind="dock">
+    <MinBudgetCanvas minWidth={1280} minHeight={240}>
       <WorkspaceDockContent />
-    </DesktopCanvas>
+    </MinBudgetCanvas>
   );
 }
 
 export function WorkspacePreview() {
   return (
-    <DesktopCanvas kind="preview">
+    <AspectRatioCanvas width={1920} height={1080}>
       <div className="workspace-preview">
         <WorkspaceLeftContent />
         <div className="workspace-preview__game">CS2 游戏画面</div>
         <WorkspaceDockContent />
       </div>
-    </DesktopCanvas>
+    </AspectRatioCanvas>
   );
 }
 

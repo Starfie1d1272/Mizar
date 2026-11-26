@@ -1,5 +1,5 @@
 .resource-library {
-  max-width: 1200px;
+  max-width: none;
   margin: auto;
   display: grid;
   gap: var(--mizar-layout-padding);

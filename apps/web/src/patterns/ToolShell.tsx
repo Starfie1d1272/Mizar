@@ -1,4 +1,3 @@
-import { DesktopCanvas } from './DesktopCanvas';
 import type { ReactNode } from 'react';
 import './tool-shell.css';
 
@@ -7,37 +6,33 @@ export function ToolShell({
   title,
   context,
   fill = false,
-  responsive = false,
   children,
 }: {
   title: string;
   fill?: boolean;
-  responsive?: boolean;
   context?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <DesktopCanvas kind="product" responsive={responsive}>
-      <div
-        className="product-shell mizar-tool-shell mizar-surface"
-        data-context={Boolean(context)}
-        data-fill={fill}
-      >
-        <a className="mizar-tool-skip" href="#tool-content">
-          跳到工具内容
-        </a>
-        <header className="mizar-tool-heading">
-          <span className="mizar-tool-brand">
-            <img src="/brand/mizar-mark.svg" alt="" width="24" height="24" />
-            Mizar
-          </span>
-          <span>{title}</span>
-        </header>
-        {context}
-        <div id="tool-content" className="mizar-tool-content" tabIndex={-1}>
-          {children}
-        </div>
+    <div
+      className="product-shell mizar-tool-shell mizar-surface"
+      data-context={Boolean(context)}
+      data-fill={fill}
+    >
+      <a className="mizar-tool-skip" href="#tool-content">
+        跳到工具内容
+      </a>
+      <header className="mizar-tool-heading">
+        <span className="mizar-tool-brand">
+          <img src="/brand/mizar-mark.svg" alt="" width="24" height="24" />
+          Mizar
+        </span>
+        <span>{title}</span>
+      </header>
+      {context}
+      <div id="tool-content" className="mizar-tool-content" tabIndex={-1}>
+        {children}
       </div>
-    </DesktopCanvas>
+    </div>
   );
 }

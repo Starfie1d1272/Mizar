@@ -192,7 +192,7 @@ export function MatchConnectionDialog() {
     }
   };
   return (
-    <ToolShell title="GoTV 连接" responsive>
+    <ToolShell title="GoTV 连接">
       <main className="workbench-tool match-connection-dialog">
         <h1>GoTV 连接</h1>
         <Select
