@@ -13,6 +13,7 @@ import { closeWebsiteOutput } from '../src/output/website-lifecycle.js';
 import { DemoTestController, readDemoTestRecovery } from '../src/demo-test/controller.js';
 import { createProgramRuntime } from '../src/runtime/program-runtime.js';
 import { registerProductionReadiness } from '../src/program-scenes/readiness.js';
+import { ObsOutputController } from '../src/obs/outputs.js';
 import { ObsVideoError } from '../src/obs/video-transaction.js';
 import { registerUpdateRoutes } from '../src/updates/routes.js';
 import { UpdateManager } from '../src/updates/manager.js';
@@ -387,6 +388,25 @@ test('auto-download yields on OBS busy and resumes when OBS returns idle even du
   }
   assert.equal(manager.status().staged?.version, '1.11.21');
   assert.equal(manager.status().lastError, null);
+});
+
+test('ObsOutputController emits idle activity when stream stops even while virtual cam remains active', () => {
+  const outputs = new ObsOutputController({} as never, () => {});
+  const events: boolean[] = [];
+  outputs.setOnOutputActivity((busy) => events.push(busy));
+
+  const internal = outputs as unknown as {
+    warmupExtraOutputs: { virtual: string; replay: string };
+    event: (
+      kind: 'stream' | 'record',
+      event: { outputState: string; outputActive: boolean },
+    ) => void;
+  };
+  internal.warmupExtraOutputs.virtual = 'active';
+  internal.event('stream', { outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED', outputActive: true });
+  internal.event('stream', { outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED', outputActive: false });
+
+  assert.deepEqual(events, [true, false]);
 });
 
 test('update staging survives unavailable OBS and rejects removed notification actions', async (t) => {

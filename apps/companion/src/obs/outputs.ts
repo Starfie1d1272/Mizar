@@ -175,6 +175,17 @@ export class ObsOutputController {
     });
   }
 
+  hasActiveStreamOrRecord(): boolean {
+    return kinds.some((kind) => {
+      const state = this.values[kind];
+      return (
+        state.active === true ||
+        state.pending !== null ||
+        ['starting', 'stopping', 'reconnecting', 'paused'].includes(state.phase)
+      );
+    });
+  }
+
   hasRunningOutput(): boolean {
     return (
       kinds.some((kind) => {
@@ -435,11 +446,7 @@ export class ObsOutputController {
     this.update(kind, phase, phase === 'unknown' ? null : event.outputActive);
     if (phase === 'starting' || phase === 'active' || event.outputActive) {
       this.onOutputActivity?.(true);
-    } else if (
-      !this.hasRunningOutput() &&
-      !this.values.stream.pending &&
-      !this.values.record.pending
-    ) {
+    } else if (!this.hasActiveStreamOrRecord()) {
       this.onOutputActivity?.(false);
     }
   }
@@ -969,12 +976,7 @@ export class ObsOutputController {
       );
     } finally {
       this.values[output] = { ...this.values[output], pending: null };
-      if (
-        this.ready &&
-        !this.hasRunningOutput() &&
-        !this.values.stream.pending &&
-        !this.values.record.pending
-      ) {
+      if (this.ready && !this.hasActiveStreamOrRecord()) {
         this.onOutputActivity?.(false);
       }
     }

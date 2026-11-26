@@ -1,7 +1,6 @@
 import {
   createContext,
   createElement,
-  useCallback,
   useContext,
   useEffect,
   useState,
@@ -123,15 +122,13 @@ export interface UpdateStatusContextValue {
 const UpdateStatusContext = createContext<UpdateStatusContextValue | null>(null);
 
 export function useUpdatePolling(): UpdateStatusContextValue {
+  const desktop = Boolean(window.__TAURI_INTERNALS__);
   const [status, setStatusState] = useState<UpdateStatus | null>(null);
   const [connectionError, setConnectionError] = useState('');
-  const [unavailable, setUnavailable] = useState(false);
-
-  const setStatus = useCallback((next: UpdateStatus) => {
-    setStatusState(next);
-  }, []);
+  const [unavailable, setUnavailable] = useState(!desktop);
 
   useEffect(() => {
+    if (!desktop) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     let request: AbortController | undefined;
@@ -164,9 +161,9 @@ export function useUpdatePolling(): UpdateStatusContextValue {
       clearTimeout(timer);
       request?.abort();
     };
-  }, []);
+  }, [desktop]);
 
-  return { status, setStatus, connectionError, unavailable };
+  return { status, setStatus: setStatusState, connectionError, unavailable };
 }
 
 export function UpdateStatusProvider({ children }: { readonly children: ReactNode }) {

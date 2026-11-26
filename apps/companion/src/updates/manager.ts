@@ -706,10 +706,16 @@ export class UpdateManager {
   }
   async resumeAutoDownload() {
     if (!this.config.automatic || this.closed || this.initializationError) return;
-    if (this.task) {
+    if (
+      this.task &&
+      this.activity === 'downloading' &&
+      this.currentDownloadKind === 'auto' &&
+      this.abortReason === 'yield'
+    ) {
       this.pendingAutoResume = true;
       return;
     }
+    if (this.task) return;
     await this.maybeAutoDownload();
   }
   private async discard() {

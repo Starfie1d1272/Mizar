@@ -111,6 +111,14 @@
   color: var(--mizar-status-danger);
   line-height: 1.4;
 }
+.product-sidebar-update__link {
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-link);
+  text-decoration: none;
+}
+.product-sidebar-update__link:hover {
+  text-decoration: underline;
+}
 @media (max-width: 1100px) {
   .product-shell {
     grid-template-columns: calc(var(--mizar-layout-target) * 5) minmax(0, 1fr);

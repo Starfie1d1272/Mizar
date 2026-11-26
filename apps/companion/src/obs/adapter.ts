@@ -349,6 +349,9 @@ export class ObsAdapter {
         }
         await this.outputs.command(command, current);
       } catch (error) {
+        if (command.action === 'start' && !this.outputs.hasActiveStreamOrRecord()) {
+          this.outputs.notifyOutputActivity(false);
+        }
         const config = await this.configStore.read();
         this.diagnostic('obs_output_command', obsErrorEvidence(error, config.password));
         throw error;

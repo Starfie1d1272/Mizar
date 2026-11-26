@@ -29,10 +29,26 @@ export function SidebarUpdateEntry() {
   const targetVersion =
     mode === 'staged' ? status?.staged?.version : (status?.candidate?.version ?? null);
 
-  if (!desktop || !status || !mode || !targetVersion) return null;
+  if (!desktop) return null;
 
-  const errorKey = `${mode}:${targetVersion}:${status.installBlockedReason ?? ''}`;
-  const error = errorState?.key === errorKey ? errorState.message : '';
+  const errorKey =
+    mode && targetVersion ? `${mode}:${targetVersion}:${status?.installBlockedReason ?? ''}` : null;
+  const error = errorState && (!errorKey || errorState.key === errorKey) ? errorState.message : '';
+
+  if (!status || !mode || !targetVersion) {
+    if (!error) return null;
+    return (
+      <div className="product-sidebar-update">
+        <p className="product-sidebar-update__error" role="alert">
+          {error}
+        </p>
+        <a className="product-sidebar-update__link" href="/settings?tab=advanced">
+          查看更新设置
+        </a>
+      </div>
+    );
+  }
+
   const blocked = mode === 'staged' && Boolean(status.installBlockedReason);
   const label = mode === 'staged' ? '更新已就绪' : '发现新版本';
   const actionLabel =
@@ -59,7 +75,7 @@ export function SidebarUpdateEntry() {
       }
     } catch (reason) {
       setErrorState({
-        key: errorKey,
+        key: errorKey ?? 'detached',
         message: reason instanceof Error ? reason.message : '操作未完成，请重试。',
       });
     } finally {
@@ -85,9 +101,14 @@ export function SidebarUpdateEntry() {
         <p className="product-sidebar-update__reason">{status.installBlockedReason}</p>
       ) : null}
       {error ? (
-        <p className="product-sidebar-update__error" role="alert">
-          {error}
-        </p>
+        <>
+          <p className="product-sidebar-update__error" role="alert">
+            {error}
+          </p>
+          <a className="product-sidebar-update__link" href="/settings?tab=advanced">
+            查看更新设置
+          </a>
+        </>
       ) : null}
     </div>
   );

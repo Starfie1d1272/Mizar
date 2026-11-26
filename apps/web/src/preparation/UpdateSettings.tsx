@@ -7,28 +7,15 @@ import {
   installDesktopUpdate,
   openUpdateReleasePage,
   sendUpdateAction,
-  useUpdatePolling,
   useUpdateStatus,
 } from './updates-client';
 
-function StandaloneUpdateSettings({ children }: { children?: ReactNode }) {
-  const polling = useUpdatePolling();
-  return <UpdateSettingsView {...polling}>{children}</UpdateSettingsView>;
-}
-
 export function UpdateSettings({ children }: { children?: ReactNode }) {
   const shared = useUpdateStatus();
-  if (!shared) return <StandaloneUpdateSettings>{children}</StandaloneUpdateSettings>;
-  return <UpdateSettingsView {...shared}>{children}</UpdateSettingsView>;
-}
-
-function UpdateSettingsView({
-  status,
-  setStatus,
-  connectionError,
-  unavailable,
-  children,
-}: ReturnType<typeof useUpdatePolling> & { children?: ReactNode }) {
+  const status = shared?.status ?? null;
+  const setStatus = shared?.setStatus ?? (() => {});
+  const connectionError = shared?.connectionError ?? '';
+  const unavailable = shared?.unavailable ?? false;
   const [busy, setBusy] = useState(false);
   const [installingNow, setInstallingNow] = useState(false);
   const [error, setError] = useState('');
@@ -219,7 +206,7 @@ function UpdateSettingsView({
           {status?.staged ? (
             <Button
               variant="primary"
-              disabled={waiting || !desktop || Boolean(blocked)}
+              disabled={busy || installing || !desktop || Boolean(blocked)}
               aria-busy={installing || undefined}
               onClick={() => void install()}
             >
