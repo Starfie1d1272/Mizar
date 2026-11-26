@@ -82,7 +82,10 @@ export function SoundSettings() {
             ) : null}
             {connected &&
               !preparing &&
-              (unchecked || findings.some(({ code }) => code === 'audio_missing')) && (
+              (unchecked ||
+                findings.some(
+                  ({ code }) => code === 'audio_missing' || code.startsWith('audio_scene:'),
+                )) && (
                 <Button
                   disabled={busy || outputActive}
                   onClick={() => {
