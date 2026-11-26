@@ -105,6 +105,9 @@ export function Cs2LaunchSettings() {
               }}
             >
               <option value={60}>60 帧／秒（推荐）</option>
+              <option value={90}>90 帧／秒</option>
+              <option value={120}>120 帧／秒</option>
+              <option value={144}>144 帧／秒</option>
               <option value={30}>30 帧／秒（省资源）</option>
               <option value={0}>不限帧（可能导致雷达卡顿）</option>
             </Select>

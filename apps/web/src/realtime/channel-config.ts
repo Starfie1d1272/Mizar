@@ -3,7 +3,14 @@ import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/o
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
 import type { SnapshotEnvelopeLike, SnapshotSchema } from '@mizar/protocol/acceptance';
-import { LOCAL_PROTOCOL_SUBPROTOCOL, type LocalSnapshotChannel } from '@mizar/protocol/version';
+import {
+  ASSIST_SCHEMA_VERSION,
+  LOCAL_PROTOCOL_SUBPROTOCOL,
+  OPERATOR_SCHEMA_VERSION,
+  PROGRAM_SCHEMA_VERSION,
+  RADAR_SCHEMA_VERSION,
+  type LocalSnapshotChannel,
+} from '@mizar/protocol/version';
 
 export { LOCAL_PROTOCOL_SUBPROTOCOL };
 
@@ -17,24 +24,29 @@ export type LocalChannelSnapshot<C extends LocalSnapshotChannel> = C extends 'pr
 
 export interface LocalChannelConfig<TSnapshot extends SnapshotEnvelopeLike> {
   readonly path: string;
+  readonly schemaVersion: number;
   readonly schema: SnapshotSchema<TSnapshot>;
 }
 
 export const localChannelConfigs = {
   program: {
     path: '/local/v1/program',
+    schemaVersion: PROGRAM_SCHEMA_VERSION,
     schema: programSnapshotSchema,
   },
   radar: {
     path: '/local/v1/radar',
+    schemaVersion: RADAR_SCHEMA_VERSION,
     schema: radarSnapshotSchema,
   },
   operator: {
     path: '/local/v1/operator',
+    schemaVersion: OPERATOR_SCHEMA_VERSION,
     schema: operatorSnapshotSchema,
   },
   assist: {
     path: '/local/v1/assist',
+    schemaVersion: ASSIST_SCHEMA_VERSION,
     schema: assistSnapshotSchema,
   },
 } satisfies {

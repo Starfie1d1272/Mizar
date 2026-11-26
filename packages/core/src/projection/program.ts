@@ -708,6 +708,14 @@ function projectBomb(
   return { state, sourcePlayerId, explosion, action };
 }
 
+export function shouldNeutralizeGameplayProjection(
+  telemetryFreshness: ProgramSafeRuntimeFreshness,
+  mapName: string | undefined,
+  identityState: IdentityState,
+): boolean {
+  return telemetryFreshness === 'fresh' && mapName !== undefined && identityState === 'mismatch';
+}
+
 export function projectProgram(input: ProgramProjectionInput): ProgramProjection {
   const telemetry = input.runtime.telemetry;
   const contextFreshness =
@@ -723,9 +731,7 @@ export function projectProgram(input: ProgramProjectionInput): ProgramProjection
   const countdown = telemetry?.telemetry.phaseCountdowns;
   const unboundGameplay =
     input.presentationRole === 'gameplay' &&
-    telemetryFreshness === 'fresh' &&
-    map?.name !== undefined &&
-    input.identity.state === 'mismatch';
+    shouldNeutralizeGameplayProjection(telemetryFreshness, map?.name, input.identity.state);
   const activeLineup = input.activeLineup;
   const activeLineupIsCurrent =
     activeLineup.sourceGeneration === input.runtime.cursor.programSourceGeneration &&

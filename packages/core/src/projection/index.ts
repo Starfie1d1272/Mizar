@@ -6,7 +6,12 @@ export {
 export { projectObserverAssist, ObserverHintTimeline } from './observer-assist.js';
 export { ProgramClockTracker } from './program-clock.js';
 export type { ProgramClockSample } from './program-clock.js';
-export { completedSeriesMapForProgram, projectProgram, projectSeries } from './program.js';
+export {
+  completedSeriesMapForProgram,
+  projectProgram,
+  projectSeries,
+  shouldNeutralizeGameplayProjection,
+} from './program.js';
 export { seriesWinnerSide } from './series-winner.js';
 export {
   observedPlayerDisplayName,

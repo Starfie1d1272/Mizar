@@ -7,16 +7,24 @@ import {
   type IdentityResolution,
 } from '@mizar/core/identity';
 import {
+  getProgramSafeRuntimeFreshness,
   projectObserverAssist,
   ObserverHintTimeline,
   inspectBp,
   projectProgram,
   selectProgramSafeRuntimeView,
+  shouldNeutralizeGameplayProjection,
   type ObserverAssistProjection,
   type ProgramProjection,
+  type ProgramSafeRuntimeFreshness,
+  type ProgramSafeRuntimeView,
 } from '@mizar/core/projection';
 import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
-import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
+import {
+  assistSnapshotSchema,
+  type AssistPayload,
+  type AssistSnapshot,
+} from '@mizar/protocol/assist';
 import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
@@ -195,6 +203,11 @@ export class ProjectionCoordinator {
   private contextBinding: MatchContextBinding | undefined;
   private current: ProjectionBundle;
   private lastPublishedProgram: ProgramProjection | undefined;
+  private lastProgramSemantic: ProgramSemanticSnapshot | undefined;
+  private lastOperatorSemantic: OperatorSemanticSnapshot | undefined;
+  private lastAssistSemantic: AssistSemanticSnapshot | undefined;
+  private lastPublishedAssistPayload: AssistPayload | undefined;
+  private initialized = false;
   private predictionPublishTimer: unknown;
   private activeLineup: ActiveLineupResolution;
   private staleTimer: unknown;
@@ -299,41 +312,90 @@ export class ProjectionCoordinator {
           this.contextBinding.cachedFrom === 'online' ||
           this.contextBinding.localAuthoringMode === 'bound-overlay');
       const nowMonotonicMs = this.nowMonotonicMs();
-      const programInput = {
+      const telemetryFreshness = getProgramSafeRuntimeFreshness(
+        runtimeView,
+        nowMonotonicMs,
+        runtimeSnapshot.continuityPolicy,
+      );
+      const bombDamageResource = this.bombDamageResources.get(
+        runtimeView.telemetry?.telemetry.map?.name ?? null,
+        `${runtimeView.cursor.programSourceGeneration}:${runtimeView.cursor.mapEpoch}`,
+      );
+      const needsNeutralGameplay = shouldNeutralizeGameplayProjection(
+        telemetryFreshness,
+        runtimeView.telemetry?.telemetry.map?.name,
+        identity.state,
+      );
+      const chatSnapshot = this.programChat
+        ? this.programChat(runtimeView.cursor, telemetryFreshness === 'fresh')
+        : undefined;
+      const nextProgramSemantic = buildProgramSemanticSnapshot({
+        telemetryFreshness,
+        needsNeutralGameplay,
         preferCanonicalPlayerNames,
-        equipmentCatalog,
-        runtime: runtimeView,
-        bombDamageResource: this.bombDamageResources.get(
-          runtimeView.telemetry?.telemetry.map?.name ?? null,
-          `${runtimeView.cursor.programSourceGeneration}:${runtimeView.cursor.mapEpoch}`,
-        ),
-        ...(context === undefined ? {} : { context }),
-        ...(this.contextBinding === undefined
-          ? {}
-          : { contextFreshness: this.contextBinding.freshness }),
+        context,
+        contextFreshness: this.contextBinding?.freshness,
         identity,
         activeLineup,
         seriesProgress: runtimeSnapshot.seriesProgress,
-        nowMonotonicMs,
-        continuityPolicy: runtimeSnapshot.continuityPolicy,
-      };
-      const withAvatars = (p: ProgramProjection): ProgramProjection => ({
-        ...p,
-        players: p.players.map((player) => ({
-          ...player,
-          avatarUrl: player.avatarUrl ?? this.avatars?.get(player.sourcePlayerId) ?? null,
-        })),
+        bombDamageResource,
+        runtimeView,
+        chatSnapshot,
       });
-      const baseProgram = projectProgram(programInput);
-      const program = withAvatars(baseProgram);
-      const gameplay = withAvatars(
-        projectProgram({ ...programInput, presentationRole: 'gameplay' }),
-      );
-      this.avatars?.request(
-        baseProgram.players
-          .filter((player) => player.avatarUrl === null)
-          .map((player) => player.sourcePlayerId),
-      );
+      const avatarsUpdated =
+        this.initialized &&
+        this.avatars !== undefined &&
+        this.current.program.players.some(
+          (player) =>
+            player.avatarUrl === null && this.avatars?.get(player.sourcePlayerId) !== null,
+        );
+      const programChanged =
+        !this.initialized ||
+        publishWaiting ||
+        this.predictionPublishTimer !== undefined ||
+        avatarsUpdated ||
+        !sameProgramSemantic(this.lastProgramSemantic, nextProgramSemantic);
+
+      let program: ProgramProjection;
+      let gameplay: ProgramProjection;
+      if (programChanged) {
+        const programInput = {
+          preferCanonicalPlayerNames,
+          equipmentCatalog,
+          runtime: runtimeView,
+          bombDamageResource,
+          ...(context === undefined ? {} : { context }),
+          ...(this.contextBinding === undefined
+            ? {}
+            : { contextFreshness: this.contextBinding.freshness }),
+          identity,
+          activeLineup,
+          seriesProgress: runtimeSnapshot.seriesProgress,
+          nowMonotonicMs,
+          continuityPolicy: runtimeSnapshot.continuityPolicy,
+        };
+        const withAvatars = (p: ProgramProjection): ProgramProjection => ({
+          ...p,
+          players: p.players.map((player) => ({
+            ...player,
+            avatarUrl: player.avatarUrl ?? this.avatars?.get(player.sourcePlayerId) ?? null,
+          })),
+        });
+        const baseProgram = projectProgram(programInput);
+        program = withAvatars(baseProgram);
+        gameplay = needsNeutralGameplay
+          ? withAvatars(projectProgram({ ...programInput, presentationRole: 'gameplay' }))
+          : program;
+        this.avatars?.request(
+          baseProgram.players
+            .filter((player) => player.avatarUrl === null)
+            .map((player) => player.sourcePlayerId),
+        );
+      } else {
+        program = this.current.program;
+        gameplay = this.lastPublishedProgram ?? program;
+      }
+
       const radar = projectRadarFrame({
         preferCanonicalPlayerNames,
         ...(context === undefined ? {} : { context }),
@@ -342,15 +404,43 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
         continuityPolicy: runtimeSnapshot.continuityPolicy,
       });
-      const operator = projectOperator({
-        runtime: runtimeSnapshot,
-        context: this.contextBinding,
+
+      const programSourceHealth = this.cstvSources.program.getHealth();
+      const lookaheadSourceHealth = this.cstvSources.lookahead.getHealth();
+      const nextOperatorSemantic = buildOperatorSemanticSnapshot({
+        telemetryFreshness,
+        runtimeSnapshot,
+        runtimeView,
+        contextBinding: this.contextBinding,
         identity,
         activeLineup,
-        cstvSources: this.cstvSources,
-        nowMonotonicMs,
+        programSourceHealth,
+        lookaheadSourceHealth,
       });
-      const assist = this.assistance(program, nowMonotonicMs);
+      const operatorChanged =
+        !this.initialized || !sameOperatorSemantic(this.lastOperatorSemantic, nextOperatorSemantic);
+      const operator = operatorChanged
+        ? projectOperator({
+            runtime: runtimeSnapshot,
+            context: this.contextBinding,
+            identity,
+            activeLineup,
+            cstvSources: this.cstvSources,
+            nowMonotonicMs,
+          })
+        : this.current.operator;
+
+      const nextAssistSemantic = buildAssistSemanticSnapshot({
+        program,
+        observerSettings: this.observerSettings?.(),
+        lookaheadHealth: lookaheadSourceHealth,
+      });
+      const assistChanged =
+        !this.initialized ||
+        programChanged ||
+        !sameAssistSemantic(this.lastAssistSemantic, nextAssistSemantic);
+      const assist = assistChanged ? this.assistance(program, nowMonotonicMs) : this.current.assist;
+
       this.current = { program, radar, operator, assist, identity };
       this.scheduleStaleDeadline(
         runtimeView,
@@ -358,69 +448,86 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
         runtimeSnapshot.continuityPolicy,
       );
-      const prior = this.lastPublishedProgram;
-      const cursor = gameplay.cursor;
-      const coalescePredictionWait =
-        this.predictionPublishCoalescing &&
-        !publishWaiting &&
-        prior !== undefined &&
-        prior.status.telemetry === 'fresh' &&
-        gameplay.status.telemetry === 'fresh' &&
-        gameplay.status.context === prior.status.context &&
-        gameplay.status.identity === prior.status.identity &&
-        gameplay.match?.matchId === prior.match?.matchId &&
-        cursor.producerInstanceId === prior.cursor.producerInstanceId &&
-        cursor.liveSessionId === prior.cursor.liveSessionId &&
-        cursor.programSourceGeneration === prior.cursor.programSourceGeneration &&
-        cursor.mapEpoch === prior.cursor.mapEpoch &&
-        gameplay.round?.phase === 'live' &&
-        gameplay.map?.roundNumber === prior.map?.roundNumber &&
-        gameplay.map?.score.ct === prior.map?.score.ct &&
-        gameplay.map?.score.t === prior.map?.score.t &&
-        gameplay.clock?.phase === prior.clock?.phase &&
-        gameplay.bomb?.state === prior.bomb?.state &&
-        gameplay.bombDamage.players.some(
-          (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
-        ) &&
-        gameplay.bombDamage.players.every(
-          (player) =>
-            player.status === 'predicted' ||
-            player.reason === 'prediction-loading' ||
-            prior.bombDamage.players.some(
-              (previous) =>
-                previous.sourcePlayerId === player.sourcePlayerId &&
-                previous.status === 'unavailable' &&
-                previous.reason === player.reason,
-            ),
-        );
-      if (coalescePredictionWait) {
-        // Keep the existing WHOLE published snapshot and its original cursor.
-        // A completion reprojects latest state; never attach old estimates to a
-        // new input. A slow worker still exposes waiting after one display frame.
-        this.predictionPublishTimer ??= this.scheduler.setTimeout(() => {
+
+      if (programChanged) {
+        const prior = this.lastPublishedProgram;
+        const cursor = gameplay.cursor;
+        const coalescePredictionWait =
+          this.predictionPublishCoalescing &&
+          !publishWaiting &&
+          prior !== undefined &&
+          prior.status.telemetry === 'fresh' &&
+          gameplay.status.telemetry === 'fresh' &&
+          gameplay.status.context === prior.status.context &&
+          gameplay.status.identity === prior.status.identity &&
+          gameplay.match?.matchId === prior.match?.matchId &&
+          cursor.producerInstanceId === prior.cursor.producerInstanceId &&
+          cursor.liveSessionId === prior.cursor.liveSessionId &&
+          cursor.programSourceGeneration === prior.cursor.programSourceGeneration &&
+          cursor.mapEpoch === prior.cursor.mapEpoch &&
+          gameplay.round?.phase === 'live' &&
+          gameplay.map?.roundNumber === prior.map?.roundNumber &&
+          gameplay.map?.score.ct === prior.map?.score.ct &&
+          gameplay.map?.score.t === prior.map?.score.t &&
+          gameplay.clock?.phase === prior.clock?.phase &&
+          gameplay.bomb?.state === prior.bomb?.state &&
+          gameplay.bombDamage.players.some(
+            (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
+          ) &&
+          gameplay.bombDamage.players.every(
+            (player) =>
+              player.status === 'predicted' ||
+              player.reason === 'prediction-loading' ||
+              prior.bombDamage.players.some(
+                (previous) =>
+                  previous.sourcePlayerId === player.sourcePlayerId &&
+                  previous.status === 'unavailable' &&
+                  previous.reason === player.reason,
+              ),
+          );
+        if (coalescePredictionWait) {
+          // Keep the existing WHOLE published snapshot and its original cursor.
+          // A completion reprojects latest state; never attach old estimates to a
+          // new input. A slow worker still exposes waiting after one display frame.
+          this.predictionPublishTimer ??= this.scheduler.setTimeout(() => {
+            this.predictionPublishTimer = undefined;
+            this.refresh(true);
+          }, 16);
+          return this.current;
+        }
+        if (this.predictionPublishTimer !== undefined) {
+          this.scheduler.clearTimeout(this.predictionPublishTimer);
           this.predictionPublishTimer = undefined;
-          this.refresh(true);
-        }, 16);
-        return this.current;
-      }
-      if (this.predictionPublishTimer !== undefined) {
-        this.scheduler.clearTimeout(this.predictionPublishTimer);
-        this.predictionPublishTimer = undefined;
-      }
-      for (const listener of this.presentationListeners) {
-        try {
-          listener(this.current);
-        } catch {
-          report(this.onDiagnostic, 'presentation-projection-failed');
+        }
+        for (const listener of this.presentationListeners) {
+          try {
+            listener(this.current);
+          } catch {
+            report(this.onDiagnostic, 'presentation-projection-failed');
+          }
         }
       }
-      this.publish(gameplay, radar, operator, assist);
-      this.lastPublishedProgram = gameplay;
-      try {
-        this.onProjection?.(this.current);
-      } catch {
-        report(this.onDiagnostic, 'output-projection-failed');
+
+      this.publish(gameplay, radar, operator, assist, {
+        program: programChanged,
+        radar: true,
+        operator: operatorChanged,
+        assist: assistChanged,
+        chatSnapshot,
+      });
+
+      if (programChanged) {
+        this.lastPublishedProgram = gameplay;
+        this.lastProgramSemantic = nextProgramSemantic;
+        try {
+          this.onProjection?.(this.current);
+        } catch {
+          report(this.onDiagnostic, 'output-projection-failed');
+        }
       }
+      if (operatorChanged) this.lastOperatorSemantic = nextOperatorSemantic;
+      if (assistChanged) this.lastAssistSemantic = nextAssistSemantic;
+      this.initialized = true;
       return this.current;
     } finally {
       this.refreshing = false;
@@ -551,34 +658,49 @@ export class ProjectionCoordinator {
     radar: RadarFrame,
     operator: OperatorProjection,
     assist: ObserverAssistProjection,
+    channels: {
+      readonly program: boolean;
+      readonly radar: boolean;
+      readonly operator: boolean;
+      readonly assist: boolean;
+      readonly chatSnapshot?: NonNullable<ProgramSnapshot['payload']['allChat']> | undefined;
+    },
   ): void {
-    this.publishChannel('program', () =>
-      this.publishers.program.publish({
-        type: 'snapshot',
-        protocolVersion: LOCAL_PROTOCOL_VERSION,
-        channel: 'program',
-        schemaVersion: PROGRAM_SCHEMA_VERSION,
-        cursor: program.cursor,
-        payload: {
-          ...mapProgramProjection(program),
-          ...(this.programChat
-            ? { allChat: this.programChat(program.cursor, program.status.telemetry === 'fresh') }
-            : {}),
-        },
-      }),
-    );
-    this.publishChannel('radar', () =>
-      this.publishers.radar.publish({
-        type: 'snapshot',
-        protocolVersion: LOCAL_PROTOCOL_VERSION,
-        channel: 'radar',
-        schemaVersion: RADAR_SCHEMA_VERSION,
-        cursor: radar.cursor,
-        payload: mapRadarFrame(radar),
-      }),
-    );
-    this.publishOperator(operator);
-    this.publishAssist(assist);
+    if (channels.program) {
+      this.publishChannel('program', () =>
+        this.publishers.program.publish({
+          type: 'snapshot',
+          protocolVersion: LOCAL_PROTOCOL_VERSION,
+          channel: 'program',
+          schemaVersion: PROGRAM_SCHEMA_VERSION,
+          cursor: program.cursor,
+          payload: {
+            ...mapProgramProjection(program),
+            ...(channels.chatSnapshot !== undefined
+              ? { allChat: channels.chatSnapshot }
+              : this.programChat
+                ? {
+                    allChat: this.programChat(program.cursor, program.status.telemetry === 'fresh'),
+                  }
+                : {}),
+          },
+        }),
+      );
+    }
+    if (channels.radar) {
+      this.publishChannel('radar', () =>
+        this.publishers.radar.publish({
+          type: 'snapshot',
+          protocolVersion: LOCAL_PROTOCOL_VERSION,
+          channel: 'radar',
+          schemaVersion: RADAR_SCHEMA_VERSION,
+          cursor: radar.cursor,
+          payload: mapRadarFrame(radar),
+        }),
+      );
+    }
+    if (channels.operator) this.publishOperator(operator);
+    if (channels.assist) this.publishAssist(assist);
   }
 
   private assistance(program: ProgramProjection, now: number): ObserverAssistProjection {
@@ -616,6 +738,8 @@ export class ProjectionCoordinator {
   }
 
   private publishAssist(assist: ObserverAssistProjection): void {
+    const payload = mapObserverAssistProjection(assist);
+    if (sameAssistPayload(this.lastPublishedAssistPayload, payload)) return;
     const previous = this.publishers.assist.getCurrent()?.channelSeq;
     this.publishChannel('assist', () => {
       this.publishers.assist.publish({
@@ -624,8 +748,9 @@ export class ProjectionCoordinator {
         channel: 'assist',
         schemaVersion: ASSIST_SCHEMA_VERSION,
         cursor: assist.cursor,
-        payload: mapObserverAssistProjection(assist),
+        payload,
       });
+      this.lastPublishedAssistPayload = payload;
       const current = this.publishers.assist.getCurrent();
       if (current && current.channelSeq !== previous && assist.observer?.hints.length)
         this.observerTimeline.recordPublished(assist.observer.hints);
@@ -803,6 +928,466 @@ export class ProjectionCoordinator {
     this.staleTimerKey = undefined;
     this.staleDeadline = undefined;
   }
+}
+
+interface ProgramSemanticSnapshot {
+  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
+  readonly needsNeutralGameplay: boolean;
+  readonly preferCanonicalPlayerNames: boolean;
+  readonly context: unknown;
+  readonly contextFreshness: 'fresh' | 'stale' | undefined;
+  readonly identity: IdentityResolution;
+  readonly activeLineup: ActiveLineupResolution;
+  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
+  readonly bombDamageResource: unknown;
+  readonly producerInstanceId: string;
+  readonly liveSessionId: string | null;
+  readonly programSourceGeneration: number;
+  readonly mapEpoch: number;
+  readonly objectiveTimingActive: boolean;
+  readonly objectiveTiming: ProgramSafeRuntimeView['objectiveTiming'];
+  readonly playerStats: unknown;
+  readonly telemetry: ProgramSafeRuntimeView['telemetry'];
+  readonly chatLength: number;
+  readonly lastChatId: string | null;
+}
+
+function buildProgramSemanticSnapshot(args: {
+  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
+  readonly needsNeutralGameplay: boolean;
+  readonly preferCanonicalPlayerNames: boolean;
+  readonly context: unknown;
+  readonly contextFreshness: 'fresh' | 'stale' | undefined;
+  readonly identity: IdentityResolution;
+  readonly activeLineup: ActiveLineupResolution;
+  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
+  readonly bombDamageResource: unknown;
+  readonly runtimeView: ProgramSafeRuntimeView;
+  readonly chatSnapshot: NonNullable<ProgramSnapshot['payload']['allChat']> | undefined;
+}): ProgramSemanticSnapshot {
+  const { runtimeView, chatSnapshot } = args;
+  const bombState = runtimeView.telemetry?.telemetry.bomb?.state;
+  const lastChat =
+    chatSnapshot && chatSnapshot.length > 0 ? chatSnapshot[chatSnapshot.length - 1] : undefined;
+  return {
+    telemetryFreshness: args.telemetryFreshness,
+    needsNeutralGameplay: args.needsNeutralGameplay,
+    preferCanonicalPlayerNames: args.preferCanonicalPlayerNames,
+    context: args.context,
+    contextFreshness: args.contextFreshness,
+    identity: args.identity,
+    activeLineup: args.activeLineup,
+    seriesProgress: args.seriesProgress,
+    bombDamageResource: args.bombDamageResource,
+    producerInstanceId: runtimeView.cursor.producerInstanceId,
+    liveSessionId: runtimeView.cursor.liveSessionId,
+    programSourceGeneration: runtimeView.cursor.programSourceGeneration,
+    mapEpoch: runtimeView.cursor.mapEpoch,
+    objectiveTimingActive:
+      bombState === 'planting' || bombState === 'defusing' || bombState === 'planted',
+    objectiveTiming: runtimeView.objectiveTiming,
+    playerStats: runtimeView.playerStats,
+    telemetry: runtimeView.telemetry,
+    chatLength: chatSnapshot?.length ?? 0,
+    lastChatId: lastChat ? lastChat.id : null,
+  };
+}
+
+function sameProgramSemantic(
+  prev: ProgramSemanticSnapshot | undefined,
+  next: ProgramSemanticSnapshot,
+): boolean {
+  if (prev === undefined) return false;
+  if (
+    prev.telemetryFreshness !== next.telemetryFreshness ||
+    prev.needsNeutralGameplay !== next.needsNeutralGameplay ||
+    prev.preferCanonicalPlayerNames !== next.preferCanonicalPlayerNames ||
+    prev.context !== next.context ||
+    prev.contextFreshness !== next.contextFreshness ||
+    prev.seriesProgress !== next.seriesProgress ||
+    prev.bombDamageResource !== next.bombDamageResource ||
+    prev.producerInstanceId !== next.producerInstanceId ||
+    prev.liveSessionId !== next.liveSessionId ||
+    prev.programSourceGeneration !== next.programSourceGeneration ||
+    prev.mapEpoch !== next.mapEpoch ||
+    prev.objectiveTimingActive ||
+    next.objectiveTimingActive ||
+    prev.objectiveTiming.plantActionDurationSeconds !==
+      next.objectiveTiming.plantActionDurationSeconds ||
+    prev.objectiveTiming.defuseActionDurationSeconds !==
+      next.objectiveTiming.defuseActionDurationSeconds ||
+    prev.playerStats !== next.playerStats ||
+    prev.chatLength !== next.chatLength ||
+    prev.lastChatId !== next.lastChatId
+  ) {
+    return false;
+  }
+  if (
+    prev.identity !== next.identity &&
+    (prev.identity.state !== next.identity.state ||
+      prev.identity.sideMapping.a !== next.identity.sideMapping.a ||
+      prev.identity.sideMapping.b !== next.identity.sideMapping.b ||
+      prev.identity.capabilities.canonicalTeamBranding !==
+        next.identity.capabilities.canonicalTeamBranding)
+  ) {
+    return false;
+  }
+  if (
+    prev.activeLineup.sourceGeneration !== next.activeLineup.sourceGeneration ||
+    prev.activeLineup.mapEpoch !== next.activeLineup.mapEpoch ||
+    prev.activeLineup.state !== next.activeLineup.state ||
+    prev.activeLineup.ct.length !== next.activeLineup.ct.length ||
+    prev.activeLineup.t.length !== next.activeLineup.t.length
+  ) {
+    return false;
+  }
+  const prevObs = prev.telemetry;
+  const nextObs = next.telemetry;
+  if (prevObs === nextObs) return true;
+  if (prevObs === null || nextObs === null) return false;
+  if (
+    prevObs.coverage.map !== nextObs.coverage.map ||
+    prevObs.coverage.round !== nextObs.coverage.round ||
+    prevObs.coverage.phaseCountdowns !== nextObs.coverage.phaseCountdowns ||
+    prevObs.coverage.player !== nextObs.coverage.player ||
+    prevObs.coverage.allPlayers !== nextObs.coverage.allPlayers ||
+    prevObs.coverage.bomb !== nextObs.coverage.bomb
+  ) {
+    return false;
+  }
+  const pt = prevObs.telemetry;
+  const nt = nextObs.telemetry;
+  if (
+    pt.map?.name !== nt.map?.name ||
+    pt.map?.mode !== nt.map?.mode ||
+    pt.map?.phase !== nt.map?.phase ||
+    pt.map?.roundNumber !== nt.map?.roundNumber ||
+    pt.map?.sides?.ct?.score !== nt.map?.sides?.ct?.score ||
+    pt.map?.sides?.t?.score !== nt.map?.sides?.t?.score ||
+    pt.map?.sides?.ct?.name !== nt.map?.sides?.ct?.name ||
+    pt.map?.sides?.t?.name !== nt.map?.sides?.t?.name ||
+    pt.map?.sides?.ct?.timeoutsRemaining !== nt.map?.sides?.ct?.timeoutsRemaining ||
+    pt.map?.sides?.t?.timeoutsRemaining !== nt.map?.sides?.t?.timeoutsRemaining ||
+    pt.map?.sides?.ct?.consecutiveRoundLosses !== nt.map?.sides?.ct?.consecutiveRoundLosses ||
+    pt.map?.sides?.t?.consecutiveRoundLosses !== nt.map?.sides?.t?.consecutiveRoundLosses ||
+    (pt.map?.roundWins?.length ?? 0) !== (nt.map?.roundWins?.length ?? 0) ||
+    pt.round?.phase !== nt.round?.phase ||
+    pt.round?.winnerSide !== nt.round?.winnerSide ||
+    pt.phaseCountdowns?.phase !== nt.phaseCountdowns?.phase ||
+    pt.phaseCountdowns?.endsInSeconds !== nt.phaseCountdowns?.endsInSeconds ||
+    pt.player?.sourcePlayerId !== nt.player?.sourcePlayerId ||
+    pt.bomb?.state !== nt.bomb?.state ||
+    pt.bomb?.sourcePlayerId !== nt.bomb?.sourcePlayerId ||
+    pt.bomb?.countdownSeconds !== nt.bomb?.countdownSeconds
+  ) {
+    return false;
+  }
+  const bombDamageSensitive =
+    nt.round?.phase === 'live' && (nt.bomb?.state === 'planted' || nt.bomb?.state === 'defusing');
+  if (bombDamageSensitive) {
+    if (
+      pt.bomb?.position?.x !== nt.bomb?.position?.x ||
+      pt.bomb?.position?.y !== nt.bomb?.position?.y ||
+      pt.bomb?.position?.z !== nt.bomb?.position?.z
+    ) {
+      return false;
+    }
+  }
+  const pPlayers = pt.allPlayers;
+  const nPlayers = nt.allPlayers;
+  if (pPlayers === nPlayers) return true;
+  if (!pPlayers || !nPlayers || pPlayers.length !== nPlayers.length) return false;
+  for (let i = 0; i < nPlayers.length; i += 1) {
+    const pp = pPlayers[i]!;
+    const np = nPlayers[i]!;
+    if (
+      pp.sourcePlayerId !== np.sourcePlayerId ||
+      pp.side !== np.side ||
+      pp.displayName !== np.displayName ||
+      pp.observerSlot !== np.observerSlot ||
+      pp.activity !== np.activity
+    ) {
+      return false;
+    }
+    if (bombDamageSensitive) {
+      if (
+        pp.position?.x !== np.position?.x ||
+        pp.position?.y !== np.position?.y ||
+        pp.position?.z !== np.position?.z ||
+        pp.forward?.x !== np.forward?.x ||
+        pp.forward?.y !== np.forward?.y ||
+        pp.forward?.z !== np.forward?.z
+      ) {
+        return false;
+      }
+    }
+    const ps = pp.state;
+    const ns = np.state;
+    if (ps !== ns) {
+      if (
+        !ps ||
+        !ns ||
+        ps.health !== ns.health ||
+        ps.armor !== ns.armor ||
+        ps.hasHelmet !== ns.hasHelmet ||
+        ps.hasDefuser !== ns.hasDefuser ||
+        ps.flashed !== ns.flashed ||
+        ps.smoked !== ns.smoked ||
+        ps.burning !== ns.burning ||
+        ps.money !== ns.money ||
+        ps.roundTotalDamage !== ns.roundTotalDamage ||
+        ps.roundKills !== ns.roundKills ||
+        ps.roundKillHeadshots !== ns.roundKillHeadshots ||
+        ps.equipValue !== ns.equipValue
+      ) {
+        return false;
+      }
+    }
+    const pm = pp.matchStats;
+    const nm = np.matchStats;
+    if (pm !== nm) {
+      if (
+        !pm ||
+        !nm ||
+        pm.kills !== nm.kills ||
+        pm.assists !== nm.assists ||
+        pm.deaths !== nm.deaths ||
+        pm.mvps !== nm.mvps ||
+        pm.score !== nm.score
+      ) {
+        return false;
+      }
+    }
+    const pw = pp.weapons;
+    const nw = np.weapons;
+    if (pw !== nw) {
+      if (!pw || !nw || pw.length !== nw.length) return false;
+      for (let j = 0; j < nw.length; j += 1) {
+        const pwj = pw[j]!;
+        const nwj = nw[j]!;
+        if (
+          pwj.sourceWeaponId !== nwj.sourceWeaponId ||
+          pwj.name !== nwj.name ||
+          pwj.paintKit !== nwj.paintKit ||
+          pwj.type !== nwj.type ||
+          pwj.ammoClip !== nwj.ammoClip ||
+          pwj.ammoClipMax !== nwj.ammoClipMax ||
+          pwj.ammoReserve !== nwj.ammoReserve ||
+          pwj.state !== nwj.state
+        ) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+interface OperatorSemanticSnapshot {
+  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
+  readonly mapName: string | null;
+  readonly lastDispositionKind: string | null;
+  readonly lastDispositionReason: string | null;
+  readonly transitionsLength: number;
+  readonly lastTransitionSeq: number | null;
+  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
+  readonly contextBinding: MatchContextBinding | undefined;
+  readonly identityState: IdentityResolution['state'];
+  readonly identityIssuesLen: number;
+  readonly identityResolvedCount: number;
+  readonly lineupState: ActiveLineupResolution['state'];
+  readonly lineupGen: number;
+  readonly lineupEpoch: number;
+  readonly lineupCtCount: number;
+  readonly lineupTCount: number;
+  readonly lineupExtrasCount: number;
+  readonly programSourceState: string;
+  readonly programSourceGen: number;
+  readonly programSourceTick: number | null;
+  readonly lookaheadSourceState: string;
+  readonly lookaheadSourceGen: number;
+  readonly lookaheadSourceTick: number | null;
+  readonly producerInstanceId: string;
+  readonly liveSessionId: string | null;
+  readonly programSourceGeneration: number;
+  readonly mapEpoch: number;
+}
+
+function buildOperatorSemanticSnapshot(args: {
+  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
+  readonly runtimeSnapshot: ProgramRuntimeSnapshot;
+  readonly runtimeView: ProgramSafeRuntimeView;
+  readonly contextBinding: MatchContextBinding | undefined;
+  readonly identity: IdentityResolution;
+  readonly activeLineup: ActiveLineupResolution;
+  readonly programSourceHealth: ReturnType<CstvSourceManagers['program']['getHealth']>;
+  readonly lookaheadSourceHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
+}): OperatorSemanticSnapshot {
+  const { runtimeSnapshot, runtimeView, identity, activeLineup } = args;
+  const lastTransition =
+    runtimeSnapshot.recentTransitions.length > 0
+      ? runtimeSnapshot.recentTransitions[runtimeSnapshot.recentTransitions.length - 1]
+      : undefined;
+  return {
+    telemetryFreshness: args.telemetryFreshness,
+    mapName: runtimeView.telemetry?.telemetry.map?.name ?? null,
+    lastDispositionKind: runtimeSnapshot.lastDisposition?.kind ?? null,
+    lastDispositionReason: runtimeSnapshot.lastDisposition?.reason ?? null,
+    transitionsLength: runtimeSnapshot.recentTransitions.length,
+    lastTransitionSeq: lastTransition?.runtimeSeq ?? null,
+    seriesProgress: runtimeSnapshot.seriesProgress,
+    contextBinding: args.contextBinding,
+    identityState: identity.state,
+    identityIssuesLen: identity.issues.length,
+    identityResolvedCount: identity.players.filter((p) => p.canonicalPlayerId !== null).length,
+    lineupState: activeLineup.state,
+    lineupGen: activeLineup.sourceGeneration,
+    lineupEpoch: activeLineup.mapEpoch,
+    lineupCtCount: activeLineup.ct.length,
+    lineupTCount: activeLineup.t.length,
+    lineupExtrasCount: activeLineup.extras.length,
+    programSourceState: args.programSourceHealth.state,
+    programSourceGen: args.programSourceHealth.generation,
+    programSourceTick: args.programSourceHealth.lastSync?.tick ?? null,
+    lookaheadSourceState: args.lookaheadSourceHealth.state,
+    lookaheadSourceGen: args.lookaheadSourceHealth.generation,
+    lookaheadSourceTick: args.lookaheadSourceHealth.lastSync?.tick ?? null,
+    producerInstanceId: runtimeView.cursor.producerInstanceId,
+    liveSessionId: runtimeView.cursor.liveSessionId,
+    programSourceGeneration: runtimeView.cursor.programSourceGeneration,
+    mapEpoch: runtimeView.cursor.mapEpoch,
+  };
+}
+
+function sameOperatorSemantic(
+  prev: OperatorSemanticSnapshot | undefined,
+  next: OperatorSemanticSnapshot,
+): boolean {
+  if (prev === undefined) return false;
+  return (
+    prev.telemetryFreshness === next.telemetryFreshness &&
+    prev.mapName === next.mapName &&
+    prev.lastDispositionKind === next.lastDispositionKind &&
+    prev.lastDispositionReason === next.lastDispositionReason &&
+    prev.transitionsLength === next.transitionsLength &&
+    prev.lastTransitionSeq === next.lastTransitionSeq &&
+    prev.seriesProgress === next.seriesProgress &&
+    prev.contextBinding === next.contextBinding &&
+    prev.identityState === next.identityState &&
+    prev.identityIssuesLen === next.identityIssuesLen &&
+    prev.identityResolvedCount === next.identityResolvedCount &&
+    prev.lineupState === next.lineupState &&
+    prev.lineupGen === next.lineupGen &&
+    prev.lineupEpoch === next.lineupEpoch &&
+    prev.lineupCtCount === next.lineupCtCount &&
+    prev.lineupTCount === next.lineupTCount &&
+    prev.lineupExtrasCount === next.lineupExtrasCount &&
+    prev.programSourceState === next.programSourceState &&
+    prev.programSourceGen === next.programSourceGen &&
+    prev.programSourceTick === next.programSourceTick &&
+    prev.lookaheadSourceState === next.lookaheadSourceState &&
+    prev.lookaheadSourceGen === next.lookaheadSourceGen &&
+    prev.lookaheadSourceTick === next.lookaheadSourceTick &&
+    prev.producerInstanceId === next.producerInstanceId &&
+    prev.liveSessionId === next.liveSessionId &&
+    prev.programSourceGeneration === next.programSourceGeneration &&
+    prev.mapEpoch === next.mapEpoch
+  );
+}
+
+interface AssistSemanticSnapshot {
+  readonly enabled: boolean;
+  readonly leadSeconds: number;
+  readonly delaySeconds: number;
+  readonly waitingForNextMap: boolean;
+  readonly lookaheadState: string;
+  readonly lookaheadGen: number;
+  readonly lookaheadErrorCode: string | null;
+  readonly lookaheadMapName: string | null;
+  readonly mapName: string | null;
+  readonly roundNumber: number | null;
+  readonly roundPhase: string | null;
+}
+
+function buildAssistSemanticSnapshot(args: {
+  readonly program: ProgramProjection;
+  readonly observerSettings:
+    | {
+        enabled: boolean;
+        leadSeconds: number;
+        delaySeconds: number;
+        waitingForNextMap?: boolean;
+      }
+    | undefined;
+  readonly lookaheadHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
+}): AssistSemanticSnapshot {
+  return {
+    enabled: args.observerSettings?.enabled ?? false,
+    leadSeconds: args.observerSettings?.leadSeconds ?? 0,
+    delaySeconds: args.observerSettings?.delaySeconds ?? 0,
+    waitingForNextMap: args.observerSettings?.waitingForNextMap ?? false,
+    lookaheadState: args.lookaheadHealth.state,
+    lookaheadGen: args.lookaheadHealth.generation,
+    lookaheadErrorCode: args.lookaheadHealth.lastErrorCode ?? null,
+    lookaheadMapName:
+      args.lookaheadHealth.mapName ?? args.lookaheadHealth.lastSync?.mapName ?? null,
+    mapName: args.program.map.name,
+    roundNumber: args.program.map.roundNumber,
+    roundPhase: args.program.round?.phase ?? null,
+  };
+}
+
+function sameAssistSemantic(
+  prev: AssistSemanticSnapshot | undefined,
+  next: AssistSemanticSnapshot,
+): boolean {
+  if (prev === undefined) return false;
+  return (
+    prev.enabled === next.enabled &&
+    prev.leadSeconds === next.leadSeconds &&
+    prev.delaySeconds === next.delaySeconds &&
+    prev.waitingForNextMap === next.waitingForNextMap &&
+    prev.lookaheadState === next.lookaheadState &&
+    prev.lookaheadGen === next.lookaheadGen &&
+    prev.lookaheadErrorCode === next.lookaheadErrorCode &&
+    prev.lookaheadMapName === next.lookaheadMapName &&
+    prev.mapName === next.mapName &&
+    prev.roundNumber === next.roundNumber &&
+    prev.roundPhase === next.roundPhase
+  );
+}
+
+function sameAssistPayload(prev: AssistPayload | undefined, next: AssistPayload): boolean {
+  if (prev === undefined) return false;
+  if (prev.availability !== next.availability) return false;
+  const po = prev.observer;
+  const no = next.observer;
+  if (po === no) return true;
+  if (!po || !no) return false;
+  if (
+    po.state !== no.state ||
+    po.waitingReason !== no.waitingReason ||
+    po.nextWindowSeconds !== no.nextWindowSeconds ||
+    po.leadSeconds !== no.leadSeconds ||
+    po.hints.length !== no.hints.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < no.hints.length; i += 1) {
+    const ph = po.hints[i]!;
+    const nh = no.hints[i]!;
+    if (
+      ph.id !== nh.id ||
+      ph.remainingSeconds !== nh.remainingSeconds ||
+      ph.attacker.name !== nh.attacker.name ||
+      ph.attacker.observerSlot !== nh.attacker.observerSlot ||
+      ph.victim.name !== nh.victim.name ||
+      ph.victim.observerSlot !== nh.victim.observerSlot
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function sameStaleKey(

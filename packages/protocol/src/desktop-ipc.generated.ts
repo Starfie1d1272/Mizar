@@ -14,7 +14,14 @@ const Cs2ActivityPhase = z.enum(['idle', 'starting', 'checking', 'restoring']);
 const Cs2ConfigPhase = z.enum(['idle', 'uncertain', 'running', 'pending']);
 const QualityPreset = z.enum(['very-high', 'high', 'medium', 'preserve']);
 const BackupAction = z.enum(['select', 'apply', 'apply-hud', 'cancel']);
-const FrameRateLimit = z.union([z.literal(0), z.literal(30), z.literal(60)]);
+const FrameRateLimit = z.union([
+  z.literal(0),
+  z.literal(30),
+  z.literal(60),
+  z.literal(90),
+  z.literal(120),
+  z.literal(144),
+]);
 const Busy = z.literal(true);
 const Ready = z.literal(false);
 const PreparationSteps = z.object({

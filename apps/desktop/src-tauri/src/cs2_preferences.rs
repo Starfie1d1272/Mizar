@@ -28,7 +28,7 @@ impl Default for Preferences {
 impl Preferences {
     pub fn new(quality: &str, frame_rate_limit: u16) -> Result<Self, String> {
         if FrameRateLimit::try_from(frame_rate_limit).is_err() {
-            return Err("CS2 帧率仅支持 60、30 或不限帧。".into());
+            return Err("CS2 帧率仅支持 144、120、90、60、30 或不限帧。".into());
         }
         Ok(Self {
             quality: Quality::parse(quality)?,

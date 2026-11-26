@@ -2,7 +2,7 @@ import type { ResolvedHudModule } from '@mizar/broadcast-config';
 import { AssetFonts, assetStyle, useAssetUrl } from './assets.js';
 import { presentationBoundaryKey } from './presentation-boundary.js';
 import type { RadarProps } from './widgets/radar/Radar.js';
-import type { CSSProperties, ReactElement } from 'react';
+import { memo, useMemo, type CSSProperties, type ReactElement } from 'react';
 
 import {
   HUD_WIDGET_REGISTRY,
@@ -97,19 +97,65 @@ export function GameplayHud({
   const resolve = useAssetUrl();
   const programFresh = snapshot?.payload.status.telemetry === 'fresh';
   const radarAvailable = radarSource !== undefined || radarSnapshot != null;
-  if (!programFresh && !radarAvailable) return null;
-
   const accentColor =
     accent?.source === 'fixed'
       ? accent.value
       : accent?.source === 'event'
         ? (eventAccent ?? accent.fallback)
         : resolvedPreset.theme.brandColor;
+  const rootThemeStyle = useMemo(
+    () => themeStyle(resolvedPreset.theme, accentColor),
+    [resolvedPreset.theme, accentColor],
+  );
+  const rootAssetStyle = useMemo(() => assetStyle(resolve), [resolve]);
+  const rootStyle = useMemo(
+    () => ({ ...rootThemeStyle, ...rootAssetStyle }),
+    [rootThemeStyle, rootAssetStyle],
+  );
+  const score = resolvedPreset.widgets['top-score-bar'];
+  const showTimeoutFromSettings = useMemo(
+    () => topScoreBarSettingsSchema.parse(score.settings).showTimeout,
+    [score.settings],
+  );
+  const compactRadar =
+    hudDesignForVariant(resolvedPreset.widgets.radar.variant) === 'current' &&
+    resolvedPreset.layout.widgets.radar.anchor === DEFAULT_PLACEMENTS.radar.anchor &&
+    resolvedPreset.layout.widgets.radar.offsetX === DEFAULT_PLACEMENTS.radar.offsetX &&
+    resolvedPreset.layout.widgets.radar.offsetY === DEFAULT_PLACEMENTS.radar.offsetY &&
+    (!programFresh ||
+      !snapshot ||
+      !resolvedPreset.layout.widgets['series-strip'].visible ||
+      !hasSeriesMapStrip(snapshot.payload));
+  const widgetLayouts = useMemo(
+    () =>
+      HUD_WIDGET_REGISTRY.map((descriptor) => {
+        const placement = resolvedPreset.layout.widgets[descriptor.id];
+        if (placement === undefined || !placement.visible) return null;
+        const rendererEntry = getHudRendererEntry(descriptor.id, rendererRegistry);
+        if (rendererEntry.renderer === null) return null;
+        let box = placementToBox(descriptor.id, placement);
+        if (descriptor.id === 'radar' && compactRadar) {
+          // Only compact the standard slot. Explicit editor placements remain authoritative.
+          box = { ...box, top: DEFAULT_PLACEMENTS['series-strip'].offsetY };
+        }
+        const design = hudDesignForVariant(resolvedPreset.widgets[descriptor.id].variant);
+        const boxStyle: CSSProperties = {
+          height: `${box.height}px`,
+          left: `${box.left}px`,
+          top: `${box.top}px`,
+          width: `${box.width}px`,
+        };
+        return { descriptor, placement, rendererEntry, box, design, boxStyle };
+      }),
+    [resolvedPreset, rendererRegistry, compactRadar],
+  );
+
+  if (!programFresh && !radarAvailable) return null;
+
   const chat = overlays?.chat;
   const autoChat = chat?.enabled === true && chat.placement === 'auto';
   const fixedChat =
     chat?.enabled && chat.placement !== 'auto' && chat.placement.visible ? chat.placement : null;
-  const score = resolvedPreset.widgets['top-score-bar'];
   const design = hudDesignForVariant(
     overlays?.pause.visual && overlays.pause.visual !== 'legacy'
       ? overlays.pause.visual
@@ -120,8 +166,7 @@ export function GameplayHud({
     programFresh &&
     snapshot &&
     (overlays?.pause.enabled ??
-      (resolvedPreset.layout.widgets['top-score-bar'].visible &&
-        topScoreBarSettingsSchema.parse(score.settings).showTimeout)) &&
+      (resolvedPreset.layout.widgets['top-score-bar'].visible && showTimeoutFromSettings)) &&
     !gg &&
     (phase === 'paused' || phase === 'timeout_ct' || phase === 'timeout_t')
   ) {
@@ -130,7 +175,7 @@ export function GameplayHud({
         className="gameplay-hud"
         data-gameplay-hud="true"
         data-hud-preset-id={resolvedPreset.preset.id}
-        style={{ ...themeStyle(resolvedPreset.theme, accentColor), ...assetStyle(resolve) }}
+        style={rootStyle}
       >
         <AssetFonts />
         <BroadcastPause
@@ -152,7 +197,7 @@ export function GameplayHud({
       className="gameplay-hud"
       data-gameplay-hud="true"
       data-hud-preset-id={resolvedPreset.preset.id}
-      style={{ ...themeStyle(resolvedPreset.theme, accentColor), ...assetStyle(resolve) }}
+      style={rootStyle}
     >
       <AssetFonts />
       {fixedChat && snapshot && programFresh ? (
@@ -168,35 +213,16 @@ export function GameplayHud({
       !resolvedPreset.layout.widgets['team-t-rail'].visible ? (
         <AutoChat snapshot={snapshot} resolvedPreset={resolvedPreset} />
       ) : null}
-      {HUD_WIDGET_REGISTRY.map((descriptor) => {
-        const placement = resolvedPreset.layout.widgets[descriptor.id];
-        if (placement === undefined || !placement.visible) return null;
-        const rendererEntry = getHudRendererEntry(descriptor.id, rendererRegistry);
-        if (rendererEntry.renderer === null) return null;
-
-        let box = placementToBox(descriptor.id, placement);
-        if (
-          descriptor.id === 'radar' &&
-          hudDesignForVariant(resolvedPreset.widgets.radar.variant) === 'current' &&
-          placement.anchor === DEFAULT_PLACEMENTS.radar.anchor &&
-          placement.offsetX === DEFAULT_PLACEMENTS.radar.offsetX &&
-          placement.offsetY === DEFAULT_PLACEMENTS.radar.offsetY &&
-          (!programFresh ||
-            !snapshot ||
-            !resolvedPreset.layout.widgets['series-strip'].visible ||
-            !hasSeriesMapStrip(snapshot.payload))
-        ) {
-          // Only compact the standard slot. Explicit editor placements remain authoritative.
-          box = { ...box, top: DEFAULT_PLACEMENTS['series-strip'].offsetY };
-        }
-        const design = hudDesignForVariant(resolvedPreset.widgets[descriptor.id].variant);
+      {widgetLayouts.map((entry) => {
+        if (entry === null) return null;
+        const { descriptor, placement, rendererEntry, box, design: widgetDesign, boxStyle } = entry;
         let content: ReactElement;
         if (rendererEntry.source === 'program') {
           if (!programFresh || snapshot === null) return null;
           const Renderer = rendererEntry.renderer;
           content = (
             <Renderer
-              design={design}
+              design={widgetDesign}
               box={box}
               placement={placement}
               resolvedPreset={resolvedPreset}
@@ -228,8 +254,8 @@ export function GameplayHud({
 
         return (
           <div
-            className={`gameplay-hud__widget hud-widget-design${design === 'current' ? '' : ' hud-redraw'}`}
-            data-hud-design={design}
+            className={`gameplay-hud__widget hud-widget-design${widgetDesign === 'current' ? '' : ' hud-redraw'}`}
+            data-hud-design={widgetDesign}
             data-hud-widget={descriptor.id}
             data-renderer-availability={descriptor.rendererAvailability}
             key={
@@ -237,12 +263,7 @@ export function GameplayHud({
                 ? 'radar'
                 : `${descriptor.id}:${presentationBoundaryKey(snapshot, undefined)}`
             }
-            style={{
-              height: `${box.height}px`,
-              left: `${box.left}px`,
-              top: `${box.top}px`,
-              width: `${box.width}px`,
-            }}
+            style={boxStyle}
           >
             {content}
           </div>
@@ -252,7 +273,7 @@ export function GameplayHud({
   );
 }
 
-function FixedChat({
+const FixedChat = memo(function FixedChat({
   snapshot,
   placement,
   design,
@@ -271,8 +292,8 @@ function FixedChat({
       <AllChat design={design} messages={snapshot.payload.allChat ?? []} />
     </div>
   );
-}
-function AutoChat({
+});
+const AutoChat = memo(function AutoChat({
   snapshot,
   resolvedPreset,
 }: {
@@ -292,4 +313,4 @@ function AutoChat({
       </section>
     </div>
   );
-}
+});
