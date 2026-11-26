@@ -3,11 +3,20 @@ import {
   type ProductionExitEvidence,
 } from '@mizar/protocol/program-scenes';
 import { ControlTask } from '../debug/control-task';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { desktopInvoke } from '../workspace/client';
 import { prepareObs } from '../workspace/obs-preparation';
 
-export function useLocalReadWithTime<T>(path: string | null, interval = 2000, refresh = 0) {
+export function useLocalReadWithTime<T>(
+  path: string | null,
+  interval = 2000,
+  refresh = 0,
+  isEqual?: (prev: T, next: T) => boolean,
+) {
+  const isEqualRef = useRef(isEqual);
+  useEffect(() => {
+    isEqualRef.current = isEqual;
+  }, [isEqual]);
   const [value, setValue] = useState<{
     value: T | null;
     updatedAt: number | null;
@@ -32,7 +41,19 @@ export function useLocalReadWithTime<T>(path: string | null, interval = 2000, re
         if (!response.ok) throw new Error('unavailable');
         const next = (await response.json()) as T;
         const now = Date.now();
-        if (active) setValue({ value: next, updatedAt: now, polledAt: now, status: 'ready' });
+        if (active) {
+          setValue((prev) => ({
+            value:
+              prev.status === 'ready' &&
+              prev.value !== null &&
+              isEqualRef.current?.(prev.value, next)
+                ? prev.value
+                : next,
+            updatedAt: now,
+            polledAt: now,
+            status: 'ready',
+          }));
+        }
       } catch {
         if (active)
           setValue({ value: null, updatedAt: null, polledAt: Date.now(), status: 'unavailable' });

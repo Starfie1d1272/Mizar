@@ -28,10 +28,59 @@ const subscribeMotion = (notify: () => void) => {
 };
 const readReducedMotion = () => window.matchMedia(motionQuery).matches;
 
-function usePresentation(preview: boolean) {
+function usePageVisibility(): boolean {
+  const [docVisible, setDocVisible] = useState(() =>
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+  );
+  const [obsState, setObsState] = useState<{ active: boolean | null; visible: boolean | null }>({
+    active: null,
+    visible: null,
+  });
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      setDocVisible(document.visibilityState !== 'hidden');
+    };
+    const onObsActive = (event: Event) => {
+      const active = (event as CustomEvent<{ active?: unknown }>).detail?.active;
+      if (typeof active === 'boolean') {
+        setObsState((prev) => (prev.active === active ? prev : { ...prev, active }));
+      }
+    };
+    const onObsVisible = (event: Event) => {
+      const visible = (event as CustomEvent<{ visible?: unknown }>).detail?.visible;
+      if (typeof visible === 'boolean') {
+        setObsState((prev) => (prev.visible === visible ? prev : { ...prev, visible }));
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('obsSourceActiveChanged', onObsActive);
+      window.addEventListener('obsSourceVisibleChanged', onObsVisible);
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('obsSourceActiveChanged', onObsActive);
+        window.removeEventListener('obsSourceVisibleChanged', onObsVisible);
+      }
+    };
+  }, []);
+
+  if (obsState.active !== null || obsState.visible !== null) {
+    return docVisible && (Boolean(obsState.active) || Boolean(obsState.visible));
+  }
+  return docVisible;
+}
+
+function usePresentation(preview: boolean, enabled: boolean) {
   const [value, setValue] = useState<ProgramPresentation | null>(null);
   useEffect(() => {
-    if (preview) return;
+    if (preview || !enabled) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -55,14 +104,23 @@ function usePresentation(preview: boolean) {
       active = false;
       clearTimeout(timer);
     };
-  }, [preview]);
+  }, [preview, enabled]);
   return value;
 }
 
 export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId }) {
   const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
   const preview = params.get('preview') === '1';
-  const liveData = usePresentation(preview);
+  const scenes = useProgramScenes();
+  const pageVisible = usePageVisibility();
+  const sceneActive =
+    scenes === null ||
+    scenes.active === sceneId ||
+    scenes.preparing?.target === sceneId ||
+    scenes.director?.next === sceneId ||
+    scenes.director?.readyToTake === sceneId ||
+    pageVisible;
+  const liveData = usePresentation(preview, sceneActive);
   const variant = params.get('variant');
   const [sample, setSample] = useState<{
     sceneId: ProgramSceneId;
@@ -92,7 +150,6 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   }, [preview, sceneId, variant]);
   const selectedSample = sample?.sceneId === sceneId && sample.variant === variant ? sample : null;
   const data = preview ? (selectedSample?.data ?? null) : liveData;
-  const scenes = useProgramScenes();
   const reducedMotion = useSyncExternalStore(subscribeMotion, readReducedMotion, () => false);
   const display = useBroadcastDisplayConfig(!preview, sceneId);
   const hud = useHudConfigClient(
@@ -100,7 +157,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   );
   const activeHud =
     !preview && display.current?.hud.renderer === 'native' ? display.current.hud : null;
-  const client = useLocalChannelClient('program');
+  const client = useLocalChannelClient('program', !preview && sceneActive);
   const connection = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const snapshot = preview ? (selectedSample?.snapshot ?? null) : connection.current;
   const clock = snapshot?.payload.clock?.phase;
@@ -142,7 +199,7 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
   };
   const scene =
     !preview && (sceneId === 'matchup' || sceneId === 'gameplay') ? (
-      <LiveRadarScene {...sceneProps} sceneStyle={sceneStyle} />
+      <LiveRadarScene {...sceneProps} active={sceneActive} sceneStyle={sceneStyle} />
     ) : (
       <ProgramView kind="scene" sceneStyle={sceneStyle} {...sceneProps} />
     );
@@ -160,12 +217,14 @@ export function ProgramScenePage({ sceneId }: { readonly sceneId: ProgramSceneId
 }
 
 function LiveRadarScene({
+  active,
   sceneStyle,
   ...props
 }: ProgramSceneViewProps & {
+  readonly active: boolean;
   readonly sceneStyle?: CSSProperties | undefined;
 }) {
-  const radarClient = useLocalChannelClient('radar');
+  const radarClient = useLocalChannelClient('radar', active);
   const radar = useSyncExternalStore(
     radarClient.subscribe,
     radarClient.getSnapshot,

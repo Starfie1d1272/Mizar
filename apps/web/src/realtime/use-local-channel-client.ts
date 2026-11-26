@@ -11,23 +11,31 @@ import { createLocalChannelClient, type LocalChannelClient } from './local-chann
  */
 export function useLocalChannelClient<C extends LocalSnapshotChannel>(
   channel: C,
+  enabled = true,
 ): LocalChannelClient<C> {
-  const client = useMemo(() => createLocalChannelClient(channel), [channel]);
-  const disposeTimer = useRef<number | undefined>(undefined);
+  const client = useMemo(
+    () => (enabled ? createLocalChannelClient(channel) : createLocalChannelClient(channel)),
+    [channel, enabled],
+  );
+  const pendingDisposal = useRef<{ client: LocalChannelClient<C>; timer: number } | null>(null);
 
   useEffect(() => {
-    if (disposeTimer.current !== undefined) {
-      window.clearTimeout(disposeTimer.current);
-      disposeTimer.current = undefined;
+    if (!enabled) return;
+    if (pendingDisposal.current?.client === client) {
+      window.clearTimeout(pendingDisposal.current.timer);
+      pendingDisposal.current = null;
     }
     client.start();
     return () => {
-      disposeTimer.current = window.setTimeout(() => {
-        disposeTimer.current = undefined;
+      const timer = window.setTimeout(() => {
+        if (pendingDisposal.current?.client === client) {
+          pendingDisposal.current = null;
+        }
         client.dispose();
       }, 0);
+      pendingDisposal.current = { client, timer };
     };
-  }, [client]);
+  }, [client, enabled]);
 
   return client;
 }
