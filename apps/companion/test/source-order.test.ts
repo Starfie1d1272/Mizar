@@ -204,29 +204,39 @@ test('fetchVerifiedMetadata decouples 8s transport timeout from verify(bytes, si
     new Response(JSON.stringify({ ok: true }), { status: 200 });
 
   let verifyAborted = false;
-  const pending = fetchVerifiedMetadata({
-    origin: 'https://github.com/Starfie1d1272/Mizar/releases/latest/download/machine-metadata.json',
-    maxBytes: 64 * 1024,
-    signal: outer.signal,
-    fetcher,
-    verify: async (bytes, verifySignal) => {
-      assert.equal(verifySignal, outer.signal);
-      verifySignal.addEventListener('abort', () => {
-        verifyAborted = true;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 9_500));
-      assert.equal(verifySignal.aborted, false);
-      return (JSON.parse(bytes.toString('utf8')) as { ok: boolean }).ok;
-    },
+  let markVerifyEntered!: () => void;
+  const verifyEntered = new Promise<void>((resolve) => {
+    markVerifyEntered = resolve;
   });
 
-  // Advance past the 8s official transport budget while verify() is still running
-  await Promise.resolve();
-  t.mock.timers.tick(8_500);
-  await Promise.resolve();
-  assert.equal(verifyAborted, false);
-  t.mock.timers.tick(2_000);
-  assert.equal(await pending, true);
+  try {
+    const pending = fetchVerifiedMetadata({
+      origin:
+        'https://github.com/Starfie1d1272/Mizar/releases/latest/download/machine-metadata.json',
+      maxBytes: 64 * 1024,
+      signal: outer.signal,
+      fetcher,
+      verify: async (bytes, verifySignal) => {
+        assert.equal(verifySignal, outer.signal);
+        verifySignal.addEventListener('abort', () => {
+          verifyAborted = true;
+        });
+        const done = new Promise<void>((resolve) => setTimeout(resolve, 9_500));
+        markVerifyEntered();
+        await done;
+        assert.equal(verifySignal.aborted, false);
+        return (JSON.parse(bytes.toString('utf8')) as { ok: boolean }).ok;
+      },
+    });
+
+    await verifyEntered;
+    t.mock.timers.tick(8_500);
+    assert.equal(verifyAborted, false);
+    t.mock.timers.tick(2_000);
+    assert.equal(await pending, true);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
 
 test('fetchVerifiedResourceCarrier falls back when second-half publication verification fails', async () => {
