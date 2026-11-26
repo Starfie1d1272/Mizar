@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from 'node:process';
-import { setInterval } from 'node:timers';
+import { setInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 // Synthetic local child: no SDK, network or game process.
 import fs from 'node:fs';
