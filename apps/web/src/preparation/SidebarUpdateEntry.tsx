@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '../ui';
 import {
   installDesktopUpdate,
@@ -12,7 +12,7 @@ export function SidebarUpdateEntry() {
   const context = useUpdateStatus();
   const status = context?.status ?? null;
   const [acting, setActing] = useState(false);
-  const [error, setError] = useState('');
+  const [errorState, setErrorState] = useState<{ key: string; message: string } | null>(null);
 
   const mode = status?.staged
     ? 'staged'
@@ -29,12 +29,10 @@ export function SidebarUpdateEntry() {
   const targetVersion =
     mode === 'staged' ? status?.staged?.version : (status?.candidate?.version ?? null);
 
-  useEffect(() => {
-    setError('');
-  }, [mode, targetVersion, status?.installBlockedReason]);
-
   if (!desktop || !status || !mode || !targetVersion) return null;
 
+  const errorKey = `${mode}:${targetVersion}:${status.installBlockedReason ?? ''}`;
+  const error = errorState?.key === errorKey ? errorState.message : '';
   const blocked = mode === 'staged' && Boolean(status.installBlockedReason);
   const label = mode === 'staged' ? '更新已就绪' : '发现新版本';
   const actionLabel =
@@ -49,7 +47,7 @@ export function SidebarUpdateEntry() {
   const handleAction = async () => {
     if (acting || blocked) return;
     setActing(true);
-    setError('');
+    setErrorState(null);
     try {
       if (mode === 'staged') {
         await installDesktopUpdate();
@@ -60,7 +58,10 @@ export function SidebarUpdateEntry() {
         await openUpdateReleasePage(targetVersion);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '操作未完成，请重试。');
+      setErrorState({
+        key: errorKey,
+        message: reason instanceof Error ? reason.message : '操作未完成，请重试。',
+      });
     } finally {
       setActing(false);
     }
@@ -73,7 +74,7 @@ export function SidebarUpdateEntry() {
         <span className="product-sidebar-update__version">v{targetVersion}</span>
       </div>
       <Button
-        variant={mode === 'staged' ? 'primary' : 'default'}
+        variant={mode === 'staged' ? 'primary' : 'secondary'}
         disabled={acting || blocked}
         aria-busy={acting || undefined}
         onClick={() => void handleAction()}

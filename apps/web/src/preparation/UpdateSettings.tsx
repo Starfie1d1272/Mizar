@@ -228,7 +228,7 @@ function UpdateSettingsView({
           ) : null}
           {canDownloadCandidate && status?.candidate ? (
             <Button
-              variant={status.staged ? 'default' : 'primary'}
+              variant={status.staged ? 'secondary' : 'primary'}
               disabled={waiting || !desktop}
               onClick={() => void action('download')}
             >
