@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Button, Select } from '../ui';
 
 type Devices = {
-  desktopMode: boolean;
   revision: string;
   devices: {
     role: 'desktop' | 'microphone';
@@ -67,21 +66,11 @@ export function ObsAudioDevices({ disabled }: { disabled: boolean }) {
       <Button disabled={disabled || busy} aria-busy={busy} onClick={() => void run(read)}>
         {busy ? '正在读取设备…' : '重新读取设备'}
       </Button>
-      {devices?.desktopMode && (
-        <p>
-          更换桌面设备前，请先切到独立分路（可选择暂不采集其他解说），保存设备后再切回桌面混音，以重新核对音乐监听。麦克风设备可直接更换。
-        </p>
-      )}
       {devices?.devices.map((device) => (
         <div key={device.role}>
           <Select
             label={device.name}
-            disabled={
-              disabled ||
-              busy ||
-              !device.configurable ||
-              (device.role === 'desktop' && devices.desktopMode)
-            }
+            disabled={disabled || busy || !device.configurable}
             value={choices[device.role] ?? ''}
             onChange={(event) => setChoices({ ...choices, [device.role]: event.target.value })}
           >
@@ -97,7 +86,6 @@ export function ObsAudioDevices({ disabled }: { disabled: boolean }) {
               disabled ||
               busy ||
               !device.configurable ||
-              (device.role === 'desktop' && devices.desktopMode) ||
               !choices[device.role] ||
               choices[device.role] === device.deviceId
             }

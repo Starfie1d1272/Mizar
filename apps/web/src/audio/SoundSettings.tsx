@@ -80,33 +80,26 @@ export function SoundSettings() {
                 )}
               </StatusBanner>
             ) : null}
-            {connected &&
-              !preparing &&
-              (unchecked ||
-                findings.some(
-                  ({ code }) => code === 'audio_missing' || code.startsWith('audio_scene:'),
-                )) && (
-                <Button
-                  disabled={busy || outputActive}
-                  onClick={() => {
-                    setBusy(true);
-                    setMessage('');
-                    void prepareObs()
-                      .then(() => {
-                        setRoutingVersion((version) => version + 1);
-                        setMessage('已重新检查场景与音频。');
-                      })
-                      .catch((error: unknown) =>
-                        setMessage(
-                          error instanceof Error ? error.message : '场景与音频准备未完成。',
-                        ),
-                      )
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  修复场景与音频
-                </Button>
-              )}
+            {connected && !preparing && (
+              <Button
+                disabled={busy || outputActive}
+                onClick={() => {
+                  setBusy(true);
+                  setMessage('');
+                  void prepareObs()
+                    .then(() => {
+                      setRoutingVersion((version) => version + 1);
+                      setMessage('已重新检查场景与音频。');
+                    })
+                    .catch((error: unknown) =>
+                      setMessage(error instanceof Error ? error.message : '场景与音频准备未完成。'),
+                    )
+                    .finally(() => setBusy(false));
+                }}
+              >
+                修复场景与音频
+              </Button>
+            )}
             {message && <p role="status">{message}</p>}
             <ObsAudioRouting key={routingVersion} outputActive={outputActive} />
           </Panel>
