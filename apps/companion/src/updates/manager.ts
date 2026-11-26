@@ -18,6 +18,7 @@ import { installerUrl, StableSource } from './source.js';
 
 const CHECK_INTERVAL = 2 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY = 30_000;
+const AUTOMATIC_OPT_OUT = 'automatic-opt-out';
 const configSchema = z.strictObject({
   automatic: z.boolean().default(true),
   lastAttempt: z.number().nonnegative(),
@@ -229,6 +230,15 @@ export class UpdateManager {
       this.disableInitialization('directory_scan', cause);
       return;
     }
+    if (this.options.installed && !this.config.automatic && !names.includes(AUTOMATIC_OPT_OUT)) {
+      this.config.automatic = true;
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        this.config.automatic = false;
+        this.failure('settings_migrate', error);
+      }
+    }
     if (this.ready) {
       if (this.isVersionAtOrBelowCurrent(this.ready.manifest.version)) {
         this.ready = null;
@@ -397,6 +407,14 @@ export class UpdateManager {
       if (this.prepared || this.planning) throw new Error('update_busy');
       if (this.task && (this.activity !== 'downloading' || this.currentDownloadKind !== 'auto'))
         throw new Error('update_busy');
+      if (!automatic) {
+        // Keep the existing settings schema readable by an older version after rollback.
+        await writeFile(join(this.root, AUTOMATIC_OPT_OUT), '', { flag: 'wx', mode: 0o600 }).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== 'EEXIST') throw error;
+          },
+        );
+      }
       const previous = this.config.automatic;
       this.config.automatic = automatic;
       try {
