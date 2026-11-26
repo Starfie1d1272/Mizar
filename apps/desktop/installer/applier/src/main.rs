@@ -245,8 +245,6 @@ struct InstallParams {
 struct InstallOutput {
     version: Option<String>,
     previous_version: Option<String>,
-    version_id: Option<String>,
-    previous_id: Option<String>,
     cleanup_warning: Option<String>,
 }
 
@@ -278,21 +276,7 @@ fn run_install_or_update(
     }
 
     let (code, msg, committed, relaunch_exe) = match res {
-        Ok(()) => {
-            if let Some(ui) = ui_opt.take() {
-                ui.close();
-            }
-            if let Some(version_id) = out.version_id.as_deref() {
-                cleanup_old_versions_and_staging(
-                    &params.install_dir,
-                    version_id,
-                    out.previous_id.as_deref(),
-                    log,
-                    &mut out.cleanup_warning,
-                );
-            }
-            (ExitCode::Ok, None, true, None)
-        }
+        Ok(()) => (ExitCode::Ok, None, true, None),
         Err(e) => {
             log.log(&e.msg);
             (e.code, Some(e.msg), e.committed, e.relaunch_exe)
@@ -375,11 +359,21 @@ fn execute_install_or_update(
     };
     let ui = ProgressUi::start(params.no_ui, ui_mode, initial_stage, None);
     let res = run_phases(params, log, &ui, &mut guards, out);
-    *ui_slot = Some(ui);
 
     match res {
-        Ok(()) => Ok(()),
+        Ok((version_id, previous_id)) => {
+            ui.close();
+            cleanup_old_versions_and_staging(
+                &params.install_dir,
+                &version_id,
+                previous_id.as_deref(),
+                log,
+                &mut out.cleanup_warning,
+            );
+            Ok(())
+        }
         Err(mut err) => {
+            *ui_slot = Some(ui);
             if !err.committed {
                 let relaunch = if err.code != ExitCode::AppRunning {
                     guards
@@ -403,7 +397,7 @@ fn run_phases(
     ui: &ProgressUi,
     guards: &mut PreCommitGuard,
     out: &mut InstallOutput,
-) -> Result<(), StepError> {
+) -> Result<(String, Option<String>), StepError> {
     let is_update = params.apply_update.is_some();
     let prev_ver_hint = read_current_pointer(&params.install_dir)
         .map(|p| p.current.split('-').next().unwrap_or(&p.current).to_owned());
@@ -578,8 +572,6 @@ fn run_phases(
     write_current_pointer_atomic(&install_dir, &new_pointer).map_err(|e| {
         StepError::pre_commit(ExitCode::IoError, format!("写入 current.json 失败: {e}"))
     })?;
-    out.version_id = Some(version_id.clone());
-    out.previous_id = previous_id.clone();
     legacy_guard.archive = None;
     log.log(&format!("committed current.json -> {version_id}"));
 
@@ -659,7 +651,7 @@ fn run_phases(
         }
     }
 
-    Ok(())
+    Ok((version_id, previous_id))
 }
 
 fn cleanup_old_versions_and_staging(

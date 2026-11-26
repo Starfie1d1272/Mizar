@@ -189,7 +189,7 @@ fn stop_runtime(
     expected_instance: &str,
 ) -> Result<(), String> {
     let mut child = supervisor(root, "--stop", None, Some(expected_instance))?;
-    match wait_child(&mut child, Duration::from_secs(300)) {
+    match wait_child(&mut child, Duration::from_secs(75)) {
         Ok(status) if status.success() => {
             if let Ok(scope) = shutdown_scope(root) {
                 ExitSignal::notify_stopped(&scope);
