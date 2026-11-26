@@ -1,4 +1,9 @@
-import { LOCAL_SNAPSHOT_CHANNELS, type LocalSnapshotChannel } from './version.js';
+import {
+  LOCAL_PROTOCOL_VERSION,
+  LOCAL_SNAPSHOT_CHANNELS,
+  LOCAL_SNAPSHOT_VERSIONS,
+  type LocalSnapshotChannel,
+} from './version.js';
 
 export interface SnapshotCursorLike {
   readonly producerInstanceId: string;
@@ -64,6 +69,9 @@ export interface SnapshotSchema<TSnapshot> {
   parse(input: unknown): TSnapshot;
 }
 
+export type SnapshotValidator<TSnapshot> =
+  SnapshotSchema<TSnapshot> | ((input: unknown) => TSnapshot | null);
+
 export function createSnapshotAcceptanceState(): SnapshotAcceptanceState {
   return {
     channel: null,
@@ -109,17 +117,50 @@ function isSnapshotChannel(value: unknown): value is LocalSnapshotChannel {
   );
 }
 
+function hasValidChannelPayload(
+  channel: LocalSnapshotChannel,
+  payload: Record<string, unknown>,
+): boolean {
+  switch (channel) {
+    case 'program':
+      return (
+        isPlainRecord(payload.status) &&
+        isPlainRecord(payload.teams) &&
+        isPlainRecord(payload.map) &&
+        Array.isArray(payload.players)
+      );
+    case 'radar':
+      return (
+        (payload.mapName === null || typeof payload.mapName === 'string') &&
+        Array.isArray(payload.players) &&
+        Array.isArray(payload.grenades)
+      );
+    case 'operator':
+      return (
+        isPlainRecord(payload.runtime) &&
+        isPlainRecord(payload.matchContext) &&
+        isPlainRecord(payload.identity) &&
+        isPlainRecord(payload.activeLineup) &&
+        isPlainRecord(payload.sources)
+      );
+    case 'assist':
+      return (
+        typeof payload.availability === 'string' &&
+        (payload.observer === undefined || isPlainRecord(payload.observer))
+      );
+  }
+}
+
 /**
- * Lightweight runtime envelope check for trusted local WebSocket hot paths.
- * Avoids per-frame full Zod deep-cloning while preserving envelope, cursor,
- * and payload invariants. Contract tests continue to use acceptSnapshot().
+ * Zero-copy structural validator for local WebSocket snapshot hot paths.
+ * Validates envelope, cursor, and channel-specific top-level payload invariants
+ * without allocating a deep-cloned object tree.
  */
 export function parseSnapshotEnvelope<TSnapshot extends SnapshotEnvelopeLike>(
   input: unknown,
   expected?: SnapshotEnvelopeExpectation,
 ): TSnapshot | null {
-  if (!isPlainRecord(input)) return null;
-  if (input.type !== 'snapshot') return null;
+  if (!isPlainRecord(input) || input.type !== 'snapshot') return null;
 
   const protocolVersion = input.protocolVersion;
   if (typeof protocolVersion !== 'number' || !Number.isInteger(protocolVersion)) return null;
@@ -157,14 +198,42 @@ export function parseSnapshotEnvelope<TSnapshot extends SnapshotEnvelopeLike>(
   }
   if (!isNonNegativeInt(cursor.mapEpoch)) return null;
 
-  if (!isPlainRecord(input.payload)) return null;
+  const payload = input.payload;
+  if (!isPlainRecord(payload) || !hasValidChannelPayload(channel, payload)) return null;
+
   return input as unknown as TSnapshot;
 }
 
-function acceptValidatedSnapshot<TSnapshot extends SnapshotEnvelopeLike>(
-  snapshot: TSnapshot,
-  previous: SnapshotAcceptanceState,
+export function createChannelSnapshotValidator<TSnapshot extends SnapshotEnvelopeLike>(
+  channel: LocalSnapshotChannel,
+): (input: unknown) => TSnapshot | null {
+  const expected: SnapshotEnvelopeExpectation = {
+    channel,
+    protocolVersion: LOCAL_PROTOCOL_VERSION,
+    schemaVersion: LOCAL_SNAPSHOT_VERSIONS[channel],
+  };
+  return (input: unknown) => parseSnapshotEnvelope<TSnapshot>(input, expected);
+}
+
+export function acceptSnapshot<TSnapshot extends SnapshotEnvelopeLike>(
+  input: unknown,
+  validator: SnapshotValidator<TSnapshot>,
+  previous: SnapshotAcceptanceState = createSnapshotAcceptanceState(),
 ): SnapshotAcceptanceResult<TSnapshot> {
+  let snapshot: TSnapshot | null;
+  if (typeof validator === 'function') {
+    snapshot = validator(input);
+  } else {
+    try {
+      snapshot = validator.parse(input);
+    } catch {
+      snapshot = null;
+    }
+  }
+  if (snapshot === null) {
+    return rejected(previous, 'schema-invalid');
+  }
+
   const channel = snapshot.channel;
   if (previous.channel !== null && previous.channel !== channel) {
     return rejected(previous, 'channel-changed');
@@ -213,32 +282,6 @@ function acceptValidatedSnapshot<TSnapshot extends SnapshotEnvelopeLike>(
   return { kind: 'accepted', snapshot, state, reset };
 }
 
-export function acceptSnapshot<TSnapshot extends SnapshotEnvelopeLike>(
-  input: unknown,
-  schema: SnapshotSchema<TSnapshot>,
-  previous: SnapshotAcceptanceState = createSnapshotAcceptanceState(),
-): SnapshotAcceptanceResult<TSnapshot> {
-  let snapshot: TSnapshot;
-  try {
-    snapshot = schema.parse(input);
-  } catch {
-    return rejected(previous, 'schema-invalid');
-  }
-  return acceptValidatedSnapshot(snapshot, previous);
-}
-
-export function acceptSnapshotEnvelope<TSnapshot extends SnapshotEnvelopeLike>(
-  input: unknown,
-  expected?: SnapshotEnvelopeExpectation,
-  previous: SnapshotAcceptanceState = createSnapshotAcceptanceState(),
-): SnapshotAcceptanceResult<TSnapshot> {
-  const snapshot = parseSnapshotEnvelope<TSnapshot>(input, expected);
-  if (snapshot === null) {
-    return rejected(previous, 'schema-invalid');
-  }
-  return acceptValidatedSnapshot(snapshot, previous);
-}
-
 export interface SnapshotAcceptance<TSnapshot extends SnapshotEnvelopeLike> {
   accept(input: unknown): SnapshotAcceptanceResult<TSnapshot>;
   getState(): SnapshotAcceptanceState;
@@ -246,29 +289,12 @@ export interface SnapshotAcceptance<TSnapshot extends SnapshotEnvelopeLike> {
 }
 
 export function createSnapshotAcceptance<TSnapshot extends SnapshotEnvelopeLike>(
-  schema: SnapshotSchema<TSnapshot>,
+  validator: SnapshotValidator<TSnapshot>,
 ): SnapshotAcceptance<TSnapshot> {
   let state = createSnapshotAcceptanceState();
   return {
     accept(input) {
-      const result = acceptSnapshot(input, schema, state);
-      if (result.kind === 'accepted') state = result.state;
-      return result;
-    },
-    getState: () => state,
-    reset: () => {
-      state = createSnapshotAcceptanceState();
-    },
-  };
-}
-
-export function createSnapshotEnvelopeAcceptance<TSnapshot extends SnapshotEnvelopeLike>(
-  expected?: SnapshotEnvelopeExpectation,
-): SnapshotAcceptance<TSnapshot> {
-  let state = createSnapshotAcceptanceState();
-  return {
-    accept(input) {
-      const result = acceptSnapshotEnvelope<TSnapshot>(input, expected, state);
+      const result = acceptSnapshot(input, validator, state);
       if (result.kind === 'accepted') state = result.state;
       return result;
     },

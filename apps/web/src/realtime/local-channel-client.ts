@@ -1,9 +1,6 @@
 import { recordChannelConsumption } from '../debug/performance-journal';
-import {
-  createSnapshotEnvelopeAcceptance,
-  type SnapshotAcceptance,
-} from '@mizar/protocol/acceptance';
-import { LOCAL_PROTOCOL_VERSION, type LocalSnapshotChannel } from '@mizar/protocol/version';
+import { createSnapshotAcceptance, type SnapshotAcceptance } from '@mizar/protocol/acceptance';
+import type { LocalSnapshotChannel } from '@mizar/protocol/version';
 
 import {
   getLocalChannelConfig,
@@ -133,11 +130,7 @@ export class LocalChannelClient<C extends LocalSnapshotChannel> {
   private connect(): void {
     if (this.disposed) return;
     const generation = ++this.connectionGeneration;
-    const acceptance = createSnapshotEnvelopeAcceptance<LocalChannelSnapshot<C>>({
-      channel: this.channel,
-      protocolVersion: LOCAL_PROTOCOL_VERSION,
-      schemaVersion: this.config.schemaVersion,
-    });
+    const acceptance = createSnapshotAcceptance(this.config.validator);
     this.acceptance = acceptance;
     this.store.setState('connecting');
 

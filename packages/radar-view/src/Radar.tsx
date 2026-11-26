@@ -53,10 +53,10 @@ function drawContainedWebGL(
   alpha: number,
   tintColor?: string,
 ): void {
-  const tex = renderer.atlas.image(renderer.gl, image, tintColor);
-  if (!tex) return;
-  const scale = Math.min(boxWidth / tex.width, boxHeight / tex.height);
-  renderer.drawTexturedQuad(tex.texture, cx, cy, tex.width * scale, tex.height * scale, alpha);
+  const region = renderer.cache.image(image, tintColor);
+  if (!region) return;
+  const scale = Math.min(boxWidth / region.width, boxHeight / region.height);
+  renderer.drawTexturedQuad(region, cx, cy, region.width * scale, region.height * scale, alpha);
 }
 
 /** React owns the surface. Accepted channel samples and WebGL 2 rAF own all motion. */
@@ -127,56 +127,8 @@ export function RadarView({
 
     const isPageVisible = () =>
       typeof document === 'undefined' || document.visibilityState === 'visible';
-
-    const scheduleFrame = () => {
-      if (disposed || frame !== 0) return;
-      frame = requestAnimationFrame(render);
-    };
-
-    const invalidateSurface = () => {
-      surfaceDirty = true;
-      scheduleFrame();
-    };
-    redraw.current = invalidateSurface;
-
-    const handleVisibilityChange = () => {
-      if (isPageVisible()) {
-        scheduleFrame();
-      } else if (frame !== 0) {
-        cancelAnimationFrame(frame);
-        frame = 0;
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    const handleContextLost = (event: Event) => {
-      event.preventDefault();
-      if (frame !== 0) {
-        cancelAnimationFrame(frame);
-        frame = 0;
-      }
-      renderer.handleContextLost();
-    };
-    const handleContextRestored = () => {
-      if (renderer.handleContextRestored()) {
-        invalidateSurface();
-      }
-    };
-    element.addEventListener('webglcontextlost', handleContextLost);
-    element.addEventListener('webglcontextrestored', handleContextRestored);
-
-    const resizeObserver =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(invalidateSurface);
-    resizeObserver?.observe(element);
-    const styleObserver = new MutationObserver(invalidateSurface);
-    for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement)
-      styleObserver.observe(ancestor, {
-        attributes: true,
-        ...(ancestor === element ? { attributeFilter: ['class', 'style'] } : {}),
-      });
-    window.addEventListener('resize', invalidateSurface);
-
     const motionPreference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+
     const updateUtilityPhaseDataset = () => {
       if (!emitDiagnostics) return;
       let phases = '';
@@ -196,32 +148,6 @@ export function RadarView({
       return resolveAssetUrl ? resolveAssetUrl(url) : url;
     };
 
-    const eslFonts = appearance === 'esl' ? document.fonts : undefined;
-    let bundledLegend: FontFace | undefined;
-    if (eslFonts) {
-      if (!Array.from(eslFonts).some((face) => face.family === 'ESLLegend')) {
-        bundledLegend = new FontFace(
-          'Mizar Radar Legend',
-          'url(' + JSON.stringify(assetUrl('brand/fonts/esl/legend-bold.woff2')) + ')',
-          { weight: '900' },
-        );
-        eslFonts.add(bundledLegend);
-      }
-      const load = bundledLegend?.load() ?? eslFonts.load('900 48px ESLLegend');
-      void load.then(invalidateSurface, () => undefined);
-    }
-
-    const imageFor = (url: string): HTMLImageElement | null => {
-      let image = images.get(url);
-      if (!image) {
-        image = new Image();
-        image.onload = invalidateSurface;
-        image.src = assetUrl(url);
-        images.set(url, image);
-      }
-      return image.complete && image.naturalWidth > 0 ? image : null;
-    };
-
     const clearChangedPausedBoundary = (next: RadarViewFrame | null | undefined) => {
       if (
         currentPaused.current &&
@@ -234,19 +160,22 @@ export function RadarView({
       }
     };
 
-    const accept = () => {
-      if (!client) return;
-      const state = client.getSnapshot();
-      clearChangedPausedBoundary(state);
-      if (state === lastConnection || (currentPaused.current && state !== null)) return;
-      lastConnection = state;
-      model.accept(state, performance.now(), restoreStaticBoundary);
-      restoreStaticBoundary = false;
-      updateUtilityPhaseDataset();
-      if (isPageVisible() && !staticFrame) scheduleFrame();
+    // Declare render and scheduling helpers before subscribing or loading assets
+    // so synchronous accept() / image callbacks never hit TDZ.
+    let accept: () => void = () => {};
+    let scheduleFrame: () => void = () => {};
+    let invalidateSurface: () => void = () => {};
+
+    const imageFor = (url: string): HTMLImageElement | null => {
+      let image = images.get(url);
+      if (!image) {
+        image = new Image();
+        image.onload = invalidateSurface;
+        image.src = assetUrl(url);
+        images.set(url, image);
+      }
+      return image.complete && image.naturalWidth > 0 ? image : null;
     };
-    const unsubscribe = client?.subscribe(accept);
-    accept();
 
     const render = () => {
       if (disposed) return;
@@ -312,7 +241,7 @@ export function RadarView({
       const boundary = model.snapshot ? radarBoundary(model.snapshot) : null;
       if (boundary !== cacheBoundary) {
         cacheBoundary = boundary;
-        renderer.atlas.clear(gl);
+        renderer.cache.clear();
       }
 
       const geometry = model.geometry;
@@ -429,10 +358,10 @@ export function RadarView({
         placement: RadarCanvasPlacement | null,
         alpha: number,
       ) => {
-        const entry = renderer.atlas.artwork(gl, image, placement, size, appearance);
-        if (entry) {
+        const region = renderer.cache.artwork(image, placement, size, appearance);
+        if (region) {
           renderer.drawTexturedQuad(
-            entry.texture,
+            region,
             logicalSize * 0.5,
             logicalSize * 0.5,
             logicalSize,
@@ -466,8 +395,9 @@ export function RadarView({
           placement?.viewport ?? null,
           placement?.rect ?? null,
         );
-        const entry = renderer.atlas.siteBadge(gl, label);
-        if (entry) renderer.drawTexturedQuad(entry.texture, point.x, point.y, 56, 56, 1);
+        renderer.drawRect(point.x, point.y, 56, 56, '#f3ce22', 1);
+        const region = renderer.cache.glyph(label, '900 42px Inter, sans-serif', '#0b1119');
+        if (region) renderer.drawTexturedQuad(region, point.x, point.y, 44, 44, 1);
       };
       if (appearance !== 'esl' && geometry?.mapKey === 'de_ancient') {
         drawSiteBadge('A', { x: 0.302, y: 0.26 }, 'single');
@@ -603,9 +533,9 @@ export function RadarView({
             renderer.drawCircle(x, y, radius, '#ffffff80', opacity, sideColor(marker.side), 5);
             return;
           }
-          const smokeTex = renderer.atlas.smoke(gl, marker.source.sourceEntityId);
+          const smokeTex = renderer.cache.smoke(marker.source.sourceEntityId);
           if (smokeTex) {
-            renderer.drawTexturedQuad(smokeTex.texture, x, y, radius * 2, radius * 2, opacity);
+            renderer.drawTexturedQuad(smokeTex, x, y, radius * 2, radius * 2, opacity);
           }
           renderer.drawCircle(x, y, radius, '#00000000', opacity * 0.78, '#f7f8f8', 2);
 
@@ -802,16 +732,14 @@ export function RadarView({
           const baseAlpha = layerOpacity(marker.target, model.layer);
 
           if (appearance === 'esl' && markerKind === 'dead') {
-            const lbl = renderer.atlas.label(
-              gl,
+            const lbl = renderer.cache.glyph(
               p.label ?? '',
               '900 48px ESLLegend, "Mizar Radar Legend", SourceHanSans, sans-serif',
               color,
-              64,
             );
             if (lbl) {
               const s = 64 / z.scale;
-              renderer.drawTexturedQuad(lbl.texture, x, y, s, s, baseAlpha * 0.2);
+              renderer.drawTexturedQuad(lbl, x, y, s, s, baseAlpha * 0.2);
             }
             continue;
           }
@@ -828,10 +756,10 @@ export function RadarView({
             if (p.facing) {
               const direction = imageFor('brand/hud/esl/playerBg.png');
               if (direction) {
-                const tex = renderer.atlas.image(gl, direction);
-                if (tex) {
+                const region = renderer.cache.image(direction);
+                if (region) {
                   renderer.drawTexturedQuad(
-                    tex.texture,
+                    region,
                     x,
                     y,
                     radius * 2.3,
@@ -844,14 +772,14 @@ export function RadarView({
               if (marker.shootingUntil > now) {
                 const fire = imageFor('brand/hud/esl/shootFire.png');
                 if (fire) {
-                  const tex = renderer.atlas.image(gl, fire);
+                  const region = renderer.cache.image(fire);
                   const fireAlpha =
                     baseAlpha * (reduceMotion || Math.floor(now / 125) % 2 === 0 ? 1 : 0);
-                  if (tex && fireAlpha > 0) {
+                  if (region && fireAlpha > 0) {
                     const fx = x + Math.cos(angleRad) * (radius * 2);
                     const fy = y + Math.sin(angleRad) * (radius * 2);
                     renderer.drawTexturedQuad(
-                      tex.texture,
+                      region,
                       fx,
                       fy,
                       radius * 4,
@@ -869,16 +797,14 @@ export function RadarView({
             if (flashRatio > 0) {
               renderer.drawCircle(x, y, radius, '#ffffff', baseAlpha * flashRatio);
             }
-            const lbl = renderer.atlas.label(
-              gl,
+            const lbl = renderer.cache.glyph(
               p.label ?? '',
               '900 48px ESLLegend, "Mizar Radar Legend", SourceHanSans, sans-serif',
               '#000000',
-              64,
             );
             if (lbl) {
               const s = 64 / z.scale;
-              renderer.drawTexturedQuad(lbl.texture, x, y, s, s, baseAlpha);
+              renderer.drawTexturedQuad(lbl, x, y, s, s, baseAlpha);
             }
             continue;
           }
@@ -903,15 +829,9 @@ export function RadarView({
             renderer.drawCircle(x, y, 24, '#ffffff', flashRatio * 0.9);
           }
           const lblColor = flashRatio > 0.72 ? '#5d6670' : '#0b1119';
-          const lbl = renderer.atlas.label(
-            gl,
-            p.label ?? '',
-            '800 42px Inter, sans-serif',
-            lblColor,
-            56,
-          );
+          const lbl = renderer.cache.glyph(p.label ?? '', '800 42px Inter, sans-serif', lblColor);
           if (lbl) {
-            renderer.drawTexturedQuad(lbl.texture, x, y, 38, 38, baseAlpha);
+            renderer.drawTexturedQuad(lbl, x, y, 38, 38, baseAlpha);
           }
           if (marker.damageUntil > now) {
             const damageAlpha = Math.max(
@@ -960,10 +880,93 @@ export function RadarView({
         setData('radarDrawnSequence', drawnSeq);
       }
 
-      if (!staticFrame && !currentPaused.current && isPageVisible()) {
+      if (
+        !staticFrame &&
+        !currentPaused.current &&
+        isPageVisible() &&
+        model.hasActiveMotion(now, reduceMotion)
+      ) {
         scheduleFrame();
       }
     };
+
+    scheduleFrame = () => {
+      if (disposed || frame !== 0) return;
+      frame = requestAnimationFrame(render);
+    };
+
+    invalidateSurface = () => {
+      surfaceDirty = true;
+      scheduleFrame();
+    };
+    redraw.current = invalidateSurface;
+
+    accept = () => {
+      if (!client) return;
+      const state = client.getSnapshot();
+      clearChangedPausedBoundary(state);
+      if (state === lastConnection || (currentPaused.current && state !== null)) return;
+      lastConnection = state;
+      model.accept(state, performance.now(), restoreStaticBoundary);
+      restoreStaticBoundary = false;
+      updateUtilityPhaseDataset();
+      if (isPageVisible() && !staticFrame) scheduleFrame();
+    };
+
+    const handleVisibilityChange = () => {
+      if (isPageVisible()) {
+        scheduleFrame();
+      } else if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      renderer.handleContextLost();
+    };
+    const handleContextRestored = () => {
+      if (renderer.handleContextRestored()) {
+        invalidateSurface();
+      }
+    };
+    element.addEventListener('webglcontextlost', handleContextLost);
+    element.addEventListener('webglcontextrestored', handleContextRestored);
+
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(invalidateSurface);
+    resizeObserver?.observe(element);
+    const styleObserver = new MutationObserver(invalidateSurface);
+    for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement)
+      styleObserver.observe(ancestor, {
+        attributes: true,
+        ...(ancestor === element ? { attributeFilter: ['class', 'style'] } : {}),
+      });
+    window.addEventListener('resize', invalidateSurface);
+
+    const eslFonts = appearance === 'esl' ? document.fonts : undefined;
+    let bundledLegend: FontFace | undefined;
+    if (eslFonts) {
+      if (!Array.from(eslFonts).some((face) => face.family === 'ESLLegend')) {
+        bundledLegend = new FontFace(
+          'Mizar Radar Legend',
+          'url(' + JSON.stringify(assetUrl('brand/fonts/esl/legend-bold.woff2')) + ')',
+          { weight: '900' },
+        );
+        eslFonts.add(bundledLegend);
+      }
+      const load = bundledLegend?.load() ?? eslFonts.load('900 48px ESLLegend');
+      void load.then(invalidateSurface, () => undefined);
+    }
+
+    const unsubscribe = client?.subscribe(accept);
+    accept();
 
     if (isPageVisible() || staticFrame) {
       scheduleFrame();

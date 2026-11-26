@@ -71,3 +71,19 @@ impl Preferences {
         json!({"qualityPreset": self.quality.name(), "frameRateLimit": self.frame_rate_limit, "preferMulnx": self.prefer_mulnx, "launchPreferenceVersion": 2})
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_extended_frame_rate_limits() {
+        for limit in [0u16, 30, 60, 90, 120, 144] {
+            let prefs = Preferences::new("medium", limit).expect("valid frame rate limit");
+            assert_eq!(prefs.frame_rate_limit, limit);
+            let parsed = Preferences::from_json(&prefs.json()).expect("roundtrip json");
+            assert_eq!(parsed.frame_rate_limit, limit);
+        }
+        assert!(Preferences::new("medium", 75).is_err());
+    }
+}

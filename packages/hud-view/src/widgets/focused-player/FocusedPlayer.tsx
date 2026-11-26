@@ -6,7 +6,6 @@ import {
   type FocusedPlayerSettings,
 } from '@mizar/hud-config';
 import {
-  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -586,36 +585,7 @@ export function FocusedPlayerCard({
   );
 }
 
-function sameFocusedPlayerProps(
-  prev: HudWidgetRendererProps,
-  next: HudWidgetRendererProps,
-): boolean {
-  if (
-    prev.design !== next.design ||
-    prev.presentationRevision !== next.presentationRevision ||
-    prev.settings !== next.settings
-  ) {
-    return false;
-  }
-  const pp = prev.snapshot.payload;
-  const np = next.snapshot.payload;
-  if (pp === np) return true;
-  if (
-    pp.status.telemetry !== np.status.telemetry ||
-    pp.observedPlayerSourceId !== np.observedPlayerSourceId ||
-    pp.teams !== np.teams ||
-    pp.round?.phase !== np.round?.phase
-  ) {
-    return false;
-  }
-  const id = np.observedPlayerSourceId;
-  if (id === null) return true;
-  const pPlayer = pp.players.find((p) => p.sourcePlayerId === id);
-  const nPlayer = np.players.find((p) => p.sourcePlayerId === id);
-  return pPlayer === nPlayer;
-}
-
-export const FocusedPlayer = memo(function FocusedPlayer({
+export function FocusedPlayer({
   design = 'current',
   snapshot,
   settings,
@@ -632,4 +602,4 @@ export const FocusedPlayer = memo(function FocusedPlayer({
       presentationRevision={presentationRevision}
     />
   );
-}, sameFocusedPlayerProps);
+}

@@ -10,7 +10,7 @@ import { topScoreBarSettingsSchema, type TopScoreBarSettings } from '@mizar/hud-
  * (MIT). Angular shell, series pips and objective choreography follow the user-provided reference.
  * Team binding and all gameplay progress remain owned by the existing presentation join/Core. */
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry.js';
-import { memo, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ObjectiveCenter, ObjectiveDefused, ObjectiveFuse } from './ObjectiveCenter.js';
 import {
   buildMatchHeaderPresentation,
@@ -113,48 +113,7 @@ function Team({
     </>
   );
 }
-function sameTopScoreBarProps(prev: HudWidgetRendererProps, next: HudWidgetRendererProps): boolean {
-  if (
-    prev.design !== next.design ||
-    prev.presentationRevision !== next.presentationRevision ||
-    prev.gg !== next.gg ||
-    prev.settings !== next.settings
-  ) {
-    return false;
-  }
-  const pp = prev.snapshot.payload;
-  const np = next.snapshot.payload;
-  if (pp === np) return true;
-  if (
-    pp.status.telemetry !== np.status.telemetry ||
-    pp.match !== np.match ||
-    pp.teams !== np.teams ||
-    pp.series !== np.series ||
-    pp.map !== np.map ||
-    pp.round !== np.round ||
-    pp.clock !== np.clock ||
-    pp.bomb !== np.bomb
-  ) {
-    return false;
-  }
-  if (pp.players.length !== np.players.length) return false;
-  for (let i = 0; i < np.players.length; i += 1) {
-    const a = pp.players[i]!;
-    const b = np.players[i]!;
-    if (
-      a.sourcePlayerId !== b.sourcePlayerId ||
-      a.side !== b.side ||
-      a.lifeState !== b.lifeState ||
-      a.displayName !== b.displayName ||
-      a.equipment.hasC4 !== b.equipment.hasC4
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export const TopScoreBar = memo(function TopScoreBar({
+export function TopScoreBar({
   design = 'current',
   snapshot,
   settings,
@@ -263,7 +222,7 @@ export const TopScoreBar = memo(function TopScoreBar({
       />
     </section>
   );
-}, sameTopScoreBarProps);
+}
 
 function MatchHeaderPanels({
   aliveBoundary,

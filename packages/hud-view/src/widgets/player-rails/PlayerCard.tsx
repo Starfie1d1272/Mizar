@@ -2,7 +2,7 @@ import { EquipmentIcon } from '../player-equipment/EquipmentIcon.js';
 import { StatGlyph } from '../player-status-effects/StatGlyph.js';
 import type { ProgramPayload } from '@mizar/protocol/program';
 import { playerRailSettingsSchema, type PlayerRailSettings } from '@mizar/hud-config';
-import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectionCursor } from '@mizar/protocol/shared';
 
 import { observerHotkeyLabel } from '../../observer-hotkey.js';
@@ -485,150 +485,113 @@ function PlayerBody({
   );
 }
 
-function samePlayerCardPresentation(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (!samePlayerCardPresentation(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  const ar = a as Record<string, unknown>;
-  const br = b as Record<string, unknown>;
-  const keys = Object.keys(ar);
-  if (keys.length !== Object.keys(br).length) return false;
-  for (const k of keys) {
-    if (!samePlayerCardPresentation(ar[k], br[k])) return false;
-  }
-  return true;
+export function PlayerCard({
+  design = 'current',
+  prediction,
+  explosionHandoff = false,
+  predictionScope = null,
+  predictionSequence = null,
+  predictionRoundNumber = null,
+  player,
+  cursor = null,
+  physicalSide = 'left',
+  presentationRevision = 0,
+  options = playerRailSettingsSchema.parse({}),
+}: {
+  readonly design?: HudDesign;
+  readonly prediction?: BombPrediction | undefined;
+  readonly explosionHandoff?: boolean;
+  readonly predictionScope?: string | null;
+  readonly predictionSequence?: number | null;
+  readonly predictionRoundNumber?: number | null;
+  readonly player: PlayerCardPresentation;
+  readonly cursor?: ProjectionCursor | null;
+  readonly physicalSide?: 'left' | 'right';
+  readonly options?: PlayerRailSettings;
+  readonly presentationRevision?: number;
+}) {
+  const dead = player.mode === 'dead';
+  const combatFeedback = useCombatFeedback({
+    sourcePlayerId: player.sourcePlayerId,
+    health: player.health,
+    dead,
+    cursor,
+    presentationRevision,
+  });
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
+  const hasAvatar =
+    options.showAvatar && player.avatarUrl !== null && failedAvatarUrl !== player.avatarUrl;
+  const avatar = options.showAvatar ? (
+    <Avatar
+      unavailable={failedAvatarUrl === player.avatarUrl}
+      dead={dead}
+      player={player}
+      onUnavailable={() => setFailedAvatarUrl(player.avatarUrl)}
+    />
+  ) : (
+    <div className="player-rail__avatar" data-card-part="avatar" />
+  );
+  const body = (
+    <PlayerBody
+      physicalSide={physicalSide}
+      design={design}
+      prediction={prediction}
+      explosionHandoff={explosionHandoff}
+      predictionScope={predictionScope}
+      predictionSequence={predictionSequence}
+      predictionRoundNumber={predictionRoundNumber}
+      options={options}
+      damageGhost={combatFeedback.damageGhost}
+      dead={dead}
+      player={player}
+      presentationRevision={presentationRevision}
+    />
+  );
+  const hotkeyLabel = observerHotkeyLabel(player.observerSlot);
+  const endcap = (
+    <div
+      aria-label={`Observer hotkey ${hotkeyLabel}`}
+      className={`player-rail__endcap player-rail__endcap--${physicalSide}`}
+      data-card-part="observer-endcap"
+      data-observed={player.observed}
+      data-side={player.side}
+      role="img"
+    >
+      <strong>{hotkeyLabel}</strong>
+    </div>
+  );
+
+  return (
+    <article
+      aria-label={`${player.displayName ?? 'Player'} ${dead ? 'DEAD' : 'player card'}`}
+      className={`player-rail__card player-rail__card--${player.mode}${
+        player.observed ? ' is-observed' : ''
+      }${player.healthPercent !== null && player.healthPercent <= 25 ? ' is-low-health' : ''}`}
+      data-avatar={hasAvatar}
+      data-life-state={player.lifeState}
+      data-observed={player.observed}
+      data-player-card={player.sourcePlayerId}
+      data-side={player.side}
+      data-physical-side={physicalSide}
+    >
+      {avatar}
+      {body}
+      {!dead && (
+        <PlayerStatusEffects
+          key={`status:${presentationRevision}`}
+          anchor={physicalSide}
+          state={player.statusEffects}
+        />
+      )}
+      {!dead && (
+        <PlayerImpactEffects
+          anchor={physicalSide}
+          sourcePlayerId={player.sourcePlayerId}
+          surface="rail"
+        />
+      )}
+      <CombatTransitionEffects feedback={combatFeedback} surface="rail" />
+      {endcap}
+    </article>
+  );
 }
-
-export const PlayerCard = memo(
-  function PlayerCard({
-    design = 'current',
-    prediction,
-    explosionHandoff = false,
-    predictionScope = null,
-    predictionSequence = null,
-    predictionRoundNumber = null,
-    player,
-    cursor = null,
-    physicalSide = 'left',
-    presentationRevision = 0,
-    options = playerRailSettingsSchema.parse({}),
-  }: {
-    readonly design?: HudDesign;
-    readonly prediction?: BombPrediction | undefined;
-    readonly explosionHandoff?: boolean;
-    readonly predictionScope?: string | null;
-    readonly predictionSequence?: number | null;
-    readonly predictionRoundNumber?: number | null;
-    readonly player: PlayerCardPresentation;
-    readonly cursor?: ProjectionCursor | null;
-    readonly physicalSide?: 'left' | 'right';
-    readonly options?: PlayerRailSettings;
-    readonly presentationRevision?: number;
-  }) {
-    const dead = player.mode === 'dead';
-    const combatFeedback = useCombatFeedback({
-      sourcePlayerId: player.sourcePlayerId,
-      health: player.health,
-      dead,
-      cursor,
-      presentationRevision,
-    });
-    const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
-    const hasAvatar =
-      options.showAvatar && player.avatarUrl !== null && failedAvatarUrl !== player.avatarUrl;
-    const avatar = options.showAvatar ? (
-      <Avatar
-        unavailable={failedAvatarUrl === player.avatarUrl}
-        dead={dead}
-        player={player}
-        onUnavailable={() => setFailedAvatarUrl(player.avatarUrl)}
-      />
-    ) : (
-      <div className="player-rail__avatar" data-card-part="avatar" />
-    );
-    const body = (
-      <PlayerBody
-        physicalSide={physicalSide}
-        design={design}
-        prediction={prediction}
-        explosionHandoff={explosionHandoff}
-        predictionScope={predictionScope}
-        predictionSequence={predictionSequence}
-        predictionRoundNumber={predictionRoundNumber}
-        options={options}
-        damageGhost={combatFeedback.damageGhost}
-        dead={dead}
-        player={player}
-        presentationRevision={presentationRevision}
-      />
-    );
-    const hotkeyLabel = observerHotkeyLabel(player.observerSlot);
-    const endcap = (
-      <div
-        aria-label={`Observer hotkey ${hotkeyLabel}`}
-        className={`player-rail__endcap player-rail__endcap--${physicalSide}`}
-        data-card-part="observer-endcap"
-        data-observed={player.observed}
-        data-side={player.side}
-        role="img"
-      >
-        <strong>{hotkeyLabel}</strong>
-      </div>
-    );
-
-    return (
-      <article
-        aria-label={`${player.displayName ?? 'Player'} ${dead ? 'DEAD' : 'player card'}`}
-        className={`player-rail__card player-rail__card--${player.mode}${
-          player.observed ? ' is-observed' : ''
-        }${player.healthPercent !== null && player.healthPercent <= 25 ? ' is-low-health' : ''}`}
-        data-avatar={hasAvatar}
-        data-life-state={player.lifeState}
-        data-observed={player.observed}
-        data-player-card={player.sourcePlayerId}
-        data-side={player.side}
-        data-physical-side={physicalSide}
-      >
-        {avatar}
-        {body}
-        {!dead && (
-          <PlayerStatusEffects
-            key={`status:${presentationRevision}`}
-            anchor={physicalSide}
-            state={player.statusEffects}
-          />
-        )}
-        {!dead && (
-          <PlayerImpactEffects
-            anchor={physicalSide}
-            sourcePlayerId={player.sourcePlayerId}
-            surface="rail"
-          />
-        )}
-        <CombatTransitionEffects feedback={combatFeedback} surface="rail" />
-        {endcap}
-      </article>
-    );
-  },
-  (prev, next) =>
-    prev.design === next.design &&
-    prev.physicalSide === next.physicalSide &&
-    prev.presentationRevision === next.presentationRevision &&
-    prev.explosionHandoff === next.explosionHandoff &&
-    prev.predictionScope === next.predictionScope &&
-    prev.predictionSequence === next.predictionSequence &&
-    prev.predictionRoundNumber === next.predictionRoundNumber &&
-    prev.prediction === next.prediction &&
-    prev.options === next.options &&
-    prev.cursor?.producerInstanceId === next.cursor?.producerInstanceId &&
-    prev.cursor?.liveSessionId === next.cursor?.liveSessionId &&
-    prev.cursor?.programSourceGeneration === next.cursor?.programSourceGeneration &&
-    prev.cursor?.mapEpoch === next.cursor?.mapEpoch &&
-    samePlayerCardPresentation(prev.player, next.player),
-);

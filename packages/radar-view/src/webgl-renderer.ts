@@ -1,5 +1,5 @@
 import { RADAR_CANVAS_GEOMETRY } from './canvas-geometry.js';
-import { RadarTextureAtlas } from './texture-atlas.js';
+import { RadarTextureCache, type TextureRegion } from './texture-cache.js';
 
 const VERTEX_SHADER_SOURCE = `#version 300 es
 precision highp float;
@@ -260,7 +260,7 @@ function compileShader(
 
 export class WebGL2RadarRenderer {
   readonly gl: WebGL2RenderingContext;
-  readonly atlas: RadarTextureAtlas;
+  readonly cache: RadarTextureCache;
 
   private program: WebGLProgram | null = null;
   private vao: WebGLVertexArrayObject | null = null;
@@ -271,16 +271,46 @@ export class WebGL2RadarRenderer {
   private instances: Float32Array;
   private capacity: number;
   private count = 0;
+  private drawCalls = 0;
+  private frameInstances = 0;
   private currentTexture: WebGLTexture | null = null;
   private currentAdditive = false;
   private disposed = false;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.atlas = new RadarTextureAtlas();
+    this.cache = new RadarTextureCache(
+      (canvas) => this.uploadTexture(canvas),
+      (texture) => {
+        if (!this.gl.isContextLost()) this.gl.deleteTexture(texture);
+        if (this.currentTexture === texture) this.currentTexture = null;
+      },
+    );
     this.capacity = INITIAL_CAPACITY;
     this.instances = new Float32Array(this.capacity * FLOATS_PER_INSTANCE);
     this.initGl();
+  }
+
+  private uploadTexture(canvas: HTMLCanvasElement): WebGLTexture | null {
+    const gl = this.gl;
+    if (this.disposed || gl.isContextLost()) return null;
+    this.flush();
+    const texture = gl.createTexture();
+    if (!texture) return null;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    this.currentTexture = texture;
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+    return texture;
+  }
+
+  getLastFrameStats(): { readonly drawCalls: number; readonly instances: number } {
+    return { drawCalls: this.drawCalls, instances: this.frameInstances };
   }
 
   initGl(): boolean {
@@ -350,7 +380,7 @@ export class WebGL2RadarRenderer {
   }
 
   handleContextRestored(): boolean {
-    this.atlas.clear(this.gl);
+    this.cache.clear();
     return this.initGl();
   }
 
@@ -358,6 +388,8 @@ export class WebGL2RadarRenderer {
     const gl = this.gl;
     if (this.disposed || !this.program || !this.vao || gl.isContextLost()) return;
     this.count = 0;
+    this.drawCalls = 0;
+    this.frameInstances = 0;
     this.currentTexture = null;
     this.currentAdditive = false;
 
@@ -401,6 +433,8 @@ export class WebGL2RadarRenderer {
       this.instances.subarray(0, this.count * FLOATS_PER_INSTANCE),
     );
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
+    this.drawCalls += 1;
+    this.frameInstances += this.count;
     this.count = 0;
   }
 
@@ -485,7 +519,7 @@ export class WebGL2RadarRenderer {
   }
 
   drawTexturedQuad(
-    texture: WebGLTexture,
+    region: TextureRegion,
     cx: number,
     cy: number,
     width: number,
@@ -494,7 +528,7 @@ export class WebGL2RadarRenderer {
     angleRad = 0,
     tint: RGBA = [1, 1, 1, 1],
   ): void {
-    this.setBatchState(texture, false);
+    this.setBatchState(region.texture, false);
     const cosA = angleRad === 0 ? 1 : Math.cos(angleRad);
     const sinA = angleRad === 0 ? 0 : Math.sin(angleRad);
     this.pushInstance(
@@ -506,10 +540,10 @@ export class WebGL2RadarRenderer {
       sinA,
       alpha,
       0,
-      0,
-      0,
-      1,
-      1,
+      region.u0,
+      region.v0,
+      region.u1,
+      region.v1,
       tint,
       [0, 0, 0, 0],
       0,
@@ -744,8 +778,8 @@ export class WebGL2RadarRenderer {
     if (this.disposed) return;
     this.disposed = true;
     const gl = this.gl;
+    this.cache.clear();
     if (!gl.isContextLost()) {
-      this.atlas.clear(gl);
       if (this.program) gl.deleteProgram(this.program);
       if (this.vao) gl.deleteVertexArray(this.vao);
       if (this.instanceBuffer) gl.deleteBuffer(this.instanceBuffer);

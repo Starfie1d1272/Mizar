@@ -367,6 +367,7 @@ export class RadarPresentation {
   readonly grenades = new Map<string, GrenadeMarker>();
   readonly exits = new Map<string, GrenadeExit>();
   zoom = { x: 0.5, y: 0.5, scale: 1 };
+  private zoomTarget = { x: 0.5, y: 0.5, scale: 1 };
   private boundary: string | null = null;
   private lastFrame: number | null = null;
   private acceptedAt: number | null = null;
@@ -397,6 +398,7 @@ export class RadarPresentation {
     this.grenades.clear();
     this.exits.clear();
     this.zoom = { x: 0.5, y: 0.5, scale: 1 };
+    this.zoomTarget = { x: 0.5, y: 0.5, scale: 1 };
     this.boundary = null;
     this.lastFrame = null;
     this.acceptedAt = null;
@@ -800,8 +802,62 @@ export class RadarPresentation {
       x = Math.max(half, Math.min(1 - half, (minX + maxX) / 2));
       y = Math.max(half, Math.min(1 - half, (minY + maxY) / 2));
     }
+    this.zoomTarget.x = x;
+    this.zoomTarget.y = y;
+    this.zoomTarget.scale = scale;
     this.zoom.x += (x - this.zoom.x) * mix;
     this.zoom.y += (y - this.zoom.y) * mix;
     this.zoom.scale += (scale - this.zoom.scale) * mix;
+  }
+
+  hasActiveMotion(now: number, reducedMotion = false): boolean {
+    if (reducedMotion) return false;
+    if (this.exits.size > 0) return true;
+    if (
+      Math.abs(this.zoom.x - this.zoomTarget.x) > 0.0005 ||
+      Math.abs(this.zoom.y - this.zoomTarget.y) > 0.0005 ||
+      Math.abs(this.zoom.scale - this.zoomTarget.scale) > 0.001
+    ) {
+      return true;
+    }
+    const bombState = this.snapshot?.payload.bomb?.state;
+    if ((bombState === 'planted' || bombState === 'defusing') && this.bombVisible(now)) {
+      return true;
+    }
+    for (const marker of this.players.values()) {
+      if (marker.damageUntil > now || marker.shootingUntil > now) return true;
+      if (marker.source.lifeState === 'dead') continue;
+      if (
+        now - marker.sampledAt <
+          marker.interpolationDurationMs + RADAR_PRESENTATION.maxExtrapolationMs &&
+        (marker.x !== marker.target.x ||
+          marker.y !== marker.target.y ||
+          Math.abs(shortestAngle(marker.angle, marker.targetAngle)) > 0.1 ||
+          marker.velocity.x !== 0 ||
+          marker.velocity.y !== 0)
+      ) {
+        return true;
+      }
+    }
+    for (const marker of this.grenades.values()) {
+      if (marker.phase === 'effect') {
+        const enterMs =
+          marker.source.kind === 'inferno'
+            ? RADAR_PRESENTATION.infernoEnterMs
+            : RADAR_PRESENTATION.smokeEnterMs;
+        if (now - marker.phaseStartedAt < enterMs) return true;
+      } else if (
+        marker.phase === 'projectile' &&
+        now - marker.sampledAt <
+          marker.interpolationDurationMs + RADAR_PRESENTATION.maxExtrapolationMs &&
+        (marker.velocity.x !== 0 ||
+          marker.velocity.y !== 0 ||
+          marker.x !== marker.target.x ||
+          marker.y !== marker.target.y)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 }

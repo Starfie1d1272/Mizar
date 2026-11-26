@@ -1,4 +1,3 @@
-import { memo } from 'react';
 import { playerRailSettingsSchema } from '@mizar/hud-config';
 import type { HudWidgetRendererProps } from '../../hud-renderer-registry.js';
 
@@ -7,41 +6,7 @@ import { buildPlayerRailsPresentation } from './presentation.js';
 import { TeamSummary } from './TeamSummary.js';
 import { AllChat } from './AllChat.js';
 
-function samePlayerRailProps(prev: HudWidgetRendererProps, next: HudWidgetRendererProps): boolean {
-  if (
-    prev.design !== next.design ||
-    prev.widgetId !== next.widgetId ||
-    prev.presentationRevision !== next.presentationRevision ||
-    prev.chatEnabled !== next.chatEnabled ||
-    prev.settings !== next.settings
-  ) {
-    return false;
-  }
-  const pp = prev.snapshot.payload;
-  const np = next.snapshot.payload;
-  if (pp === np) return true;
-  if (
-    pp.status.telemetry !== np.status.telemetry ||
-    pp.teams !== np.teams ||
-    pp.teamEconomy !== np.teamEconomy ||
-    pp.map.phase !== np.map.phase ||
-    pp.map.roundNumber !== np.map.roundNumber ||
-    pp.round?.phase !== np.round?.phase ||
-    pp.clock?.phase !== np.clock?.phase ||
-    pp.bomb !== np.bomb ||
-    pp.bombDamage !== np.bombDamage ||
-    pp.observedPlayerSourceId !== np.observedPlayerSourceId ||
-    pp.players !== np.players
-  ) {
-    return false;
-  }
-  if (next.chatEnabled !== false && next.widgetId === 'team-t-rail') {
-    if (pp.allChat !== np.allChat) return false;
-  }
-  return true;
-}
-
-export const PlayerRail = memo(function PlayerRail({
+export function PlayerRail({
   design = 'current',
   snapshot,
   settings,
@@ -144,4 +109,4 @@ export const PlayerRail = memo(function PlayerRail({
       </div>
     </section>
   );
-}, samePlayerRailProps);
+}

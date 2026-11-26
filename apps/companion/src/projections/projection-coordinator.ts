@@ -16,15 +16,9 @@ import {
   shouldNeutralizeGameplayProjection,
   type ObserverAssistProjection,
   type ProgramProjection,
-  type ProgramSafeRuntimeFreshness,
-  type ProgramSafeRuntimeView,
 } from '@mizar/core/projection';
 import { getObjectiveClockLeaseMs } from '@mizar/core/runtime';
-import {
-  assistSnapshotSchema,
-  type AssistPayload,
-  type AssistSnapshot,
-} from '@mizar/protocol/assist';
+import { assistSnapshotSchema, type AssistSnapshot } from '@mizar/protocol/assist';
 import { operatorSnapshotSchema, type OperatorSnapshot } from '@mizar/protocol/operator';
 import { programSnapshotSchema, type ProgramSnapshot } from '@mizar/protocol/program';
 import { radarSnapshotSchema, type RadarSnapshot } from '@mizar/protocol/radar';
@@ -203,11 +197,6 @@ export class ProjectionCoordinator {
   private contextBinding: MatchContextBinding | undefined;
   private current: ProjectionBundle;
   private lastPublishedProgram: ProgramProjection | undefined;
-  private lastProgramSemantic: ProgramSemanticSnapshot | undefined;
-  private lastOperatorSemantic: OperatorSemanticSnapshot | undefined;
-  private lastAssistSemantic: AssistSemanticSnapshot | undefined;
-  private lastPublishedAssistPayload: AssistPayload | undefined;
-  private initialized = false;
   private predictionPublishTimer: unknown;
   private activeLineup: ActiveLineupResolution;
   private staleTimer: unknown;
@@ -317,85 +306,46 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
         runtimeSnapshot.continuityPolicy,
       );
-      const bombDamageResource = this.bombDamageResources.get(
-        runtimeView.telemetry?.telemetry.map?.name ?? null,
-        `${runtimeView.cursor.programSourceGeneration}:${runtimeView.cursor.mapEpoch}`,
-      );
       const needsNeutralGameplay = shouldNeutralizeGameplayProjection(
         telemetryFreshness,
         runtimeView.telemetry?.telemetry.map?.name,
         identity.state,
       );
-      const chatSnapshot = this.programChat
-        ? this.programChat(runtimeView.cursor, telemetryFreshness === 'fresh')
-        : undefined;
-      const nextProgramSemantic = buildProgramSemanticSnapshot({
-        telemetryFreshness,
-        needsNeutralGameplay,
+      const programInput = {
         preferCanonicalPlayerNames,
-        context,
-        contextFreshness: this.contextBinding?.freshness,
+        equipmentCatalog,
+        runtime: runtimeView,
+        bombDamageResource: this.bombDamageResources.get(
+          runtimeView.telemetry?.telemetry.map?.name ?? null,
+          `${runtimeView.cursor.programSourceGeneration}:${runtimeView.cursor.mapEpoch}`,
+        ),
+        ...(context === undefined ? {} : { context }),
+        ...(this.contextBinding === undefined
+          ? {}
+          : { contextFreshness: this.contextBinding.freshness }),
         identity,
         activeLineup,
         seriesProgress: runtimeSnapshot.seriesProgress,
-        bombDamageResource,
-        runtimeView,
-        chatSnapshot,
+        nowMonotonicMs,
+        continuityPolicy: runtimeSnapshot.continuityPolicy,
+      };
+      const withAvatars = (p: ProgramProjection): ProgramProjection => ({
+        ...p,
+        players: p.players.map((player) => ({
+          ...player,
+          avatarUrl: player.avatarUrl ?? this.avatars?.get(player.sourcePlayerId) ?? null,
+        })),
       });
-      const avatarsUpdated =
-        this.initialized &&
-        this.avatars !== undefined &&
-        this.current.program.players.some(
-          (player) =>
-            player.avatarUrl === null && this.avatars?.get(player.sourcePlayerId) !== null,
-        );
-      const programChanged =
-        !this.initialized ||
-        publishWaiting ||
-        this.predictionPublishTimer !== undefined ||
-        avatarsUpdated ||
-        !sameProgramSemantic(this.lastProgramSemantic, nextProgramSemantic);
-
-      let program: ProgramProjection;
-      let gameplay: ProgramProjection;
-      if (programChanged) {
-        const programInput = {
-          preferCanonicalPlayerNames,
-          equipmentCatalog,
-          runtime: runtimeView,
-          bombDamageResource,
-          ...(context === undefined ? {} : { context }),
-          ...(this.contextBinding === undefined
-            ? {}
-            : { contextFreshness: this.contextBinding.freshness }),
-          identity,
-          activeLineup,
-          seriesProgress: runtimeSnapshot.seriesProgress,
-          nowMonotonicMs,
-          continuityPolicy: runtimeSnapshot.continuityPolicy,
-        };
-        const withAvatars = (p: ProgramProjection): ProgramProjection => ({
-          ...p,
-          players: p.players.map((player) => ({
-            ...player,
-            avatarUrl: player.avatarUrl ?? this.avatars?.get(player.sourcePlayerId) ?? null,
-          })),
-        });
-        const baseProgram = projectProgram(programInput);
-        program = withAvatars(baseProgram);
-        gameplay = needsNeutralGameplay
-          ? withAvatars(projectProgram({ ...programInput, presentationRole: 'gameplay' }))
-          : program;
-        this.avatars?.request(
-          baseProgram.players
-            .filter((player) => player.avatarUrl === null)
-            .map((player) => player.sourcePlayerId),
-        );
-      } else {
-        program = this.current.program;
-        gameplay = this.lastPublishedProgram ?? program;
-      }
-
+      const baseProgram = projectProgram(programInput);
+      const program = withAvatars(baseProgram);
+      const gameplay = needsNeutralGameplay
+        ? withAvatars(projectProgram({ ...programInput, presentationRole: 'gameplay' }))
+        : program;
+      this.avatars?.request(
+        baseProgram.players
+          .filter((player) => player.avatarUrl === null)
+          .map((player) => player.sourcePlayerId),
+      );
       const radar = projectRadarFrame({
         preferCanonicalPlayerNames,
         ...(context === undefined ? {} : { context }),
@@ -404,43 +354,15 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
         continuityPolicy: runtimeSnapshot.continuityPolicy,
       });
-
-      const programSourceHealth = this.cstvSources.program.getHealth();
-      const lookaheadSourceHealth = this.cstvSources.lookahead.getHealth();
-      const nextOperatorSemantic = buildOperatorSemanticSnapshot({
-        telemetryFreshness,
-        runtimeSnapshot,
-        runtimeView,
-        contextBinding: this.contextBinding,
+      const operator = projectOperator({
+        runtime: runtimeSnapshot,
+        context: this.contextBinding,
         identity,
         activeLineup,
-        programSourceHealth,
-        lookaheadSourceHealth,
+        cstvSources: this.cstvSources,
+        nowMonotonicMs,
       });
-      const operatorChanged =
-        !this.initialized || !sameOperatorSemantic(this.lastOperatorSemantic, nextOperatorSemantic);
-      const operator = operatorChanged
-        ? projectOperator({
-            runtime: runtimeSnapshot,
-            context: this.contextBinding,
-            identity,
-            activeLineup,
-            cstvSources: this.cstvSources,
-            nowMonotonicMs,
-          })
-        : this.current.operator;
-
-      const nextAssistSemantic = buildAssistSemanticSnapshot({
-        program,
-        observerSettings: this.observerSettings?.(),
-        lookaheadHealth: lookaheadSourceHealth,
-      });
-      const assistChanged =
-        !this.initialized ||
-        programChanged ||
-        !sameAssistSemantic(this.lastAssistSemantic, nextAssistSemantic);
-      const assist = assistChanged ? this.assistance(program, nowMonotonicMs) : this.current.assist;
-
+      const assist = this.assistance(program, nowMonotonicMs);
       this.current = { program, radar, operator, assist, identity };
       this.scheduleStaleDeadline(
         runtimeView,
@@ -448,86 +370,69 @@ export class ProjectionCoordinator {
         nowMonotonicMs,
         runtimeSnapshot.continuityPolicy,
       );
-
-      if (programChanged) {
-        const prior = this.lastPublishedProgram;
-        const cursor = gameplay.cursor;
-        const coalescePredictionWait =
-          this.predictionPublishCoalescing &&
-          !publishWaiting &&
-          prior !== undefined &&
-          prior.status.telemetry === 'fresh' &&
-          gameplay.status.telemetry === 'fresh' &&
-          gameplay.status.context === prior.status.context &&
-          gameplay.status.identity === prior.status.identity &&
-          gameplay.match?.matchId === prior.match?.matchId &&
-          cursor.producerInstanceId === prior.cursor.producerInstanceId &&
-          cursor.liveSessionId === prior.cursor.liveSessionId &&
-          cursor.programSourceGeneration === prior.cursor.programSourceGeneration &&
-          cursor.mapEpoch === prior.cursor.mapEpoch &&
-          gameplay.round?.phase === 'live' &&
-          gameplay.map?.roundNumber === prior.map?.roundNumber &&
-          gameplay.map?.score.ct === prior.map?.score.ct &&
-          gameplay.map?.score.t === prior.map?.score.t &&
-          gameplay.clock?.phase === prior.clock?.phase &&
-          gameplay.bomb?.state === prior.bomb?.state &&
-          gameplay.bombDamage.players.some(
-            (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
-          ) &&
-          gameplay.bombDamage.players.every(
-            (player) =>
-              player.status === 'predicted' ||
-              player.reason === 'prediction-loading' ||
-              prior.bombDamage.players.some(
-                (previous) =>
-                  previous.sourcePlayerId === player.sourcePlayerId &&
-                  previous.status === 'unavailable' &&
-                  previous.reason === player.reason,
-              ),
-          );
-        if (coalescePredictionWait) {
-          // Keep the existing WHOLE published snapshot and its original cursor.
-          // A completion reprojects latest state; never attach old estimates to a
-          // new input. A slow worker still exposes waiting after one display frame.
-          this.predictionPublishTimer ??= this.scheduler.setTimeout(() => {
-            this.predictionPublishTimer = undefined;
-            this.refresh(true);
-          }, 16);
-          return this.current;
-        }
-        if (this.predictionPublishTimer !== undefined) {
-          this.scheduler.clearTimeout(this.predictionPublishTimer);
+      const prior = this.lastPublishedProgram;
+      const cursor = gameplay.cursor;
+      const coalescePredictionWait =
+        this.predictionPublishCoalescing &&
+        !publishWaiting &&
+        prior !== undefined &&
+        prior.status.telemetry === 'fresh' &&
+        gameplay.status.telemetry === 'fresh' &&
+        gameplay.status.context === prior.status.context &&
+        gameplay.status.identity === prior.status.identity &&
+        gameplay.match?.matchId === prior.match?.matchId &&
+        cursor.producerInstanceId === prior.cursor.producerInstanceId &&
+        cursor.liveSessionId === prior.cursor.liveSessionId &&
+        cursor.programSourceGeneration === prior.cursor.programSourceGeneration &&
+        cursor.mapEpoch === prior.cursor.mapEpoch &&
+        gameplay.round?.phase === 'live' &&
+        gameplay.map?.roundNumber === prior.map?.roundNumber &&
+        gameplay.map?.score.ct === prior.map?.score.ct &&
+        gameplay.map?.score.t === prior.map?.score.t &&
+        gameplay.clock?.phase === prior.clock?.phase &&
+        gameplay.bomb?.state === prior.bomb?.state &&
+        gameplay.bombDamage.players.some(
+          (player) => player.status === 'unavailable' && player.reason === 'prediction-loading',
+        ) &&
+        gameplay.bombDamage.players.every(
+          (player) =>
+            player.status === 'predicted' ||
+            player.reason === 'prediction-loading' ||
+            prior.bombDamage.players.some(
+              (previous) =>
+                previous.sourcePlayerId === player.sourcePlayerId &&
+                previous.status === 'unavailable' &&
+                previous.reason === player.reason,
+            ),
+        );
+      if (coalescePredictionWait) {
+        // Keep the existing WHOLE published snapshot and its original cursor.
+        // A completion reprojects latest state; never attach old estimates to a
+        // new input. A slow worker still exposes waiting after one display frame.
+        this.predictionPublishTimer ??= this.scheduler.setTimeout(() => {
           this.predictionPublishTimer = undefined;
-        }
-        for (const listener of this.presentationListeners) {
-          try {
-            listener(this.current);
-          } catch {
-            report(this.onDiagnostic, 'presentation-projection-failed');
-          }
-        }
+          this.refresh(true);
+        }, 16);
+        return this.current;
       }
-
-      this.publish(gameplay, radar, operator, assist, {
-        program: programChanged,
-        radar: true,
-        operator: operatorChanged,
-        assist: assistChanged,
-        chatSnapshot,
-      });
-
-      if (programChanged) {
-        this.lastPublishedProgram = gameplay;
-        this.lastProgramSemantic = nextProgramSemantic;
+      if (this.predictionPublishTimer !== undefined) {
+        this.scheduler.clearTimeout(this.predictionPublishTimer);
+        this.predictionPublishTimer = undefined;
+      }
+      for (const listener of this.presentationListeners) {
         try {
-          this.onProjection?.(this.current);
+          listener(this.current);
         } catch {
-          report(this.onDiagnostic, 'output-projection-failed');
+          report(this.onDiagnostic, 'presentation-projection-failed');
         }
       }
-      if (operatorChanged) this.lastOperatorSemantic = nextOperatorSemantic;
-      if (assistChanged) this.lastAssistSemantic = nextAssistSemantic;
-      this.initialized = true;
+      this.publish(gameplay, radar, operator, assist);
+      this.lastPublishedProgram = gameplay;
+      try {
+        this.onProjection?.(this.current);
+      } catch {
+        report(this.onDiagnostic, 'output-projection-failed');
+      }
       return this.current;
     } finally {
       this.refreshing = false;
@@ -658,49 +563,34 @@ export class ProjectionCoordinator {
     radar: RadarFrame,
     operator: OperatorProjection,
     assist: ObserverAssistProjection,
-    channels: {
-      readonly program: boolean;
-      readonly radar: boolean;
-      readonly operator: boolean;
-      readonly assist: boolean;
-      readonly chatSnapshot?: NonNullable<ProgramSnapshot['payload']['allChat']> | undefined;
-    },
   ): void {
-    if (channels.program) {
-      this.publishChannel('program', () =>
-        this.publishers.program.publish({
-          type: 'snapshot',
-          protocolVersion: LOCAL_PROTOCOL_VERSION,
-          channel: 'program',
-          schemaVersion: PROGRAM_SCHEMA_VERSION,
-          cursor: program.cursor,
-          payload: {
-            ...mapProgramProjection(program),
-            ...(channels.chatSnapshot !== undefined
-              ? { allChat: channels.chatSnapshot }
-              : this.programChat
-                ? {
-                    allChat: this.programChat(program.cursor, program.status.telemetry === 'fresh'),
-                  }
-                : {}),
-          },
-        }),
-      );
-    }
-    if (channels.radar) {
-      this.publishChannel('radar', () =>
-        this.publishers.radar.publish({
-          type: 'snapshot',
-          protocolVersion: LOCAL_PROTOCOL_VERSION,
-          channel: 'radar',
-          schemaVersion: RADAR_SCHEMA_VERSION,
-          cursor: radar.cursor,
-          payload: mapRadarFrame(radar),
-        }),
-      );
-    }
-    if (channels.operator) this.publishOperator(operator);
-    if (channels.assist) this.publishAssist(assist);
+    this.publishChannel('program', () =>
+      this.publishers.program.publish({
+        type: 'snapshot',
+        protocolVersion: LOCAL_PROTOCOL_VERSION,
+        channel: 'program',
+        schemaVersion: PROGRAM_SCHEMA_VERSION,
+        cursor: program.cursor,
+        payload: {
+          ...mapProgramProjection(program),
+          ...(this.programChat
+            ? { allChat: this.programChat(program.cursor, program.status.telemetry === 'fresh') }
+            : {}),
+        },
+      }),
+    );
+    this.publishChannel('radar', () =>
+      this.publishers.radar.publish({
+        type: 'snapshot',
+        protocolVersion: LOCAL_PROTOCOL_VERSION,
+        channel: 'radar',
+        schemaVersion: RADAR_SCHEMA_VERSION,
+        cursor: radar.cursor,
+        payload: mapRadarFrame(radar),
+      }),
+    );
+    this.publishOperator(operator);
+    this.publishAssist(assist);
   }
 
   private assistance(program: ProgramProjection, now: number): ObserverAssistProjection {
@@ -738,24 +628,20 @@ export class ProjectionCoordinator {
   }
 
   private publishAssist(assist: ObserverAssistProjection): void {
-    const payload = mapObserverAssistProjection(assist);
-    if (!sameAssistPayload(this.lastPublishedAssistPayload, payload)) {
-      const previous = this.publishers.assist.getCurrent()?.channelSeq;
-      this.publishChannel('assist', () => {
-        this.publishers.assist.publish({
-          type: 'snapshot',
-          protocolVersion: LOCAL_PROTOCOL_VERSION,
-          channel: 'assist',
-          schemaVersion: ASSIST_SCHEMA_VERSION,
-          cursor: assist.cursor,
-          payload,
-        });
-        this.lastPublishedAssistPayload = payload;
-        const current = this.publishers.assist.getCurrent();
-        if (current && current.channelSeq !== previous && assist.observer?.hints.length)
-          this.observerTimeline.recordPublished(assist.observer.hints);
+    const previous = this.publishers.assist.getCurrent()?.channelSeq;
+    this.publishChannel('assist', () => {
+      this.publishers.assist.publish({
+        type: 'snapshot',
+        protocolVersion: LOCAL_PROTOCOL_VERSION,
+        channel: 'assist',
+        schemaVersion: ASSIST_SCHEMA_VERSION,
+        cursor: assist.cursor,
+        payload: mapObserverAssistProjection(assist),
       });
-    }
+      const current = this.publishers.assist.getCurrent();
+      if (current && current.channelSeq !== previous && assist.observer?.hints.length)
+        this.observerTimeline.recordPublished(assist.observer.hints);
+    });
     if (!this.observerSettings) return;
     try {
       this.onObserverDiagnostics?.(this.observerTimeline.getDiagnostics());
@@ -929,228 +815,6 @@ export class ProjectionCoordinator {
     this.staleTimerKey = undefined;
     this.staleDeadline = undefined;
   }
-}
-
-function shallowEqualRecord(a: object, b: object): boolean {
-  const ar = a as Record<string, unknown>;
-  const br = b as Record<string, unknown>;
-  for (const key in ar) {
-    if (!Object.is(ar[key], br[key])) return false;
-  }
-  return true;
-}
-
-function deepEqualArrayOrObj(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) if (!deepEqualArrayOrObj(a[i], b[i])) return false;
-    return true;
-  }
-  const ar = a as Record<string, unknown>;
-  const br = b as Record<string, unknown>;
-  const keys = Object.keys(ar);
-  if (keys.length !== Object.keys(br).length) return false;
-  for (const k of keys) if (!deepEqualArrayOrObj(ar[k], br[k])) return false;
-  return true;
-}
-
-type ProgramSemanticSnapshot = ReturnType<typeof buildProgramSemanticSnapshot>;
-type OperatorSemanticSnapshot = ReturnType<typeof buildOperatorSemanticSnapshot>;
-type AssistSemanticSnapshot = ReturnType<typeof buildAssistSemanticSnapshot>;
-
-function buildProgramSemanticSnapshot(args: {
-  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
-  readonly needsNeutralGameplay: boolean;
-  readonly preferCanonicalPlayerNames: boolean;
-  readonly context: unknown;
-  readonly contextFreshness: 'fresh' | 'stale' | undefined;
-  readonly identity: IdentityResolution;
-  readonly activeLineup: ActiveLineupResolution;
-  readonly seriesProgress: ProgramRuntimeSnapshot['seriesProgress'];
-  readonly bombDamageResource: unknown;
-  readonly runtimeView: ProgramSafeRuntimeView;
-  readonly chatSnapshot: NonNullable<ProgramSnapshot['payload']['allChat']> | undefined;
-}) {
-  const { runtimeView, chatSnapshot } = args;
-  const bombState = runtimeView.telemetry?.telemetry.bomb?.state;
-  const lastChat = chatSnapshot?.[chatSnapshot.length - 1];
-  return {
-    telemetryFreshness: args.telemetryFreshness,
-    needsNeutralGameplay: args.needsNeutralGameplay,
-    preferCanonicalPlayerNames: args.preferCanonicalPlayerNames,
-    context: args.context,
-    contextFreshness: args.contextFreshness,
-    identityState: args.identity.state,
-    sideA: args.identity.sideMapping.a,
-    sideB: args.identity.sideMapping.b,
-    canonicalBranding: args.identity.capabilities.canonicalTeamBranding,
-    lineupGen: args.activeLineup.sourceGeneration,
-    lineupEpoch: args.activeLineup.mapEpoch,
-    lineupState: args.activeLineup.state,
-    lineupCtLen: args.activeLineup.ct.length,
-    lineupTLen: args.activeLineup.t.length,
-    seriesProgress: args.seriesProgress,
-    bombDamageResource: args.bombDamageResource,
-    producerInstanceId: runtimeView.cursor.producerInstanceId,
-    liveSessionId: runtimeView.cursor.liveSessionId,
-    programSourceGeneration: runtimeView.cursor.programSourceGeneration,
-    mapEpoch: runtimeView.cursor.mapEpoch,
-    objectiveTimingActive:
-      bombState === 'planting' || bombState === 'defusing' || bombState === 'planted',
-    plantDuration: runtimeView.objectiveTiming.plantActionDurationSeconds,
-    defuseDuration: runtimeView.objectiveTiming.defuseActionDurationSeconds,
-    playerStats: runtimeView.playerStats,
-    telemetry: runtimeView.telemetry,
-    chatLength: chatSnapshot?.length ?? 0,
-    lastChatId: lastChat?.id ?? null,
-  };
-}
-
-function sameProgramSemantic(
-  prev: ProgramSemanticSnapshot | undefined,
-  next: ProgramSemanticSnapshot,
-): boolean {
-  if (!prev || prev.objectiveTimingActive || next.objectiveTimingActive) return false;
-  const { telemetry: prevObs, ...prevRest } = prev;
-  const { telemetry: nextObs, ...nextRest } = next;
-  if (!shallowEqualRecord(prevRest, nextRest)) return false;
-  if (prevObs === nextObs) return true;
-  if (!prevObs || !nextObs || !shallowEqualRecord(prevObs.coverage, nextObs.coverage)) return false;
-
-  const pt = prevObs.telemetry;
-  const nt = nextObs.telemetry;
-  if (
-    !deepEqualArrayOrObj(pt.map, nt.map) ||
-    !deepEqualArrayOrObj(pt.round, nt.round) ||
-    !deepEqualArrayOrObj(pt.phaseCountdowns, nt.phaseCountdowns) ||
-    pt.player?.sourcePlayerId !== nt.player?.sourcePlayerId ||
-    pt.bomb?.state !== nt.bomb?.state ||
-    pt.bomb?.sourcePlayerId !== nt.bomb?.sourcePlayerId ||
-    pt.bomb?.countdownSeconds !== nt.bomb?.countdownSeconds
-  ) {
-    return false;
-  }
-  const bombDamageSensitive =
-    nt.round?.phase === 'live' && (nt.bomb?.state === 'planted' || nt.bomb?.state === 'defusing');
-  if (bombDamageSensitive && !deepEqualArrayOrObj(pt.bomb?.position, nt.bomb?.position))
-    return false;
-  const pPlayers = pt.allPlayers;
-  const nPlayers = nt.allPlayers;
-  if (pPlayers === nPlayers) return true;
-  if (!pPlayers || !nPlayers || pPlayers.length !== nPlayers.length) return false;
-  for (let i = 0; i < nPlayers.length; i += 1) {
-    const pp = pPlayers[i]!;
-    const np = nPlayers[i]!;
-    if (
-      pp.sourcePlayerId !== np.sourcePlayerId ||
-      pp.side !== np.side ||
-      pp.displayName !== np.displayName ||
-      pp.observerSlot !== np.observerSlot ||
-      pp.activity !== np.activity ||
-      (bombDamageSensitive &&
-        (!deepEqualArrayOrObj(pp.position, np.position) ||
-          !deepEqualArrayOrObj(pp.forward, np.forward))) ||
-      !deepEqualArrayOrObj(pp.state, np.state) ||
-      !deepEqualArrayOrObj(pp.matchStats, np.matchStats) ||
-      !deepEqualArrayOrObj(pp.weapons, np.weapons)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function buildOperatorSemanticSnapshot(args: {
-  readonly telemetryFreshness: ProgramSafeRuntimeFreshness;
-  readonly runtimeSnapshot: ProgramRuntimeSnapshot;
-  readonly runtimeView: ProgramSafeRuntimeView;
-  readonly contextBinding: MatchContextBinding | undefined;
-  readonly identity: IdentityResolution;
-  readonly activeLineup: ActiveLineupResolution;
-  readonly programSourceHealth: ReturnType<CstvSourceManagers['program']['getHealth']>;
-  readonly lookaheadSourceHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
-}) {
-  const { runtimeSnapshot, runtimeView, identity, activeLineup } = args;
-  const lastTransition =
-    runtimeSnapshot.recentTransitions[runtimeSnapshot.recentTransitions.length - 1];
-  return {
-    telemetryFreshness: args.telemetryFreshness,
-    mapName: runtimeView.telemetry?.telemetry.map?.name ?? null,
-    lastDispositionKind: runtimeSnapshot.lastDisposition?.kind ?? null,
-    lastDispositionReason: runtimeSnapshot.lastDisposition?.reason ?? null,
-    transitionsLength: runtimeSnapshot.recentTransitions.length,
-    lastTransitionSeq: lastTransition?.runtimeSeq ?? null,
-    seriesProgress: runtimeSnapshot.seriesProgress,
-    contextBinding: args.contextBinding,
-    identityState: identity.state,
-    identityIssuesLen: identity.issues.length,
-    identityResolvedCount: identity.players.filter((p) => p.canonicalPlayerId !== null).length,
-    lineupState: activeLineup.state,
-    lineupGen: activeLineup.sourceGeneration,
-    lineupEpoch: activeLineup.mapEpoch,
-    lineupCtCount: activeLineup.ct.length,
-    lineupTCount: activeLineup.t.length,
-    lineupExtrasCount: activeLineup.extras.length,
-    programSourceState: args.programSourceHealth.state,
-    programSourceGen: args.programSourceHealth.generation,
-    programSourceTick:
-      args.programSourceHealth.lastEventTick ?? args.programSourceHealth.tailTick ?? null,
-    lookaheadSourceState: args.lookaheadSourceHealth.state,
-    lookaheadSourceGen: args.lookaheadSourceHealth.generation,
-    lookaheadSourceTick:
-      args.lookaheadSourceHealth.lastEventTick ?? args.lookaheadSourceHealth.tailTick ?? null,
-    producerInstanceId: runtimeView.cursor.producerInstanceId,
-    liveSessionId: runtimeView.cursor.liveSessionId,
-    programSourceGeneration: runtimeView.cursor.programSourceGeneration,
-    mapEpoch: runtimeView.cursor.mapEpoch,
-  };
-}
-
-function sameOperatorSemantic(
-  prev: OperatorSemanticSnapshot | undefined,
-  next: OperatorSemanticSnapshot,
-): boolean {
-  return prev !== undefined && shallowEqualRecord(prev, next);
-}
-
-function buildAssistSemanticSnapshot(args: {
-  readonly program: ProgramProjection;
-  readonly observerSettings:
-    | {
-        enabled: boolean;
-        leadSeconds: number;
-        delaySeconds: number;
-        waitingForNextMap?: boolean;
-      }
-    | undefined;
-  readonly lookaheadHealth: ReturnType<CstvSourceManagers['lookahead']['getHealth']>;
-}) {
-  return {
-    enabled: args.observerSettings?.enabled ?? false,
-    leadSeconds: args.observerSettings?.leadSeconds ?? 0,
-    delaySeconds: args.observerSettings?.delaySeconds ?? 0,
-    waitingForNextMap: args.observerSettings?.waitingForNextMap ?? false,
-    lookaheadState: args.lookaheadHealth.state,
-    lookaheadGen: args.lookaheadHealth.generation,
-    lookaheadErrorCode: args.lookaheadHealth.lastErrorCode ?? null,
-    lookaheadMapName: args.lookaheadHealth.mapName ?? null,
-    mapName: args.program.map.name,
-    roundNumber: args.program.map.roundNumber,
-    roundPhase: args.program.round?.phase ?? null,
-  };
-}
-
-function sameAssistSemantic(
-  prev: AssistSemanticSnapshot | undefined,
-  next: AssistSemanticSnapshot,
-): boolean {
-  return prev !== undefined && shallowEqualRecord(prev, next);
-}
-
-function sameAssistPayload(prev: AssistPayload | undefined, next: AssistPayload): boolean {
-  return prev !== undefined && deepEqualArrayOrObj(prev, next);
 }
 
 function sameStaleKey(
