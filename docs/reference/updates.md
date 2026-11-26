@@ -35,5 +35,5 @@ EPL 官方资源通过 `distribution/resources.ts` 与 Companion 内置的 `Reso
 
 - **内核同步**：全局写入锁 `Global\MizarUpdateWriter`、桌面互斥 `Global\MizarDesktop`（内置更新时由 Host 通过 `STARTUPINFOEX` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 白名单继承给 Applier）、更新活动事件 `Global\MizarUpdateActive`；
 - **内置一键更新**：Host 仅请求 Companion 单一 `install-plan` 接口检查 OBS 推流/录制与下载校验，随后调用新包 `Setup.exe /S /MIZAREXTRACT=<temp_dir>` 静默解包，完成正常退出收尾后白名单继承 `Global\MizarDesktop` 拉起新包 `mizar-applier.exe apply-update` 并重定向 `stdout/stderr` 到 `logs\applier-launch.log`；若拉起失败，Host 释放互斥并直接重启旧版（绝不进入 CS2 配置恢复）；
-- **安全与护栏**：保留载荷 `artifact.json` + `SHA256SUMS` + `contentDigest` 校验、递归删除前的重解析点 / junction 检查、进程 `PID + StartTime` 校验，以及 OBS 推流/录制门禁；不要求旧安装目录完整即可覆盖修复，历史 `v1.11.x` 目录在首次新安装时整体改名归档为 `*-legacy-<时间戳>` 并顺手清理旧 `RunOnce\!MizarUpdateRecovery`；
-- **提交与回退**：`current.json` 原子写入为唯一提交点；提交前失败或用户取消时清理暂存并保持/拉起旧版；提交后启动新版等待 `Local\MizarUpdateStarted-<32hex>` 就绪事件（最多 60 秒），若新版在就绪前提前退出则自动将 `current.json` 翻回 `previous` 并拉起旧版；旧版本延迟清理失败仅记 `cleanupWarning`，不否定已提交的安装。
+- **安全与护栏**：由 `mizar-applier.exe` 在安装/更新期唯一执行全量载荷 `artifact.json` + `SHA256SUMS` + `contentDigest` 校验（运行时监督器启停仅校验 `artifact.json` 元数据身份，不再重复全量哈希）；保留递归删除前的重解析点 / junction 检查、进程 `PID + StartTime` 校验，以及 OBS 推流/录制门禁；不要求旧安装目录完整即可覆盖修复，历史 `v1.11.x` 目录在首次新安装时整体改名归档为 `*-legacy-<时间戳>` 并顺手清理旧 `RunOnce\!MizarUpdateRecovery`；
+- **提交与回退**：`current.json` 原子写入为唯一提交点；提交前失败或用户取消时清理暂存并保持/拉起旧版；提交后启动新版等待 `Local\MizarUpdateStarted-<32hex>` 就绪事件（最多 60 秒），若新版在就绪前提前退出则自动将 `current.json` 翻回 `previous` 并拉起旧版；新版就绪确认后立即关闭更新窗口，随后静默清理更早旧版本与 `staging/` 目录，清理失败仅记 `cleanupWarning`，不否定已提交的安装。

@@ -41,7 +41,7 @@ async function sha256(path) {
   return hash.digest('hex');
 }
 
-export async function verifyPayload(root, { onProgress = () => {} } = {}) {
+export async function readArtifactMetadata(root) {
   const manifestPath = join(root, 'resources/metadata/artifact.json');
   const artifact = JSON.parse(await readFile(manifestPath, 'utf8'));
   if (
@@ -55,6 +55,11 @@ export async function verifyPayload(root, { onProgress = () => {} } = {}) {
   ) {
     throw new Error('程序版本信息不完整，请重新解压完整产品包');
   }
+  return artifact;
+}
+
+export async function verifyPayload(root, { onProgress = () => {} } = {}) {
+  const artifact = await readArtifactMetadata(root);
   const sums = await readFile(join(root, 'resources/metadata/SHA256SUMS'), 'utf8');
   const paths = new Set();
   const digest = createHash('sha256');
@@ -466,41 +471,47 @@ export async function runProduct({
   }
 }
 
-async function main() {
-  const stateRoot = writableRoot(bundleRoot, process.env.MIZAR_STATE_ROOT);
-  const sessionId = startupSessionId(process.env.MIZAR_STARTUP_SESSION_ID);
+export async function main({
+  root = bundleRoot,
+  argv = process.argv.slice(2),
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch,
+  port = PRODUCT_PORT,
+  nodePath = join(root, 'resources/runtime/node.exe'),
+} = {}) {
+  const stateRoot = writableRoot(root, env.MIZAR_STATE_ROOT);
+  const sessionId = startupSessionId(env.MIZAR_STARTUP_SESSION_ID);
   const log = createSupervisorLog(stateRoot, sessionId);
   try {
-    log('process_start', { platform: process.platform, arch: process.arch });
-    if (process.env.MIZAR_DESKTOP_SUPERVISED === '1') {
+    log('process_start', { platform, arch });
+    if (env.MIZAR_DESKTOP_SUPERVISED === '1') {
       await awaitDesktopStart(process.stdin);
       log('desktop_supervision_ready');
     }
-    const args = new Set(process.argv.slice(2));
+    const args = new Set(argv);
     if ([...args].some((arg) => !['--stop', '--reuse-only', '--no-browser'].includes(arg)))
       throw new Error('启动参数无法识别');
-    if (process.platform !== 'win32' || process.arch !== 'x64')
-      throw new Error('此产品包需要 64 位 Windows');
-    log('artifact_verify_begin');
-    const artifact = await verifyPayload(bundleRoot, {
-      onProgress: (progress) => log('artifact_verify_progress', progress),
-    });
-    log('artifact_verified', { gitSha: artifact.gitSha, artifactSha256: artifact.artifactSha256 });
+    if (platform !== 'win32' || arch !== 'x64') throw new Error('此产品包需要 64 位 Windows');
     if (args.has('--stop')) {
       log('product_stop_begin');
-      await stopProduct(bundleRoot, {
+      const expectedInstance = env.MIZAR_EXPECTED_RUNTIME_INSTANCE || undefined;
+      await stopProduct(root, {
+        port,
         stateRoot,
-        artifact,
-        expectedInstance: process.env.MIZAR_EXPECTED_RUNTIME_INSTANCE,
+        expectedInstance,
+        ...(expectedInstance ? {} : { artifact: await readArtifactMetadata(root) }),
       });
       log('product_stopped');
       return;
     }
+    const artifact = await readArtifactMetadata(root);
     await runProduct({
-      root: bundleRoot,
+      root,
       artifact,
+      port,
       stateRoot,
-      nodePath: join(bundleRoot, 'resources/runtime/node.exe'),
+      nodePath,
       reuseOnly: args.has('--reuse-only'),
       openBrowser: !args.has('--no-browser'),
       sessionId,

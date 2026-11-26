@@ -245,6 +245,8 @@ struct InstallParams {
 struct InstallOutput {
     version: Option<String>,
     previous_version: Option<String>,
+    version_id: Option<String>,
+    previous_id: Option<String>,
     cleanup_warning: Option<String>,
 }
 
@@ -279,6 +281,15 @@ fn run_install_or_update(
         Ok(()) => {
             if let Some(ui) = ui_opt.take() {
                 ui.close();
+            }
+            if let Some(version_id) = out.version_id.as_deref() {
+                cleanup_old_versions_and_staging(
+                    &params.install_dir,
+                    version_id,
+                    out.previous_id.as_deref(),
+                    log,
+                    &mut out.cleanup_warning,
+                );
             }
             (ExitCode::Ok, None, true, None)
         }
@@ -567,6 +578,8 @@ fn run_phases(
     write_current_pointer_atomic(&install_dir, &new_pointer).map_err(|e| {
         StepError::pre_commit(ExitCode::IoError, format!("写入 current.json 失败: {e}"))
     })?;
+    out.version_id = Some(version_id.clone());
+    out.previous_id = previous_id.clone();
     legacy_guard.archive = None;
     log.log(&format!("committed current.json -> {version_id}"));
 
@@ -599,7 +612,7 @@ fn run_phases(
         }
     }
 
-    // Phase 5: Post (release locks, launch & verify, best-effort cleanup)
+    // Phase 5: Post (release locks, launch & verify)
     guards.release_locks();
 
     if !params.no_launch {
@@ -646,17 +659,27 @@ fn run_phases(
         }
     }
 
+    Ok(())
+}
+
+fn cleanup_old_versions_and_staging(
+    install_dir: &Path,
+    version_id: &str,
+    previous_id: Option<&str>,
+    log: &Logger,
+    cleanup_warning: &mut Option<String>,
+) {
     // Best-effort delayed cleanup of older versions & staging
     if let Ok(entries) = fs::read_dir(install_dir.join("versions")) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str != version_id && previous_id.as_deref() != Some(name_str.as_ref()) {
+            if name_str != version_id && previous_id != Some(name_str.as_ref()) {
                 if let Err(e) = remove_dir_safe(&entry.path()) {
                     let w = format!("清理旧版本 {name_str} 失败: {e}");
                     log.log(&format!("warn: {w}"));
-                    if out.cleanup_warning.is_none() {
-                        out.cleanup_warning = Some(w);
+                    if cleanup_warning.is_none() {
+                        *cleanup_warning = Some(w);
                     }
                 }
             }
@@ -667,13 +690,11 @@ fn run_phases(
         if let Err(e) = remove_dir_safe(&staging_root) {
             let w = format!("清理 staging 失败: {e}");
             log.log(&format!("warn: {w}"));
-            if out.cleanup_warning.is_none() {
-                out.cleanup_warning = Some(w);
+            if cleanup_warning.is_none() {
+                *cleanup_warning = Some(w);
             }
         }
     }
-
-    Ok(())
 }
 
 fn run_uninstall(
