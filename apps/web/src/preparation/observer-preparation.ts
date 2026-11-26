@@ -89,8 +89,22 @@ export function observerFailureReason(view: ObserverRuntimeView) {
   if (!view.failed && view.stopReason === 'host-invalid')
     return '游戏或工作台已变化，请确认游戏仍在运行后重新连接。';
   const code = view.terminal?.reason ?? view.health.lastErrorCode;
-  if (code === 'initialization-timeout' || code === 'phase-timeout')
+  if (
+    code === 'initialization-timeout' ||
+    code === 'phase-timeout' ||
+    code === 'connection-timeout'
+  )
     return '提前提示连接超时，请核对地址与服务器状态。';
+  if (
+    code === 'native-auth-failed' ||
+    code === 'ticket-rejected' ||
+    code === 'steam-ticket-failed' ||
+    code?.includes('ticket') ||
+    code?.includes('auth')
+  )
+    return 'GoTV 观战认证未通过，请确认 Steam 登录状态及服务器密码后重试。';
+  if (code === 'untrusted-node' || code?.includes('untrusted'))
+    return '服务器拒绝了当前节点连接，请核对白名单或网络环境后重试。';
   if (code === 'source-hltv-stop') return '服务器已结束本次观战连接。';
   if (code === 'native-start-failed' && view.terminal?.nativeBootCode === 5)
     return 'Steam 当前未连接在线服务，请确认 Steam 已登录并联网后重试提前提示。';

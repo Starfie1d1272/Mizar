@@ -91,7 +91,7 @@ it('displays lookahead hints with local residence compensation during lead windo
     waitingReason: null,
     hints: [
       {
-        id: '1:1',
+        id: '0:1:1',
         remainingSeconds: 4.5,
         attacker: { name: 'Player 0', observerSlot: 0 },
         victim: { name: 'Player 1', observerSlot: 1 },
@@ -118,7 +118,7 @@ it('continues showing cached hints when early source disconnects, fails, or ends
   ]) {
     expect(timeline.project(program(116500), settings, 116500, source).observer).toMatchObject({
       state: 'ready',
-      hints: [{ id: '1:1', remainingSeconds: 4.5 }],
+      hints: [{ id: '0:1:1', remainingSeconds: 4.5 }],
     });
   }
 });
@@ -134,10 +134,10 @@ it('retains cached kills across same-map reconnect and accepts new kills', () =>
 
   expect(
     timeline.project(program(116500), settings, 116500, reconnected).observer?.hints,
-  ).toMatchObject([{ id: '1:1' }]);
+  ).toMatchObject([{ id: '0:1:1' }]);
   expect(
     timeline.project(program(121500), settings, 121500, reconnected).observer?.hints,
-  ).toMatchObject([{ id: '2:1' }]);
+  ).toMatchObject([{ id: '0:2:1' }]);
 });
 
 it('relaxes 10-player requirement when attacker and victim are matched', () => {
@@ -161,7 +161,7 @@ it('relaxes 10-player requirement when attacker and victim are matched', () => {
     ).observer?.hints,
   ).toEqual([
     {
-      id: '1:1',
+      id: '0:1:1',
       remainingSeconds: 4.5,
       attacker: { name: 'Player 0', observerSlot: null },
       victim: { name: 'Player 1', observerSlot: null },
@@ -169,21 +169,45 @@ it('relaxes 10-player requirement when attacker and victim are matched', () => {
   ]);
 });
 
-it('clears buffered kills on match restart (round regression) or resetForMap', () => {
+it('clears buffered kills on resetForMap', () => {
   const timeline = new ObserverHintTimeline();
   timeline.project(program(0, { roundNumber: 6 }), settings, 0, early);
   timeline.consume(death(1, 1, 1000, { roundsCompleted: 6 }));
   expect(timeline.getDiagnostics().pending).toBe(1);
 
-  // Round regression proves match restarted
-  timeline.consume(death(1, 2, 2000, { roundsCompleted: 0 }));
-  expect(timeline.getDiagnostics().pending).toBe(1);
-  expect(
-    timeline.project(program(117500, { roundNumber: 0 }), settings, 117500, early).observer?.hints,
-  ).toMatchObject([{ id: '1:2' }]);
-
-  timeline.resetForMap(118000);
+  timeline.resetForMap(2000);
   expect(timeline.getDiagnostics().pending).toBe(0);
+});
+
+it('retains kill when player is temporarily missing and accepts lower generation after resetForMap', () => {
+  const timeline = new ObserverHintTimeline();
+  timeline.project(program(0), settings, 0, early);
+  timeline.consume(death(5, 20, 1000));
+
+  // Temporarily missing victim: skipped this frame, NOT permanently dropped
+  const missingVictim: ObserverProgramView = {
+    ...program(116500),
+    players: players.filter((p) => p.sourcePlayerId !== 'player-1'),
+  };
+  expect(timeline.project(missingVictim, settings, 116500, early).observer?.hints).toEqual([]);
+  expect(timeline.getDiagnostics().pending).toBe(1);
+
+  // Player reappears on next frame -> hint is displayed
+  expect(timeline.project(program(116600), settings, 116600, early).observer?.hints).toMatchObject([
+    { id: '0:5:20' },
+  ]);
+
+  // Switch to map 2 with a fresh observer process starting at generation 1, sequence 1
+  timeline.resetForMap(117000);
+  timeline.consume(death(1, 1, 117500, { mapName: 'de_mirage', roundsCompleted: 0 }));
+  expect(
+    timeline.project(
+      program(233000, { mapEpoch: 2, mapName: 'de_mirage', roundNumber: 0 }),
+      settings,
+      233000,
+      { connected: true, fresh: true, sameMap: true, generation: 1 },
+    ).observer?.hints,
+  ).toMatchObject([{ id: '1:1:1' }]);
 });
 
 it('hides hints when disabled or when program match is paused', () => {

@@ -104,7 +104,6 @@ describe('program statistics integration', () => {
       role: 'program',
       state: 'live',
       generation: 2,
-      reconnectAttempt: 0,
       mapName: 'de_mirage',
     });
     const coordinator = createProjectionCoordinator({

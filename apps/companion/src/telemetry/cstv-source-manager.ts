@@ -6,7 +6,6 @@ import {
   type CstvDiagnostic,
   type CstvDiagnosticCode,
   type CstvObservationClock,
-  type CstvSessionTerminalStatus,
 } from '@mizar/telemetry-cstv';
 
 export const CSTV_RECENT_GAME_EVENTS_MAX = 64;
@@ -19,7 +18,6 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly role: R;
   readonly state: CstvSourceState;
   readonly generation: number;
-  readonly reconnectAttempt: number;
   readonly lastReceiveMonotonicMs?: number;
   readonly mapName?: string;
   readonly tailTick?: number;
@@ -27,7 +25,6 @@ export interface CstvSourceHealth<R extends GameEventSourceRole = GameEventSourc
   readonly lastEventSequence?: number;
   readonly lastEventObservedAt?: string;
   readonly lastErrorCode?: CstvDiagnosticCode;
-  readonly lastTerminalStatus?: CstvSessionTerminalStatus;
 }
 
 export interface CstvSourceSnapshot<R extends GameEventSourceRole = GameEventSourceRole> {
@@ -122,7 +119,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements Observe
       role: this.role,
       state: this.state,
       generation: this.generation,
-      reconnectAttempt: 0,
       ...(this.lastReceiveMonotonicMs === undefined
         ? {}
         : { lastReceiveMonotonicMs: this.lastReceiveMonotonicMs }),
@@ -321,10 +317,6 @@ class DefaultCstvSourceManager<R extends GameEventSourceRole> implements Observe
       row.residenceUs >= 0
         ? row.residenceUs
         : undefined;
-    if (residenceUs !== undefined && residenceUs >= 2_000_000) {
-      this.resetObserverContinuity('connecting', 'observer-residence-limit');
-      return;
-    }
     const sample = this.clock?.now() ?? {
       observedAt: new Date().toISOString(),
       observedMonotonicMs: performance.now(),

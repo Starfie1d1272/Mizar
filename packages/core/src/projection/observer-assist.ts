@@ -50,11 +50,13 @@ interface BufferedKill {
 
 export class ObserverHintTimeline {
   private kills: BufferedKill[] = [];
-  private context = '';
-  private contextIdentity: { match: string; session: string | null; map: string } | null = null;
-  private generation: number | undefined;
-  private lastDeathSequence = -1;
-  private lastAcceptedRound: number | undefined;
+  private sessionEpoch = 0;
+  private currentContext: {
+    key: string;
+    match: string;
+    session: string | null;
+    map: string;
+  } | null = null;
   private lastNow = 0;
   private programSource = { generation: 0, mapEpoch: 0, receiveSequence: null as number | null };
   private configuration: ObserverHintSettings | null = null;
@@ -115,12 +117,13 @@ export class ObserverHintTimeline {
     if (this.lastReset.reason !== reason || this.kills.length)
       this.lastReset = { reason, atMonotonicMs: now };
     this.kills = [];
-    this.lastAcceptedRound = undefined;
+    this.sessionEpoch++;
     this.nextDueMs = null;
     this.nextWindowMs = null;
   }
 
   resetForMap(now: number) {
+    this.currentContext = null;
     this.reset('map-connection', now);
   }
 
@@ -128,39 +131,13 @@ export class ObserverHintTimeline {
     if (event.cursor.role !== 'lookahead') return;
     this.receivedEvents++;
     this.lastReceivedMs = event.cursor.observedMonotonicMs;
-    if (this.generation !== undefined && event.cursor.generation < this.generation) return;
-    if (this.generation !== event.cursor.generation) {
-      this.generation = event.cursor.generation;
-      this.lastDeathSequence = -1;
-      if (this.contextIdentity && event.cursor.mapName !== this.contextIdentity.map) {
-        this.kills = [];
-        this.lastAcceptedRound = undefined;
-      }
-    }
     if (event.kind !== 'player-death') return;
     if (!event.attacker?.sourcePlayerId || !event.victim.sourcePlayerId) return;
     if (!event.cursor.ticksPerSecond) return;
-    if (event.cursor.sequence <= this.lastDeathSequence) return;
-    if (
-      this.lastAcceptedRound !== undefined &&
-      event.cursor.roundsCompleted !== undefined &&
-      event.cursor.roundsCompleted < this.lastAcceptedRound
-    ) {
-      // A round regression proves the match restarted (e.g. during a disconnect).
-      this.kills = [];
-      this.lastAcceptedRound = undefined;
-    }
-    if (event.cursor.roundsCompleted !== undefined) {
-      this.lastAcceptedRound =
-        this.lastAcceptedRound === undefined
-          ? event.cursor.roundsCompleted
-          : Math.max(this.lastAcceptedRound, event.cursor.roundsCompleted);
-    }
-    this.lastDeathSequence = event.cursor.sequence;
     this.acceptedDeaths++;
     if (event.cursor.sourceArrivalMonotonicMs !== undefined) this.compensatedDeaths++;
     this.kills.push({
-      id: `${event.cursor.generation}:${event.cursor.sequence}`,
+      id: `${this.sessionEpoch}:${event.cursor.generation}:${event.cursor.sequence}`,
       event,
       sourceMs: event.cursor.sourceArrivalMonotonicMs ?? event.cursor.observedMonotonicMs,
       published: false,
@@ -208,24 +185,20 @@ export class ObserverHintTimeline {
       this.blocked = 'disabled';
       return { cursor: program.cursor, availability: 'unavailable' };
     }
-    const context = [
+    const contextKey = [
       program.match?.matchId,
       program.cursor.liveSessionId,
       program.cursor.mapEpoch,
       program.map.name,
     ].join(':');
-    if (program.match && program.map.name && context !== this.context) {
-      this.reset('program-context', now);
-      this.context = context;
-      this.contextIdentity = {
+    if (program.match && program.map.name && contextKey !== this.currentContext?.key) {
+      if (this.currentContext !== null) this.reset('program-context', now);
+      this.currentContext = {
+        key: contextKey,
         match: program.match.matchId,
         session: program.cursor.liveSessionId,
         map: program.map.name,
       };
-    }
-    if (this.generation === undefined || source.generation > this.generation) {
-      this.generation = source.generation;
-      this.lastDeathSequence = -1;
     }
     if (
       program.status.telemetry !== 'fresh' ||
@@ -265,7 +238,10 @@ export class ObserverHintTimeline {
         (p) => p.sourcePlayerId === kill.event.attacker!.sourcePlayerId,
       );
       const victim = players.find((p) => p.sourcePlayerId === kill.event.victim.sourcePlayerId);
-      if (!attacker || !victim) continue;
+      if (!attacker || !victim) {
+        kept.push(kill);
+        continue;
+      }
       const eventRound = kill.event.cursor.roundsCompleted;
       const programRound = program.map.roundNumber;
       if (eventRound === undefined || programRound === null) {

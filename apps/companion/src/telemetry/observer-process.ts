@@ -451,13 +451,7 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     } catch {
       console.error('observer_attempt_diagnostic_failed');
     }
-    const failed =
-      report.report !== 'received' ||
-      terminal.outcome === 'failed' ||
-      output.status === 'failed' ||
-      inputFailed ||
-      startupTimedOut ||
-      (code !== 0 && code !== 2);
+    const failed = output.status === 'failed' || inputFailed || startupTimedOut || code !== 0;
     const sourceHealth = manager.getHealth();
     if (failed && sourceHealth.state === 'ended' && sourceHealth.mapName !== undefined) {
       manager.disconnectObserver('failed');
@@ -526,6 +520,9 @@ export function startObserverProcess<R extends GameEventSourceRole>(
     getSnapshot: () => manager.getSnapshot(),
     subscribe: (listener) => manager.subscribe(listener),
     subscribeLiveGameEvents: (listener) => manager.subscribeLiveGameEvents(listener),
+    ...(manager.subscribeTimelineReset
+      ? { subscribeTimelineReset: (listener) => manager.subscribeTimelineReset!(listener) }
+      : {}),
   };
   return { ...owner, source, health: diagnostics.health };
 }

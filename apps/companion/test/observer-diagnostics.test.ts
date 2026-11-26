@@ -11,7 +11,15 @@ import { gzipSync } from 'node:zlib';
 import { unzipSync, zipSync } from 'fflate';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
 import { WorkspaceObserver } from '../src/telemetry/observer-workspace.js';
-import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
+import {
+  createObserverSourceManager,
+  selectCstvSources,
+} from '../src/telemetry/cstv-source-manager.js';
+import { createObserverAssistScope } from '../src/telemetry/observer-assist-scope.js';
+import { createProgramRuntime } from '../src/runtime/program-runtime.js';
+import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
+import type { ObserverHintTimeline } from '@mizar/core/projection';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { SessionJournal } from '../src/support/session-journal.js';
 import { SupportExports } from '../src/support/export-job.js';
@@ -233,15 +241,11 @@ test('managed v3 keeps channel, world, residenceUs, and timeline reset authority
   write(17, cursor, 3);
   write(18, { ...fixture, residenceUs: 2_000_000 }, 3);
   write(19, fixture, 3);
-  assert.equal(manager.getHealth().state, 'connecting');
-  assert.equal(manager.getHealth().lastErrorCode, 'observer-residence-limit');
-  assert.deepEqual(seen, [4, 9, 13]);
-  write(20, cursor, 3);
-  write(21, fixture, 3);
-  assert.deepEqual(seen, [4, 9, 13, 21]);
+  assert.equal(manager.getHealth().state, 'live');
+  assert.deepEqual(seen, [4, 9, 13, 18, 19]);
   await manager.stop();
-  write(22, fixture, 3);
-  assert.deepEqual(seen, [4, 9, 13, 21]);
+  write(20, fixture, 3);
+  assert.deepEqual(seen, [4, 9, 13, 18, 19]);
 });
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
@@ -310,12 +314,17 @@ test('component failure survives local journal and actual support ZIP without cr
   await writeFile(
     join(reports, oldId, 'report.json'),
     JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reason: 'ordered-parser-error: historical_field',
+      schema: 'cs2-observer-report/3',
+      outcome: 'failed',
+      reason: 'native-start-failed',
+      channel: 1,
+      world: 1,
+      lastOutputSequence: 0,
+      reconnects: 0,
       password,
-      native_boot_code: 5,
-      steam_init_result: 0,
-      cleanupCompleted: true,
+      nativeBootCode: 5,
+      steamInitResult: 0,
+      faults: [],
     }),
   );
   const exports = new SupportExports(logs);
@@ -330,7 +339,8 @@ test('component failure survives local journal and actual support ZIP without cr
   const report = entries[`attachments/observer/${oldId}/report.json`];
   assert(report, Buffer.from(entries['coverage.json']!).toString());
   const attachment = JSON.parse(Buffer.from(report).toString());
-  assert.equal(attachment.reason, 'ordered-parser-error: historical_field');
+  assert.equal(attachment.schema, 'cs2-observer-report/3');
+  assert.equal(attachment.reason, 'native-start-failed');
   assert.equal(attachment.password, '[redacted]');
   const events = Object.entries(entries)
     .filter(([name]) => name.startsWith('events/'))
@@ -611,4 +621,189 @@ test('WorkspaceObserver allows starting a new session even when previous process
   // Starting a new session must not be blocked by previous report failure.
   await observer.start(process.execPath, '127.0.0.10:27020', 'pw2');
   assert.equal(observer.view().failed, false);
+});
+
+test('exit code 0 without report is not failure, while exit code 2 is failure', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-exit-codes-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const clean = startObserverProcess({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    outputDirectory: join(root, randomUUID()),
+    hostVersion: 14197,
+    endpoint: '127.0.0.31:27020',
+    password: 'pw',
+  });
+  t.after(() => clean.stop());
+  const cleanResult = await clean.closed;
+  assert.equal(cleanResult.terminal.report, 'missing');
+  assert.equal(cleanResult.failed, false);
+
+  const cliError = startObserverProcess({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    outputDirectory: join(root, randomUUID()),
+    hostVersion: 14197,
+    endpoint: '127.0.0.4:27020',
+    password: 'pw',
+  });
+  t.after(() => cliError.stop());
+  const cliResult = await cliError.closed;
+  assert.equal(cliResult.terminal.code, 2);
+  assert.equal(cliResult.failed, true);
+});
+
+test('end-to-end: map 1 hints with reconnect -> map 1 ends -> new observer process for map 2 -> begin_new_match clears buffer', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-e2e-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const baseMs = performance.now();
+  let nowMs = baseMs;
+  const observer = new WorkspaceObserver(async () => ({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    hostVersion: 14197,
+    outputDirectory: join(root, randomUUID()),
+  }));
+  t.after(() => observer.close());
+
+  const settings = new ObserverSettingsStore();
+  await settings.configure({
+    enabled: true,
+    nicknameSource: 'game',
+    leadSeconds: 5,
+    delaySeconds: 120,
+  });
+  const scope = createObserverAssistScope(settings, () => true);
+  const programRuntime = createProgramRuntime('e2e');
+  let latestDiagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']> | undefined;
+  const coordinator = createProjectionCoordinator({
+    programRuntime,
+    cstvSources: selectCstvSources(undefined, observer.source),
+    observerSettings: scope.projectionSettings,
+    nowMonotonicMs: () => nowMs,
+    matchContextBinding: {
+      context: JSON.parse(
+        await readFile(
+          new URL(
+            '../../../packages/protocol/test/fixtures/match-document-v1.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    } as unknown as NonNullable<
+      Parameters<typeof createProjectionCoordinator>[0]['matchContextBinding']
+    >,
+    onObserverDiagnostics: (d) => {
+      latestDiagnostics = d;
+    },
+  });
+  t.after(() => coordinator.close());
+  const unsubscribeScope = scope.subscribe({
+    program: () => coordinator.getCurrent().program,
+    refresh: () => coordinator.refresh(),
+    refreshAssist: () => coordinator.refreshAssist(),
+    resetAssist: () => coordinator.resetObserverAssist(),
+    mapConnectionChanged: () => {},
+  });
+  t.after(unsubscribeScope);
+
+  const ids = Array.from(
+    { length: 10 },
+    (_, i) => `765611980000000${String(i + 1).padStart(2, '0')}`,
+  );
+  const gsiFrame = (seq: number, mapName: string, roundNumber: number): TelemetryObservation => ({
+    receive: { sequence: seq, receivedAt: '2026-01-01T00:00:00Z', receivedMonotonicMs: nowMs },
+    source: { kind: 'cs2-gsi' },
+    coverage: {
+      provider: 'present',
+      map: 'present',
+      round: 'present',
+      phaseCountdowns: 'absent',
+      player: 'absent',
+      allPlayers: 'present',
+      bomb: 'absent',
+      grenades: 'absent',
+    },
+    telemetry: {
+      map: { name: mapName, phase: 'live', roundNumber },
+      round: { phase: 'live' },
+      allPlayers: ids.map((sourcePlayerId, i) => ({
+        sourcePlayerId,
+        side: i < 5 ? 'CT' : 'T',
+        activity: 'playing',
+        observerSlot: (i % 5) + 1,
+        state: { health: 100, roundTotalDamage: 0, money: 3000, equipValue: 2500 },
+        matchStats: { kills: 0, assists: 0, deaths: 0 },
+        weapons: [{ sourceWeaponId: 'w0', name: 'weapon_ak47', state: 'active' }],
+      })),
+    },
+  });
+
+  // 1. Map 1 (de_dust2) starts, emits kill 1, reconnects, emits kill 2, and ends.
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(1, 'de_dust2', 6)));
+  await observer.start(process.execPath, '127.0.0.29:27020', 'pw1');
+  for (let i = 0; i < 50 && (latestDiagnostics?.acceptedDeaths ?? 0) < 2; i++) await delay(10);
+  assert.equal(
+    latestDiagnostics?.acceptedDeaths,
+    2,
+    JSON.stringify({
+      diag: observer.source.getRecentDiagnostics(),
+      health: observer.source.getHealth(),
+      latestDiagnostics,
+    }),
+  );
+
+  nowMs = baseMs + 117_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(2, 'de_dust2', 6)));
+  coordinator.refreshAssist();
+  const map1Hints = coordinator.getCurrent().assist.observer?.hints ?? [];
+  assert.equal(map1Hints.length, 2);
+
+  // 2. Switch to Map 2 (de_mirage): new observer process starts with generation resetting from 0.
+  settings.setMapConnection(
+    'map-2',
+    'connect',
+    { earlyEndpoint: '127.0.0.30:27020', programEndpoint: '127.0.0.30:27021', password: 'pw2' },
+    true,
+  );
+  nowMs = baseMs + 118_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(3, 'de_mirage', 0)));
+  await observer.start(process.execPath, '127.0.0.30:27020', 'pw2');
+  for (let i = 0; i < 50 && (latestDiagnostics?.pending ?? 0) < 1; i++) await delay(10);
+  assert.equal(
+    latestDiagnostics?.pending,
+    1,
+    JSON.stringify({
+      health: observer.source.getHealth(),
+      diag: observer.source.getRecentDiagnostics(),
+      latestDiagnostics,
+    }),
+  );
+
+  nowMs = baseMs + 118_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(4, 'de_mirage', 0)));
+  coordinator.refreshAssist();
+  const map2Hints = coordinator.getCurrent().assist.observer?.hints ?? [];
+  assert.equal(
+    map2Hints.length,
+    1,
+    JSON.stringify({ latestDiagnostics, assist: coordinator.getCurrent().assist }),
+  );
+
+  // 3. Process 2 emits begin_new_match -> subscribeTimelineReset clears buffer via ProjectionCoordinator.
+  for (let i = 0; i < 50 && (latestDiagnostics?.pending ?? 0) > 0; i++) await delay(15);
+  assert.equal(latestDiagnostics?.pending, 0);
+  assert.equal(coordinator.getCurrent().assist.observer?.hints.length, 0);
 });

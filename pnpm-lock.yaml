@@ -194,9 +194,6 @@ catalogs:
     '@vitejs/plugin-react':
       specifier: 6.1.2
       version: 6.1.2
-    cs2parser:
-      specifier: 2.7.2
-      version: 2.7.2
     eslint:
       specifier: 10.12.0
       version: 10.12.0
@@ -707,9 +704,6 @@ importers:
       '@mizar/core':
         specifier: workspace:*
         version: link:../core
-      cs2parser:
-        specifier: 'catalog:'
-        version: 2.7.2
     devDependencies:
       '@typescript/native':
         specifier: 'catalog:'
@@ -828,9 +822,6 @@ packages:
   '@bramus/specificity@2.4.3':
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
-
-  '@bufbuild/protobuf@2.15.0':
-    resolution: {integrity: sha512-DAheWUkVr/SJTWCc+lg9dhY0eN4SaWlf4+bG1KzHeXbnqt0AfB/NX0Z+VunGlM1ki1B4zVvye27MpKh/svySUA==}
 
   '@cacheable/memory@2.2.0':
     resolution: {integrity: sha512-CTLKqLItRCEixEAewD3/j9DB3/o96gpTPD4eJ1v+DGOlxZRZncRQkGYqqnAGCscYd6RNeXfGeiuCphsPtqyIfQ==}
@@ -2361,10 +2352,6 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  cs2parser@2.7.2:
-    resolution: {integrity: sha512-eHB6QWUUAgdxoowlCrgWxbkFuZvc1MzGIKr253tgfCBTzMsXyoyTZcl1SiZkEZCzRE/gEvVAd+or+7tqMTGZuA==}
-    engines: {node: '>=22.0.0'}
-
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
     engines: {node: ^10 || ^12.20.0 || ^14.13.0 || >=15.0.0}
@@ -3808,8 +3795,6 @@ snapshots:
       css-tree: 3.2.1
     optional: true
 
-  '@bufbuild/protobuf@2.15.0': {}
-
   '@cacheable/memory@2.2.0':
     dependencies:
       '@cacheable/utils': 2.5.0
@@ -5027,10 +5012,6 @@ snapshots:
   crypto-js@4.2.0: {}
 
   cs2-c4-damage@0.1.1: {}
-
-  cs2parser@2.7.2:
-    dependencies:
-      '@bufbuild/protobuf': 2.15.0
 
   css-tree@3.2.1:
     dependencies:

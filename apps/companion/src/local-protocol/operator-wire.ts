@@ -108,14 +108,14 @@ function mapSourceHealth(
     role: health.role,
     state: health.state,
     generation: health.generation,
-    reconnectAttempt: health.reconnectAttempt,
+    reconnectAttempt: 0,
     lastSync: null,
     tailTick: health.tailTick ?? null,
     lastEventTick: health.lastEventTick ?? null,
     lastEventSequence: health.lastEventSequence ?? null,
     lastEventObservedAt: health.lastEventObservedAt ?? null,
     lastErrorCode: health.lastErrorCode ?? null,
-    lastTerminalStatus: health.lastTerminalStatus ?? null,
+    lastTerminalStatus: null,
   };
 }
 

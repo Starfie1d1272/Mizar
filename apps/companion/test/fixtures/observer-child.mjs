@@ -123,6 +123,83 @@ for await (const text of inputLines) {
     setInterval(() => {}, 1000);
     await new Promise(() => {});
   }
+  if (input.endpoint === '127.0.0.29:27020' || input.endpoint === '127.0.0.30:27020') {
+    const map = input.endpoint === '127.0.0.29:27020' ? 'de_dust2' : 'de_mirage';
+    const round = input.endpoint === '127.0.0.29:27020' ? 6 : 0;
+    const death = (channel, sequence, killerSlot, victimSlot) => ({
+      kind: 'event',
+      name: 'player_death',
+      channel,
+      world: 1,
+      sequence,
+      eventTick: 100 + sequence,
+      committedTick: 100 + sequence,
+      tickInterval: 1 / 64,
+      map,
+      warmup: false,
+      round,
+      fields: {
+        userid: victimSlot,
+        attacker: killerSlot,
+        weapon: 'ak47',
+        assistedflash: false,
+        headshot: true,
+        penetrated: 0,
+        noscope: false,
+        thrusmoke: false,
+        attackerblind: false,
+        attackerinair: false,
+        distance: 10,
+        dmg_health: 100,
+        dmg_armor: 0,
+        hitgroup: 1,
+      },
+      players: {
+        attacker: {
+          domain: 'player-controller-slot',
+          slot: killerSlot,
+          steamId: '76561198000000001',
+          userId: 1,
+          controller: { index: killerSlot + 1, serial: 1 },
+        },
+        userid: {
+          domain: 'player-controller-slot',
+          slot: victimSlot,
+          steamId: '76561198000000002',
+          userId: 2,
+          controller: { index: victimSlot + 1, serial: 1 },
+        },
+      },
+    });
+    const out = (row) => process.stdout.write(JSON.stringify(row) + '\n');
+    out({ kind: 'session-start', protocol: 3, channel: 1, world: 1, sequence: 1 });
+    out({ kind: 'cursor', channel: 1, world: 1, sequence: 2, committedTick: 100, tickInterval: 1 / 64, map, warmup: false, round });
+    out(death(1, 3, 0, 1));
+    if (input.endpoint === '127.0.0.29:27020') {
+      out({ kind: 'discontinuity', scope: 'connection', reason: 'network-drop', channel: 1, world: 1, sequence: 4 });
+      out({ kind: 'session-start', protocol: 3, channel: 2, world: 1, sequence: 5 });
+      out({ kind: 'cursor', channel: 2, world: 1, sequence: 6, committedTick: 200, tickInterval: 1 / 64, map, warmup: false, round });
+      out(death(2, 7, 0, 1));
+      out({ kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop', channel: 2, world: 1, sequence: 8 });
+      process.stderr.write(JSON.stringify({
+        schema: 'cs2-observer-report/3',
+        outcome: 'closed',
+        reason: 'source-hltv-stop',
+        channel: 2,
+        world: 1,
+        lastOutputSequence: 8,
+        reconnects: 1,
+        faults: [],
+      }) + '\n');
+      process.exitCode = 0;
+      inputLines.close();
+      process.stdin.destroy();
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    out({ kind: 'event', name: 'begin_new_match', channel: 1, world: 1, sequence: 4, eventTick: 110, committedTick: 110, tickInterval: 1 / 64, map, warmup: true, round: 0, fields: {}, players: {} });
+    continue;
+  }
   const event = JSON.parse(
     fs.readFileSync(new URL('./observer-event.json', import.meta.url), 'utf8'),
   );
@@ -140,6 +217,12 @@ for await (const text of inputLines) {
   process.stdout.write(JSON.stringify({ kind: 'session-start', protocol: 3, channel: 1, world: 1, sequence: 1 }) + '\n');
   process.stdout.write(JSON.stringify(cursor) + '\n');
   process.stdout.write(JSON.stringify({ ...event, world: 1, sequence: 7 }) + '\n');
+  if (input.endpoint === '127.0.0.31:27020') {
+    process.exitCode = 0;
+    inputLines.close();
+    process.stdin.destroy();
+    break;
+  }
   if (input.endpoint === '127.0.0.10:27020') {
     process.stderr.write(
       JSON.stringify({

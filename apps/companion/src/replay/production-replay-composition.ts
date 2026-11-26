@@ -44,7 +44,6 @@ function createDisabledReplaySource<R extends 'program' | 'lookahead'>(
     role,
     state: 'disabled',
     generation: 0,
-    reconnectAttempt: 0,
   };
   const snapshot: CstvSourceSnapshot<R> = {
     health,

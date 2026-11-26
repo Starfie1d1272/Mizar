@@ -17,7 +17,6 @@
 | `@typescript/native` → `typescript`      |    7.0.2 | TypeScript 7 编译与类型检查      | Apache-2.0                             |
 | `@vitejs/plugin-react`                   |    6.1.1 | Vite React 插件                  | MIT                                    |
 | `cs2-c4-damage`                          |    0.1.0 | C4 站立伤害估算与十图数值资源    | Apache-2.0（项目代码）；资源边界见下节 |
-| `cs2parser`                              |    2.7.2 | CSTV fragment / GameEvent source | GPL-3.0                                |
 | `eslint`                                 |  10.12.0 | 静态检查                         | MIT                                    |
 | `eslint-plugin-react-hooks`              |    7.1.1 | React Hooks 规则                 | MIT                                    |
 | `fastify`                                |   5.12.5 | Companion HTTP 组合层            | MIT                                    |
@@ -66,7 +65,7 @@ Windows Setup 使用 NSIS 3.11 封装完整便携 payload，不属于 Mizar 的�
 | G2 Esports team logo                    |        `https://g2esports.com/pages/brand-guidelines` 与官方 CDN PNG | #76 fixture-local MatchContext presentation enrichment；文件 hash 记录于 `fixtures/gsi/acceptance/ancient-round-03/team-context-enrichment.json` | G2 Esports origin；按官方 brand guidance 保持比例、不添加效果；provenance 记录不构成所有权或再许可声明 |
 | Steam public profile avatars            | Steam Web API `ISteamUser/GetPlayerSummaries/v2` 返回的 `avatarfull` | #76 开发期一次性 import，写入本地 fixture asset 并记录 profile ID、source URL 与 SHA-256                                                         | Valve / Steam profile content；仅记录来源，不作用户内容所有权或再许可判断                              |
 
-`cs2parser` 只通过 `packages/telemetry-cstv` 内部 binding 使用；其第三方类型不成为 Mizar 公共 contract。本仓库未因研究参考而复制 HOT、Boltobserv、Lexogrine HUD Manager、Obserview、Zhenhai HUD Manager 等应用的代码或图片资产。
+本仓库未因研究参考而复制 HOT、Boltobserv、Lexogrine HUD Manager、Obserview、Zhenhai HUD Manager 等应用的代码或图片资产。
 
 ## Adapted presentation sources
 
