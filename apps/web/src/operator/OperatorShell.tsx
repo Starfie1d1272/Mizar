@@ -1,4 +1,3 @@
-import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { SessionContext } from '../preparation/SessionContext';
 import { SidebarUpdateEntry } from '../preparation/SidebarUpdateEntry';
 import { UpdateStatusProvider, useUpdateStatus } from '../preparation/updates-client';
@@ -62,51 +61,49 @@ function OperatorShellLayout({
   const mulnxAvailable = updateContext?.status?.mulnx?.checkResult === 'available';
 
   return (
-    <DesktopCanvas kind="product">
-      <div className="product-shell mizar-surface">
-        <a className="product-skip" href="#product-content">
-          跳到主要内容
+    <div className="product-shell mizar-surface">
+      <a className="product-skip" href="#product-content">
+        跳到主要内容
+      </a>
+      <aside className="product-sidebar">
+        <a className="product-brand" href="/">
+          <img className="product-brand__mark" src="/brand/mizar-mark.svg" alt="" />
+          <span>MIZAR</span>
         </a>
-        <aside className="product-sidebar">
-          <a className="product-brand" href="/">
-            <img className="product-brand__mark" src="/brand/mizar-mark.svg" alt="" />
-            <span>MIZAR</span>
-          </a>
-          <nav aria-label="制作导航">
-            {[
-              ['/', '本场'],
-              ['/resources', '比赛库'],
-              ['/packages', '资源管理'],
-              ['/picture', 'HUD 与画面'],
-              ['/settings', '设置'],
-            ].map(([path, label]) => (
-              <a
-                key={path}
-                href={path}
-                aria-current={
-                  active === path || (path === '/' && active === '/matches') ? 'page' : undefined
-                }
-              >
-                <NavigationIcon path={path ?? '/'} />
-                <span>{label}</span>
-                {path === '/packages' && mulnxAvailable ? (
-                  <span
-                    className="product-nav-badge"
-                    aria-label="MulNX 有可用更新"
-                    title="MulNX 有可用更新"
-                  />
-                ) : null}
-              </a>
-            ))}
-          </nav>
-          <SidebarUpdateEntry />
-        </aside>
-        <div className="product-content" id="product-content">
-          <SessionContext />
-          <div className="product-page">{children}</div>
-        </div>
+        <nav aria-label="制作导航">
+          {[
+            ['/', '本场'],
+            ['/resources', '比赛库'],
+            ['/packages', '资源管理'],
+            ['/picture', 'HUD 与画面'],
+            ['/settings', '设置'],
+          ].map(([path, label]) => (
+            <a
+              key={path}
+              href={path}
+              aria-current={
+                active === path || (path === '/' && active === '/matches') ? 'page' : undefined
+              }
+            >
+              <NavigationIcon path={path ?? '/'} />
+              <span>{label}</span>
+              {path === '/packages' && mulnxAvailable ? (
+                <span
+                  className="product-nav-badge"
+                  aria-label="MulNX 有可用更新"
+                  title="MulNX 有可用更新"
+                />
+              ) : null}
+            </a>
+          ))}
+        </nav>
+        <SidebarUpdateEntry />
+      </aside>
+      <div className="product-content" id="product-content">
+        <SessionContext />
+        <div className="product-page">{children}</div>
       </div>
-    </DesktopCanvas>
+    </div>
   );
 }
 

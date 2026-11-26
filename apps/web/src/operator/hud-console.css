@@ -521,7 +521,7 @@
   gap: 0.85rem;
   isolation: isolate;
   margin: 0 auto;
-  max-width: 2160px;
+  max-width: none;
   width: 100%;
   min-height: 0;
   align-content: start;
