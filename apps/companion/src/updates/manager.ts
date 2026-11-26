@@ -225,7 +225,7 @@ export class UpdateManager {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('ready_load', error);
       this.ready = null;
     }
-    let names: string[] = [];
+    let names: string[];
     try {
       names = await readdir(this.root);
     } catch (cause) {

@@ -188,6 +188,10 @@ test('install priority cancels background check and allows staged version even w
     }),
   );
   let checkAborted = false;
+  let markCheckStarted!: () => void;
+  const checkStarted = new Promise<void>((resolve) => {
+    markCheckStarted = resolve;
+  });
   let releaseCheck!: () => void;
   const checkBlocked = new Promise<void>((resolve) => {
     releaseCheck = resolve;
@@ -200,6 +204,7 @@ test('install priority cancels background check and allows staged version even w
     version: '1.11.20',
     source: {
       latest: async (signal) => {
+        markCheckStarted();
         signal.addEventListener('abort', () => {
           checkAborted = true;
           releaseCheck();
@@ -216,6 +221,7 @@ test('install priority cancels background check and allows staged version even w
   });
   await manager.load();
   const bgCheck = manager.check('auto', 'periodic');
+  await checkStarted;
   const plan = await manager.prepare();
   assert.equal(checkAborted, true);
   assert.equal(plan.version, '1.11.21');
