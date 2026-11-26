@@ -4,8 +4,6 @@ import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from './config.js';
 import type { ObsRpc } from './reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
-import type { MusicState } from '../music/store.js';
-
 import type {
   MusicDevice,
   MusicDeviceProvider,
@@ -15,15 +13,6 @@ import type {
   MusicSourceSetup,
 } from '../music/device.js';
 import { readMonitorMode, writeMonitorMode } from '../music/monitor-journal.js';
-import type { ObsAudioRouting } from './audio-routing.js';
-import { desktopMonitorRelationship } from './audio-monitor-device.js';
-
-type MonitorAccess = {
-  readonly routing: ObsAudioRouting | undefined;
-  sources(): MusicState['sources'];
-  baseUrl: string;
-};
-type MonitorSession = MonitorAccess & { isCurrent(): Promise<boolean> };
 
 const mediaStates = new Map<unknown, MusicMediaState>([
   ['OBS_MEDIA_STATE_PLAYING', 'playing'],
@@ -68,11 +57,7 @@ async function managedMonitorModes(obs: ObsRpc) {
   return modes;
 }
 
-export function createMusicDevice(
-  obs: ObsRpc,
-  endpoint?: string,
-  access?: MonitorSession,
-): MusicDevice {
+export function createMusicDevice(obs: ObsRpc): MusicDevice {
   return {
     async mediaStatus({ sourceId }) {
       const status = await obs.call('GetMediaInputStatus', { inputUuid: sourceId });
@@ -131,26 +116,21 @@ export function createMusicDevice(
       });
     },
     reportsDispatch: Boolean(obs.reportsDispatch),
-    guardWrites: (guard) =>
-      createMusicDevice(obs.withMutationGuard?.(guard) ?? obs, endpoint, access),
+    guardWrites: (guard) => createMusicDevice(obs.withMutationGuard?.(guard) ?? obs),
     checkCalls: (guard, checkAfter) =>
-      createMusicDevice(
-        {
-          ...obs,
-          call: (...args) => {
-            guard();
-            const result = obs.call(...args);
-            return checkAfter
-              ? result.then((value) => {
-                  guard();
-                  return value;
-                })
-              : result;
-          },
+      createMusicDevice({
+        ...obs,
+        call: (...args) => {
+          guard();
+          const result = obs.call(...args);
+          return checkAfter
+            ? result.then((value) => {
+                guard();
+                return value;
+              })
+            : result;
         },
-        endpoint,
-        access,
-      ),
+      }),
     ownershipScope: async () => obs.ownershipScope?.(),
     readManagedMonitorModes: () => managedMonitorModes(obs),
     hasSource: async (store, layer, valid) =>
@@ -161,26 +141,6 @@ export function createMusicDevice(
       const stream = await obs.call('GetStreamStatus');
       const record = await obs.call('GetRecordStatus');
       return stream.outputActive === false && record.outputActive === false;
-    },
-    async monitorSafe() {
-      if (!endpoint || !access?.routing || !(await access.isCurrent())) return false;
-      return access.routing.musicMonitorSafe(obs, endpoint, {
-        sources: access.sources(),
-        baseUrl: access.baseUrl,
-      });
-    },
-    async monitorRelationship() {
-      if (await access?.routing?.modePending()) throw new Error('audio_mode_pending');
-      const binding = await access?.routing?.desktopBinding();
-      if (!binding) return 'independent';
-      if (
-        !access ||
-        !(await access.isCurrent()) ||
-        binding.endpoint !== endpoint ||
-        (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== binding.collection
-      )
-        throw new Error('audio_binding_changed');
-      return desktopMonitorRelationship(obs, binding.inputUuid);
     },
   };
 }
@@ -197,7 +157,6 @@ export class ObsMusicProvider implements MusicDeviceProvider {
     private readonly config: ObsConfigStore,
     private readonly diagnostic: (stage: string, evidence: unknown) => void = () => {},
     private readonly onMonitorSettingsChanged: () => void = () => {},
-    private readonly monitorAccess?: MonitorAccess,
   ) {}
   get isConnected(): boolean {
     return this.connected;
@@ -338,25 +297,7 @@ export class ObsMusicProvider implements MusicDeviceProvider {
       endpoint,
       'http://127.0.0.1:3000',
     );
-    const access = this.monitorAccess;
-    return run(
-      createMusicDevice(
-        prepare(connection),
-        endpoint,
-        access && {
-          ...access,
-          isCurrent: async () => {
-            const current = await this.config.read();
-            return (
-              this.connected &&
-              this.client === client &&
-              JSON.stringify([current.host, current.port, current.password]) === signature
-            );
-          },
-        },
-      ),
-      this.epoch,
-    );
+    return run(createMusicDevice(prepare(connection)), this.epoch);
   }
 
   async close() {
@@ -728,10 +669,6 @@ async function prepareMusicResources(
       );
       if (index < 0) throw new Error('music_initialization_unconfirmed');
       if (accepted) {
-        if (state.sourceScopes[layer] !== scope) {
-          state.desktopMonitorOriginal[layer] = null;
-          state.monitorConfigured[layer] = null;
-        }
         state.sources[layer] = accepted.inputUuid!;
         state.sourceScopes[layer] = scope;
         state.sourceInitialization[index] = {
@@ -830,10 +767,6 @@ async function prepareMusicResources(
       before: null,
     };
     await store.commitSourceReplacement(layer, (s) => {
-      if (s.sourceScopes[layer] !== scope) {
-        s.desktopMonitorOriginal[layer] = null;
-        s.monitorConfigured[layer] = null;
-      }
       s.sources[layer] = result.inputUuid as string;
       const index = s.sourceInitialization.findIndex(
         (entry) => sameItem(entry, creation) && entry.phase === 'create',

@@ -1,7 +1,7 @@
 import { musicFailure } from './failure.js';
 import type { MusicPreviewRequest, MusicPreviewStatus } from '@mizar/protocol/music';
 import type { MusicDevice, MusicMediaState } from './device.js';
-import { PreviewMonitor, type PreviewMonitorTarget } from './preview-monitor.js';
+import { PreviewMonitor } from './preview-monitor.js';
 import type { MusicStore } from './store.js';
 
 const active = (state: MusicMediaState) => ['playing', 'opening', 'buffering'].includes(state);
@@ -32,26 +32,15 @@ export class MusicPreview {
   constructor(
     private readonly store: MusicStore,
     private readonly now: () => number,
-    monitorTarget: PreviewMonitorTarget = () => Promise.resolve(null),
   ) {
-    this.monitor = new PreviewMonitor(store, monitorTarget);
+    this.monitor = new PreviewMonitor(store);
   }
-  ownsMonitor(uuid: string): boolean {
-    return this.uuid === uuid || this.monitor.owns(uuid);
-  }
-  /** Recover only after the media borrow ends; false freezes this field, not other controls. */
-  async recoverMonitor(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
+  async syncMonitor(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
     if (this.uuid) return false;
-    const restored = await this.monitor.restore(obs, valid);
-    if (!restored && valid() && this.status?.phase === 'stopped')
-      this.status = { ...this.status, message: '试听已停止；本机监听恢复未确认，请在 OBS 核对。' };
-    return restored;
+    return this.monitor.syncPreference(obs, valid);
   }
   get busy() {
     return Boolean(this.request || this.uuid);
-  }
-  get recoveryPending() {
-    return this.store.state.previewMonitorLeases.length > 0;
   }
   /** Share the borrowed source's current gain with the normal mixer owner. */
   mixerVolume(uuid: string): number | null {
@@ -157,6 +146,8 @@ export class MusicPreview {
       }
       return;
     }
+    if (this.request && !this.uuid && (now >= this.lease || now >= this.deadline))
+      this.cancel(now >= this.deadline ? 'deadline' : 'lease');
     if (this.busy && (!same || this.status?.phase !== 'confirmation'))
       throw new Error('music_preview_busy');
     if (!this.store.ready || this.store.failure) throw new Error('music_preview_storage');
@@ -218,13 +209,14 @@ export class MusicPreview {
       this.request = null;
     }
   }
-  confirmStopped(uuid: string): void {
-    if (!this.stopping || this.uuid !== uuid) return;
+  confirmStopped(uuid: string): boolean {
+    if (!this.stopping || this.uuid !== uuid) return false;
     this.event('stopped', 'obs_stopped');
     this.uuid = null;
     this.request = null;
     this.stopping = false;
     this.status = { ...this.status!, phase: 'stopped', message: '试听已停止。' };
+    return true;
   }
   unavailable(error: unknown = new Error('music_obs_unavailable')) {
     if (
@@ -253,10 +245,7 @@ export class MusicPreview {
     stopExpected: (uuid: string) => void,
     manual: () => Promise<void>,
   ) {
-    if (!this.request) {
-      await this.recoverMonitor(obs, valid);
-      return;
-    }
+    if (!this.request) return;
     if (!safe && !this.stopping) this.cancel('program_safety');
     if (this.now() >= this.deadline && !this.stopping) this.cancel('deadline');
     if (this.now() >= this.lease && !this.stopping) this.cancel('lease');
@@ -293,7 +282,7 @@ export class MusicPreview {
             phase: 'stopped',
             message: 'OBS 来源已被人工修改，试听已交还控制。',
           };
-          await this.recoverMonitor(obs, valid);
+          await this.syncMonitor(obs, valid);
           await manual();
           return;
         }
@@ -333,7 +322,7 @@ export class MusicPreview {
         message: this.failureMessage ?? '试听已停止。',
       };
       this.stopping = false;
-      await this.recoverMonitor(obs, valid);
+      await this.syncMonitor(obs, valid);
       return;
     }
     if (this.status?.phase === 'confirmation') return;
@@ -349,8 +338,6 @@ export class MusicPreview {
     });
     const r = this.request;
     if (!this.uuid) {
-      await this.recoverMonitor(obs, current);
-      if (!current()) return;
       // Both owned layers must be idle. Never mix an audition with formal music or take control
       // of a paused/muted source; the operator can use the existing Stop music command first.
       for (const layer of ['bgm', 'stinger'] as const) {
@@ -410,16 +397,12 @@ export class MusicPreview {
       const gain = await device.volume({ sourceId: uuid });
       if (typeof gain !== 'number' || !Number.isFinite(gain))
         throw new Error('music_preview_mixer_unconfirmed');
-      await this.monitor.borrow(obs, uuid, current);
-      const monitor = await this.monitor.observe(obs, uuid, current);
+      const enabled = await this.monitor.enable(obs, uuid, current);
       if (!current()) return;
-      if (monitor !== true) {
-        await this.recoverMonitor(obs, current);
+      if (!enabled) {
+        await this.monitor.syncPreference(obs, current);
         if (current())
-          this.fail(
-            'monitor_unavailable',
-            '本机试听未开始。请在 OBS「设置 → 音频 → 高级」选择明确的监听设备，并确认它没有被桌面声音采集。',
-          );
+          this.fail('monitor_unavailable', '本机试听未开始。请检查 OBS 连接或音频监听设置后重试。');
         return;
       }
       // Register cleanup before the first write, including uncertain RPC outcomes.
@@ -468,7 +451,7 @@ export class MusicPreview {
         phase: 'stopped',
         message: 'OBS 已人工接管试听，请在 OBS 检查或停止音效来源。',
       };
-      await this.recoverMonitor(obs, valid);
+      await this.syncMonitor(obs, valid);
       await manual();
       return;
     }
@@ -489,10 +472,6 @@ export class MusicPreview {
     if (!current()) return;
     if (monitor === false) {
       this.fail('monitor_changed', '本机监听已关闭，正在停止试听。请在 OBS 核对监听设备。');
-      return;
-    }
-    if (!(await this.monitor.safe(obs, this.uuid, current))) {
-      if (current()) this.cancel('monitor_changed');
       return;
     }
     if (this.status?.phase !== 'playing') {

@@ -3,12 +3,7 @@ import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/progra
 import type { MusicGroup, MusicStatus, MusicTrack } from '@mizar/protocol/music';
 import { musicMapScope, musicOpeningScope } from '../scope/identities.js';
 import { hasFrozenMapResult, isRegulationHalftime } from '../program-scenes/presentation.js';
-import type {
-  MonitorRelationship,
-  MusicMediaState,
-  MusicMonitorMode,
-  MusicMonitorOriginals,
-} from './device.js';
+import type { MusicMediaState, MusicMonitorMode } from './device.js';
 
 export interface MusicTruth {
   program: ProgramProjection;
@@ -101,28 +96,8 @@ export function musicCue(truth: MusicTruth, pauseId: string | null): MusicCue | 
   return ['waiting', 'bp', 'intermap'].includes(active) ? waiting : null;
 }
 
-export function desiredMusicMonitorMode(
-  relationship: MonitorRelationship,
-  wanted: boolean,
-): MusicMonitorMode {
-  if (!wanted || relationship === 'unknown') return 'off';
-  return relationship === 'same' ? 'monitor-only' : 'monitor-and-output';
-}
-
-export function ownedMonitorApplied(
-  original: MusicMonitorOriginals['bgm'],
-): MusicMonitorMode | undefined {
-  if (!original) return undefined;
-  // v1.9.1 stored the pre-mix mode before changing it to monitor-only.
-  return original.applied ?? (original.mode === 'monitor-and-output' ? 'monitor-only' : undefined);
-}
-
-export function monitorRestoreTarget(
-  original: MusicMonitorOriginals['bgm'],
-  preference: boolean | null,
-): MusicMonitorMode | undefined {
-  if (!original) return undefined;
-  return !original.applied && preference === false ? 'off' : original.mode;
+export function desiredMusicMonitorMode(wanted: boolean): MusicMonitorMode {
+  return wanted ? 'monitor-and-output' : 'off';
 }
 
 export function observedPlayback(state: MusicMediaState): MusicStatus['playback'] {

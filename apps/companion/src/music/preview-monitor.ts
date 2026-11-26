@@ -1,193 +1,56 @@
-import type { MusicDevice, MusicMediaState, MusicMonitorMode } from './device.js';
-import { readMonitorMode, writeMonitorMode } from './monitor-journal.js';
-import type { MusicState, MusicStore } from './store.js';
+import { desiredMusicMonitorMode } from './cues.js';
+import type { MusicDevice } from './device.js';
+import type { MusicStore } from './store.js';
 
-type Lease = MusicState['previewMonitorLeases'][number];
-export type PreviewMonitorTarget = (
-  device: MusicDevice,
-) => Promise<Exclude<MusicMonitorMode, 'off'> | null>;
-const stopped = (state: MusicMediaState) => ['stopped', 'ended', 'empty', 'error'].includes(state);
-const same = (a: Lease | undefined, b: Lease) =>
-  a?.uuid === b.uuid &&
-  a.scope === b.scope &&
-  a.before === b.before &&
-  a.applied === b.applied &&
-  a.phase === b.phase;
-
-/** A single borrowed monitor field, persisted by the existing music owner. */
+/** Manages ephemeral stinger monitor mode for auditions using the single monitor preference rule. */
 export class PreviewMonitor {
-  constructor(
-    private readonly store: MusicStore,
-    private readonly target: PreviewMonitorTarget,
-  ) {}
-  private current(state = this.store.state): Lease | undefined {
-    return state.previewMonitorLeases.find(
-      (lease) => lease.uuid === state.sources.stinger && lease.scope === state.sourceScopes.stinger,
-    );
-  }
-  owns(uuid: string): boolean {
-    return this.current()?.uuid === uuid;
-  }
-  private identity(lease: Lease): boolean {
-    return (
-      this.store.state.sources.stinger === lease.uuid &&
-      this.store.state.sourceScopes.stinger === lease.scope
-    );
-  }
-  private async clear(lease: Lease, valid: () => boolean, external = false) {
-    if (!valid()) return;
-    await this.store.update((state) => {
-      if (!valid() || !same(this.current(state), lease)) throw new Error('music_cancelled');
-      state.previewMonitorLeases = state.previewMonitorLeases.filter((item) => !same(item, lease));
-      if (external && this.identity(lease)) state.monitorConfigured.stinger = lease.uuid;
-    });
-  }
+  constructor(private readonly store: MusicStore) {}
+
   private failure(stage: string, error: unknown) {
     this.store.previewEvent(`music_preview_monitor_${stage}`, { error });
   }
+
+  /** Enable monitor-and-output on stinger before audition playback and verify readback is not off. */
+  async enable(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<boolean> {
+    try {
+      await obs.setMonitorMode({ sourceId: uuid, mode: 'monitor-and-output' });
+      if (!valid()) return false;
+      const mode = await obs.monitorMode({ sourceId: uuid });
+      if (!valid()) return false;
+      return mode !== undefined && mode !== 'off';
+    } catch (error) {
+      this.failure('enable', error);
+      return false;
+    }
+  }
+
   /** An OBS mode readback is not evidence of sound at the listening device. */
   async observe(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<boolean | null> {
     try {
       const mode = await obs.monitorMode({ sourceId: uuid });
       if (!valid() || mode === undefined) return null;
-      const lease = this.current();
-      if (lease?.uuid === uuid && this.identity(lease) && mode !== readMonitorMode(lease.applied))
-        await this.clear(lease, valid, true); // A later field edit is owned by the operator.
       return mode !== 'off';
     } catch (error) {
       this.failure('read', error);
       return null;
     }
   }
-  /** Only our borrowed field needs continuous device/recapture verification. */
-  async safe(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<boolean> {
-    const lease = this.current();
-    if (!lease || lease.uuid !== uuid) return true;
+
+  /** Sync stinger monitor mode back to store.state.monitorPreference after audition ends. */
+  async syncPreference(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
+    const uuid = this.store.state.sources.stinger;
+    if (!uuid || !valid()) return true;
     try {
-      const target = await this.target(obs);
-      return valid() && this.identity(lease) && target === readMonitorMode(lease.applied);
-    } catch {
-      return false;
-    }
-  }
-  async borrow(obs: MusicDevice, uuid: string, valid: () => boolean): Promise<void> {
-    try {
-      if (this.current()) return;
-      const scope = this.store.state.sourceScopes.stinger;
-      if (!scope || this.store.state.sources.stinger !== uuid || !valid()) return;
-      const before = await obs.monitorMode({ sourceId: uuid });
-      // Existing enabled monitoring belongs to its owner, not to an audition.
-      if (!valid() || before !== 'off') return;
-      // The audio owner proves device/recapture safety; this owner never changes tracks.
-      const applied = await this.target(obs);
-      if (!valid() || !applied) return;
-      const lease: Lease = {
-        uuid,
-        scope,
-        before: writeMonitorMode(before),
-        applied: writeMonitorMode(applied),
-        phase: 'borrowed',
-      };
-      const current = () => valid() && this.identity(lease);
-      if (
-        !current() ||
-        (await obs.ownershipScope()) !== scope ||
-        (await obs.monitorMode({ sourceId: uuid })) !== before ||
-        !current()
-      )
-        return;
-      await this.store.update((state) => {
-        if (!current() || this.current(state)) throw new Error('music_cancelled');
-        state.previewMonitorLeases.push(lease);
-      });
-      const guard = () => {
-        if (!current() || !same(this.current(), lease)) throw new Error('music_cancelled');
-      };
-      guard();
-      const latest = await obs.monitorMode({ sourceId: uuid });
-      guard();
-      if (latest === undefined) return;
-      if (latest !== before) {
-        await this.clear(lease, current, true);
-        return;
-      }
-      if ((await this.target(obs)) !== applied) {
-        await this.clear(lease, current);
-        return;
-      }
-      guard();
-      const writer = obs.guardWrites(guard);
-      await writer.setMonitorMode({ sourceId: uuid, mode: applied });
-      await this.observe(obs, uuid, current);
-    } catch (error) {
-      // Never replay an uncertain borrow. Media stop remains independent of this field.
-      this.failure('borrow', error);
-    }
-  }
-  async restore(obs: MusicDevice, valid: () => boolean): Promise<boolean> {
-    const lease = this.current();
-    if (!lease) return true;
-    const before = readMonitorMode(lease.before)!;
-    const applied = readMonitorMode(lease.applied)!;
-    try {
-      if (!valid() || !this.identity(lease)) return false;
       const name = await obs.hasSource(this.store, 'stinger', valid);
-      if (!name || !valid() || (await obs.ownershipScope()) !== lease.scope) return false;
-      const mode = await obs.monitorMode({ sourceId: lease.uuid });
-      if (!valid() || !this.identity(lease) || mode === undefined) return false;
-      if (mode !== applied) {
-        // Already restored, never applied, or externally edited: preserve the observed field.
-        await this.clear(lease, valid, lease.phase !== 'restoring' || mode !== before);
-        return !this.current();
-      }
-      // A lost restore reply freezes only this monitor field, never playback/visual preparation.
-      if (lease.phase === 'restoring') return false;
-      // A restart can leave media playing with no in-memory audition. Never take its monitor.
-      const media = await obs.mediaStatus({ sourceId: lease.uuid });
-      if (!valid() || !this.identity(lease) || !stopped(media.state)) return false;
-      const restoring: Lease = { ...lease, phase: 'restoring' };
-      await this.store.update((state) => {
-        if (!valid() || !this.identity(lease) || !same(this.current(state), lease))
-          throw new Error('music_cancelled');
-        const index = state.previewMonitorLeases.findIndex((item) => same(item, lease));
-        state.previewMonitorLeases[index] = restoring;
-      });
-      const guard = () => {
-        if (!valid() || !this.identity(restoring) || !same(this.current(), restoring))
-          throw new Error('music_cancelled');
-      };
-      let dispatched = false;
-      try {
-        guard();
-        // Persistence can wait behind another music update. Recheck before the actual write.
-        const [latest, playback] = await Promise.all([
-          obs.monitorMode({ sourceId: lease.uuid }),
-          obs.mediaStatus({ sourceId: lease.uuid }),
-        ]);
-        guard();
-        if (latest === undefined) throw new Error('music_monitor_unconfirmed');
-        if (latest !== applied) {
-          await this.clear(restoring, valid, latest !== before);
-          return !this.current();
-        }
-        if (!stopped(playback.state)) throw new Error('music_preview_monitor_busy');
-        dispatched = !obs.reportsDispatch;
-        await obs.guardWrites(guard).setMonitorMode({ sourceId: lease.uuid, mode: before }, () => {
-          dispatched = true;
-        });
-      } catch (error) {
-        if (!dispatched)
-          await this.store.update((state) => {
-            const index = state.previewMonitorLeases.findIndex((item) => same(item, restoring));
-            if (index >= 0) state.previewMonitorLeases[index] = lease;
-          });
-        throw error;
-      }
+      if (!name || !valid()) return false;
+      const desired = desiredMusicMonitorMode(this.store.state.monitorPreference === true);
+      const current = await obs.monitorMode({ sourceId: uuid });
       if (!valid()) return false;
-      const read = await obs.monitorMode({ sourceId: lease.uuid });
-      if (!valid() || read === undefined || read === applied) return false;
-      await this.clear(restoring, valid, read !== before);
-      return !this.current();
+      if (current === desired) return true;
+      await obs.setMonitorMode({ sourceId: uuid, mode: desired });
+      if (!valid()) return false;
+      const read = await obs.monitorMode({ sourceId: uuid });
+      return valid() && read === desired;
     } catch (error) {
       this.failure('restore', error);
       return false;

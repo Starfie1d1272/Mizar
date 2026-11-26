@@ -260,15 +260,12 @@ export function MusicControls({
           <span role="status">监听：{monitorLabel}</span>
         </div>
       </div>
-      <p className="music-player__hint">使用 OBS 所在机器的监听设备；桌面采集可能回灌。</p>
+      <p className="music-player__hint">
+        使用 OBS 监听设备（默认跟随系统默认播放设备），实际听感请在 OBS 核对。
+      </p>
       {status.monitorDisablePending ? (
         <p className="music-player__hint">
           已保存关闭监听的请求，Mizar 会在可控制 OBS 监听时继续，直到确认关闭。
-        </p>
-      ) : status.monitorPending ? (
-        <p className="music-player__hint">
-          本机监听暂缓：设备关系无法确认，或当前 OBS 不支持同设备仅监听。音乐保持节目直出；请在 OBS
-          选择未被桌面声音采集的监听设备，再开启监听并录制试听。
         </p>
       ) : null}
       {status.stinger ? <span className="music-player__hint">音效：{status.stinger}</span> : null}

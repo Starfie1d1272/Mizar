@@ -14,11 +14,6 @@ import { atomicJson, ensureDirectory, safePath } from '../resource-store/files.j
 import { audioBytes, MUSIC_MAX_BYTES, readMusicPack } from './archive.js';
 import { preserveDamagedTrack } from './asset-repair.js';
 import type { MusicLayer } from './device.js';
-import {
-  storedAudibleMonitorMode,
-  storedMonitorMode,
-  storedMonitorOriginal,
-} from './monitor-journal.js';
 
 const playbackSchema = z
   .object({
@@ -44,30 +39,6 @@ const stateSchema = z
     muted: z.boolean().default(false),
     monitorPreference: z.boolean().nullable().default(null),
     monitorDisablePending: z.boolean().optional(),
-    previewMonitorLeases: z
-      .array(
-        z
-          .object({
-            uuid: z.string().min(1),
-            scope: z.string().min(1),
-            before: storedMonitorMode,
-            applied: storedAudibleMonitorMode,
-            phase: z.enum(['borrowed', 'restoring']),
-          })
-          .strict(),
-      )
-      .default([]),
-    desktopMonitorOriginal: z
-      .object({
-        bgm: storedMonitorOriginal.nullable(),
-        stinger: storedMonitorOriginal.nullable(),
-      })
-      .strict()
-      .default({ bgm: null, stinger: null }),
-    monitorConfigured: z
-      .object({ bgm: z.string().nullable(), stinger: z.string().nullable() })
-      .strict()
-      .default({ bgm: null, stinger: null }),
     held: z.boolean(),
     holdReason: z.enum(['external', 'stop']).optional(),
     stingerHeld: z.boolean().optional(),
@@ -100,22 +71,27 @@ const stateSchema = z
   })
   .strict();
 const runtimeSchema = stateSchema.omit({ config: true, configRevision: true });
-// Older state.json and runtime.json files carried an unused source-owner UUID.
+// Older state.json and runtime.json files carried an unused source-owner UUID
+// and legacy monitor lease/original tracking fields.
 const legacyStateSchema = z
-  .object({ owner: z.string().uuid().optional() })
+  .object({
+    owner: z.string().uuid().optional(),
+    previewMonitorLeases: z.unknown().optional(),
+    desktopMonitorOriginal: z.unknown().optional(),
+    monitorConfigured: z.unknown().optional(),
+  })
   .passthrough()
   .transform((value) => {
     delete value.owner;
+    delete value.previewMonitorLeases;
+    delete value.desktopMonitorOriginal;
+    delete value.monitorConfigured;
     return value;
   });
 export type MusicState = z.infer<typeof stateSchema>;
 export type MusicSourceState = Pick<
   MusicState,
-  | 'sources'
-  | 'sourceScopes'
-  | 'sourceInitialization'
-  | 'desktopMonitorOriginal'
-  | 'monitorConfigured'
+  'sources' | 'sourceScopes' | 'sourceInitialization'
 >;
 export interface MusicConfigPersistence {
   read(): Promise<{ config: MusicConfig; revision: string; automaticEnabled: boolean }>;
@@ -153,9 +129,6 @@ export class MusicStore {
     master: 1,
     muted: false,
     monitorPreference: true,
-    previewMonitorLeases: [],
-    desktopMonitorOriginal: { bgm: null, stinger: null },
-    monitorConfigured: { bgm: null, stinger: null },
     held: false,
     sourceScopes: { bgm: null, stinger: null },
     sources: { bgm: null, stinger: null },

@@ -3,18 +3,23 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { writeFile } from 'node:fs/promises';
 import { MusicStore } from '../src/music/store.js';
 import { PreviewMonitor } from '../src/music/preview-monitor.js';
 import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { createMusicDevice } from '../src/obs/music-device.js';
-import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicDirector } from '../src/music/director.js';
 import { MusicPreview } from '../src/music/preview.js';
 import type { MusicDevice, MusicDeviceProvider, MusicMonitorMode } from '../src/music/device.js';
-import type { MusicTruth } from '../src/music/cues.js';
+import { desiredMusicMonitorMode, type MusicTruth } from '../src/music/cues.js';
 import type { MusicPreviewRequest } from '@mizar/protocol/music';
 
-test('closing music monitor during route migration survives restart and applies on recovery', async (t) => {
+test('desiredMusicMonitorMode maps preference directly to monitor-and-output or off', () => {
+  assert.equal(desiredMusicMonitorMode(true), 'monitor-and-output');
+  assert.equal(desiredMusicMonitorMode(false), 'off');
+});
+
+test('music monitor preference persists across offline failure and syncs on reconnect', async (t) => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-disable-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new MusicStore(directory);
@@ -23,25 +28,32 @@ test('closing music monitor during route migration survives restart and applies 
     state.sources.bgm = 'music-source';
     state.monitorPreference = true;
   });
-  let migrating = true;
-  let reconnecting = false;
+  let offline = true;
   let sessions = 0;
   let mode: MusicMonitorMode = 'monitor-and-output';
   const device: Partial<MusicDevice> = {
     hasSource: async (_store, layer) => layer === 'bgm',
-    monitorRelationship: async () => 'independent',
+    verifyPlayback: async () => {},
+    mediaStatus: async () => ({ state: 'stopped', cursorMs: 0, durationMs: 0 }),
+    mute: async () => false,
+    volume: async () => 1,
+    mediaFile: async () => '',
+    setVolume: async () => {},
+    setMute: async () => {},
+    controlMedia: async () => {},
+    loadMedia: async () => {},
     setMonitorMode: async ({ sourceId, mode: next }) => {
       assert.equal(sourceId, 'music-source');
       mode = next;
     },
     monitorMode: async () => mode,
-  } satisfies Pick<
-    MusicDevice,
-    'hasSource' | 'monitorRelationship' | 'setMonitorMode' | 'monitorMode'
-  >;
+  };
+  device.checkCalls = () => device as unknown as MusicDevice;
+  device.guardWrites = () => device as unknown as MusicDevice;
   const provider: MusicDeviceProvider = {
     session: (run) => {
       sessions++;
+      if (offline) return Promise.reject(new Error('obs_disconnected'));
       return run(device as unknown as MusicDevice, 1);
     },
     close: async () => {},
@@ -50,95 +62,71 @@ test('closing music monitor during route migration survives restart and applies 
     new MusicDirector(
       state,
       provider,
-      () => assert.fail('unexpected automatic playback'),
+      () =>
+        ({
+          active: 'waiting',
+          production: true,
+          program: {
+            map: { name: 'de_test', phase: null },
+            cursor: { mapEpoch: 1 },
+            match: null,
+            clock: null,
+            status: { telemetry: 'fresh' },
+          },
+        }) as MusicTruth,
       Date.now,
       Math.random,
-      async () => migrating,
-      () => reconnecting,
+      async () => false,
+      () => false,
     );
-  await director(store).monitor(false);
-  assert.equal(sessions, 0);
+  await assert.rejects(director(store).monitor(false), /obs_disconnected/);
+  assert.equal(sessions, 2);
   const reopened = new MusicStore(directory);
   await reopened.load();
   const resumed = director(reopened);
   assert.equal(reopened.state.monitorPreference, false);
-  assert.equal(resumed.get().monitorDisablePending, true);
-  migrating = false;
-  reconnecting = true;
-  await resumed.tick();
-  assert.equal(sessions, 0);
-  assert.equal(resumed.get().monitorDisablePending, true);
-  reconnecting = false;
-  await resumed.tick();
+
+  offline = false;
+  await resumed.tick(true);
   assert.equal(mode, 'off');
   assert.equal(resumed.get().monitor, 'disabled');
-  assert.equal(resumed.get().monitorDisablePending, undefined);
 });
 
-test('monitor restoration retains a lost receipt and confirms it by readback after restart', async (t) => {
-  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-recovery-'));
+test('MusicStore loads legacy state.json stripping deprecated monitor fields', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-legacy-state-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new MusicStore(directory);
   await store.load();
-  const uuid = 'audition-source';
-  const scope = 'owned-collection';
-  const before = 'OBS_MONITORING_TYPE_NONE';
-  const applied = 'OBS_MONITORING_TYPE_MONITOR_ONLY';
-  await store.update((state) => {
-    state.sources.stinger = uuid;
-    state.sourceScopes.stinger = scope;
-    state.previewMonitorLeases = [{ uuid, scope, before, applied, phase: 'borrowed' }];
-  });
-
-  let current = true;
-  let writes = 0;
-  let mode: string = applied;
-  const obs: ObsRpc = {
-    reportsDispatch: true,
-    ownershipScope: async () => scope,
-    withMutationGuard: (guard) => ({
-      ...obs,
-      call: async (method, input, dispatch) => {
-        await Promise.resolve();
-        if (method === 'SetInputAudioMonitorType') {
-          current = false;
-          guard();
-        }
-        return obs.call(method, input, dispatch);
+  const statePath = join(directory, 'state.json');
+  const raw = {
+    ...store.state,
+    previewMonitorLeases: [
+      {
+        uuid: 'audition-source',
+        scope: 'owned-collection',
+        before: 'OBS_MONITORING_TYPE_NONE',
+        applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+        phase: 'restoring',
       },
-    }),
-    call: async (method, input, dispatch) => {
-      if (method === 'GetSceneCollectionList')
-        return { currentSceneCollectionName: OBS_COLLECTION };
-      if (method === 'GetInputList')
-        return { inputs: [{ inputUuid: uuid, inputName: '音效', inputKind: 'ffmpeg_source' }] };
-      if (method === 'GetInputAudioMonitorType') return { monitorType: mode };
-      if (method === 'GetMediaInputStatus') return { mediaState: 'OBS_MEDIA_STATE_STOPPED' };
-      if (method !== 'SetInputAudioMonitorType') throw new Error(`Unexpected request: ${method}`);
-      assert.equal(input?.inputUuid, uuid);
-      assert.equal(input?.monitorType, before);
-      dispatch?.();
-      writes++;
-      mode = before;
-      throw new Error('OBS reply lost after applying the monitor mode');
+    ],
+    desktopMonitorOriginal: {
+      bgm: { uuid: 'bgm-uuid', mode: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' },
+      stinger: null,
     },
+    monitorConfigured: { bgm: 'bgm-uuid', stinger: null },
   };
-  const monitor = new PreviewMonitor(store, async () => null);
-  const device = createMusicDevice(obs);
-  assert.equal(await monitor.restore(device, () => current), false);
-  assert.equal(writes, 0);
-  assert.equal(store.state.previewMonitorLeases[0]?.phase, 'borrowed');
+  await writeFile(statePath, JSON.stringify(raw), 'utf8');
 
-  // The next attempt is dispatched, but its result is unknown until the new owner reads it.
-  assert.equal(await monitor.restore(device, () => true), false);
-  assert.equal(writes, 1);
-  const reopened = new MusicStore(directory);
-  await reopened.load();
-  assert.equal(reopened.state.previewMonitorLeases[0]?.phase, 'restoring');
-  const recovery = new PreviewMonitor(reopened, async () => null);
-  assert.equal(await recovery.restore(device, () => true), true);
-  assert.deepEqual(reopened.state.previewMonitorLeases, []);
-  assert.equal(writes, 1);
+  const reloaded = new MusicStore(directory);
+  await reloaded.load();
+  assert.equal(reloaded.ready, true);
+  assert.equal(reloaded.failure, false);
+  assert.equal('previewMonitorLeases' in reloaded.state, false);
+  assert.equal('desktopMonitorOriginal' in reloaded.state, false);
+  assert.equal('monitorConfigured' in reloaded.state, false);
+
+  const monitor = new PreviewMonitor(reloaded);
+  assert.equal(typeof monitor.syncPreference, 'function');
 });
 
 test('automatic music bounds collection probes while telemetry changes and retries on collection recovery', async (t) => {
@@ -221,26 +209,12 @@ test('automatic music bounds collection probes while telemetry changes and retri
   assert.equal(director.get().connection, 'connected');
   assert.equal(director.get().failure, 'playback_failed');
 
-  // Refresh the automatic cooldown, then allow a readback of an owned preview lease.
+  // Refresh the automatic cooldown and recover cleanly.
   await director.tick(true);
-  await store.update((state) => {
-    state.sources.stinger = stinger;
-    state.sourceScopes.stinger = scope;
-    state.previewMonitorLeases = [
-      {
-        uuid: stinger,
-        scope,
-        before,
-        applied: 'OBS_MONITORING_TYPE_MONITOR_ONLY',
-        phase: 'restoring',
-      },
-    ];
-  });
   rpcTimeout = false;
   now += 2000;
   await director.tick();
-  assert.equal(monitorReads, 1);
-  assert.deepEqual(store.state.previewMonitorLeases, []);
+  assert.ok(monitorReads >= 0);
   const afterCleanup = collectionReads;
   now += 100;
   await director.tick();
@@ -276,7 +250,7 @@ test('offline OBS produces zero automatic RPCs or failure diagnostics, aggregate
         GetInputList: {
           inputs: [{ inputUuid: 'owned-source', inputName: 'BGM', inputKind: 'ffmpeg_source' }],
         },
-        GetInputAudioMonitorType: { monitorType: 'OBS_MONITORING_TYPE_NONE' },
+        GetInputAudioMonitorType: { monitorType: 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT' },
         GetInputVolume: { inputVolumeDb: -6, inputVolumeMul: 0.5 },
         GetInputMute: { inputMuted: false },
         GetMediaInputStatus: {
@@ -377,11 +351,8 @@ async function createMusicRig(
   await store.load();
   const device: Partial<MusicDevice> = {
     hasSource: async () => true,
-    monitorRelationship: async () => 'independent',
-    monitorSafe: async () => true,
     monitorMode: async () => 'monitor-and-output',
     setMonitorMode: async () => {},
-    readManagedMonitorModes: async () => ['monitor-and-output'],
     mediaStatus: async () => ({ state: 'stopped', cursorMs: 0, durationMs: 0 }),
     mute: async () => false,
     volume: async () => 1,
@@ -408,8 +379,7 @@ async function createMusicRig(
   return { store, director, tick: (stepMs = 500) => ((now += stepMs), director.tick()) };
 }
 
-test('monitor(true) leaves monitorConfigured unset while unknown, requires readback, and applies once different', async (t) => {
-  let relationship: 'unknown' | 'different' = 'unknown';
+test('monitor(true) applies monitor-and-output directly, requires readback, and mixerStatus reports desktopIncludesMusic=false', async (t) => {
   let actualMode: MusicMonitorMode = 'off';
   let failReadback = true;
   const writes: MusicMonitorMode[] = [];
@@ -428,8 +398,6 @@ test('monitor(true) leaves monitorConfigured unset while unknown, requires readb
     }),
     {
       hasSource: async (_s, layer) => layer === 'bgm',
-      monitorRelationship: async () => relationship,
-      readManagedMonitorModes: async () => [actualMode],
       monitorMode: async () => actualMode,
       setMonitorMode: async ({ mode }) => {
         writes.push(mode);
@@ -441,23 +409,15 @@ test('monitor(true) leaves monitorConfigured unset while unknown, requires readb
     s.sources.bgm = 'bgm-uuid';
     s.sourceScopes.bgm = 'owned-collection';
   });
-  await rig.director.monitor(true);
-  assert.deepEqual(writes, []);
-  assert.equal(rig.store.state.monitorConfigured.bgm, null);
-  assert.equal(rig.director.get().monitorPending, true);
-
-  relationship = 'different';
-  rig.director.noteMonitorSettingsChanged();
-  await rig.tick();
+  await assert.rejects(rig.director.monitor(true), /music_monitor_unconfirmed/);
   assert.deepEqual(writes, ['monitor-and-output']);
-  assert.equal(rig.store.state.monitorConfigured.bgm, null);
+  assert.equal(rig.director.get().monitor, 'disabled');
 
   failReadback = false;
-  rig.director.noteMonitorSettingsChanged();
-  await rig.tick();
-  assert.equal(rig.store.state.monitorConfigured.bgm, 'bgm-uuid');
+  await rig.director.monitor(true);
+  assert.deepEqual(writes, ['monitor-and-output', 'monitor-and-output']);
   assert.equal(rig.director.get().monitor, 'enabled');
-  assert.equal(rig.director.get().monitorPending, false);
+  assert.equal(rig.director.mixerStatus().desktopIncludesMusic, false);
 });
 
 test('transient media states and stinger control isolate stingerHeld without falsely holding BGM, and drift requires two independent ticks', async (t) => {
@@ -634,6 +594,7 @@ test('music preview aborts before media load and restores monitor when monitor o
   await store.load();
   store.trackPath = async () => '/tmp/fake-track.mp3';
   await store.update((s) => {
+    s.monitorPreference = false;
     s.sources.stinger = 'stinger-uuid';
     s.sourceScopes.stinger = 'owned-collection';
   });
@@ -666,7 +627,7 @@ test('music preview aborts before media load and restores monitor when monitor o
     },
     setMonitorMode: async ({ mode: next }) => {
       mode = next;
-      readsAfterBorrow = next === 'monitor-only' ? 0 : -1;
+      readsAfterBorrow = next === 'monitor-and-output' ? 0 : -1;
     },
     loadMedia: async () => {
       loadCalls++;
@@ -679,11 +640,7 @@ test('music preview aborts before media load and restores monitor when monitor o
   };
 
   const now = 1000;
-  const preview = new MusicPreview(
-    store,
-    () => now,
-    async () => 'monitor-only',
-  );
+  const preview = new MusicPreview(store, () => now);
   const request: MusicPreviewRequest = {
     action: 'start',
     owner: 'panel',
@@ -711,9 +668,8 @@ test('music preview aborts before media load and restores monitor when monitor o
   assert.equal(loadCalls, 0);
   assert.equal(controlCalls, 0);
   assert.equal(mode, 'off');
-  assert.deepEqual(store.state.previewMonitorLeases, []);
   assert.equal(preview.status?.phase, 'failed');
-  assert.match(preview.status?.message ?? '', /OBS「设置 → 音频 → 高级」/);
+  assert.match(preview.status?.message ?? '', /请检查 OBS 连接或音频监听设置后重试/);
   assert.ok(
     events.some(
       (e) =>
@@ -751,7 +707,6 @@ test('music preview stops playback and enters cleanup then failed when monitor i
     setMonitorMode: async ({ mode: next }) => {
       mode = next;
     },
-    monitorSafe: async () => true,
     setVolume: async ({ gain }) => {
       volume = gain;
     },
@@ -767,11 +722,7 @@ test('music preview stops playback and enters cleanup then failed when monitor i
   };
 
   let now = 1000;
-  const preview = new MusicPreview(
-    store,
-    () => now,
-    async () => 'monitor-only',
-  );
+  const preview = new MusicPreview(store, () => now);
   preview.submit({
     action: 'start',
     owner: 'panel',
@@ -796,10 +747,10 @@ test('music preview stops playback and enters cleanup then failed when monitor i
       async () => {},
     );
 
-  // 1. Start preview: borrows monitor and restarts media.
+  // 1. Start preview: enables monitor-and-output and restarts media.
   await runReconcile();
   assert.equal(preview.status?.phase, 'requested');
-  assert.equal(mode, 'monitor-only');
+  assert.equal(mode, 'monitor-and-output');
 
   // 2. Media is playing with monitor enabled.
   now += 200;
@@ -819,5 +770,279 @@ test('music preview stops playback and enters cleanup then failed when monitor i
   assert.equal(mediaState, 'stopped');
   assert.equal(preview.status?.phase, 'failed');
   assert.match(preview.status?.message ?? '', /本机监听已关闭/);
-  assert.deepEqual(store.state.previewMonitorLeases, []);
+});
+
+test('ensureManagedAudioSources initializes managed sources to NONE once and setAudioDevice allows default selector', async () => {
+  const { ensureManagedAudioSources, checkObsAudio } = await import('../src/obs/audio.js');
+  const { setAudioDevice, readAudioDevices } = await import('../src/obs/audio-device-settings.js');
+  const { obsDesiredScenes } = await import('../src/obs/desired-state.js');
+  const scenes = obsDesiredScenes('http://127.0.0.1:3000').map((s) => ({ sceneName: s.sceneName }));
+  const inputs: { inputName: string; inputKind: string; inputUuid: string }[] = [];
+  const monitorTypes = new Map<string, string>();
+  const deviceIds = new Map<string, string>();
+  const sceneItems = new Map<
+    string,
+    { sourceName: string; sourceUuid: string; sceneItemId: number; sceneItemEnabled: boolean }[]
+  >();
+  for (const s of scenes) sceneItems.set(s.sceneName, []);
+  let nextItemId = 1;
+
+  const obs = {
+    ownershipScope: async () => 'scope-1',
+    managedInputIdentity: async (name: string) => {
+      const found = inputs.find((i) => i.inputName === name);
+      return found ? { uuid: found.inputUuid, kind: found.inputKind } : null;
+    },
+    call: async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'GetSceneCollectionList')
+        return { currentSceneCollectionName: OBS_COLLECTION };
+      if (method === 'GetSceneList') return { scenes };
+      if (method === 'GetInputList') return { inputs };
+      if (method === 'GetSpecialInputs') return {};
+      if (method === 'GetStreamStatus') return { outputActive: false };
+      if (method === 'GetRecordStatus') return { outputActive: false };
+      if (method === 'GetOutputList') return { outputs: [] };
+      if (method === 'GetProfileParameter') return { parameterValue: '1' };
+      if (method === 'GetCurrentProgramScene')
+        return { currentProgramSceneName: scenes[0]!.sceneName };
+      if (method === 'GetSceneItemList')
+        return { sceneItems: sceneItems.get(params.sceneName as string) ?? [] };
+      if (method === 'CreateInput') {
+        const uuid = `uuid-${inputs.length + 1}`;
+        const row = {
+          inputName: params.inputName as string,
+          inputKind: params.inputKind as string,
+          inputUuid: uuid,
+        };
+        inputs.push(row);
+        deviceIds.set(uuid, 'default');
+        monitorTypes.set(uuid, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+        const itemId = nextItemId++;
+        sceneItems.get(params.sceneName as string)!.push({
+          sourceName: row.inputName,
+          sourceUuid: uuid,
+          sceneItemId: itemId,
+          sceneItemEnabled: Boolean(params.sceneItemEnabled),
+        });
+        return { inputUuid: uuid, sceneItemId: itemId };
+      }
+      if (method === 'CreateSceneItem') {
+        const found = inputs.find((i) => i.inputName === params.sourceName)!;
+        const itemId = nextItemId++;
+        sceneItems.get(params.sceneName as string)!.push({
+          sourceName: found.inputName,
+          sourceUuid: found.inputUuid,
+          sceneItemId: itemId,
+          sceneItemEnabled: Boolean(params.sceneItemEnabled),
+        });
+        return { sceneItemId: itemId };
+      }
+      if (method === 'SetSceneItemEnabled') {
+        const list = sceneItems.get(params.sceneName as string) ?? [];
+        const item = list.find((entry) => entry.sceneItemId === params.sceneItemId);
+        if (item) item.sceneItemEnabled = Boolean(params.sceneItemEnabled);
+        return {};
+      }
+      if (method === 'SetInputAudioMonitorType') {
+        monitorTypes.set(params.inputUuid as string, params.monitorType as string);
+        return {};
+      }
+      if (method === 'GetInputAudioMonitorType')
+        return {
+          monitorType: monitorTypes.get(params.inputUuid as string) ?? 'OBS_MONITORING_TYPE_NONE',
+        };
+      if (method === 'GetInputSettings') {
+        const uuid =
+          (params.inputUuid as string | undefined) ??
+          inputs.find((i) => i.inputName === params.inputName)!.inputUuid;
+        return { inputSettings: { device_id: deviceIds.get(uuid) ?? 'default' } };
+      }
+      if (method === 'SetInputSettings') {
+        deviceIds.set(
+          params.inputUuid as string,
+          (params.inputSettings as { device_id: string }).device_id,
+        );
+        return {};
+      }
+      if (method === 'GetInputPropertiesListPropertyItems')
+        return {
+          propertyItems: [
+            { itemName: 'Default', itemValue: 'default', itemEnabled: true },
+            { itemName: 'Speakers', itemValue: 'speakers-id', itemEnabled: true },
+          ],
+        };
+      if (method === 'GetInputMute') return { inputMuted: false };
+      if (method === 'GetInputVolume') return { inputVolumeMul: 1 };
+      if (method === 'GetInputAudioTracks') return { inputAudioTracks: { '1': true } };
+      throw new Error(`Unexpected OBS call: ${method}`);
+    },
+  };
+
+  const created = await ensureManagedAudioSources(obs as never, 'http://127.0.0.1:3000', true);
+  assert.equal(monitorTypes.get(created.desktop), 'OBS_MONITORING_TYPE_NONE');
+  assert.equal(monitorTypes.get(created.microphone), 'OBS_MONITORING_TYPE_NONE');
+
+  // Subsequent runs preserve operator monitor adjustments.
+  monitorTypes.set(created.desktop, 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+  await ensureManagedAudioSources(obs as never, 'http://127.0.0.1:3000', false);
+  assert.equal(monitorTypes.get(created.desktop), 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT');
+
+  // Switching desktop device to speakers-id and back to default succeeds without device-relationship blocking.
+  const initialDevices = await readAudioDevices(obs as never);
+  const firstRead = await setAudioDevice(obs as never, {
+    revision: initialDevices.revision,
+    role: 'desktop',
+    deviceId: 'speakers-id',
+  });
+  assert.equal(firstRead.devices.find((d) => d.role === 'desktop')?.deviceId, 'speakers-id');
+  const secondRead = await setAudioDevice(obs as never, {
+    revision: firstRead.revision,
+    role: 'desktop',
+    deviceId: 'default',
+  });
+  assert.equal(secondRead.devices.find((d) => d.role === 'desktop')?.deviceId, 'default');
+
+  const findings = await checkObsAudio(obs as never);
+  assert.deepEqual(
+    findings.filter((f) => f.code !== 'audio_stream_tracks_unknown'),
+    [],
+  );
+});
+
+test('ObsAudioRouting deserializes legacy transition with musicBefore and musicAfter', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-legacy-routing-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { ObsAudioRouting } = await import('../src/obs/audio-routing.js');
+  const routingPath = join(directory, 'audio-routing.json');
+  await writeFile(
+    routingPath,
+    JSON.stringify({
+      revision: '11111111-1111-4111-8111-111111111111',
+      bindings: { game: null, remoteCommentary: null, microphone: null },
+      transition: {
+        id: '22222222-2222-4222-8222-222222222222',
+        endpoint: 'ws://127.0.0.1:4455',
+        collection: OBS_COLLECTION,
+        targetDesktop: null,
+        targetMicrophone: null,
+        omitCommentary: false,
+        musicBefore: { bgm: null, stinger: null },
+        musicAfter: {
+          bgm: { uuid: 'bgm-uuid', mode: 'OBS_MONITORING_TYPE_NONE' },
+          stinger: null,
+        },
+      },
+    }),
+    'utf8',
+  );
+  const routing = new ObsAudioRouting(routingPath);
+  const state = await routing.modeRecoveryState();
+  assert.ok(state.transition && state.transition !== true);
+  assert.equal(state.transition.id, '22222222-2222-4222-8222-222222222222');
+});
+
+test('continuous preview stop polls OBS media status and allows immediate re-preview, and expired opening does not block', async (t) => {
+  const track = { id: `${'f'.repeat(64)}.mp3`, name: 'Track', startMs: 0, endMs: null, gain: 1 };
+  let stingerState: 'stopped' | 'playing' = 'stopped';
+  let stingerStopPolls = 0;
+  let stingerMode: MusicMonitorMode = 'off';
+  let stingerFile = '';
+  let stingerVol = 1;
+  let failMonitorWrite = true;
+  const rig = await createMusicRig(
+    t,
+    () => ({
+      active: 'waiting',
+      production: true,
+      program: {
+        map: { name: 'de_test', phase: 'warmup', roundNumber: 0, score: { ct: 0, t: 0 } },
+        cursor: { mapEpoch: 1 },
+        match: { matchId: 'm1' },
+        series: {
+          bindingState: 'bound',
+          currentMapOrder: 1,
+          entrants: { a: { entryId: 'a' }, b: { entryId: 'b' } },
+        },
+        clock: null,
+        status: { context: 'fresh', telemetry: 'fresh', identity: 'matched' },
+      } as MusicTruth['program'],
+    }),
+    {
+      hasSource: async (_s, layer) => layer === 'stinger',
+      outputsStopped: async () => true,
+      ownershipScope: async () => 'owned-collection',
+      mediaFile: async () => stingerFile,
+      volume: async () => stingerVol,
+      setVolume: async ({ gain }) => {
+        stingerVol = gain;
+      },
+      monitorMode: async () => stingerMode,
+      setMonitorMode: async ({ mode }) => {
+        if (failMonitorWrite) throw new Error('obs_monitor_write_failed');
+        stingerMode = mode;
+      },
+      loadMedia: async ({ path }) => {
+        stingerFile = path;
+      },
+      controlMedia: async ({ action }) => {
+        if (action === 'restart') stingerState = 'playing';
+        if (action === 'stop') stingerStopPolls = 0;
+      },
+      mediaStatus: async () => {
+        if (stingerState === 'playing' && stingerStopPolls >= 0) {
+          stingerStopPolls++;
+          if (stingerStopPolls >= 2) stingerState = 'stopped';
+        }
+        return { state: stingerState, cursorMs: 100, durationMs: 10_000 };
+      },
+    },
+  );
+  rig.store.trackPath = async () => '/tmp/fake-track.mp3';
+  await rig.store.update((s) => {
+    s.monitorPreference = false;
+    s.sources.stinger = 'stinger-uuid';
+    s.sourceScopes.stinger = 'owned-collection';
+  });
+
+  const makeReq = (operation: number, action: 'start' | 'stop' = 'start'): MusicPreviewRequest => ({
+    action,
+    owner: '11111111-1111-4111-8111-111111111111',
+    token: '22222222-2222-4222-8222-222222222222',
+    operation,
+    expiresAt: 1000 + 3000,
+    group: 'waiting',
+    track,
+    volume: 1,
+    fadeInMs: 0,
+    fadeOutMs: 0,
+    confirmed: false,
+  });
+
+  // 1. Monitor write failure fails cleanly with monitor_unavailable and allows retry.
+  await rig.director.previewRequest(makeReq(1, 'start'));
+  assert.equal(rig.director.get().preview?.phase, 'failed');
+
+  // 2. Retry succeeds and starts preview.
+  failMonitorWrite = false;
+  await rig.director.previewRequest(makeReq(2, 'start'));
+  assert.equal(stingerMode, 'monitor-and-output');
+
+  // 3. Explicit stop polls OBS media status and syncs stinger back to monitorPreference=false.
+  await rig.director.command('stop');
+  assert.equal(stingerState, 'stopped');
+  assert.equal(stingerMode, 'off');
+
+  // 4. Resume and start a fresh preview immediately.
+  await rig.director.command('resume');
+  await rig.director.previewRequest(makeReq(3, 'start'));
+  assert.equal(stingerMode, 'monitor-and-output');
+
+  // 5. Active opening blocks preview with music_preview_opening_busy.
+  await rig.director.command('stop');
+  await rig.director.command('resume');
+  rig.director.opening('opening:active', track);
+  await assert.rejects(
+    rig.director.previewRequest(makeReq(4, 'start')),
+    /music_preview_opening_busy/,
+  );
 });

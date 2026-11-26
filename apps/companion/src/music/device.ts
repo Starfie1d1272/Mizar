@@ -2,7 +2,6 @@ import type { MixerChannelStatus } from '@mizar/protocol/mixer';
 import type { MusicSourceState, MusicStore } from './store.js';
 
 export type MusicLayer = 'bgm' | 'stinger';
-export type MonitorRelationship = 'independent' | 'same' | 'different' | 'unknown';
 type Source = { sourceId: string | null | undefined };
 type SourceState = { readonly state: MusicSourceState };
 export type MusicSourceSetup = SourceState &
@@ -27,17 +26,6 @@ export type MusicMonitorOriginal = {
   applied?: MusicMonitorMode;
 };
 export type MusicMonitorOriginals = Record<MusicLayer, MusicMonitorOriginal | null>;
-export type MusicMonitorChange = {
-  sourceId: string;
-  before: MusicMonitorMode;
-  applied: MusicMonitorMode;
-};
-export type MusicMonitorPlan = {
-  changes: MusicMonitorChange[];
-  managedSources: string[];
-  musicBefore: MusicMonitorOriginals;
-  musicAfter: MusicMonitorOriginals;
-};
 
 export interface MusicDevice {
   mediaStatus(source: Source): Promise<{
@@ -67,8 +55,6 @@ export interface MusicDevice {
   verifyPlayback(store: SourceState, layer: MusicLayer, valid: () => boolean): Promise<void>;
   prepareResources(store: MusicSourceSetup, layer: MusicLayer, valid: () => boolean): Promise<void>;
   outputsStopped(): Promise<boolean>;
-  monitorSafe(): Promise<boolean>;
-  monitorRelationship(): Promise<MonitorRelationship>;
 }
 
 export interface MusicDeviceProvider {
@@ -80,22 +66,9 @@ export interface MusicDeviceProvider {
 
 export interface MusicAudioRecovery {
   withAudioModeRecovery<T>(run: (current: () => boolean) => Promise<T>): Promise<T>;
-  commitDesktopMonitorOriginals(
-    before: MusicMonitorOriginals,
-    after: MusicMonitorOriginals,
-    side: 'before' | 'after',
-  ): Promise<void>;
-  monitorPlanCompatible(relationship: MonitorRelationship, after: MusicMonitorOriginals): boolean;
 }
 
-export interface MusicAudioMode extends MusicAudioRecovery {
-  wantsMonitor(): boolean;
-  prepareDesktopMix<T>(
-    device: MusicDevice,
-    relationship: MonitorRelationship,
-    apply: (plan: MusicMonitorPlan) => Promise<T>,
-  ): Promise<T>;
-}
+export type MusicAudioMode = MusicAudioRecovery;
 
 export interface MusicMixerControl {
   mixerStatus(): { channel: MixerChannelStatus; desktopIncludesMusic: boolean };

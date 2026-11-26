@@ -82,6 +82,7 @@ export function SoundSettings() {
             ) : null}
             {connected && !preparing && (
               <Button
+                variant={unchecked || findings.length > 0 ? 'primary' : 'secondary'}
                 disabled={busy || outputActive}
                 onClick={() => {
                   setBusy(true);
@@ -97,7 +98,7 @@ export function SoundSettings() {
                     .finally(() => setBusy(false));
                 }}
               >
-                修复场景与音频
+                {unchecked || findings.length > 0 ? '修复场景与音频' : '重新检查'}
               </Button>
             )}
             {message && <p role="status">{message}</p>}

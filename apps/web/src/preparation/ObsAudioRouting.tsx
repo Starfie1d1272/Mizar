@@ -204,7 +204,7 @@ export function ObsAudioRouting({ outputActive }: { outputActive: boolean }) {
           '切换结果未确认，请立即在 OBS 核对当前音源与直播电平；如无声请手动恢复可用来源。',
       );
     }
-    const result = (await response.json()) as { monitorPending?: boolean; waiting?: boolean };
+    const result = (await response.json()) as { waiting?: boolean };
     if (cancelling) setCommentaryPreparing(false);
     const current = await refresh();
     if (!cancelling && !result.waiting) setTargetMode(current.desktop ? 'independent' : 'desktop');
@@ -215,11 +215,9 @@ export function ObsAudioRouting({ outputActive }: { outputActive: boolean }) {
           ? '已取消等待。'
           : result.waiting
             ? '解说来源尚未就绪，桌面混音仍可用。准备好后请再次点击切回。'
-            : result.monitorPending
-              ? '已切换桌面混音；音乐仍播出，本机监听暂缓。'
-              : mode === 'desktop'
-                ? '已切换桌面混音。请录制试听。'
-                : '已切换独立分路。请录制试听。',
+            : mode === 'desktop'
+              ? '已切换桌面混音。请录制试听。'
+              : '已切换独立分路。请录制试听。',
     );
   }
   const currentMode = status?.desktop
@@ -287,9 +285,8 @@ export function ObsAudioRouting({ outputActive }: { outputActive: boolean }) {
         <summary>高级音频设置</summary>
         <h3>切换音频模式</h3>
         <p>
-          桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制。 OBS
-          中的音乐若同时直出并监听到该设备，可能重复收音，请核对监听并录制试听。
-          请在采集设备中核对实际播放设备与麦克风。
+          桌面混音采集所选播放设备上的声音，无法分别调节游戏与解说；麦克风仍单独控制。OBS 32+
+          会自动对同设备监听进行去重，实际听感请在 OBS 核对并录制试听。
         </p>
         <details>
           <summary>核对播放设备（包括 Sonar Chat / Gaming）</summary>

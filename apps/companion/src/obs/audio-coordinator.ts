@@ -38,7 +38,6 @@ import {
   recoverAudioModeTransaction,
   switchAudioModeTransaction,
 } from './audio-mode-transaction.js';
-import { assertDesktopDeviceRoute } from './audio-monitor-device.js';
 import { AudioConfigurationConnection } from './audio-configuration-connection.js';
 import type { ObsConfigStore } from './config.js';
 import { AUDIO_KINDS, assertManagedGlobalAudioSilent, readDesiredSceneItems } from './audio.js';
@@ -260,16 +259,7 @@ export class ObsAudioCoordinator {
             generation === this.host.recoveryGeneration() &&
             programGeneration === this.host.programGeneration(),
         );
-        return setAudioDevice(
-          obs,
-          command,
-          command.role === 'desktop' && state.desktop
-            ? async (uuid) => {
-                if (uuid !== state.desktop!.inputUuid) throw new Error('audio_devices_changed');
-                await assertDesktopDeviceRoute(obs, uuid, command.deviceId);
-              }
-            : undefined,
-        );
+        return setAudioDevice(obs, command);
       }),
     );
   }
@@ -325,7 +315,7 @@ export class ObsAudioCoordinator {
       }),
     );
     const ready = await this.prepareWaitingIndependent();
-    if (!ready) return { waiting: true, monitorPending: false };
+    if (!ready) return { waiting: true };
     const result = await this.switchAudioMode(
       ready.revision,
       'independent',
@@ -460,7 +450,7 @@ export class ObsAudioCoordinator {
     if (!routing || !commentary) throw new Error('audio_routing_unavailable');
     return this.host.configurationMutation(() =>
       this.audioModeRun('audio_mode_switch', async (obs, endpoint, observer) => {
-        const { monitorPending, desktopSettled } = await switchAudioModeTransaction(
+        const { desktopSettled } = await switchAudioModeTransaction(
           { routing, commentary, browserBaseUrl },
           obs,
           endpoint,
@@ -473,7 +463,7 @@ export class ObsAudioCoordinator {
           if (this.warnings.routing?.code === 'audio_bindings_required')
             delete this.warnings.routing;
         }
-        return { monitorPending };
+        return {};
       }),
     );
   }
