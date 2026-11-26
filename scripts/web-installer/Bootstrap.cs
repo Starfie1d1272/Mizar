@@ -441,7 +441,7 @@ namespace Mizar.WebInstaller {
         Controls.Add(marker); marker.BringToFront();
       }
       AcceptButton=action; CancelButton=cancel;
-      FormClosing += (s,e)=>{if(cancellation!=null){RequestCancel();e.Cancel=true;}};
+      FormClosing += (s,e)=>{if(cancellation!=null){if(activePhase!="installing-core") RequestCancel();e.Cancel=true;}};
     }
     async Task<string> Install(IProgress<long> bytes,IProgress<string> stages,CancellationToken token) {
       stages.Report("checking-release");
@@ -460,6 +460,7 @@ namespace Mizar.WebInstaller {
       if(phase=="checking-cache" || phase=="connecting-download" || phase=="validating-download") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-cache" ? "正在检查已有下载" : phase=="validating-download" ? "正在验证下载文件" : "正在连接下载源";detail.Text="请稍候。";return;}
       if(phase=="checking-installation" || phase=="preparing-update") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text=phase=="checking-installation" ? "正在检查安装位置" : "正在准备安装";detail.Text="请稍候。";return;}
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
+      if(phase=="installing-core") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text="正在安装 Mizar";detail.Text="正在写入程序文件，即将完成，此时不可取消。";cancel.Enabled=false;return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
       heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
       detail.Text=phase=="waiting-for-installer" ? "正在等待安装操作安全结束。" : "请稍候。";
@@ -512,7 +513,7 @@ namespace Mizar.WebInstaller {
       } catch {return "无法保存，请复制当前提示。";}
     }
     internal void RequestCancel() {
-      if(cancellation==null) return;
+      if(cancellation==null || activePhase=="installing-core") return;
       ShowStage("waiting-for-installer"); cancellation.Cancel(); cancel.Enabled=false;
     }
     internal async Task Start() {

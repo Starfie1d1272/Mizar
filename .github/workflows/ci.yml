@@ -172,6 +172,8 @@ jobs:
         with:
           runtime: node@24
           install: false
+      - name: Build installer binaries
+        run: cargo build --profile ci --manifest-path apps/desktop/installer/Cargo.toml
       - name: Verify native update and recovery
         shell: pwsh
         run: |

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
-use ui::ProgressUi;
+use ui::{ProgressKind, ProgressUi, UiMode};
 use win32::{
     clear_legacy_run_once, create_shortcut, delete_install_registry, desktop_dir,
     find_running_mizar_under, launch_and_wait_ready, random_hex_16, remove_shortcuts,
@@ -57,20 +57,48 @@ impl Logger {
             }
         }
     }
+
+    fn logs_dir(&self) -> PathBuf {
+        self.path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 struct StepError {
     code: ExitCode,
     msg: String,
+    committed: bool,
+    old_relaunched: bool,
 }
 
 impl StepError {
-    fn new(code: ExitCode, msg: impl Into<String>) -> Self {
+    fn pre_commit(code: ExitCode, msg: impl Into<String>) -> Self {
         Self {
             code,
             msg: msg.into(),
+            committed: false,
+            old_relaunched: false,
         }
     }
+
+    fn post_commit(code: ExitCode, msg: impl Into<String>, old_relaunched: bool) -> Self {
+        Self {
+            code,
+            msg: msg.into(),
+            committed: true,
+            old_relaunched,
+        }
+    }
+}
+
+struct PendingErrorUi {
+    ui: ProgressUi,
+    heading: String,
+    impact: String,
+    detail: String,
+    logs_dir: PathBuf,
 }
 
 struct StagingGuard(Option<PathBuf>);
@@ -108,24 +136,31 @@ impl PreCommitGuard {
         }
         self.active_event.take();
     }
-}
-impl Drop for PreCommitGuard {
-    fn drop(&mut self) {
+
+    fn relaunch_old_now(&mut self) -> bool {
         if let Some(mut dm) = self.desktop_mutex.take() {
             dm.release_now();
         }
         self.active_event.take();
-        if let Some(dir) = self.relaunch_dir.take() {
-            let exe = dir.join("Mizar.exe");
-            if exe.is_file() {
-                let _ = Command::new(&exe)
-                    .current_dir(&dir)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            }
+        let Some(dir) = self.relaunch_dir.take() else {
+            return false;
+        };
+        let exe = dir.join("Mizar.exe");
+        if !exe.is_file() {
+            return false;
         }
+        Command::new(&exe)
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    }
+}
+impl Drop for PreCommitGuard {
+    fn drop(&mut self) {
+        let _ = self.relaunch_old_now();
     }
 }
 
@@ -200,10 +235,21 @@ struct InstallParams {
     apply_update: Option<(u32, u64, Option<usize>)>,
 }
 
-fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, ApplierResult) {
+fn format_version_transition(prev: Option<&str>, next: &str) -> String {
+    match prev {
+        Some(p) if !p.is_empty() && p != next => format!("v{p} → v{next}"),
+        _ => format!("v{next}"),
+    }
+}
+
+fn run_install_or_update(
+    params: InstallParams,
+    log: &Logger,
+) -> (ExitCode, ApplierResult, Option<PendingErrorUi>) {
     let mut version_out: Option<String> = None;
     let mut prev_version_out: Option<String> = None;
     let mut cleanup_warning: Option<String> = None;
+    let mut pending_ui: Option<PendingErrorUi> = None;
 
     let res = execute_install_or_update(
         &params,
@@ -211,6 +257,7 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
         &mut version_out,
         &mut prev_version_out,
         &mut cleanup_warning,
+        &mut pending_ui,
     );
 
     if params.apply_update.is_some() {
@@ -235,6 +282,7 @@ fn run_install_or_update(params: InstallParams, log: &Logger) -> (ExitCode, Appl
             log_path: log.path.to_string_lossy().into_owned(),
             message: msg,
         },
+        pending_ui,
     )
 }
 
@@ -244,16 +292,47 @@ fn execute_install_or_update(
     version_out: &mut Option<String>,
     prev_version_out: &mut Option<String>,
     cleanup_warning: &mut Option<String>,
+    pending_ui: &mut Option<PendingErrorUi>,
 ) -> Result<(), StepError> {
-    // Phase 1: Acquire & UI
-    let _writer = WriterMutex::try_acquire()
-        .map_err(|e| StepError::new(ExitCode::IoError, format!("无法获取全局写入锁: {e}")))?
-        .ok_or_else(|| {
-            StepError::new(
-                ExitCode::WriterBusy,
-                "另一个 Mizar 安装或更新事务正在进行中",
-            )
-        })?;
+    let is_update = params.apply_update.is_some();
+    let ui_mode = if is_update {
+        UiMode::Update
+    } else {
+        UiMode::Install
+    };
+
+    // Phase 1: Acquire locks
+    let _writer = match WriterMutex::try_acquire() {
+        Ok(Some(w)) => w,
+        Ok(None) => {
+            let msg = "另一个 Mizar 安装或更新事务正在进行中".to_string();
+            if !params.no_ui && is_update {
+                let ui = ProgressUi::start(false, ui_mode, "无法开始更新", None);
+                *pending_ui = Some(PendingErrorUi {
+                    ui,
+                    heading: "无法开始更新".into(),
+                    impact: "原程序未被替换，配置与比赛资料未受影响。".into(),
+                    detail: format!("原因：{msg}，请稍后重试。"),
+                    logs_dir: log.logs_dir(),
+                });
+            }
+            return Err(StepError::pre_commit(ExitCode::WriterBusy, msg));
+        }
+        Err(e) => {
+            let msg = format!("无法获取全局写入锁: {e}");
+            if !params.no_ui && is_update {
+                let ui = ProgressUi::start(false, ui_mode, "无法开始更新", None);
+                *pending_ui = Some(PendingErrorUi {
+                    ui,
+                    heading: "更新未完成".into(),
+                    impact: "原程序未被替换，配置与比赛资料未受影响。".into(),
+                    detail: format!("原因：{msg}"),
+                    logs_dir: log.logs_dir(),
+                });
+            }
+            return Err(StepError::pre_commit(ExitCode::IoError, msg));
+        }
+    };
 
     let active_event = match UpdateActiveEvent::acquire() {
         Ok(ev) => Some(ev),
@@ -265,8 +344,9 @@ fn execute_install_or_update(
 
     let desktop_mutex = match &params.apply_update {
         Some((_, _, Some(raw))) => DesktopMutexHandle::from_raw(*raw),
-        _ => DesktopMutexHandle::acquire_or_create()
-            .map_err(|e| StepError::new(ExitCode::IoError, format!("无法获取桌面互斥锁: {e}")))?,
+        _ => DesktopMutexHandle::acquire_or_create().map_err(|e| {
+            StepError::pre_commit(ExitCode::IoError, format!("无法获取桌面互斥锁: {e}"))
+        })?,
     };
 
     let mut guards = PreCommitGuard {
@@ -278,22 +358,137 @@ fn execute_install_or_update(
             .map(|_| params.install_dir.clone()),
     };
 
-    let ui = ProgressUi::start(params.no_ui, "正在校验安装包...");
+    let prev_ver_hint = read_current_pointer(&params.install_dir)
+        .map(|p| p.current.split('-').next().unwrap_or(&p.current).to_owned());
+    let initial_stage = if is_update {
+        "正在校验更新文件…"
+    } else {
+        "正在校验安装文件…"
+    };
+    let ui = ProgressUi::start(params.no_ui, ui_mode, initial_stage, None);
+
+    let outcome = run_phases(
+        params,
+        log,
+        &ui,
+        &mut guards,
+        prev_ver_hint.as_deref(),
+        version_out,
+        prev_version_out,
+        cleanup_warning,
+    );
+
+    match outcome {
+        Ok(()) => {
+            ui.close();
+            Ok(())
+        }
+        Err(mut err) => {
+            if !err.committed {
+                if err.code == ExitCode::AppRunning {
+                    guards.release_locks();
+                } else {
+                    err.old_relaunched = guards.relaunch_old_now();
+                }
+            }
+
+            if params.no_ui {
+                ui.close();
+                return Err(err);
+            }
+
+            // If user cancelled or rollback/pre-commit failure successfully relaunched old Mizar,
+            // close the updater window and let Mizar handle the transition.
+            if err.old_relaunched {
+                ui.close();
+                return Err(err);
+            }
+
+            // Otherwise keep the updater window open with accurate failure state and recovery actions.
+            let (heading, impact, detail) = if err.code == ExitCode::Cancelled {
+                (
+                    "更新已取消",
+                    "原程序未被替换，但未能自动重新启动旧版 Mizar。",
+                    "请手动打开 Mizar；如需排查启动问题，可打开日志目录查看记录。".to_string(),
+                )
+            } else if err.code == ExitCode::RolledBack {
+                (
+                    "更新未完成",
+                    "已自动回退到上一版本，但未能自动启动旧版 Mizar。",
+                    "原因：新版本启动失败且未能自动拉起旧版，请手动启动 Mizar 或查看日志。"
+                        .to_string(),
+                )
+            } else if !err.committed {
+                (
+                    if is_update {
+                        "更新未完成"
+                    } else {
+                        "安装未完成"
+                    },
+                    if is_update {
+                        "原程序未被替换，配置与比赛资料未受影响。"
+                    } else {
+                        "本次安装未完成，已有用户资料未受影响。"
+                    },
+                    format!("原因：{}", err.msg),
+                )
+            } else {
+                (
+                    if is_update {
+                        "更新未完成"
+                    } else {
+                        "安装未完成"
+                    },
+                    "更新切换后未能正常完成，你的配置与比赛资料单独保存未受影响。",
+                    format!("原因：{}", err.msg),
+                )
+            };
+
+            *pending_ui = Some(PendingErrorUi {
+                ui,
+                heading: heading.into(),
+                impact: impact.into(),
+                detail,
+                logs_dir: log.logs_dir(),
+            });
+            Err(err)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_phases(
+    params: &InstallParams,
+    log: &Logger,
+    ui: &ProgressUi,
+    guards: &mut PreCommitGuard,
+    prev_ver_hint: Option<&str>,
+    version_out: &mut Option<String>,
+    prev_version_out: &mut Option<String>,
+    cleanup_warning: &mut Option<String>,
+) -> Result<(), StepError> {
+    let is_update = params.apply_update.is_some();
 
     // Phase 2: Stage (completely reversible, cancellable)
     let install_dir = validate_install_dir(&params.install_dir, &params.state_root)
-        .map_err(|m| StepError::new(ExitCode::IoError, m))?;
+        .map_err(|m| StepError::pre_commit(ExitCode::IoError, m))?;
 
     let artifact = verify_payload(
         &params.payload_dir,
         params.expected_content_digest.as_deref(),
         &|| ui.is_cancelled(),
+        &|new_ver| {
+            ui.set_version_label(format_version_transition(prev_ver_hint, new_ver));
+        },
+        &|done, total| {
+            ui.set_progress(done, total);
+        },
     )
     .map_err(|msg| {
         if msg == "cancelled" {
-            StepError::new(ExitCode::Cancelled, "用户取消安装")
+            StepError::pre_commit(ExitCode::Cancelled, "用户取消安装")
         } else {
-            StepError::new(ExitCode::PayloadInvalid, msg)
+            StepError::pre_commit(ExitCode::PayloadInvalid, msg)
         }
     })?;
 
@@ -304,7 +499,7 @@ fn execute_install_or_update(
     ));
 
     if ui.is_cancelled() {
-        return Err(StepError::new(ExitCode::Cancelled, "用户取消安装"));
+        return Err(StepError::pre_commit(ExitCode::Cancelled, "用户取消安装"));
     }
 
     let is_legacy_layout = (install_dir.join("installed.flag").exists()
@@ -332,36 +527,56 @@ fn execute_install_or_update(
         install_dir.join("staging").join(&version_id)
     };
 
-    ui.set_stage("正在准备版本文件...");
+    ui.set_stage("正在准备新版本…", ProgressKind::Indeterminate);
     if staging_dir.exists() {
         let _ = remove_dir_safe(&staging_dir);
     }
     let mut staging_guard = StagingGuard(Some(staging_dir.clone()));
 
-    move_or_copy_dir(&params.payload_dir, &staging_dir)
-        .map_err(|e| StepError::new(ExitCode::IoError, format!("暂存新版本文件失败: {e}")))?;
-    fs::write(staging_dir.join("installed.flag"), b"mizar.install.v2\n")
-        .map_err(|e| StepError::new(ExitCode::IoError, format!("写入 installed.flag 失败: {e}")))?;
+    let stage_progress = |done: u64, total: u64| ui.set_progress(done, total);
+    move_or_copy_dir(
+        &params.payload_dir,
+        &staging_dir,
+        &|| ui.is_cancelled(),
+        Some(&stage_progress),
+    )
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::Interrupted {
+            StepError::pre_commit(ExitCode::Cancelled, "用户取消安装")
+        } else {
+            StepError::pre_commit(ExitCode::IoError, format!("暂存新版本文件失败: {e}"))
+        }
+    })?;
+    fs::write(staging_dir.join("installed.flag"), b"mizar.install.v2\n").map_err(|e| {
+        StepError::pre_commit(ExitCode::IoError, format!("写入 installed.flag 失败: {e}"))
+    })?;
 
     // Phase 3: Quiesce
-    ui.set_stage("正在等待旧版程序退出...");
     if let Some((host_pid, host_start_time, _)) = params.apply_update {
+        ui.set_stage("正在等待旧版 Mizar 退出…", ProgressKind::Indeterminate);
         wait_host_exit(host_pid, host_start_time, Duration::from_secs(60))
-            .map_err(|m| StepError::new(ExitCode::AppRunning, m))?;
+            .map_err(|m| StepError::pre_commit(ExitCode::AppRunning, m))?;
     } else if find_running_mizar_under(&install_dir) {
-        return Err(StepError::new(
+        return Err(StepError::pre_commit(
             ExitCode::AppRunning,
             "检测到当前目录的 Mizar 仍在运行，请先退出后再安装",
         ));
     }
 
     if ui.is_cancelled() {
-        return Err(StepError::new(ExitCode::Cancelled, "用户取消安装"));
+        return Err(StepError::pre_commit(ExitCode::Cancelled, "用户取消安装"));
     }
 
     // Phase 4: Switch & Commit (atomic commit point, cancel disabled)
     ui.enter_commit();
-    ui.set_stage("正在切换版本...");
+    ui.set_stage(
+        if is_update {
+            "正在应用更新…"
+        } else {
+            "正在写入程序文件…"
+        },
+        ProgressKind::Indeterminate,
+    );
 
     let old_pointer = read_current_pointer(&install_dir);
     *prev_version_out = old_pointer
@@ -382,15 +597,16 @@ fn execute_install_or_update(
             utc_compact_timestamp()
         ));
         log.log(&format!("archiving legacy dir to {}", arch.display()));
-        fs::rename(&install_dir, &arch)
-            .map_err(|e| StepError::new(ExitCode::IoError, format!("归档旧安装目录失败: {e}")))?;
+        fs::rename(&install_dir, &arch).map_err(|e| {
+            StepError::pre_commit(ExitCode::IoError, format!("归档旧安装目录失败: {e}"))
+        })?;
         legacy_guard.archive = Some(arch);
     }
 
     let ver_dir = install_dir.join("versions").join(&version_id);
     fs::create_dir_all(install_dir.join("versions"))
-        .and_then(|_| move_or_copy_dir(&staging_dir, &ver_dir))
-        .map_err(|e| StepError::new(ExitCode::IoError, format!("移动版本目录失败: {e}")))?;
+        .and_then(|_| move_or_copy_dir(&staging_dir, &ver_dir, &|| false, None))
+        .map_err(|e| StepError::pre_commit(ExitCode::IoError, format!("移动版本目录失败: {e}")))?;
     staging_guard.0 = None;
     if legacy_guard.archive.is_some() {
         retire_legacy_update_state(&params.state_root, log);
@@ -404,7 +620,7 @@ fn execute_install_or_update(
         let required = legacy_guard.archive.is_some() || !dst.is_file();
         if let Err(err) = copy_binary_with_retry(&ver_dir.join(src_name), &dst) {
             if required {
-                return Err(StepError::new(ExitCode::IoError, err));
+                return Err(StepError::pre_commit(ExitCode::IoError, err));
             }
             log.log(&format!("warn: {err}"));
             if cleanup_warning.is_none() {
@@ -420,8 +636,9 @@ fn execute_install_or_update(
         previous: previous_id.clone(),
         updated_at: utc_iso8601(),
     };
-    write_current_pointer_atomic(&install_dir, &new_pointer)
-        .map_err(|e| StepError::new(ExitCode::IoError, format!("写入 current.json 失败: {e}")))?;
+    write_current_pointer_atomic(&install_dir, &new_pointer).map_err(|e| {
+        StepError::pre_commit(ExitCode::IoError, format!("写入 current.json 失败: {e}"))
+    })?;
     legacy_guard.archive = None;
     log.log(&format!("committed current.json -> {version_id}"));
 
@@ -458,7 +675,7 @@ fn execute_install_or_update(
     guards.release_locks();
 
     if !params.no_launch {
-        ui.set_stage("正在启动新版 Mizar...");
+        ui.set_stage("正在启动新版 Mizar…", ProgressKind::Indeterminate);
         let target_exe = ver_dir.join("Mizar.exe");
         let launch_failed = match launch_and_wait_ready(&target_exe, Duration::from_secs(60)) {
             Ok(LaunchOutcome::Ready) => {
@@ -489,20 +706,22 @@ fn execute_install_or_update(
                         log.log(&format!("rollback current.json failed: {e}"));
                     } else {
                         log.log(&format!("rolled back current.json -> {prev_id}"));
-                        let _ = Command::new(&prev_exe)
+                        let relaunched = Command::new(&prev_exe)
                             .current_dir(prev_exe.parent().unwrap_or(&install_dir))
                             .stdin(Stdio::null())
                             .stdout(Stdio::null())
                             .stderr(Stdio::null())
-                            .spawn();
-                        return Err(StepError::new(
+                            .spawn()
+                            .is_ok();
+                        return Err(StepError::post_commit(
                             ExitCode::RolledBack,
                             "新版启动失败，已自动回退到上一版本",
+                            relaunched,
                         ));
                     }
                 }
             }
-            return Err(StepError::new(ExitCode::IoError, reason));
+            return Err(StepError::post_commit(ExitCode::IoError, reason, false));
         }
     }
 
@@ -533,7 +752,6 @@ fn execute_install_or_update(
         }
     }
 
-    ui.close();
     Ok(())
 }
 
@@ -542,7 +760,7 @@ fn run_uninstall(
     state_root: PathBuf,
     no_ui: bool,
     log: &Logger,
-) -> (ExitCode, ApplierResult) {
+) -> (ExitCode, ApplierResult, Option<PendingErrorUi>) {
     let make_result = |code: ExitCode, msg: Option<String>| ApplierResult {
         status: code.status_str(),
         code: code.code_str(),
@@ -556,18 +774,43 @@ fn run_uninstall(
     let _writer = match WriterMutex::try_acquire() {
         Ok(Some(w)) => w,
         Ok(None) => {
+            let msg = "另一个安装或更新事务正在进行中".to_string();
+            let err_ui = if !no_ui {
+                let ui = ProgressUi::start(false, UiMode::Uninstall, "无法卸载", None);
+                Some(PendingErrorUi {
+                    ui,
+                    heading: "无法开始卸载".into(),
+                    impact: "原程序与用户资料未受影响。".into(),
+                    detail: format!("原因：{msg}，请稍后重试。"),
+                    logs_dir: log.logs_dir(),
+                })
+            } else {
+                None
+            };
             return (
                 ExitCode::WriterBusy,
-                make_result(
-                    ExitCode::WriterBusy,
-                    Some("另一个安装或更新事务正在进行中".into()),
-                ),
+                make_result(ExitCode::WriterBusy, Some(msg)),
+                err_ui,
             );
         }
         Err(e) => {
+            let msg = format!("无法获取写入锁: {e}");
+            let err_ui = if !no_ui {
+                let ui = ProgressUi::start(false, UiMode::Uninstall, "无法卸载", None);
+                Some(PendingErrorUi {
+                    ui,
+                    heading: "卸载未完成".into(),
+                    impact: "原程序与用户资料未受影响。".into(),
+                    detail: format!("原因：{msg}"),
+                    logs_dir: log.logs_dir(),
+                })
+            } else {
+                None
+            };
             return (
                 ExitCode::IoError,
-                make_result(ExitCode::IoError, Some(format!("无法获取写入锁: {e}"))),
+                make_result(ExitCode::IoError, Some(msg)),
+                err_ui,
             );
         }
     };
@@ -581,19 +824,31 @@ fn run_uninstall(
         return (
             ExitCode::AppRunning,
             make_result(ExitCode::AppRunning, Some(msg)),
+            None,
         );
     }
 
-    let ui = ProgressUi::start(no_ui, "正在卸载 Mizar...");
+    let ui = ProgressUi::start(no_ui, UiMode::Uninstall, "正在卸载 Mizar…", None);
     ui.enter_commit();
 
     if let Ok(true) = is_reparse_point(&install_dir) {
+        let msg = "安装目录是重解析点，拒绝卸载删除".to_string();
+        let err_ui = if !no_ui {
+            Some(PendingErrorUi {
+                ui,
+                heading: "卸载未完成".into(),
+                impact: "原程序与用户资料未受影响。".into(),
+                detail: format!("原因：{msg}"),
+                logs_dir: log.logs_dir(),
+            })
+        } else {
+            ui.close();
+            None
+        };
         return (
             ExitCode::IoError,
-            make_result(
-                ExitCode::IoError,
-                Some("安装目录是重解析点，拒绝卸载删除".into()),
-            ),
+            make_result(ExitCode::IoError, Some(msg)),
+            err_ui,
         );
     }
 
@@ -603,7 +858,23 @@ fn run_uninstall(
             if let Err(e) = remove_dir_safe(&p) {
                 let msg = format!("清理 {sub} 失败: {e}");
                 log.log(&msg);
-                return (ExitCode::IoError, make_result(ExitCode::IoError, Some(msg)));
+                let err_ui = if !no_ui {
+                    Some(PendingErrorUi {
+                        ui,
+                        heading: "卸载未完成".into(),
+                        impact: "部分程序文件可能未完全移除，用户资料单独保存未受影响。".into(),
+                        detail: format!("原因：{msg}"),
+                        logs_dir: log.logs_dir(),
+                    })
+                } else {
+                    ui.close();
+                    None
+                };
+                return (
+                    ExitCode::IoError,
+                    make_result(ExitCode::IoError, Some(msg)),
+                    err_ui,
+                );
             }
         }
     }
@@ -613,7 +884,23 @@ fn run_uninstall(
             if let Err(e) = fs::remove_file(&p) {
                 let msg = format!("删除 {file} 失败: {e}");
                 log.log(&msg);
-                return (ExitCode::IoError, make_result(ExitCode::IoError, Some(msg)));
+                let err_ui = if !no_ui {
+                    Some(PendingErrorUi {
+                        ui,
+                        heading: "卸载未完成".into(),
+                        impact: "部分程序文件可能未完全移除，用户资料单独保存未受影响。".into(),
+                        detail: format!("原因：{msg}"),
+                        logs_dir: log.logs_dir(),
+                    })
+                } else {
+                    ui.close();
+                    None
+                };
+                return (
+                    ExitCode::IoError,
+                    make_result(ExitCode::IoError, Some(msg)),
+                    err_ui,
+                );
             }
         }
     }
@@ -635,7 +922,7 @@ fn run_uninstall(
 
     let _ = state_root;
     ui.close();
-    (ExitCode::Ok, make_result(ExitCode::Ok, None))
+    (ExitCode::Ok, make_result(ExitCode::Ok, None), None)
 }
 
 fn main() {
@@ -647,10 +934,16 @@ fn main() {
         }
     };
 
+    if let CommandMode::Preview { state, hold_ms } = mode {
+        ProgressUi::run_preview(&state, hold_ms);
+        return;
+    }
+
     let state_override = match &mode {
         CommandMode::Install { state_root, .. }
         | CommandMode::ApplyUpdate { state_root, .. }
         | CommandMode::Uninstall { state_root, .. } => state_root.clone(),
+        CommandMode::Preview { .. } => unreachable!(),
     };
     let state_root = match state_override.map(Ok).unwrap_or_else(default_state_root) {
         Ok(p) => p,
@@ -661,7 +954,7 @@ fn main() {
     };
     let log = Logger::new(&state_root);
 
-    let (result_file, code, result) = match mode {
+    let (result_file, code, result, pending_error_ui) = match mode {
         CommandMode::Install {
             payload_dir,
             install_dir,
@@ -672,7 +965,7 @@ fn main() {
             result_file,
             ..
         } => {
-            let (c, r) = run_install_or_update(
+            let (c, r, ui) = run_install_or_update(
                 InstallParams {
                     payload_dir,
                     install_dir,
@@ -685,7 +978,7 @@ fn main() {
                 },
                 &log,
             );
-            (result_file, c, r)
+            (result_file, c, r, ui)
         }
         CommandMode::ApplyUpdate {
             payload_dir,
@@ -698,7 +991,7 @@ fn main() {
             result_file,
             ..
         } => {
-            let (c, r) = run_install_or_update(
+            let (c, r, ui) = run_install_or_update(
                 InstallParams {
                     payload_dir,
                     install_dir,
@@ -711,7 +1004,7 @@ fn main() {
                 },
                 &log,
             );
-            (result_file, c, r)
+            (result_file, c, r, ui)
         }
         CommandMode::Uninstall {
             install_dir,
@@ -719,11 +1012,20 @@ fn main() {
             result_file,
             ..
         } => {
-            let (c, r) = run_uninstall(install_dir, state_root.clone(), no_ui, &log);
-            (result_file, c, r)
+            let (c, r, ui) = run_uninstall(install_dir, state_root.clone(), no_ui, &log);
+            (result_file, c, r, ui)
         }
+        CommandMode::Preview { .. } => unreachable!(),
     };
 
     write_result(&result, result_file.as_deref(), &state_root);
+    if let Some(err_ui) = pending_error_ui {
+        err_ui.ui.show_error_and_wait(
+            &err_ui.heading,
+            &err_ui.impact,
+            &err_ui.detail,
+            Some(&err_ui.logs_dir),
+        );
+    }
     std::process::exit(code as i32);
 }

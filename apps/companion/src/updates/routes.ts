@@ -44,8 +44,11 @@ export function registerUpdateRoutes(
     const mulnxPending = Boolean(
       tool?.notificationIdentity && tool.notificationIdentity !== tool.notifiedIdentity,
     );
+    const lastResultPending = Boolean(status.lastResultNotificationPending);
     const blocked =
-      status.phase === 'ready' || reminderPhase || mulnxPending ? await assess() : null;
+      status.phase === 'ready' || reminderPhase || mulnxPending || lastResultPending
+        ? await assess()
+        : null;
     const installBlockedReason = status.phase === 'ready' ? blocked : null;
     return {
       ...status,
@@ -53,6 +56,7 @@ export function registerUpdateRoutes(
       mulnxNotificationPending: mulnxPending,
       installBlockedReason,
       notificationSafe: status.automatic && (reminderPhase || mulnxPending) && blocked === null,
+      lastResultSafe: lastResultPending && blocked === null,
     };
   };
   app.get('/local/v1/updates', async (_request, reply) =>
@@ -86,6 +90,8 @@ export function registerUpdateRoutes(
         return { ...(await publicView()), notification };
       } else if (body?.action === 'dismiss-notification' && typeof body.version === 'string') {
         manager.dismissNotification(body.version);
+      } else if (body?.action === 'dismiss-last-result') {
+        await manager.dismissLastResult();
       } else if (
         body?.action === 'dismiss-mulnx-notification' &&
         typeof body.identity === 'string'
