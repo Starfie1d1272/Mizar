@@ -472,7 +472,7 @@ export function runArchiveWorker(
           } else value = readGzip(source);
           if (source.jsonAttachment) {
             if (
-              !['cs2-observer-report/1', 'cs2-observer-report/2'].includes(
+              !['cs2-observer-report/1', 'cs2-observer-report/2', 'cs2-observer-report/3'].includes(
                 String(object(value).schema),
               )
             )

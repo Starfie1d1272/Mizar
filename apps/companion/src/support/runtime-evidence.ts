@@ -157,14 +157,11 @@ export function createRuntimeDiagnostics(
       const sinceLast = now - observerDiagnosticLoggedAt;
       if (sinceLast < 5000 || (key === observerDiagnosticKey && sinceLast < 30_000)) return;
       const counts = JSON.stringify([
+        diagnostics.receivedEvents,
         diagnostics.acceptedDeaths,
-        diagnostics.enteredWindow,
-        diagnostics.generatedHints,
         diagnostics.publishedHints,
-        diagnostics.ended,
-        diagnostics.expiredBeforeWindow,
-        diagnostics.endedAfterGeneration,
-        diagnostics.discarded,
+        diagnostics.pending,
+        diagnostics.timingBasis,
       ]);
       if (key === observerDiagnosticKey && counts === observerDiagnosticCounts) return;
       observerDiagnosticKey = key;

@@ -26,7 +26,6 @@ export class ObserverSettingsStore {
   mapConnection: { id: string; mode: 'connect' | 'register-current'; nextMap: boolean } | undefined;
   private scope: string | undefined;
   private connectionRequestedAt: number | null = null;
-  waitingForMap = false;
   receiverPaused = false;
   receiverRevision = 0;
   revision = randomUUID();
@@ -42,18 +41,9 @@ export class ObserverSettingsStore {
       const saved: unknown = JSON.parse(await readFile(this.path, 'utf8'));
       if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
         const record = saved as Record<string, unknown>;
-        const current = { ...((record.settings ?? record) as Record<string, unknown>) };
-        // Read the preview format while keeping each capability's current preferences.
-        const legacyHud = current.hideGameHud;
-        delete current.expectedDelaySeconds;
-        delete current.displaySeconds;
-        delete current.hideGameHud;
-        this.settings = observerSettingsSchema.parse(current);
+        this.settings = observerSettingsSchema.parse(record.settings ?? record);
         this.gameAutomation = gameAutomationSettingsSchema.parse(
-          record.gameAutomation ?? {
-            ...DEFAULT_GAME_AUTOMATION_SETTINGS,
-            ...(typeof legacyHud === 'boolean' ? { hideGameHud: legacyHud } : {}),
-          },
+          record.gameAutomation ?? DEFAULT_GAME_AUTOMATION_SETTINGS,
         );
       } else this.settings = observerSettingsSchema.parse(saved);
     } catch (error) {
@@ -67,7 +57,6 @@ export class ObserverSettingsStore {
       gameAutomation: this.gameAutomation,
       revision: this.revision,
       mapConnection: this.mapConnection ?? null,
-      waitingForMap: this.waitingForMap,
       receiverPaused: this.receiverPaused,
       suggestedConnectionMode: isObserving ? 'register-current' : 'connect',
       connection: this.connection
@@ -122,7 +111,6 @@ export class ObserverSettingsStore {
     this.connection = connection;
     this.setReceiverPaused(false);
     this.mapConnection = undefined;
-    this.waitingForMap = false;
     this.changed('connection');
   }
   setMapConnection(
@@ -143,19 +131,6 @@ export class ObserverSettingsStore {
         throw new Error('map_intent_conflict');
       return;
     }
-    if (nextMap) {
-      const previous = this.connection;
-      const previousEndpoints = [previous?.earlyEndpoint, previous?.programEndpoint];
-      if (
-        !value ||
-        previousEndpoints.some(
-          (endpoint) =>
-            endpoint === connection.earlyEndpoint || endpoint === connection.programEndpoint,
-        )
-      ) {
-        throw new Error('next_map_connection_required');
-      }
-    }
     this.connection = connection;
     this.setReceiverPaused(false);
     this.connectionRequestedAt = Date.now();
@@ -163,14 +138,12 @@ export class ObserverSettingsStore {
     this.changed('map');
   }
   /** Scope changes invalidate drafts; migration never issues another game connect. */
-  observeScope(scope: string, waitingForMap = false) {
+  observeScope(scope: string) {
     if (scope === this.scope) return;
     const previous = this.scope;
     this.scope = scope;
     if (previous === undefined) return;
-    if (!waitingForMap && this.mapConnection?.nextMap)
-      this.mapConnection = { ...this.mapConnection, nextMap: false };
-    this.waitingForMap = waitingForMap;
+    if (this.mapConnection?.nextMap) this.mapConnection = { ...this.mapConnection, nextMap: false };
     this.changed('scope');
   }
   clearConnection() {
@@ -178,14 +151,12 @@ export class ObserverSettingsStore {
     this.connection = undefined;
     this.connectionRequestedAt = null;
     this.mapConnection = undefined;
-    this.waitingForMap = false;
     this.setReceiverPaused(false);
     this.changed('connection');
   }
   endProduction() {
-    if (!this.mapConnection && !this.waitingForMap) return;
+    if (!this.mapConnection) return;
     this.mapConnection = undefined;
-    this.waitingForMap = false;
     this.setReceiverPaused(true);
     this.changed('connection');
   }
@@ -287,10 +258,6 @@ export function registerObserverSettings(
         } catch (error) {
           if (error instanceof Error && error.message === 'map_intent_conflict')
             return reply.code(409).send({ message: '本图连接意图已变化，请重新确认。' });
-          if (error instanceof Error && error.message === 'next_map_connection_required')
-            return reply
-              .code(400)
-              .send({ message: '请填写赛事方为下一图提供的新 GoTV 地址和授权信息。' });
           return reply.code(400).send({ message: '请填写本图 GoTV 连接。' });
         }
       } else store.setConnection(parsed.data.connection);

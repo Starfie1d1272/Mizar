@@ -11,8 +11,6 @@ import type { GatewayResult, MulnxProvider } from './provider.js';
 import type { OrchestrationStore } from './store.js';
 
 export interface CameraTruth extends MusicTruth {
-  /** False while a requested next map has not been observed yet. */
-  mapConfirmed: boolean;
   /** Present only during an isolated external Demo trial; true requires fresh map/player data. */
   demoAudition?: boolean | undefined;
 }
@@ -148,7 +146,7 @@ export class CameraDirector {
   private safe(t: CameraTruth, audition = false) {
     return (
       this.nativeReady() &&
-      (audition ? t.mapConfirmed : t.production) &&
+      (audition ? true : t.production) &&
       (t.demoAudition === undefined ? audition || musicSafe(t.program) : t.demoAudition) &&
       (audition ? Boolean(t.program.map.name) : t.program.status.telemetry === 'fresh')
     );

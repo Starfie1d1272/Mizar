@@ -16,8 +16,7 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@mizar/core": "workspace:*",
-    "cs2parser": "catalog:"
+    "@mizar/core": "workspace:*"
   },
   "devDependencies": {
     "@typescript/native": "catalog:"

@@ -5,7 +5,6 @@ import { asRecord } from './player.js';
 
 /** Identity supplied by the local source owner, never inferred from event payload fields. */
 export interface ObserverSourceIdentity {
-  readonly source: string;
   readonly role: 'ahead' | 'delayed';
   readonly channel: number;
   readonly world: number;
@@ -18,7 +17,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Adapt a committed ordinary-observer event without treating controller slots as userids.
+ * Adapt a committed ordinary-observer v3 event without treating controller slots as userids.
  * Transport ownership and discontinuity handling remain with the caller.
  */
 export function normalizeObserverGameEvent(
@@ -30,9 +29,7 @@ export function normalizeObserverGameEvent(
   const tick = observerEventTick(row);
   const role = owner.role === 'ahead' ? 'lookahead' : 'program';
   if (
-    row.type !== 'raw-event' ||
-    row.source !== owner.source ||
-    !owner.source.startsWith(`${owner.role}:`) ||
+    row.kind !== 'event' ||
     row.channel !== owner.channel ||
     row.world !== owner.world ||
     context.cursor.role !== role ||
@@ -121,10 +118,10 @@ function isIndividualSteamId(value: string): boolean {
   );
 }
 
-/** Event time comes from the source event, with explicit transport context as fallback. */
+/** Event time comes from v3 eventTick. */
 export function observerEventTick(input: unknown): number {
   const row = record(input);
-  const tick = row.eventServerTick ?? row.tick;
+  const tick = row.eventTick;
   if (typeof tick !== 'number' || !Number.isSafeInteger(tick) || tick < 1)
     throw new Error('Invalid observer event tick');
   return tick;

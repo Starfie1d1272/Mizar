@@ -59,7 +59,6 @@ type ObserverHistory = ObserverAttemptEvidence & {
 type Owner = ReturnType<typeof startObserverProcess<'lookahead'>>;
 const HOST_LEASE_MS = 6000;
 const HOST_RECOVERY_MS = 30_000;
-const DATA_STALL_RECOVERY_MS = 45_000;
 
 /** The stable source facade keeps existing private consumers subscribed across attempts. */
 export class WorkspaceObserver {
@@ -69,6 +68,7 @@ export class WorkspaceObserver {
   private events = new Set<
     Parameters<CstvSourceManager<'lookahead'>['subscribeLiveGameEvents']>[0]
   >();
+  private timelineResets = new Set<() => void>();
   private unsubscribe: (() => void)[] = [];
   private queue = Promise.resolve();
   private lease = 0;
@@ -106,21 +106,6 @@ export class WorkspaceObserver {
   private terminal: Awaited<Owner['closed']>['terminal'] | undefined;
   private failed = false;
   private launched = false;
-  private generationBase = 0;
-  private event(event: ReturnType<CstvSourceManager<'lookahead'>['getRecentGameEvents']>[number]) {
-    return {
-      ...event,
-      cursor: { ...event.cursor, generation: event.cursor.generation + this.generationBase },
-    };
-  }
-  private health() {
-    const { normalDrain, ...health } = this.current.getHealth();
-    return {
-      ...health,
-      ...(normalDrain ? (this.stopReason ? { state: 'stopped' as const } : { normalDrain }) : {}),
-      generation: health.generation + this.generationBase,
-    };
-  }
   readonly source: CstvSourceManager<'lookahead'>;
 
   constructor(
@@ -134,14 +119,10 @@ export class WorkspaceObserver {
       role: 'lookahead',
       start: () => this.current.start(),
       stop: () => this.close(),
-      getHealth: () => this.health(),
-      getSnapshot: () => ({
-        health: this.health(),
-        recentGameEvents: this.current.getRecentGameEvents().map((e) => this.event(e)),
-        recentDiagnostics: this.current.getRecentDiagnostics(),
-      }),
+      getHealth: () => this.current.getHealth(),
+      getSnapshot: () => this.current.getSnapshot(),
       getRecentDiagnostics: () => this.current.getRecentDiagnostics(),
-      getRecentGameEvents: () => this.current.getRecentGameEvents().map((e) => this.event(e)),
+      getRecentGameEvents: () => this.current.getRecentGameEvents(),
       subscribe: (listener) => {
         this.listeners.add(listener);
         return () => {
@@ -152,6 +133,12 @@ export class WorkspaceObserver {
         this.events.add(listener);
         return () => {
           this.events.delete(listener);
+        };
+      },
+      subscribeTimelineReset: (listener) => {
+        this.timelineResets.add(listener);
+        return () => {
+          this.timelineResets.delete(listener);
         };
       },
     };
@@ -169,7 +156,7 @@ export class WorkspaceObserver {
       sessionId: this.sessionId,
       history: [...this.history],
       active: this.owner !== undefined,
-      health: this.health(),
+      health: this.current.getHealth(),
       componentHealth: this.owner?.health() ?? this.terminal?.supervisor,
       failed: this.failed,
       stopReason: this.stopReason ?? null,
@@ -208,7 +195,6 @@ export class WorkspaceObserver {
       try {
         options = await this.launch(executable);
         check();
-        this.generationBase += this.current.getHealth().generation + 1;
         this.owner = startObserverProcess({
           ...options,
           ...(job ? { job } : {}),
@@ -241,7 +227,6 @@ export class WorkspaceObserver {
           startupTimedOut: false,
           cancelled,
           stdout: { status: 'ended', parsedRecords: 0 },
-          finalizationFailures: [],
         };
         this.failed = !cancelled;
         this.retain(this.terminal, sessionId);
@@ -278,9 +263,10 @@ export class WorkspaceObserver {
       this.lease = performance.now();
       this.unsubscribe = [
         this.current.subscribe(() => this.listeners.forEach((f) => f())),
-        this.current.subscribeLiveGameEvents((event) =>
-          this.events.forEach((f) => f(this.event(event))),
-        ),
+        this.current.subscribeLiveGameEvents((event) => this.events.forEach((f) => f(event))),
+        ...(this.current.subscribeTimelineReset
+          ? [this.current.subscribeTimelineReset(() => this.timelineResets.forEach((f) => f()))]
+          : []),
       ];
       this.listeners.forEach((f) => f());
     });
@@ -314,12 +300,13 @@ export class WorkspaceObserver {
     this.unsubscribe.forEach((f) => f());
     this.unsubscribe = [];
     this.listeners.forEach((f) => f());
-    if (
-      (result.terminal.cancelled && result.failed) ||
-      result.terminal.cleanupCompleted === false ||
-      result.terminal.finalizationFailures.length > 0
-    )
-      throw new Error('observer_component_finalization_failed');
+    if (result.failed) {
+      console.error('observer_process_finalization_warning', {
+        report: result.terminal.report,
+        reason: result.terminal.reason,
+        outcome: result.terminal.outcome,
+      });
+    }
   }
   close() {
     this.closing = true;
@@ -344,23 +331,18 @@ export function installedWorkspaceObserver(
         .object({
           componentVersion: z.string(),
           sourceSha: z.string(),
-          distribution: z.string(),
           nativeAbi: z.literal(observerComponent.nativeAbi),
-          parserIpc: z.literal(observerComponent.parserIpc),
           managedProtocol: z.literal(observerComponent.managedProtocol),
           entrypoints: z.strictObject({
-            python: z.literal('runtime/python/python.exe'),
-            driver: z.literal('client/driver.py'),
-            native: z.literal('client/cs2_observer.dll'),
-            worker: z.literal('client/parser_worker.mjs'),
+            executable: z.literal('cs2-headless-observer.exe'),
+            native: z.literal('cs2_observer.dll'),
           }),
           filesSha256: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
         })
         .parse(JSON.parse(await readFile(join(component, 'manifest.json'), 'utf8')) as unknown);
       if (
         manifest.componentVersion !== OBSERVER_VERSION ||
-        manifest.sourceSha !== observerComponent.sourceSha ||
-        manifest.distribution !== 'external-node'
+        manifest.sourceSha !== observerComponent.sourceSha
       )
         throw new Error('observer_component_version');
       for (const entry of Object.values(manifest.entrypoints)) {
@@ -382,11 +364,8 @@ export function installedWorkspaceObserver(
       const outputParent = await prepareObserverOutputParent(state);
       return {
         role: 'lookahead',
-        python: join(component, 'runtime/python/python.exe'),
-        driver: join(component, 'client/driver.py'),
-        native: join(component, 'client/cs2_observer.dll'),
-        parserWorker: join(component, 'client/parser_worker.mjs'),
-        node: process.execPath,
+        executable: join(component, 'cs2-headless-observer.exe'),
+        native: join(component, 'cs2_observer.dll'),
         steamApi: join(dirname(executable), 'steam_api64.dll'),
         hostVersion: Number(patch.replaceAll('.', '')),
         outputDirectory: join(outputParent, randomUUID()),
@@ -437,8 +416,6 @@ export function registerWorkspaceObserver(
     | {
         token: string;
         recoveryUsed: boolean;
-        stallRecoveryUsed: boolean;
-        stallRecoveredReceiveMs?: number | undefined;
         recovering: boolean;
       }
     | undefined;
@@ -447,7 +424,6 @@ export function registerWorkspaceObserver(
     lease = {
       token: randomUUID(),
       recoveryUsed: false,
-      stallRecoveryUsed: false,
       recovering: false,
     };
     return lease.token;
@@ -977,66 +953,29 @@ export function registerWorkspaceObserver(
           return { ok: true, enabled: false };
         }
         const view = observer.view();
-        const health = observer.source.getHealth();
-        const receiveAgeMs =
-          health.lastReceiveMonotonicMs === undefined
-            ? null
-            : Math.max(0, performance.now() - health.lastReceiveMonotonicMs);
         const expired =
           !lease.recovering && (age > HOST_LEASE_MS || view.stopReason === 'lease-expired');
-        if (
-          !expired &&
-          lease.stallRecoveryUsed &&
-          !lease.recovering &&
-          view.active &&
-          !view.stopReason &&
-          !view.failed &&
-          health.state === 'live' &&
-          !health.normalDrain &&
-          health.lastReceiveMonotonicMs !== undefined &&
-          health.lastReceiveMonotonicMs !== lease.stallRecoveredReceiveMs
-        ) {
-          lease.stallRecoveryUsed = false;
-          lease.stallRecoveredReceiveMs = undefined;
-        }
-        const stalled =
-          !expired &&
-          !lease.recovering &&
-          !lease.stallRecoveryUsed &&
-          view.active &&
-          !view.stopReason &&
-          !view.failed &&
-          health.state === 'live' &&
-          !health.normalDrain &&
-          receiveAgeMs !== null &&
-          receiveAgeMs >= DATA_STALL_RECOVERY_MS;
-        if (expired || stalled) {
+        if (expired) {
           if (
-            expired &&
-            (!host ||
-              !settings ||
-              lease.recoveryUsed ||
-              view.failed ||
-              (!view.active && view.stopReason !== 'lease-expired'))
+            !host ||
+            !settings ||
+            lease.recoveryUsed ||
+            view.failed ||
+            (!view.active && view.stopReason !== 'lease-expired')
           ) {
             lease = undefined;
             if (view.active) await observer.stop('lease-expired');
             return { ok: true, enabled: false };
           }
-          if (expired) lease.recoveryUsed = true;
-          else {
-            lease.stallRecoveryUsed = true;
-            lease.stallRecoveredReceiveMs = health.lastReceiveMonotonicMs;
-          }
+          lease.recoveryUsed = true;
           lease.recovering = true;
           const accepted = lease;
           const value = host!;
           const attempt = epoch;
           const revision = settings!.revision;
-          const stage = expired ? 'observer_lease_recovery' : 'observer_stall_recovery';
+          const stage = 'observer_lease_recovery';
           hostLease = performance.now();
-          if (!expired) observer.pulse();
-          const stopped = observer.stop(expired ? 'lease-expired' : 'connection-changed');
+          const stopped = observer.stop('lease-expired');
           const current = () =>
             lease === accepted &&
             host === value &&
@@ -1046,9 +985,9 @@ export function registerWorkspaceObserver(
             canStart();
           app.log.info(
             {
-              stage: expired ? 'observer_lease' : 'observer_stall',
-              reason: expired ? 'lease-expired' : 'source-stale',
-              elapsedMs: Math.round(expired ? age : (receiveAgeMs ?? 0)),
+              stage: 'observer_lease',
+              reason: 'lease-expired',
+              elapsedMs: Math.round(age),
             },
             '提前提示接收正在恢复',
           );

@@ -13,7 +13,6 @@ export type ConnectionPreparationView = {
     mode: 'connect' | 'register-current';
     nextMap: boolean;
   } | null;
-  waitingForMap?: boolean;
   receiverPaused?: boolean;
   suggestedConnectionMode?: 'connect' | 'register-current';
 };
@@ -80,20 +79,25 @@ export type ObserverRuntimeView = {
 export function observerNeedsRecovery(view: ObserverRuntimeView) {
   if (view.error || view.failed || view.health.state === 'failed') return true;
   if (view.stopReason) return ['lease-expired', 'host-invalid'].includes(view.stopReason);
-  return (
-    ['stopped', 'ended'].includes(view.health.state) && view.terminal?.reason !== 'source-hltv-stop'
-  );
+  return view.health.state === 'stopped';
 }
 export function observerFailureReason(view: ObserverRuntimeView) {
-  if (view.terminal?.stage === 'cleanup')
-    return '提前提示收尾未完成，请导出诊断并重启 Mizar 后重试。';
   if (!view.failed && view.stopReason === 'lease-expired')
     return '与工作台的连接暂时中断，请重新连接。';
   if (!view.failed && view.stopReason === 'host-invalid')
     return '游戏或工作台已变化，请确认游戏仍在运行后重新连接。';
   const code = view.terminal?.reason ?? view.health.lastErrorCode;
-  if (code === 'initialization-timeout' || code === 'phase-timeout')
+  if (
+    code === 'initialization-timeout' ||
+    code === 'phase-timeout' ||
+    code === 'connection-timeout'
+  )
     return '提前提示连接超时，请核对地址与服务器状态。';
+  if (code === 'native-authentication-failed')
+    return 'GoTV 观战认证未通过，请确认 Steam 登录状态及服务器密码后重试。';
+  if (code === 'native-ticket-failed')
+    return 'GoTV 观战票据获取失败，请确认 Steam 登录状态并联网后重试。';
+  if (code === 'native-untrusted-peer') return '连接未通过安全校验，请核对服务器地址后重试。';
   if (code === 'source-hltv-stop') return '服务器已结束本次观战连接。';
   if (code === 'native-start-failed' && view.terminal?.nativeBootCode === 5)
     return 'Steam 当前未连接在线服务，请确认 Steam 已登录并联网后重试提前提示。';
@@ -102,11 +106,7 @@ export function observerFailureReason(view: ObserverRuntimeView) {
     return '提前提示输出目录不可用，请检查 Mizar 数据目录是否可写，再重试。';
   if (code === 'configuration-boundary')
     return '提前提示未接受连接配置，请重新填写本场观战连接；若仍失败，请导出诊断。';
-  if (code?.startsWith('node-runtime-'))
-    return '提前提示运行环境检查失败，请检查安装包完整性并导出诊断。';
   if (view.terminal?.stage === 'spawn')
     return '提前提示进程未能启动，请检查安装包与系统访问权限，并导出诊断。';
-  if (view.terminal?.stage === 'parser-initialization')
-    return '提前提示未能开始接收数据，请重试；仍失败时请导出诊断。';
   return '提前提示接收未完成，请重试；仍失败时请导出诊断。';
 }

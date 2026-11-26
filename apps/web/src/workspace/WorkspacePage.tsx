@@ -11,10 +11,7 @@ import { DesktopCanvas } from '../patterns/DesktopCanvas';
 import { CameraControls } from '../orchestration/CameraControls';
 import type { OrchestrationView } from '@mizar/protocol/orchestration';
 import type { ProductionGuidance } from '@mizar/protocol/program-scenes';
-import type {
-  ConnectionPreparationView,
-  ObserverRuntimeView,
-} from '../preparation/observer-preparation';
+import type { ObserverRuntimeView } from '../preparation/observer-preparation';
 import { MusicControls } from '../music/MusicControls';
 import { ObsOutputControls } from './ObsOutputControls';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -360,7 +357,6 @@ function ObsConfidence() {
 
 function WorkspaceLeftContent() {
   const [musicError, setMusicError] = useState('');
-  const connection = useLocalRead<ConnectionPreparationView>('/local/v1/observer-assist');
   const observer = useLocalRead<ObserverRuntimeView & { programCommandQueued?: boolean }>(
     '/local/v1/observer',
   );
@@ -396,7 +392,6 @@ function WorkspaceLeftContent() {
     guidance?.phase !== 'map_end' &&
     guidance?.phase !== 'match_end' &&
     payload?.runtime.telemetryFreshness === 'stale' &&
-    !connection?.waitingForMap &&
     !observer?.programCommandQueued;
   const connectionInRadar =
     !liveRadar &&
@@ -424,33 +419,28 @@ function WorkspaceLeftContent() {
                   <strong>
                     {guidance?.phase === 'match_end'
                       ? '比赛已结束'
-                      : guidance?.phase === 'map_end' && connection?.waitingForMap
-                        ? '等待本图数据'
-                        : guidance?.phase === 'map_end'
-                          ? plannedMap
-                            ? `准备第 ${plannedMap.mapOrder} 图`
-                            : '准备下一图'
-                          : payload?.runtime.telemetryFreshness === 'fresh'
-                            ? '游戏数据接收中 · 等待雷达画面'
-                            : observer?.programCommandQueued
-                              ? '等待本图数据'
-                              : payload?.runtime.telemetryFreshness === 'stale' &&
-                                  !connection?.waitingForMap
-                                ? '游戏数据已中断'
-                                : '填写 GoTV 后接收比赛画面'}
+                      : guidance?.phase === 'map_end'
+                        ? plannedMap
+                          ? `准备第 ${plannedMap.mapOrder} 图`
+                          : '准备下一图'
+                        : payload?.runtime.telemetryFreshness === 'fresh'
+                          ? '游戏数据接收中 · 等待雷达画面'
+                          : observer?.programCommandQueued
+                            ? '等待本图数据'
+                            : payload?.runtime.telemetryFreshness === 'stale'
+                              ? '游戏数据已中断'
+                              : '填写 GoTV 后接收比赛画面'}
                   </strong>
                   <p>
                     {guidance?.phase === 'match_end'
                       ? '请核对直播与录像状态'
-                      : guidance?.phase === 'map_end' && connection?.waitingForMap
-                        ? '连接已提交，请等待游戏数据'
-                        : guidance?.phase === 'map_end'
-                          ? '填写本图新的 GoTV'
-                          : payload?.runtime.telemetryFreshness === 'fresh'
-                            ? '等待雷达画面更新'
-                            : observer?.programCommandQueued
-                              ? '连接已提交，请等待游戏数据'
-                              : '连接 GoTV 后显示比赛画面'}
+                      : guidance?.phase === 'map_end'
+                        ? '填写本图新的 GoTV'
+                        : payload?.runtime.telemetryFreshness === 'fresh'
+                          ? '等待雷达画面更新'
+                          : observer?.programCommandQueued
+                            ? '连接已提交，请等待游戏数据'
+                            : '连接 GoTV 后显示比赛画面'}
                   </p>
                   {interrupted ? (
                     <Button onClick={() => void openPreparation('/settings?tab=gsi')}>

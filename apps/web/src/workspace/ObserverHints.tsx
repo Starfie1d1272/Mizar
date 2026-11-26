@@ -25,15 +25,11 @@ export function ObserverHints() {
   const client = useLocalChannelClient('assist');
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const observer = state.state === 'live' ? state.current?.payload.observer : undefined;
-  const draining = observer?.waitingReason === 'normal-drain';
-  const awaitingProgramMap = observer?.waitingReason === 'waiting-next-map';
   const awaitingTooLong = Boolean(
     configuration?.settings.enabled &&
     configuration.mapConnection &&
     configuration?.connectionRequestedAt &&
     !configuration.receiverPaused &&
-    !draining &&
-    !awaitingProgramMap &&
     runtime?.active &&
     !runtime.pending &&
     now - configuration.connectionRequestedAt > 60_000 &&
@@ -62,7 +58,6 @@ export function ObserverHints() {
   const pending = enabled && runtime?.pending;
   const reconnecting = enabled && runtime?.health?.state === 'reconnecting';
   const connecting = enabled && runtime?.health?.state === 'connecting';
-  const waitingNextMap = awaitingProgramMap || runtime?.terminal?.reason === 'source-hltv-stop';
   const sourceStale = observer?.waitingReason === 'source-stale';
   const reconnectButton = (label: string, retryingLabel: string) =>
     window.__TAURI_INTERNALS__ ? (
@@ -88,20 +83,8 @@ export function ObserverHints() {
     enabled &&
     configuration?.connection &&
     configuration.mapConnection &&
-    (!runtime ||
-      runtime.active ||
-      pending ||
-      paused ||
-      needsRecovery ||
-      error ||
-      draining ||
-      waitingNextMap);
-  const visibleHints =
-    showPanel &&
-    !paused &&
-    (draining || (!pending && !needsRecovery && !reconnecting && !connecting))
-      ? hints
-      : [];
+    (!runtime || runtime.active || pending || paused || needsRecovery || error || hints.length > 0);
+  const visibleHints = showPanel && !paused ? hints : [];
   const cursor = state.state === 'live' ? state.current?.cursor : undefined;
   useObserverHintEvidence(
     cursor
@@ -151,8 +134,6 @@ export function ObserverHints() {
             </Button>
           ) : null}
         </>
-      ) : draining ? (
-        <StatusPill tone="info">继续显示本图提前提示</StatusPill>
       ) : pending ? (
         <StatusPill tone="info">
           {runtime?.recovering ? '正在恢复提前提示' : '正在准备提前提示'}
@@ -183,12 +164,6 @@ export function ObserverHints() {
           </p>
           {reconnectButton('重新连接', '正在重试…')}
         </>
-      ) : waitingNextMap ? (
-        <StatusPill tone="info">
-          {awaitingProgramMap && runtime?.health?.state === 'live'
-            ? '已接收下一图数据，等待节目切图'
-            : '等待下一图的 GoTV 连接'}
-        </StatusPill>
       ) : sourceStale ? (
         <>
           <StatusPill tone="warning">GoTV 数据中断，暂未收到新数据</StatusPill>
@@ -207,7 +182,6 @@ export function ObserverHints() {
                       'source-disconnected': 'GoTV 观察连接已断开',
                       'program-stale': '正在等待节目端比赛数据…',
                       'source-map-mismatch': 'GoTV 与当前节目地图不一致',
-                      'source-execution-ahead': '等待节目对齐新对局…',
                     } as Record<string, string>
                   )[observer?.waitingReason ?? ''] ?? '正在接收比赛数据…')}
         </StatusPill>

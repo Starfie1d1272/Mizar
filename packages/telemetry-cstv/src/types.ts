@@ -70,7 +70,7 @@ export type CstvSessionRunResult = {
   readonly status: Exclude<CstvSessionTerminalStatus, 'failed'>;
 };
 
-/** Package-owned seam used by deterministic tests and by the cs2parser binding. */
+/** Package-owned seam used by deterministic tests and observer normalization. */
 export interface CstvParserSession {
   readonly sync: CstvSyncMetadata | null;
   readonly tailTick: number;

@@ -5,26 +5,13 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import pin from '../../apps/companion/src/telemetry/observer-component.json' with { type: 'json' };
-const execute = promisify(execFile);
-async function inspectNode(node) {
-  const { stdout } = await execute(
-    node,
-    [
-      '-e',
-      'console.log(JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch,features:[typeof WebAssembly==="object"&&"WebAssembly",typeof ReadableStream==="function"&&"ReadableStream",typeof structuredClone==="function"&&"structuredClone"].filter(Boolean)}))',
-    ],
-    { windowsHide: true, timeout: 10000, maxBuffer: 4096 },
-  );
-  return JSON.parse(stdout);
-}
 
+const execute = promisify(execFile);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const digest = /^[a-f0-9]{64}$/;
 const entrypoints = {
-  python: 'runtime/python/python.exe',
-  driver: 'client/driver.py',
-  native: 'client/cs2_observer.dll',
-  worker: 'client/parser_worker.mjs',
+  executable: 'cs2-headless-observer.exe',
+  native: 'cs2_observer.dll',
 };
 
 export async function stageReleasedObserver(resourcesDirectory, temporaryDirectory) {
@@ -45,14 +32,15 @@ export async function stageReleasedObserver(resourcesDirectory, temporaryDirecto
     throw new Error('observer_release_identity');
   const receipt = await stageObserverComponent(extracted, resourcesDirectory);
   // The installed copy is already fixed. Run the upstream offline replay on
-  // the extracted archive with the exact Node selected for this product.
+  // the extracted archive using the standalone Rust executable.
   await execute(
-    join(extracted, entrypoints.python),
+    join(extracted, entrypoints.executable),
     [
-      '-B',
-      join(extracted, 'tools/replay_example.py'),
-      '--node',
-      join(resourcesDirectory, 'runtime/node.exe'),
+      'replay',
+      '--input',
+      'examples/synthetic-channel.json',
+      '--host-version',
+      '14191',
       '--output',
       join(temporaryDirectory, 'observer-self-check'),
     ],
@@ -84,12 +72,8 @@ async function files(directory, prefix = '') {
   return found.sort();
 }
 
-/** Build-time staging and Node capability probe. No Steam, network or component activation. */
-export async function stageObserverComponent(
-  componentDirectory,
-  resourcesDirectory,
-  { allowDirty = false, inspectRuntime = inspectNode } = {},
-) {
+/** Build-time staging. No Steam, network or component activation. */
+export async function stageObserverComponent(componentDirectory, resourcesDirectory) {
   const source = resolve(componentDirectory);
   const resources = resolve(resourcesDirectory);
   if (
@@ -101,39 +85,29 @@ export async function stageObserverComponent(
   const manifestBytes = await readFile(join(source, 'manifest.json'));
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
   if (
-    manifest.schema !== 'cs2-headless-observer-package/4' ||
-    manifest.distribution !== 'external-node' ||
+    manifest.schema !== 'cs2-headless-observer-package/6' ||
     manifest.componentId !== 'cs2-headless-observer' ||
     !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(manifest.componentVersion) ||
     !/^[a-f0-9]{40}$/.test(manifest.sourceSha) ||
-    typeof manifest.workingTreeDirty !== 'boolean' ||
     manifest.platform !== 'win32-x64' ||
     manifest.nativeAbi !== pin.nativeAbi ||
-    manifest.parserIpc !== pin.parserIpc ||
     manifest.managedProtocol !== pin.managedProtocol ||
-    !Array.isArray(manifest.managedProtocols) ||
-    !manifest.managedProtocols.includes(pin.managedProtocol) ||
     !Array.isArray(manifest.validatedHostVersions) ||
     !manifest.validatedHostVersions.length ||
     manifest.validatedHostVersions.some(
       (host) => !Number.isInteger(host) || host <= 0 || host > 0xffffffff,
     ) ||
     new Set(manifest.validatedHostVersions).size !== manifest.validatedHostVersions.length ||
-    manifest.nodeRequirement?.minimumMajor !== 24 ||
-    JSON.stringify(manifest.nodeRequirement.features) !==
-      JSON.stringify(['WebAssembly', 'ReadableStream', 'structuredClone']) ||
     !manifest.filesSha256 ||
     typeof manifest.filesSha256 !== 'object' ||
     Array.isArray(manifest.filesSha256) ||
     Object.entries(entrypoints).some(([key, value]) => manifest.entrypoints?.[key] !== value)
   )
     throw new Error('observer_component_contract');
-  if (manifest.workingTreeDirty && !allowDirty) throw new Error('observer_component_dirty_source');
   const expected = Object.keys(manifest.filesSha256).sort();
   if (
     expected.some((name) => !safePath(name) || !digest.test(manifest.filesSha256[name])) ||
     expected.some((name) => /(^|\/)steam_api64\.dll$/i.test(name)) ||
-    expected.includes('runtime/node.exe') ||
     expected.includes('manifest.json') ||
     Object.values(entrypoints).some((name) => !expected.includes(name))
   )
@@ -145,16 +119,6 @@ export async function stageObserverComponent(
     if (sha256(await readFile(join(source, name))) !== manifest.filesSha256[name])
       throw new Error('observer_component_file_hash');
   }
-  const node = join(resources, 'runtime/node.exe');
-  const runtime = await inspectRuntime(node);
-  if (
-    !/^\d+\.\d+\.\d+$/.test(runtime.version) ||
-    Number(runtime.version.split('.')[0]) < manifest.nodeRequirement.minimumMajor ||
-    runtime.platform !== 'win32' ||
-    runtime.arch !== 'x64' ||
-    !manifest.nodeRequirement.features.every((feature) => runtime.features?.includes(feature))
-  )
-    throw new Error('observer_component_node_requirement');
   const destination = join(resources, 'observer');
   try {
     await lstat(destination);
@@ -189,18 +153,12 @@ export async function stageObserverComponent(
     componentId: manifest.componentId,
     componentVersion: manifest.componentVersion,
     sourceSha: manifest.sourceSha,
-    workingTreeDirty: manifest.workingTreeDirty,
     nativeAbi: manifest.nativeAbi,
-    parserIpc: manifest.parserIpc,
     managedProtocol: manifest.managedProtocol,
     manifestSha256: sha256(manifestBytes),
-    nodeRuntime: { ...runtime, executableSha256: sha256(await readFile(node)) },
-    launch: {
-      ...Object.fromEntries(
-        Object.entries(entrypoints).map(([key, value]) => [key, 'resources/observer/' + value]),
-      ),
-      node: 'resources/runtime/node.exe',
-    },
+    launch: Object.fromEntries(
+      Object.entries(entrypoints).map(([key, value]) => [key, 'resources/observer/' + value]),
+    ),
   };
   await mkdir(join(resources, 'metadata'), { recursive: true });
   await writeFile(

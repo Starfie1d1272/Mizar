@@ -108,26 +108,14 @@ function mapSourceHealth(
     role: health.role,
     state: health.state,
     generation: health.generation,
-    reconnectAttempt: health.reconnectAttempt,
-    lastSync:
-      health.lastSync === undefined
-        ? null
-        : {
-            protocol: health.lastSync.protocol,
-            tick: health.lastSync.tick,
-            ticksPerSecond: health.lastSync.ticksPerSecond,
-            fragment: health.lastSync.fragment,
-            signupFragment: health.lastSync.signupFragment,
-            mapName: health.lastSync.mapName ?? null,
-            realTimeDelaySeconds: health.lastSync.realTimeDelaySeconds ?? null,
-            receiveAgeSeconds: health.lastSync.receiveAgeSeconds ?? null,
-          },
+    reconnectAttempt: 0,
+    lastSync: null,
     tailTick: health.tailTick ?? null,
     lastEventTick: health.lastEventTick ?? null,
     lastEventSequence: health.lastEventSequence ?? null,
     lastEventObservedAt: health.lastEventObservedAt ?? null,
     lastErrorCode: health.lastErrorCode ?? null,
-    lastTerminalStatus: health.lastTerminalStatus ?? null,
+    lastTerminalStatus: null,
   };
 }
 

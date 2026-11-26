@@ -121,9 +121,7 @@ async function assertBundleSmoke(outputRoot) {
     'app/package.json',
     'app/dist/server.js',
     'app/node_modules',
-    'app/node_modules/cs2parser/package.json',
-    'app/node_modules/cs2parser/LICENSE',
-    'app/node_modules/@bufbuild/protobuf/package.json',
+
     'runtime',
     'scripts/common.ps1',
     'scripts/gsi-discovery.ps1',

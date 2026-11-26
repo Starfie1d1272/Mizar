@@ -9,13 +9,17 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 import { unzipSync, zipSync } from 'fflate';
-import Fastify from 'fastify';
 import { startObserverProcess } from '../src/telemetry/observer-process.js';
+import { WorkspaceObserver } from '../src/telemetry/observer-workspace.js';
 import {
-  registerWorkspaceObserver,
-  type WorkspaceObserver,
-} from '../src/telemetry/observer-workspace.js';
-import { createObserverSourceManager } from '../src/telemetry/cstv-source-manager.js';
+  createObserverSourceManager,
+  selectCstvSources,
+} from '../src/telemetry/cstv-source-manager.js';
+import { createObserverAssistScope } from '../src/telemetry/observer-assist-scope.js';
+import { createProgramRuntime } from '../src/runtime/program-runtime.js';
+import { createProjectionCoordinator } from '../src/projections/projection-coordinator.js';
+import type { TelemetryObservation } from '@mizar/core/telemetry';
+import type { ObserverHintTimeline } from '@mizar/core/projection';
 import { ObserverSettingsStore } from '../src/telemetry/observer-settings.js';
 import { SessionJournal } from '../src/support/session-journal.js';
 import { SupportExports } from '../src/support/export-job.js';
@@ -23,32 +27,19 @@ import { runArchiveWorker } from '../src/support/archive-worker.js';
 import { technicalProjection } from '../src/support/technical-projection.js';
 import { errorEvidence } from '../src/updates/diagnostics.js';
 
-test('next-map connect requires new GoTV endpoints and reuses the accepted request on retry', () => {
+test('next-map connect allows reusing GoTV endpoints and reuses the accepted request on retry', () => {
   const settings = new ObserverSettingsStore();
   const original = {
     earlyEndpoint: '127.0.0.25:27025',
     programEndpoint: '127.0.0.25:27026',
     password: 'first-map',
   };
-  const next = {
-    earlyEndpoint: '127.0.0.26:27025',
-    programEndpoint: '127.0.0.26:27026',
-    password: 'second-map',
-  };
   settings.setMapConnection('first', 'connect', original);
-  assert.throws(
-    () => settings.setMapConnection('next', 'connect', undefined, true),
-    /next_map_connection_required/,
-  );
-  assert.throws(
-    () => settings.setMapConnection('next', 'connect', original, true),
-    /next_map_connection_required/,
-  );
-  settings.setMapConnection('next', 'connect', next, true);
+  settings.setMapConnection('next', 'connect', original, true);
   const revision = settings.revision;
-  settings.setMapConnection('next', 'connect', next, true);
+  settings.setMapConnection('next', 'connect', original, true);
   assert.equal(settings.revision, revision);
-  assert.deepEqual(settings.configured(), next);
+  assert.deepEqual(settings.configured(), original);
 });
 
 test('diagnostic coverage exceeding the ZIP entry limit is exported in indexed shards', async (t) => {
@@ -176,28 +167,29 @@ test('large manual exports retain a single ZIP readable by the offline tool', as
   execFileSync(process.execPath, [reader, join(output, 'part-1.zip')], { stdio: 'pipe' });
 });
 
-test('managed v2 keeps channel, world and public sequence authority at stream boundaries', async () => {
-  const source = 'ahead:observer';
+test('managed v3 keeps channel, world, residenceUs, and timeline reset authority', async () => {
   const manager = createObserverSourceManager({
     role: 'lookahead',
-    identity: { source, role: 'ahead', channel: 0, world: 1 },
     clock: { now: () => ({ observedAt: new Date().toISOString(), observedMonotonicMs: 1000 }) },
   });
   const fixture = JSON.parse(
     await readFile(new URL('./fixtures/observer-event.json', import.meta.url), 'utf8'),
   );
   const seen: number[] = [];
+  let resets = 0;
   manager.subscribeLiveGameEvents(({ cursor }) => seen.push(cursor.sequence));
+  manager.subscribeTimelineReset?.(() => resets++);
   manager.start();
   const write = (sequence: number, row: object, channel = 1, world = 1) =>
-    manager.consumeObserverRecord({ ...row, source, sequence, channel, world });
-  const begin = { kind: 'session-start', protocol: 2 };
+    manager.consumeObserverRecord({ ...row, sequence, channel, world });
+  const begin = { kind: 'session-start', protocol: 3 };
   const cursor = {
     kind: 'cursor',
-    tick: 100,
     committedTick: 100,
     tickInterval: 1 / 64,
     map: 'de_test',
+    warmup: false,
+    round: 1,
   };
 
   write(1, cursor);
@@ -205,73 +197,59 @@ test('managed v2 keeps channel, world and public sequence authority at stream bo
   write(1, begin);
   write(2, { kind: 'future-record' });
   write(3, cursor);
-  write(4, {
-    ...fixture,
-    sdkQueueAgeUs: 700,
-    dequeueToSubmitUs: 100,
-    submitToObservedUs: 1000,
-    resultQueueUs: 300,
-    supervisorForwardUs: 200,
-  });
+  write(4, { ...fixture, residenceUs: 2000 });
   write(4, fixture);
   assert.deepEqual(seen, [4]);
   assert.equal(manager.getRecentGameEvents()[0]?.cursor.sourceArrivalMonotonicMs, 998);
 
-  write(5, { kind: 'discontinuity', scope: 'world' }, 1, 2);
-  write(6, fixture, 1, 2);
+  write(5, {
+    kind: 'event',
+    name: 'begin_new_match',
+    map: 'de_test',
+    eventTick: 101,
+    committedTick: 101,
+    tickInterval: 1 / 64,
+    fields: {},
+    players: {},
+  });
+  assert.equal(resets, 1);
+
+  write(6, { kind: 'discontinuity', scope: 'world' }, 1, 2);
+  write(7, fixture, 1, 2);
   write(50, cursor);
   assert.equal(manager.getHealth().state, 'connecting');
   assert.deepEqual(manager.getRecentGameEvents(), []);
-  write(7, cursor, 1, 2);
-  write(8, fixture, 1, 2);
-  write(9, { kind: 'discontinuity', scope: 'connection' }, 1, 2);
+  write(8, cursor, 1, 2);
+  write(9, fixture, 1, 2);
+  write(10, { kind: 'discontinuity', scope: 'connection' }, 1, 2);
   write(50, cursor, 1, 2);
   assert.equal(manager.getHealth().state, 'reconnecting');
-  write(10, begin, 2);
-  write(11, { ...cursor, observedAt: Date.now() - 3000 }, 2);
-  write(12, fixture, 2);
-  assert.equal(manager.getHealth().state, 'connecting');
-  write(13, cursor, 2);
-  write(14, fixture, 2);
-  assert.deepEqual(seen, [4, 8, 14]);
+  write(11, begin, 2);
+  write(12, cursor, 2);
+  write(13, fixture, 2);
+  assert.deepEqual(seen, [4, 9, 13]);
   assert.equal(manager.getRecentGameEvents().at(-1)?.cursor.sourceArrivalMonotonicMs, undefined);
   const live = manager.getHealth();
-  write(15, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
-  write(16, fixture, 2);
+  write(14, { kind: 'discontinuity', scope: 'connection', reason: 'source-hltv-stop' }, 2);
+  write(15, fixture, 2);
   manager.disconnectObserver('ended');
-  assert.equal(manager.getHealth().normalDrain, undefined);
-  manager.confirmObserverDrain();
-  assert.equal(manager.getHealth().normalDrain, true);
+  assert.equal(manager.getHealth().state, 'ended');
   assert.equal(manager.getHealth().generation, live.generation);
-  assert.deepEqual(seen, [4, 8, 14]);
+  assert.deepEqual(seen, [4, 9, 13]);
 
-  write(17, begin, 3);
-  write(18, cursor, 3);
-  write(
-    19,
-    {
-      ...fixture,
-      sdkQueueAgeUs: 2_000_000,
-      dequeueToSubmitUs: 100,
-      submitToObservedUs: 1000,
-    },
-    3,
-  );
-  write(20, fixture, 3);
-  assert.equal(manager.getHealth().state, 'connecting');
-  assert.equal(manager.getHealth().lastErrorCode, 'observer-residence-limit');
-  assert.deepEqual(seen, [4, 8, 14]);
-  write(21, cursor, 3);
-  write(22, fixture, 3);
-  assert.deepEqual(seen, [4, 8, 14, 22]);
+  write(16, begin, 3);
+  write(17, cursor, 3);
+  write(18, { ...fixture, residenceUs: 2_000_000 }, 3);
+  write(19, fixture, 3);
+  assert.equal(manager.getHealth().state, 'live');
+  assert.deepEqual(seen, [4, 9, 13, 18, 19]);
   await manager.stop();
-  assert.equal(manager.getHealth().normalDrain, undefined);
-  write(23, fixture, 3);
-  assert.deepEqual(seen, [4, 8, 14, 22]);
+  write(20, fixture, 3);
+  assert.deepEqual(seen, [4, 9, 13, 18, 19]);
 });
 
 test('component failure survives local journal and actual support ZIP without credentials', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-evidence-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-evidence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -282,12 +260,9 @@ test('component failure survives local journal and actual support ZIP without cr
   const password = 'diagnostic-test-private-password';
   const owner = startObserverProcess({
     role: 'lookahead',
-    python: process.execPath,
-    driver,
+    executable: driver,
     native: driver,
     steamApi: driver,
-    node: process.execPath,
-    parserWorker: driver,
     outputDirectory,
     hostVersion: 14197,
     endpoint: '127.0.0.25:27020',
@@ -296,8 +271,9 @@ test('component failure survives local journal and actual support ZIP without cr
   t.after(() => owner.stop());
   const result = await owner.closed;
   assert.equal(result.failed, true);
-  assert.match(result.terminal.detail ?? '', /unsupported serializer test_field/);
-  assert.match(result.terminal.detail ?? '', /root-cause-at-end/);
+  assert.equal(result.terminal.reason, 'native-start-failed');
+  assert.equal(result.terminal.nativeBootCode, 5);
+  assert.equal(result.terminal.phase, 'native-boot');
   assert(!JSON.stringify(result.terminal).includes(password));
   assert.equal(result.terminal.hostVersion, 14197);
   const journal = new SessionJournal(logs);
@@ -338,12 +314,17 @@ test('component failure survives local journal and actual support ZIP without cr
   await writeFile(
     join(reports, oldId, 'report.json'),
     JSON.stringify({
-      schema: 'cs2-observer-report/1',
-      reason: 'ordered-parser-error: historical_field',
+      schema: 'cs2-observer-report/3',
+      outcome: 'failed',
+      reason: 'native-start-failed',
+      channel: 1,
+      world: 1,
+      lastOutputSequence: 0,
+      reconnects: 0,
       password,
-      native_boot_code: 5,
-      steam_init_result: 0,
-      cleanupCompleted: true,
+      nativeBootCode: 5,
+      steamInitResult: 0,
+      faults: [],
     }),
   );
   const exports = new SupportExports(logs);
@@ -358,7 +339,8 @@ test('component failure survives local journal and actual support ZIP without cr
   const report = entries[`attachments/observer/${oldId}/report.json`];
   assert(report, Buffer.from(entries['coverage.json']!).toString());
   const attachment = JSON.parse(Buffer.from(report).toString());
-  assert.equal(attachment.reason, 'ordered-parser-error: historical_field');
+  assert.equal(attachment.schema, 'cs2-observer-report/3');
+  assert.equal(attachment.reason, 'native-start-failed');
   assert.equal(attachment.password, '[redacted]');
   const events = Object.entries(entries)
     .filter(([name]) => name.startsWith('events/'))
@@ -370,8 +352,8 @@ test('component failure survives local journal and actual support ZIP without cr
         .map((line) => JSON.parse(line)),
     );
   const terminal = events.find((event) => event.kind === 'observer_attempt_terminal');
-  assert.match(terminal.evidence.detail, /unsupported serializer test_field/);
-  assert.match(terminal.evidence.detail, /root-cause-at-end/);
+  assert.equal(terminal.evidence.reason, 'native-start-failed');
+  assert.equal(terminal.evidence.nativeBootCode, 5);
   const context = events.find((event) => event.kind === 'local_diagnostic_context').evidence;
   assert.equal(context.outputTokenConfigured, true);
   assert.equal(context.gsiTokenConfigured, false);
@@ -398,11 +380,11 @@ test('component failure survives local journal and actual support ZIP without cr
   );
   const cloud = technicalProjection(terminal, '2020-01-01T00:00:00Z');
   assert.deepEqual(cloud.evidence, terminal.evidence);
-  assert.match(JSON.stringify(cloud), /unsupported serializer/);
+  assert.match(JSON.stringify(cloud), /native-start-failed/);
 });
 
 test('pre-report and protocol failures survive the real export; overflow retains a prefix and a gap', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-stream-evidence-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-stream-evidence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -415,12 +397,9 @@ test('pre-report and protocol failures survive the real export; overflow retains
   for (const host of [13, 26, 27, 28]) {
     const owner = startObserverProcess({
       role: 'lookahead',
-      python: process.execPath,
-      driver,
+      executable: driver,
       native: driver,
       steamApi: driver,
-      node: process.execPath,
-      parserWorker: driver,
       outputDirectory: join(reports, randomUUID()),
       hostVersion: 14197,
       endpoint: `127.0.0.${host}:27020`,
@@ -465,7 +444,7 @@ test('pre-report and protocol failures survive the real export; overflow retains
   assert(overflow.stderr.observedBytes > overflow.stderr.retainedBytes);
   const supervisor = failures.find((failure) => failure.reason === 'reconnect-budget-exhausted');
   assert.equal(supervisor?.report, 'received');
-  assert.equal(supervisor?.supervisor.state, 'backoff');
+  assert.equal(supervisor?.supervisor.state, 'failed');
   assert.equal(supervisor?.lastOutputSequence, 1);
   assert.equal(supervisor?.stderr.truncated, true);
   const coverage = JSON.parse(Buffer.from(entries['coverage.json']!).toString());
@@ -474,7 +453,7 @@ test('pre-report and protocol failures survive the real export; overflow retains
 });
 
 test('support export rejects hard-linked or invalid observer reports and records the gaps', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mizar-observer-report-boundary-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-report-boundary-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const logs = join(root, 'logs');
   const reports = join(root, 'data', 'observer');
@@ -622,91 +601,209 @@ test('support ZIP reads durable Host prefixes and reports uncommitted and unavai
   );
 });
 
-test('registerWorkspaceObserver reopens stall recovery after new valid cursor data and does not loop without data or on normalDrain', async (t) => {
-  const settings = new ObserverSettingsStore();
-  await settings.configure({ ...settings.settings, enabled: true });
-  settings.setMapConnection('m1', 'connect', {
-    earlyEndpoint: '127.0.0.25:27025',
-    programEndpoint: '127.0.0.25:27026',
+test('WorkspaceObserver allows starting a new session even when previous process ended without a report', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-workspace-unblocked-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const observer = new WorkspaceObserver(async () => ({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    hostVersion: 14197,
+    outputDirectory: join(root, randomUUID()),
+  }));
+  t.after(() => observer.close());
+
+  // 127.0.0.14 exits with code 1 and empty stderr (missing report).
+  await observer.start(process.execPath, '127.0.0.14:27020', 'pw1');
+  await delay(100);
+  // Starting a new session must not be blocked by previous report failure.
+  await observer.start(process.execPath, '127.0.0.10:27020', 'pw2');
+  assert.equal(observer.view().failed, false);
+});
+
+test('exit code 0 without report is not failure, while exit code 2 is failure', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-exit-codes-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const clean = startObserverProcess({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    outputDirectory: join(root, randomUUID()),
+    hostVersion: 14197,
+    endpoint: '127.0.0.31:27020',
     password: 'pw',
   });
-  let active = false;
-  let stopReason: 'connection-changed' | null = null;
-  let starts = 0;
-  let lastReceiveMonotonicMs: number | undefined;
-  let normalDrain = false;
-  const mockObserver = {
-    view: () => ({ active, failed: false, stopReason }),
-    source: {
-      getHealth: () => ({
-        state: 'live',
-        ...(normalDrain ? { normalDrain: true } : {}),
-        ...(lastReceiveMonotonicMs === undefined ? {} : { lastReceiveMonotonicMs }),
-      }),
-      subscribeEvidence: () => () => {},
-    },
-    subscribeEvidence: () => () => {},
-    pulse: () => {},
-    start: async () => {
-      starts++;
-      active = true;
-      stopReason = null;
-      lastReceiveMonotonicMs = undefined;
-    },
-    stop: async (reason?: 'connection-changed') => {
-      active = false;
-      stopReason = reason ?? 'connection-changed';
-    },
-  };
-  const app = Fastify();
-  registerWorkspaceObserver(
-    app,
-    mockObserver as unknown as WorkspaceObserver,
-    'test-token',
-    () => true,
-    settings,
-  );
-  t.after(() => app.close());
-  const post = (body: Record<string, unknown>) =>
-    app.inject({
-      method: 'POST',
-      url: '/operator/runtime/observer',
-      headers: { 'x-runtime-token': 'test-token' },
-      payload: body,
-    });
-  const prep = await post({ action: 'prepare', game: 'g1', job: 'j1' });
-  const started = await post({
-    action: 'start-configured',
-    game: 'g1',
-    job: 'j1',
-    executable: 'cs2.exe',
-    revision: (prep.json() as { revision: string }).revision,
+  t.after(() => clean.stop());
+  const cleanResult = await clean.closed;
+  assert.equal(cleanResult.terminal.report, 'missing');
+  assert.equal(cleanResult.failed, false);
+
+  const cliError = startObserverProcess({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    outputDirectory: join(root, randomUUID()),
+    hostVersion: 14197,
+    endpoint: '127.0.0.4:27020',
+    password: 'pw',
   });
-  const leaseToken = (started.json() as { leaseToken: string }).leaseToken;
-  assert.equal(starts, 1);
+  t.after(() => cliError.stop());
+  const cliResult = await cliError.closed;
+  assert.equal(cliResult.terminal.code, 2);
+  assert.equal(cliResult.failed, true);
+});
 
-  // First 45s stall triggers one restart; continuing with no new data does not loop.
-  lastReceiveMonotonicMs = performance.now() - 50_000;
-  await post({ action: 'pulse', leaseToken });
-  await delay(20);
-  assert.equal(starts, 2);
-  assert.equal(lastReceiveMonotonicMs, undefined);
-  await post({ action: 'pulse', leaseToken });
-  await delay(20);
-  assert.equal(starts, 2);
+test('end-to-end: map 1 hints with reconnect -> map 1 ends -> new observer process for map 2 -> begin_new_match clears buffer', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mizar-observer-e2e-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = fileURLToPath(new URL('./fixtures/observer-child.mjs', import.meta.url));
+  const baseMs = performance.now();
+  let nowMs = baseMs;
+  const observer = new WorkspaceObserver(async () => ({
+    role: 'lookahead',
+    executable: driver,
+    native: driver,
+    steamApi: driver,
+    hostVersion: 14197,
+    outputDirectory: join(root, randomUUID()),
+  }));
+  t.after(() => observer.close());
 
-  // Fresh cursor data reopens stall recovery quota; a second independent stall recovers too.
-  lastReceiveMonotonicMs = performance.now();
-  await post({ action: 'pulse', leaseToken });
-  lastReceiveMonotonicMs = performance.now() - 50_000;
-  await post({ action: 'pulse', leaseToken });
-  await delay(20);
-  assert.equal(starts, 3);
+  const settings = new ObserverSettingsStore();
+  await settings.configure({
+    enabled: true,
+    nicknameSource: 'game',
+    leadSeconds: 5,
+    delaySeconds: 120,
+  });
+  const scope = createObserverAssistScope(settings, () => true);
+  const programRuntime = createProgramRuntime('e2e');
+  let latestDiagnostics: ReturnType<ObserverHintTimeline['getDiagnostics']> | undefined;
+  const coordinator = createProjectionCoordinator({
+    programRuntime,
+    cstvSources: selectCstvSources(undefined, observer.source),
+    observerSettings: scope.projectionSettings,
+    nowMonotonicMs: () => nowMs,
+    matchContextBinding: {
+      context: JSON.parse(
+        await readFile(
+          new URL(
+            '../../../packages/protocol/test/fixtures/match-document-v1.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ),
+      origin: 'online',
+      freshness: 'fresh',
+      diagnostics: [],
+    } as unknown as NonNullable<
+      Parameters<typeof createProjectionCoordinator>[0]['matchContextBinding']
+    >,
+    onObserverDiagnostics: (d) => {
+      latestDiagnostics = d;
+    },
+  });
+  t.after(() => coordinator.close());
+  const unsubscribeScope = scope.subscribe({
+    program: () => coordinator.getCurrent().program,
+    refresh: () => coordinator.refresh(),
+    refreshAssist: () => coordinator.refreshAssist(),
+    resetAssist: () => coordinator.resetObserverAssist(),
+    mapConnectionChanged: () => {},
+  });
+  t.after(unsubscribeScope);
 
-  // Normal drain never triggers stall recovery even if receive timestamp ages.
-  normalDrain = true;
-  lastReceiveMonotonicMs = performance.now() - 50_000;
-  await post({ action: 'pulse', leaseToken });
-  await delay(20);
-  assert.equal(starts, 3);
+  const ids = Array.from(
+    { length: 10 },
+    (_, i) => `765611980000000${String(i + 1).padStart(2, '0')}`,
+  );
+  const gsiFrame = (seq: number, mapName: string, roundNumber: number): TelemetryObservation => ({
+    receive: { sequence: seq, receivedAt: '2026-01-01T00:00:00Z', receivedMonotonicMs: nowMs },
+    source: { kind: 'cs2-gsi' },
+    coverage: {
+      provider: 'present',
+      map: 'present',
+      round: 'present',
+      phaseCountdowns: 'absent',
+      player: 'absent',
+      allPlayers: 'present',
+      bomb: 'absent',
+      grenades: 'absent',
+    },
+    telemetry: {
+      map: { name: mapName, phase: 'live', roundNumber },
+      round: { phase: 'live' },
+      allPlayers: ids.map((sourcePlayerId, i) => ({
+        sourcePlayerId,
+        side: i < 5 ? 'CT' : 'T',
+        activity: 'playing',
+        observerSlot: (i % 5) + 1,
+        state: { health: 100, roundTotalDamage: 0, money: 3000, equipValue: 2500 },
+        matchStats: { kills: 0, assists: 0, deaths: 0 },
+        weapons: [{ sourceWeaponId: 'w0', name: 'weapon_ak47', state: 'active' }],
+      })),
+    },
+  });
+
+  // 1. Map 1 (de_dust2) starts, emits kill 1, reconnects, emits kill 2, and ends.
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(1, 'de_dust2', 6)));
+  await observer.start(process.execPath, '127.0.0.29:27020', 'pw1');
+  for (let i = 0; i < 50 && (latestDiagnostics?.acceptedDeaths ?? 0) < 2; i++) await delay(10);
+  assert.equal(
+    latestDiagnostics?.acceptedDeaths,
+    2,
+    JSON.stringify({
+      diag: observer.source.getRecentDiagnostics(),
+      health: observer.source.getHealth(),
+      latestDiagnostics,
+    }),
+  );
+
+  nowMs = baseMs + 117_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(2, 'de_dust2', 6)));
+  coordinator.refreshAssist();
+  const map1Hints = coordinator.getCurrent().assist.observer?.hints ?? [];
+  assert.equal(map1Hints.length, 2);
+
+  // 2. Switch to Map 2 (de_mirage): new observer process starts with generation resetting from 0.
+  settings.setMapConnection(
+    'map-2',
+    'connect',
+    { earlyEndpoint: '127.0.0.30:27020', programEndpoint: '127.0.0.30:27021', password: 'pw2' },
+    true,
+  );
+  nowMs = baseMs + 118_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(3, 'de_mirage', 0)));
+  await observer.start(process.execPath, '127.0.0.30:27020', 'pw2');
+  for (let i = 0; i < 50 && (latestDiagnostics?.pending ?? 0) < 1; i++) await delay(10);
+  assert.equal(
+    latestDiagnostics?.pending,
+    1,
+    JSON.stringify({
+      health: observer.source.getHealth(),
+      diag: observer.source.getRecentDiagnostics(),
+      latestDiagnostics,
+    }),
+  );
+
+  nowMs = baseMs + 118_000;
+  coordinator.afterRuntimeMutation(programRuntime.acceptObservation(gsiFrame(4, 'de_mirage', 0)));
+  coordinator.refreshAssist();
+  const map2Hints = coordinator.getCurrent().assist.observer?.hints ?? [];
+  assert.equal(
+    map2Hints.length,
+    1,
+    JSON.stringify({ latestDiagnostics, assist: coordinator.getCurrent().assist }),
+  );
+
+  // 3. Process 2 emits begin_new_match -> subscribeTimelineReset clears buffer via ProjectionCoordinator.
+  for (let i = 0; i < 50 && (latestDiagnostics?.pending ?? 0) > 0; i++) await delay(15);
+  assert.equal(latestDiagnostics?.pending, 0);
+  assert.equal(coordinator.getCurrent().assist.observer?.hints.length, 0);
 });

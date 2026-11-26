@@ -259,7 +259,7 @@ function normalizeBombPickup(
   };
 }
 
-/** Normalize one supported cs2parser event without retaining its object graph. */
+/** Normalize one supported game event without retaining its object graph. */
 export function normalizeGameEvent(
   eventName: CstvGameEventName,
   event: unknown,
