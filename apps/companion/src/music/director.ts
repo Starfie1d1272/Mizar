@@ -178,11 +178,7 @@ export class MusicDirector implements MusicAudioMode, MusicMixerControl {
     return {
       ...this.status,
       ...(this.store.state.monitorDisablePending ? { monitorDisablePending: true } : {}),
-      message:
-        this.status.message ??
-        (!this.preview.busy && this.preview.recoveryPending
-          ? '上次试听的本机监听恢复未确认，请在 OBS 核对音效来源的播放和监听设置。'
-          : null),
+      message: this.status.message,
       held: this.isHeld(),
       stingerHeld: Boolean(this.isStingerHeld()),
       intent: this.isHeld() ? 'held' : this.manual ? 'manual' : 'automatic',

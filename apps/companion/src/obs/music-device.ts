@@ -4,6 +4,7 @@ import { OBSWebSocket } from 'obs-websocket-js/json';
 import type { ObsConfigStore } from './config.js';
 import type { ObsRpc } from './reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
+import type { MusicState } from '../music/store.js';
 import type {
   MusicDevice,
   MusicDeviceProvider,
