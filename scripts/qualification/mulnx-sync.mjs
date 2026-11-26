@@ -30,15 +30,30 @@ async function prepare() {
   if (process.env.GITHUB_REF !== 'refs/heads/main' || !/^[a-f0-9]{40}$/.test(sourceSha ?? ''))
     fail('MulNX sync requires main source identity');
   await mkdir(root, { recursive: true });
-  const { latestMulnxRelease, downloadVerified, upstreamNotice } = await import(
-    pathToFileURL(join(process.cwd(), 'apps/companion/dist/orchestration/tool-release.js')).href
-  );
+  const [{ latestMulnxRelease, upstreamNotice, MULNX_MAX_ARCHIVE }, { downloadVerifiedAsset }] =
+    await Promise.all([
+      import(
+        pathToFileURL(join(process.cwd(), 'apps/companion/dist/orchestration/tool-release.js')).href
+      ),
+      import(
+        pathToFileURL(join(process.cwd(), 'apps/companion/dist/distribution/transfer.js')).href
+      ),
+    ]);
   const release = await latestMulnxRelease(buildMetadata);
   const previous = await publishedSnapshot();
   const reuse = previous && JSON.stringify(previous.release) === JSON.stringify(release);
   const notices = reuse ? previous.notices : {};
-  if (!reuse)
-    await downloadVerified(release.url, join(root, 'MulNX.7z'), release.sha256, release.size);
+  if (!reuse) {
+    await downloadVerifiedAsset({
+      origin: release.url,
+      target: join(root, 'MulNX.7z'),
+      bytes: release.size,
+      maxBytes: MULNX_MAX_ARCHIVE,
+      sha256: release.sha256,
+      integrityError: 'mulnx_download_integrity',
+      signal: new globalThis.AbortController().signal,
+    });
+  }
   for (const name of reuse ? [] : names) {
     const bytes = await upstreamNotice(name, release.tag, buildMetadata);
     if (!bytes.length || bytes.length > 256 * 1024) fail('MulNX notice exceeds budget');

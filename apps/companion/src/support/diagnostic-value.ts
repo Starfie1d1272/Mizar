@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { BOX_READ_TOKEN } from '../updates/contract.js';
 
 const credential =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|.*(?:password|passwd|token|secret|credential)|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|ticket)$/i;
@@ -28,12 +27,41 @@ const POTENTIAL_SENSITIVE_RAW =
   /password|passwd|token|secret|credential|ticket|authorization|cookie|bearer|basic|rh_mizar_|data:|\\?"key\\?"|api[_-]?key|stream[_-]?key|device[_-]?code|user[_-]?code|pairing[_-]?code|:\\?\/\\?\/|program_all_chat|\\u|"(?:\s|\\[nrtfb])*[{[]/i;
 
 /** Fast pre-check: when false, `diagnosticEvidence(JSON.parse(raw))` is a no-op clone. */
-export function needsEvidenceSanitize(rawJson: string): boolean {
-  return rawJson.includes(BOX_READ_TOKEN) || POTENTIAL_SENSITIVE_RAW.test(rawJson);
+export function needsEvidenceSanitize(rawJson: string, secrets: readonly string[] = []): boolean {
+  return (
+    POTENTIAL_SENSITIVE_RAW.test(rawJson) ||
+    secrets.some((secret) => Boolean(secret) && rawJson.includes(secret))
+  );
 }
 
-export function diagnosticEvidence(value: unknown): unknown {
-  return sanitize(value, '', new Set(), [], true);
+/** Local evidence keeps the complete error chain; display summaries have a separate policy. */
+export function errorEvidence(error: unknown): unknown {
+  const seen = new Set<object>();
+  const visit = (value: unknown): unknown => {
+    if (!(value instanceof Error)) return diagnosticValue(value);
+    if (seen.has(value)) return '[circular error]';
+    seen.add(value);
+    const evidence = diagnosticValue(value) as Record<string, unknown>;
+    const fields = value as Error & { issues?: unknown[]; errors?: unknown[] };
+    if (value.name === 'ZodError' && Array.isArray(fields.issues)) {
+      evidence.message = 'Schema validation failed; see issue codes and paths';
+      delete evidence.stack;
+      evidence.issues = fields.issues.map((issue) => {
+        const { code, path, expected } = issue as Record<string, unknown>;
+        return diagnosticValue({ code, path, expected });
+      });
+      evidence.coverage = { excluded: ['schema-rejected-values-and-stack-header'] };
+    }
+    if (value.cause !== undefined) evidence.cause = visit(value.cause);
+    if (Array.isArray(fields.errors)) evidence.errors = fields.errors.map(visit);
+    seen.delete(value);
+    return evidence;
+  };
+  return visit(error);
+}
+
+export function diagnosticEvidence(value: unknown, secrets: readonly string[] = []): unknown {
+  return sanitize(value, '', new Set(), secrets, true);
 }
 
 /** Preserve technical context; replace credential values, never whole events. */
@@ -99,7 +127,7 @@ function sanitize(
       sha256: createHash('sha256').update(value).digest('hex'),
     };
   if (typeof value === 'string') {
-    let cleanText = value.replaceAll(BOX_READ_TOKEN, '[redacted]');
+    let cleanText = value;
     for (const secret of secrets)
       if (secret) cleanText = cleanText.replaceAll(secret, '[redacted]');
     if (/^\s*[{[]/.test(cleanText)) {

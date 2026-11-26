@@ -11,9 +11,8 @@ import {
   updateManifestSchema,
   type UpdateManifest,
 } from './contract.js';
-import { updateRequest, type UpdateFetch } from './network.js';
-import { transfer } from '../distribution/transfer.js';
-import { sourceOrder, forgetSourceOrder } from '../distribution/sources.js';
+import { DistributionHttpError, type FetchLike as UpdateFetch } from '../distribution/http.js';
+import { downloadVerifiedAsset } from '../distribution/transfer.js';
 import { installerUrl, StableSource } from './source.js';
 
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
@@ -487,10 +486,7 @@ export class UpdateManager {
     this.sourceMessage = '';
     const abort = new AbortController();
     this.abort = abort;
-    this.task = this.doDownload(
-      this.candidate,
-      AbortSignal.any([abort.signal, AbortSignal.timeout(15 * 60_000)]),
-    );
+    this.task = this.doDownload(this.candidate, abort.signal);
     // Download runs independently of the initiating HTTP request. Polling and cancellation remain available.
     void this.task.finally(() => {
       this.task = undefined;
@@ -508,76 +504,37 @@ export class UpdateManager {
       directory = await mkdtemp(join(this.root, 'download-'));
       const path = join(directory, manifest.installer.name);
       const origin = installerUrl(manifest);
-      const sources = [
-        {
-          name: 'GitHub',
-          stage: 'github_download',
-          request: (attempt: AbortSignal, end?: number) =>
-            updateRequest(
-              origin,
-              attempt,
-              this.options.fetcher,
-              end === undefined ? undefined : { rangeEnd: end },
-            ),
-        },
-        {
-          name: 'GitHub 加速',
-          stage: 'proxy_download',
-          request: (attempt: AbortSignal, end?: number) =>
-            updateRequest(
-              `https://gh-proxy.com/${origin}`,
-              attempt,
-              this.options.fetcher,
-              end === undefined ? undefined : { rangeEnd: end },
-            ),
-        },
-      ];
-      const key = `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}:${sources.map((source) => source.name).join(',')}`;
       this.sourceMessage = '正在测试下载来源…';
-      const order = await sourceOrder(
-        key,
-        manifest.installer.bytes,
+      await downloadVerifiedAsset({
+        origin,
+        target: path,
+        bytes: manifest.installer.bytes,
+        sha256: manifest.installer.sha256,
+        integrityError: 'update_download_corrupt',
+        fetcher: this.options.fetcher,
         signal,
-        sources.map((source) => source.request),
-        ({ error, source, order, ...diagnostic }) =>
+        onDiagnostic: ({ error, ...diagnostic }) =>
           this.options.log?.('download_sources', 'source_response_probe', manifest.version, {
             operationId: this.operationId,
             ...diagnostic,
-            candidates: sources.map((entry) => entry.name),
-            source: source === undefined ? undefined : sources[source]!.name,
-            order: order?.map((index) => sources[index]!.name),
             ...(error === undefined ? {} : { error: diagnosticValue(error) }),
           }),
-      );
+        onProgress: (bytes, source) => {
+          if (this.sourceMessage === '正在测试下载来源…') this.sourceMessage = '';
+          this.transferStage = 'downloading';
+          this.downloaded = bytes;
+          this.downloadSource = source.name;
+        },
+        onVerifying: () => {
+          this.transferStage = 'verifying';
+        },
+        onFallback: (error, source) => {
+          this.sourceMessage = `${source.name}连接或文件校验失败，正在切换来源。`;
+          this.failure(source.stage ?? 'proxy_download', error);
+          this.event('download', 'mirror_fallback');
+        },
+      });
       this.sourceMessage = '';
-      try {
-        await transfer({
-          target: path,
-          bytes: manifest.installer.bytes,
-          sha256: manifest.installer.sha256,
-          integrityError: 'update_download_corrupt',
-          signal,
-          sources: order.map((index) => (attempt) => sources[index]!.request(attempt)),
-          progress: (bytes, source) => {
-            this.transferStage = 'downloading';
-            this.downloaded = bytes;
-            this.downloadSource = sources[order[source]!]!.name;
-          },
-          verifying: () => {
-            this.transferStage = 'verifying';
-          },
-          fallback: (error, source) => {
-            const failed = sources[order[source]!]!;
-            forgetSourceOrder(key);
-            this.sourceMessage = `${failed.name}连接或文件校验失败，正在切换来源。`;
-            this.failure(failed.stage, error);
-            this.event('download', 'mirror_fallback');
-          },
-        });
-      } catch (error) {
-        if (!signal.aborted) forgetSourceOrder(key);
-        throw error;
-      }
       this.options.log?.('download', 'verified', manifest.version, {
         operationId: this.operationId,
         source: this.downloadSource,
@@ -687,6 +644,7 @@ export class UpdateManager {
   }
 }
 export function safeCode(error: unknown): string {
+  if (error instanceof DistributionHttpError) return 'update_network_failed';
   const value = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   return /^update_[a-z_]{1,50}$/.test(value) ? value : 'update_operation_failed';
 }

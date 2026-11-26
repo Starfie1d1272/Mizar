@@ -85,8 +85,8 @@ jobs:
             /.github/actions/save-cargo-cache/
             /scripts/ci/cargo-cache-key.mjs
             /scripts/architecture/windows-ipc-acl.mjs
-            /scripts/web-installer/Bootstrap.cs
-            /scripts/web-installer/Nsis.cs
+            /scripts/web-installer/
+            /config/distribution.json
             /apps/desktop/src-tauri/
             /apps/desktop/installer/
             /packages/protocol/src/desktop-ipc.generated.ts
@@ -110,7 +110,7 @@ jobs:
             fi
           fi
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- scripts/web-installer/Bootstrap.cs scripts/web-installer/Nsis.cs scripts/web-installer/build.ps1 .github/workflows/ci.yml; then
+            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- scripts/web-installer config/distribution.json .github/workflows/ci.yml; then
               installer=false
             else
               result=$?
@@ -125,10 +125,10 @@ jobs:
         shell: pwsh
         run: |
           $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-          $bootstrap = (Resolve-Path -LiteralPath 'scripts/web-installer/Bootstrap.cs').Path
-          $nsis = (Resolve-Path -LiteralPath 'scripts/web-installer/Nsis.cs').Path
+          $sources = @(Get-ChildItem -LiteralPath 'scripts/web-installer' -Filter '*.cs' | ForEach-Object { $_.FullName })
+          $distConfig = (Resolve-Path -LiteralPath 'config/distribution.json').Path
           $output = Join-Path $env:RUNNER_TEMP 'Mizar-WebInstaller-compile.exe'
-          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$output" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll $bootstrap $nsis
+          & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$output" "/resource:$distConfig,distribution.json" /r:System.Net.Http.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll @sources
           if ($LASTEXITCODE -ne 0) { throw 'WebInstaller C# compilation failed' }
       - uses: ./.github/actions/cargo-cache
         id: cargo-cache

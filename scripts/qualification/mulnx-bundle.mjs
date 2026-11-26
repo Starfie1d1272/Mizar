@@ -51,15 +51,33 @@ export async function buildMetadata(url, run = execute) {
 
 /** Resolve upstream once per candidate; the product digest freezes these exact bytes. */
 export async function stageMulnxBundle(root, destination) {
-  const { latestMulnxRelease, downloadVerified, extractMulnx, upstreamNotice, SEVEN_ZIP } =
-    await import(
-      pathToFileURL(join(root, 'apps/companion/dist/orchestration/tool-release.js')).href
-    );
+  const [
+    { latestMulnxRelease, extractMulnx, upstreamNotice, MULNX_MAX_ARCHIVE, SEVEN_ZIP },
+    { downloadVerifiedAsset },
+  ] = await Promise.all([
+    import(pathToFileURL(join(root, 'apps/companion/dist/orchestration/tool-release.js')).href),
+    import(pathToFileURL(join(root, 'apps/companion/dist/distribution/transfer.js')).href),
+  ]);
   const release = await latestMulnxRelease(buildMetadata);
   await mkdir(destination, { recursive: true });
   const downloads = await Promise.allSettled([
-    downloadVerified(release.url, join(destination, 'MulNX.7z'), release.sha256, release.size),
-    downloadVerified(SEVEN_ZIP.url, join(destination, '7zr.exe'), SEVEN_ZIP.sha256),
+    downloadVerifiedAsset({
+      origin: release.url,
+      target: join(destination, 'MulNX.7z'),
+      bytes: release.size,
+      maxBytes: MULNX_MAX_ARCHIVE,
+      sha256: release.sha256,
+      integrityError: 'mulnx_download_integrity',
+      signal: new globalThis.AbortController().signal,
+    }),
+    downloadVerifiedAsset({
+      origin: SEVEN_ZIP.url,
+      target: join(destination, '7zr.exe'),
+      maxBytes: MULNX_MAX_ARCHIVE,
+      sha256: SEVEN_ZIP.sha256,
+      integrityError: 'mulnx_download_integrity',
+      signal: new globalThis.AbortController().signal,
+    }),
     ...['LICENSE.txt', 'COPYRIGHT.md', 'SECURITY.md'].map(async (name) => {
       await writeFile(
         join(destination, `MulNX-${name}`),

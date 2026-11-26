@@ -25,10 +25,12 @@ import { prepareIsolatedPack } from './prepare-pack.js';
 import { cameraSourceTreeSha256, verifyCameraConversion } from './camera-source.js';
 import { verifyIsolatedPack } from './isolated-pack.js';
 import type { CameraSourceRef, MulnxToolRef } from '@mizar/broadcast-config';
+import { downloadVerifiedAsset } from '../distribution/transfer.js';
 import {
-  downloadVerified,
+  assertMulnxAssetUrl,
   extractMulnx,
   fileSha256,
+  MULNX_MAX_ARCHIVE,
   SEVEN_ZIP,
   type MulnxRelease,
 } from './tool-release.js';
@@ -963,32 +965,43 @@ export class MulnxTool {
         this.sourceMessage = '';
         this.sourceName = null;
         try {
-          await downloadVerified(
-            release.url,
-            archive,
-            release.sha256,
-            release.size,
-            AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]),
-            (bytes, _source, name) => {
+          await downloadVerifiedAsset({
+            origin: assertMulnxAssetUrl(release.url),
+            target: archive,
+            bytes: release.size,
+            maxBytes: MULNX_MAX_ARCHIVE,
+            sha256: release.sha256,
+            integrityError: 'mulnx_download_integrity',
+            extraSources:
+              this.mirror && sameMulnxAsset(this.mirror.release, release)
+                ? [
+                    {
+                      name: '南大云盘',
+                      request: (signal, end) => mirrorArchive(this.mirror!, signal, end),
+                    },
+                  ]
+                : [],
+            signal: abort.signal,
+            onProgress: (bytes, source) => {
               this.phase = 'downloading';
               this.downloadedBytes = bytes;
-              this.sourceName = name;
+              this.sourceName = source.name;
               if (bytes === 0)
-                this.diagnostic('mulnx_source_download', { result: 'begin', source: name });
+                this.diagnostic('mulnx_source_download', { result: 'begin', source: source.name });
             },
-            this.mirror && sameMulnxAsset(this.mirror.release, release)
-              ? (signal, end) => mirrorArchive(this.mirror!, signal, end)
-              : undefined,
-            (error, name) => {
-              this.sourceMessage = `${name}连接或文件校验失败，正在切换来源。`;
-              this.diagnostic('mulnx_source_download', { result: 'failure', source: name, error });
+            onFallback: (error, source) => {
+              this.sourceMessage = `${source.name}连接或文件校验失败，正在切换来源。`;
+              this.diagnostic('mulnx_source_download', {
+                result: 'failure',
+                source: source.name,
+                error,
+              });
             },
-            () => {
+            onVerifying: () => {
               this.phase = 'verifying';
             },
-            true,
-            (evidence) => this.diagnostic('mulnx_source_probe', evidence),
-          );
+            onDiagnostic: (evidence) => this.diagnostic('mulnx_source_probe', evidence),
+          });
           this.diagnostic('mulnx_source_download', { result: 'verified', source: this.sourceName });
         } catch (error) {
           this.phase = abort.signal.aborted ? 'cancelled' : 'error';
