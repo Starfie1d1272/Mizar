@@ -41,6 +41,7 @@ impl ExitCode {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplierResult {
+    pub operation: &'static str,
     pub status: &'static str,
     pub code: &'static str,
     pub version: Option<String>,
@@ -79,10 +80,8 @@ pub enum CommandMode {
         no_ui: bool,
         result_file: Option<PathBuf>,
     },
-    Preview {
-        state: String,
-        hold_ms: Option<u64>,
-    },
+    #[cfg(feature = "ui-preview")]
+    Preview { state: String, hold_ms: Option<u64> },
 }
 
 fn next_val(args: &[String], i: &mut usize, flag: &str) -> Result<String, String> {
@@ -135,7 +134,9 @@ pub fn parse_args() -> Result<CommandMode, String> {
     let mut no_ui = false;
     let mut no_launch = false;
     let mut result_file = None;
+    #[cfg(feature = "ui-preview")]
     let mut preview_state = None;
+    #[cfg(feature = "ui-preview")]
     let mut hold_ms = None;
 
     let mut i = 1;
@@ -148,7 +149,6 @@ pub fn parse_args() -> Result<CommandMode, String> {
             "--expected-content-digest" => {
                 expected_content_digest = Some(next_val(&args, &mut i, flag)?)
             }
-
             "--host-pid" => {
                 let v = next_val(&args, &mut i, flag)?;
                 host_pid = Some(v.parse::<u32>().map_err(|_| format!("无效 PID：{v}"))?);
@@ -166,7 +166,9 @@ pub fn parse_args() -> Result<CommandMode, String> {
             "--no-ui" => no_ui = true,
             "--no-launch" => no_launch = true,
             "--result-file" => result_file = Some(PathBuf::from(next_val(&args, &mut i, flag)?)),
+            #[cfg(feature = "ui-preview")]
             "--state" => preview_state = Some(next_val(&args, &mut i, flag)?),
+            #[cfg(feature = "ui-preview")]
             "--hold-ms" => {
                 let v = next_val(&args, &mut i, flag)?;
                 hold_ms = Some(v.parse::<u64>().map_err(|_| format!("无效时长：{v}"))?);
@@ -205,6 +207,7 @@ pub fn parse_args() -> Result<CommandMode, String> {
             no_ui,
             result_file,
         }),
+        #[cfg(feature = "ui-preview")]
         "preview" => Ok(CommandMode::Preview {
             state: preview_state.unwrap_or_else(|| "verifying".to_string()),
             hold_ms,

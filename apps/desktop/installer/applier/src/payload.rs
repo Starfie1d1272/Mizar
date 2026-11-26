@@ -3,7 +3,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,56 +203,7 @@ pub fn verify_payload(
     Ok(artifact)
 }
 
-fn dir_total_bytes(src: &Path) -> io::Result<u64> {
-    let mut total: u64 = 0;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let s = entry.path();
-        if is_reparse_point(&s)? {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("拒绝复制重解析点：{}", s.display()),
-            ));
-        }
-        let meta = fs::symlink_metadata(&s)?;
-        if meta.is_dir() {
-            total = total.saturating_add(dir_total_bytes(&s)?);
-        } else {
-            total = total.saturating_add(meta.len());
-        }
-    }
-    Ok(total)
-}
-
-fn copy_file_with_progress(
-    src: &Path,
-    dst: &Path,
-    is_cancelled: &dyn Fn() -> bool,
-    on_bytes: &mut dyn FnMut(u64),
-) -> io::Result<()> {
-    let mut input = File::open(src)?;
-    let mut output = File::create(dst)?;
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        if is_cancelled() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
-        }
-        let n = input.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        output.write_all(&buf[..n])?;
-        on_bytes(n as u64);
-    }
-    Ok(())
-}
-
-fn copy_dir_recursive(
-    src: &Path,
-    dst: &Path,
-    is_cancelled: &dyn Fn() -> bool,
-    on_bytes: &mut dyn FnMut(u64),
-) -> io::Result<()> {
+fn copy_dir_recursive(src: &Path, dst: &Path, is_cancelled: &dyn Fn() -> bool) -> io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         if is_cancelled() {
@@ -269,45 +220,22 @@ fn copy_dir_recursive(
         }
         let meta = fs::symlink_metadata(&s)?;
         if meta.is_dir() {
-            copy_dir_recursive(&s, &d, is_cancelled, on_bytes)?;
+            copy_dir_recursive(&s, &d, is_cancelled)?;
         } else {
-            copy_file_with_progress(&s, &d, is_cancelled, on_bytes)?;
+            fs::copy(&s, &d)?;
         }
     }
     Ok(())
 }
 
-pub fn move_or_copy_dir(
-    src: &Path,
-    dst: &Path,
-    is_cancelled: &dyn Fn() -> bool,
-    on_progress: Option<&dyn Fn(u64, u64)>,
-) -> io::Result<()> {
+pub fn move_or_copy_dir(src: &Path, dst: &Path, is_cancelled: &dyn Fn() -> bool) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
     match fs::rename(src, dst) {
         Ok(()) => Ok(()),
         Err(_) => {
-            let total = if on_progress.is_some() {
-                dir_total_bytes(src)?
-            } else {
-                0
-            };
-            if let Some(cb) = on_progress {
-                if total > 0 {
-                    cb(0, total);
-                }
-            }
-            let mut copied: u64 = 0;
-            copy_dir_recursive(src, dst, is_cancelled, &mut |chunk| {
-                copied = copied.saturating_add(chunk);
-                if let Some(cb) = on_progress {
-                    if total > 0 {
-                        cb(copied.min(total), total);
-                    }
-                }
-            })?;
+            copy_dir_recursive(src, dst, is_cancelled)?;
             let _ = remove_dir_safe(src);
             Ok(())
         }

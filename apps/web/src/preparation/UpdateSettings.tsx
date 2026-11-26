@@ -45,7 +45,7 @@ export interface UpdateStatus {
   transferStage?: 'downloading' | 'verifying';
   candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
-  lastResult?: 'installed' | 'restored' | 'recovery-required' | 'cancelled' | 'failed' | null;
+  lastResult?: 'installed' | 'restored' | 'cancelled' | 'failed' | null;
   lastResultVersion?: string | null;
   lastResultMessage?: string | null;
   lastResultNotificationPending?: boolean;
@@ -326,19 +326,8 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
         <StatusBanner tone="warning">升级未完成，已恢复旧版。</StatusBanner>
       ) : null}
       {status?.lastResult === 'failed' ? (
-        <StatusBanner tone="warning">更新准备失败，原程序未被替换。请查看诊断后重试。</StatusBanner>
-      ) : null}
-      {status?.lastResult === 'recovery-required' ? (
-        <StatusBanner tone="danger">
-          升级需要恢复。保存资料并关闭 Mizar 与残留安装向导后，在对应 install-* 安装记录目录运行
-          Restore-Mizar.cmd。保留备份和恢复记录。
-          <Button
-            onClick={() =>
-              void desktopInvoke('open_update_recovery').catch(() => setError('恢复目录未能打开。'))
-            }
-          >
-            打开恢复目录
-          </Button>
+        <StatusBanner tone="warning">
+          应用更新未完成，当前仍运行旧版。原程序与配置未受影响，请查看诊断后重试。
         </StatusBanner>
       ) : null}
       <div className="settings-update-footer">

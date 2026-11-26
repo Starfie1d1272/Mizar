@@ -199,6 +199,7 @@ export class UpdateManager {
     try {
       const result = z
         .object({
+          operation: z.enum(['install', 'apply-update', 'uninstall']).optional(),
           status: z.enum(['installed', 'rolled_back', 'cancelled', 'failed']),
           version: z.string().nullable().optional(),
           message: z.string().nullable().optional(),
@@ -212,11 +213,13 @@ export class UpdateManager {
             ),
           ),
         );
-      this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
-      this.lastResultVersion = result.version ?? null;
-      this.lastResultMessage = result.message ?? null;
-      this.lastResultNotificationPending =
-        (this.lastResult === 'restored' || this.lastResult === 'failed') && !result.notified;
+      if (result.operation === 'apply-update') {
+        this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
+        this.lastResultVersion = result.version ?? null;
+        this.lastResultMessage = result.message ?? null;
+        this.lastResultNotificationPending =
+          (this.lastResult === 'restored' || this.lastResult === 'failed') && !result.notified;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }

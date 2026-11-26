@@ -196,6 +196,7 @@ test('rollback applier result notifies once across restarts and skips cancelled 
   await writeFile(
     resultPath,
     JSON.stringify({
+      operation: 'apply-update',
       status: 'rolled_back',
       version: '1.13.0',
       message: '新版启动失败，已自动回退到上一版本',
@@ -228,12 +229,25 @@ test('rollback applier result notifies once across restarts and skips cancelled 
   assert.equal(second.status().lastResult, 'restored');
   assert.equal(second.status().lastResultNotificationPending, false);
 
-  await writeFile(resultPath, JSON.stringify({ status: 'cancelled', version: '1.13.0' }));
+  await writeFile(
+    resultPath,
+    JSON.stringify({ operation: 'apply-update', status: 'cancelled', version: '1.13.0' }),
+  );
   const third = makeManager();
   t.after(() => third.close());
   await third.load();
   assert.equal(third.status().lastResult, 'cancelled');
   assert.equal(third.status().lastResultNotificationPending, false);
+
+  await writeFile(
+    resultPath,
+    JSON.stringify({ operation: 'install', status: 'failed', version: '1.13.0' }),
+  );
+  const fourth = makeManager();
+  t.after(() => fourth.close());
+  await fourth.load();
+  assert.equal(fourth.status().lastResult, null);
+  assert.equal(fourth.status().lastResultNotificationPending, false);
 });
 
 test('website shutdown cannot acknowledge a failed local source commit', async () => {

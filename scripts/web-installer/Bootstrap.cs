@@ -462,7 +462,7 @@ namespace Mizar.WebInstaller {
       if(phase=="downloading-core") {downloading=true;bar.Visible=true;bar.Style=ProgressBarStyle.Continuous;bar.Value=0;amount.Text="";heading.Text="正在下载 Mizar";detail.Text="请稍候。";return;}
       if(phase=="installing-core") {downloading=false;bar.Visible=true;bar.Style=ProgressBarStyle.Marquee;amount.Text="";heading.Text="正在安装 Mizar";detail.Text="正在写入程序文件，即将完成，此时不可取消。";cancel.Enabled=false;return;}
       downloading=false; bar.Visible=true; bar.Style=ProgressBarStyle.Marquee; amount.Text="";
-      heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="installing-resources" ? "正在完成准备" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
+      heading.Text=phase=="checking-release" ? "正在准备安装" : phase=="waiting-for-installer" ? "正在停止" : "正在安装";
       detail.Text=phase=="waiting-for-installer" ? "正在等待安装操作安全结束。" : "请稍候。";
     }
     internal void ShowCompleted(string path) {
