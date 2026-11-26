@@ -63,6 +63,7 @@ export type ProductionDependencies = {
     ) => Promise<void>;
     wait: () => Promise<void>;
   };
+  onModeChange?: (mode: 'preparation' | 'live' | 'hidden') => void;
   warn: (details: object, message: string) => void;
   error: (details: object, message: string) => void;
 };
@@ -423,6 +424,7 @@ export function createProduction(options: ProductionDependencies) {
             void options.source?.stats(statsTarget(binding.context));
         }
         mode = 'live';
+        options.onModeChange?.('live');
         if (entering) lastEnteredId = entryId;
       } else if (body?.action === 'hide') {
         if (mode === 'live') mode = 'hidden';
@@ -482,6 +484,7 @@ export function createProduction(options: ProductionDependencies) {
           }
           scheduleObsExit(controlValid, sceneRequired);
           mode = 'preparation';
+          options.onModeChange?.('preparation');
           if (!obsOnlyRetry) {
             statsActive = false;
             options.source?.clearStats();
@@ -555,6 +558,7 @@ export function createProduction(options: ProductionDependencies) {
             releaseHandoffState = 'confirmed';
           }
           mode = 'preparation';
+          options.onModeChange?.('preparation');
           statsActive = false;
           options.source?.clearStats();
         }
@@ -762,10 +766,12 @@ export function createProduction(options: ProductionDependencies) {
       exitFrozen = false;
       sessionId = randomUUID();
       mode = 'live';
+      options.onModeChange?.('live');
       revision = randomUUID();
     },
     setTrialPreparation: () => {
       mode = 'preparation';
+      options.onModeChange?.('preparation');
       revision = randomUUID();
     },
     deferTrialObsExit: async () => {

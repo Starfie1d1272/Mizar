@@ -331,9 +331,14 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     obsExit: createObsExitStatus(options.obsConfigPath, (error) => {
       app.log.warn({ err: error }, 'OBS exit status not saved');
     }),
+    onModeChange: (mode) => {
+      if (mode === 'live') options.updates?.yieldAutoDownload();
+      else if (mode === 'preparation') void options.updates?.resumeAutoDownload();
+    },
     warn: (details, message) => app.log.warn(details, message),
     error: (details, message) => app.log.error(details, message),
   });
+  obsAdapter?.setOnOutputBusy(() => options.updates?.yieldAutoDownload());
   connectWebsiteRuntime({
     projections: projectionCoordinator,
     context: matchContextController,

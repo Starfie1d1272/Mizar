@@ -135,6 +135,14 @@ export class ObsOutputController {
   private extraTransitionAt = { replay: 0, virtual: 0 };
   private warmupCollectionChanging = false;
   private warmupExitStarted = false;
+  private onOutputBusy: (() => void) | undefined;
+
+  setOnOutputBusy(handler: () => void): void {
+    this.onOutputBusy = handler;
+  }
+  notifyOutputBusy(): void {
+    this.onOutputBusy?.();
+  }
 
   constructor(
     private readonly config: ObsConfigStore,
@@ -425,6 +433,7 @@ export class ObsOutputController {
       this.streamBytes = undefined;
     if (phase === 'starting' || phase === 'stopping') this.transitionAt[kind] = Date.now();
     this.update(kind, phase, phase === 'unknown' ? null : event.outputActive);
+    if (phase === 'starting' || phase === 'active' || event.outputActive) this.onOutputBusy?.();
   }
 
   private async connect(): Promise<void> {

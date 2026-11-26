@@ -339,7 +339,7 @@ Host 私有 `POST /operator/runtime/camera-session` 通过 `host-start/begin/pul
 | `select_demo_file/start_demo_test`                  | 短期选择 token 与文件名，不接受网页任意路径；完成须 Host 确认退出与恢复            |
 | `set_cs2_preferences/cs2_config_status`             | 有限画质/帧率和当前恢复摘要；canPreserve 不是已完成备份或启动证明                  |
 | `select_cs2_installation/open_cs2_config_directory` | 原生选择或重新解析当前目录，不接收任意打开路径                                     |
-| `GET /local/v1/updates`、`POST /operator/updates`   | 有限状态、检查、下载、取消和偏好，不回暂存路径                                     |
+| `GET /local/v1/updates`、`POST /operator/updates`   | 正交更新状态（`staged`/`candidate`/`activity`/`lastError`）、检查、下载、取消与自动准备偏好，不回暂存路径 |
 | `install_update`                                    | 仅准备中心主窗口发起，Host 重新核对安装计划与运行资格                              |
 
 试播 `cancel` 只用于尚未提交游戏启动的撤销；`complete` 在游戏停止和配置恢复后确认。试播隔离允许原生宿主调用 `mulnx-prepare` 准备或恢复游戏启动参数，仍校验 Host token、无网页来源及既有制作资格，不开放正式比赛写入。错误响应使用稳定 error/stage/operationId 与有限中文提示，原始原因只进入脱敏诊断。

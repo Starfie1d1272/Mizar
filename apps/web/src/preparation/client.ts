@@ -327,13 +327,6 @@ export async function productionAction(
         return task.result;
       }
     } else if (window.__TAURI_INTERNALS__ && action === 'enter') {
-      void fetch('/operator/updates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...task.headers() },
-        body: JSON.stringify({ action: 'entry-check' }),
-        keepalive: true,
-        signal: AbortSignal.timeout(40_000),
-      }).catch(() => {});
       await enterDesktopWorkspace(
         { expectedRevision: state.revision, preserveSettings, external },
         task,

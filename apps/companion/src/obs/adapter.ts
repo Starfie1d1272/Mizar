@@ -299,6 +299,10 @@ export class ObsAdapter {
     return this.outputs.waitForAutomaticAudioConnection();
   }
 
+  setOnOutputBusy(handler: () => void): void {
+    this.outputs.setOnOutputBusy(handler);
+  }
+
   async outputStatus(includePreparation = true): Promise<ObsOutputsStatus> {
     const outputs = await this.outputs.read().catch(() => this.outputs.snapshot());
     return includePreparation
@@ -316,6 +320,7 @@ export class ObsAdapter {
           throw new ObsOutputError('obs_output_stale', '输出请求已取消，未发送到 OBS。');
         let current = valid;
         if (command.action === 'start') {
+          this.outputs.notifyOutputBusy();
           if (this.configurationPending)
             throw new ObsOutputError('obs_output_busy', 'OBS 正在准备配置，请等待状态确认。');
           let preparation = await this.preparationStatus();

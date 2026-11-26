@@ -168,16 +168,24 @@ export class StableSource {
     );
     return { manifest, publication };
   }
-  private async fetchAndVerifyManifest(
+  /** Authenticate raw machine-metadata.json bytes using Sigstore/TUF, update-index.v2, and Core qualification. */
+  async authenticateMetadata(carrier: Buffer, signal: AbortSignal): Promise<UpdateManifest> {
+    const { manifest } = await this.authenticateIndex(
+      readMachineFile(carrier, 'update-index.json'),
+      signal,
+    );
+    return this.selectCore(manifest, signal, carrier);
+  }
+  private async fetchAndVerifyManifest<T>(
     version: string | undefined,
     signal: AbortSignal,
-    verifyCarrier: (carrier: Buffer, attemptSignal: AbortSignal) => Promise<UpdateManifest>,
-  ): Promise<UpdateManifest> {
+    verifyCarrier: (carrier: Buffer, attemptSignal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     const path = version === undefined ? 'latest/download' : `download/v${version}`;
     const origin = `https://github.com/${UPDATE_REPOSITORY}/releases/${path}/${MACHINE_METADATA_NAME}`;
     const began = Date.now();
     try {
-      const manifest = await fetchVerifiedMetadata({
+      const result = await fetchVerifiedMetadata({
         origin,
         maxBytes: MACHINE_METADATA_MAX_BYTES,
         signal,
@@ -193,35 +201,36 @@ export class StableSource {
         },
       });
       this.diagnostic?.('github_metadata', undefined, Date.now() - began);
-      return manifest;
+      return result;
     } catch (error) {
       const normalized = normalizeMetadataError(error);
       this.diagnostic?.('github_metadata', normalized, Date.now() - began);
       throw normalized;
     }
   }
-  async latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest> {
+  async latestRelease(
+    signal: AbortSignal,
+    minimumVersion?: string,
+  ): Promise<{ manifest: UpdateManifest; metadataBytes: Buffer }> {
     return this.fetchAndVerifyManifest(undefined, signal, async (carrier, attemptSignal) => {
-      const { manifest } = await this.authenticateIndex(
-        readMachineFile(carrier, 'update-index.json'),
-        attemptSignal,
-      );
+      const manifest = await this.authenticateMetadata(carrier, attemptSignal);
       if (minimumVersion && compareVersions(manifest.version, minimumVersion) < 0)
         throw new Error('update_rollback_rejected');
-      return this.selectCore(manifest, attemptSignal, carrier);
+      return { manifest, metadataBytes: carrier };
     });
+  }
+  async latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest> {
+    const { manifest } = await this.latestRelease(signal, minimumVersion);
+    return manifest;
   }
   /** Fixed-version installers authenticate that version's original dual-signed index. */
   async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {
     if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
       throw new Error('update_version_invalid');
     return this.fetchAndVerifyManifest(version, signal, async (carrier, attemptSignal) => {
-      const { manifest } = await this.authenticateIndex(
-        readMachineFile(carrier, 'update-index.json'),
-        attemptSignal,
-      );
+      const manifest = await this.authenticateMetadata(carrier, attemptSignal);
       if (manifest.version !== version) throw new Error('update_tag_mismatch');
-      return this.selectCore(manifest, attemptSignal, carrier);
+      return manifest;
     });
   }
 }

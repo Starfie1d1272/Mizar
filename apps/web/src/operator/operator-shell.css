@@ -68,6 +68,45 @@
   height: var(--mizar-type-size-title);
   flex: none;
 }
+.product-nav-badge {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--mizar-accent-primary);
+  margin-left: auto;
+  flex: none;
+}
+.product-sidebar-update {
+  margin-top: auto;
+  display: grid;
+  gap: var(--mizar-layout-compact);
+  padding: var(--mizar-layout-padding);
+  background: var(--mizar-bg-elevated, var(--mizar-bg-canvas));
+  border: var(--mizar-line-border) solid var(--mizar-border-default);
+  border-radius: var(--mizar-shape-control);
+}
+.product-sidebar-update__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mizar-layout-compact);
+}
+.product-sidebar-update__label {
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-secondary);
+  font-weight: var(--mizar-type-weight-strong);
+}
+.product-sidebar-update__version {
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.product-sidebar-update__reason {
+  margin: 0;
+  font-size: var(--mizar-type-size-small);
+  color: var(--mizar-fg-muted);
+  line-height: 1.4;
+}
 @media (max-width: 1100px) {
   .product-shell {
     grid-template-columns: calc(var(--mizar-layout-target) * 5) minmax(0, 1fr);

@@ -32,7 +32,6 @@ import {
   type Production,
 } from './client';
 import { Settings } from './Settings';
-import { UpdateNotification } from './UpdateNotification';
 import { DiagnosticDeliveryNotice } from '../debug/DiagnosticDeliveryNotice';
 import { Cs2Recovery } from './Cs2Recovery';
 import { useWorkspaceExitStatus } from './cs2-status';
@@ -212,7 +211,6 @@ export function PreparationPage() {
     <OperatorShell active={path}>
       <main className="preparation" data-page={path}>
         <AutomaticPreparation />
-        <UpdateNotification />
         {preparation?.message ? (
           <StatusBanner tone={preparation.running ? 'info' : 'warning'}>
             {preparation.message}

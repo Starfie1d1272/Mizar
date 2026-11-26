@@ -1,28 +1,36 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
 import { desktopInvoke } from '../workspace/client';
 import './updates.css';
 import { openTool } from './client';
 
+export interface UpdateLastError {
+  code: string;
+  stage: string;
+  stageLabel: string;
+  summary: string;
+  nextStep: string;
+  operationId: string;
+  manual: boolean;
+  security: boolean;
+}
+
+export interface UpdateManifestView {
+  version: string;
+  notes: string;
+  installer: { bytes: number };
+}
+
 export interface UpdateStatus {
-  phase:
-    | 'idle'
-    | 'checking'
-    | 'current'
-    | 'available'
-    | 'downloading'
-    | 'ready'
-    | 'installing'
-    | 'manual'
-    | 'error';
+  activity: 'idle' | 'checking' | 'downloading' | 'installing';
+  staged: UpdateManifestView | null;
+  candidate: UpdateManifestView | null;
+  manual: boolean;
+  checkedCurrent?: boolean;
   automatic: boolean;
-  notificationPending?: boolean;
-  notificationSafe?: boolean;
-  mulnxNotificationPending?: boolean;
   mulnx?: {
     installed: string | null;
     latest: string | null;
-    notificationIdentity: string | null;
     checkedAt: number | null;
     checkResult: 'unchecked' | 'current' | 'available' | 'error';
     phase: string;
@@ -32,6 +40,7 @@ export interface UpdateStatus {
   lastCheckedAt?: number | null;
   distribution: 'installed' | 'portable';
   error: string | null;
+  lastError: UpdateLastError | null;
   failureDetails?: {
     stage: string;
     stageLabel?: string;
@@ -43,11 +52,11 @@ export interface UpdateStatus {
   downloadSource?: string | null;
   sourceMessage?: string;
   transferStage?: 'downloading' | 'verifying';
-  candidate: null | { version: string; notes: string; installer: { bytes: number } };
   installBlockedReason?: string | null;
   lastResult?: 'installed' | 'restored' | 'cancelled' | 'failed' | null;
   lastResultVersion?: string | null;
 }
+
 const failures: Record<string, string> = {
   update_network_failed: '更新网络请求失败，具体原因请查看诊断；网络恢复后可重新检查。',
   update_trust_metadata_failed:
@@ -62,6 +71,7 @@ const failures: Record<string, string> = {
   update_download_corrupt: '下载不完整，请重试。',
   update_settings_invalid: '更新设置无法保存，请检查资料目录。',
 };
+
 async function sendAction(action: string, enabled?: boolean): Promise<UpdateStatus> {
   const response = await fetch('/operator/updates', {
     method: 'POST',
@@ -78,25 +88,21 @@ async function sendAction(action: string, enabled?: boolean): Promise<UpdateStat
     );
   return value;
 }
+
 export function UpdateSettings({ children }: { children?: ReactNode }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [requested, setRequested] = useState(false);
+  const [installingNow, setInstallingNow] = useState(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
   const [diagnosticFeedback, setDiagnosticFeedback] = useState('');
   const [unavailable, setUnavailable] = useState(false);
-  const installing = useRef(false);
   const desktop = Boolean(window.__TAURI_INTERNALS__);
+
   const applyStatus = useCallback((next: UpdateStatus) => {
     setStatus(next);
-    if (
-      next.phase === 'error' ||
-      next.error === 'update_cancelled' ||
-      (next.phase === 'ready' && next.installBlockedReason)
-    )
-      setRequested(false);
   }, []);
+
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -131,60 +137,40 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       request?.abort();
     };
   }, [applyStatus]);
-  useEffect(() => {
-    if (!requested || !status || installing.current) return;
-    if (status.phase === 'error' || status.error === 'update_cancelled') return;
-    if (status.phase !== 'ready') return;
-    if (status.installBlockedReason) return;
-    installing.current = true;
-    const complete = async () => {
-      try {
-        await desktopInvoke('install_update');
-        setRequested(false);
-      } catch (reason) {
-        setRequested(false);
-        setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
-      } finally {
-        installing.current = false;
-      }
-    };
-    void complete();
-  }, [requested, status]);
+
   const action = async (name: string, enabled?: boolean) => {
-    if (busy || installing.current) return;
-    if (name === 'cancel') setRequested(false);
+    if (busy || installingNow) return;
     setBusy(true);
     setError('');
     try {
       applyStatus(await sendAction(name, enabled));
     } catch (reason) {
-      setRequested(false);
       setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
     } finally {
       setBusy(false);
     }
   };
-  const update = async () => {
-    if (busy || !desktop || !status) return;
+
+  const install = async () => {
+    if (busy || installingNow || !desktop || !status?.staged || status.installBlockedReason) return;
+    setInstallingNow(true);
     setError('');
-    if (status.phase === 'available') {
-      setBusy(true);
-      try {
-        applyStatus(await sendAction('download'));
-        setRequested(true);
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
-      } finally {
-        setBusy(false);
-      }
-    } else setRequested(true);
+    try {
+      await desktopInvoke('install_update');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
+    } finally {
+      setInstallingNow(false);
+    }
   };
+
   const openPage = async () => {
     try {
+      const targetVersion = status?.candidate?.version ?? status?.staged?.version ?? null;
       if (desktop)
         await desktopInvoke('open_update_page', {
           source: 'github',
-          version: status?.candidate?.version ?? null,
+          version: targetVersion,
         });
       else
         window.open(
@@ -196,6 +182,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       setError('下载页面未能打开。');
     }
   };
+
   const copyUpdateSummary = async () => {
     try {
       await navigator.clipboard.writeText(
@@ -204,9 +191,10 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
             schema: 'mizar-update-summary/1',
             time: new Date().toISOString(),
             currentVersion: status?.currentVersion ?? null,
+            stagedVersion: status?.staged?.version ?? null,
             candidateVersion: status?.candidate?.version ?? null,
             distribution: status?.distribution ?? null,
-            phase: status?.phase ?? null,
+            activity: status?.activity ?? null,
             error: status?.error ?? null,
             lastResult: status?.lastResult ?? null,
             failureDetails:
@@ -229,25 +217,32 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       setDiagnosticFeedback('更新摘要未能复制，请导出诊断包。');
     }
   };
-  const phase = status?.phase;
-  const waiting = busy || phase === 'checking' || phase === 'installing';
-  const downloading = phase === 'downloading';
+
+  const activity = status?.activity;
+  const checking = activity === 'checking';
+  const downloading = activity === 'downloading';
+  const installing = activity === 'installing' || installingNow;
+  const waiting = busy || checking || installing;
   const blocked = status?.installBlockedReason;
-  const visibleDetails = status?.failureDetails?.filter(
-    (detail) =>
-      (status.error && status.error !== 'update_cancelled') ||
-      detail.stage === 'result_load' ||
-      detail.stage === 'result_identity_load',
+  const displayRelease = status?.candidate ?? status?.staged ?? null;
+
+  const recoveryFailures =
+    status?.failureDetails?.filter(
+      (detail) => detail.stage === 'result_load' || detail.stage === 'result_identity_load',
+    ) ?? [];
+  const showRemoteError = Boolean(
+    status?.lastError && (status.lastError.manual || status.lastError.security),
   );
   const failure =
     error ||
     connectionError ||
-    visibleDetails
-      ?.map((detail) => `${detail.stageLabel ?? '更新'}：${detail.summary} ${detail.nextStep}`)
+    recoveryFailures
+      .map((detail) => `${detail.stageLabel ?? '更新'}：${detail.summary} ${detail.nextStep}`)
       .join('\n') ||
-    (status?.error && status.error !== 'update_cancelled'
-      ? failures[status.error] || '更新未完成，原因未知。请导出诊断定位原因。'
+    (showRemoteError && status?.lastError
+      ? `${status.lastError.stageLabel}：${status.lastError.summary} ${status.lastError.nextStep}`
       : '');
+
   return (
     <Panel className="settings-card settings-update">
       <div className="settings-update-header">
@@ -255,25 +250,30 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           <h2>应用更新</h2>
           {status ? <p className="settings-update-version">当前 v{status.currentVersion}</p> : null}
         </div>
-        <Button
-          disabled={!status || waiting || downloading || requested}
-          onClick={() => void action('check')}
-        >
-          {phase === 'checking' ? '正在检查…' : '检查更新'}
+        <Button disabled={!status || waiting || downloading} onClick={() => void action('check')}>
+          {checking ? '正在检查…' : '检查更新'}
         </Button>
       </div>
-      {status?.candidate ? (
+      {displayRelease ? (
         <div className="settings-update-release">
-          <h3>v{status.candidate.version}</h3>
+          <h3>
+            v{displayRelease.version}
+            {status?.staged?.version === displayRelease.version ? '（已准备就绪）' : ''}
+          </h3>
           <details>
             <summary>更新说明</summary>
-            <div className="settings-update-notes">{status.candidate.notes}</div>
+            <div className="settings-update-notes">{displayRelease.notes}</div>
           </details>
         </div>
-      ) : phase === 'current' ? (
+      ) : status?.checkedCurrent && activity === 'idle' ? (
         <p>未发现可用更新。</p>
       ) : unavailable ? (
         <p>请在桌面应用中检查更新。</p>
+      ) : null}
+      {status?.staged && status.candidate && status.staged.version !== status.candidate.version ? (
+        <p className="settings-update-version">
+          本地已就绪 v{status.staged.version}，可随时重启安装。
+        </p>
       ) : null}
       {downloading ? (
         <div className="settings-update-progress">
@@ -300,7 +300,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
         </div>
       ) : null}
       {downloading && status?.sourceMessage ? <p>{status.sourceMessage}</p> : null}
-      {blocked && phase === 'ready' ? (
+      {blocked && status?.staged ? (
         <StatusBanner tone="warning">{status.installBlockedReason}</StatusBanner>
       ) : null}
       {failure ? (
@@ -329,14 +329,22 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
       ) : null}
       <div className="settings-update-footer">
         <div className="preparation-actions">
-          {phase === 'available' || phase === 'ready' || requested ? (
+          {status?.staged ? (
             <Button
               variant="primary"
-              disabled={waiting || downloading || requested || !desktop || Boolean(blocked)}
-              aria-busy={requested || undefined}
-              onClick={() => void update()}
+              disabled={waiting || !desktop || Boolean(blocked)}
+              aria-busy={installing || undefined}
+              onClick={() => void install()}
             >
-              {requested ? '正在更新…' : '一键更新'}
+              {installing ? '正在更新…' : '重启并更新'}
+            </Button>
+          ) : status?.candidate && !status.manual && !downloading ? (
+            <Button
+              variant="primary"
+              disabled={waiting || !desktop}
+              onClick={() => void action('download')}
+            >
+              下载更新
             </Button>
           ) : null}
           {downloading ? (
@@ -344,26 +352,23 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
               取消
             </Button>
           ) : null}
-          {downloading && requested ? (
-            <Button onClick={() => setRequested(false)}>稍后</Button>
-          ) : null}
-          {phase === 'manual' ? (
+          {status?.manual ? (
             <Button variant="primary" onClick={() => void openPage()}>
-              下载新版
+              前往下载
             </Button>
           ) : null}
-          {phase === 'error' ? <Button onClick={() => void openPage()}>GitHub 下载</Button> : null}
+          {failure ? <Button onClick={() => void openPage()}>GitHub 下载</Button> : null}
         </div>
         {status ? (
           <details className="settings-update-options">
             <summary>更新设置</summary>
             <Checkbox
-              label="自动检查 Mizar 和 MulNX 更新"
+              label="自动准备更新"
               checked={status.automatic}
-              disabled={waiting || downloading || requested}
+              disabled={waiting}
               onChange={(event) => void action('automatic', event.target.checked)}
             />
-            <p>启动时检查，持续运行每 6 小时复查；下载和安装由你决定。</p>
+            <p>启动 30 秒后及每 2 小时自动检查，并在非制播空闲时自动下载；重启安装始终由你决定。</p>
           </details>
         ) : null}
       </div>
