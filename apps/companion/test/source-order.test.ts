@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RESOURCE_ASSET_NAMES } from '@mizar/resource-pack-contract/runtime';
 import { makeMachineMetadata } from '@mizar/resource-pack-contract/transport';
 import { boundedBytes, fetchHttps } from '../src/distribution/http.js';
 import { getDistributionConfig, sourceOrder } from '../src/distribution/sources.js';
@@ -244,8 +245,8 @@ test('fetchVerifiedResourceCarrier falls back when second-half publication verif
   const config = getDistributionConfig();
   const makeCarrier = (catalogSig: string, publicationDigest: string) =>
     makeMachineMetadata([
-      ['resource-catalog.json', Buffer.from(JSON.stringify({ sig: catalogSig }))],
-      ['official-resource-publication.json', Buffer.from(publicationDigest)],
+      [RESOURCE_ASSET_NAMES.catalog, Buffer.from(JSON.stringify({ sig: catalogSig }))],
+      [RESOURCE_ASSET_NAMES.publication, Buffer.from(publicationDigest)],
     ]);
 
   const badProxyHost = config.githubReleaseProxies[0]
@@ -272,10 +273,10 @@ test('fetchVerifiedResourceCarrier falls back when second-half publication verif
     fetcher,
     verify: (carrier) => {
       const catalog = JSON.parse(
-        extractMachineFile(carrier, 'resource-catalog.json', 65536).toString('utf8'),
+        extractMachineFile(carrier, RESOURCE_ASSET_NAMES.catalog, 65536).toString('utf8'),
       ) as { sig: string };
       if (catalog.sig !== 'valid-catalog') throw new Error('catalog_invalid');
-      const pubBytes = extractMachineFile(carrier, 'official-resource-publication.json', 65536);
+      const pubBytes = extractMachineFile(carrier, RESOURCE_ASSET_NAMES.publication, 65536);
       if (createHash('sha256').update(pubBytes).digest('hex') !== expectedSha) {
         throw new Error('Authenticated resource asset bytes changed');
       }
