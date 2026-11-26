@@ -153,9 +153,7 @@ namespace Mizar.WebInstaller {
           System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = OfflineDownloads, UseShellExecute = true });
         } catch (Exception error) {
           detail.Text = "下载页面未能打开，请查看详情中的下载地址。";
-          technicalDetails += "
-完整离线包：" + OfflineDownloads + "
-" + RedactText(error.ToString());
+          technicalDetails += "\r\n完整离线包：" + OfflineDownloads + "\r\n" + RedactText(error.ToString());
         }
       };
 
@@ -323,18 +321,14 @@ namespace Mizar.WebInstaller {
 
     string ErrorDetails(Exception error) {
       var sb = new StringBuilder();
-      sb.Append("失败阶段：").Append(activePhase).Append("
-");
+      sb.Append("失败阶段：").Append(activePhase).Append("\r\n");
       lock (diagnosticLog) {
         if (diagnosticLog.Count > 0) {
-          sb.Append("下载诊断：
-");
-          foreach (string line in diagnosticLog) sb.Append("  ").Append(line).Append("
-");
+          sb.Append("下载诊断：\r\n");
+          foreach (string line in diagnosticLog) sb.Append("  ").Append(line).Append("\r\n");
         }
       }
-      sb.Append(DiagnosticText(error)).Append("
-诊断日志：").Append(SaveDiagnostic(error, sb.ToString()));
+      sb.Append(DiagnosticText(error)).Append("\r\n诊断日志：").Append(SaveDiagnostic(error, sb.ToString()));
       return sb.ToString();
     }
 

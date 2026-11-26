@@ -45,12 +45,9 @@ test('sourceOrder supports >3 sources, filters text/html, and falls back on corr
       });
     }
 
-    // Fastest probe source returns corrupt full body; fallback should succeed on next source
-    const fastestProxyHost =
-      config.githubReleaseProxies.length > 1
-        ? new URL(config.githubReleaseProxies[1]!).hostname
-        : new URL(config.githubReleaseProxies[0]!).hostname;
-    return new Response(url.hostname === fastestProxyHost ? Buffer.from('evil') : bytes, {
+    // First full download attempt returns corrupt body; fallback should succeed on next source
+    const isFirstFullAttempt = requests.filter((r) => !r.range).length === 1;
+    return new Response(isFirstFullAttempt ? Buffer.from('evil') : bytes, {
       status: 200,
       headers: { 'content-type': 'application/octet-stream' },
     });
