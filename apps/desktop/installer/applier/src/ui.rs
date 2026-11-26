@@ -6,9 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{
-    COLORREF, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
-};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE,
 };
@@ -19,7 +17,7 @@ use windows::Win32::Graphics::Gdi::{
     SelectObject, SetBkMode, SetTextColor, UpdateWindow, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
     COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT,
     DEFAULT_CHARSET, DEFAULT_PITCH, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
-    DT_VCENTER, DT_WORDBREAK, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT,
+    DT_VCENTER, DT_WORDBREAK, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ,
     OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_NULL, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -28,14 +26,15 @@ use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
 };
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx,
-    EnableMenuItem, EnableWindow, GetClientRect, GetMessageW, GetSystemMenu, GetWindowLongPtrW,
-    IsDialogMessageW, KillTimer, LoadCursorW, LoadImageW, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SendMessageW, SetFocus, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, SystemParametersInfoW, TranslateMessage, BS_DEFPUSHBUTTON,
-    BS_PUSHBUTTON, DI_NORMAL, GWLP_USERDATA, HICON, ICON_BIG, ICON_SMALL, IDCANCEL, IDC_ARROW,
-    IDOK, IMAGE_ICON, LR_DEFAULTCOLOR, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MSG, SC_CLOSE,
+    EnableMenuItem, GetClientRect, GetMessageW, GetSystemMenu, GetWindowLongPtrW, IsDialogMessageW,
+    KillTimer, LoadCursorW, LoadImageW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    SystemParametersInfoW, TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DI_NORMAL,
+    GWLP_USERDATA, HICON, ICON_BIG, ICON_SMALL, IDCANCEL, IDC_ARROW, IDOK, IMAGE_ICON,
+    LR_DEFAULTCOLOR, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MSG, SC_CLOSE,
     SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOZORDER,
     SW_HIDE, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
     WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_PAINT,
@@ -299,13 +298,14 @@ impl WindowResources {
 
     fn destroy(&mut self) {
         unsafe {
-            for obj in [
+            let objs: [HGDIOBJ; 4] = [
                 self.bg_brush.into(),
                 self.font_heading.into(),
                 self.font_body.into(),
                 self.font_small.into(),
-            ] {
-                if !HBRUSH(obj.0).is_invalid() {
+            ];
+            for obj in objs {
+                if !obj.is_invalid() {
                     let _ = DeleteObject(obj);
                 }
             }
