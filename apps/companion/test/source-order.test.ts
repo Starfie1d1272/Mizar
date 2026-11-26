@@ -48,42 +48,76 @@ test('proxy probes and full transfers send no credentials, and a corrupt winner 
   }
 });
 
-test('Mizar proxy policy accepts only the authenticated public asset and does not forward credentials', async () => {
-  const { updateRequest } = await import('../src/updates/network.js');
+test('updateRequest follows wrapped GH-Proxy 302 redirects without credentials', async () => {
+  const { boundedBytes, updateRequest } = await import('../src/updates/network.js');
   const origin =
     'https://github.com/Starfie1d1272/Mizar/releases/download/v1.9.2/Mizar-v1.9.2-Windows-x64-Core-Setup.exe';
   const proxy = `https://gh-proxy.com/${origin}`;
+  const wrappedRedirect =
+    'https://gh-proxy.com/https://release-assets.githubusercontent.com/github-production-release-asset/12345/setup.exe?rscd=attachment&sp=r';
   const signal = new AbortController().signal;
-  const fetcher: typeof fetch = async (_input, init) => {
+  const visited: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    visited.push(url);
     const headers = new Headers(init?.headers);
-    assert.equal(headers.get('range'), 'bytes=0-3');
     assert.equal(headers.has('authorization'), false);
     assert.equal(headers.has('cookie'), false);
-    return new Response('good', { status: 206, headers: { 'content-range': 'bytes 0-3/4' } });
+    if (url === proxy) {
+      return new Response(null, { status: 302, headers: { location: wrappedRedirect } });
+    }
+    assert.equal(url, wrappedRedirect);
+    return new Response('good', { status: 200 });
   };
-  const result = await updateRequest(proxy, signal, fetcher, { proxyAsset: origin, rangeEnd: 3 });
-  assert.equal(result.status, 206);
-  await result.body?.cancel();
-  const boxFile = await updateRequest(
-    'https://box.nju.edu.cn/seafhttp/files/opaque',
-    signal,
-    fetcher,
-    { rangeEnd: 3 },
-  );
-  await boxFile.body?.cancel();
+  const response = await updateRequest(proxy, signal, fetcher);
+  assert.equal((await boundedBytes(response, 1024)).toString('utf8'), 'good');
+  assert.deepEqual(visited, [proxy, wrappedRedirect]);
+});
+
+test('updateRequest rejects non-HTTPS redirects and URLs with embedded credentials', async () => {
+  const { updateRequest } = await import('../src/updates/network.js');
+  const signal = new AbortController().signal;
+  const httpRedirect: typeof fetch = async () =>
+    new Response(null, { status: 302, headers: { location: 'http://example.com/insecure' } });
   await assert.rejects(
     updateRequest(
-      'https://gh-proxy.com/https://github.com/other/private/releases/download/v1/x',
+      'https://gh-proxy.com/https://github.com/org/repo/releases/download/v1/x',
       signal,
-      fetcher,
-      { proxyAsset: origin, rangeEnd: 3 },
+      httpRedirect,
     ),
     /update_url_forbidden/,
   );
-  const redirect: typeof fetch = async () =>
-    new Response(null, { status: 302, headers: { location: 'https://example.com/untrusted' } });
   await assert.rejects(
-    updateRequest(proxy, signal, redirect, { proxyAsset: origin }),
+    updateRequest('https://user:pass@example.com/file', signal, httpRedirect),
     /update_url_forbidden/,
   );
+  const credentialRedirect: typeof fetch = async () =>
+    new Response(null, { status: 302, headers: { location: 'https://user@example.com/file' } });
+  await assert.rejects(
+    updateRequest('https://example.com/start', signal, credentialRedirect),
+    /update_url_forbidden/,
+  );
+});
+
+test('updateRequest isolates Box Authorization header on per-hop redirect', async () => {
+  const { updateRequest } = await import('../src/updates/network.js');
+  const signal = new AbortController().signal;
+  const boxApi = 'https://box.nju.edu.cn/api/v2.1/via-repo-token/download-link/';
+  const externalTarget = 'https://cdn.example.com/files/opaque';
+  const authSeen: { url: string; hasAuth: boolean }[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    const headers = new Headers(init?.headers);
+    authSeen.push({ url, hasAuth: headers.has('authorization') });
+    if (url === boxApi) {
+      return new Response(null, { status: 302, headers: { location: externalTarget } });
+    }
+    return new Response('ok', { status: 200 });
+  };
+  const response = await updateRequest(boxApi, signal, fetcher);
+  await response.body?.cancel();
+  assert.deepEqual(authSeen, [
+    { url: boxApi, hasAuth: true },
+    { url: externalTarget, hasAuth: false },
+  ]);
 });

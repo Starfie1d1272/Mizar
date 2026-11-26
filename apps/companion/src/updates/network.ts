@@ -1,33 +1,13 @@
 import { MACHINE_METADATA_MAX_BYTES } from '@mizar/resource-pack-contract/transport';
 import { UpdateRequestError } from './diagnostics.js';
-import { BOX_READ_TOKEN, UPDATE_REPOSITORY } from './contract.js';
+import { BOX_READ_TOKEN } from './contract.js';
 
 export type UpdateFetch = typeof globalThis.fetch;
-export function allowedUpdateUrl(url: URL): boolean {
-  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash)
-    return false;
-  if (url.hostname === 'github.com')
-    return (
-      url.pathname.startsWith(`/${UPDATE_REPOSITORY}/releases/download/`) ||
-      url.pathname === `/${UPDATE_REPOSITORY}/releases/latest/download/machine-metadata.json`
-    );
-  if (url.hostname === 'release-assets.githubusercontent.com') return true;
-  if (url.hostname === 'box.nju.edu.cn')
-    return (
-      url.pathname.startsWith('/d/91dec4c27e5d47f38fcf/') ||
-      url.pathname.startsWith('/api/v2.1/share-links/91dec4c27e5d47f38fcf/') ||
-      ['/api/v2.1/via-repo-token/dir/', '/api/v2.1/via-repo-token/download-link/'].includes(
-        url.pathname,
-      ) ||
-      url.pathname.startsWith('/seafhttp/files/')
-    );
-  return false;
-}
 export async function updateRequest(
   input: string,
   signal: AbortSignal,
   fetcher: UpdateFetch = globalThis.fetch,
-  options?: { allowCompressedBoxText?: boolean; rangeEnd?: number; proxyAsset?: string },
+  options?: { allowCompressedBoxText?: boolean; rangeEnd?: number },
 ): Promise<Response> {
   if (
     options?.rangeEnd !== undefined &&
@@ -36,26 +16,9 @@ export async function updateRequest(
     throw new Error('update_range_invalid');
   let url = new URL(input);
   for (let redirects = 0; redirects < 5; redirects++) {
-    const original = options?.proxyAsset ? new URL(options.proxyAsset) : null;
-    const isProxyAsset =
-      original?.origin === 'https://github.com' &&
-      allowedUpdateUrl(original) &&
-      !original.search &&
-      url.href === `https://gh-proxy.com/${original.href}`;
-    const proxyRedirect =
-      original &&
-      (url.href === original.href ||
-        (original.pathname ===
-          `/${UPDATE_REPOSITORY}/releases/latest/download/machine-metadata.json` &&
-          url.origin === 'https://github.com' &&
-          !url.search &&
-          allowedUpdateUrl(url) &&
-          new RegExp(
-            `^/${UPDATE_REPOSITORY}/releases/download/v(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)/machine-metadata\\.json$`,
-          ).test(url.pathname)) ||
-        (url.hostname === 'release-assets.githubusercontent.com' && allowedUpdateUrl(url)));
-    if (options?.proxyAsset ? !(isProxyAsset || proxyRedirect) : !allowedUpdateUrl(url))
+    if (url.protocol !== 'https:' || url.username || url.password) {
       throw new Error('update_url_forbidden');
+    }
     const response = await fetcher(url, {
       redirect: 'manual',
       signal,
@@ -159,12 +122,7 @@ export async function githubMetadata(
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
     try {
       return await boundedBytes(
-        await updateRequest(
-          source,
-          deadline,
-          fetcher,
-          index === 0 ? undefined : { proxyAsset: url },
-        ),
+        await updateRequest(source, deadline, fetcher),
         MACHINE_METADATA_MAX_BYTES,
       );
     } catch (error) {
