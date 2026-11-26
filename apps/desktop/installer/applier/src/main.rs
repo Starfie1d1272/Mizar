@@ -276,12 +276,7 @@ fn run_install_or_update(
     }
 
     let (code, msg, committed, relaunch_exe) = match res {
-        Ok(()) => {
-            if let Some(ui) = ui_opt.take() {
-                ui.close();
-            }
-            (ExitCode::Ok, None, true, None)
-        }
+        Ok(()) => (ExitCode::Ok, None, true, None),
         Err(e) => {
             log.log(&e.msg);
             (e.code, Some(e.msg), e.committed, e.relaunch_exe)
@@ -364,11 +359,21 @@ fn execute_install_or_update(
     };
     let ui = ProgressUi::start(params.no_ui, ui_mode, initial_stage, None);
     let res = run_phases(params, log, &ui, &mut guards, out);
-    *ui_slot = Some(ui);
 
     match res {
-        Ok(()) => Ok(()),
+        Ok((version_id, previous_id)) => {
+            ui.close();
+            cleanup_old_versions_and_staging(
+                &params.install_dir,
+                &version_id,
+                previous_id.as_deref(),
+                log,
+                &mut out.cleanup_warning,
+            );
+            Ok(())
+        }
         Err(mut err) => {
+            *ui_slot = Some(ui);
             if !err.committed {
                 let relaunch = if err.code != ExitCode::AppRunning {
                     guards
@@ -392,7 +397,7 @@ fn run_phases(
     ui: &ProgressUi,
     guards: &mut PreCommitGuard,
     out: &mut InstallOutput,
-) -> Result<(), StepError> {
+) -> Result<(String, Option<String>), StepError> {
     let is_update = params.apply_update.is_some();
     let prev_ver_hint = read_current_pointer(&params.install_dir)
         .map(|p| p.current.split('-').next().unwrap_or(&p.current).to_owned());
@@ -599,7 +604,7 @@ fn run_phases(
         }
     }
 
-    // Phase 5: Post (release locks, launch & verify, best-effort cleanup)
+    // Phase 5: Post (release locks, launch & verify)
     guards.release_locks();
 
     if !params.no_launch {
@@ -646,17 +651,27 @@ fn run_phases(
         }
     }
 
+    Ok((version_id, previous_id))
+}
+
+fn cleanup_old_versions_and_staging(
+    install_dir: &Path,
+    version_id: &str,
+    previous_id: Option<&str>,
+    log: &Logger,
+    cleanup_warning: &mut Option<String>,
+) {
     // Best-effort delayed cleanup of older versions & staging
     if let Ok(entries) = fs::read_dir(install_dir.join("versions")) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str != version_id && previous_id.as_deref() != Some(name_str.as_ref()) {
+            if name_str != version_id && previous_id != Some(name_str.as_ref()) {
                 if let Err(e) = remove_dir_safe(&entry.path()) {
                     let w = format!("清理旧版本 {name_str} 失败: {e}");
                     log.log(&format!("warn: {w}"));
-                    if out.cleanup_warning.is_none() {
-                        out.cleanup_warning = Some(w);
+                    if cleanup_warning.is_none() {
+                        *cleanup_warning = Some(w);
                     }
                 }
             }
@@ -667,13 +682,11 @@ fn run_phases(
         if let Err(e) = remove_dir_safe(&staging_root) {
             let w = format!("清理 staging 失败: {e}");
             log.log(&format!("warn: {w}"));
-            if out.cleanup_warning.is_none() {
-                out.cleanup_warning = Some(w);
+            if cleanup_warning.is_none() {
+                *cleanup_warning = Some(w);
             }
         }
     }
-
-    Ok(())
 }
 
 fn run_uninstall(

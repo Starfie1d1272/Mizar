@@ -141,7 +141,7 @@ fn wait_for_runtime(
     child: &mut Child,
     log: Option<&DesktopLog>,
 ) -> Result<(), String> {
-    let mut wait = startup_wait::StartupWait::new(Instant::now());
+    let wait = startup_wait::StartupWait::new(Instant::now());
     loop {
         if host_runtime::health_matches(root) {
             return Ok(());
@@ -154,8 +154,8 @@ fn wait_for_runtime(
                 )
             })
             .unwrap_or_default();
-        if let Some(error) = &progress.error {
-            return Err(error.clone());
+        if let Some(error) = progress.error {
+            return Err(error);
         }
         if let Some(status) = child
             .try_wait()
@@ -163,9 +163,8 @@ fn wait_for_runtime(
         {
             return Err(format!("制播服务未能启动（{status}）；请查看运行日志。"));
         }
-        wait.update(Instant::now(), &progress);
         if wait.expired(Instant::now()) {
-            return Err(wait.timeout_message(&progress));
+            return Err(wait.timeout_message());
         }
         thread::sleep(Duration::from_millis(200));
     }
@@ -190,7 +189,7 @@ fn stop_runtime(
     expected_instance: &str,
 ) -> Result<(), String> {
     let mut child = supervisor(root, "--stop", None, Some(expected_instance))?;
-    match wait_child(&mut child, Duration::from_secs(300)) {
+    match wait_child(&mut child, Duration::from_secs(75)) {
         Ok(status) if status.success() => {
             if let Ok(scope) = shutdown_scope(root) {
                 ExitSignal::notify_stopped(&scope);
@@ -198,8 +197,7 @@ fn stop_runtime(
             Ok(())
         }
         outcome => {
-            // An outer timeout could be payload verification, not Companion
-            // shutdown. Only the stop helper's own exit code proves the latter.
+            // Only the stop helper's own exit code 2 proves a Companion shutdown timeout.
             let timed_out = matches!(&outcome, Ok(status) if status.code() == Some(2));
             if outcome.is_err() {
                 let _ = child.kill();
