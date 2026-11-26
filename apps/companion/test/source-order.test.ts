@@ -7,6 +7,11 @@ import { join } from 'node:path';
 import { boundedBytes, fetchHttps } from '../src/distribution/http.js';
 import { getDistributionConfig, sourceOrder } from '../src/distribution/sources.js';
 import { downloadVerifiedAsset, fetchVerifiedMetadata } from '../src/distribution/transfer.js';
+import {
+  extractMachineFile,
+  fetchVerifiedResourceCarrier,
+} from '../src/distribution/resource-transport.js';
+import { makeMachineMetadata } from '@mizar/resource-pack-contract/transport';
 import { diagnosticValue } from '../src/support/diagnostic-value.js';
 
 test('sourceOrder supports >3 sources, filters text/html, and falls back on corrupt winner', async () => {
@@ -26,7 +31,6 @@ test('sourceOrder supports >3 sources, filters text/html, and falls back on corr
     requests.push({ host: url.hostname, range });
 
     if (range) {
-      // Simulate 4+ sources: first proxy returns text/html, github.com is slower, second proxy is fastest
       if (url.hostname === new URL(config.githubReleaseProxies[0]!).hostname) {
         return new Response('<html>blocked</html>', {
           status: 200,
@@ -45,7 +49,6 @@ test('sourceOrder supports >3 sources, filters text/html, and falls back on corr
       });
     }
 
-    // First full download attempt returns corrupt body; fallback should succeed on next source
     const isFirstFullAttempt = requests.filter((r) => !r.range).length === 1;
     return new Response(isFirstFullAttempt ? Buffer.from('evil') : bytes, {
       status: 200,
@@ -78,7 +81,6 @@ test('sourceOrder accepts more than 3 candidates and uses 256 KiB sample', async
   const delays = [40, 10, 30, 20];
   let observedRange = '';
   const order = await sourceOrder(
-    'test-4-sources-' + Date.now(),
     512 * 1024,
     new AbortController().signal,
     delays.map((delay, idx) => async (_signal, end) => {
@@ -146,17 +148,35 @@ test('fetchHttps rejects non-HTTPS, credentials, localhost, and bare IP redirect
   );
 });
 
-test('fetchVerifiedMetadata falls back atomically when verification fails on earlier source', async () => {
+test('fetchVerifiedMetadata tries official first, then races proxies and aborts losers', async () => {
   const signal = new AbortController().signal;
-  const attempts: string[] = [];
-  const fetcher: typeof fetch = async (input) => {
+  const config = getDistributionConfig();
+  assert.ok(config.githubReleaseProxies.length >= 2);
+  let abortedSlowProxy = false;
+  let officialTried = false;
+
+  const fetcher: typeof fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : input.toString();
-    attempts.push(url);
     if (url.startsWith('https://github.com/')) {
-      return new Response(JSON.stringify({ valid: false }), { status: 200 });
+      officialTried = true;
+      return new Response('unavailable', { status: 503 });
     }
-    return new Response(JSON.stringify({ valid: true, version: '1.13.3' }), { status: 200 });
+    const fastHost = new URL(config.githubReleaseProxies[1]!).hostname;
+    if (url.includes(fastHost)) {
+      return new Response(JSON.stringify({ valid: true, version: '1.13.3' }), { status: 200 });
+    }
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        'abort',
+        () => {
+          abortedSlowProxy = true;
+          reject(init.signal?.reason);
+        },
+        { once: true },
+      );
+    });
   };
+
   const result = await fetchVerifiedMetadata({
     origin: 'https://github.com/Starfie1d1272/Mizar/releases/latest/download/machine-metadata.json',
     maxBytes: 64 * 1024,
@@ -168,8 +188,42 @@ test('fetchVerifiedMetadata falls back atomically when verification fails on ear
       return parsed.version!;
     },
   });
+  assert.equal(officialTried, true);
   assert.equal(result, '1.13.3');
-  assert.equal(attempts.length, 2);
+  assert.equal(abortedSlowProxy, true);
+});
+
+test('fetchVerifiedResourceCarrier switches source when carrier signature verification fails', async () => {
+  const signal = new AbortController().signal;
+  const config = getDistributionConfig();
+  const makeCarrier = (sig: string) =>
+    makeMachineMetadata([['resource-catalog.json', Buffer.from(JSON.stringify({ sig }))]]);
+
+  const badProxyHost = new URL(config.githubReleaseProxies[0]!).hostname;
+  const fetcher: typeof fetch = async (input) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.startsWith('https://github.com/')) {
+      return new Response('timeout', { status: 504 });
+    }
+    if (url.includes(badProxyHost)) {
+      return new Response(makeCarrier('invalid-signature'), { status: 200 });
+    }
+    return new Response(makeCarrier('valid-signature'), { status: 200 });
+  };
+
+  const verified = await fetchVerifiedResourceCarrier({
+    version: '1.13.3',
+    signal,
+    fetcher,
+    verify: (carrier) => {
+      const catalog = JSON.parse(
+        extractMachineFile(carrier, 'resource-catalog.json', 65536).toString('utf8'),
+      ) as { sig: string };
+      if (catalog.sig !== 'valid-signature') throw new Error('resource_signature_invalid');
+      return catalog.sig;
+    },
+  });
+  assert.equal(verified, 'valid-signature');
 });
 
 test('downloadVerifiedAsset supports assets without preset bytes (e.g. 7zr.exe)', async () => {
@@ -200,4 +254,15 @@ test('diagnosticValue redacts explicit Box token secrets', () => {
   };
   assert.equal(redacted.message.includes(secret), false);
   assert.equal(redacted.message.includes('[redacted]'), true);
+});
+
+test('C# web-installer enforces embedded config, local IO boundary, and success diagnostics', async () => {
+  const [downloaderCs, windowCs] = await Promise.all([
+    readFile(join(process.cwd(), '..', '..', 'scripts/web-installer/Downloader.cs'), 'utf8'),
+    readFile(join(process.cwd(), '..', '..', 'scripts/web-installer/Window.cs'), 'utf8'),
+  ]);
+  assert.match(downloaderCs, /class LocalStorageException/);
+  assert.match(downloaderCs, /catch \(LocalStorageException\)/);
+  assert.match(downloaderCs, /缺少嵌入的分发配置 distribution\.json/);
+  assert.match(windowCs, /SaveSuccessDiagnostic\(\)/);
 });

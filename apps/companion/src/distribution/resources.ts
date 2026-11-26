@@ -7,7 +7,11 @@ import {
   verifyCatalogResourcePublicationBytes,
   type ResourceCatalogCorePin,
 } from '@mizar/resource-pack-contract/runtime';
-import { createResourceOriginalDownloader, downloadResourceArchive } from './resource-transport.js';
+import {
+  downloadResourceArchive,
+  extractMachineFile,
+  fetchVerifiedResourceCarrier,
+} from './resource-transport.js';
 
 export interface PublishedResourceOptions {
   /** Authenticated current Core, never a renderer-supplied identity. */
@@ -29,45 +33,45 @@ export async function authenticatePublishedResource(options: PublishedResourceOp
   const signal = options.signal;
   const fetcher = options.fetcher ?? globalThis.fetch;
   const version = options.core.appVersion;
-  const downloadResourceOriginal = createResourceOriginalDownloader();
-  const download = (name: string, maximum: number, attempt: AbortSignal) =>
-    downloadResourceOriginal({
-      version,
-      name,
-      maximum,
-      signal: attempt,
-      fetcher,
-    });
-  const authenticate = async () => {
-    const descriptorBytes = await download(names.descriptor, 65536, signal);
-    const descriptorBundleBytes = await download(names.descriptorQualification, 2097152, signal);
-    const catalogBytes = await download(names.catalog, 65536, signal);
-    const catalogBundleBytes = await download(names.catalogPromotion, 2097152, signal);
-    return verifyResourceCatalogBytes({
-      descriptorBytes,
-      descriptorBundleBytes,
-      catalogBytes,
-      catalogBundleBytes,
-      expectedCore: options.core,
-      tufCachePath: options.tufCachePath,
-      signal,
-    });
-  };
-  const authorization = await authenticate();
+
+  const { carrier, authorization } = await fetchVerifiedResourceCarrier({
+    version,
+    signal,
+    fetcher,
+    verify: async (candidateCarrier, attemptSignal) => {
+      const auth = await verifyResourceCatalogBytes({
+        descriptorBytes: extractMachineFile(candidateCarrier, names.descriptor, 65536),
+        descriptorBundleBytes: extractMachineFile(
+          candidateCarrier,
+          names.descriptorQualification,
+          2097152,
+        ),
+        catalogBytes: extractMachineFile(candidateCarrier, names.catalog, 65536),
+        catalogBundleBytes: extractMachineFile(candidateCarrier, names.catalogPromotion, 2097152),
+        expectedCore: options.core,
+        tufCachePath: options.tufCachePath,
+        signal: attemptSignal,
+      });
+      return { carrier: candidateCarrier, authorization: auth };
+    },
+  });
+
   const identity = getResourceAuthorization(authorization);
   const loadVerified = async (downloadSignal: AbortSignal = signal) => {
     const attempt = AbortSignal.any([signal, downloadSignal]);
     const prefix = `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/`;
-    const metadata = async (name: string, maximum: number) => {
-      if (identity.assets[name] !== prefix + name)
+    const metadata = (name: string, maximum: number) => {
+      if (identity.assets[name] !== prefix + name) {
         throw new Error('Canonical resource origin changed');
-      return download(name, maximum, attempt);
+      }
+      return extractMachineFile(carrier, name, maximum);
     };
-    const archiveBundleBytes = await metadata(names.archiveQualification, 2097152);
-    const statementBytes = await metadata(names.publication, 65536);
-    if (createHash('sha256').update(statementBytes).digest('hex') !== identity.publication.sha256)
+    const archiveBundleBytes = metadata(names.archiveQualification, 2097152);
+    const statementBytes = metadata(names.publication, 65536);
+    if (createHash('sha256').update(statementBytes).digest('hex') !== identity.publication.sha256) {
       throw new Error('Authenticated resource asset bytes changed');
-    const publicationBundleBytes = await metadata(names.publicationPromotion, 2097152);
+    }
+    const publicationBundleBytes = metadata(names.publicationPromotion, 2097152);
     const inputs = {
       authorization,
       archiveBundleBytes,

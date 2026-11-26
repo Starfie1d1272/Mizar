@@ -3,12 +3,24 @@ import { open, rm } from 'node:fs/promises';
 import { boundedBytes, type FetchLike } from './http.js';
 import {
   buildGitHubReleaseSources,
-  forgetSourceOrder,
   getDistributionConfig,
   sourceOrder,
   type DistributionSource,
   type SourceDiagnostic,
 } from './sources.js';
+
+const OFFICIAL_METADATA_TIMEOUT_MS = 8_000;
+
+export interface FormattedSourceDiagnostic {
+  stage: SourceDiagnostic['stage'];
+  candidates: string[];
+  source?: string;
+  order?: string[];
+  elapsedMs?: number;
+  status?: number | undefined;
+  rangeIgnored?: boolean;
+  error?: unknown;
+}
 
 /** Download each authenticated source to a fresh file and verify every byte before returning. */
 export async function transfer(options: {
@@ -138,17 +150,10 @@ export interface DownloadVerifiedAssetOptions {
   extraSources?: readonly DistributionSource[];
   fetcher?: FetchLike | undefined;
   signal: AbortSignal;
-  cacheKey?: string;
   onProgress?: (bytes: number, source: DistributionSource, sourceIndex: number) => void;
   onVerifying?: (source: DistributionSource) => void;
   onFallback?: (error: unknown, source: DistributionSource, sourceIndex: number) => void;
-  onDiagnostic?: (
-    diagnostic: SourceDiagnostic & {
-      candidates: string[];
-      sourceName?: string | undefined;
-      orderNames?: string[] | undefined;
-    },
-  ) => void;
+  onDiagnostic?: (diagnostic: FormattedSourceDiagnostic) => void;
 }
 
 export async function downloadVerifiedAsset(
@@ -159,56 +164,56 @@ export async function downloadVerifiedAsset(
     options.extraSources ?? [],
     options.fetcher,
   );
-  const key =
-    options.cacheKey ??
-    `asset:${options.origin}:${options.sha256}:${options.bytes ?? 0}:${sources.map((s) => s.name).join(',')}`;
-
+  const candidates = sources.map((entry) => entry.name);
   const shouldProbe = options.bytes !== undefined && sources.length > 1;
   const order = shouldProbe
     ? await sourceOrder(
-        key,
         options.bytes!,
         options.signal,
         sources.map((s) => s.request),
-        (diagnostic) =>
-          options.onDiagnostic?.({
-            ...diagnostic,
-            candidates: sources.map((entry) => entry.name),
-            sourceName:
-              diagnostic.source === undefined ? undefined : sources[diagnostic.source]?.name,
-            orderNames: diagnostic.order?.map((idx) => sources[idx]!.name),
-          }),
+        (diagnostic) => {
+          const formatted: FormattedSourceDiagnostic = {
+            stage: diagnostic.stage,
+            candidates,
+          };
+          if (diagnostic.elapsedMs !== undefined) formatted.elapsedMs = diagnostic.elapsedMs;
+          if (diagnostic.status !== undefined) formatted.status = diagnostic.status;
+          if (diagnostic.rangeIgnored !== undefined)
+            formatted.rangeIgnored = diagnostic.rangeIgnored;
+          if (diagnostic.error !== undefined) formatted.error = diagnostic.error;
+          if (diagnostic.sourceIndex !== undefined) {
+            formatted.source = sources[diagnostic.sourceIndex]!.name;
+          }
+          if (diagnostic.orderIndices !== undefined) {
+            formatted.order = diagnostic.orderIndices.map((idx) => sources[idx]!.name);
+          }
+          options.onDiagnostic?.(formatted);
+        },
       )
     : sources.map((_, idx) => idx);
 
   let currentSource = sources[order[0]!]!;
-  try {
-    const result = await transfer({
-      target: options.target,
-      ...(options.bytes === undefined ? {} : { bytes: options.bytes }),
-      ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
-      sha256: options.sha256,
-      ...(options.integrityError === undefined ? {} : { integrityError: options.integrityError }),
-      signal: options.signal,
-      sources: order.map((idx) => (attempt) => sources[idx]!.request(attempt)),
-      progress: (bytes, orderedIndex) => {
-        currentSource = sources[order[orderedIndex]!]!;
-        options.onProgress?.(bytes, currentSource, orderedIndex);
-      },
-      verifying: () => {
-        options.onVerifying?.(currentSource);
-      },
-      fallback: (error, orderedIndex) => {
-        const failed = sources[order[orderedIndex]!]!;
-        if (shouldProbe) forgetSourceOrder(key);
-        options.onFallback?.(error, failed, orderedIndex);
-      },
-    });
-    return { source: sources[order[result.sourceIndex]!]!, bytes: result.bytes };
-  } catch (error) {
-    if (!options.signal.aborted && shouldProbe) forgetSourceOrder(key);
-    throw error;
-  }
+  const result = await transfer({
+    target: options.target,
+    ...(options.bytes === undefined ? {} : { bytes: options.bytes }),
+    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+    sha256: options.sha256,
+    ...(options.integrityError === undefined ? {} : { integrityError: options.integrityError }),
+    signal: options.signal,
+    sources: order.map((idx) => (attempt) => sources[idx]!.request(attempt)),
+    progress: (bytes, orderedIndex) => {
+      currentSource = sources[order[orderedIndex]!]!;
+      options.onProgress?.(bytes, currentSource, orderedIndex);
+    },
+    verifying: () => {
+      options.onVerifying?.(currentSource);
+    },
+    fallback: (error, orderedIndex) => {
+      const failed = sources[order[orderedIndex]!]!;
+      options.onFallback?.(error, failed, orderedIndex);
+    },
+  });
+  return { source: sources[order[result.sourceIndex]!]!, bytes: result.bytes };
 }
 
 export interface FetchVerifiedMetadataOptions<T> {
@@ -224,6 +229,10 @@ export interface FetchVerifiedMetadataOptions<T> {
   ) => void;
 }
 
+/**
+ * Official-first (8s), then parallel proxy race:
+ * the first proxy that passes the complete verify() callback wins and aborts all others.
+ */
 export async function fetchVerifiedMetadata<T>(
   options: FetchVerifiedMetadataOptions<T>,
 ): Promise<T> {
@@ -235,20 +244,59 @@ export async function fetchVerifiedMetadata<T>(
   const { metadataMs } = getDistributionConfig().timeouts;
   const failures: unknown[] = [];
 
-  for (const [index, source] of sources.entries()) {
+  const official = sources[0]!;
+  const officialBudget = Math.min(OFFICIAL_METADATA_TIMEOUT_MS, metadataMs);
+  const officialSignal = AbortSignal.any([options.signal, AbortSignal.timeout(officialBudget)]);
+  try {
+    options.onDiagnostic?.('metadata_attempt', { source: official, index: 0 });
+    const response = await official.request(officialSignal);
+    const bytes = await boundedBytes(response, options.maxBytes);
+    const verified = await options.verify(bytes, officialSignal);
+    options.onDiagnostic?.('metadata_verified', { source: official, index: 0 });
+    return verified;
+  } catch (error) {
     options.signal.throwIfAborted();
-    const attemptSignal = AbortSignal.any([options.signal, AbortSignal.timeout(metadataMs)]);
+    failures.push(error);
+    options.onDiagnostic?.('metadata_fallback', { source: official, index: 0, error });
+  }
+
+  const proxies = sources.slice(1);
+  if (proxies.length > 0) {
+    const raceAbort = new AbortController();
+    const proxySignal = AbortSignal.any([
+      options.signal,
+      raceAbort.signal,
+      AbortSignal.timeout(metadataMs),
+    ]);
     try {
-      options.onDiagnostic?.('metadata_attempt', { source, index });
-      const response = await source.request(attemptSignal);
-      const bytes = await boundedBytes(response, options.maxBytes);
-      const verified = await options.verify(bytes, options.signal);
-      options.onDiagnostic?.('metadata_verified', { source, index });
-      return verified;
+      return await Promise.any(
+        proxies.map(async (source, proxyOffset) => {
+          const index = proxyOffset + 1;
+          options.onDiagnostic?.('metadata_attempt', { source, index });
+          try {
+            const response = await source.request(proxySignal);
+            const bytes = await boundedBytes(response, options.maxBytes);
+            const verified = await options.verify(bytes, proxySignal);
+            raceAbort.abort();
+            options.onDiagnostic?.('metadata_verified', { source, index });
+            return verified;
+          } catch (error) {
+            if (!options.signal.aborted && !raceAbort.signal.aborted) {
+              options.onDiagnostic?.('metadata_fallback', { source, index, error });
+            }
+            throw error;
+          }
+        }),
+      );
     } catch (error) {
       options.signal.throwIfAborted();
-      failures.push(error);
-      options.onDiagnostic?.('metadata_fallback', { source, index, error });
+      if (error instanceof AggregateError) {
+        failures.push(...error.errors);
+      } else {
+        failures.push(error);
+      }
+    } finally {
+      raceAbort.abort();
     }
   }
 

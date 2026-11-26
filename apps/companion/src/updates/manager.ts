@@ -13,7 +13,6 @@ import {
 } from './contract.js';
 import { DistributionHttpError, type FetchLike as UpdateFetch } from '../distribution/http.js';
 import { downloadVerifiedAsset } from '../distribution/transfer.js';
-import { UpdateRequestError } from './diagnostics.js';
 import { installerUrl, StableSource } from './source.js';
 
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
@@ -514,21 +513,11 @@ export class UpdateManager {
         integrityError: 'update_download_corrupt',
         fetcher: this.options.fetcher,
         signal,
-        cacheKey: `mizar:${origin}:${manifest.installer.sha256}:${manifest.installer.bytes}`,
-        onDiagnostic: (diagnostic) =>
+        onDiagnostic: ({ error, ...diagnostic }) =>
           this.options.log?.('download_sources', 'source_response_probe', manifest.version, {
             operationId: this.operationId,
-            stage: diagnostic.stage,
-            candidates: diagnostic.candidates,
-            ...(diagnostic.elapsedMs === undefined ? {} : { elapsedMs: diagnostic.elapsedMs }),
-            ...(diagnostic.status === undefined ? {} : { status: diagnostic.status }),
-            ...(diagnostic.rangeIgnored === undefined
-              ? {}
-              : { rangeIgnored: diagnostic.rangeIgnored }),
-            ...(diagnostic.cacheHit === undefined ? {} : { cacheHit: diagnostic.cacheHit }),
-            ...(diagnostic.sourceName === undefined ? {} : { source: diagnostic.sourceName }),
-            ...(diagnostic.orderNames === undefined ? {} : { order: diagnostic.orderNames }),
-            ...(diagnostic.error === undefined ? {} : { error: diagnosticValue(diagnostic.error) }),
+            ...diagnostic,
+            ...(error === undefined ? {} : { error: diagnosticValue(error) }),
           }),
         onProgress: (bytes, source) => {
           if (this.sourceMessage === '正在测试下载来源…') this.sourceMessage = '';
@@ -555,19 +544,7 @@ export class UpdateManager {
       await writeFile(join(this.root, 'ready.tmp'), JSON.stringify(this.ready), { mode: 0o600 });
       await rename(join(this.root, 'ready.tmp'), join(this.root, 'ready.json'));
       this.phase = 'ready';
-    } catch (rawError) {
-      const e =
-        rawError instanceof DistributionHttpError
-          ? Object.assign(
-              new UpdateRequestError(
-                'update_network_failed',
-                rawError.source,
-                rawError.status,
-                rawError,
-              ),
-              { rateLimited: rawError.rateLimited },
-            )
-          : rawError;
+    } catch (e) {
       if (directory)
         await rm(directory, { recursive: true, force: true }).catch((error: unknown) =>
           this.failure('download_cleanup', error),
@@ -667,6 +644,7 @@ export class UpdateManager {
   }
 }
 export function safeCode(error: unknown): string {
+  if (error instanceof DistributionHttpError) return 'update_network_failed';
   const value = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   return /^update_[a-z_]{1,50}$/.test(value) ? value : 'update_operation_failed';
 }

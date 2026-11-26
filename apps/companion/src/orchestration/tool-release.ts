@@ -4,8 +4,6 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { downloadVerifiedAsset } from '../distribution/transfer.js';
-import type { DistributionSource, SourceDiagnostic } from '../distribution/sources.js';
 
 export const MULNX_REPOSITORY = 'Co1Swet/MulNX_CS2';
 export const SEVEN_ZIP = {
@@ -23,7 +21,8 @@ export interface MulnxRelease {
   sha256: string;
 }
 const execute = promisify(execFile);
-const MAX_ARCHIVE = 64 * 1024 * 1024;
+export const MULNX_MAX_ARCHIVE = 64 * 1024 * 1024;
+const MAX_ARCHIVE = MULNX_MAX_ARCHIVE;
 const MAX_EXPANDED = 512 * 1024 * 1024;
 
 /** Build/sync only: callers supply their authenticated metadata reader; no client fallback. */
@@ -80,20 +79,7 @@ export async function latestMulnxRelease(
   };
 }
 
-export async function downloadVerified(
-  url: string,
-  target: string,
-  sha256: string,
-  expectedSize?: number,
-  signal: AbortSignal = AbortSignal.timeout(120_000),
-  progress?: (bytes: number, source: number, name: string) => void,
-  mirror?: (signal: AbortSignal, end?: number) => Promise<Response>,
-  fallback?: (error: unknown, name: string) => void,
-  verifying?: () => void,
-  selectSources = false,
-  report?: (diagnostic: SourceDiagnostic & { candidates: string[] }) => void,
-) {
-  void selectSources;
+export function assertMulnxAssetUrl(url: string): string {
   const origin = new URL(url);
   if (
     origin.protocol !== 'https:' ||
@@ -110,22 +96,7 @@ export async function downloadVerified(
   ) {
     throw new Error('mulnx_url_forbidden');
   }
-  const extraSources: DistributionSource[] = mirror ? [{ name: '南大云盘', request: mirror }] : [];
-  await downloadVerifiedAsset({
-    origin: origin.href,
-    target,
-    ...(expectedSize === undefined ? {} : { bytes: expectedSize }),
-    maxBytes: MAX_ARCHIVE,
-    sha256,
-    integrityError: 'mulnx_download_integrity',
-    extraSources,
-    signal,
-    cacheKey: `mulnx:${origin.href}:${sha256}:${expectedSize ?? 0}`,
-    onProgress: (bytes, source, sourceIndex) => progress?.(bytes, sourceIndex, source.name),
-    onFallback: (error, source) => fallback?.(error, source.name),
-    onVerifying: () => verifying?.(),
-    onDiagnostic: (diagnostic) => report?.(diagnostic),
-  });
+  return origin.href;
 }
 
 export async function fileSha256(path: string): Promise<string> {

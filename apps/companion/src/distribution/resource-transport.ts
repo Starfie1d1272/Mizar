@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { downloadVerifiedAsset, fetchVerifiedMetadata } from './transfer.js';
-import { errorEvidence } from '../updates/diagnostics.js';
+import { errorEvidence } from '../support/diagnostic-value.js';
 import {
   MACHINE_METADATA_MAX_BYTES,
   MACHINE_METADATA_NAME,
@@ -23,6 +23,7 @@ export function validateResourceAsset(version: string, name: string) {
   if (
     !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?$/.test(version) ||
     !(
+      name === MACHINE_METADATA_NAME ||
       fixedNames.has(name) ||
       /^Mizar-official-epl-default-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.zip$/.test(name)
     )
@@ -31,53 +32,32 @@ export function validateResourceAsset(version: string, name: string) {
   }
 }
 
-// Transport only. Original canonical catalog URLs and all publisher claims stay
-// unchanged; the existing SDK authenticates the returned original bytes.
-/** A transaction-local byte cache, not an authorization or persistent trust cache. */
-export function createResourceOriginalDownloader() {
-  const carriers = new Map<string, Buffer>();
-  return (options: Parameters<typeof downloadResourceOriginal>[0]) =>
-    downloadResourceOriginal(options, carriers);
+export function extractMachineFile(carrier: Buffer, name: string, maximum: number): Buffer {
+  if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
+  const original = readMachineFile(carrier, name);
+  if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
+  return original;
 }
 
-async function downloadResourceOriginal(
-  {
-    version,
-    name,
-    maximum,
-    signal,
-    fetcher,
-  }: {
-    version: string;
-    name: string;
-    maximum: number;
-    signal: AbortSignal;
-    fetcher?: typeof fetch;
-  },
-  carriers: Map<string, Buffer>,
-) {
-  validateResourceAsset(version, name);
-  if (!fixedNames.has(name)) throw new Error('resource_metadata_name_invalid');
-  const extract = (bytes: Buffer) => {
-    const original = readMachineFile(bytes, name);
-    if (original.length > maximum) throw new Error('resource_metadata_size_invalid');
-    return original;
-  };
-  const key = version;
-  const cached = carriers.get(key);
-  signal.throwIfAborted();
-  if (cached) return extract(cached);
-
-  return fetchVerifiedMetadata<Buffer>({
+/** Fetch and verify the full machine-metadata.json carrier atomically before returning. */
+export async function fetchVerifiedResourceCarrier<T>({
+  version,
+  signal,
+  fetcher,
+  verify,
+}: {
+  version: string;
+  signal: AbortSignal;
+  fetcher?: typeof fetch | undefined;
+  verify: (carrier: Buffer, attemptSignal: AbortSignal) => Promise<T> | T;
+}): Promise<T> {
+  validateResourceAsset(version, MACHINE_METADATA_NAME);
+  return fetchVerifiedMetadata<T>({
     origin: `https://github.com/Starfie1d1272/Mizar/releases/download/v${version}/${MACHINE_METADATA_NAME}`,
     maxBytes: MACHINE_METADATA_MAX_BYTES,
     signal,
     fetcher,
-    verify: (bytes) => {
-      const original = extract(bytes);
-      carriers.set(key, bytes);
-      return original;
-    },
+    verify,
     onDiagnostic: (stage, { index, error }) => {
       if (stage === 'metadata_fallback') {
         logBootstrapFallback(
@@ -125,20 +105,10 @@ export async function downloadResourceArchive({
       integrityError: 'resource_archive_integrity',
       fetcher,
       signal,
-      cacheKey: `epl:${origin}:${archive.sha256}:${archive.bytes}`,
-      onDiagnostic: (diagnostic) =>
+      onDiagnostic: ({ error, ...diagnostic }) =>
         log('resource_sources', {
-          stage: diagnostic.stage,
-          candidates: diagnostic.candidates,
-          ...(diagnostic.elapsedMs === undefined ? {} : { elapsedMs: diagnostic.elapsedMs }),
-          ...(diagnostic.status === undefined ? {} : { status: diagnostic.status }),
-          ...(diagnostic.rangeIgnored === undefined
-            ? {}
-            : { rangeIgnored: diagnostic.rangeIgnored }),
-          ...(diagnostic.cacheHit === undefined ? {} : { cacheHit: diagnostic.cacheHit }),
-          ...(diagnostic.sourceName === undefined ? {} : { source: diagnostic.sourceName }),
-          ...(diagnostic.orderNames === undefined ? {} : { order: diagnostic.orderNames }),
-          ...(diagnostic.error === undefined ? {} : { error: errorEvidence(diagnostic.error) }),
+          ...diagnostic,
+          ...(error === undefined ? {} : { error: errorEvidence(error) }),
         }),
       onProgress: (bytes, source) => {
         onProgress?.(bytes);

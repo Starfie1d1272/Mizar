@@ -7,7 +7,6 @@ const distributionConfigSchema = z.strictObject({
   probe: z.strictObject({
     sampleBytes: z.number().int().positive(),
     timeoutMs: z.number().int().positive(),
-    cacheTtlMs: z.number().int().nonnegative(),
   }),
   timeouts: z.strictObject({
     firstByteMs: z.number().int().positive(),
@@ -48,7 +47,7 @@ export interface DistributionSource {
 export function buildGitHubReleaseSources(
   origin: string,
   extraSources: readonly DistributionSource[] = [],
-  fetcher?: FetchLike,
+  fetcher?: FetchLike | undefined,
 ): DistributionSource[] {
   const canonical = validateHttpsUrl(origin).href;
   const config = getDistributionConfig();
@@ -82,26 +81,18 @@ export function buildGitHubReleaseSources(
   return sources;
 }
 
-const cache = new Map<string, { until: number; order: number[] }>();
-
 export type SourceDiagnostic = {
   stage: 'probe' | 'selection';
-  source?: number;
+  sourceIndex?: number;
   elapsedMs?: number;
   status?: number | undefined;
   rangeIgnored?: boolean;
   error?: unknown;
-  cacheHit?: boolean;
-  order?: number[];
+  orderIndices?: number[];
 };
-
-export function forgetSourceOrder(key: string) {
-  cache.delete(key);
-}
 
 /** Measure a small prefix of the authenticated asset; this never authenticates its contents. */
 export async function sourceOrder(
-  key: string,
   expectedBytes: number,
   signal: AbortSignal,
   probes: Array<(signal: AbortSignal, end: number) => Promise<Response>>,
@@ -112,11 +103,6 @@ export async function sourceOrder(
     throw new Error('source_probe_invalid');
   }
   const config = getDistributionConfig();
-  const cached = cache.get(key);
-  if (cached && cached.until > Date.now() && cached.order.length === probes.length) {
-    report?.({ stage: 'selection', cacheHit: true, order: [...cached.order] });
-    return [...cached.order];
-  }
   const sample = Math.min(expectedBytes, config.probe.sampleBytes);
   const measured = await Promise.all(
     probes.map(async (probe, index) => {
@@ -168,7 +154,7 @@ export async function sourceOrder(
         const elapsed = performance.now() - started;
         report?.({
           stage: 'probe',
-          source: index,
+          sourceIndex: index,
           elapsedMs: elapsed,
           status,
           rangeIgnored: status === 200,
@@ -177,7 +163,7 @@ export async function sourceOrder(
       } catch (error) {
         report?.({
           stage: 'probe',
-          source: index,
+          sourceIndex: index,
           elapsedMs: performance.now() - started,
           status,
           error,
@@ -191,11 +177,7 @@ export async function sourceOrder(
   );
   signal.throwIfAborted();
   measured.sort((a, b) => a.elapsed - b.elapsed || a.index - b.index);
-  const order = measured.map((item) => item.index);
-  if (measured.some((item) => Number.isFinite(item.elapsed)) && config.probe.cacheTtlMs > 0) {
-    if (cache.size >= 16) cache.delete(cache.keys().next().value!);
-    cache.set(key, { until: Date.now() + config.probe.cacheTtlMs, order });
-  }
-  report?.({ stage: 'selection', cacheHit: false, order: [...order] });
-  return order;
+  const orderIndices = measured.map((item) => item.index);
+  report?.({ stage: 'selection', orderIndices: [...orderIndices] });
+  return orderIndices;
 }

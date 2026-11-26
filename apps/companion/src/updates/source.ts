@@ -8,7 +8,6 @@ import { z } from 'zod';
 import { MACHINE_METADATA_MAX_BYTES } from '@mizar/resource-pack-contract/transport';
 import { DistributionHttpError, type FetchLike as UpdateFetch } from '../distribution/http.js';
 import { fetchVerifiedMetadata } from '../distribution/transfer.js';
-import { UpdateRequestError } from './diagnostics.js';
 import {
   compareVersions,
   UPDATE_REPOSITORY,
@@ -228,16 +227,7 @@ export class StableSource {
 }
 function normalizeMetadataError(error: unknown): unknown {
   const cause = error instanceof AggregateError ? error.cause : error;
-  if (cause instanceof DistributionHttpError) {
-    const wrapped = new UpdateRequestError(
-      'update_network_failed',
-      cause.source,
-      cause.status,
-      error,
-    );
-    wrapped.rateLimited = cause.rateLimited;
-    return wrapped;
-  }
+  if (cause instanceof DistributionHttpError) return cause;
   if (cause instanceof Error && /^update_[a-z_]{1,50}$/.test(cause.message)) {
     return cause;
   }

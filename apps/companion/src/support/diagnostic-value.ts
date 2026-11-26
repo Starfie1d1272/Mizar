@@ -34,6 +34,32 @@ export function needsEvidenceSanitize(rawJson: string, secrets: readonly string[
   );
 }
 
+/** Local evidence keeps the complete error chain; display summaries have a separate policy. */
+export function errorEvidence(error: unknown): unknown {
+  const seen = new Set<object>();
+  const visit = (value: unknown): unknown => {
+    if (!(value instanceof Error)) return diagnosticValue(value);
+    if (seen.has(value)) return '[circular error]';
+    seen.add(value);
+    const evidence = diagnosticValue(value) as Record<string, unknown>;
+    const fields = value as Error & { issues?: unknown[]; errors?: unknown[] };
+    if (value.name === 'ZodError' && Array.isArray(fields.issues)) {
+      evidence.message = 'Schema validation failed; see issue codes and paths';
+      delete evidence.stack;
+      evidence.issues = fields.issues.map((issue) => {
+        const { code, path, expected } = issue as Record<string, unknown>;
+        return diagnosticValue({ code, path, expected });
+      });
+      evidence.coverage = { excluded: ['schema-rejected-values-and-stack-header'] };
+    }
+    if (value.cause !== undefined) evidence.cause = visit(value.cause);
+    if (Array.isArray(fields.errors)) evidence.errors = fields.errors.map(visit);
+    seen.delete(value);
+    return evidence;
+  };
+  return visit(error);
+}
+
 export function diagnosticEvidence(value: unknown, secrets: readonly string[] = []): unknown {
   return sanitize(value, '', new Set(), secrets, true);
 }

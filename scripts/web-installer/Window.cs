@@ -252,6 +252,7 @@ namespace Mizar.WebInstaller {
 
     internal void ShowCompleted(string path) {
       installedCore = path;
+      SaveSuccessDiagnostic();
       finished = true;
       bar.Visible = false;
       amount.Text = "";
@@ -319,6 +320,18 @@ namespace Mizar.WebInstaller {
       }
     }
 
+    void SaveSuccessDiagnostic() {
+      var sb = new StringBuilder();
+      sb.Append("安装完成\r\n");
+      lock (diagnosticLog) {
+        if (diagnosticLog.Count > 0) {
+          sb.Append("下载诊断：\r\n");
+          foreach (string line in diagnosticLog) sb.Append("  ").Append(line).Append("\r\n");
+        }
+      }
+      SaveDiagnostic(null, sb.ToString());
+    }
+
     string ErrorDetails(Exception error) {
       var sb = new StringBuilder();
       sb.Append("失败阶段：").Append(activePhase).Append("\r\n");
@@ -338,7 +351,7 @@ namespace Mizar.WebInstaller {
         Downloader.NoReparse(directory);
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "web-installer-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".log");
-        string content = String.IsNullOrEmpty(extra) ? DiagnosticText(error) : extra;
+        string content = String.IsNullOrEmpty(extra) ? (error != null ? DiagnosticText(error) : "") : RedactText(extra);
         File.WriteAllText(path, content, new UTF8Encoding(false));
         return path;
       } catch {
@@ -417,6 +430,11 @@ namespace Mizar.WebInstaller {
       } catch (InstallerActionRequired error) {
         heading.Text = "无法继续安装";
         detail.Text = error.Message;
+        technicalDetails = ErrorDetails(error);
+        action.Text = "重试";
+      } catch (LocalStorageException error) {
+        heading.Text = "无法写入本地文件";
+        detail.Text = "请检查缓存或安装位置的磁盘空间与读写权限后重试。";
         technicalDetails = ErrorDetails(error);
         action.Text = "重试";
       } catch (UnauthorizedAccessException error) {
