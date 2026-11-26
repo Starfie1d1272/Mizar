@@ -124,12 +124,8 @@ export function registerUpdateRoutes(
       scenes.setUpdatePending(true);
       return plan;
     } catch (e) {
-      const reason =
-        e instanceof Error && e.message === 'update_recheck_required' && e.cause instanceof Error
-          ? e.cause
-          : e;
-      manager.failure('install_plan', reason);
-      const failure = updateFailure('install_plan', reason, '');
+      manager.failure('install_plan', e);
+      const failure = updateFailure('install_plan', e, '');
       releaseUpdate();
       return reply.code(409).send({
         message: blockedReason ?? `${failure.summary} ${failure.nextStep}`,

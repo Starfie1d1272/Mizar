@@ -28,13 +28,13 @@ const readySchema = z.strictObject({
   directory: z.string().regex(/^download-[A-Za-z0-9_-]+$/),
   manifest: updateManifestSchema,
 });
+export interface AuthenticatedRelease {
+  manifest: UpdateManifest;
+  metadataBytes: Buffer;
+}
 export interface UpdateSource {
-  latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest | null>;
-  latestRelease?(
-    signal: AbortSignal,
-    minimumVersion?: string,
-  ): Promise<{ manifest: UpdateManifest; metadataBytes: Buffer } | null>;
-  authenticateMetadata?(carrier: Buffer, signal: AbortSignal): Promise<UpdateManifest>;
+  latest(signal: AbortSignal, minimumVersion?: string): Promise<AuthenticatedRelease | null>;
+  authenticateMetadata(carrier: Buffer, signal: AbortSignal): Promise<UpdateManifest>;
 }
 export type UpdateActivity = 'idle' | 'checking' | 'downloading' | 'installing';
 export interface UpdateLastError {
@@ -63,7 +63,6 @@ export class UpdateManager {
     highestIdentity: null as string | null,
   };
   private activity: UpdateActivity = 'idle';
-  private error: string | null = null;
   private lastError: UpdateLastError | null = null;
   private candidate: UpdateManifest | null = null;
   private candidateMetadataBytes: Buffer | null = null;
@@ -77,12 +76,13 @@ export class UpdateManager {
   private abortReason: 'user' | 'yield' | null = null;
   private currentDownloadKind: 'manual' | 'auto' | null = null;
   private suppressedAutoVersion: string | null = null;
+  private yieldEpoch = 0;
+  private pendingAutoResume = false;
   private task: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
   private startupSession: string | undefined;
-  private startupPending = false;
   private companionCheck: ((force: boolean) => Promise<boolean>) | undefined;
   private companionStartupPending = false;
   private companionLastAttempt = 0;
@@ -113,12 +113,10 @@ export class UpdateManager {
       fetcher?: UpdateFetch;
       now?: () => number;
       startupDelayMs?: number;
-      canAutoDownload?: () => Promise<boolean>;
       log?: (stage: string, code: string, version?: string, diagnostic?: unknown) => void;
     },
   ) {
     this.root = join(options.stateRoot, 'updates');
-    this.canAutoDownloadCallback = options.canAutoDownload;
     this.source =
       options.source ??
       new StableSource(join(this.root, 'trust'), options.fetcher, (stage, error, durationMs) => {
@@ -153,7 +151,6 @@ export class UpdateManager {
   }
   private setLastError(stage: string, error: unknown, manual: boolean) {
     const detail = updateFailure(stage, error, this.operationId);
-    this.error = detail.code;
     this.lastError = {
       ...detail,
       manual,
@@ -269,7 +266,7 @@ export class UpdateManager {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
     }
   }
-  private async cleanupDownloads(names?: string[], keepDirectory?: string) {
+  private async cleanupDownloads(names?: string[]) {
     if (this.completedReadyCleanup && !this.ready) {
       try {
         await rm(join(this.root, 'ready.json'), { force: true });
@@ -280,12 +277,7 @@ export class UpdateManager {
     }
     try {
       for (const name of names ?? (await readdir(this.root))) {
-        if (
-          !/^download-[A-Za-z0-9_-]+$/.test(name) ||
-          name === this.ready?.directory ||
-          name === keepDirectory
-        )
-          continue;
+        if (!/^download-[A-Za-z0-9_-]+$/.test(name) || name === this.ready?.directory) continue;
         try {
           await rm(join(this.root, name), { recursive: true, force: true });
         } catch (cause) {
@@ -317,20 +309,12 @@ export class UpdateManager {
   desktopStartup(session: string) {
     if (this.startupSession === session || this.closed) return;
     this.startupSession = session;
-    this.startupPending = true;
     this.companionStartupPending = true;
     clearTimeout(this.startupTimer);
     const delay = this.options.startupDelayMs ?? STARTUP_CHECK_DELAY;
     this.startupTimer = setTimeout(() => {
       if (this.closed) return;
       void this.checkCompanion();
-      if (this.task || this.prepared || this.planning)
-        this.event(
-          'check',
-          this.activity === 'checking'
-            ? 'update_check_startup_shared'
-            : 'update_check_startup_deferred',
-        );
       void this.automaticCheck('startup');
     }, delay);
     this.startupTimer.unref();
@@ -365,15 +349,20 @@ export class UpdateManager {
   }
   private async automaticCheck(reason: 'startup' | 'periodic') {
     if (!this.config.automatic || this.initializationError || this.closed) {
-      if (this.startupPending) this.event('check', 'update_check_startup_disabled');
-      this.startupPending = false;
+      if (reason === 'startup') this.event('check', 'update_check_startup_disabled');
       return;
     }
     if (this.task || this.prepared || this.planning) {
-      if (this.activity === 'checking') this.startupPending = false;
+      if (reason === 'startup') {
+        this.event(
+          'check',
+          this.activity === 'checking'
+            ? 'update_check_startup_shared'
+            : 'update_check_startup_deferred',
+        );
+      }
       return;
     }
-    this.startupPending = false;
     await this.check('auto', reason).catch((error: unknown) => this.failure('check', error));
   }
   status() {
@@ -386,7 +375,7 @@ export class UpdateManager {
       candidate: this.candidate,
       manual,
       checkedCurrent: this.checkedCurrent,
-      error: this.error,
+      error: this.lastError?.code ?? null,
       lastError: this.lastError,
       failureDetails: [...this.recoveryFailures, ...this.failureDetails],
       currentVersion: this.options.version,
@@ -436,7 +425,6 @@ export class UpdateManager {
     if (this.task || this.prepared || this.planning || this.closed) throw new Error('update_busy');
     const manual = trigger === 'manual';
     this.activity = 'checking';
-    this.error = null;
     this.config.lastAttempt = this.now();
     const abort = new AbortController();
     this.abort = abort;
@@ -469,28 +457,15 @@ export class UpdateManager {
     try {
       await this.cleanupDownloads();
       await this.saveConfig();
-      let manifest: UpdateManifest | null = null;
-      let metadataBytes: Buffer | null = null;
-      if (this.source.latestRelease) {
-        const release = await this.source.latestRelease(
-          signal,
-          this.config.highestVersion ?? undefined,
-        );
-        if (release) {
-          manifest = release.manifest;
-          metadataBytes = release.metadataBytes;
-        }
-      } else {
-        manifest = await this.source.latest(signal, this.config.highestVersion ?? undefined);
-      }
-      if (!manifest) {
+      const release = await this.source.latest(signal, this.config.highestVersion ?? undefined);
+      if (!release) {
         this.candidate = null;
         this.candidateMetadataBytes = null;
         this.checkedCurrent = true;
         this.lastError = null;
-        this.error = null;
         return;
       }
+      const { manifest, metadataBytes } = release;
       const target = manifest.version;
       if (this.config.highestVersion && compareVersions(target, this.config.highestVersion) < 0)
         throw new Error('update_rollback_rejected');
@@ -499,7 +474,6 @@ export class UpdateManager {
         this.candidateMetadataBytes = null;
         this.checkedCurrent = true;
         this.lastError = null;
-        this.error = null;
         return;
       }
       signal.throwIfAborted();
@@ -516,22 +490,12 @@ export class UpdateManager {
       this.candidateMetadataBytes = metadataBytes;
       this.checkedCurrent = false;
       this.lastError = null;
-      this.error = null;
       if (!isCompatible(this.options.version, manifest) || !this.options.installed) {
         return;
-      }
-      if (this.ready && manifestIdentity(this.ready.manifest) === identity) {
-        try {
-          await this.verifyFile(this.ready, this.ready.manifest, signal);
-        } catch (error) {
-          this.failure('cached_download_verify', error);
-          await this.discard();
-        }
       }
       this.event('check', 'authenticated');
     } catch (e) {
       if (signal.aborted && this.abortReason === 'yield') {
-        this.error = null;
         return;
       }
       this.failure('check', e);
@@ -574,14 +538,16 @@ export class UpdateManager {
       this.task ||
       this.prepared ||
       this.planning ||
-      !this.candidate
+      !this.candidate ||
+      !this.candidateMetadataBytes
     )
       return;
     if (this.suppressedAutoVersion === this.candidate.version) return;
     if (!this.canStartDownloadFor(this.candidate)) return;
+    const epoch = this.yieldEpoch;
     if (this.canAutoDownloadCallback) {
       const allowed = await this.canAutoDownloadCallback().catch(() => false);
-      if (!allowed) return;
+      if (!allowed || epoch !== this.yieldEpoch) return;
     }
     if (
       this.closed ||
@@ -590,6 +556,7 @@ export class UpdateManager {
       this.planning ||
       !this.config.automatic ||
       !this.candidate ||
+      !this.candidateMetadataBytes ||
       !this.canStartDownloadFor(this.candidate)
     )
       return;
@@ -603,6 +570,7 @@ export class UpdateManager {
       this.prepared ||
       this.closed ||
       !this.candidate ||
+      !this.candidateMetadataBytes ||
       !this.canStartDownloadFor(this.candidate)
     )
       return Promise.reject(new Error('update_unavailable'));
@@ -612,14 +580,9 @@ export class UpdateManager {
     this.startDownload(this.candidate, this.candidateMetadataBytes, 'manual');
     return Promise.resolve();
   }
-  private startDownload(
-    manifest: UpdateManifest,
-    metadataBytes: Buffer | null,
-    kind: 'manual' | 'auto',
-  ) {
+  private startDownload(manifest: UpdateManifest, metadataBytes: Buffer, kind: 'manual' | 'auto') {
     this.activity = 'downloading';
     this.currentDownloadKind = kind;
-    this.error = null;
     this.downloaded = 0;
     this.downloadSource = null;
     this.sourceMessage = '';
@@ -634,11 +597,17 @@ export class UpdateManager {
       this.abortReason = null;
       this.currentDownloadKind = null;
       if (!this.prepared && this.activity === 'downloading') this.activity = 'idle';
+      if (this.pendingAutoResume) {
+        this.pendingAutoResume = false;
+        if (this.config.automatic && !this.closed && !this.planning && !this.prepared) {
+          void this.maybeAutoDownload();
+        }
+      }
     });
   }
   private async doDownload(
     manifest: UpdateManifest,
-    metadataBytes: Buffer | null,
+    metadataBytes: Buffer,
     signal: AbortSignal,
     kind: 'manual' | 'auto',
   ) {
@@ -686,9 +655,7 @@ export class UpdateManager {
         source: this.downloadSource,
       });
       signal.throwIfAborted();
-      if (metadataBytes) {
-        await writeFile(join(directory, MACHINE_METADATA_NAME), metadataBytes, { mode: 0o600 });
-      }
+      await writeFile(join(directory, MACHINE_METADATA_NAME), metadataBytes, { mode: 0o600 });
       signal.throwIfAborted();
       if (this.planning || this.prepared || this.closed) {
         throw new Error('update_cancelled');
@@ -699,7 +666,6 @@ export class UpdateManager {
       await rename(join(this.root, 'ready.tmp'), join(this.root, 'ready.json'));
       this.ready = nextReady;
       this.lastError = null;
-      this.error = null;
       if (previousReady && previousReady.directory !== nextReady.directory) {
         await rm(join(this.root, previousReady.directory), { recursive: true, force: true }).catch(
           (error: unknown) => this.failure('download_cleanup', error),
@@ -710,24 +676,15 @@ export class UpdateManager {
         await rm(directory, { recursive: true, force: true }).catch((error: unknown) =>
           this.failure('download_cleanup', error),
         );
-      const timedOut =
-        signal.aborted && signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
-      const cancelled = signal.aborted && !timedOut;
-      if (cancelled && this.abortReason === 'yield') {
-        this.error = null;
-        this.event('download', 'update_download_yielded');
+      if (signal.aborted) {
+        this.event(
+          'download',
+          this.abortReason === 'yield' ? 'update_download_yielded' : 'update_cancelled',
+        );
         return;
       }
-      if (cancelled) {
-        this.error = 'update_cancelled';
-        this.event('download', 'update_cancelled');
-        return;
-      }
-      const errorToRecord = timedOut
-        ? new Error('update_download_timeout', { cause: signal.reason })
-        : e;
-      this.failure('download', errorToRecord);
-      this.setLastError('download', errorToRecord, kind === 'manual');
+      this.failure('download', e);
+      this.setLastError('download', e, kind === 'manual');
     }
   }
   async cancel() {
@@ -741,6 +698,7 @@ export class UpdateManager {
     }
   }
   yieldAutoDownload() {
+    this.yieldEpoch++;
     if (this.task && this.activity === 'downloading' && this.currentDownloadKind === 'auto') {
       this.abortReason = 'yield';
       this.abort?.abort();
@@ -748,6 +706,10 @@ export class UpdateManager {
   }
   async resumeAutoDownload() {
     if (!this.config.automatic || this.closed || this.initializationError) return;
+    if (this.task) {
+      this.pendingAutoResume = true;
+      return;
+    }
     await this.maybeAutoDownload();
   }
   private async discard() {
@@ -783,11 +745,18 @@ export class UpdateManager {
         throw new Error('update_metadata_missing');
       }
       const carrier = await readFile(metadataPath);
-      if (!this.source.authenticateMetadata) throw new Error('update_metadata_missing');
-      const verifiedManifest = await this.source.authenticateMetadata(
-        carrier,
-        AbortSignal.timeout(60_000),
-      );
+      let verifiedManifest: UpdateManifest;
+      try {
+        verifiedManifest = await this.source.authenticateMetadata(
+          carrier,
+          AbortSignal.timeout(60_000),
+        );
+      } catch (error) {
+        if (safeCode(error) !== 'update_trust_metadata_failed') {
+          await this.discard();
+        }
+        throw error;
+      }
       if (this.isVersionAtOrBelowCurrent(verifiedManifest.version)) {
         await this.discard();
         throw new Error('update_rollback_rejected');
@@ -925,7 +894,7 @@ export function updateFailure(stage: string, error: unknown, operationId: string
                 : status === 403
                   ? '请核对网络代理或访问限制，并导出诊断；保留当前版本。'
                   : code === 'update_network_failed'
-                    ? '检查网络连接与代理后重新检查，或从正式发布页下载完整包；保留当前版本。'
+                    ? '检查网络连接与代理后重新检查，或从正式发布页获取完整包；保留当前版本。'
                     : '保留当前版本，请导出诊断定位原因，或从正式发布页核对安装包。';
   const stageLabel =
     stage === 'directory_load'

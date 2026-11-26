@@ -208,7 +208,7 @@ export class StableSource {
       throw normalized;
     }
   }
-  async latestRelease(
+  async latest(
     signal: AbortSignal,
     minimumVersion?: string,
   ): Promise<{ manifest: UpdateManifest; metadataBytes: Buffer }> {
@@ -218,10 +218,6 @@ export class StableSource {
         throw new Error('update_rollback_rejected');
       return { manifest, metadataBytes: carrier };
     });
-  }
-  async latest(signal: AbortSignal, minimumVersion?: string): Promise<UpdateManifest> {
-    const { manifest } = await this.latestRelease(signal, minimumVersion);
-    return manifest;
   }
   /** Fixed-version installers authenticate that version's original dual-signed index. */
   async authenticateVersion(version: string, signal: AbortSignal): Promise<UpdateManifest> {

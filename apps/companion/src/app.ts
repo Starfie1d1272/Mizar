@@ -338,7 +338,10 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
     warn: (details, message) => app.log.warn(details, message),
     error: (details, message) => app.log.error(details, message),
   });
-  obsAdapter?.setOnOutputBusy(() => options.updates?.yieldAutoDownload());
+  obsAdapter?.setOnOutputActivity((busy) => {
+    if (busy) options.updates?.yieldAutoDownload();
+    else void options.updates?.resumeAutoDownload();
+  });
   connectWebsiteRuntime({
     projections: projectionCoordinator,
     context: matchContextController,

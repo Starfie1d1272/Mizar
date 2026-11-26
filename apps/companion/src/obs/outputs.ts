@@ -135,13 +135,13 @@ export class ObsOutputController {
   private extraTransitionAt = { replay: 0, virtual: 0 };
   private warmupCollectionChanging = false;
   private warmupExitStarted = false;
-  private onOutputBusy: (() => void) | undefined;
+  private onOutputActivity: ((busy: boolean) => void) | undefined;
 
-  setOnOutputBusy(handler: () => void): void {
-    this.onOutputBusy = handler;
+  setOnOutputActivity(handler: (busy: boolean) => void): void {
+    this.onOutputActivity = handler;
   }
-  notifyOutputBusy(): void {
-    this.onOutputBusy?.();
+  notifyOutputActivity(busy: boolean): void {
+    this.onOutputActivity?.(busy);
   }
 
   constructor(
@@ -433,7 +433,15 @@ export class ObsOutputController {
       this.streamBytes = undefined;
     if (phase === 'starting' || phase === 'stopping') this.transitionAt[kind] = Date.now();
     this.update(kind, phase, phase === 'unknown' ? null : event.outputActive);
-    if (phase === 'starting' || phase === 'active' || event.outputActive) this.onOutputBusy?.();
+    if (phase === 'starting' || phase === 'active' || event.outputActive) {
+      this.onOutputActivity?.(true);
+    } else if (
+      !this.hasRunningOutput() &&
+      !this.values.stream.pending &&
+      !this.values.record.pending
+    ) {
+      this.onOutputActivity?.(false);
+    }
   }
 
   private async connect(): Promise<void> {
@@ -961,6 +969,14 @@ export class ObsOutputController {
       );
     } finally {
       this.values[output] = { ...this.values[output], pending: null };
+      if (
+        this.ready &&
+        !this.hasRunningOutput() &&
+        !this.values.stream.pending &&
+        !this.values.record.pending
+      ) {
+        this.onOutputActivity?.(false);
+      }
     }
   }
 }

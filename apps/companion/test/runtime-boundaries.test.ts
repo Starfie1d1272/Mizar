@@ -94,7 +94,7 @@ test('install authenticates local staged metadata offline, cleans legacy cache, 
     currentContentDigest: 'c'.repeat(64),
     installed: true,
     version: '1.11.20',
-    source: { latest: async () => null },
+    source: { latest: async () => null, authenticateMetadata: async () => manifest },
   });
   await legacyManager.load();
   assert.equal(legacyManager.status().staged, null);
@@ -224,8 +224,169 @@ test('install priority cancels background check and allows staged version even w
   await checkStarted;
   const plan = await manager.prepare();
   assert.equal(checkAborted, true);
+  assert.equal(manager.status().staged?.version, '1.11.21');
   assert.equal(plan.version, '1.11.21');
   await bgCheck.catch(() => {});
+});
+
+test('prepare preserves staged on trust metadata refresh failure and discards on corrupt metadata', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-auth-err-'));
+  const updates = join(stateRoot, 'updates');
+  const directory = 'download-staged';
+  const bytes = Buffer.from('staged bytes');
+  const manifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Staged',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  const installer = join(updates, directory, manifest.installer.name);
+  await mkdir(join(updates, directory), { recursive: true });
+  await writeFile(installer, bytes);
+  await writeFile(
+    join(updates, directory, 'machine-metadata.json'),
+    Buffer.from(JSON.stringify(manifest)),
+  );
+  await writeFile(join(updates, 'ready.json'), JSON.stringify({ directory, manifest }));
+
+  let authErrorCode = 'update_trust_metadata_failed';
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    source: {
+      latest: async () => null,
+      authenticateMetadata: async () => {
+        throw new Error(authErrorCode);
+      },
+    },
+  });
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  await assert.rejects(manager.prepare(), /update_trust_metadata_failed/);
+  assert.equal(manager.status().staged?.version, '1.11.21');
+  assert.equal(await readFile(installer, 'utf8'), 'staged bytes');
+
+  authErrorCode = 'update_metadata_corrupt';
+  await assert.rejects(manager.prepare(), /update_metadata_corrupt/);
+  assert.equal(manager.status().staged, null);
+  await assert.rejects(readFile(installer), { code: 'ENOENT' });
+});
+
+test('auto-download yields on OBS busy and resumes when OBS returns idle even during cancellation settle', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-yield-resume-'));
+  const bytes = Buffer.from('installer payload');
+  const manifest = updateManifestSchema.parse({
+    schemaVersion: 'mizar.update.v1',
+    repository: 'Starfie1d1272/Mizar',
+    channel: 'stable',
+    version: '1.11.21',
+    gitSha: 'a'.repeat(40),
+    notes: 'Yield resume test',
+    compatibility: { minimumVersion: '1.11.0', maximumVersionExclusive: '1.12.0' },
+    installer: {
+      platform: 'win32-x64',
+      format: 'nsis-setup',
+      name: 'Mizar-v1.11.21-Windows-x64-Setup.exe',
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contentDigest: 'b'.repeat(64),
+    },
+  });
+  const metadataBytes = Buffer.from(JSON.stringify(manifest));
+
+  let downloadAttempts = 0;
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  let markFirstAborted!: () => void;
+  const firstAborted = new Promise<void>((resolve) => {
+    markFirstAborted = resolve;
+  });
+  let markSecondDone!: () => void;
+  const secondDone = new Promise<void>((resolve) => {
+    markSecondDone = resolve;
+  });
+
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes('github.com') && !url.includes('gh-proxy')) {
+      downloadAttempts++;
+      if (downloadAttempts === 1) {
+        markFirstStarted();
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener('abort', () => {
+                markFirstAborted();
+                controller.error(new Error('aborted'));
+              });
+            },
+          }),
+          { status: 200, headers: { 'content-length': String(bytes.length) } },
+        );
+      }
+      queueMicrotask(() => markSecondDone());
+      return new Response(bytes, {
+        status: 200,
+        headers: { 'content-length': String(bytes.length) },
+      });
+    }
+    return new Response('slow mirror', { status: 504 });
+  };
+
+  let obsBusy = false;
+  const manager = new UpdateManager({
+    stateRoot,
+    bundleRoot: stateRoot,
+    currentContentDigest: 'c'.repeat(64),
+    installed: true,
+    version: '1.11.20',
+    fetcher,
+    source: {
+      latest: async () => ({ manifest, metadataBytes }),
+      authenticateMetadata: async () => manifest,
+    },
+  });
+  manager.setCanAutoDownload(async () => !obsBusy);
+  t.after(async () => {
+    await manager.close();
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  await manager.load();
+  await manager.check('auto', 'periodic');
+  await firstStarted;
+
+  obsBusy = true;
+  manager.yieldAutoDownload();
+  await firstAborted;
+
+  // Resume immediately while the cancelled download task may still be settling.
+  obsBusy = false;
+  await manager.resumeAutoDownload();
+  await secondDone;
+  for (let i = 0; i < 40 && manager.status().staged?.version !== '1.11.21'; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(manager.status().staged?.version, '1.11.21');
+  assert.equal(manager.status().lastError, null);
 });
 
 test('update staging survives unavailable OBS and rejects removed notification actions', async (t) => {
@@ -320,7 +481,12 @@ test('UpdateManager consumes only apply-update results from last-applier-result.
       currentContentDigest: 'c'.repeat(64),
       installed: true,
       version: '1.12.0',
-      source: { latest: async () => null },
+      source: {
+        latest: async () => null,
+        authenticateMetadata: async () => {
+          throw new Error('unused');
+        },
+      },
     });
 
   await writeFile(

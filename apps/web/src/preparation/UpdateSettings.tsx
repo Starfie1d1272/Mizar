@@ -1,149 +1,46 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button, Checkbox, Panel, StatusBanner } from '../ui';
-import { desktopInvoke } from '../workspace/client';
 import './updates.css';
 import { openTool } from './client';
+import {
+  formatMegabytes,
+  installDesktopUpdate,
+  openUpdateReleasePage,
+  sendUpdateAction,
+  useUpdatePolling,
+  useUpdateStatus,
+} from './updates-client';
 
-export interface UpdateLastError {
-  code: string;
-  stage: string;
-  stageLabel: string;
-  summary: string;
-  nextStep: string;
-  operationId: string;
-  manual: boolean;
-  security: boolean;
-}
-
-export interface UpdateManifestView {
-  version: string;
-  notes: string;
-  installer: { bytes: number };
-}
-
-export interface UpdateStatus {
-  activity: 'idle' | 'checking' | 'downloading' | 'installing';
-  staged: UpdateManifestView | null;
-  candidate: UpdateManifestView | null;
-  manual: boolean;
-  checkedCurrent?: boolean;
-  automatic: boolean;
-  mulnx?: {
-    installed: string | null;
-    latest: string | null;
-    checkedAt: number | null;
-    checkResult: 'unchecked' | 'current' | 'available' | 'error';
-    phase: string;
-    busy: boolean;
-  } | null;
-  currentVersion: string;
-  lastCheckedAt?: number | null;
-  distribution: 'installed' | 'portable';
-  error: string | null;
-  lastError: UpdateLastError | null;
-  failureDetails?: {
-    stage: string;
-    stageLabel?: string;
-    summary: string;
-    nextStep: string;
-    operationId: string;
-  }[];
-  downloadedBytes: number;
-  downloadSource?: string | null;
-  sourceMessage?: string;
-  transferStage?: 'downloading' | 'verifying';
-  installBlockedReason?: string | null;
-  lastResult?: 'installed' | 'restored' | 'cancelled' | 'failed' | null;
-  lastResultVersion?: string | null;
-}
-
-const failures: Record<string, string> = {
-  update_network_failed: '更新网络请求失败，具体原因请查看诊断；网络恢复后可重新检查。',
-  update_trust_metadata_failed:
-    'Sigstore 信任元数据未能刷新，尚未完成来源认证；请检查网络或从正式发布页下载完整离线包。',
-  update_operation_failed: '更新未完成，原因未知。请导出诊断定位原因。',
-  update_metadata_missing: '暂时无法验证更新，请从发布页下载。',
-  update_provenance_failed:
-    '更新来源认证未通过。请保留现有版本，导出诊断并从正式发布页核对安装包。',
-  update_rollback_rejected: '更新版本发生回退，已拒绝安装。请从正式发布页核对版本。',
-  update_identity_changed:
-    '同版本更新内容发生变化，已拒绝安装。请导出诊断并从正式发布页核对安装包。',
-  update_download_corrupt: '下载不完整，请重试。',
-  update_settings_invalid: '更新设置无法保存，请检查资料目录。',
-};
-
-async function sendAction(action: string, enabled?: boolean): Promise<UpdateStatus> {
-  const response = await fetch('/operator/updates', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...(enabled === undefined ? {} : { enabled }) }),
-    signal: AbortSignal.timeout(75_000),
-  });
-  const value = (await response.json()) as UpdateStatus & { error?: string };
-  if (!response.ok)
-    throw new Error(
-      value.failureDetails?.map((detail) => `${detail.summary} ${detail.nextStep}`).join('\n') ||
-        failures[value.error ?? ''] ||
-        '更新未完成，原因未知。请导出诊断定位原因。',
-    );
-  return value;
+function StandaloneUpdateSettings({ children }: { children?: ReactNode }) {
+  const polling = useUpdatePolling();
+  return <UpdateSettingsView {...polling}>{children}</UpdateSettingsView>;
 }
 
 export function UpdateSettings({ children }: { children?: ReactNode }) {
-  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const shared = useUpdateStatus();
+  if (!shared) return <StandaloneUpdateSettings>{children}</StandaloneUpdateSettings>;
+  return <UpdateSettingsView {...shared}>{children}</UpdateSettingsView>;
+}
+
+function UpdateSettingsView({
+  status,
+  setStatus,
+  connectionError,
+  unavailable,
+  children,
+}: ReturnType<typeof useUpdatePolling> & { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [installingNow, setInstallingNow] = useState(false);
   const [error, setError] = useState('');
-  const [connectionError, setConnectionError] = useState('');
   const [diagnosticFeedback, setDiagnosticFeedback] = useState('');
-  const [unavailable, setUnavailable] = useState(false);
   const desktop = Boolean(window.__TAURI_INTERNALS__);
-
-  const applyStatus = useCallback((next: UpdateStatus) => {
-    setStatus(next);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    let request: AbortController;
-    const poll = async () => {
-      request = new AbortController();
-      try {
-        const response = await fetch('/local/v1/updates', {
-          cache: 'no-store',
-          signal: AbortSignal.any([request.signal, AbortSignal.timeout(8000)]),
-        });
-        if (response.status === 404) {
-          if (active) setUnavailable(true);
-          return;
-        }
-        if (!response.ok) throw new Error();
-        const next = (await response.json()) as UpdateStatus;
-        if (active) {
-          applyStatus(next);
-          setConnectionError('');
-        }
-      } catch {
-        if (active) setConnectionError('暂时无法检查更新。');
-      } finally {
-        if (active) timer = setTimeout(() => void poll(), 3000);
-      }
-    };
-    void poll();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-      request?.abort();
-    };
-  }, [applyStatus]);
 
   const action = async (name: string, enabled?: boolean) => {
     if (busy || installingNow) return;
     setBusy(true);
     setError('');
     try {
-      applyStatus(await sendAction(name, enabled));
+      setStatus(await sendUpdateAction(name, enabled));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
     } finally {
@@ -156,7 +53,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
     setInstallingNow(true);
     setError('');
     try {
-      await desktopInvoke('install_update');
+      await installDesktopUpdate();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '更新未完成，请重试。');
     } finally {
@@ -166,18 +63,7 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
 
   const openPage = async () => {
     try {
-      const targetVersion = status?.candidate?.version ?? status?.staged?.version ?? null;
-      if (desktop)
-        await desktopInvoke('open_update_page', {
-          source: 'github',
-          version: targetVersion,
-        });
-      else
-        window.open(
-          'https://github.com/Starfie1d1272/Mizar/releases',
-          '_blank',
-          'noopener,noreferrer',
-        );
+      await openUpdateReleasePage(status?.candidate?.version ?? status?.staged?.version ?? null);
     } catch {
       setError('下载页面未能打开。');
     }
@@ -225,6 +111,12 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
   const waiting = busy || checking || installing;
   const blocked = status?.installBlockedReason;
   const displayRelease = status?.candidate ?? status?.staged ?? null;
+  const canDownloadCandidate = Boolean(
+    status?.candidate &&
+    !status.manual &&
+    !downloading &&
+    (!status.staged || status.candidate.version !== status.staged.version),
+  );
 
   const recoveryFailures =
     status?.failureDetails?.filter(
@@ -242,6 +134,11 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
     (showRemoteError && status?.lastError
       ? `${status.lastError.stageLabel}：${status.lastError.summary} ${status.lastError.nextStep}`
       : '');
+
+  const totalBytes = status?.candidate?.installer.bytes ?? 0;
+  const downloadedBytes = status?.downloadedBytes ?? 0;
+  const percent =
+    totalBytes > 0 ? Math.min(99, Math.floor((downloadedBytes / totalBytes) * 100)) : 0;
 
   return (
     <Panel className="settings-card settings-update">
@@ -280,22 +177,12 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
           {status?.transferStage === 'verifying' ? <span>正在校验</span> : null}
           <progress
             aria-label="更新下载进度"
-            value={Math.min(
-              status?.downloadedBytes ?? 0,
-              Math.max(0, (status?.candidate?.installer.bytes ?? 1) - 1),
-            )}
-            max={status?.candidate?.installer.bytes ?? 1}
+            value={Math.min(downloadedBytes, Math.max(0, totalBytes - 1))}
+            max={Math.max(1, totalBytes)}
           />
           <span>
             {status?.downloadSource ? `${status.downloadSource} · ` : ''}
-            {status?.downloadedBytes ?? 0} / {status?.candidate?.installer.bytes ?? 0} 字节 ·{' '}
-            {Math.min(
-              99,
-              Math.floor(
-                ((status?.downloadedBytes ?? 0) / (status?.candidate?.installer.bytes ?? 1)) * 100,
-              ),
-            )}
-            %
+            {formatMegabytes(downloadedBytes)} / {formatMegabytes(totalBytes)} MB · {percent}%
           </span>
         </div>
       ) : null}
@@ -338,13 +225,14 @@ export function UpdateSettings({ children }: { children?: ReactNode }) {
             >
               {installing ? '正在更新…' : '重启并更新'}
             </Button>
-          ) : status?.candidate && !status.manual && !downloading ? (
+          ) : null}
+          {canDownloadCandidate && status?.candidate ? (
             <Button
-              variant="primary"
+              variant={status.staged ? 'default' : 'primary'}
               disabled={waiting || !desktop}
               onClick={() => void action('download')}
             >
-              下载更新
+              {status.staged ? `下载 v${status.candidate.version}` : '下载更新'}
             </Button>
           ) : null}
           {downloading ? (
