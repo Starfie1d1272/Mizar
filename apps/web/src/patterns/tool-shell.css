@@ -45,3 +45,9 @@
   overflow: hidden;
   scrollbar-gutter: auto;
 }
+@media (max-width: 1100px) {
+  .mizar-tool-shell[data-fill='true'] > .mizar-tool-content {
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+}

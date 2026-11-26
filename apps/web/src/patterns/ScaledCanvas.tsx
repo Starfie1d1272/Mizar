@@ -1,6 +1,34 @@
 import './scaled-canvas.css';
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
+export function computeAspectRatioScale(
+  clientWidth: number,
+  clientHeight: number,
+  width: number,
+  height: number,
+): number | null {
+  if (clientWidth <= 0 || clientHeight <= 0 || width <= 0 || height <= 0) return null;
+  return Math.min(clientWidth / width, clientHeight / height);
+}
+
+export function computeMinBudgetStyle(
+  clientWidth: number,
+  clientHeight: number,
+  minWidth: number,
+  minHeight: number,
+): CSSProperties | null {
+  if (clientWidth <= 0 || clientHeight <= 0 || minWidth <= 0 || minHeight <= 0) return null;
+  const scale = Math.min(1, clientWidth / minWidth, clientHeight / minHeight);
+  if (scale >= 1) {
+    return { width: '100%', height: '100%' };
+  }
+  return {
+    width: clientWidth / scale,
+    height: clientHeight / scale,
+    zoom: scale,
+  };
+}
+
 export function AspectRatioCanvas({
   width,
   height,
@@ -17,9 +45,13 @@ export function AspectRatioCanvas({
     const element = host.current;
     if (!element) return;
     const resize = () => {
-      const { clientWidth, clientHeight } = element;
-      if (clientWidth <= 0 || clientHeight <= 0) return;
-      setScale(Math.min(clientWidth / width, clientHeight / height));
+      const next = computeAspectRatioScale(
+        element.clientWidth,
+        element.clientHeight,
+        width,
+        height,
+      );
+      if (next !== null) setScale(next);
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -55,18 +87,13 @@ export function MinBudgetCanvas({
     const element = host.current;
     if (!element) return;
     const resize = () => {
-      const { clientWidth, clientHeight } = element;
-      if (clientWidth <= 0 || clientHeight <= 0) return;
-      const scale = Math.min(1, clientWidth / minWidth, clientHeight / minHeight);
-      if (scale >= 1) {
-        setInnerStyle({ width: '100%', height: '100%' });
-      } else {
-        setInnerStyle({
-          width: clientWidth / scale,
-          height: clientHeight / scale,
-          zoom: scale,
-        });
-      }
+      const next = computeMinBudgetStyle(
+        element.clientWidth,
+        element.clientHeight,
+        minWidth,
+        minHeight,
+      );
+      if (next !== null) setInnerStyle(next);
     };
     resize();
     const observer = new ResizeObserver(resize);

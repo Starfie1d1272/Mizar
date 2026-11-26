@@ -193,7 +193,8 @@ export function checkDesign(repository, records, report) {
           edge.specifier,
         ) ||
         (isCatalog(record.path) &&
-          (edge.specifier.startsWith('@storybook/') || edge.specifier.startsWith('storybook/')));
+          (edge.specifier.startsWith('@storybook/') || edge.specifier.startsWith('storybook/'))) ||
+        (/\.test\.[^.]+$/.test(record.path) && edge.specifier === 'vitest');
       const allowedLocal =
         edge.specifier.startsWith('.') &&
         (target.startsWith('apps/web/src/ui/') ||

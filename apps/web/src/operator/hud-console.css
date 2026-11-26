@@ -701,6 +701,10 @@
     padding: 0;
     border: 0;
   }
+  .hud-console__editor-fieldset {
+    overflow-y: visible;
+    scrollbar-gutter: auto;
+  }
   .hud-console__replay {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
