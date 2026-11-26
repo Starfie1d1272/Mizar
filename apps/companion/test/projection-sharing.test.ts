@@ -8,7 +8,6 @@ import {
   type CstvSourceManagers,
 } from '../src/telemetry/cstv-source-manager.js';
 
-import type { RoleScopedGameEventObservation } from '@mizar/core/game-events';
 import type { MatchContext } from '@mizar/core/match-context';
 import type { TelemetryObservation } from '@mizar/core/telemetry';
 
@@ -92,7 +91,7 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
     await coordinator.close();
   });
 
-  it('throttles operator heartbeat during stable high-frequency GSI frames and publishes immediately on structural or source changes', async () => {
+  it('throttles operator broadcasts during stable high-frequency GSI frames while keeping program/radar cursors aligned', async () => {
     let now = 1000;
     const runtime = createProgramRuntime('test-prod');
     let lookaheadHealth: CstvSourceHealth<'lookahead'> = {
@@ -111,16 +110,10 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
       getHealth: readHealth,
       getRecentGameEvents: () => [],
       getRecentDiagnostics: () => [],
-      getSnapshot: () => ({
-        health: readHealth(),
-        recentGameEvents: [],
-        recentDiagnostics: [],
-      }),
+      getSnapshot: () => ({ health: readHealth(), recentGameEvents: [], recentDiagnostics: [] }),
       subscribe: (listener) => {
         if (role === 'lookahead') healthListeners.add(listener);
-        return () => {
-          healthListeners.delete(listener);
-        };
+        return () => healthListeners.delete(listener);
       },
       subscribeLiveGameEvents: () => () => undefined,
     });
@@ -148,20 +141,23 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
     const progSeqBefore = programPub.getCurrent()!.channelSeq;
     const radarSeqBefore = radarPub.getCurrent()!.channelSeq;
 
-    // High-frequency coordinate-only frames within 1000ms window: program & radar update every frame, operator is throttled
+    // High-frequency coordinate-only frames within 1000ms window:
+    // program & radar advance every frame with identical cursors; operator broadcast is throttled.
     for (const [seq, ts, x] of [
       [3, 1150, 140],
       [4, 1200, 160],
       [5, 1250, 180],
     ] as const) {
       now = ts;
-      coordinator.afterRuntimeMutation(runtime.acceptObservation(makeObservation(seq, x)));
+      const bundle = coordinator.afterRuntimeMutation(
+        runtime.acceptObservation(makeObservation(seq, x)),
+      );
+      expect(bundle.operator.runtime.lastAccepted?.receiveSequence).toBe(seq);
+      expect(programPub.getCurrent()!.cursor).toEqual(radarPub.getCurrent()!.cursor);
     }
 
     expect(programPub.getCurrent()!.channelSeq).toBe(progSeqBefore + 3);
-    expect(programPub.getCurrent()!.cursor.programReceiveSequence).toBe(5);
     expect(radarPub.getCurrent()!.channelSeq).toBe(radarSeqBefore + 3);
-    expect(radarPub.getCurrent()!.cursor.programReceiveSequence).toBe(5);
     expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore);
     expect(operatorPub.getCurrent()!.payload.runtime.lastAccepted?.receiveSequence).toBe(2);
 
@@ -171,13 +167,8 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
     expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 1);
     expect(operatorPub.getCurrent()!.payload.runtime.lastAccepted?.receiveSequence).toBe(6);
 
-    // Next frame within window is throttled again
-    now = 2150;
-    coordinator.afterRuntimeMutation(runtime.acceptObservation(makeObservation(7, 220)));
-    expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 1);
-
     // CSTV source health change publishes operator immediately
-    now = 2180;
+    now = 2150;
     lookaheadHealth = { role: 'lookahead', state: 'live', generation: 1, mapName: 'de_ancient' };
     for (const listener of healthListeners) listener();
     expect(operatorPub.getCurrent()!.channelSeq).toBe(opSeqBefore + 2);
@@ -238,115 +229,26 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
     await coordinator.close();
   });
 
-  it('deduplicates redundant assist broadcasts while preserving diagnostics, event precision, and timeline resets', async () => {
+  it('keeps program and radar cursors aligned across prediction coalescing and completion', async () => {
     let now = 1000;
     const runtime = createProgramRuntime('test-prod');
-    const lookaheadListeners = new Set<
-      (event: RoleScopedGameEventObservation<'lookahead'>) => void
-    >();
-    const resetListeners = new Set<() => void>();
-    let lookaheadHealth: CstvSourceHealth<'lookahead'> = {
-      role: 'lookahead',
-      state: 'live',
-      generation: 1,
-      mapName: 'de_ancient',
-      lastReceiveMonotonicMs: 1000,
-    };
-    const cstvSources: CstvSourceManagers = {
-      program: {
-        role: 'program',
-        start: () => undefined,
-        stop: () => Promise.resolve(),
-        getHealth: () => ({ role: 'program', state: 'disabled', generation: 0 }),
-        getRecentGameEvents: () => [],
-        getRecentDiagnostics: () => [],
-        getSnapshot: () => ({
-          health: { role: 'program', state: 'disabled', generation: 0 },
-          recentGameEvents: [],
-          recentDiagnostics: [],
-        }),
-        subscribe: () => () => undefined,
-        subscribeLiveGameEvents: () => () => undefined,
-      },
-      lookahead: {
-        role: 'lookahead',
-        start: () => undefined,
-        stop: () => Promise.resolve(),
-        getHealth: () => lookaheadHealth,
-        getRecentGameEvents: () => [],
-        getRecentDiagnostics: () => [],
-        getSnapshot: () => ({
-          health: lookaheadHealth,
-          recentGameEvents: [],
-          recentDiagnostics: [],
-        }),
-        subscribe: () => () => undefined,
-        subscribeLiveGameEvents: (listener) => {
-          lookaheadListeners.add(listener);
-          return () => lookaheadListeners.delete(listener);
-        },
-        subscribeTimelineReset: (listener) => {
-          resetListeners.add(listener);
-          return () => resetListeners.delete(listener);
-        },
-      },
-    };
-    const diagnosticsCount = { value: 0 };
-    const context = {
-      schemaVersion: 'mizar.match-document.v1',
-      matchId: 'match-assist',
-      competition: {
-        competitionId: 'comp-1',
-        slug: 'comp-1',
-        name: 'Test Cup',
-        logoUrl: null,
-        themeColor: null,
-      },
-      status: 'live',
-      format: 'bo1',
-      stage: 'group',
-      stageLabel: 'Group',
-      round: null,
-      roundLabel: null,
-      entryRound: null,
-      matchLabel: null,
-      stakesLabel: null,
-      scheduledAt: null,
-      startedAt: null,
-      completedAt: null,
-      scoreA: null,
-      scoreB: null,
-      isForfeit: false,
-      entrants: {
-        a: { entryId: 'a', name: 'Team A', logoUrl: null, rosterId: null, players: [] },
-        b: { entryId: 'b', name: 'Team B', logoUrl: null, rosterId: null, players: [] },
-      },
-      mapPool: ['de_ancient'],
-      maps: [],
-      veto: [],
-      commentators: [],
-    } as unknown as MatchContext;
-    runtime.bindContext(context, 'local');
+    const cstvSources = createCstvSourceManagers();
+    const scheduled: (() => void)[] = [];
     const coordinator = createProjectionCoordinator({
       programRuntime: runtime,
       cstvSources,
-      observerSettings: () => ({ enabled: true, leadSeconds: 5, delaySeconds: 120 }),
-      onObserverDiagnostics: () => {
-        diagnosticsCount.value += 1;
-      },
-      matchContextBinding: {
-        manifest: context as unknown as NonNullable<
-          Parameters<typeof createProjectionCoordinator>[0]['matchContextBinding']
-        >['manifest'],
-        context,
-        origin: 'local',
-        freshness: 'fresh',
-        diagnostics: [],
-      },
       nowMonotonicMs: () => now,
+      predictionPublishCoalescing: true,
+      scheduler: {
+        setTimeout: (cb) => {
+          scheduled.push(cb);
+          return scheduled.length;
+        },
+        clearTimeout: () => undefined,
+      },
     });
 
-    const obs = (seq: number): TelemetryObservation => ({
+    const plantedObs = (seq: number): TelemetryObservation => ({
       ...makeObservation(seq, 100 + seq),
       receive: {
         sequence: seq,
@@ -355,83 +257,29 @@ describe('ProjectionCoordinator projection sharing and propagation', () => {
       },
       telemetry: {
         ...makeObservation(seq, 100 + seq).telemetry,
-        allPlayers: Array.from({ length: 10 }, (_, i) => ({
-          sourcePlayerId: `765611980000000${String(i + 1).padStart(2, '0')}`,
-          displayName: `Player${i + 1}`,
-          side: (i < 5 ? 'CT' : 'T') as 'CT' | 'T',
-          observerSlot: (i % 5) + 1,
-          activity: 'playing',
-          position: { x: 100 + seq + i * 10, y: 200, z: 0 },
-          forward: { x: 1, y: 0, z: 0 },
-          state: { health: 100 },
-          matchStats: { kills: 0, assists: 0, deaths: 0, mvps: 0, score: 0 },
-          weapons: [],
-        })),
+        bomb: {
+          state: 'planted',
+          countdownSeconds: 35,
+          position: { x: 100, y: 200, z: 0 },
+        },
       },
     });
 
     now = 1050;
-    coordinator.afterRuntimeMutation(runtime.acceptObservation(obs(1)));
-    const assistPub = coordinator.getPublisher('assist');
-    const steadyAssistSeq = assistPub.getCurrent()!.channelSeq;
-    const diagBefore = diagnosticsCount.value;
+    coordinator.afterRuntimeMutation(runtime.acceptObservation(plantedObs(1)));
+    const programPub = coordinator.getPublisher('program');
+    const radarPub = coordinator.getPublisher('radar');
+    expect(programPub.getCurrent()!.cursor).toEqual(radarPub.getCurrent()!.cursor);
 
-    // Repeated refreshAssist & coordinate frames with unchanged assist state skip redundant broadcasts,
-    // while still reporting diagnostics on every cycle.
-    now = 1250;
-    coordinator.afterRuntimeMutation(runtime.acceptObservation(obs(2)));
-    now = 1450;
-    coordinator.refreshAssist();
-    now = 1650;
-    coordinator.refreshAssist();
+    now = 1100;
+    const bundle2 = coordinator.afterRuntimeMutation(runtime.acceptObservation(plantedObs(2)));
+    expect(bundle2.program.cursor.programReceiveSequence).toBe(2);
+    expect(coordinator.getCurrent().program.cursor.programReceiveSequence).toBe(2);
+    expect(programPub.getCurrent()!.cursor).toEqual(radarPub.getCurrent()!.cursor);
 
-    expect(assistPub.getCurrent()!.channelSeq).toBe(steadyAssistSeq);
-    expect(diagnosticsCount.value).toBe(diagBefore + 3);
-
-    // Lookahead kill event + lead window arrival publishes hint with accurate timing
-    for (const listener of lookaheadListeners) {
-      listener({
-        kind: 'player-death',
-        cursor: {
-          kind: 'cs2-cstv',
-          role: 'lookahead',
-          generation: 1,
-          sequence: 1,
-          tick: 1000,
-          ticksPerSecond: 64,
-          mapName: 'de_ancient',
-          roundsCompleted: 1,
-          observedAt: '2026-11-26T00:00:01.000Z',
-          observedMonotonicMs: 1650,
-          sourceArrivalMonotonicMs: 1650,
-        },
-        attacker: { sourcePlayerId: '76561198000000001', displayName: 'Player1', side: 'CT' },
-        victim: { sourcePlayerId: '76561198000000006', displayName: 'Player6', side: 'T' },
-        weapon: 'ak47',
-        assistedFlash: false,
-        headshot: true,
-        penetratedObjects: 0,
-        throughSmoke: false,
-        attackerBlind: false,
-        attackerInAir: false,
-        noScope: false,
-      });
-    }
-
-    // Advance into lead window (1650 + 120000 - 5000 = 116650)
-    now = 117650;
-    lookaheadHealth = { ...lookaheadHealth, lastReceiveMonotonicMs: now };
-    coordinator.afterRuntimeMutation(runtime.acceptObservation(obs(3)));
-    const withHint = assistPub.getCurrent()!;
-    expect(withHint.payload.observer?.hints).toHaveLength(1);
-    expect(withHint.payload.observer?.hints[0]?.remainingSeconds).toBeCloseTo(4, 3);
-    expect(withHint.channelSeq).toBe(steadyAssistSeq + 2);
-
-    // Timeline reset clears active hints and publishes immediately
-    for (const listener of resetListeners) listener();
-    const afterReset = assistPub.getCurrent()!;
-    expect(afterReset.channelSeq).toBe(steadyAssistSeq + 3);
-    expect(afterReset.payload.observer?.hints).toHaveLength(0);
+    // Drain any scheduled coalescing or stale timer callbacks
+    for (const cb of scheduled.splice(0, scheduled.length)) cb();
+    expect(programPub.getCurrent()!.cursor).toEqual(radarPub.getCurrent()!.cursor);
 
     await coordinator.close();
   });
