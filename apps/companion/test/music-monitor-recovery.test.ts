@@ -9,8 +9,10 @@ import { OBS_COLLECTION } from '../src/obs/desired-state.js';
 import { createMusicDevice } from '../src/obs/music-device.js';
 import type { ObsRpc } from '../src/obs/reconcile.js';
 import { MusicDirector } from '../src/music/director.js';
+import { MusicPreview } from '../src/music/preview.js';
 import type { MusicDevice, MusicDeviceProvider, MusicMonitorMode } from '../src/music/device.js';
 import type { MusicTruth } from '../src/music/cues.js';
+import type { MusicPreviewRequest } from '@mizar/protocol/music';
 
 test('closing music monitor during route migration survives restart and applies on recovery', async (t) => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-monitor-disable-'));
@@ -623,4 +625,199 @@ test('manualPause and seek confirm playback transitions and fail closed to unkno
   await assert.rejects(rig.director.seek(4000, key), /obs_seek_lost/);
   assert.equal(rig.director.get().playback, 'unknown');
   assert.equal(rig.director.get().held, true);
+});
+
+test('music preview aborts before media load and restores monitor when monitor observation is unconfirmed', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-preview-monitor-gate-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  store.trackPath = async () => '/tmp/fake-track.mp3';
+  await store.update((s) => {
+    s.sources.stinger = 'stinger-uuid';
+    s.sourceScopes.stinger = 'owned-collection';
+  });
+
+  const events: { stage: string; evidence: unknown }[] = [];
+  const originalPreviewEvent = store.previewEvent.bind(store);
+  store.previewEvent = (stage, evidence) => {
+    events.push({ stage, evidence });
+    originalPreviewEvent(stage, evidence);
+  };
+
+  let mode: MusicMonitorMode = 'off';
+  let readsAfterBorrow = -1;
+  let loadCalls = 0;
+  let controlCalls = 0;
+  const device: Partial<MusicDevice> = {
+    hasSource: async (_s, layer) => layer === 'stinger',
+    outputsStopped: async () => true,
+    ownershipScope: async () => 'owned-collection',
+    verifyPlayback: async () => {},
+    mediaStatus: async () => ({ state: 'stopped', cursorMs: 0, durationMs: 10_000 }),
+    mute: async () => false,
+    volume: async () => 1,
+    monitorMode: async () => {
+      if (readsAfterBorrow >= 0) {
+        readsAfterBorrow++;
+        if (readsAfterBorrow <= 2) return undefined;
+      }
+      return mode;
+    },
+    setMonitorMode: async ({ mode: next }) => {
+      mode = next;
+      readsAfterBorrow = next === 'monitor-only' ? 0 : -1;
+    },
+    loadMedia: async () => {
+      loadCalls++;
+    },
+    controlMedia: async () => {
+      controlCalls++;
+    },
+    guardWrites: () => device as unknown as MusicDevice,
+    checkCalls: () => device as unknown as MusicDevice,
+  };
+
+  const now = 1000;
+  const preview = new MusicPreview(
+    store,
+    () => now,
+    async () => 'monitor-only',
+  );
+  const request: MusicPreviewRequest = {
+    action: 'start',
+    owner: 'panel',
+    token: 'tok-1',
+    operation: 1,
+    expiresAt: now + 3000,
+    group: 'waiting',
+    track: { id: `${'d'.repeat(64)}.mp3`, name: 'Track', startMs: 0, endMs: null, gain: 1 },
+    volume: 1,
+    fadeInMs: 0,
+    fadeOutMs: 0,
+    confirmed: false,
+  };
+  preview.submit(request);
+
+  await preview.reconcile(
+    device as unknown as MusicDevice,
+    1,
+    () => true,
+    true,
+    () => {},
+    async () => {},
+  );
+
+  assert.equal(loadCalls, 0);
+  assert.equal(controlCalls, 0);
+  assert.equal(mode, 'off');
+  assert.deepEqual(store.state.previewMonitorLeases, []);
+  assert.equal(preview.status?.phase, 'failed');
+  assert.match(preview.status?.message ?? '', /OBS「设置 → 音频 → 高级」/);
+  assert.ok(
+    events.some(
+      (e) =>
+        e.stage === 'music_preview_failed' &&
+        (e.evidence as { reason?: string } | undefined)?.reason === 'monitor_unavailable',
+    ),
+  );
+});
+
+test('music preview stops playback and enters cleanup then failed when monitor is disabled mid-preview', async (t) => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'mizar-preview-monitor-lost-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MusicStore(directory);
+  await store.load();
+  store.trackPath = async () => '/tmp/fake-track.mp3';
+  await store.update((s) => {
+    s.sources.stinger = 'stinger-uuid';
+    s.sourceScopes.stinger = 'owned-collection';
+  });
+
+  let mode: MusicMonitorMode = 'off';
+  let mediaState: 'stopped' | 'playing' = 'stopped';
+  let mediaFile = '';
+  let volume = 1;
+  const device: Partial<MusicDevice> = {
+    hasSource: async (_s, layer) => layer === 'stinger',
+    outputsStopped: async () => true,
+    ownershipScope: async () => 'owned-collection',
+    verifyPlayback: async () => {},
+    mediaStatus: async () => ({ state: mediaState, cursorMs: 500, durationMs: 10_000 }),
+    mute: async () => false,
+    volume: async () => volume,
+    mediaFile: async () => mediaFile,
+    monitorMode: async () => mode,
+    setMonitorMode: async ({ mode: next }) => {
+      mode = next;
+    },
+    monitorSafe: async () => true,
+    setVolume: async ({ gain }) => {
+      volume = gain;
+    },
+    loadMedia: async ({ path }) => {
+      mediaFile = path;
+    },
+    controlMedia: async ({ action }) => {
+      if (action === 'restart') mediaState = 'playing';
+      if (action === 'stop') mediaState = 'stopped';
+    },
+    guardWrites: () => device as unknown as MusicDevice,
+    checkCalls: () => device as unknown as MusicDevice,
+  };
+
+  let now = 1000;
+  const preview = new MusicPreview(
+    store,
+    () => now,
+    async () => 'monitor-only',
+  );
+  preview.submit({
+    action: 'start',
+    owner: 'panel',
+    token: 'tok-2',
+    operation: 1,
+    expiresAt: now + 3000,
+    group: 'waiting',
+    track: { id: `${'e'.repeat(64)}.mp3`, name: 'Track', startMs: 0, endMs: null, gain: 1 },
+    volume: 1,
+    fadeInMs: 0,
+    fadeOutMs: 0,
+    confirmed: false,
+  });
+
+  const runReconcile = () =>
+    preview.reconcile(
+      device as unknown as MusicDevice,
+      1,
+      () => true,
+      true,
+      () => {},
+      async () => {},
+    );
+
+  // 1. Start preview: borrows monitor and restarts media.
+  await runReconcile();
+  assert.equal(preview.status?.phase, 'requested');
+  assert.equal(mode, 'monitor-only');
+
+  // 2. Media is playing with monitor enabled.
+  now += 200;
+  await runReconcile();
+  assert.equal(preview.status?.phase, 'playing');
+
+  // 3. Monitor is turned off mid-preview -> stops preview into cleanup state.
+  mode = 'off';
+  now += 200;
+  await runReconcile();
+  assert.equal(preview.status?.phase, 'cleanup');
+  assert.match(preview.status?.message ?? '', /本机监听已关闭/);
+
+  // 4. Next reconcile stops OBS media and settles into failed state.
+  now += 200;
+  await runReconcile();
+  assert.equal(mediaState, 'stopped');
+  assert.equal(preview.status?.phase, 'failed');
+  assert.match(preview.status?.message ?? '', /本机监听已关闭/);
+  assert.deepEqual(store.state.previewMonitorLeases, []);
 });

@@ -410,6 +410,18 @@ export class MusicPreview {
       const gain = await device.volume({ sourceId: uuid });
       if (typeof gain !== 'number' || !Number.isFinite(gain))
         throw new Error('music_preview_mixer_unconfirmed');
+      await this.monitor.borrow(obs, uuid, current);
+      const monitor = await this.monitor.observe(obs, uuid, current);
+      if (!current()) return;
+      if (monitor !== true) {
+        await this.recoverMonitor(obs, current);
+        if (current())
+          this.fail(
+            'monitor_unavailable',
+            '本机试听未开始。请在 OBS「设置 → 音频 → 高级」选择明确的监听设备，并确认它没有被桌面声音采集。',
+          );
+        return;
+      }
       // Register cleanup before the first write, including uncertain RPC outcomes.
       this.uuid = uuid;
       this.path = path;
@@ -421,7 +433,6 @@ export class MusicPreview {
       this.pendingMute = null;
       this.envelope = 0;
       this.expectedVolume = gain;
-      await this.monitor.borrow(obs, uuid, current);
       // Remain silent until OBS confirms playback and the segment seek.
       await this.prepareMixer(obs, uuid, 0);
       await device.setVolume({ sourceId: uuid, gain: 0 });
@@ -476,6 +487,10 @@ export class MusicPreview {
     }
     const monitor = await this.monitor.observe(obs, this.uuid, current);
     if (!current()) return;
+    if (monitor === false) {
+      this.fail('monitor_changed', '本机监听已关闭，正在停止试听。请在 OBS 核对监听设备。');
+      return;
+    }
     if (!(await this.monitor.safe(obs, this.uuid, current))) {
       if (current()) this.cancel('monitor_changed');
       return;
@@ -499,9 +514,7 @@ export class MusicPreview {
       message:
         monitor === true
           ? 'OBS 已确认媒体播放和本机监听开启，最多 15 秒。'
-          : monitor === false
-            ? 'OBS 媒体正在播放，本机监听未开启；请为监听和桌面采集选择明确设备，监听设备不能被桌面采集。'
-            : 'OBS 媒体正在播放，本机监听状态未确认；请在 OBS 核对。',
+          : '本机监听状态未确认，请在 OBS 核对。',
     };
     const cursor =
       this.status.phase === 'playing'

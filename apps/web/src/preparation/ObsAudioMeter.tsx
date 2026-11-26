@@ -54,16 +54,13 @@ export function ObsAudioMeter({
     }
   }
   return (
-    <section>
-      <h3>节目声音</h3>
-      <p>
-        当前模式 ·{' '}
-        {mode === 'desktop' ? '桌面混音' : mode === 'independent' ? '独立分路' : '未确认'}
-      </p>
-      <p>点击后采样约两秒，请同时说话或播放声音。只检查专用集合的固定音源，不改变音频配置。</p>
-      <Button disabled={busy} aria-busy={busy} onClick={() => void sample()}>
-        {busy ? '正在采样…' : '检查两秒输入电平'}
-      </Button>
+    <section className="sound-sources__meter" aria-label="输入电平">
+      <div className="sound-sources__meter-heading">
+        <span>检查时请说话或播放声音。电平为输入峰值。</span>
+        <Button disabled={busy} aria-busy={busy} onClick={() => void sample()}>
+          {busy ? '正在采样…' : '检查输入电平'}
+        </Button>
+      </div>
       {message && <p role="alert">{message}</p>}
       {reading && (
         <div role="status">
@@ -108,7 +105,6 @@ export function ObsAudioMeter({
           </ul>
         </div>
       )}
-      <p>峰值取自音量调整前的输入。请录制试听或监听平台，确认实际节目声音。</p>
     </section>
   );
 }

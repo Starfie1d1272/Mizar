@@ -43,11 +43,11 @@
 .audio-mixer__control .mizar-button {
   flex-shrink: 0;
 }
-.audio-mixer--music {
+.audio-mixer--embedded {
   padding: 0;
   border: 0;
   background: transparent;
 }
-.audio-mixer--music .audio-mixer__channels {
+.audio-mixer--embedded .audio-mixer__channels {
   margin: 0;
 }
