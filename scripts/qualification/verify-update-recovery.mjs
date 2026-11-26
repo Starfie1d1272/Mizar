@@ -155,6 +155,46 @@ try {
   assert.equal(verOut.code, 0);
   assert.equal(verOut.stdout.trim(), '1.12.0');
 
+  // 1b. Pre-commit apply-update digest mismatch -> fails with 12, preserves current.json, relaunches versions/<current>/Mizar.exe
+  const payloadBad = join(work, 'payloadBad');
+  await makeStubPayload(payloadBad, { version: '1.12.1', gitSha: 'b2c3d4e5'.repeat(5) });
+  const exitedHost = await new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore', windowsHide: true });
+    const pid = child.pid;
+    child.on('error', reject);
+    child.on('close', () => resolvePromise(pid));
+  });
+  const resBad = join(work, 'resBad.json');
+  const rBad = await exec(applierBin, [
+    'apply-update',
+    '--payload-dir',
+    payloadBad,
+    '--install-dir',
+    installDir,
+    '--state-root',
+    stateRoot,
+    '--expected-content-digest',
+    '0'.repeat(64),
+    '--host-pid',
+    String(exitedHost),
+    '--host-start-time',
+    '0',
+    '--no-ui',
+    '--result-file',
+    resBad,
+  ]);
+  assert.equal(rBad.code, 12, rBad.stderr);
+  const lastBad = JSON.parse(
+    await readFile(join(stateRoot, 'logs', 'last-applier-result.json'), 'utf8'),
+  );
+  assert.equal(lastBad.operation, 'apply-update');
+  assert.equal(lastBad.status, 'failed');
+  assert.equal(lastBad.code, 'payload_invalid');
+  const ptrAfterBad = JSON.parse(await readFile(join(installDir, 'current.json'), 'utf8'));
+  assert.equal(ptrAfterBad.current, '1.12.0-a1b2c3d4');
+  const badLog = await readFile(lastBad.logPath, 'utf8');
+  assert.match(badLog, /versions[\\/]1\.12\.0-a1b2c3d4[\\/]Mizar\.exe -> ok=true/);
+
   // 2. Startup crash auto-rollback (v1.12.1 exits 1 before signaling ready -> rolls back to v1.12.0)
   const payload2 = join(work, 'payload2');
   const sha2 = 'e5f6a7b8'.repeat(5);

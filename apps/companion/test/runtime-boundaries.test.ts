@@ -185,7 +185,7 @@ test('update staging survives unavailable OBS and only a known active output blo
   assert.equal(reserved, false);
 });
 
-test('rollback applier result notifies once across restarts and skips cancelled results', async (t) => {
+test('UpdateManager consumes only apply-update results from last-applier-result.json', async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-applier-result-'));
   const logsDir = join(stateRoot, 'logs');
   await mkdir(logsDir, { recursive: true });
@@ -193,15 +193,6 @@ test('rollback applier result notifies once across restarts and skips cancelled 
     await rm(stateRoot, { recursive: true, force: true });
   });
   const resultPath = join(logsDir, 'last-applier-result.json');
-  await writeFile(
-    resultPath,
-    JSON.stringify({
-      operation: 'apply-update',
-      status: 'rolled_back',
-      version: '1.13.0',
-      message: '新版启动失败，已自动回退到上一版本',
-    }),
-  );
   const makeManager = () =>
     new UpdateManager({
       stateRoot,
@@ -212,42 +203,38 @@ test('rollback applier result notifies once across restarts and skips cancelled 
       source: { latest: async () => null },
     });
 
+  await writeFile(
+    resultPath,
+    JSON.stringify({
+      operation: 'apply-update',
+      status: 'rolled_back',
+      version: '1.13.0',
+      message: '新版启动失败，已自动回退到上一版本',
+    }),
+  );
   const first = makeManager();
   t.after(() => first.close());
   await first.load();
   assert.equal(first.status().lastResult, 'restored');
   assert.equal(first.status().lastResultVersion, '1.13.0');
-  assert.equal(first.status().lastResultNotificationPending, true);
-
-  assert.equal(await first.dismissLastResult(), true);
-  assert.equal(first.status().lastResultNotificationPending, false);
-  assert.equal(await first.dismissLastResult(), false);
-
-  const second = makeManager();
-  t.after(() => second.close());
-  await second.load();
-  assert.equal(second.status().lastResult, 'restored');
-  assert.equal(second.status().lastResultNotificationPending, false);
 
   await writeFile(
     resultPath,
     JSON.stringify({ operation: 'apply-update', status: 'cancelled', version: '1.13.0' }),
   );
-  const third = makeManager();
-  t.after(() => third.close());
-  await third.load();
-  assert.equal(third.status().lastResult, 'cancelled');
-  assert.equal(third.status().lastResultNotificationPending, false);
+  const second = makeManager();
+  t.after(() => second.close());
+  await second.load();
+  assert.equal(second.status().lastResult, 'cancelled');
 
   await writeFile(
     resultPath,
     JSON.stringify({ operation: 'install', status: 'failed', version: '1.13.0' }),
   );
-  const fourth = makeManager();
-  t.after(() => fourth.close());
-  await fourth.load();
-  assert.equal(fourth.status().lastResult, null);
-  assert.equal(fourth.status().lastResultNotificationPending, false);
+  const third = makeManager();
+  t.after(() => third.close());
+  await third.load();
+  assert.equal(third.status().lastResult, null);
 });
 
 test('website shutdown cannot acknowledge a failed local source commit', async () => {

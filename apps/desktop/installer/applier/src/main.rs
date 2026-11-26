@@ -98,6 +98,7 @@ struct PostRunUi {
     no_ui: bool,
     committed: bool,
     relaunch_exe: Option<PathBuf>,
+    host_wait: Option<(u32, u64)>,
 }
 
 struct StagingGuard(Option<PathBuf>);
@@ -120,6 +121,19 @@ impl Drop for LegacyArchiveGuard {
             let _ = fs::rename(&arch, &self.install_dir);
         }
     }
+}
+
+fn resolve_installed_host_exe(install_dir: &Path) -> PathBuf {
+    if let Some(ptr) = read_current_pointer(install_dir) {
+        let candidate = install_dir
+            .join("versions")
+            .join(&ptr.current)
+            .join("Mizar.exe");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    install_dir.join("Mizar.exe")
 }
 
 fn relaunch_old_product(exe_path: &Path) -> bool {
@@ -151,7 +165,7 @@ impl Drop for PreCommitGuard {
         }
         self.active_event.take();
         if let Some(dir) = self.relaunch_dir.take() {
-            let _ = relaunch_old_product(&dir.join("Mizar.exe"));
+            let _ = relaunch_old_product(&resolve_installed_host_exe(&dir));
         }
     }
 }
@@ -291,6 +305,7 @@ fn run_install_or_update(
             no_ui: params.no_ui,
             committed,
             relaunch_exe,
+            host_wait: params.apply_update.map(|(pid, start, _)| (pid, start)),
         },
     )
 }
@@ -358,8 +373,8 @@ fn execute_install_or_update(
                 let relaunch = if err.code != ExitCode::AppRunning {
                     guards
                         .relaunch_dir
-                        .as_ref()
-                        .map(|dir| dir.join("Mizar.exe"))
+                        .as_deref()
+                        .map(resolve_installed_host_exe)
                 } else {
                     None
                 };
@@ -683,6 +698,7 @@ fn run_uninstall(
         no_ui,
         committed,
         relaunch_exe: None,
+        host_wait: None,
     };
 
     let _writer = match WriterMutex::try_acquire() {
@@ -720,6 +736,7 @@ fn run_uninstall(
                 no_ui: true,
                 committed: false,
                 relaunch_exe: None,
+                host_wait: None,
             },
         );
     }
@@ -793,6 +810,7 @@ fn format_error_ui(
     mode: UiMode,
     code: ExitCode,
     committed: bool,
+    old_relaunched: bool,
     msg: &str,
 ) -> (&'static str, &'static str, String) {
     match mode {
@@ -814,16 +832,24 @@ fn format_error_ui(
             if code == ExitCode::Cancelled {
                 (
                     "更新已取消",
-                    "原程序未被替换，但未能自动重新启动旧版 Mizar。",
+                    "原程序未被替换，但未能自动重新启动旧版 Mizar，请手动打开。",
                     "请手动打开 Mizar；如需排查启动问题，可打开日志目录查看记录。".to_string(),
                 )
             } else if code == ExitCode::RolledBack {
-                (
-                    "更新未完成",
-                    "已自动回退到上一版本，但未能自动启动旧版 Mizar。",
-                    "原因：新版本启动失败且未能自动拉起旧版，请手动启动 Mizar 或查看日志。"
-                        .to_string(),
-                )
+                if old_relaunched {
+                    (
+                        "更新未完成",
+                        "已自动恢复旧版 Mizar，配置与比赛资料未受影响。",
+                        "原因：新版本启动失败，已自动回退到上一版本并重新打开旧版。".to_string(),
+                    )
+                } else {
+                    (
+                        "更新未完成",
+                        "已自动回退到上一版本，但未能自动启动旧版 Mizar，请手动打开。",
+                        "原因：新版本启动失败且未能自动拉起旧版，请手动启动 Mizar 或查看日志。"
+                            .to_string(),
+                    )
+                }
             } else if code == ExitCode::WriterBusy {
                 (
                     if is_update {
@@ -835,27 +861,37 @@ fn format_error_ui(
                     format!("原因：{msg}，请稍后重试。"),
                 )
             } else if !committed {
+                let impact = if !is_update {
+                    "本次安装未完成，已有用户资料未受影响。"
+                } else if old_relaunched {
+                    "已自动恢复旧版 Mizar，原程序与比赛资料未受影响。"
+                } else if code == ExitCode::AppRunning {
+                    "原程序未被替换，配置与比赛资料未受影响。"
+                } else {
+                    "原程序未被替换，未能自动启动旧版 Mizar，请手动打开。"
+                };
                 (
                     if is_update {
                         "更新未完成"
                     } else {
                         "安装未完成"
                     },
-                    if is_update {
-                        "原程序未被替换，配置与比赛资料未受影响。"
-                    } else {
-                        "本次安装未完成，已有用户资料未受影响。"
-                    },
+                    impact,
                     format!("原因：{msg}"),
                 )
             } else {
+                let impact = if old_relaunched {
+                    "已自动恢复旧版 Mizar，配置与比赛资料单独保存未受影响。"
+                } else {
+                    "更新切换后未能正常完成，未能自动启动旧版 Mizar，请手动打开。"
+                };
                 (
                     if is_update {
                         "更新未完成"
                     } else {
                         "安装未完成"
                     },
-                    "更新切换后未能正常完成，你的配置与比赛资料单独保存未受影响。",
+                    impact,
                     format!("原因：{msg}"),
                 )
             }
@@ -962,20 +998,30 @@ fn main() {
     // 1. Persist result before relaunching old Mizar to avoid startup read races.
     write_result(&result, result_file.as_deref(), &state_root);
 
-    // 2. Relaunch old Mizar if applicable; close UI if relaunch succeeded or headless.
-    let old_relaunched = post
-        .relaunch_exe
-        .as_deref()
-        .is_some_and(relaunch_old_product);
+    // 2. Ensure old host exited before relaunching; close UI on success or user-cancelled relaunch.
+    let old_relaunched = if let Some(exe) = post.relaunch_exe.as_deref() {
+        if let Some((host_pid, host_start_time)) = post.host_wait {
+            let _ = wait_host_exit(host_pid, host_start_time, Duration::from_secs(10), &|| {
+                false
+            });
+        }
+        let ok = relaunch_old_product(exe);
+        log.log(&format!("relaunch {} -> ok={ok}", exe.display()));
+        ok
+    } else {
+        false
+    };
 
     if code != ExitCode::Ok {
-        if post.no_ui || old_relaunched {
+        let should_close = post.no_ui || (code == ExitCode::Cancelled && old_relaunched);
+        if should_close {
             if let Some(ui) = post.ui {
                 ui.close();
             }
         } else {
             let msg = result.message.as_deref().unwrap_or("未知错误");
-            let (heading, impact, detail) = format_error_ui(post.mode, code, post.committed, msg);
+            let (heading, impact, detail) =
+                format_error_ui(post.mode, code, post.committed, old_relaunched, msg);
             let ui = post
                 .ui
                 .unwrap_or_else(|| ProgressUi::start(false, post.mode, heading, None));

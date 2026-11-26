@@ -76,8 +76,6 @@ export class UpdateManager {
   private checkFailure: unknown;
   private lastResult: string | null = null;
   private lastResultVersion: string | null = null;
-  private lastResultMessage: string | null = null;
-  private lastResultNotificationPending = false;
   private operationId = randomUUID();
   private failureDetails: ReturnType<typeof updateFailure>[] = [];
   private recoveryFailures: ReturnType<typeof updateFailure>[] = [];
@@ -202,8 +200,6 @@ export class UpdateManager {
           operation: z.enum(['install', 'apply-update', 'uninstall']).optional(),
           status: z.enum(['installed', 'rolled_back', 'cancelled', 'failed']),
           version: z.string().nullable().optional(),
-          message: z.string().nullable().optional(),
-          notified: z.boolean().optional(),
         })
         .parse(
           JSON.parse(
@@ -216,9 +212,6 @@ export class UpdateManager {
       if (result.operation === 'apply-update') {
         this.lastResult = result.status === 'rolled_back' ? 'restored' : result.status;
         this.lastResultVersion = result.version ?? null;
-        this.lastResultMessage = result.message ?? null;
-        this.lastResultNotificationPending =
-          (this.lastResult === 'restored' || this.lastResult === 'failed') && !result.notified;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure('result_load', error);
@@ -331,22 +324,6 @@ export class UpdateManager {
     this.event('check', 'update_notification_dismissed');
     return true;
   }
-  async dismissLastResult() {
-    if (!this.lastResultNotificationPending) return false;
-    this.lastResultNotificationPending = false;
-    this.event('check', 'update_last_result_dismissed');
-    const resultPath = join(this.options.stateRoot, 'logs', 'last-applier-result.json');
-    try {
-      const parsed = JSON.parse(await readFile(resultPath, 'utf8')) as Record<string, unknown>;
-      const tmp = `${resultPath}.${randomUUID()}.tmp`;
-      await writeFile(tmp, `${JSON.stringify({ ...parsed, notified: true }, null, 2)}\n`, 'utf8');
-      await rename(tmp, resultPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        this.failure('result_acknowledge', error);
-    }
-    return true;
-  }
   status() {
     return {
       phase: this.phase,
@@ -371,8 +348,6 @@ export class UpdateManager {
       releaseUrl: this.candidate ? `${RELEASES_URL}/tag/v${this.candidate.version}` : RELEASES_URL,
       lastResult: this.lastResult,
       lastResultVersion: this.lastResultVersion,
-      lastResultMessage: this.lastResultMessage,
-      lastResultNotificationPending: this.lastResultNotificationPending,
     };
   }
   setAutomatic(automatic: boolean) {

@@ -47,9 +47,6 @@ export interface UpdateStatus {
   installBlockedReason?: string | null;
   lastResult?: 'installed' | 'restored' | 'cancelled' | 'failed' | null;
   lastResultVersion?: string | null;
-  lastResultMessage?: string | null;
-  lastResultNotificationPending?: boolean;
-  lastResultSafe?: boolean;
 }
 const failures: Record<string, string> = {
   update_network_failed: '更新网络请求失败，具体原因请查看诊断；网络恢复后可重新检查。',

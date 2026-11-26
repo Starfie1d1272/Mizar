@@ -20,7 +20,6 @@ function DesktopUpdateNotification() {
   const [notice, setNotice] = useState<Notification | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [dismissedMulnx, setDismissedMulnx] = useState<string | null>(null);
-  const [dismissedLastResult, setDismissedLastResult] = useState(false);
   const [mulnxNotice, setMulnxNotice] = useState<{ identity: string; version: string } | null>(
     null,
   );
@@ -28,7 +27,6 @@ function DesktopUpdateNotification() {
   const request = useRef<AbortController | null>(null);
   const acknowledging = useRef(false);
   const acknowledgingMulnx = useRef(false);
-  const acknowledgingLastResult = useRef(false);
   useEffect(() => {
     latest.current = status;
   }, [status]);
@@ -68,26 +66,6 @@ function DesktopUpdateNotification() {
       acknowledgingMulnx.current = false;
     }
   }, []);
-  const acknowledgeLastResult = useCallback(async () => {
-    if (acknowledgingLastResult.current) return;
-    acknowledgingLastResult.current = true;
-    try {
-      await fetch('/operator/updates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'dismiss-last-result' }),
-        keepalive: true,
-        signal: AbortSignal.timeout(8000),
-      });
-    } catch {
-      /* Retry on a subsequent poll. */
-    } finally {
-      acknowledgingLastResult.current = false;
-    }
-  }, []);
-  useEffect(() => {
-    if (dismissedLastResult && status?.lastResultNotificationPending) void acknowledgeLastResult();
-  }, [status, dismissedLastResult, acknowledgeLastResult]);
   useEffect(() => {
     if (
       dismissedMulnx &&
@@ -161,35 +139,17 @@ function DesktopUpdateNotification() {
       };
     }
   }, [status, mulnxNotice, dismissedMulnx, notice]);
-  const lastResultKind =
-    status?.lastResult === 'restored' || status?.lastResult === 'failed' ? status.lastResult : null;
-  const lastResultOpen = Boolean(
-    lastResultKind &&
-    status?.lastResultNotificationPending &&
-    status.lastResultSafe &&
-    !dismissedLastResult &&
-    canInterrupt(),
-  );
   const shownMizar = notice;
   const shownMulnx = mulnxNotice;
   const mizarOpen =
-    !lastResultOpen &&
     shownMizar !== null &&
     shownMizar.version === status?.candidate?.version &&
     dismissed !== shownMizar.version;
   const mulnxOpen =
-    !lastResultOpen &&
     shownMulnx !== null &&
     status?.mulnxNotificationPending &&
     shownMulnx.identity === status.mulnx?.notificationIdentity;
-  const open = Boolean(
-    lastResultOpen || ((mizarOpen || mulnxOpen) && status?.notificationSafe && canInterrupt()),
-  );
-  const dismissLastResult = () => {
-    if (!lastResultOpen) return;
-    setDismissedLastResult(true);
-    void acknowledgeLastResult();
-  };
+  const open = Boolean((mizarOpen || mulnxOpen) && status?.notificationSafe && canInterrupt());
   const dismissMizar = () => {
     if (!shownMizar || !mizarOpen) return;
     setDismissed(shownMizar.version);
@@ -203,81 +163,46 @@ function DesktopUpdateNotification() {
     void acknowledgeMulnx(shownMulnx.identity);
   };
   const dismiss = () => {
-    if (lastResultOpen) {
-      dismissLastResult();
-      return;
-    }
     dismissMizar();
     dismissMulnx();
   };
-  const dialogTitle = lastResultOpen
-    ? lastResultKind === 'restored'
-      ? '更新未完成，已恢复旧版'
-      : '更新未完成'
-    : '发现新版';
-  const versionPart = status?.lastResultVersion ? ` v${status.lastResultVersion} ` : '';
   return (
     <Dialog
       open={open}
-      title={dialogTitle}
+      title="发现新版"
       className="updates-notification"
       onClose={() => {
         if (open) dismiss();
       }}
       showCloseButton={false}
       actions={
-        lastResultOpen ? (
-          <>
+        <>
+          {mizarOpen ? (
             <Button
               variant="primary"
               onClick={() => {
-                dismissLastResult();
+                dismissMizar();
                 window.location.assign('/settings?tab=advanced');
               }}
             >
-              查看更新设置
+              查看 Mizar 更新
             </Button>
-            <Button onClick={dismissLastResult}>知道了</Button>
-          </>
-        ) : (
-          <>
-            {mizarOpen ? (
-              <Button
-                variant="primary"
-                onClick={() => {
-                  dismissMizar();
-                  window.location.assign('/settings?tab=advanced');
-                }}
-              >
-                查看 Mizar 更新
-              </Button>
-            ) : null}
-            {mulnxOpen ? (
-              <Button
-                variant="primary"
-                onClick={() => {
-                  dismissMulnx();
-                  window.location.assign('/packages');
-                }}
-              >
-                查看 MulNX 更新
-              </Button>
-            ) : null}
-            <Button onClick={dismiss}>稍后</Button>
-          </>
-        )
+          ) : null}
+          {mulnxOpen ? (
+            <Button
+              variant="primary"
+              onClick={() => {
+                dismissMulnx();
+                window.location.assign('/packages');
+              }}
+            >
+              查看 MulNX 更新
+            </Button>
+          ) : null}
+          <Button onClick={dismiss}>稍后</Button>
+        </>
       }
     >
-      {lastResultOpen ? (
-        lastResultKind === 'restored' ? (
-          <p>新版{versionPart}未能正常启动，已自动回退到当前版本。你的配置与比赛资料未受影响。</p>
-        ) : (
-          <>
-            <p>应用更新未完成，当前仍运行旧版。原程序与配置未受影响。</p>
-            {status?.lastResultMessage ? <p>{status.lastResultMessage}</p> : null}
-          </>
-        )
-      ) : null}
       {mizarOpen ? (
         <>
           <p>Mizar v{shownMizar?.version} 可更新。</p>
