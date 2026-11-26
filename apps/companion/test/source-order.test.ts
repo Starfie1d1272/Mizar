@@ -258,8 +258,8 @@ test('diagnosticValue redacts explicit Box token secrets', () => {
 
 test('C# web-installer enforces embedded config, local IO boundary, and success diagnostics', async () => {
   const [downloaderCs, windowCs] = await Promise.all([
-    readFile(join(process.cwd(), '..', '..', 'scripts/web-installer/Downloader.cs'), 'utf8'),
-    readFile(join(process.cwd(), '..', '..', 'scripts/web-installer/Window.cs'), 'utf8'),
+    readFile(new URL('../../../scripts/web-installer/Downloader.cs', import.meta.url), 'utf8'),
+    readFile(new URL('../../../scripts/web-installer/Window.cs', import.meta.url), 'utf8'),
   ]);
   assert.match(downloaderCs, /class LocalStorageException/);
   assert.match(downloaderCs, /catch \(LocalStorageException\)/);
