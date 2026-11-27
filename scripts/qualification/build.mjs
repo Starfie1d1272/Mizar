@@ -379,6 +379,7 @@ async function main() {
               'build',
               '--profile',
               options.desktopProfile,
+              '--locked',
               '--manifest-path',
               join(installerDir, 'Cargo.toml'),
             ],

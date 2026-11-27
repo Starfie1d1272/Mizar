@@ -33,6 +33,7 @@
     "format": "pnpm format:prettier && pnpm format:ci && pnpm format:rust",
     "format:check": "pnpm format:prettier:check && pnpm format:ci:check && pnpm format:rust:check",
     "release-notes:check": "node scripts/qualification/check-release-notes.mjs",
+    "release:prepare": "node scripts/qualification/release-prepare.mjs",
     "lint": "pnpm release-notes:check && pnpm build:packages && eslint . --max-warnings=0",
     "typecheck": "node scripts/qualification/app-version.mjs && pnpm -r run typecheck && pnpm --filter @mizar-hud/radar-view... --fail-if-no-match run consumer:typecheck",
     "qualification:build": "node scripts/qualification/build.mjs",

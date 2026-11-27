@@ -1,14 +1,30 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, URL } from 'node:url';
 
-// Cargo is authoritative; the Tauri mirror is required to agree before a build.
+function readTomlSectionVersion(toml, sectionHeader) {
+  const header = new RegExp(
+    `^\\[${sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\r?$`,
+    'm',
+  ).exec(toml);
+  if (!header) return undefined;
+  const sectionStart = toml.indexOf('\n', header.index) + 1;
+  const nextSection = /^\[[^\r\n]+\]\r?$/gm;
+  nextSection.lastIndex = sectionStart;
+  const sectionEnd = nextSection.exec(toml)?.index ?? toml.length;
+  return toml.slice(sectionStart, sectionEnd).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+}
+
+// Cargo is authoritative; Tauri, Installer, and stable release mirrors must agree.
 export async function readAppVersion(root = new URL('../../', import.meta.url)) {
   const cargo = await readFile(new URL('apps/desktop/src-tauri/Cargo.toml', root), 'utf8');
-  const appVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  const appVersion = readTomlSectionVersion(cargo, 'package');
+  const installerCargo = await readFile(new URL('apps/desktop/installer/Cargo.toml', root), 'utf8');
+  const installerVersion = readTomlSectionVersion(installerCargo, 'workspace.package');
   const config = JSON.parse(
     await readFile(new URL('apps/desktop/src-tauri/tauri.conf.json', root), 'utf8'),
   );
   if (!appVersion || config.version !== appVersion) throw new Error('Cargo / Tauri 应用版本不一致');
+  if (installerVersion !== appVersion) throw new Error('Cargo / Installer 应用版本不一致');
   if (/^\d+\.\d+\.\d+$/.test(appVersion)) {
     const policy = JSON.parse(
       await readFile(new URL('scripts/qualification/update-release.json', root), 'utf8'),

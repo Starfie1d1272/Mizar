@@ -4,11 +4,10 @@ import { pathToFileURL } from 'node:url';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 
-// Only Mizar's own version is excluded. Dependency versions and Cargo profiles
-// remain part of the cache identity; Cargo independently fingerprints source.
-export function cargoCacheFingerprints(manifest, lock) {
-  const header = /^\[package\]\r?$/m.exec(manifest);
-  if (!header) throw new Error('Cargo.toml has no [package] section');
+function normalizeTomlSectionVersion(manifest, sectionHeader) {
+  const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const header = new RegExp(`^\\[${escaped}\\]\\r?$`, 'm').exec(manifest);
+  if (!header) throw new Error(`Cargo.toml has no [${sectionHeader}] section`);
   const sectionStart = manifest.indexOf('\n', header.index) + 1;
   const nextSection = /^\[[^\r\n]+\]\r?$/gm;
   nextSection.lastIndex = sectionStart;
@@ -16,22 +15,48 @@ export function cargoCacheFingerprints(manifest, lock) {
   const packageText = manifest.slice(sectionStart, sectionEnd);
   const ownVersion = /^(version[ \t]*=[ \t]*)"[^"\r\n]+"(?=[ \t]*(?:#[^\r\n]*)?\r?$)/gm;
   if ([...packageText.matchAll(ownVersion)].length !== 1) {
-    throw new Error('Cargo.toml must contain exactly one package.version');
+    throw new Error(`Cargo.toml [${sectionHeader}] must contain exactly one version`);
   }
-  const normalizedManifest =
+  return (
     manifest.slice(0, sectionStart) +
     packageText.replace(ownVersion, '$1"0.0.0"') +
-    manifest.slice(sectionEnd);
+    manifest.slice(sectionEnd)
+  );
+}
 
-  const ownLockVersion =
-    /(^\[\[package\]\]\r?\nname[ \t]*=[ \t]*"mizar-desktop"\r?\nversion[ \t]*=[ \t]*)"[^"\r\n]+"/gm;
-  if ([...lock.matchAll(ownLockVersion)].length !== 1) {
-    throw new Error('Cargo.lock must contain exactly one mizar-desktop package');
+function normalizeLockPackageVersions(lock, packageNames) {
+  let normalized = lock;
+  for (const name of packageNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ownLockVersion = new RegExp(
+      `(^\\[\\[package\\]\\]\\r?\\nname[ \t]*=[ \t]*"${escaped}"\\r?\\nversion[ \t]*=[ \t]*)"[^"\r\n]+"`,
+      'gm',
+    );
+    if ([...normalized.matchAll(ownLockVersion)].length !== 1) {
+      throw new Error(`Cargo.lock must contain exactly one ${name} package`);
+    }
+    normalized = normalized.replace(ownLockVersion, '$1"0.0.0"');
   }
-  const normalizedLock = lock.replace(ownLockVersion, '$1"0.0.0"');
+  return normalized.replace(/\r\n/g, '\n');
+}
+
+// Only Mizar's own package versions are excluded. Dependency versions and Cargo profiles
+// remain part of the cache identity; Cargo independently fingerprints source.
+export function cargoCacheFingerprints(hostManifest, hostLock, installerLock) {
+  const normalizedHostManifest = normalizeTomlSectionVersion(hostManifest, 'package').replace(
+    /\r\n/g,
+    '\n',
+  );
+  const normalizedHostLock = normalizeLockPackageVersions(hostLock, ['mizar-desktop']);
+  const normalizedInstallerLock = normalizeLockPackageVersions(installerLock, [
+    'mizar-common',
+    'mizar-launcher',
+    'mizar-applier',
+  ]);
   return {
-    manifest: hash(normalizedManifest.replace(/\r\n/g, '\n')),
-    lock: hash(normalizedLock.replace(/\r\n/g, '\n')),
+    registry_lock: hash(`${normalizedHostLock}\n${normalizedInstallerLock}`),
+    host_lock: hash(normalizedHostLock),
+    host_manifest: hash(normalizedHostManifest),
   };
 }
 
@@ -39,11 +64,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const fingerprints = cargoCacheFingerprints(
     readFileSync('apps/desktop/src-tauri/Cargo.toml', 'utf8'),
     readFileSync('apps/desktop/src-tauri/Cargo.lock', 'utf8'),
+    readFileSync('apps/desktop/installer/Cargo.lock', 'utf8'),
   );
   if (!process.env.GITHUB_OUTPUT) throw new Error('GITHUB_OUTPUT is required');
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    'manifest=' + fingerprints.manifest + '\nlock=' + fingerprints.lock + '\n',
+    `registry_lock=${fingerprints.registry_lock}\nhost_lock=${fingerprints.host_lock}\nhost_manifest=${fingerprints.host_manifest}\n`,
   );
-  console.log('Cargo cache keys exclude only the application version');
+  console.log('Cargo cache keys exclude only Mizar package versions');
 }

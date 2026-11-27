@@ -1,0 +1,21 @@
+name: PR Metadata
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions: {}
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$PR_TITLE" | grep -qE '^(feat|fix|refactor|docs|ci|chore|test|perf|build|release|revert)(\([^)\r\n]+\))?!?: \S.*$'; then
+            echo "::error::PR 标题不符合 Conventional Commits 格式：$PR_TITLE"
+            echo "示例：feat(desktop): 支持音频监听预览 / fix: 修复更新器退出判定 / chore(ci): 优化缓存键"
+            echo "允许类型：feat, fix, refactor, docs, ci, chore, test, perf, build, release, revert"
+            exit 1
+          fi
