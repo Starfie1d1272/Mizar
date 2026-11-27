@@ -838,7 +838,7 @@ export async function verifyResourceMetadata(
       try {
         await verifyAttestations([subject]);
       } catch (error) {
-        // eslint-disable-next-line preserve-caught-error -- Shared verifier already sanitized tokens and signed URLs.
+        // Shared verifier already sanitized tokens and signed URLs.
         throw new MirrorError(error.message);
       }
     };
