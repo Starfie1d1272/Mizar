@@ -19,6 +19,7 @@ const NATIVE_RUST_PATHS = [
   'scripts/qualification/bundle/gsi-discovery.ps1',
   'config/mizar_observer.cfg',
   'scripts/ci/cargo-cache-key.mjs',
+  'scripts/qualification/app-version.mjs',
   'scripts/architecture/windows-ipc-acl.mjs',
   '.cargo',
   'rust-toolchain',
@@ -59,8 +60,12 @@ export function computeCiPlan({
   eventName = process.env.GITHUB_EVENT_NAME,
   prBase = process.env.PR_BASE,
   sha = process.env.GITHUB_SHA,
+  cwd,
   diff = (base, head) =>
-    execFileSync('git', ['diff', '--no-renames', '--name-only', base, head], { encoding: 'utf8' }),
+    execFileSync('git', ['diff', '--no-renames', '--name-only', base, head], {
+      cwd,
+      encoding: 'utf8',
+    }),
 } = {}) {
   if (eventName !== 'pull_request' || !prBase || !sha) {
     return { run_build: true, run_native_rust: true, run_web_installer: true };

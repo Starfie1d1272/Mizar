@@ -80,7 +80,7 @@ test('renaming a file out of a native directory still triggers native_rust via -
     eventName: 'pull_request',
     prBase: base,
     sha: head,
-    diff: (b, h) => git('diff', '--no-renames', '--name-only', b, h),
+    cwd: dir,
   });
   assert.deepEqual(plan, {
     run_build: true,
