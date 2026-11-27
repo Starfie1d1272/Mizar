@@ -206,6 +206,7 @@ test('default device, custom scene items, auto-prepare stinger, audition lifecyc
   let stingerVol = 1;
   let failStingerWrite = true;
   let failBgmRead = false;
+  let outputsIdle = true;
   const rig = await createMusicRig(
     t,
     () => ({
@@ -235,7 +236,7 @@ test('default device, custom scene items, auto-prepare stinger, audition lifecyc
           });
         }
       },
-      outputsStopped: async () => true,
+      outputsStopped: async () => outputsIdle,
       ownershipScope: async () => 'owned-collection',
       mediaFile: async () => stingerFile,
       volume: async () => stingerVol,
@@ -323,11 +324,19 @@ test('default device, custom scene items, auto-prepare stinger, audition lifecyc
   await rig.tick();
   assert.equal(stingerMode, 'off');
 
-  // Active opening blocks preview with music_preview_opening_busy.
+  // Waiting for live-stream confirmation keeps stinger monitor at monitorPreference (off).
   await rig.director.command('resume');
+  outputsIdle = false;
+  await rig.director.previewRequest(makeReq(5, 'start'));
+  assert.equal(rig.director.get().preview?.phase, 'confirmation');
+  assert.equal(stingerMode, 'off');
+  await rig.director.previewRequest(makeReq(6, 'stop'));
+  outputsIdle = true;
+
+  // Active opening blocks preview with music_preview_opening_busy.
   rig.director.opening('opening:active', track);
   await assert.rejects(
-    rig.director.previewRequest(makeReq(5, 'start')),
+    rig.director.previewRequest(makeReq(7, 'start')),
     /music_preview_opening_busy/,
   );
 });
@@ -340,11 +349,12 @@ test('monitorPreference is the single source of truth across mixed/failed writes
   let stingerMode: MusicMonitorMode = 'off';
   let failStingerReadback = true;
   let vol = 1;
+  let inProduction = true;
   const rig = await createMusicRig(
     t,
     () => ({
       active: 'waiting',
-      production: true,
+      production: inProduction,
       program: {
         map: { name: 'de_test', phase: null },
         cursor: { mapEpoch: 1 },
@@ -372,18 +382,59 @@ test('monitorPreference is the single source of truth across mixed/failed writes
     s.sourceScopes.stinger = 'owned-collection';
   });
 
-  // Explicit monitor(true) updates bgm even when stinger readback fails (mixed -> rejects), then converges on next sync.
+  // prepare() immediately applies monitorPreference to prepared sources.
+  await rig.director.prepare(undefined, (run) =>
+    run({
+      hasSource: async () => true,
+      prepareResources: async () => {},
+      monitorMode: async ({ sourceId }: { sourceId?: string | null }) =>
+        sourceId === 'bgm-uuid' ? bgmMode : stingerMode,
+      setMonitorMode: async ({
+        sourceId,
+        mode,
+      }: {
+        sourceId?: string | null;
+        mode: MusicMonitorMode;
+      }) => {
+        if (sourceId === 'bgm-uuid') bgmMode = mode;
+        else if (!failStingerReadback) stingerMode = mode;
+      },
+    } as unknown as MusicDevice),
+  );
+  assert.equal(bgmMode, 'monitor-and-output');
+  assert.equal(rig.director.get().monitor, 'mixed');
+
+  // Explicit monitor(true) updates bgm even when stinger readback fails (mixed -> rejects).
+  bgmMode = 'off';
   await assert.rejects(rig.director.monitor(true), /music_monitor_unconfirmed/);
   assert.equal(bgmMode, 'monitor-and-output');
   assert.equal(rig.director.get().monitorPreference, true);
 
-  // Simulate mixed state (bgm off, stinger on), allow readback, and verify next sync converges both to monitorPreference=true.
-  bgmMode = 'off';
+  // Establish connected state first, then verify outside production (settings phase) connected tick() still syncs mismatched monitor.
   failStingerReadback = false;
   await rig.tick();
-  assert.equal(bgmMode, 'monitor-and-output');
-  assert.equal(stingerMode, 'monitor-and-output');
+  assert.equal(rig.director.get().connection, 'connected');
   assert.equal(rig.director.get().monitor, 'enabled');
+
+  inProduction = false;
+  bgmMode = 'off';
+  // Simulate drift observed via monitor(false) failure or external change:
+  await assert.rejects(
+    (async () => {
+      failStingerReadback = true;
+      await rig.director.monitor(false);
+    })(),
+    /music_monitor_unconfirmed/,
+  );
+  assert.equal(rig.director.get().monitor, 'mixed');
+  failStingerReadback = false;
+  await rig.tick();
+  assert.equal(bgmMode, 'off');
+  assert.equal(stingerMode, 'off');
+  assert.equal(rig.director.get().monitor, 'disabled');
+
+  // Restore monitorPreference=true for mixer check below.
+  await rig.director.monitor(true);
 
   // Mixer channel works independently of OBS audio routing.
   await rig.director.setMixer(0.4, false);

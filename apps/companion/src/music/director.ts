@@ -140,6 +140,7 @@ export class MusicDirector implements MusicAudioRecovery, MusicMixerControl {
             failures.push(error);
           }
         }
+        if (active()) await this.syncMonitors(obs, active);
       });
       if (failures.length) throw new AggregateError(failures, 'music_preparation_incomplete');
     });
@@ -669,8 +670,15 @@ export class MusicDirector implements MusicAudioRecovery, MusicMixerControl {
 
   private desiredLayerMonitor(layer: MusicLayer): MusicMonitorMode {
     return desiredMusicMonitorMode(
-      this.store.state.monitorPreference === true || (layer === 'stinger' && this.preview.busy),
+      this.store.state.monitorPreference === true ||
+        (layer === 'stinger' && this.preview.monitoringActive),
     );
+  }
+
+  private monitorNeedsSync(): boolean {
+    if (!Object.values(this.store.state.sources).some(Boolean)) return false;
+    const desired = this.store.state.monitorPreference === true ? 'enabled' : 'disabled';
+    return this.status.monitor !== desired;
   }
 
   noteMonitorSettingsChanged() {
@@ -904,8 +912,10 @@ export class MusicDirector implements MusicAudioRecovery, MusicMixerControl {
     }
     if (this.inFlight) return;
     const { bgm, stinger } = this.store.state;
+    const monitorSyncConnected = this.status.connection === 'connected' && this.monitorNeedsSync();
     if (
       !explicit &&
+      !monitorSyncConnected &&
       !truth.production &&
       !this.manual &&
       !this.unknownControl &&

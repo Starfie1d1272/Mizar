@@ -248,18 +248,16 @@ export class AudioMigration {
     collection: string,
     replacements: { before: string; after: string; kind: string }[],
   ): Promise<void> {
+    void replacements;
     const completed = await this.readJournal(path);
     if (!completed) return;
+    const fields = completed.fields.filter((entry) => !('kind' in entry));
     if (
       completed.endpoint !== endpoint ||
       completed.collection !== collection ||
-      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+      fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
     )
       throw new Error('audio_migration_identity_changed');
-    if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
-      throw new Error('audio_migration_identity_changed');
-    void replacements;
-    const fields = completed.fields.filter((entry) => !('kind' in entry));
     if ((await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== collection)
       throw new Error('audio_migration_identity_changed');
     const temp = `${path}.${randomUUID()}.tmp`;
@@ -270,17 +268,20 @@ export class AudioMigration {
       await rm(temp, { force: true });
     }
   }
-  /** Rebuilding our exclusive graph retires scene-item identities, not monitor preferences. */
+  /** Rebuilding our exclusive graph retires scene-item and deprecated monitor identities. */
   async forgetCompletedSceneItems(path: string, endpoint: string, collection: string) {
     const completed = await this.readJournal(path);
     if (!completed) return;
+    const fields = completed.fields.filter(
+      (entry) => !('sceneName' in entry) && !('kind' in entry),
+    );
     if (
       completed.endpoint !== endpoint ||
       completed.collection !== collection ||
-      completed.fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
+      fields.some((entry) => entry.phase !== 'confirmed' || entry.externalChanged)
     )
       throw new Error('audio_migration_identity_changed');
-    const next = { ...completed, fields: completed.fields.filter((entry) => 'kind' in entry) };
+    const next = { ...completed, fields };
     const temp = `${path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });

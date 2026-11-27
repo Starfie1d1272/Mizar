@@ -55,6 +55,9 @@ export class MusicPreview {
   get busy() {
     return Boolean(this.request || this.uuid);
   }
+  get monitoringActive() {
+    return this.uuid !== null;
+  }
   /** Share the borrowed source's current gain with the normal mixer owner. */
   mixerVolume(uuid: string): number | null {
     if (this.uuid !== uuid || !this.request) return null;
