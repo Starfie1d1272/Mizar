@@ -793,7 +793,13 @@
   max-height: 42%;
   overflow-y: auto;
 }
-.desktop-canvas[data-kind='left'] .workspace-recovery {
+.workspace-viewport {
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--mizar-bg-canvas);
+}
+.workspace-viewport--left .workspace-recovery {
   width: calc(100% - var(--mizar-layout-gap) * 2);
 }
 

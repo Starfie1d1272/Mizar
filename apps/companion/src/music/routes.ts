@@ -49,11 +49,15 @@ export function registerMusicRoutes(
         message:
           reason === 'music_preview_storage'
             ? '音乐存储未就绪，请重新检查。'
-            : reason === 'music_preview_channel_busy'
-              ? '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。'
-              : reason === 'music_preview_busy'
-                ? '音效通道或其他窗口正在使用试听，请先停止。'
-                : '试听请求已失效或参数无效，请重新试听。',
+            : reason === 'music_preview_opening_busy'
+              ? '开场音效正在切换或播放中，请稍后再试听。'
+              : reason === 'music_preview_channel_busy'
+                ? '当前音乐正在播放或已人工接管，请先使用“停止音乐”停止当前音乐，再试听。'
+                : reason === 'music_preview_busy'
+                  ? '音效通道或其他窗口正在使用试听，请先停止。'
+                  : reason === 'music_preview_closed'
+                    ? '音乐服务正在关闭，请稍后重试。'
+                    : '试听请求已失效或参数无效，请重新试听。',
       });
     }
   });

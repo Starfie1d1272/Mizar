@@ -1,4 +1,3 @@
-import { desktopMonitorRelationship } from './audio-monitor-device.js';
 import { configuredStreamTracks } from './audio-stream-tracks.js';
 import { ObsActionError } from './action-error.js';
 import { OBS_COLLECTION, obsDesiredScenes } from './desired-state.js';
@@ -167,26 +166,7 @@ export async function checkObsAudio(
         code: `audio_muted:${input.inputName}`,
         message: `${input.inputName} 已静音或音量为零，请检查 OBS 混音器。`,
       });
-    if (isMusic) {
-      const monitor = await obs.call('GetInputAudioMonitorType', data);
-      if (monitor.monitorType === 'OBS_MONITORING_TYPE_MONITOR_ONLY') {
-        // OBS <=32 reaches the program through desktop recapture, checked above.
-        const desktop = candidates.find(
-          (source) =>
-            source.inputKind === 'wasapi_output_capture' && source.inputName === '桌面声音',
-        );
-        if (
-          !desktop?.inputUuid ||
-          (await desktopMonitorRelationship(obs, desktop.inputUuid).catch(() => 'unknown')) !==
-            'same'
-        )
-          findings.push({
-            code: `audio_monitor_path:${input.inputName}`,
-            message: `${input.inputName} 仅监听但无法确认同设备桌面回采路径，请核对 OBS 监听与输出。`,
-          });
-        continue;
-      }
-    }
+
     const assigned = (tracks.inputAudioTracks ?? {}) as Record<string, unknown>;
     if (!Object.values(assigned).some((enabled) => enabled === true))
       findings.push({
@@ -253,6 +233,10 @@ export async function ensureManagedAudioSources(
       });
       if (typeof created.inputUuid !== 'string') throw new Error('audio_source_creation_unknown');
       uuid = created.inputUuid;
+      await obs.call('SetInputAudioMonitorType', {
+        inputUuid: uuid,
+        monitorType: 'OBS_MONITORING_TYPE_NONE',
+      });
       createdAny = true;
     }
     ids[managed.name] = uuid;

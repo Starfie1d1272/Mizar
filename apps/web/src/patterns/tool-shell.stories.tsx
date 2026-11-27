@@ -33,10 +33,9 @@ export const Tool: Story = {
   },
 };
 
-export const ResponsiveTool: Story = {
+export const LongContentTool: Story = {
   args: {
     title: '长内容工具示例',
-    responsive: true,
     children: (
       <main>
         <h1>长内容工具示例</h1>
@@ -58,7 +57,7 @@ export const FillTool: Story = {
     context: <div>示例会话</div>,
     fill: true,
     children: (
-      <div style={{ height: '100%', overflow: 'auto' }}>{ResponsiveTool.args.children}</div>
+      <div style={{ height: '100%', overflow: 'auto' }}>{LongContentTool.args.children}</div>
     ),
   },
 };

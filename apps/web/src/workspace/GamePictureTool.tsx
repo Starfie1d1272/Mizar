@@ -58,7 +58,7 @@ export function GamePictureTool() {
     }
   }
   return (
-    <ToolShell title="游戏画面" responsive>
+    <ToolShell title="游戏画面">
       <main className="workbench-tool">
         <Panel className="settings-card">
           <h1>游戏画面</h1>
