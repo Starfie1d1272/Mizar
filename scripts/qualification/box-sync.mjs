@@ -3,20 +3,23 @@ import {
   MACHINE_METADATA_MAX_BYTES,
   readMachineMetadata,
 } from '../../packages/resource-pack-contract/transport.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFile, appendFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import timers from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Buffer, Blob } from 'node:buffer';
 import { URL } from 'node:url';
-import { releaseAttestationArgs } from './release-identity.mjs';
+import { releaseAttestationArgs, verifyReleaseAttestations } from './release-identity.mjs';
 import { assertPublication } from './update-publication.mjs';
 import { makeUpdateIndex } from './update-index.mjs';
-import { RESOURCE_ASSET_NAMES as resourceNames } from '../../packages/resource-pack-contract/catalog.mjs';
+import {
+  RESOURCE_ASSET_NAMES as resourceNames,
+  parseResourceCatalogBytes,
+} from '../../packages/resource-pack-contract/catalog.mjs';
 import { apiRequest, multipartUpload } from './box-upload.mjs';
 import { curlMultipartUpload } from './box-curl-upload.mjs';
 
@@ -24,7 +27,6 @@ const { fetch, AbortSignal, FormData } = globalThis;
 
 const origin = 'https://box.nju.edu.cn';
 const downloadsFolder = '/Stable/Downloads';
-const publicShare = 'https://box.nju.edu.cn/d/91dec4c27e5d47f38fcf/';
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export class MirrorError extends Error {
@@ -752,69 +754,7 @@ export async function readPublicDownloadDirectory(signal) {
   });
 }
 
-// Anonymous access is a separate acceptance boundary, never inferred from the upload token.
-export async function verifyPublicDownloads(
-  { bootstrap },
-  { readDirectory = readPublicDownloadDirectory, transport = fetch } = {},
-) {
-  requireValue(bootstrap?.identity, '匿名验收缺少原文件身份');
-  const listing = await readDirectory();
-  const files = [bootstrap.identity];
-  requireValue(
-    listing.length === 1 &&
-      listing[0].name === bootstrap.identity.name &&
-      listing[0].size === bootstrap.identity.size,
-    '匿名用户入口未就绪或文件不一致',
-  );
-  for (const identity of files)
-    await boxStage(
-      `匿名下载/${identity.name}`,
-      async () => {
-        let url = new URL('files/', publicShare);
-        url.searchParams.set('p', '/Downloads/' + identity.name);
-        url.searchParams.set('dl', '1');
-        let response;
-        const downloadSignal = AbortSignal.timeout(180000);
-        for (let redirects = 0; redirects < 5; redirects++) {
-          requireValue(
-            url.origin === origin &&
-              !url.username &&
-              !url.password &&
-              (url.pathname.startsWith('/d/91dec4c27e5d47f38fcf/files/') ||
-                url.pathname.startsWith('/seafhttp/files/')),
-            '匿名下载地址超出允许范围',
-          );
-          // A redirect is expected from the shared file page; do not forward credentials.
-          response = await transport(url, {
-            redirect: 'manual',
-            signal: downloadSignal,
-          });
-          if ([301, 302, 303, 307, 308].includes(response.status)) {
-            const location = response.headers.get('location');
-            await response.body?.cancel();
-            requireValue(location, '匿名下载重定向无效');
-            url = new URL(location, url);
-            continue;
-          }
-          break;
-        }
-        requireValue(response?.ok && response.body, '匿名下载未完成');
-        const hash = createHash('sha256');
-        let size = 0;
-        for await (const chunk of response.body) {
-          size += chunk.length;
-          requireValue(size <= identity.size, '匿名文件大小不一致');
-          hash.update(chunk);
-        }
-        requireValue(
-          size === identity.size && hash.digest('hex') === identity.sha256,
-          '匿名下载原字节不一致',
-        );
-      },
-      180000,
-    );
-  return '匿名验收成功：用户入口仅提供轻量 EXE，下载原字节一致；完整离线 ZIP 由 GitHub 提供。';
-}
+// Verify signed resource descriptor, catalog and publication metadata without downloading large archives.
 
 export async function syncCompatibilityMetadata({ box, version, bytes }) {
   requireValue(/^\d+\.\d+\.\d+$/.test(version), 'Invalid Runtime version');
@@ -879,30 +819,69 @@ export async function verifyStablePointer({ box, updateIndex }) {
     sha256: digest(updateIndex),
   });
 }
-export async function probe(box) {
-  await box.initialize();
-  const name = `mizar-api-probe-${randomUUID()}.txt`;
-  const folder = `/Archive/${name.slice(0, -4)}`;
-  const bytes = Buffer.from('Mizar Box API probe\n');
-  const expected = { size: bytes.length, sha256: digest(bytes) };
-  await box.api('dir', folder, 'POST', { operation: 'mkdir' });
+export async function verifyResourceMetadata(
+  identity,
+  verifyAttestations = verifyReleaseAttestations,
+) {
+  const originals = identity.originals;
+  requireValue(originals, '资源阶段缺少机器元数据');
+  const parsed = parseResourceCatalogBytes(
+    originals.get(resourceNames.descriptor),
+    originals.get(resourceNames.catalog),
+    identity.core,
+  );
+  const directory = await mkdtemp(join(tmpdir(), 'mizar-box-small-proofs-'));
   try {
-    await box.uploadChunks(folder, name, bytes, Math.ceil(bytes.length / 2));
-    await verifyRemote(box, `${folder}/${name}`, expected);
-    const metadata = await box.api('file', `${folder}/${name}`);
-    requireValue(metadata, '探测文件元数据读取失败');
-    await box.move(folder, '/Archive', name);
-    await verifyRemote(box, `/Archive/${name}`, expected);
+    for (const name of Object.values(resourceNames))
+      await writeFile(join(directory, name), originals.get(name), { flag: 'wx', mode: 0o600 });
+    const verify = async (subject) => {
+      try {
+        await verifyAttestations([subject]);
+      } catch (error) {
+        // eslint-disable-next-line preserve-caught-error -- Shared verifier already sanitized tokens and signed URLs.
+        throw new MirrorError(error.message);
+      }
+    };
+    await boxStage(
+      `来源证明/${resourceNames.descriptor}`,
+      () =>
+        verify({
+          file: join(directory, resourceNames.descriptor),
+          sourceSha: identity.gitSha,
+          bundle: join(directory, resourceNames.descriptorQualification),
+        }),
+      60000,
+    );
+    await boxStage(
+      `来源证明/${resourceNames.catalog}`,
+      () =>
+        verify({
+          file: join(directory, resourceNames.catalog),
+          sourceSha: parsed.catalog.promotionSha,
+          bundle: join(directory, resourceNames.catalogPromotion),
+          workflow: 'promotion',
+        }),
+      60000,
+    );
+    requireValue(
+      digest(originals.get(resourceNames.publication)) === parsed.entry.publication.sha256,
+      '资源声明与签发目录不一致',
+    );
+    await boxStage(
+      `来源证明/${resourceNames.publication}`,
+      () =>
+        verify({
+          file: join(directory, resourceNames.publication),
+          sourceSha: parsed.entry.policy.promotionSha,
+          bundle: join(directory, resourceNames.publicationPromotion),
+          workflow: 'promotion',
+        }),
+      60000,
+    );
+    return parsed;
   } finally {
-    // Only this unique probe file and its empty directory can be removed.
-    for (const parent of [folder, '/Archive']) {
-      if ((await box.list(parent)).some((e) => e.name === name))
-        await box.remove(`${parent}/${name}`);
-    }
-    requireValue((await box.list(folder)).length === 0, '探测目录出现其他文件；保留目录供核对');
-    await box.api('dir', folder, 'DELETE');
+    await rm(directory, { recursive: true, force: true });
   }
-  return '接口探测通过：列目录、分块上传、元数据、下载校验、移动与删除；Stable 保持原样。';
 }
 
 export async function github(path) {
@@ -1262,31 +1241,85 @@ export async function resolveBoxTag() {
   return tag;
 }
 
-async function main() {
-  const mode = process.env.BOX_SYNC_MODE || 'sync';
-  requireValue(['sync', 'probe', 'verify-downloads'].includes(mode), '未知镜像操作');
-  const tag = await resolveBoxTag();
+export async function syncBoxMetadata({
+  tag,
+  box,
+  createBox,
+  readRelease = readReleaseInfo,
+  loadIdentity = releaseIdentity,
+  loadIndex = verifiedUpdateIndex,
+  verifyResources = verifyResourceMetadata,
+  onPrerelease,
+} = {}) {
   const prerelease = /^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$/.test(tag ?? '');
-  if (process.env.GITHUB_OUTPUT)
-    await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
-  if (prerelease) return '预发布版本：Box Stable、Downloads、Updates 与 Archive 保持原样。';
-  const box =
-    mode === 'verify-downloads'
-      ? undefined
-      : new BoxClient(
-          process.env.MIZAR_BOX_REPO_TOKEN,
-          process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
-        );
-  if (mode === 'probe') return probe(box);
-  if (mode === 'verify-downloads') {
-    const identity = await releaseIdentity(tag, { runtime: false });
-    return verifyPublicDownloads({ identity, bootstrap: { identity: identity.bootstrap } });
+  if (onPrerelease) await onPrerelease(prerelease);
+  if (prerelease) {
+    return {
+      prerelease: true,
+      message: '预发布版本：Box Runtime 与 Updates 保持原样。',
+    };
   }
-  // The phased workflow is the only publication entry point. This avoids an
-  // alternate CLI path uploading or moving historical executable/resource files.
-  throw new MirrorError('请通过 Box Sync 工作流同步兼容元数据');
+  const releaseInfo = await readRelease(tag);
+  const identity = await loadIdentity(tag, {
+    runtime: false,
+    bootstrap: true,
+    releaseInfo,
+  });
+  requireValue(
+    identity.runtime?.length === 2 &&
+      identity.bootstrap?.data &&
+      identity.core &&
+      identity.originals &&
+      !older(identity.version, '1.6.0'),
+    '仅同步已签拆分发行',
+  );
+  const updateIndex = await loadIndex(identity, tag);
+  const resources = await verifyResources(identity);
+  const archive = resources.entry.archive;
+  const matching = identity.release.assets.filter((asset) => asset.name === archive.name);
+  requireValue(
+    matching.length === 1 &&
+      matching[0].size === archive.bytes &&
+      matching[0].digest === `sha256:${archive.sha256}` &&
+      matching[0].browser_download_url ===
+        `https://github.com/Starfie1d1272/Mizar/releases/download/${tag}/${archive.name}`,
+    '资源归档与公开 Release 不一致',
+  );
+  const carrier = identity.runtime.find((asset) => asset.name === MACHINE_METADATA_NAME)?.bytes;
+  requireValue(carrier, '缺少兼容机器元数据');
+  const client = box ?? createBox();
+  await client.initialize();
+  await syncCompatibilityMetadata({ box: client, version: identity.version, bytes: carrier });
+  const pointerMessage = await publishStablePointer({
+    box: client,
+    updateIndex,
+    version: identity.version,
+  });
+  await verifyStablePointer({ box: client, updateIndex });
+  return {
+    prerelease: false,
+    tag,
+    message: `${pointerMessage} Box 兼容元数据与更新索引已完整回读核验（${tag}）。`,
+  };
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+
+async function main() {
+  const tag = await resolveBoxTag();
+  const result = await syncBoxMetadata({
+    tag,
+    createBox: () =>
+      new BoxClient(
+        process.env.MIZAR_BOX_REPO_TOKEN,
+        process.env.BOX_UPLOAD_TRANSPORT === 'native' ? multipartUpload : curlMultipartUpload,
+      ),
+    onPrerelease: async (prerelease) => {
+      if (process.env.GITHUB_OUTPUT)
+        await appendFile(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
+    },
+  });
+  return result.message;
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = await main();
     console.log(result);
