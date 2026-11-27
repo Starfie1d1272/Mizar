@@ -1,17 +1,52 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, URL } from 'node:url';
 
-function readTomlSectionVersion(toml, sectionHeader) {
-  const header = new RegExp(
-    `^\\[${sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\r?$`,
-    'm',
-  ).exec(toml);
-  if (!header) return undefined;
-  const sectionStart = toml.indexOf('\n', header.index) + 1;
+export const HOST_CARGO_PACKAGES = Object.freeze(['mizar-desktop']);
+export const INSTALLER_CARGO_PACKAGES = Object.freeze([
+  'mizar-common',
+  'mizar-launcher',
+  'mizar-applier',
+]);
+
+function locateTomlSection(toml, sectionHeader) {
+  const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const header = new RegExp(`^\\[${escaped}\\]\\r?$`, 'm').exec(toml);
+  if (!header) throw new Error(`Cargo.toml 缺少 [${sectionHeader}] 节`);
+  const start = toml.indexOf('\n', header.index) + 1;
   const nextSection = /^\[[^\r\n]+\]\r?$/gm;
-  nextSection.lastIndex = sectionStart;
-  const sectionEnd = nextSection.exec(toml)?.index ?? toml.length;
-  return toml.slice(sectionStart, sectionEnd).match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  nextSection.lastIndex = start;
+  const end = nextSection.exec(toml)?.index ?? toml.length;
+  return { start, end, text: toml.slice(start, end) };
+}
+
+export function readTomlSectionVersion(toml, sectionHeader) {
+  const { text } = locateTomlSection(toml, sectionHeader);
+  return text.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+}
+
+export function replaceTomlSectionVersion(toml, sectionHeader, version) {
+  const { start, end, text } = locateTomlSection(toml, sectionHeader);
+  const ownVersion = /^(version[ \t]*=[ \t]*)"[^"\r\n]+"(?=[ \t]*(?:#[^\r\n]*)?\r?$)/gm;
+  if ([...text.matchAll(ownVersion)].length !== 1) {
+    throw new Error(`Cargo.toml [${sectionHeader}] 必须包含且仅包含一个 version 字段`);
+  }
+  return toml.slice(0, start) + text.replace(ownVersion, `$1"${version}"`) + toml.slice(end);
+}
+
+export function replaceLockPackageVersions(lock, packageNames, version) {
+  let updated = lock;
+  for (const name of packageNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+      `(^\\[\\[package\\]\\]\\r?\\nname[ \t]*=[ \t]*"${escaped}"\\r?\\nversion[ \t]*=[ \t]*)"[^"\r\n]+"`,
+      'gm',
+    );
+    if ([...updated.matchAll(pattern)].length !== 1) {
+      throw new Error(`Cargo.lock 必须包含且仅包含一个 ${name} 包条目`);
+    }
+    updated = updated.replace(pattern, `$1"${version}"`);
+  }
+  return updated;
 }
 
 // Cargo is authoritative; Tauri, Installer, and stable release mirrors must agree.

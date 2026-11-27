@@ -107,6 +107,7 @@ jobs:
             /.github/actions/cargo-cache/
             /.github/actions/save-cargo-cache/
             /scripts/ci/cargo-cache-key.mjs
+            /scripts/qualification/app-version.mjs
             /scripts/architecture/windows-ipc-acl.mjs
             /scripts/web-installer/
             /config/distribution.json

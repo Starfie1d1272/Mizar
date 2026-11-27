@@ -1,47 +1,18 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
-import { readAppVersion, validateReleaseTag } from './app-version.mjs';
+import {
+  HOST_CARGO_PACKAGES,
+  INSTALLER_CARGO_PACKAGES,
+  readAppVersion,
+  replaceLockPackageVersions,
+  replaceTomlSectionVersion,
+  validateReleaseTag,
+} from './app-version.mjs';
 import { checkReleaseNotes } from './check-release-notes.mjs';
 import { releaseSections } from './release-notes.mjs';
 
 const stablePattern = /^\d+\.\d+\.\d+$/;
-
-function replaceTomlSectionVersion(toml, sectionHeader, version) {
-  const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const header = new RegExp(`^\\[${escaped}\\]\\r?$`, 'm').exec(toml);
-  if (!header) throw new Error(`Cargo.toml 缺少 [${sectionHeader}] 节`);
-  const sectionStart = toml.indexOf('\n', header.index) + 1;
-  const nextSection = /^\[[^\r\n]+\]\r?$/gm;
-  nextSection.lastIndex = sectionStart;
-  const sectionEnd = nextSection.exec(toml)?.index ?? toml.length;
-  const sectionText = toml.slice(sectionStart, sectionEnd);
-  const ownVersion = /^(version[ \t]*=[ \t]*)"[^"\r\n]+"(?=[ \t]*(?:#[^\r\n]*)?\r?$)/gm;
-  if ([...sectionText.matchAll(ownVersion)].length !== 1) {
-    throw new Error(`Cargo.toml [${sectionHeader}] 必须包含且仅包含一个 version 字段`);
-  }
-  return (
-    toml.slice(0, sectionStart) +
-    sectionText.replace(ownVersion, `$1"${version}"`) +
-    toml.slice(sectionEnd)
-  );
-}
-
-function replaceLockPackageVersions(lock, packageNames, version) {
-  let updated = lock;
-  for (const name of packageNames) {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp(
-      `(^\\[\\[package\\]\\]\\r?\\nname[ \t]*=[ \t]*"${escaped}"\\r?\\nversion[ \t]*=[ \t]*)"[^"\r\n]+"`,
-      'gm',
-    );
-    if ([...updated.matchAll(pattern)].length !== 1) {
-      throw new Error(`Cargo.lock 必须包含且仅包含一个 ${name} 包条目`);
-    }
-    updated = updated.replace(pattern, `$1"${version}"`);
-  }
-  return updated;
-}
 
 function promoteUnreleasedChangelog(changelog, version) {
   const sections = releaseSections(changelog);
@@ -99,8 +70,8 @@ export async function prepareRelease(
   const rootUrl =
     root instanceof URL ? root : pathToFileURL(`${resolve(root).replace(/\/?$/, '/')}`);
 
-  const changelogPath = new URL('CHANGELOG.md', rootUrl);
-  const currentChangelog = await readFile(changelogPath, 'utf8');
+  const changelogUrl = new URL('CHANGELOG.md', rootUrl);
+  const currentChangelog = await readFile(changelogUrl, 'utf8');
   const { nextChangelog, promoted, hasPrerelease } = promoteUnreleasedChangelog(
     currentChangelog,
     version,
@@ -109,78 +80,49 @@ export async function prepareRelease(
     log(`提醒：检测到 ${version} 的预发布章节，请确认正式版日志已汇总期间 RC 的累计变更。`);
   }
 
-  const targets = [
+  const fileSpecs = [
     {
       rel: 'CHANGELOG.md',
-      url: changelogPath,
       current: currentChangelog,
-      next: nextChangelog,
+      transform: () => nextChangelog,
     },
+    {
+      rel: 'apps/desktop/src-tauri/Cargo.toml',
+      transform: (text) => replaceTomlSectionVersion(text, 'package', version),
+    },
+    {
+      rel: 'apps/desktop/installer/Cargo.toml',
+      transform: (text) => replaceTomlSectionVersion(text, 'workspace.package', version),
+    },
+    {
+      rel: 'apps/desktop/src-tauri/tauri.conf.json',
+      transform: (text) => `${JSON.stringify({ ...JSON.parse(text), version }, null, 2)}\n`,
+    },
+    {
+      rel: 'apps/desktop/src-tauri/Cargo.lock',
+      transform: (text) => replaceLockPackageVersions(text, HOST_CARGO_PACKAGES, version),
+    },
+    {
+      rel: 'apps/desktop/installer/Cargo.lock',
+      transform: (text) => replaceLockPackageVersions(text, INSTALLER_CARGO_PACKAGES, version),
+    },
+    ...(stablePattern.test(version)
+      ? [
+          {
+            rel: 'scripts/qualification/update-release.json',
+            transform: (text) => `${JSON.stringify({ ...JSON.parse(text), version }, null, 2)}\n`,
+          },
+        ]
+      : []),
   ];
 
-  const desktopCargoUrl = new URL('apps/desktop/src-tauri/Cargo.toml', rootUrl);
-  const desktopCargo = await readFile(desktopCargoUrl, 'utf8');
-  targets.push({
-    rel: 'apps/desktop/src-tauri/Cargo.toml',
-    url: desktopCargoUrl,
-    current: desktopCargo,
-    next: replaceTomlSectionVersion(desktopCargo, 'package', version),
-  });
-
-  const installerCargoUrl = new URL('apps/desktop/installer/Cargo.toml', rootUrl);
-  const installerCargo = await readFile(installerCargoUrl, 'utf8');
-  targets.push({
-    rel: 'apps/desktop/installer/Cargo.toml',
-    url: installerCargoUrl,
-    current: installerCargo,
-    next: replaceTomlSectionVersion(installerCargo, 'workspace.package', version),
-  });
-
-  const tauriConfUrl = new URL('apps/desktop/src-tauri/tauri.conf.json', rootUrl);
-  const tauriConfRaw = await readFile(tauriConfUrl, 'utf8');
-  const tauriConf = JSON.parse(tauriConfRaw);
-  tauriConf.version = version;
-  targets.push({
-    rel: 'apps/desktop/src-tauri/tauri.conf.json',
-    url: tauriConfUrl,
-    current: tauriConfRaw,
-    next: `${JSON.stringify(tauriConf, null, 2)}\n`,
-  });
-
-  const desktopLockUrl = new URL('apps/desktop/src-tauri/Cargo.lock', rootUrl);
-  const desktopLock = await readFile(desktopLockUrl, 'utf8');
-  targets.push({
-    rel: 'apps/desktop/src-tauri/Cargo.lock',
-    url: desktopLockUrl,
-    current: desktopLock,
-    next: replaceLockPackageVersions(desktopLock, ['mizar-desktop'], version),
-  });
-
-  const installerLockUrl = new URL('apps/desktop/installer/Cargo.lock', rootUrl);
-  const installerLock = await readFile(installerLockUrl, 'utf8');
-  targets.push({
-    rel: 'apps/desktop/installer/Cargo.lock',
-    url: installerLockUrl,
-    current: installerLock,
-    next: replaceLockPackageVersions(
-      installerLock,
-      ['mizar-common', 'mizar-launcher', 'mizar-applier'],
-      version,
-    ),
-  });
-
-  if (stablePattern.test(version)) {
-    const updateReleaseUrl = new URL('scripts/qualification/update-release.json', rootUrl);
-    const updateReleaseRaw = await readFile(updateReleaseUrl, 'utf8');
-    const updateRelease = JSON.parse(updateReleaseRaw);
-    updateRelease.version = version;
-    targets.push({
-      rel: 'scripts/qualification/update-release.json',
-      url: updateReleaseUrl,
-      current: updateReleaseRaw,
-      next: `${JSON.stringify(updateRelease, null, 2)}\n`,
-    });
-  }
+  const targets = await Promise.all(
+    fileSpecs.map(async ({ rel, current, transform }) => {
+      const url = new URL(rel, rootUrl);
+      const before = current ?? (await readFile(url, 'utf8'));
+      return { rel, url, current: before, next: transform(before) };
+    }),
+  );
 
   const changed = targets.filter((item) => item.next !== item.current);
   if (dryRun) {
@@ -197,7 +139,7 @@ export async function prepareRelease(
   if (verifiedVersion !== version) {
     throw new Error(`版本自检失败：期望 ${version}，实际 ${verifiedVersion}`);
   }
-  checkReleaseNotes(await readFile(changelogPath, 'utf8'), version);
+  checkReleaseNotes(await readFile(changelogUrl, 'utf8'), version);
   log(`已准备版本 ${version}（更新 ${changed.length} 个文件，版本与更新日志自检通过）`);
   return { dryRun: false, version, promoted, changedPaths: changed.map((item) => item.rel) };
 }

@@ -60,7 +60,7 @@ export function computeCiPlan({
   prBase = process.env.PR_BASE,
   sha = process.env.GITHUB_SHA,
   diff = (base, head) =>
-    execFileSync('git', ['diff', '--name-only', base, head], { encoding: 'utf8' }),
+    execFileSync('git', ['diff', '--no-renames', '--name-only', base, head], { encoding: 'utf8' }),
 } = {}) {
   if (eventName !== 'pull_request' || !prBase || !sha) {
     return { run_build: true, run_native_rust: true, run_web_installer: true };
