@@ -486,6 +486,44 @@ test('update staging survives unavailable OBS and rejects removed notification a
   }
 });
 
+test('installed updates enable legacy automatic preferences and preserve a later opt-out', async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-update-preference-'));
+  const settingsPath = join(stateRoot, 'updates', 'settings.json');
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  await mkdir(join(stateRoot, 'updates'));
+  const legacy = {
+    automatic: false,
+    lastAttempt: 123,
+    highestVersion: '1.13.4',
+    highestIdentity: 'a'.repeat(64),
+  };
+  await writeFile(settingsPath, JSON.stringify(legacy));
+  const load = async (installed: boolean) => {
+    const manager = new UpdateManager({
+      stateRoot,
+      bundleRoot: stateRoot,
+      currentContentDigest: 'c'.repeat(64),
+      installed,
+      version: '1.13.4',
+    });
+    t.after(() => manager.close());
+    await manager.load();
+    return manager;
+  };
+
+  assert.equal((await load(false)).status().automatic, false);
+  const upgraded = await load(true);
+  assert.equal(upgraded.status().automatic, true);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')), {
+    ...legacy,
+    automatic: true,
+  });
+
+  await upgraded.setAutomatic(false);
+  assert.equal((await load(true)).status().automatic, false);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')), legacy);
+});
+
 test('UpdateManager consumes only apply-update results from last-applier-result.json', async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'mizar-applier-result-'));
   const logsDir = join(stateRoot, 'logs');
