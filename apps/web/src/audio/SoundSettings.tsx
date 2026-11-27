@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MusicSettings } from '../music/MusicSettings';
 import { ObsAudioRouting } from '../preparation/ObsAudioRouting';
 import { ObsGameAudioPolicy } from '../preparation/ObsGameAudioPolicy';
@@ -25,16 +25,36 @@ export function SoundSettings() {
         item.code === 'game_audio_missing' ||
         item.code === 'commentary_pending',
     ) ?? [];
-  const unchecked = obs?.findings.some((item) =>
-    [
-      'collection_missing',
-      'collection_inactive',
-      'scene_missing',
-      'configuration_unchecked',
-      'configuration_check_failed',
-      'source_kind_conflict',
-    ].includes(item.code),
+  const unchecked = Boolean(
+    obs?.findings.some((item) =>
+      [
+        'collection_missing',
+        'collection_inactive',
+        'scene_missing',
+        'configuration_unchecked',
+        'configuration_check_failed',
+        'source_kind_conflict',
+      ].includes(item.code),
+    ),
   );
+  const autoPreparedRef = useRef(false);
+  useEffect(() => {
+    if (!connected) {
+      autoPreparedRef.current = false;
+      return;
+    }
+    if (preparing || outputActive || busy || autoPreparedRef.current) return;
+    if (!unchecked && findings.length === 0) return;
+    autoPreparedRef.current = true;
+    void prepareObs()
+      .then(() => {
+        setMessage('');
+        setRoutingVersion((version) => version + 1);
+      })
+      .catch((error: unknown) => {
+        setMessage(error instanceof Error ? error.message : '场景与音频准备未完成。');
+      });
+  }, [connected, preparing, outputActive, busy, unchecked, findings.length]);
   return (
     <div className="sound-settings">
       <nav className="obs-settings-tabs" aria-label="声音设置分区">
@@ -82,6 +102,7 @@ export function SoundSettings() {
             ) : null}
             {connected && !preparing && (
               <Button
+                variant={unchecked || findings.length > 0 ? 'primary' : 'secondary'}
                 disabled={busy || outputActive}
                 onClick={() => {
                   setBusy(true);
@@ -97,7 +118,7 @@ export function SoundSettings() {
                     .finally(() => setBusy(false));
                 }}
               >
-                修复场景与音频
+                {unchecked || findings.length > 0 ? '修复场景与音频' : '重新检查'}
               </Button>
             )}
             {message && <p role="status">{message}</p>}

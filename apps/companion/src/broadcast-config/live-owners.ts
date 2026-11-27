@@ -90,11 +90,6 @@ export function registerBroadcastOwners(
     obsConfigStore,
     (stage, evidence) => options.record(stage, evidence),
     () => music.noteMonitorSettingsChanged(),
-    {
-      routing: obsAudioRouting,
-      sources: () => musicStore.state.sources,
-      baseUrl: options.baseUrl,
-    },
   );
   const music = new MusicDirector(
     musicStore,

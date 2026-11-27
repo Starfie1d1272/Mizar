@@ -1,4 +1,4 @@
-import { musicOriginals, type MonitorOriginals } from './audio-monitor-contract.js';
+import { musicOriginals } from './audio-monitor-contract.js';
 import { randomUUID } from 'node:crypto';
 import {
   audioCollectionTransferSchema,
@@ -16,12 +16,7 @@ import {
 } from '@mizar/protocol/obs';
 import type { ObsRpc } from './reconcile.js';
 import { OBS_COLLECTION, obsDesiredScenes, obsObjects as records } from './desired-state.js';
-import { BP_COMPACT_INPUT, BP_COMPACT_PATH } from './bp-overlay.js';
-import {
-  AUDIO_KINDS as audioKinds,
-  assertManagedGlobalAudioSilent,
-  readDesiredSceneItems,
-} from './audio.js';
+import { AUDIO_KINDS as audioKinds, assertManagedGlobalAudioSilent } from './audio.js';
 
 const roles = ['game', 'remoteCommentary', 'microphone'] as const;
 const modeTransition = z
@@ -32,8 +27,8 @@ const modeTransition = z
     targetDesktop: obsAudioBindingSchema.nullable(),
     targetMicrophone: obsAudioBindingSchema.nullable(),
     omitCommentary: z.boolean().default(false),
-    musicBefore: musicOriginals,
-    musicAfter: musicOriginals,
+    musicBefore: musicOriginals.optional(),
+    musicAfter: musicOriginals.optional(),
   })
   .strict();
 const stateSchema = z
@@ -248,143 +243,6 @@ export class ObsAudioRouting {
         roles.map((role) => [role, state.bindings[role]!.inputUuid]),
       ) as Record<ObsAudioRole, string>,
     };
-  }
-  /** Check the active mode and every managed scene before enabling music monitoring. */
-  async musicMonitorSafe(
-    obs: ObsRpc,
-    endpoint: string,
-    music?: {
-      sources: { bgm: string | null; stinger: string | null };
-      baseUrl: string;
-    },
-  ): Promise<boolean> {
-    const state = await this.load();
-    const managed =
-      state.desktop || state.independentCommentaryDisabled
-        ? null
-        : await this.managedBindings(obs, endpoint);
-    if (
-      state.transition ||
-      state.collectionTransfer ||
-      (!state.desktop && !state.independentCommentaryDisabled && !managed) ||
-      (await obs.call('GetSceneCollectionList')).currentSceneCollectionName !== OBS_COLLECTION ||
-      (state.desktop &&
-        (state.desktop.endpoint !== endpoint || state.desktop.collection !== OBS_COLLECTION))
-    )
-      return false;
-    const selectedIds = state.desktop
-      ? [
-          state.desktop.inputUuid,
-          ...(state.desktopMicrophone ? [state.desktopMicrophone.inputUuid] : []),
-        ]
-      : state.independentCommentaryDisabled
-        ? [state.bindings.game?.inputUuid, state.bindings.microphone?.inputUuid].filter(
-            (uuid): uuid is string => Boolean(uuid),
-          )
-        : Object.values(managed!.ids);
-    const inputs = records((await obs.call('GetInputList')).inputs);
-    if (
-      !state.desktop &&
-      state.independentCommentaryDisabled &&
-      (selectedIds.length !== 2 ||
-        ['game', 'microphone'].some((role) => {
-          const binding = state.bindings[role as 'game' | 'microphone'];
-          return (
-            !binding ||
-            binding.endpoint !== endpoint ||
-            binding.collection !== OBS_COLLECTION ||
-            !inputs.some(
-              (input) =>
-                input.inputUuid === binding.inputUuid && input.inputKind === binding.inputKind,
-            )
-          );
-        }))
-    )
-      return false;
-    try {
-      await assertManagedGlobalAudioSilent(obs);
-    } catch {
-      return false;
-    }
-    if (state.desktop) {
-      if (
-        !inputs.some(
-          (i) =>
-            i.inputUuid === state.desktop!.inputUuid && i.inputKind === 'wasapi_output_capture',
-        )
-      )
-        return false;
-    } else if (
-      selectedIds.some(
-        (id) => inputs.find((i) => i.inputUuid === id)?.inputKind === 'wasapi_output_capture',
-      )
-    )
-      return false;
-    for (const { items: rawItems } of await readDesiredSceneItems(obs, 'http://127.0.0.1:3000')) {
-      const items = records(rawItems);
-      if (
-        selectedIds.some(
-          (id) =>
-            !(state.desktop && id === state.desktopMicrophone?.inputUuid) &&
-            items.filter((item) => item.sourceUuid === id && item.sceneItemEnabled === true)
-              .length !== 1,
-        )
-      )
-        return false;
-      for (const item of items) {
-        if (typeof item.sceneItemEnabled !== 'boolean') return false;
-        if (item.sceneItemEnabled !== true) continue;
-        const input = inputs.find((i) => i.inputUuid === item.sourceUuid);
-        if (!input) return false;
-        const selected = selectedIds.includes(String(input.inputUuid));
-        if (input.inputKind === 'wasapi_output_capture' && !selected) return false;
-        if (audioKinds.has(String(input.inputKind)) && !selected) return false;
-        if (['game_capture', 'window_capture'].includes(String(input.inputKind)) && !selected) {
-          const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
-            .inputSettings;
-          if (!settings || typeof settings !== 'object') return false;
-          if ((settings as Record<string, unknown>).capture_audio !== false) return false;
-        }
-        if (selected || videoKinds.has(String(input.inputKind))) continue;
-        if (
-          music &&
-          input.inputKind === 'ffmpeg_source' &&
-          (['bgm', 'stinger'] as const).some(
-            (layer) =>
-              input.inputUuid === music.sources[layer] &&
-              input.inputName === (layer === 'bgm' ? '音乐' : '音效'),
-          )
-        )
-          continue;
-        if (music && input.inputKind === 'browser_source') {
-          const desired = obsDesiredScenes(music.baseUrl).find(
-            (s) => s.browserInput === input.inputName,
-          );
-          const expected =
-            desired?.browserUrl ??
-            (input.inputName === BP_COMPACT_INPUT
-              ? new URL(BP_COMPACT_PATH, music.baseUrl).toString()
-              : null);
-          if (expected) {
-            const settings = (await obs.call('GetInputSettings', { inputUuid: input.inputUuid }))
-              .inputSettings;
-            if (
-              settings &&
-              typeof settings === 'object' &&
-              (settings as Record<string, unknown>).url === expected
-            )
-              continue;
-          }
-        }
-        return false;
-      }
-    }
-    const after = await this.load();
-    return (
-      !after.transition &&
-      after.revision === state.revision &&
-      after.desktop?.inputUuid === state.desktop?.inputUuid
-    );
   }
   async read(obs: ObsRpc, endpoint: string): Promise<ObsAudioRoutingStatus> {
     const state = await this.load();
@@ -758,7 +616,7 @@ export class ObsAudioRouting {
       ids: Partial<Record<ObsAudioRole, string>>,
       desktopUuid: string | undefined,
       verify: () => Promise<boolean>,
-      begin: (before: MonitorOriginals, after: MonitorOriginals) => Promise<string>,
+      begin: () => Promise<string>,
       commit: (id: string) => Promise<void>,
     ) => Promise<void>,
   ) {
@@ -875,7 +733,7 @@ export class ObsAudioRouting {
       };
     }
     let modeId: string | undefined;
-    const begin = async (musicBefore: MonitorOriginals, musicAfter: MonitorOriginals) => {
+    const begin = async () => {
       if (modeId || (await this.load()).revision !== revision || (await this.load()).transition)
         throw new Error('audio_mode_transition_changed');
       modeId = randomUUID();
@@ -888,8 +746,6 @@ export class ObsAudioRouting {
           targetDesktop: desktop,
           targetMicrophone: desktopMicrophone,
           omitCommentary: !desktop && Boolean(state.waitingIndependent?.omitCommentary),
-          musicBefore,
-          musicAfter,
         },
       });
       return modeId;
