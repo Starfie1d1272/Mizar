@@ -85,13 +85,16 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          $cargo = Get-Content apps/desktop/src-tauri/Cargo.toml -Raw
-          if ($cargo -notmatch '(?m)^version\s*=\s*"([^"\r\n]+)"') { throw 'Missing application version' }
-          if ($env:RELEASE_TAG -ne "v$($Matches[1])") { throw 'Release tag differs from application version' }
+        run: node scripts/qualification/app-version.mjs "$env:RELEASE_TAG"
       - name: Pin checked-out source
         id: source
         run: node scripts/qualification/release-identity.mjs qualification
+      - name: Verify source commit passed full CI
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qualification/verify-source-ci.mjs --sha "$env:GITHUB_SHA"
       - name: Set up Node.js 24 and pnpm 12
         uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:

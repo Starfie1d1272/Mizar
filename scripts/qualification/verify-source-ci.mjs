@@ -47,9 +47,16 @@ export function verifySourceCi(repository, sourceSha, api = githubApi) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [, , manifestPath, output] = process.argv;
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  const evidence = verifySourceCi(process.env.GH_REPO, manifest.gitSha);
-  await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`);
-  console.log(`完整 CI 已通过：${evidence.url}`);
+  const [, , arg1, arg2] = process.argv;
+  if (arg1 === '--sha') {
+    if (!arg2) throw new Error('用法：verify-source-ci.mjs --sha <40位源码SHA>');
+    const evidence = verifySourceCi(process.env.GH_REPO, arg2);
+    console.log(`完整 CI 已通过：${evidence.url}`);
+  } else {
+    if (!arg1 || !arg2) throw new Error('用法：verify-source-ci.mjs <manifest.json> <output.json>');
+    const manifest = JSON.parse(await readFile(arg1, 'utf8'));
+    const evidence = verifySourceCi(process.env.GH_REPO, manifest.gitSha);
+    await writeFile(arg2, `${JSON.stringify(evidence, null, 2)}\n`);
+    console.log(`完整 CI 已通过：${evidence.url}`);
+  }
 }

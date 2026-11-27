@@ -978,16 +978,21 @@ test('RivalHubLibrary separates manual refresh from 60s background cooldown and 
     async () => ({}),
     () => now,
   );
+  const waitIdle = async () => {
+    while ((await library.view(false)).library.refreshing) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
   const first = await library.view();
   assert.equal(calls, 1);
   assert.equal(first.library.error, null);
   assert.ok(first.library.syncedAt);
-  await new Promise((r) => setTimeout(r, 15));
+  await waitIdle();
 
   now += 61_000;
   online = false;
   await library.view();
-  await new Promise((r) => setTimeout(r, 10));
+  await waitIdle();
   assert.equal(calls, 2);
 
   online = true;

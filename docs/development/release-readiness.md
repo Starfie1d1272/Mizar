@@ -31,9 +31,10 @@
 
 ## 发布过程
 
-1. 在 `main` 触发 `Release Qualification`（输入 `tag`、`ref`、`resource_pack_version`、`resource_sequence` 或复用 `resource_source_run`）。
-2. 资格通过后自动触发 `Release Promotion` 创建并公开 GitHub Release（生成并签发 `update-manifest.json`、`update-publication.json`、`update-index.json` 与 `machine-metadata.json`）。
-3. 稳定版晋级完成后自动触发 `Box Sync` 同步兼容元数据与 `Diagnostics Release`。
+1. **准备版本与更新日志**：先在 [CHANGELOG.md](../../CHANGELOG.md) 编写合法的 `## [Unreleased]` 或目标版本日志（预发布 `RC` 记录本轮增量；正式版 `Stable` 需由人工或 Agent 汇总上一正式版以来的累计变化），再执行 `pnpm release:prepare <version>`（例如 `pnpm release:prepare 1.14.0-rc.1` 或 `pnpm release:prepare 1.14.0`，支持 `--dry-run` 预览）。该命令仅同步更新本地版本文件并做自检，不会自动执行 `git commit`、`git tag` 或 `git push`。
+2. 在 `main` 触发 `Release Qualification`（输入 `tag`、`ref`、`resource_pack_version`、`resource_sequence` 或复用 `resource_source_run`）。
+3. 资格通过后自动触发 `Release Promotion` 创建并公开 GitHub Release（生成并签发 `update-manifest.json`、`update-publication.json`、`update-index.json` 与 `machine-metadata.json`）。
+4. 稳定版晋级完成后自动触发 `Box Sync` 同步兼容元数据与 `Diagnostics Release`。
 
 ## 分发、镜像与应用内更新
 

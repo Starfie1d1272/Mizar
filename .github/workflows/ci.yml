@@ -18,8 +18,30 @@ permissions:
   contents: read
   actions: read
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      run_build: ${{ steps.plan.outputs.run_build }}
+      run_native_rust: ${{ steps.plan.outputs.run_native_rust }}
+      run_web_installer: ${{ steps.plan.outputs.run_web_installer }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ci/plan.mjs
+      - id: plan
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/ci/plan.mjs
   build:
     name: build
+    needs: [plan]
+    if: needs.plan.outputs.run_build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -66,14 +88,15 @@ jobs:
       - run: node scripts/ci/tests.mjs scripts
   native:
     name: native build / Windows
+    needs: [plan]
+    if: needs.plan.outputs.run_native_rust == 'true' || needs.plan.outputs.run_web_installer == 'true'
     runs-on: windows-2025
     # Keep the 180 s feedback objective in ci-gate; cold toolchain builds must still finish.
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
-          # checkout uses blob:none for sparse checkout; keep full trees for the diff below.
+          persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.gitattributes
@@ -84,6 +107,7 @@ jobs:
             /.github/actions/cargo-cache/
             /.github/actions/save-cargo-cache/
             /scripts/ci/cargo-cache-key.mjs
+            /scripts/qualification/app-version.mjs
             /scripts/architecture/windows-ipc-acl.mjs
             /scripts/web-installer/
             /config/distribution.json
@@ -93,35 +117,8 @@ jobs:
             /apps/companion/src/match-context/lifecycle-contract.json
             /scripts/qualification/bundle/gsi-discovery.ps1
             /config/mizar_observer.cfg
-      - name: Select native build
-        id: select
-        shell: bash
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          native=true
-          installer=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- apps/desktop/src-tauri apps/desktop/installer packages/protocol/src/desktop-ipc.generated.ts apps/companion/src/match-context/lifecycle-contract.json scripts/qualification/bundle/gsi-discovery.ps1 config/mizar_observer.cfg scripts/ci/cargo-cache-key.mjs scripts/architecture/windows-ipc-acl.mjs .cargo rust-toolchain rust-toolchain.toml .github/actions/cargo-cache .github/actions/save-cargo-cache .github/workflows/ci.yml; then
-              native=false
-            else
-              result=$?
-              if [ "$result" -ne 1 ]; then echo "Cannot determine native changes" >&2; exit "$result"; fi
-            fi
-          fi
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$PR_BASE" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
-            if git diff --quiet "$PR_BASE" "$GITHUB_SHA" -- scripts/web-installer config/distribution.json .github/workflows/ci.yml; then
-              installer=false
-            else
-              result=$?
-              if [ "$result" -ne 1 ]; then echo "Cannot determine installer changes" >&2; exit "$result"; fi
-            fi
-          fi
-          echo "installer=$installer" >> "$GITHUB_OUTPUT"
-          echo "native=$native" >> "$GITHUB_OUTPUT"
-          echo "Native build required: $native"
       - name: Compile WebInstaller C# sources
-        if: steps.select.outputs.installer == 'true'
+        if: needs.plan.outputs.run_web_installer == 'true'
         shell: pwsh
         run: |
           $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
@@ -132,11 +129,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WebInstaller C# compilation failed' }
       - uses: ./.github/actions/cargo-cache
         id: cargo-cache
-        if: steps.select.outputs.native == 'true'
+        if: needs.plan.outputs.run_native_rust == 'true'
         with:
           profile: ci
       - name: Build Host and check generated Windows IPC capabilities
-        if: steps.select.outputs.native == 'true'
+        if: needs.plan.outputs.run_native_rust == 'true'
         shell: pwsh
         run: |
           $messages = cargo build --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml --message-format=json-render-diagnostics
@@ -144,16 +141,16 @@ jobs:
           $hostBuild = @($messages | ConvertFrom-Json | Where-Object { $_.reason -eq 'build-script-executed' -and $_.package_id -match '#mizar-desktop@' })
           if ($hostBuild.Count -ne 1) { throw 'Desktop build did not report its capability output directory' }
           node scripts/architecture/windows-ipc-acl.mjs (Join-Path $hostBuild[0].out_dir 'capabilities.json')
-      - if: steps.select.outputs.native == 'true'
+      - if: needs.plan.outputs.run_native_rust == 'true'
         run: cargo clippy --locked --profile ci --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
-      - if: steps.select.outputs.native == 'true'
-        run: cargo build --profile ci --manifest-path apps/desktop/installer/Cargo.toml
-      - if: steps.select.outputs.native == 'true'
-        run: cargo clippy --profile ci --manifest-path apps/desktop/installer/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
-      - if: steps.select.outputs.native == 'true'
-        run: cargo check --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
+      - if: needs.plan.outputs.run_native_rust == 'true'
+        run: cargo build --locked --profile ci --manifest-path apps/desktop/installer/Cargo.toml
+      - if: needs.plan.outputs.run_native_rust == 'true'
+        run: cargo clippy --locked --profile ci --manifest-path apps/desktop/installer/Cargo.toml -- -D clippy::correctness -D clippy::suspicious
+      - if: needs.plan.outputs.run_native_rust == 'true'
+        run: cargo check --locked --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
       - name: Save Cargo caches on main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.select.outputs.native == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.run_native_rust == 'true'
         uses: ./.github/actions/save-cargo-cache
         with:
           profile: ci
@@ -175,7 +172,7 @@ jobs:
           runtime: node@24
           install: false
       - name: Build installer binaries
-        run: cargo build --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
+        run: cargo build --locked --profile ci --manifest-path apps/desktop/installer/Cargo.toml --workspace --features mizar-applier/ui-preview
       - name: Verify native update and recovery
         shell: pwsh
         run: |
@@ -194,12 +191,15 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [build, quality, native, update-recovery]
+    needs: [plan, build, quality, native, update-recovery]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful checks and report elapsed time
         env:
           GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.plan.result }}
+          RUN_BUILD: ${{ needs.plan.outputs.run_build }}
+          RUN_NATIVE: ${{ needs.plan.outputs.run_native_rust == 'true' || needs.plan.outputs.run_web_installer == 'true' }}
           BUILD: ${{ needs.build.result }}
           NATIVE: ${{ needs.native.result }}
           QUALITY: ${{ needs.quality.result }}
@@ -227,8 +227,24 @@ jobs:
           if [ "${elapsed:-0}" -gt 180 ]; then
             echo "::warning::CI feedback took ${elapsed}s; inspect runner wait and job duration."
           fi
-          if [ "$BUILD" != success ] || [ "$QUALITY" != success ] || [ "$NATIVE" != success ]; then
-            echo "::error::Required jobs must succeed (build=$BUILD, quality=$QUALITY, native=$NATIVE)"
+          if [ "$PLAN" != success ] || [ "$QUALITY" != success ]; then
+            echo "::error::Required jobs must succeed (plan=$PLAN, quality=$QUALITY)"
+            exit 1
+          fi
+          if [ "$RUN_BUILD" = true ] && [ "$BUILD" != success ]; then
+            echo "::error::Required build job must succeed (build=$BUILD)"
+            exit 1
+          fi
+          if [ "$RUN_BUILD" != true ] && [ "$BUILD" != skipped ] && [ "$BUILD" != success ]; then
+            echo "::error::Unexpected build result (build=$BUILD)"
+            exit 1
+          fi
+          if [ "$RUN_NATIVE" = true ] && [ "$NATIVE" != success ]; then
+            echo "::error::Required native job must succeed (native=$NATIVE)"
+            exit 1
+          fi
+          if [ "$RUN_NATIVE" != true ] && [ "$NATIVE" != skipped ] && [ "$NATIVE" != success ]; then
+            echo "::error::Unexpected native result (native=$NATIVE)"
             exit 1
           fi
           test "$UPDATE_RECOVERY" = skipped || test "$UPDATE_RECOVERY" = success
