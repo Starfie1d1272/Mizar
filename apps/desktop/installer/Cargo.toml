@@ -3,7 +3,7 @@ members = ["common", "launcher", "applier"]
 resolver = "2"
 
 [workspace.package]
-version = "1.13.4"
+version = "1.13.5"
 edition = "2021"
 
 [workspace.dependencies]
