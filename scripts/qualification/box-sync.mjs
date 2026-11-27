@@ -26,7 +26,6 @@ import { curlMultipartUpload } from './box-curl-upload.mjs';
 const { fetch, AbortSignal, FormData } = globalThis;
 
 const origin = 'https://box.nju.edu.cn';
-const downloadsFolder = '/Stable/Downloads';
 const shaPattern = /^[a-f0-9]{64}$/;
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export class MirrorError extends Error {
@@ -416,8 +415,6 @@ export class BoxClient {
     });
   }
   async list(path, signal) {
-    // This directory is the verified public share; do not send a repository token.
-    if (path === downloadsFolder) return readPublicDownloadDirectory(signal);
     const result = await this.api('dir', path, 'GET', undefined, signal);
     requireValue(Array.isArray(result.dirent_list), '云盘目录返回格式错误');
     return result.dirent_list;
@@ -719,39 +716,6 @@ export async function verifyRemote(box, path, identity, signal) {
     actual.sha256 === identity.sha256 && actual.size === identity.size,
     '云盘同名文件内容冲突；停止同步并保留文件',
   );
-}
-
-// Public listing is read-only; publication uses the authenticated phased workflow.
-export async function readPublicDownloadDirectory(signal) {
-  const listing = await checkedFetch(
-    'https://box.nju.edu.cn/api/v2.1/share-links/91dec4c27e5d47f38fcf/dirents/?path=%2FDownloads%2F',
-    { redirect: 'error', cache: 'no-store', signal },
-    20000,
-    fetch,
-    (response) => boundedJson(response, 2 * 1024 * 1024),
-  );
-  requireValue(
-    listing.dir_path === downloadsFolder + '/' &&
-      Array.isArray(listing.dirent_list) &&
-      listing.dirent_list.length <= 100,
-    '公开下载目录身份不一致',
-  );
-  const names = new Set();
-  return listing.dirent_list.map((entry) => {
-    requireValue(
-      typeof entry.file_name === 'string' &&
-        entry.file_name.length > 0 &&
-        !/[\\/]/.test(entry.file_name) &&
-        !names.has(entry.file_name) &&
-        entry.is_dir === false &&
-        entry.file_path === '/Downloads/' + entry.file_name &&
-        Number.isSafeInteger(entry.size) &&
-        entry.size >= 0,
-      '公开下载目录存在无效或重复文件',
-    );
-    names.add(entry.file_name);
-    return { name: entry.file_name, size: entry.size, type: 'file' };
-  });
 }
 
 // Verify signed resource descriptor, catalog and publication metadata without downloading large archives.

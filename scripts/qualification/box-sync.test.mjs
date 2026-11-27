@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { makeMachineMetadata } from '../../packages/resource-pack-contract/transport.mjs';
-import { RESOURCE_ASSET_NAMES } from '../../packages/resource-pack-contract/catalog.mjs';
-import { digest, syncBoxMetadata } from './box-sync.mjs';
+import {
+  RESOURCE_ASSET_NAMES,
+  createResourceCatalog,
+  createResourceDescriptor,
+} from '../../packages/resource-pack-contract/catalog.mjs';
+import { jsonBytes } from '../../packages/resource-pack-contract/content.mjs';
+import { digest, syncBoxMetadata, verifyResourceMetadata } from './box-sync.mjs';
 
 function fakeBox() {
   const directories = new Set([
@@ -262,5 +267,112 @@ test('requires attested WebInstaller bytes and matching Release resource archive
     }),
     /资源归档与公开 Release 不一致/,
   );
+  assert.equal(box.writes.length, 0);
+});
+
+test('verifyResourceMetadata parses descriptor/catalog, verifies 3 attestations and rejects publication digest mismatch', async () => {
+  const gitSha = 'a'.repeat(40);
+  const promotionSha = 'b'.repeat(40);
+  const core = {
+    appVersion: '1.10.0',
+    gitSha,
+    archive: 'Mizar-v1.10.0-Windows-x64-Core.zip',
+    archiveSha256: 'c'.repeat(64),
+  };
+  const archive = {
+    name: 'Mizar-official-epl-default-1.0.0.zip',
+    format: 'zip',
+    bytes: 42,
+    sha256: 'd'.repeat(64),
+  };
+  const descriptor = createResourceDescriptor({
+    core,
+    packVersion: '1.0.0',
+    archive,
+    manifestSha256: 'e'.repeat(64),
+    sequence: 1,
+    issuedAt: '2026-01-01T00:00:00Z',
+    expiresAt: '2026-06-01T00:00:00Z',
+  });
+  const descriptorBytes = jsonBytes(descriptor);
+  const publicationBytes = Buffer.from('signed-publication');
+  const catalog = createResourceCatalog(
+    descriptor,
+    descriptorBytes,
+    promotionSha,
+    digest(publicationBytes),
+  );
+  const catalogBytes = jsonBytes(catalog);
+  const originals = new Map([
+    [RESOURCE_ASSET_NAMES.descriptor, descriptorBytes],
+    [RESOURCE_ASSET_NAMES.descriptorQualification, Buffer.from('qual-bundle')],
+    [RESOURCE_ASSET_NAMES.catalog, catalogBytes],
+    [RESOURCE_ASSET_NAMES.catalogPromotion, Buffer.from('catalog-bundle')],
+    [RESOURCE_ASSET_NAMES.archiveQualification, Buffer.from('archive-bundle')],
+    [RESOURCE_ASSET_NAMES.publication, publicationBytes],
+    [RESOURCE_ASSET_NAMES.publicationPromotion, Buffer.from('pub-bundle')],
+  ]);
+
+  const attested = [];
+  const parsed = await verifyResourceMetadata({ gitSha, core, originals }, async ([subject]) => {
+    attested.push({
+      file: basename(subject.file),
+      bundle: basename(subject.bundle),
+      sourceSha: subject.sourceSha,
+      workflow: subject.workflow,
+    });
+  });
+  assert.equal(parsed.entry.archive.name, archive.name);
+  assert.deepEqual(attested, [
+    {
+      file: RESOURCE_ASSET_NAMES.descriptor,
+      bundle: RESOURCE_ASSET_NAMES.descriptorQualification,
+      sourceSha: gitSha,
+      workflow: undefined,
+    },
+    {
+      file: RESOURCE_ASSET_NAMES.catalog,
+      bundle: RESOURCE_ASSET_NAMES.catalogPromotion,
+      sourceSha: promotionSha,
+      workflow: 'promotion',
+    },
+    {
+      file: RESOURCE_ASSET_NAMES.publication,
+      bundle: RESOURCE_ASSET_NAMES.publicationPromotion,
+      sourceSha: promotionSha,
+      workflow: 'promotion',
+    },
+  ]);
+
+  originals.set(RESOURCE_ASSET_NAMES.publication, Buffer.from('tampered-publication'));
+  await assert.rejects(
+    verifyResourceMetadata({ gitSha, core, originals }, async () => {}),
+    /资源声明与签发目录不一致/,
+  );
+});
+
+test('aborts before publishing /Updates/latest.json when machine-metadata.json upload fails', async () => {
+  const { tag, updateIndex, release, identity, resources } = makeFixtures('v1.10.0');
+  const box = fakeBox();
+  box.upload = async () => {
+    throw new Error('metadata upload failed');
+  };
+
+  await assert.rejects(
+    syncBoxMetadata({
+      tag,
+      box,
+      readRelease: async (t) => ({
+        tag: t,
+        release,
+        ref: { object: { type: 'commit', sha: identity.gitSha } },
+      }),
+      loadIdentity: async () => identity,
+      loadIndex: async () => updateIndex,
+      verifyResources: async () => resources,
+    }),
+    /metadata upload failed/,
+  );
+  assert.equal(box.files.has('/Updates/latest.json'), false);
   assert.equal(box.writes.length, 0);
 });
