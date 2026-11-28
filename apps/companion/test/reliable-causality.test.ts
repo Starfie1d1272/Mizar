@@ -642,3 +642,89 @@ test('map_started expires after 24h while map_ended is retained up to 7 days', a
     'accepted',
   );
 });
+
+test('lineup-mismatch display-only mode still enqueues map_ended when binding.freshness is stale', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-v2-sub-stale-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const outbox = new ReliableOutbox(join(dir, 'outbox.json'));
+  const output = new OutputService({ outbox, now: () => new Date('2026-11-28T10:00:00.000Z') });
+  t.after(() => output.close());
+  await output.start();
+
+  const binding = makeBinding('rev-1', 'stale');
+  const startersA = Array.from({ length: 5 }, (_, i) => ({
+    playerId: `p-a-${i}`,
+    steam64: `7656119830000000${i}`,
+    isStarter: true,
+  }));
+  const startersB = Array.from({ length: 5 }, (_, i) => ({
+    playerId: `p-b-${i}`,
+    steam64: `7656119840000000${i}`,
+    isStarter: true,
+  }));
+  (binding.context.entrants.a as unknown as { players: unknown[] }).players = startersA;
+  (binding.context.entrants.b as unknown as { players: unknown[] }).players = startersB;
+
+  const bundle = makeBundle({
+    mapName: 'de_ancient',
+    mapOrder: 1,
+    mapPhase: 'gameover',
+    scoreCT: 13,
+    scoreT: 10,
+    telemetry: 'stale',
+    context: 'stale',
+  });
+  (bundle.program.series!.maps[0] as unknown as { status: string; finalScore: null }).status =
+    'current';
+  (bundle.program.series!.maps[0] as unknown as { finalScore: null }).finalScore = null;
+  (bundle.operator.identity as unknown as { state: string }).state = 'degraded';
+  Object.assign(bundle.identity, {
+    state: 'degraded',
+    capabilities: { canonicalTeamBranding: true },
+    issues: [{ code: 'lineup_differs_from_expected' }],
+    players: Array.from({ length: 10 }, (_, i) => ({
+      evidence: 'current',
+      side: i < 5 ? 'CT' : 'T',
+      sourcePlayerId: `7656119800000000${i}`,
+      entryId: i < 5 ? ENTRY_A_ID : ENTRY_B_ID,
+    })),
+  });
+
+  output.setCurrent(bundle, binding);
+  const mapEnded = outbox.records().filter((r) => r.event.kind === 'map_ended');
+  assert.equal(mapEnded.length, 1);
+  if (mapEnded[0]!.event.kind === 'map_ended') {
+    assert.equal(mapEnded[0]!.event.payload.scoreA, 13);
+    assert.equal(mapEnded[0]!.event.payload.scoreB, 10);
+  }
+});
+
+test('match_started enqueues idempotently even if first live frame was skipped as stale', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'mizar-v2-match-start-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const outbox = new ReliableOutbox(join(dir, 'outbox.json'));
+  const output = new OutputService({ outbox, now: () => new Date('2026-11-28T10:00:00.000Z') });
+  t.after(() => output.close());
+  await output.start();
+
+  const binding = makeBinding('rev-1', 'fresh');
+  // First live frame has stale telemetry -> skipped.
+  output.beforeRuntimeMutation();
+  output.afterRuntimeMutation(
+    makeReduceResult('2026-11-28T10:00:00.000Z', []),
+    makeBundle({ seriesStatus: 'live', mapPhase: 'warmup', telemetry: 'stale' }),
+    binding,
+  );
+  assert.equal(outbox.records().filter((r) => r.event.kind === 'match_started').length, 0);
+
+  // Next frame is fresh -> match_started still enqueues without needing series.status transition.
+  output.beforeRuntimeMutation();
+  output.afterRuntimeMutation(
+    makeReduceResult('2026-11-28T10:00:05.000Z', []),
+    makeBundle({ seriesStatus: 'live', mapPhase: 'warmup', telemetry: 'fresh', runtimeSeq: 11 }),
+    binding,
+  );
+  assert.equal(outbox.records().filter((r) => r.event.kind === 'match_started').length, 1);
+});

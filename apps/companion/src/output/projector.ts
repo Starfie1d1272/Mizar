@@ -279,7 +279,9 @@ export function buildReliableEventV2(input: {
   const currentMap = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
-  const displayOnly = hasLineupMismatchOnly(bundle, binding);
+  const displayOnly = hasLineupMismatchOnly(bundle, binding, {
+    requireFresh: input.kind !== 'map_ended',
+  });
   const observedEnd =
     displayOnly &&
     input.kind === 'map_ended' &&

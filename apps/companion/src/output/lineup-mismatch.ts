@@ -9,16 +9,18 @@ import type { ProjectionBundle } from '../projections/projection-coordinator.js'
 export function hasLineupMismatchOnly(
   bundle: Pick<ProjectionBundle, 'program' | 'operator' | 'identity'>,
   binding: MatchContextBinding | undefined,
+  options?: { readonly requireFresh?: boolean },
 ): boolean {
+  const requireFresh = options?.requireFresh ?? true;
   const { program, operator } = bundle;
   const identity = operator.identity;
   if (
     !binding ||
     binding.origin !== 'online' ||
-    binding.freshness !== 'fresh' ||
+    (requireFresh && binding.freshness !== 'fresh') ||
     program.match?.matchId !== binding.context.matchId ||
-    program.status.context !== 'fresh' ||
-    program.status.telemetry !== 'fresh' ||
+    (requireFresh && program.status.context !== 'fresh') ||
+    (requireFresh && program.status.telemetry !== 'fresh') ||
     !['matched', 'degraded'].includes(identity.state) ||
     !identity.capabilities.canonicalTeamBranding ||
     operator.activeLineup.state !== 'complete' ||

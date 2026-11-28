@@ -52,12 +52,12 @@ export class OutputService {
   private readonly sink: ReliableEventSink | undefined;
   private readonly now: () => Date;
   private bundle: ProjectionBundle | undefined;
-  private priorForMutation: ProjectionBundle | undefined;
   private binding: MatchContextBinding | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private trialQuarantined = false;
   private outboxLoadFailed = false;
+  private lastMatchStartedScope: string | undefined;
   private lastMapStartedScope: string | undefined;
 
   constructor(private readonly options: OutputServiceOptions = {}) {
@@ -108,9 +108,7 @@ export class OutputService {
     }
   }
 
-  beforeRuntimeMutation(): void {
-    this.priorForMutation = this.bundle;
-  }
+  beforeRuntimeMutation(): void {}
 
   setCurrent(bundle: ProjectionBundle | undefined, binding?: MatchContextBinding): void {
     this.bundle = bundle;
@@ -127,8 +125,6 @@ export class OutputService {
     bundle: ProjectionBundle,
     binding?: MatchContextBinding,
   ): void {
-    const previous = this.priorForMutation;
-    this.priorForMutation = undefined;
     this.bundle = bundle;
     if (binding !== undefined) this.binding = binding;
     this.offerLive();
@@ -161,12 +157,12 @@ export class OutputService {
       }
     };
 
-    if (
-      previous?.program.series?.status !== 'live' &&
-      bundle.program.series?.status === 'live' &&
-      bundle.program.status.identity === 'matched'
-    ) {
-      enqueueKind('match_started');
+    if (bundle.program.series?.status === 'live' && bundle.program.status.identity === 'matched') {
+      const matchScope = `${activeBinding!.context.matchId}:${bundle.program.cursor.producerInstanceId}:${bundle.program.cursor.liveSessionId ?? ''}`;
+      if (this.lastMatchStartedScope !== matchScope) {
+        this.lastMatchStartedScope = matchScope;
+        enqueueKind('match_started');
+      }
     }
 
     const lineupReady =
