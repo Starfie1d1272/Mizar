@@ -117,7 +117,7 @@ export function registerOnlineMatchControl(
     runtime: Pick<ProgramRuntime, 'canUpdateSeriesPlan'>;
     outputService: Pick<
       OutputService,
-      'current' | 'currentStatus' | 'retry' | 'isPersistenceConfirmed' | 'setContextRecoveryHandler'
+      'current' | 'currentStatus' | 'retry' | 'isPersistenceConfirmed'
     >;
     originPolicy: LocalWebOriginPolicy;
   },
@@ -148,10 +148,9 @@ export function registerOnlineMatchControl(
       currentSnapshot: () => outputService.current(true),
       currentSnapshotStatus: () => outputService.currentStatus(true),
       retryOutputPersistence: async () => {
-        await outputService.retry({ localOnly: true });
+        await outputService.retry();
         return outputService.isPersistenceConfirmed();
       },
-      setContextRecoveryHandler: (handler) => outputService.setContextRecoveryHandler(handler),
       originPolicy,
     });
 }

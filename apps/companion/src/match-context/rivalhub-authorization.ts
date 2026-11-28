@@ -165,7 +165,8 @@ export class RivalHubAuthorization {
           init.signal ?? AbortSignal.timeout(operation === 'live' ? 4000 : CONTROL_TIMEOUT_MS),
       });
       if (!response.ok && response.status !== 304) {
-        if (operation !== 'reliable' && operation !== 'claim') await response.body?.cancel();
+        if (operation !== 'reliable' && operation !== 'reliable-v2' && operation !== 'claim')
+          await response.body?.cancel();
         if (operation !== 'claim-recovery' || init.method === 'POST' || response.status !== 404)
           this.onDiagnostic(operation, new Error(`RivalHub HTTP ${response.status}`));
       }

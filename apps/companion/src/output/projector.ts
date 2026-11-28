@@ -3,14 +3,13 @@ import { createHash } from 'node:crypto';
 import { projectPublicRadarFrame } from '@mizar/radar';
 
 import { completedSeriesMapForProgram } from '@mizar/core/projection';
-import type { RuntimeReduceResult } from '@mizar/core/runtime';
 import {
   parseLiveSnapshotV1,
   publicRadarV1Schema,
-  parseReliableEventV1,
+  parseReliableEventV2,
   type LiveSnapshotV1,
-  type ReliableEventKindV1,
-  type ReliableEventV1,
+  type ReliableEventKindV2,
+  type ReliableEventV2,
 } from '@mizar/protocol/output';
 
 import type { MatchContextBinding } from '../match-context/index.js';
@@ -213,41 +212,52 @@ export function projectLiveSnapshotV1(input: {
   return parseLiveSnapshotV1(snapshot);
 }
 
-export function buildReliableEventV1(input: {
-  readonly kind: ReliableEventKindV1;
+function lineupSteam64FromBundle(bundle: ProjectionBundle): string[] {
+  return bundle.program.players
+    .filter(
+      (player) => player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
+    )
+    .slice(0, 10)
+    .map((player) => player.sourcePlayerId);
+}
+
+function playersSnapshotFromBundle(
+  bundle: ProjectionBundle,
+): NonNullable<Extract<ReliableEventV2, { kind: 'map_ended' }>['payload']['players']> {
+  return bundle.program.players
+    .filter((player) => player.lineupEvidence === 'current')
+    .slice(0, 10)
+    .map((player) => ({
+      sourcePlayerId: player.sourcePlayerId,
+      canonicalPlayerId: player.canonicalPlayerId,
+      kills: player.matchStats?.kills ?? null,
+      assists: player.matchStats?.assists ?? null,
+      deaths: player.matchStats?.deaths ?? null,
+    }));
+}
+
+export function buildReliableEventV2(input: {
+  readonly kind: ReliableEventKindV2;
   readonly bundle: ProjectionBundle;
   readonly binding: MatchContextBinding | undefined;
   readonly observedAt: string;
-  readonly source: ReliableEventV1['evidence']['source'];
-  readonly reason?: string | null;
-  readonly previousMapEpoch?: number | null;
-  readonly previousSourceGeneration?: number | null;
-  readonly cursor?: ProjectionBundle['program']['cursor'];
-  readonly retainStaleBoundary?: boolean;
-}): ReliableEventV1 | null {
+  readonly authorityRevision: number;
+}): ReliableEventV2 | null {
   const { binding, bundle } = input;
   if (
     binding === undefined ||
     binding.context.competition === null ||
     bundle.program.match?.matchId !== binding.context.matchId ||
-    ((binding.freshness !== 'fresh' || bundle.program.status.context !== 'fresh') &&
-      !(
-        input.retainStaleBoundary &&
-        ['map_epoch_changed', 'source_generation_changed'].includes(input.kind)
-      ))
+    binding.freshness !== 'fresh' ||
+    bundle.program.status.context !== 'fresh' ||
+    bundle.program.status.telemetry !== 'fresh' ||
+    bundle.program.status.identity === 'mismatch'
   )
     return null;
-  const warning =
-    input.kind === 'identity_mismatch' ||
-    input.kind === 'lineup_mismatch' ||
-    input.kind === 'source_generation_changed' ||
-    input.kind === 'map_epoch_changed';
-  if (
-    !warning &&
-    (bundle.program.status.telemetry !== 'fresh' || bundle.program.status.identity === 'mismatch')
-  )
-    return null;
-  const cursor = input.cursor ?? bundle.program.cursor;
+
+  const cursor = bundle.program.cursor;
+  if (cursor.liveSessionId === null) return null;
+
   const currentMap = bundle.program.series?.maps.find(
     (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
   );
@@ -281,137 +291,82 @@ export function buildReliableEventV1(input: {
       bundle.program.map.score.t === null)
   )
     return null;
-  const payload = (() => {
-    switch (input.kind) {
-      case 'match_started':
-      case 'map_started':
-        return {};
-      case 'map_ended':
-        return {
-          scoreA: mapResult!.scoreA,
-          scoreB: mapResult!.scoreB,
-          scoreCT: bundle.program.map.score.ct!,
-          scoreT: bundle.program.map.score.t!,
-        };
-      case 'map_player_snapshot':
-        throw new Error('snapshot_requires_map_end');
-      case 'series_ended':
-        return {
-          scoreA: bundle.program.series?.score.a ?? null,
-          scoreB: bundle.program.series?.score.b ?? null,
-        };
-      case 'source_generation_changed':
-        return { previousSourceGeneration: input.previousSourceGeneration ?? null };
-      case 'map_epoch_changed':
-        return { previousMapEpoch: input.previousMapEpoch ?? null, reason: input.reason ?? null };
-      case 'identity_mismatch':
-      case 'lineup_mismatch':
-        return { reason: input.reason ?? null };
+
+  const mapId = mapResult?.mapId ?? currentMap?.mapId ?? null;
+  const mapName = mapResult?.mapName ?? bundle.program.map.name;
+  const lineupSteam64 = lineupSteam64FromBundle(bundle);
+
+  let payloadCore: Record<string, unknown>;
+  let payload: ReliableEventV2['payload'];
+  switch (input.kind) {
+    case 'match_started':
+      payloadCore = {};
+      payload = lineupSteam64.length ? { lineupSteam64 } : {};
+      break;
+    case 'map_started':
+      payloadCore = {};
+      payload = lineupSteam64.length ? { lineupSteam64 } : {};
+      break;
+    case 'map_ended': {
+      const scoreCT = bundle.program.map.score.ct!;
+      const scoreT = bundle.program.map.score.t!;
+      const players = playersSnapshotFromBundle(bundle);
+      payloadCore = {
+        scoreA: mapResult!.scoreA,
+        scoreB: mapResult!.scoreB,
+        scoreCT,
+        scoreT,
+      };
+      payload = {
+        scoreA: mapResult!.scoreA,
+        scoreB: mapResult!.scoreB,
+        scoreCT,
+        scoreT,
+        lineupSteam64,
+        ...(players.length ? { players } : {}),
+      };
+      break;
     }
-  })();
-  const identity = {
+    case 'series_ended': {
+      const scoreA = bundle.program.series?.score.a ?? null;
+      const scoreB = bundle.program.series?.score.b ?? null;
+      if (scoreA === null || scoreB === null) return null;
+      payloadCore = { scoreA, scoreB };
+      payload = { scoreA, scoreB };
+      break;
+    }
+  }
+
+  const idempotencyKey = createHash('sha256')
+    .update(
+      JSON.stringify({
+        kind: input.kind,
+        matchId: binding.context.matchId,
+        producerInstanceId: cursor.producerInstanceId,
+        liveSessionId: cursor.liveSessionId,
+        mapId,
+        mapName,
+        payloadCore,
+      }),
+    )
+    .digest('hex');
+
+  return parseReliableEventV2({
+    schemaVersion: 'mizar.reliable-event.v2',
+    idempotencyKey,
     kind: input.kind,
-    producerInstanceId: cursor.producerInstanceId,
-    liveSessionId: cursor.liveSessionId,
-    matchId: binding.context.matchId,
-    contextRevision: binding.manifest.revision,
-    mapEpoch: cursor.mapEpoch,
-    sourceGeneration: cursor.programSourceGeneration,
-    runtimeSeq: cursor.runtimeSeq,
-    payload,
-  };
-  const hash = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return parseReliableEventV1({
-    schemaVersion: 'mizar.reliable-event.v1',
-    idempotencyKey: hash,
-    kind: input.kind,
-    cursor,
     observedAt: input.observedAt,
     matchId: binding.context.matchId,
     competitionId: binding.context.competition.competitionId,
-    contextRevision: binding.manifest.revision,
-    mapId: mapResult?.mapId ?? currentMap?.mapId ?? null,
-    mapName: mapResult?.mapName ?? bundle.program.map.name,
     entryAId: binding.context.entrants.a.entryId,
     entryBId: binding.context.entrants.b.entryId,
-    evidence: {
-      identity: bundle.program.status.identity,
-      telemetryFresh: bundle.program.status.telemetry === 'fresh',
-      contextFresh: binding.freshness === 'fresh' && bundle.program.status.context === 'fresh',
-      source: input.source,
-      ...(displayOnly ? { lineupMismatchOnly: true } : {}),
+    mapId,
+    mapName,
+    session: {
+      producerInstanceId: cursor.producerInstanceId,
+      liveSessionId: cursor.liveSessionId,
+      authorityRevision: input.authorityRevision,
     },
     payload,
   });
-}
-
-/** Revision is selected once after plan verification; original observation remains unchanged. */
-export function materializeBoundaryEvent(
-  event: ReliableEventV1,
-  contextRevision: string,
-): ReliableEventV1 {
-  if (event.kind !== 'map_epoch_changed' && event.kind !== 'source_generation_changed')
-    throw new Error('boundary_kind_invalid');
-  const cursor = event.cursor;
-  const identity = {
-    kind: event.kind,
-    producerInstanceId: cursor.producerInstanceId,
-    liveSessionId: cursor.liveSessionId,
-    matchId: event.matchId,
-    contextRevision,
-    mapEpoch: cursor.mapEpoch,
-    sourceGeneration: cursor.programSourceGeneration,
-    runtimeSeq: cursor.runtimeSeq,
-    payload: event.payload,
-  };
-  const idempotencyKey = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  return parseReliableEventV1({ ...event, contextRevision, idempotencyKey });
-}
-
-export function transitionReliableEventsV1(input: {
-  readonly result: RuntimeReduceResult;
-  readonly bundle: ProjectionBundle;
-  readonly binding: MatchContextBinding | undefined;
-}): readonly ReliableEventV1[] {
-  if (input.result.disposition.kind !== 'accepted') return [];
-  const events: ReliableEventV1[] = [];
-  const add = (candidate: ReliableEventV1 | null) => {
-    if (candidate !== null) events.push(candidate);
-  };
-  for (const transition of input.result.transitions) {
-    if (transition.kind === 'map_ended')
-      add(
-        buildReliableEventV1({
-          kind: 'map_ended',
-          bundle: input.bundle,
-          binding: input.binding,
-          observedAt: transition.at.utc,
-          source: 'runtime-transition',
-        }),
-      );
-    if (transition.kind === 'map_execution_changed')
-      add(
-        buildReliableEventV1({
-          kind: 'map_epoch_changed',
-          bundle: input.bundle,
-          binding: input.binding,
-          observedAt: transition.at.utc,
-          source: 'runtime-transition',
-          previousMapEpoch: transition.previousMapEpoch,
-          reason: transition.reason,
-        }),
-      );
-  }
-  return events;
-}
-
-export function buildMapPlayerSnapshotV1(
-  end: Extract<ReliableEventV1, { kind: 'map_ended' }>,
-  players: Extract<ReliableEventV1, { kind: 'map_player_snapshot' }>['payload']['players'],
-): ReliableEventV1 {
-  const payload = { mapEndedKey: end.idempotencyKey, players };
-  const idempotencyKey = createHash('sha256')
-    .update(JSON.stringify({ kind: 'map_player_snapshot', parent: end.idempotencyKey, payload }))
-    .digest('hex');
-  return parseReliableEventV1({ ...end, kind: 'map_player_snapshot', idempotencyKey, payload });
 }

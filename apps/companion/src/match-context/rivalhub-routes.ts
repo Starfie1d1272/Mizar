@@ -3,7 +3,7 @@ import { bindHistoricalStats, projectHistoricalStats } from '../projections/hist
 import { projectHistoricalProgram } from '../projections/historical-program.js';
 import type { ProgramPresentation, ProgramSceneId } from '@mizar/protocol/program-scenes';
 import type { FastifyInstance } from 'fastify';
-import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
+import type { LiveSnapshotV1 } from '@mizar/protocol/output';
 import { checkLocalWebOrigin, type LocalWebOriginPolicy } from '../local-web/origin-policy.js';
 import type { MatchContextController } from './controller.js';
 import {
@@ -25,9 +25,6 @@ export function registerRivalHubConnectionRoutes(
     currentSnapshot: () => LiveSnapshotV1 | null;
     currentSnapshotStatus?: () => LiveSnapshotStatus;
     retryOutputPersistence?: () => Promise<boolean>;
-    setContextRecoveryHandler?: (
-      handler: (event: ReliableEventV1, authority: string) => Promise<boolean>,
-    ) => void;
     originPolicy: LocalWebOriginPolicy;
   },
 ) {
@@ -191,12 +188,7 @@ export function registerRivalHubConnectionRoutes(
         '网站同步记录无法读取。请保留原数据并导出诊断，修复后重启 Mizar。',
         'diagnostics',
       );
-    if (status.localPersistencePending || status.blockedReason === 'output_persistence_pending')
-      return block(
-        'output_persistence_pending',
-        '网站同步记录尚未确认，正在自动重试。本机画面不受影响；请保持 Mizar 运行，持续失败请导出诊断核对。',
-        'output-retry',
-      );
+
     const snapshot = status.snapshot;
     if (!snapshot) {
       switch (status.blockedReason) {
@@ -275,46 +267,41 @@ export function registerRivalHubConnectionRoutes(
       );
     return null;
   };
-  const observedLineupReady = () => snapshotBlock(currentSnapshotStatus()) === null;
+
   const sourceStatus = () => {
     const status = currentSnapshotStatus();
-    // Local persistence repair does not require website authorization or publishing readiness.
-    const localRecovery =
-      status.localPersistencePending || status.blockedReason === 'output_persistence_pending';
     const unavailable = status.blockedReason === 'output_unavailable';
-    const binding =
-      localRecovery || unavailable ? options.controller?.getActiveBinding() : linkedBinding();
+    const binding = unavailable ? options.controller?.getActiveBinding() : linkedBinding();
     const view = options.connection.view();
-    const blocked =
-      unavailable || (localRecovery && binding)
-        ? snapshotBlock(status)
-        : !view.paired
-          ? { code: 'not_paired', message: '尚未连接网站。', action: 'authorization' }
-          : view.sourceState === 'unavailable'
+    const blocked = unavailable
+      ? snapshotBlock(status)
+      : !view.paired
+        ? { code: 'not_paired', message: '尚未连接网站。', action: 'authorization' }
+        : view.sourceState === 'unavailable'
+          ? {
+              code: 'source_state_unavailable',
+              message: '本机来源记录不可用，请查看诊断后处理。',
+              action: 'diagnostics',
+            }
+          : !binding
             ? {
-                code: 'source_state_unavailable',
-                message: '本机来源记录不可用，请查看诊断后处理。',
-                action: 'diagnostics',
+                code: 'binding_missing',
+                message: '请先选择并确认加载网站比赛。',
+                action: 'match',
               }
-            : !binding
+            : binding.origin !== 'online'
               ? {
-                  code: 'binding_missing',
-                  message: '请先选择并确认加载网站比赛。',
+                  code: 'online_context_unconfirmed',
+                  message: '当前资料尚未与网站一致，请核对并确认网站版本。',
                   action: 'match',
                 }
-              : binding.origin !== 'online'
+              : options.canClaim && !options.canClaim()
                 ? {
-                    code: 'online_context_unconfirmed',
-                    message: '当前资料尚未与网站一致，请核对并确认网站版本。',
-                    action: 'match',
+                    code: 'production_inactive',
+                    message: '进入现场后可开启本场网站同步。',
+                    action: 'production',
                   }
-                : options.canClaim && !options.canClaim()
-                  ? {
-                      code: 'production_inactive',
-                      message: '进入现场后可开启本场网站同步。',
-                      action: 'production',
-                    }
-                  : snapshotBlock(status);
+                : snapshotBlock(status);
     return { ...status, binding, blocked };
   };
   const rejectSource = (state: ReturnType<typeof sourceStatus>, operation: string) => {
@@ -379,53 +366,6 @@ export function registerRivalHubConnectionRoutes(
         sourceCommand = null;
       });
   };
-  options.setContextRecoveryHandler?.(async (event, authority) => {
-    const sameExecution = () => {
-      const snapshot = options.currentSnapshot();
-      const view = options.connection.view();
-      const c = snapshot?.cursor;
-      const original = event.cursor;
-      return (
-        syncExpected() &&
-        options.connection.reliableAuthorityScope() === authority &&
-        view.stoppedMatchId !== event.matchId &&
-        !view.activeDeviceName &&
-        view.activeSourceMatchId === event.matchId &&
-        !sourceCommand &&
-        linkedBinding()?.origin === 'online' &&
-        snapshot?.matchId === event.matchId &&
-        snapshot.map.phase === 'live' &&
-        snapshot.map.name === event.mapName &&
-        c?.producerInstanceId === original.producerInstanceId &&
-        c.liveSessionId === original.liveSessionId &&
-        c.programSourceGeneration === original.programSourceGeneration &&
-        c.mapEpoch === original.mapEpoch &&
-        snapshot.capability.identity === 'matched' &&
-        observedLineupReady()
-      );
-    };
-    if (!sameExecution()) return false;
-    options.connection.setContextRecoveryProgress(event, authority, 'context_refreshing');
-    try {
-      // An older background refresh cannot prove it started after this refusal.
-      if (refreshing) await refreshing.catch(() => undefined);
-      if (!sameExecution()) {
-        options.connection.setContextRecoveryProgress(event, authority, 'context_recovery_blocked');
-        return false;
-      }
-      const result = await refresh(true);
-      const valid = !result.pending && sameExecution();
-      options.connection.setContextRecoveryProgress(
-        event,
-        authority,
-        valid ? 'context_reconfirming' : 'context_recovery_blocked',
-      );
-      return valid;
-    } catch {
-      options.connection.setContextRecoveryProgress(event, authority, 'context_recovery_blocked');
-      return false;
-    }
-  });
 
   app.post('/operator/rivalhub/refresh', { bodyLimit: 64 }, async (request, reply) => {
     if (!allowed(request.headers.origin))
@@ -651,14 +591,10 @@ export function registerRivalHubConnectionRoutes(
     if (
       !confirmed ||
       status.blockedReason === 'output_unavailable' ||
-      status.blockedReason === 'output_persistence_pending' ||
       status.blockedReason === 'output_quarantined'
     )
       return reply.code(409).send({
-        message:
-          status.blockedReason === 'output_persistence_pending'
-            ? '原同步记录仍未确认。请保持 Mizar 运行，修复诊断中报告的问题后重试，不要删除原数据。'
-            : '连续性记录仍无法确认，请保留原数据并导出诊断核对。',
+        message: '同步队列当前不可用，请保留原数据并导出诊断核对。',
       });
     return { ok: true, message: '本机同步记录已核对，网站同步仍需等待当前数据和网站接收确认。' };
   });

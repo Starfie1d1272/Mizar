@@ -58,37 +58,10 @@ export async function closeWebsiteOutput(
 export async function startWebsiteOutput(
   connection: RivalHubConnection | undefined,
   output: OutputService,
-  onStartupCleanupFailure: (error: unknown) => void,
+  onStartupCleanupFailure?: (error: unknown) => void,
 ): Promise<void> {
-  await output.start({
-    sourceStateAvailable: connection?.view().sourceState !== 'unavailable',
-    restoreSourceCapture: async () => {
-      await connection?.setSourceCaptureLifecycle?.({
-        createReference: (cursor) => output.createCaptureReference(cursor),
-        arm: (identity, reference) => output.armSourceCapture(identity, reference),
-        activate: (identity) => output.activateSourceCapture(identity),
-        restore: (identity, reference) => output.restoreSourceCapture(identity, reference),
-        seal: (identity) => output.sealSourceCapture(identity),
-        coverage: (identity) => output.sourceCaptureCoverage(identity),
-      });
-    },
-  });
-  if (!output.isReliableAvailable()) {
-    try {
-      await connection?.abortSourceCaptureStartup?.();
-    } catch (error) {
-      onStartupCleanupFailure(error);
-    }
-  }
-  connection?.setSourceSettlement?.(
-    (scope) => output.settleSourceForRelease(scope),
-    (scope) => output.resumeSource(scope),
-    (identity, disposition) =>
-      disposition === 'revoked'
-        ? output.isolateRevokedSource(identity)
-        : output.archiveConfirmedSource(identity),
-    () => output.getReliableActiveSources(),
-  );
+  void onStartupCleanupFailure;
+  await output.start();
   connection?.startSourceCleanup?.();
 }
 
@@ -128,60 +101,16 @@ export function createWebsiteOutput({
       ? undefined
       : new ReliableOutbox(
           options.reliableOutboxPath,
-          (recovery, error) => {
-            // Raw cause stays in the local log; support export applies its existing redaction.
-            const evidence = {
-              event: 'outbox',
-              stage:
-                error instanceof Error && error.message.startsWith('capture_sequence_unconfirmed:')
-                  ? 'outbox_capture'
-                  : 'outbox_load',
-              err: outboxLocalError(error),
-              recovery: recovery ?? null,
-              result:
-                recovery === undefined
-                  ? 'failure'
-                  : recovery.code === 'outbox_recovered'
-                    ? 'success'
-                    : 'unconfirmed',
-            };
-            if (recovery === undefined)
-              logger.error(evidence, '网站可靠输出操作未确认；原始文件保留。');
-            else {
-              logger.warn(evidence, recovery.message);
-              options.recordDiagnostic(recovery.code);
-            }
+          (code, detail) => {
+            logger.warn({ event: 'outbox', code, detail }, '网站可靠事件投递提示');
+            options.recordDiagnostic(code);
           },
           (record, reason) => journal?.reliable(record, reason),
-          (error) => {
-            logger.error(
-              { event: 'outbox', stage: 'worker', err: outboxLocalError(error) },
-              '网站发送队列已停止，重启后将按原提交和回执核对。',
-            );
-            options.recordDiagnostic('outbox_worker_restart_required');
-          },
         );
   const outputService: OutputService = new OutputService({
     ...(outbox ? { outbox } : {}),
-    restoreContinuity: (checkpoint) => {
-      const binding = options.readBinding();
-      if (
-        !peers ||
-        binding?.context.matchId !== checkpoint.matchId ||
-        binding.manifest.revision !== checkpoint.contextRevision ||
-        runtime.getCurrentState().runtimeSeq !== 0
-      )
-        return undefined;
-      const committed = runtime.restoreDeliveryContinuity({
-        ...checkpoint.cursor,
-        mapName: checkpoint.mapName,
-        ...(checkpoint.managedSourceId ? { managedSourceId: checkpoint.managedSourceId } : {}),
-      });
-      return peers.projections.refresh(false, committed);
-    },
     isExecutionOwnedBy: (binding) =>
       runtime.isExecutionOwnedBy(binding.context.matchId, binding.origin),
-    managedSourceId: () => runtime.getManagedSourceId(),
     isActiveOnlineBinding: (binding) => {
       const context = peers?.context;
       if (
@@ -203,26 +132,14 @@ export function createWebsiteOutput({
     },
     ...(connection !== undefined
       ? {
-          authorityScope: () => connection.reliableAuthorityScope(),
           exactSource: () => connection.reliableExactSource(),
           sink: {
-            send: (event, signal, retainedLineup, retainedSource) => {
-              if (retainedSource)
-                return connection.sendRetainedReliable(
-                  event,
-                  retainedSource,
-                  outputService.current(true),
-                  signal,
-                  retainedLineup,
-                );
-              if (connection.view().paired && isCurrentOnlineMatch(event.matchId))
-                return connection.sendReliable(
-                  event,
-                  outputService.current(true),
-                  signal,
-                  retainedLineup,
-                );
-              return options.reliableSink?.send(event, signal) ?? Promise.resolve('retry');
+            send: (event, signal) => {
+              if (connection.view().paired) return connection.sendReliableV2(event, signal);
+              return (
+                options.reliableSink?.send(event, signal) ??
+                Promise.resolve({ status: 'retry', error: 'sink_unavailable' })
+              );
             },
           },
           liveSink: {
@@ -242,23 +159,7 @@ export function createWebsiteOutput({
         { event: 'outbox', stage: 'outbox_load', err: outboxLocalError(error) },
         '发送队列无法打开，网站同步不可用；原始数据保留。',
       ),
-    onBoundaryCaptureError: (error, evidence) =>
-      logger.error(
-        {
-          event: 'outbox',
-          operation: 'boundary_capture',
-          ...evidence,
-          err: outboxLocalError(error),
-        },
-        '网站同步边界尚未确认保存，保留原请求重试；本机画面继续。',
-      ),
-    onBusinessEvidence: (stage, evidence) => journal?.write(stage, evidence),
-    onRecoveryProgress: (event, state) => {
-      const authority = connection?.reliableAuthorityScope();
-      if (authority) connection?.setContextRecoveryProgress(event, authority, state);
-    },
   });
-  connection?.setBoundaryStatusProvider?.(() => outputService.getBoundaryStatus());
   return {
     outbox,
     outputService,
@@ -298,7 +199,7 @@ export function registerWebsiteOutputRuntime(
     recordConfiguration: () => Promise<void>;
   },
 ): void {
-  const { outputService, outbox, businessJournal, sessionJournal } = options;
+  const { outputService, businessJournal, sessionJournal } = options;
   app.addHook('onReady', async () => {
     outputService.setCurrent(options.readProjection(), options.readBinding());
     await startWebsiteOutput(options.connection, outputService, (error) =>
@@ -319,7 +220,7 @@ export function registerWebsiteOutputRuntime(
       });
     });
   });
-  registerOutputRoutes(app, outputService, outbox, () =>
+  registerOutputRoutes(app, outputService, () =>
     outputService.setCurrent(options.readProjection(), options.readBinding()),
   );
 }

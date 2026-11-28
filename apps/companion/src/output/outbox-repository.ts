@@ -1,920 +1,152 @@
-import { performance } from 'node:perf_hooks';
-import {
-  parseCaptureReference,
-  type CaptureInterval,
-  type CaptureTicket,
-} from './capture-interval.js';
-import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync } from 'node:fs';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { parseReliableEventV2, type ReliableEventV2 } from '@mizar/protocol/output';
+import type { ReliableDeliveryStatus, ReliableOutboxRecord } from './outbox-codec.js';
 
-import { parseBoundaryCapture, type BoundaryCaptureOperation } from './boundary-capture.js';
-import type { ExactSource } from '../match-context/rivalhub-source-state.js';
-import {
-  archiveDigest,
-  archiveName,
-  parseBoundaryIntent,
-  parseCommit,
-  parseOutbox,
-  parseRecord,
-  parseSource,
-  sealOutbox,
-  type BoundaryScope,
-  scopeDigest,
-  sourceKey,
-  type ArchivedSource,
-  type BoundaryIntent,
-  type OutboxFile,
-  type ReliableOutboxRecord,
-  type RevokedSource,
-} from './outbox-codec.js';
-
-// Fail closed at capacity; unresolved capture evidence is never evicted.
-const MAX_CAPTURE_INTERVALS = 4096;
-const MAX_CAPTURE_UNKNOWN_SOURCES = 192;
-const MAX_CAPTURE_RECEIPTS = 16_384;
-
-// A released, sealed capture keeps its original rows and fence. It no longer
-// occupies an active capture slot or needs to be hydrated on every launch.
-const archivedCapture = `EXISTS(
-  SELECT 1 FROM sources s WHERE s.source_key=i.source_key AND s.disposition='archived'
-  AND NOT EXISTS(SELECT 1 FROM damaged_scopes d WHERE d.scope=s.scope)
-) AND NOT EXISTS(SELECT 1 FROM capture_unknown u WHERE u.source_key=i.source_key)
-  AND COALESCE(json_extract(i.payload, '$.state')='sealed', 0)`;
-
-export type HistoryKind = 'archived' | 'revoked' | 'legacy';
-export type HistoryItem =
-  | { readonly kind: 'record'; readonly value: ReliableOutboxRecord }
-  | { readonly kind: 'intent'; readonly value: BoundaryIntent };
-
-export interface OutboxHistory {
-  readonly disposition: HistoryKind;
-  readonly source?: ExactSource;
-  readonly items: readonly HistoryItem[];
+interface OutboxRow {
+  idempotency_key: string;
+  match_id: string;
+  kind: string;
+  payload_json: string;
+  status: ReliableDeliveryStatus;
+  attempts: number;
+  next_attempt_at: string;
+  created_at: string;
+  updated_at: string;
+  last_error: string | null;
 }
 
-export interface OutboxCommit {
-  readonly active: OutboxFile;
-  readonly capture?: CaptureTicket;
-  readonly boundaryCapture?: BoundaryCaptureOperation;
-  readonly history?: readonly OutboxHistory[];
-  readonly damagedScopes?: readonly string[];
+function toRecord(row: OutboxRow): ReliableOutboxRecord {
+  return {
+    event: parseReliableEventV2(JSON.parse(row.payload_json) as unknown),
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastError: row.last_error,
+  };
 }
 
-export type HistoryScope = Pick<BoundaryScope, 'producerInstanceId' | 'liveSessionId' | 'matchId'>;
-export type HistoryRow = HistoryItem & { readonly disposition: HistoryKind };
-type CaptureUnknownReason = 'legacy' | 'unclean' | 'mismatch';
-
-function parseCaptureUnknownReason(reason: string): CaptureUnknownReason {
-  if (reason !== 'legacy' && reason !== 'unclean' && reason !== 'mismatch')
-    throw new Error('capture_unknown_invalid');
-  return reason;
-}
-
-function hash(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
-}
-
-function itemScope(item: HistoryItem): string {
-  const e = item.value.event;
-  return scopeDigest(
-    e.competitionId,
-    e.matchId,
-    e.cursor.producerInstanceId,
-    e.cursor.liveSessionId,
-  );
-}
-
-async function optionalFile(path: string): Promise<Buffer | undefined> {
-  try {
-    return await readFile(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  }
-}
-
-async function optionalDirectory(path: string): Promise<string[]> {
-  try {
-    return await readdir(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
-/** Imports without modifying the JSON files. A corrupt primary may use only its exact mirror. */
-async function readLegacy(path: string): Promise<OutboxCommit> {
-  const primary = await optionalFile(path);
-  const mirror = await optionalFile(`${path}.last-good`);
-  let active: OutboxFile | undefined;
-  if (primary) {
-    try {
-      active = parseOutbox(primary);
-    } catch (cause) {
-      if (!mirror) throw new Error('outbox_import_primary_invalid', { cause });
-      try {
-        const raw = JSON.parse(primary.toString('utf8')) as Record<string, unknown>;
-        const expected = parseCommit(raw.commit);
-        const candidate = parseOutbox(mirror);
-        if (candidate.commit?.id !== expected.id || candidate.commit.sha256 !== expected.sha256)
-          throw new Error('outbox_import_mirror_mismatch', { cause });
-        active = candidate;
-      } catch (error) {
-        throw new AggregateError([cause, error], 'outbox_import_unconfirmed', { cause: error });
-      }
-    }
-  } else if (mirror) {
-    // A mirror alone cannot prove whether its commit was published.
-    throw new Error('outbox_import_primary_missing');
-  }
-  active ??= sealOutbox({ version: 'mizar.reliable-outbox.v3', records: [] });
-
-  const history: OutboxHistory[] = [];
-  const damagedScopes = new Set<string>();
-  const archives = new Map<string, ArchivedSource>();
-  for (const archive of active.archivedSources ?? [])
-    archives.set(sourceKey(archive.identity), archive);
-  for (const name of await optionalDirectory(`${path}.archives`)) {
-    const legacy = /^legacy-([a-f0-9]{64})-([a-f0-9]{64})\.json$/.exec(name);
-    const archived = /^([a-f0-9]{64})-[a-f0-9]{64}\.json$/.exec(name);
-    if (!legacy && !archived) continue;
-    const bytes = await readFile(join(`${path}.archives`, name));
-    try {
-      if (bytes.length > 4_000_000) throw new Error('outbox_archive_too_large');
-      const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
-      if (legacy) {
-        const record = parseRecord(raw.record);
-        const item = { kind: 'record' as const, value: record };
-        if (
-          itemScope(item) !== legacy[1] ||
-          createHash('sha256').update(record.event.idempotencyKey).digest('hex') !== legacy[2] ||
-          record.source ||
-          record.awaitingSource ||
-          record.status === 'pending' ||
-          raw.sha256 !== hash(record)
-        )
-          throw new Error('outbox_archive_invalid');
-        history.push({ disposition: 'legacy', items: [item] });
-      } else {
-        const identity = parseSource(raw.identity);
-        if (!Array.isArray(raw.records)) throw new Error('outbox_archive_invalid');
-        const records = raw.records.map(parseRecord);
-        const archive = { identity, records };
-        if (
-          name !== archiveName(identity) ||
-          raw.sha256 !== archiveDigest(archive) ||
-          records.some(
-            (record) =>
-              record.status === 'pending' ||
-              !record.source ||
-              sourceKey(record.source) !== sourceKey(identity),
-          )
-        )
-          throw new Error('outbox_archive_invalid');
-        const old = archives.get(sourceKey(identity));
-        if (old && archiveDigest(old) !== archiveDigest(archive))
-          throw new Error('outbox_archive_conflict');
-        archives.set(sourceKey(identity), archive);
-      }
-    } catch {
-      damagedScopes.add((legacy?.[1] ?? archived?.[1])!);
-    }
-  }
-  for (const archive of archives.values())
-    history.push({
-      disposition: 'archived',
-      source: archive.identity,
-      items: archive.records.map((value) => ({ kind: 'record', value })),
-    });
-  for (const name of await optionalDirectory(`${path}.revoked`)) {
-    const match = /^([a-f0-9]{64})-[a-f0-9]{64}\.json$/.exec(name);
-    if (!match) continue;
-    const bytes = await readFile(join(`${path}.revoked`, name));
-    try {
-      if (bytes.length > 4_000_000) throw new Error('outbox_revoked_too_large');
-      const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
-      const identity = parseSource(raw.identity);
-      if (
-        raw.disposition !== 'revoked_unconfirmed' ||
-        !Array.isArray(raw.records) ||
-        !Array.isArray(raw.intents)
-      )
-        throw new Error('outbox_revoked_invalid');
-      const records = raw.records.map(parseRecord);
-      const intents = raw.intents.map(parseBoundaryIntent);
-      const payload = {
-        disposition: raw.disposition,
-        identity: raw.identity,
-        records: raw.records,
-        intents: raw.intents,
-      };
-      if (
-        name !== archiveName(identity) ||
-        raw.sha256 !== hash(payload) ||
-        [...records, ...intents].some(
-          (item) => !item.source || sourceKey(item.source) !== sourceKey(identity),
-        )
-      )
-        throw new Error('outbox_revoked_invalid');
-      const archive: RevokedSource = {
-        disposition: 'revoked_unconfirmed',
-        identity,
-        records,
-        intents,
-      };
-      history.push({
-        disposition: 'revoked',
-        source: archive.identity,
-        items: [
-          ...archive.records.map((value) => ({ kind: 'record' as const, value })),
-          ...archive.intents.map((value) => ({ kind: 'intent' as const, value })),
-        ],
-      });
-    } catch {
-      damagedScopes.add(match[1]!);
-    }
-  }
-  const { archivedSources: _archives, ...snapshot } = active;
-  void _archives;
-  return { active: sealOutbox(snapshot), history, damagedScopes: [...damagedScopes] };
-}
-
-/** Companion-only transaction owner. Opening does not publish an incomplete import. */
 export class OutboxRepository {
-  private transactionTiming = { count: 0, totalMs: 0, maxMs: 0 };
-
-  takeTransactionTiming() {
-    const timing = this.transactionTiming;
-    this.transactionTiming = { count: 0, totalMs: 0, maxMs: 0 };
-    return timing;
-  }
-
   private constructor(private readonly db: DatabaseSync) {}
 
-  static async open(dbPath: string, legacyPath: string): Promise<OutboxRepository> {
+  static async open(dbPath: string): Promise<OutboxRepository> {
     await mkdir(dirname(dbPath), { recursive: true });
     const db = new DatabaseSync(dbPath);
     try {
       chmodSync(dbPath, 0o600);
-      db.exec('PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE;');
-      const tables = new Set(
-        (
-          db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
-            name: string;
-          }[]
-        ).map((row) => row.name),
+    } catch {
+      // Ignore chmod failures on unsupported filesystems.
+    }
+    db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
+      CREATE TABLE IF NOT EXISTS outbox_events_v2 (
+        idempotency_key TEXT PRIMARY KEY,
+        match_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT
       );
-      if (tables.has('metadata')) {
-        const active = db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as
-          { value: string } | undefined;
-        if (
-          active &&
-          JSON.parse(active.value).version === 'mizar.reliable-outbox.v3' &&
-          ['capture_intervals', 'capture_receipts', 'capture_unknown', 'boundary_captures'].some(
-            (name) => !tables.has(name),
-          )
-        )
-          throw new Error('capture_store_missing');
-      }
-      db.exec(`PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
-        CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sources (source_key TEXT NOT NULL, scope TEXT NOT NULL, disposition TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(source_key, disposition));
-        CREATE INDEX IF NOT EXISTS sources_scope ON sources(scope);
-        CREATE TABLE IF NOT EXISTS history (disposition TEXT NOT NULL, source_key TEXT NOT NULL, scope TEXT NOT NULL, item_key TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(disposition, source_key, item_key, kind));
-        CREATE INDEX IF NOT EXISTS history_scope ON history(scope);
-        CREATE INDEX IF NOT EXISTS history_key ON history(item_key);
-        CREATE INDEX IF NOT EXISTS history_delivery ON history(json_extract(payload, '$.event.cursor.producerInstanceId'), json_extract(payload, '$.event.cursor.liveSessionId'), json_extract(payload, '$.event.matchId'));
-        CREATE TABLE IF NOT EXISTS damaged_scopes (scope TEXT PRIMARY KEY);
-        CREATE TABLE IF NOT EXISTS capture_unknown (source_key TEXT PRIMARY KEY, source TEXT NOT NULL, reason TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS capture_receipts (interval_id TEXT NOT NULL, sequence INTEGER NOT NULL, request_id TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(interval_id, sequence));
-        CREATE TABLE IF NOT EXISTS capture_intervals (id TEXT PRIMARY KEY, source_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS boundary_captures (sequence INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, request TEXT NOT NULL, receipt TEXT);`);
-      const repository = new OutboxRepository(db);
-      const imported = !db.prepare("SELECT value FROM metadata WHERE key = 'imported'").get()
-        ? await readLegacy(legacyPath)
-        : undefined;
-      repository.transaction(() => {
-        if (imported) {
-          repository.write(imported);
-          db.prepare("INSERT INTO metadata VALUES ('imported', '1')").run();
-        }
-        const raw = db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as {
-          value: string;
-        };
-        const store = db.prepare("SELECT value FROM metadata WHERE key = 'capture_store'").get();
-        if (!store) {
-          if (!imported && JSON.parse(raw.value).version === 'mizar.reliable-outbox.v3')
-            throw new Error('capture_store_missing');
-          db.prepare("INSERT INTO metadata VALUES ('capture_store', ?)").run(randomUUID());
-        }
-        // The active v3 envelope and store identity become visible in one transaction.
-        repository.write({ active: sealOutbox(parseOutbox(Buffer.from(raw.value))) });
-        repository.reconcileKnownUncleanIntervals();
-      });
-      repository.captureStoreId();
-      for (const [table, max] of [
-        ['capture_unknown', MAX_CAPTURE_UNKNOWN_SOURCES],
-        ['capture_receipts', MAX_CAPTURE_RECEIPTS],
-      ] as const) {
-        const count = (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
-        if (count > max) throw new Error('capture_store_capacity_exhausted');
-      }
-      if (repository.activeCaptureCount() > MAX_CAPTURE_INTERVALS)
-        throw new Error('capture_store_capacity_exhausted');
-      return repository;
-    } catch (error) {
-      db.close();
-      throw error;
-    }
+      CREATE INDEX IF NOT EXISTS idx_outbox_v2_pending
+        ON outbox_events_v2(status, next_attempt_at, created_at);
+    `);
+    return new OutboxRepository(db);
   }
 
-  private transaction<T>(operation: () => T): T {
-    const started = performance.now();
-    let begun = false;
-    try {
-      this.db.exec('BEGIN IMMEDIATE');
-      begun = true;
-      const result = operation();
-      this.db.exec('COMMIT');
-      return result;
-    } catch (error) {
-      if (!begun) throw error;
-      let rollbackError: unknown;
-      try {
-        this.db.exec('ROLLBACK');
-      } catch (rollback) {
-        rollbackError = rollback;
-      }
-      if (rollbackError !== undefined)
-        throw new AggregateError([error, rollbackError], 'outbox_transaction_unconfirmed', {
-          cause: error,
-        });
-      throw error;
-    } finally {
-      const ms = performance.now() - started;
-      this.transactionTiming.count++;
-      this.transactionTiming.totalMs += ms;
-      this.transactionTiming.maxMs = Math.max(this.transactionTiming.maxMs, ms);
-    }
-  }
-
-  commit<T>(value: OutboxCommit, activeJson: string, view: () => T): T {
-    return this.transaction(() => {
-      if (value.boundaryCapture && this.boundaryCaptureReceipt(value.boundaryCapture))
-        throw new Error('boundary_capture_already_committed');
-      if (value.capture) {
-        const count = (
-          this.db.prepare('SELECT count(*) AS n FROM capture_receipts').get() as { n: number }
-        ).n;
-        if (count >= MAX_CAPTURE_RECEIPTS) throw new Error('capture_receipt_capacity_exhausted');
-        const interval = this.captureInterval(value.capture.intervalId);
-        if (!interval) throw new Error('capture_sequence_unconfirmed:commit:interval_missing');
-        if (interval.state === 'sealed')
-          throw new Error('capture_sequence_unconfirmed:commit:already_sealed');
-        if (value.capture.sequence !== interval.committedSequence + 1)
-          throw new Error(
-            `capture_sequence_unconfirmed:commit:expected_${interval.committedSequence + 1}:received_${value.capture.sequence}`,
-          );
-        if (
-          interval.activationCursor &&
-          JSON.stringify(interval.activationCursor) !==
-            JSON.stringify(value.capture.activationCursor)
-        )
-          throw new Error('capture_activation_conflict');
-        this.writeCaptureInterval({
-          ...interval,
-          activationCursor: value.capture.activationCursor,
-          committedSequence: value.capture.sequence,
-        });
-        this.db
-          .prepare('INSERT INTO capture_receipts VALUES (?, ?, ?, ?)')
-          .run(
-            value.capture.intervalId,
-            value.capture.sequence,
-            value.capture.requestId,
-            value.active.commit!.sha256,
-          );
-      }
-      this.write(value, activeJson);
-      for (const history of value.history ?? []) {
-        if (history.disposition !== 'archived' || !history.source) continue;
-        const interval = this.captureIntervalForSource(history.source);
-        if (interval?.state === 'sealed' && !this.captureUnknownReason(history.source))
-          this.db
-            .prepare('DELETE FROM capture_receipts WHERE interval_id = ?')
-            .run(interval.reference.id);
-      }
-      if (value.boundaryCapture) {
-        const changed = this.db
-          .prepare(
-            'UPDATE boundary_captures SET receipt = ? WHERE id = ? AND request = ? AND receipt IS NULL',
-          )
-          .run(
-            value.active.commit!.sha256,
-            value.boundaryCapture.id,
-            JSON.stringify(value.boundaryCapture.request),
-          );
-        if (Number(changed.changes) !== 1) throw new Error('boundary_capture_journal_missing');
-        this.db.exec(`DELETE FROM boundary_captures WHERE receipt IS NOT NULL AND sequence NOT IN
-          (SELECT sequence FROM boundary_captures WHERE receipt IS NOT NULL ORDER BY sequence DESC LIMIT 192)`);
-        this.db.exec(`DELETE FROM boundary_captures WHERE sequence IN
-          (SELECT sequence FROM
-            (SELECT sequence, sum(length(CAST(request AS BLOB))) OVER (ORDER BY sequence DESC) AS bytes
-             FROM boundary_captures WHERE receipt IS NOT NULL)
-           WHERE bytes > 4000000)`);
-      }
-      return view();
-    });
-  }
-
-  /** Same SQLite owner; staged requests survive a process interruption without advancing the cursor. */
-  stageBoundaryCaptures(operations: readonly BoundaryCaptureOperation[], inputLost = false): void {
-    this.transaction(() => {
-      if (inputLost)
-        this.db
-          .prepare("INSERT OR IGNORE INTO metadata VALUES ('boundary_capture_input_lost', '1')")
-          .run();
-      for (const operation of operations) {
-        if (parseBoundaryCapture(operation.request).id !== operation.id)
-          throw new Error('boundary_capture_identity_invalid');
-        const existing = this.db
-          .prepare('SELECT request FROM boundary_captures WHERE id = ?')
-          .get(operation.id) as { request: string } | undefined;
-        const request = JSON.stringify(operation.request);
-        if (existing && existing.request !== request) throw new Error('boundary_capture_conflict');
-        if (!existing)
-          this.db
-            .prepare('INSERT INTO boundary_captures (id, request) VALUES (?, ?)')
-            .run(operation.id, request);
-      }
-      const size = this.db
-        .prepare(
-          'SELECT count(*) AS count, coalesce(sum(length(CAST(request AS BLOB))), 0) AS bytes FROM boundary_captures WHERE receipt IS NULL',
-        )
-        .get() as { count: number; bytes: number };
-      if (size.count > 128 || size.bytes > 4_000_000)
-        throw new Error('boundary_capture_capacity_exhausted');
-    });
-  }
-
-  boundaryCaptureInputLost(): boolean {
-    return Boolean(
-      this.db.prepare("SELECT value FROM metadata WHERE key = 'boundary_capture_input_lost'").get(),
-    );
-  }
-
-  pendingBoundaryCaptures(): BoundaryCaptureOperation[] {
-    const size = this.db
+  insert(event: ReliableEventV2, nowIso: string): boolean {
+    const result = this.db
       .prepare(
-        'SELECT count(*) AS count, coalesce(sum(length(CAST(request AS BLOB))), 0) AS bytes FROM boundary_captures WHERE receipt IS NULL',
+        `INSERT OR IGNORE INTO outbox_events_v2 (
+          idempotency_key, match_id, kind, payload_json, status,
+          attempts, next_attempt_at, created_at, updated_at, last_error
+        ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, NULL)`,
       )
-      .get() as { count: number; bytes: number };
-    if (size.count > 128 || size.bytes > 4_000_000)
-      throw new Error('boundary_capture_capacity_exhausted');
-    return (
-      this.db
-        .prepare(
-          'SELECT id, request FROM boundary_captures WHERE receipt IS NULL ORDER BY sequence',
-        )
-        .all() as { id: string; request: string }[]
-    ).map((row) => {
-      const operation = parseBoundaryCapture(JSON.parse(row.request));
-      if (operation.id !== row.id) throw new Error('boundary_capture_identity_invalid');
-      return operation;
-    });
+      .run(
+        event.idempotencyKey,
+        event.matchId,
+        event.kind,
+        JSON.stringify(event),
+        nowIso,
+        nowIso,
+        nowIso,
+      );
+    return Number(result.changes) > 0;
   }
 
-  boundaryCaptureReceipt(operation: BoundaryCaptureOperation): string | undefined {
-    const row = this.db
-      .prepare('SELECT request, receipt FROM boundary_captures WHERE id = ?')
-      .get(operation.id) as { request: string; receipt: string | null } | undefined;
-    if (!row) return undefined;
-    if (row.request !== JSON.stringify(operation.request))
-      throw new Error('boundary_capture_conflict');
-    if (row.receipt !== null && !/^[a-f0-9]{64}$/.test(row.receipt))
-      throw new Error('boundary_capture_receipt_invalid');
-    return row.receipt ?? undefined;
-  }
-
-  captureUnknownReason(source: ExactSource): CaptureUnknownReason | undefined {
-    const row = this.db
-      .prepare('SELECT reason FROM capture_unknown WHERE source_key = ?')
-      .get(sourceKey(source)) as { reason: string } | undefined;
-    return row && parseCaptureUnknownReason(row.reason);
-  }
-
-  private insertUnknownCapture(source: ExactSource, reason: CaptureUnknownReason): void {
-    if (!this.captureUnknownReason(source)) {
-      const count = (
-        this.db.prepare('SELECT count(*) AS n FROM capture_unknown').get() as { n: number }
-      ).n;
-      if (count >= MAX_CAPTURE_UNKNOWN_SOURCES)
-        throw new Error('capture_unknown_capacity_exhausted');
-    }
-    this.db
-      .prepare('INSERT OR IGNORE INTO capture_unknown VALUES (?, ?, ?)')
-      .run(sourceKey(source), JSON.stringify(parseSource(source)), reason);
-  }
-
-  private reconcileKnownUncleanIntervals(): void {
+  listDuePending(nowIso: string, limit = 64): ReliableOutboxRecord[] {
     const rows = this.db
       .prepare(
-        "SELECT i.payload FROM capture_intervals i INNER JOIN capture_unknown u ON u.source_key = i.source_key WHERE json_extract(i.payload, '$.state') = 'armed'",
+        `SELECT * FROM outbox_events_v2
+         WHERE status = 'pending' AND next_attempt_at <= ?
+         ORDER BY created_at ASC
+         LIMIT ?`,
       )
-      .all() as { payload: string }[];
-    for (const row of rows) {
-      const interval = this.parseInterval(row.payload);
-      this.writeCaptureInterval({ ...interval, state: 'unknown' });
-    }
+      .all(nowIso, limit) as unknown as OutboxRow[];
+    return rows.map(toRecord);
   }
 
-  quarantineCaptureInterval(
-    id: string | undefined,
-    source: ExactSource,
-    reason: CaptureUnknownReason,
-    endCursor?: CaptureInterval['endCursor'],
-  ): CaptureInterval | undefined {
-    return this.transaction(() => {
-      this.insertUnknownCapture(source, reason);
-      const interval =
-        (id ? this.captureInterval(id) : undefined) ?? this.captureIntervalForSource(source);
-      if (!interval || interval.state === 'sealed') return interval;
-      const validEnd =
-        endCursor &&
-        endCursor.producerInstanceId === interval.source.producerInstanceId &&
-        endCursor.liveSessionId === interval.source.liveSessionId &&
-        (!interval.activationCursor || endCursor.runtimeSeq >= interval.activationCursor.runtimeSeq)
-          ? endCursor
-          : interval.endCursor;
-      const quarantined: CaptureInterval = {
-        ...interval,
-        state: 'unknown',
-        ...(validEnd ? { endCursor: validEnd } : {}),
-      };
-      this.writeCaptureInterval(quarantined);
-      return quarantined;
-    });
+  listRecent(limit = 100): ReliableOutboxRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM outbox_events_v2 ORDER BY created_at DESC LIMIT ?')
+      .all(limit) as unknown as OutboxRow[];
+    return rows.map(toRecord);
   }
 
-  private activeCaptureCount() {
-    return (
-      this.db
-        .prepare(`SELECT count(*) AS n FROM capture_intervals i WHERE NOT (${archivedCapture})`)
-        .get() as { n: number }
-    ).n;
-  }
-
-  captureCapacity() {
-    const capacity = (used: number, limit: number) => ({
-      used,
-      limit,
-      nearLimit: used >= limit * 0.9,
-    });
-    const count = (table: 'capture_unknown' | 'capture_receipts') =>
-      (this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
-    return {
-      intervals: capacity(this.activeCaptureCount(), MAX_CAPTURE_INTERVALS),
-      unknownSources: capacity(count('capture_unknown'), MAX_CAPTURE_UNKNOWN_SOURCES),
-      receipts: capacity(count('capture_receipts'), MAX_CAPTURE_RECEIPTS),
-    };
-  }
-
-  captureIndex() {
-    const intervals = (
-      this.db
-        .prepare(`SELECT payload FROM capture_intervals i WHERE NOT (${archivedCapture})`)
-        .all() as { payload: string }[]
-    ).map((row) => this.parseInterval(row.payload));
-    const unknown = this.db.prepare('SELECT source, reason FROM capture_unknown').all() as {
-      source: string;
-      reason: string;
-    }[];
-    return {
-      storeId: this.captureStoreId(),
-      intervals,
-      unknown: unknown.map(({ source, reason }) => ({
-        source: parseSource(JSON.parse(source)),
-        reason: parseCaptureUnknownReason(reason),
-      })),
-    };
-  }
-
-  archivedInterval(source: ExactSource): CaptureInterval | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT payload FROM capture_intervals i WHERE i.source_key=? AND (${archivedCapture})`,
-      )
-      .get(sourceKey(source)) as { payload: string } | undefined;
-    return row ? this.parseInterval(row.payload) : undefined;
-  }
-
-  captureReceipt(ticket: CaptureTicket): string | undefined {
-    const row = this.db
-      .prepare(
-        'SELECT request_id, receipt FROM capture_receipts WHERE interval_id = ? AND sequence = ?',
-      )
-      .get(ticket.intervalId, ticket.sequence) as
-      { request_id: string; receipt: string } | undefined;
-    if (row && row.request_id !== ticket.requestId) throw new Error('capture_receipt_conflict');
-    return row?.receipt;
-  }
-
-  captureStoreId(): string {
-    const row = this.db.prepare("SELECT value FROM metadata WHERE key = 'capture_store'").get() as {
-      value: string;
-    };
-    if (
-      !row ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.value)
-    )
-      throw new Error('capture_store_invalid');
-    return row.value;
-  }
-
-  captureInterval(id: string): CaptureInterval | undefined {
-    const row = this.db.prepare('SELECT payload FROM capture_intervals WHERE id = ?').get(id) as
-      { payload: string } | undefined;
-    return row ? this.parseInterval(row.payload) : undefined;
-  }
-
-  captureIntervalForSource(source: ExactSource): CaptureInterval | undefined {
-    const row = this.db
-      .prepare('SELECT payload FROM capture_intervals WHERE source_key = ?')
-      .get(sourceKey(source)) as { payload: string } | undefined;
-    return row ? this.parseInterval(row.payload) : undefined;
-  }
-
-  private parseInterval(payload: string): CaptureInterval {
-    const raw = JSON.parse(payload) as CaptureInterval;
-    const reference = parseCaptureReference(raw.reference);
-    const source = parseSource(raw.source);
-    if (
-      reference.storeId !== this.captureStoreId() ||
-      !['armed', 'sealed', 'unknown'].includes(raw.state) ||
-      !Number.isSafeInteger(raw.committedSequence) ||
-      raw.committedSequence < 0
-    )
-      throw new Error('capture_interval_invalid');
-    const activationCursor =
-      raw.activationCursor === undefined
-        ? undefined
-        : parseCaptureReference({ ...reference, startCursor: raw.activationCursor }).startCursor;
-    if (
-      activationCursor &&
-      (activationCursor.producerInstanceId !== source.producerInstanceId ||
-        activationCursor.liveSessionId !== source.liveSessionId)
-    )
-      throw new Error('capture_activation_source_mismatch');
-    if (raw.committedSequence > 0 && !activationCursor)
-      throw new Error('capture_activation_missing');
-    const endCursor =
-      raw.endCursor === undefined
-        ? undefined
-        : parseCaptureReference({ ...reference, startCursor: raw.endCursor }).startCursor;
-    if (raw.state === 'sealed' && !endCursor) throw new Error('capture_interval_invalid');
-    if (
-      endCursor &&
-      (endCursor.producerInstanceId !== source.producerInstanceId ||
-        endCursor.liveSessionId !== source.liveSessionId ||
-        (activationCursor && endCursor.runtimeSeq < activationCursor.runtimeSeq))
-    )
-      throw new Error('capture_end_cursor_mismatch');
-    return {
-      ...raw,
-      reference,
-      source,
-      ...(activationCursor ? { activationCursor } : {}),
-      ...(endCursor ? { endCursor } : {}),
-    };
-  }
-
-  private writeCaptureInterval(interval: CaptureInterval): void {
-    const parsed = this.parseInterval(JSON.stringify(interval));
+  markAccepted(idempotencyKey: string, nowIso: string, warning?: string): void {
     this.db
       .prepare(
-        'INSERT INTO capture_intervals VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
+        `UPDATE outbox_events_v2
+         SET status = 'accepted', attempts = attempts + 1, updated_at = ?, last_error = ?
+         WHERE idempotency_key = ?`,
       )
-      .run(parsed.reference.id, sourceKey(parsed.source), JSON.stringify(parsed));
+      .run(nowIso, warning ?? null, idempotencyKey);
   }
 
-  createCaptureInterval(interval: CaptureInterval): void {
-    this.transaction(() => {
-      if (this.activeCaptureCount() >= MAX_CAPTURE_INTERVALS)
-        throw new Error('capture_interval_capacity_exhausted');
-      if (
-        this.captureInterval(interval.reference.id) ||
-        this.captureIntervalForSource(interval.source)
-      )
-        throw new Error('capture_interval_exists');
-      this.writeCaptureInterval(interval);
-    });
-  }
-
-  sealCaptureInterval(
-    id: string,
-    sequence: number,
-    endCursor: NonNullable<CaptureInterval['endCursor']>,
-    activationCursor?: CaptureInterval['activationCursor'],
-  ): CaptureInterval {
-    return this.transaction(() => {
-      const interval = this.captureInterval(id);
-      if (!interval) throw new Error('capture_sequence_unconfirmed:seal:interval_missing');
-      if (interval.state !== 'armed')
-        throw new Error(`capture_sequence_unconfirmed:seal:state_${interval.state}`);
-      if (interval.committedSequence !== sequence)
-        throw new Error(
-          `capture_sequence_unconfirmed:seal:committed_${interval.committedSequence}:requested_${sequence}`,
-        );
-      if (
-        interval.activationCursor &&
-        JSON.stringify(interval.activationCursor) !== JSON.stringify(activationCursor)
-      )
-        throw new Error('capture_activation_conflict');
-      const sealed: CaptureInterval = {
-        ...interval,
-        state: 'sealed',
-        endCursor,
-        ...(activationCursor ? { activationCursor } : {}),
-      };
-      this.writeCaptureInterval(sealed);
-      return sealed;
-    });
-  }
-
-  private write(value: OutboxCommit, activeJson = JSON.stringify(value.active)): void {
-    parseOutbox(Buffer.from(activeJson));
+  markRetry(
+    idempotencyKey: string,
+    attempts: number,
+    nextAttemptAt: string,
+    nowIso: string,
+    error?: string,
+  ): void {
     this.db
       .prepare(
-        "INSERT INTO metadata VALUES ('active', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE metadata.value<>excluded.value",
+        `UPDATE outbox_events_v2
+         SET attempts = ?, next_attempt_at = ?, updated_at = ?, last_error = ?
+         WHERE idempotency_key = ?`,
       )
-      .run(activeJson);
-    const sourceInsert = this.db.prepare(
-      'INSERT INTO sources VALUES (?, ?, ?, ?) ON CONFLICT(source_key, disposition) DO UPDATE SET payload=excluded.payload',
-    );
-    const itemInsert = this.db.prepare('INSERT OR IGNORE INTO history VALUES (?, ?, ?, ?, ?, ?)');
-    const existingItem = this.db.prepare(
-      'SELECT payload FROM history WHERE disposition = ? AND source_key = ? AND item_key = ? AND kind = ?',
-    );
-    for (const entry of value.history ?? []) {
-      if ((entry.disposition === 'legacy') !== (entry.source === undefined))
-        throw new Error('outbox_history_source_invalid');
-      const key = entry.source ? sourceKey(entry.source) : '';
-      if (entry.source) {
-        const s = entry.source;
-        sourceInsert.run(
-          key,
-          scopeDigest(s.competitionId, s.matchId, s.producerInstanceId, s.liveSessionId),
-          entry.disposition,
-          JSON.stringify(s),
-        );
-      }
-      for (const item of entry.items) {
-        const parsed =
-          item.kind === 'record' ? parseRecord(item.value) : parseBoundaryIntent(item.value);
-        if (entry.source && (!parsed.source || sourceKey(parsed.source) !== key))
-          throw new Error('outbox_history_source_mismatch');
-        if (
-          entry.disposition === 'archived' &&
-          (item.kind !== 'record' || (parsed as ReliableOutboxRecord).status === 'pending')
-        )
-          throw new Error('outbox_history_disposition_invalid');
-        if (
-          entry.disposition === 'legacy' &&
-          (item.kind !== 'record' ||
-            parsed.source ||
-            (parsed as ReliableOutboxRecord).status === 'pending')
-        )
-          throw new Error('outbox_history_disposition_invalid');
-        const payload = JSON.stringify(parsed);
-        const prior = existingItem.get(
-          entry.disposition,
-          key,
-          parsed.event.idempotencyKey,
-          item.kind,
-        ) as { payload: string } | undefined;
-        if (prior && prior.payload !== payload) throw new Error('outbox_history_conflict');
-        itemInsert.run(
-          entry.disposition,
-          key,
-          itemScope({ kind: item.kind, value: parsed } as HistoryItem),
-          parsed.event.idempotencyKey,
-          item.kind,
-          payload,
-        );
-      }
-    }
-    const damage = this.db.prepare('INSERT OR IGNORE INTO damaged_scopes VALUES (?)');
-    for (const scope of value.damagedScopes ?? []) {
-      if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('outbox_scope_invalid');
-      damage.run(scope);
-    }
+      .run(attempts, nextAttemptAt, nowIso, error ?? null, idempotencyKey);
   }
 
-  active(): OutboxFile {
-    const row = this.db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as {
-      value: string;
-    };
-    return parseOutbox(Buffer.from(row.value));
-  }
-
-  bySource(source: ExactSource) {
-    return this.history('source_key', sourceKey(source));
-  }
-  byKey(key: string) {
-    return this.history('item_key', key);
-  }
-  private history(column: 'source_key' | 'item_key', value: string) {
-    const rows = this.db
-      .prepare(`SELECT disposition, kind, payload FROM history WHERE ${column} = ?`)
-      .all(value) as { disposition: string; kind: string; payload: string }[];
-    return this.rows(rows);
-  }
-  sourcesByScope(scope: string): readonly { source: ExactSource; disposition: string }[] {
-    const rows = this.db
-      .prepare('SELECT disposition, payload FROM sources WHERE scope = ?')
-      .all(scope) as { disposition: string; payload: string }[];
-    return rows.map((row) => ({
-      disposition: row.disposition,
-      source: parseSource(JSON.parse(row.payload)),
-    }));
-  }
-  sourceDisposition(source: ExactSource): readonly string[] {
-    return (
-      this.db
-        .prepare('SELECT disposition FROM sources WHERE source_key = ?')
-        .all(sourceKey(source)) as { disposition: string }[]
-    ).map((row) => row.disposition);
-  }
-  isDamaged(scope: string): boolean {
-    return !!this.db.prepare('SELECT scope FROM damaged_scopes WHERE scope = ?').get(scope);
-  }
-  /** Indexed delivery queries never load other producers' history. */
-  forDelivery(scope: HistoryScope, includeArchived = true) {
-    const terms = ["json_extract(payload, '$.event.cursor.producerInstanceId') = ?"];
-    const values = [scope.producerInstanceId];
-    if (!includeArchived) terms.push("disposition <> 'archived'");
-    if (scope.liveSessionId) {
-      terms.push("json_extract(payload, '$.event.cursor.liveSessionId') = ?");
-      values.push(scope.liveSessionId);
-    }
-    if (scope.matchId) {
-      terms.push("json_extract(payload, '$.event.matchId') = ?");
-      values.push(scope.matchId);
-    }
-    return this.rows(
-      this.db
-        .prepare(`SELECT disposition, kind, payload FROM history WHERE ${terms.join(' AND ')}`)
-        .all(...values),
-    );
-  }
-  private rows(rows: unknown): HistoryRow[] {
-    return (rows as { disposition: HistoryKind; kind: 'record' | 'intent'; payload: string }[]).map(
-      (row) =>
-        row.kind === 'record'
-          ? {
-              disposition: row.disposition,
-              kind: row.kind,
-              value: parseRecord(JSON.parse(row.payload)),
-            }
-          : {
-              disposition: row.disposition,
-              kind: row.kind,
-              value: parseBoundaryIntent(JSON.parse(row.payload)),
-            },
-    );
-  }
-  revokedSummary() {
-    const row = this.db
+  markRejected(idempotencyKey: string, nowIso: string, error: string): void {
+    this.db
       .prepare(
-        `SELECT
-      sum(CASE WHEN kind = 'record' THEN 1 ELSE 0 END) AS records,
-      sum(CASE WHEN kind = 'intent' THEN 1 ELSE 0 END) AS intents,
-      sum(CASE WHEN kind = 'record' AND json_extract(payload, '$.status') = 'pending' THEN 1 ELSE 0 END) AS pending
-      FROM history WHERE disposition = 'revoked'`,
+        `UPDATE outbox_events_v2
+         SET status = 'rejected', attempts = attempts + 1, updated_at = ?, last_error = ?
+         WHERE idempotency_key = ?`,
       )
-      .get() as Record<string, number | null>;
-    const scopes = (
-      this.db.prepare("SELECT count(*) AS n FROM sources WHERE disposition = 'revoked'").get() as {
-        n: number;
-      }
-    ).n;
-    return {
-      disposition: 'revoked_unconfirmed' as const,
-      scopes,
-      records: row.records ?? 0,
-      intents: row.intents ?? 0,
-      pending: row.pending ?? 0,
-    };
+      .run(nowIso, error, idempotencyKey);
   }
-  latestEvent() {
-    const row = this.db
-      .prepare('SELECT disposition, kind, payload FROM history ORDER BY rowid DESC LIMIT 1')
-      .all();
-    return this.rows(row)[0]?.value.event;
+
+  markExpired(idempotencyKey: string, nowIso: string): void {
+    this.db
+      .prepare(
+        `UPDATE outbox_events_v2
+         SET status = 'expired', updated_at = ?, last_error = 'expired_24h'
+         WHERE idempotency_key = ?`,
+      )
+      .run(nowIso, idempotencyKey);
   }
+
   close(): void {
     this.db.close();
   }

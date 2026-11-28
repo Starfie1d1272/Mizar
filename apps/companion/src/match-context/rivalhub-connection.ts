@@ -3,7 +3,7 @@ import { diagnosticValue } from '../support/session-journal.js';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { MatchSourceRecovery } from '@mizar/protocol/operator';
-import type { LiveSnapshotV1, ReliableEventV1 } from '@mizar/protocol/output';
+import type { LiveSnapshotV1, ReliableEventV2 } from '@mizar/protocol/output';
 import {
   RivalHubAuthorization,
   OFFICIAL_RIVALHUB_URL,
@@ -21,7 +21,7 @@ import {
   RivalHubEventTransport,
   type RivalHubTransportSource,
 } from './rivalhub-event-transport.js';
-import type { CaptureReference } from '../output/capture-interval.js';
+
 import {
   RivalHubSourceState,
   exactKey,
@@ -47,18 +47,6 @@ import {
 
 export { OFFICIAL_RIVALHUB_URL } from './rivalhub-authorization.js';
 export { statsTarget, type StatsTarget } from './rivalhub-read-client.js';
-
-export interface SourceCaptureLifecycle {
-  createReference(cursor: ReliableEventV1['cursor']): CaptureReference;
-  arm(identity: ExactSource, reference: CaptureReference): Promise<void>;
-  activate(identity: ExactSource): void;
-  restore(identity: ExactSource, reference: CaptureReference | undefined): Promise<void>;
-  seal(identity: ExactSource): Promise<boolean>;
-  coverage(identity: ExactSource): {
-    state: 'armed' | 'sealed' | 'unknown';
-    durableUnknown?: boolean;
-  };
-}
 
 type Source = RivalHubTransportSource;
 
@@ -99,7 +87,8 @@ export class RivalHubConnection {
     stage: string,
     snapshot: {
       matchId: string;
-      cursor: LiveSnapshotV1['cursor'];
+      cursor?: LiveSnapshotV1['cursor'];
+      session?: ReliableEventV2['session'];
       competitionId?: string;
       contextRevision?: string;
       observedAt?: string;
@@ -112,11 +101,12 @@ export class RivalHubConnection {
         competitionId: snapshot.competitionId,
         contextRevision: snapshot.contextRevision,
         originalObservedAt: snapshot.observedAt,
-        authorityRevision: this.source?.authorityRevision,
-        liveSessionId: snapshot.cursor.liveSessionId,
-        producerInstanceId: snapshot.cursor.producerInstanceId,
-        mapEpoch: snapshot.cursor.mapEpoch,
-        sourceGeneration: snapshot.cursor.programSourceGeneration,
+        authorityRevision: snapshot.session?.authorityRevision ?? this.source?.authorityRevision,
+        liveSessionId: snapshot.cursor?.liveSessionId ?? snapshot.session?.liveSessionId,
+        producerInstanceId:
+          snapshot.cursor?.producerInstanceId ?? snapshot.session?.producerInstanceId,
+        mapEpoch: snapshot.cursor?.mapEpoch,
+        sourceGeneration: snapshot.cursor?.programSourceGeneration,
         ...evidence,
       };
       if (stage === 'business_live') {
@@ -136,7 +126,7 @@ export class RivalHubConnection {
     }
   }
   private source: Source | null = null;
-  private readonly sourceSettlements = new Map<string, Promise<boolean>>();
+
   private cleanupCursor = 0;
   private readonly retries = new Map<
     string,
@@ -176,12 +166,7 @@ export class RivalHubConnection {
   private cleanupScheduled = false;
   private cleanupSummary = { pending: 0, blocked: 0, claimIntent: false, coverageUnknown: 0 };
   private cleanupMatches = new Map<string, 'remote_cleanup' | 'retained'>();
-  private settleSource: ((scope: SourceScope) => Promise<boolean>) | undefined;
-  private archiveSource:
-    ((identity: ExactSource, disposition?: 'revoked') => Promise<void>) | undefined;
-  private activeReliableSources: (() => readonly ExactSource[]) | undefined;
-  private readonly isolatedRevokedSources = new Map<string, ExactSource>();
-  private resumeSource: ((scope: SourceScope) => void) | undefined;
+
   private bindingGeneration = 0;
   private activeDeviceName: string | null = null;
   private activeDeviceMatchId: string | null = null;
@@ -192,25 +177,7 @@ export class RivalHubConnection {
       request: (path, init) => this.authorization.request(path, init),
     },
     fetchImpl: (...args) => this.fetchImpl(...args),
-    confirmSourceAuthority: (source, signal) => this.confirmSourceAuthority(source, signal),
-    canSendRetainedReliable: async (identity) => {
-      const state = await this.sourceState.snapshot();
-      const key = exactKey(identity);
-      const record = state.records.find((item) => sameExactSource(item.identity, identity));
-      return Boolean(
-        record &&
-        ['owned', 'release_pending'].includes(record.state) &&
-        !record.installationRevoked &&
-        !record.quarantineUncertain &&
-        !this.confirmedSourcesAwaitingPersistence.has(key),
-      );
-    },
-    isRetainedSourceActive: (identity) => {
-      const key = exactKey(identity);
-      return (
-        !this.isolatedRevokedSources.has(key) && !this.confirmedSourcesAwaitingPersistence.has(key)
-      );
-    },
+
     installation: () => this.installation,
     source: () => this.source,
     stoppedMatchId: () => this.stoppedMatchId,
@@ -234,13 +201,6 @@ export class RivalHubConnection {
     since: number;
     incidentId: string | null;
   } | null = null;
-  private boundaryStatus:
-    (() => 'continuity_chain_missing' | 'continuity_waiting' | null) | undefined;
-  setBoundaryStatusProvider(
-    provider: () => 'continuity_chain_missing' | 'continuity_waiting' | null,
-  ): void {
-    this.boundaryStatus = provider;
-  }
 
   /** Operator-only projection. A claim or a reliable ACK is never LIVE acceptance. */
   syncHealth(
@@ -302,14 +262,12 @@ export class RivalHubConnection {
       this.source.deliveryExecution === executionKey(snapshot.cursor) &&
       liveStatus?.matchesCursor,
     );
-    const boundaryStatus = this.boundaryStatus?.() ?? null;
-    if (!boundaryStatus && current && liveStatus?.recentlyAccepted) {
+    if (current && liveStatus?.recentlyAccepted) {
       watch.since = now;
       watch.incidentId = null;
       return result('healthy');
     }
     const reason =
-      boundaryStatus ??
       controlFailure ??
       (!snapshot
         ? 'input_unavailable'
@@ -317,25 +275,10 @@ export class RivalHubConnection {
           ? 'source_unavailable'
           : current
             ? (liveStatus?.reason ?? 'reception_unconfirmed')
-            : 'map_start_pending');
+            : 'live_waiting');
     if (now - watch.since < 15_000 && !watch.incidentId) return result('waiting', reason);
     watch.incidentId ??= randomUUID();
     return result('attention', reason);
-  }
-
-  setContextRecoveryProgress(
-    event: ReliableEventV1,
-    authority: string,
-    state:
-      | 'context_refreshing'
-      | 'context_reconfirming'
-      | 'context_recovery_blocked'
-      | 'continuity_chain_missing'
-      | 'continuity_waiting',
-  ): void {
-    if (this.reliableAuthorityScope() !== authority || this.stoppedMatchId === event.matchId)
-      return;
-    this.eventTransport.setControlFailure(this.failureExecutionKey(event), state);
   }
 
   retryLive(): void {
@@ -345,7 +288,7 @@ export class RivalHubConnection {
   hasCurrentStart(snapshot: LiveSnapshotV1): boolean {
     return (
       this.source?.matchId === snapshot.matchId &&
-      this.source.acknowledgedExecution === executionKey(snapshot.cursor)
+      this.source.deliveryExecution === executionKey(snapshot.cursor)
     );
   }
 
@@ -464,62 +407,14 @@ export class RivalHubConnection {
   }
 
   private sourceStateAvailable = false;
-  private captureLifecycle: SourceCaptureLifecycle | undefined;
-
-  async setSourceCaptureLifecycle(lifecycle: SourceCaptureLifecycle): Promise<void> {
-    this.captureLifecycle = lifecycle;
-    if (!this.sourceStateAvailable) return;
-    try {
-      const state = await this.sourceState.snapshot();
-      for (const record of state.records)
-        await lifecycle.restore(record.identity, record.captureReference);
-      await this.updateCleanupSummary();
-    } catch (error) {
-      this.sourceStateAvailable = false;
-      throw error;
-    }
-  }
 
   private freezeSource(source: Source): void {
     source.draining = true;
     source.paused = true;
-    this.sealCapture(this.sourceIdentity(source));
-  }
-
-  private sealCapture(identity: ExactSource): void {
-    // The lifecycle fences synchronously, before any JSON/network await.
-    try {
-      void this.captureLifecycle
-        ?.seal(identity)
-        .catch((error: unknown) => this.onDiagnostic('source_capture_seal', error));
-    } catch (error) {
-      this.onDiagnostic('source_capture_seal', error);
-    }
-  }
-
-  private async confirmedCapture(identity: ExactSource): Promise<CaptureReference | undefined> {
-    const state = await this.sourceState.snapshot();
-    return state.records.find((record) => sameExactSource(record.identity, identity))
-      ?.captureReference;
-  }
-
-  private async restoreConfirmedCapture(identity: ExactSource): Promise<void> {
-    if (!this.captureLifecycle) return;
-    await this.captureLifecycle.restore(identity, await this.confirmedCapture(identity));
   }
 
   private requireSourceState(): void {
     if (!this.sourceStateAvailable) throw new Error('rivalhub_source_state_unavailable');
-  }
-
-  /** Startup rollback only; recovery requires a new owner on the next start. */
-  async abortSourceCaptureStartup(): Promise<void> {
-    this.sourceStateAvailable = false;
-    this.unavailableLive.clear();
-    ++this.bindingGeneration;
-    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    this.cleanupTimer = undefined;
-    await this.sourceCommands.run(() => this.sourceState.close());
   }
 
   async load(): Promise<void> {
@@ -560,18 +455,6 @@ export class RivalHubConnection {
           ? { status: 'idle', cursor: null, reason: null, consecutiveUnaccepted: 0, durationMs: 0 }
           : this.eventTransport.liveDeliveryView(this.monotonicNow()),
     };
-  }
-
-  setSourceSettlement(
-    settle: (scope: SourceScope) => Promise<boolean>,
-    resume: (scope: SourceScope) => void,
-    archive?: (identity: ExactSource, disposition?: 'revoked') => Promise<void>,
-    activeSources?: () => readonly ExactSource[],
-  ): void {
-    this.settleSource = settle;
-    this.resumeSource = resume;
-    this.archiveSource = archive;
-    this.activeReliableSources = activeSources;
   }
 
   startSourceCleanup(): void {
@@ -669,9 +552,7 @@ export class RivalHubConnection {
         state.revokedIntents.length +
         (await this.sourceState.quarantineCount()),
       claimIntent: state.intents.length > 0,
-      coverageUnknown: state.records.filter(
-        (record) => this.captureLifecycle?.coverage(record.identity).state === 'unknown',
-      ).length,
+      coverageUnknown: 0,
     };
     this.cleanupMatches = cleanupMatches;
   }
@@ -760,41 +641,6 @@ export class RivalHubConnection {
     };
   }
 
-  private async settle(identity: ExactSource, budgetMs = 2500): Promise<boolean> {
-    if (!this.settleSource) return false;
-    const key = exactKey(identity);
-    let operation = this.sourceSettlements.get(key);
-    if (!operation) {
-      const drain = async () => {
-        // The output owner fences new events synchronously on entry. Only after
-        // that fence exists may a paused source deliver its already queued tail.
-        const disposition = this.settleSource!(identity).catch(() => false);
-        const source = this.source;
-        if (source?.draining && sameExactSource(source, identity)) source.drainReliable = true;
-        await this.eventTransport.awaitLiveInFlight(identity);
-        return disposition;
-      };
-      operation = drain()
-        .catch(() => false)
-        .finally(() => {
-          if (this.sourceSettlements.get(key) === operation) this.sourceSettlements.delete(key);
-        });
-      this.sourceSettlements.set(key, operation);
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        operation,
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), Math.max(1, budgetMs));
-          timer.unref();
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
   private async retireCurrent(cause: 'finish' | 'switch' | 'shutdown'): Promise<void> {
     const source = this.source;
     if (!source) return;
@@ -802,9 +648,6 @@ export class RivalHubConnection {
     this.freezeSource(source);
     await this.sourceState.handoff(identity, cause);
     await this.updateCleanupSummary();
-    // Durable handoff owns the old scope. Pending network delivery does not block a new match.
-    // Cleanup still requires settlement before issuing the exact release.
-    void this.settle(identity).catch((error: unknown) => this.onDiagnostic('source_settle', error));
     if (this.source === source) {
       this.source = null;
       this.cleanupEvidence(identity, `source_retired_${cause}`, 0);
@@ -990,11 +833,6 @@ export class RivalHubConnection {
       if (onlyKey !== undefined && key !== onlyKey) continue;
       const active = this.source;
       const current = active?.draining && sameExactSource(active, identity);
-      if (current && this.captureLifecycle && !(await this.captureLifecycle.seal(identity))) {
-        if (!this.captureLifecycle.coverage(identity).durableUnknown)
-          throw new Error('rivalhub_source_capture_unconfirmed');
-        this.cleanupEvidence(identity, 'source_capture_coverage_unknown', 0);
-      }
       const state = await this.sourceState.snapshot();
       const record = state.records.find((item) => sameExactSource(item.identity, identity));
       if (record) await this.sourceState.handoff(identity, cause);
@@ -1022,9 +860,8 @@ export class RivalHubConnection {
       if (force) throw error;
       this.onDiagnostic('source_handoff', error);
     }
-    await this.isolateRevokedSources();
     for (const identity of this.confirmedSourcesAwaitingPersistence.values()) {
-      if (await this.persistConfirmedSource(identity)) await this.archiveConfirmedSource(identity);
+      if (await this.persistConfirmedSource(identity)) await this.completeConfirmedSource(identity);
     }
     try {
       // Keep part of the cleanup budget for already confirmed sources.
@@ -1038,7 +875,7 @@ export class RivalHubConnection {
     // switching installations. Never repeat release just to retry archiving.
     for (const record of state.records) {
       if (record.state !== 'archive_pending') continue;
-      await this.archiveConfirmedSource(record.identity);
+      await this.completeConfirmedSource(record.identity);
     }
     const pending = state.records.filter(
       (record) => record.state === 'release_pending' || canCheckBlockedSource(record, force),
@@ -1074,7 +911,6 @@ export class RivalHubConnection {
       if (force || (cycle && cycle.attempts >= 8)) this.retries.delete(cleanupKey);
       if (!force && record.nextAttemptAt && Date.parse(record.nextAttemptAt) > Date.now()) continue;
       const identity = record.identity;
-      if (!(await this.settle(identity, Math.min(2500, deadline - Date.now())))) continue;
       if (this.shutdownSignal?.aborted || Date.now() >= deadline) break;
       const count = (this.retries.get(cleanupKey)?.attempts ?? 0) + 1;
       // A later bounded round probes for network recovery; no identity is discarded.
@@ -1117,7 +953,7 @@ export class RivalHubConnection {
       ) {
         if (this.source && sameExactSource(this.source, identity)) this.source = null;
         if (!(await this.persistConfirmedSource(identity))) continue;
-        if (await this.archiveConfirmedSource(identity)) {
+        if (await this.completeConfirmedSource(identity)) {
           this.retries.delete(`cleanup:${attemptKey}`);
           this.cleanupEvidence(identity, 'release_confirmed', record.attempts + 1);
         }
@@ -1178,45 +1014,10 @@ export class RivalHubConnection {
       if (!confirmsClosedSource(body, identity)) return;
       if (await this.persistConfirmedSource(identity)) {
         this.cleanupEvidence(identity, 'source_status_closed', attempts);
-        await this.archiveConfirmedSource(identity);
+        await this.completeConfirmedSource(identity);
       }
     } catch (error) {
       if (!this.shutdownSignal?.aborted) this.onDiagnostic('source_status', error);
-    }
-  }
-
-  private async isolateRevokedSources(preferred: readonly ExactSource[] = []): Promise<void> {
-    if (!this.archiveSource) return;
-    const now = Date.now();
-    const cooling = [...this.retries.entries()]
-      .filter(([key, item]) => key.startsWith('revoke:') && item.nextAt > now && item.identity)
-      .map(([, item]) => item.identity!);
-    const excluded = [...this.isolatedRevokedSources.values(), ...cooling];
-    const candidates = new Map<string, ExactSource>();
-    let backlog: readonly ExactSource[] = [];
-    try {
-      backlog = await this.sourceState.getRevokedSources(
-        excluded,
-        8,
-        this.activeReliableSources?.() ?? [],
-      );
-    } catch (error) {
-      this.onDiagnostic('source_revoked_scan', error);
-    }
-    for (const identity of [...preferred, ...backlog]) candidates.set(exactKey(identity), identity);
-    for (const identity of candidates.values()) {
-      const key = exactKey(identity);
-      const retryKey = `revoke:${key}`;
-      if (this.isolatedRevokedSources.has(key) || !this.retryReady(retryKey, now)) continue;
-      try {
-        await this.archiveSource(identity, 'revoked');
-        this.isolatedRevokedSources.set(key, identity);
-        this.retries.delete(retryKey);
-      } catch (error) {
-        // Source-state evidence remains the durable retry request.
-        this.scheduleRetry(retryKey, now + 30_000, 1, identity);
-        this.onDiagnostic('source_revoked_isolation', error);
-      }
     }
   }
 
@@ -1233,13 +1034,11 @@ export class RivalHubConnection {
     }
   }
 
-  private async archiveConfirmedSource(identity: ExactSource): Promise<boolean> {
+  private async completeConfirmedSource(identity: ExactSource): Promise<boolean> {
     try {
-      await this.archiveSource?.(identity);
       await this.sourceState.complete(identity);
       return true;
     } catch (error) {
-      // Keep archive_pending durable and retry locally on the next cleanup.
       this.onDiagnostic('source_archive', error);
       return false;
     }
@@ -1271,8 +1070,7 @@ export class RivalHubConnection {
       ) {
         throw new Error('断开连接失败，请稍后重试。');
       }
-      const revoked = await this.sourceState.confirmRevokedInstallation(installation);
-      await this.isolateRevokedSources(revoked);
+      await this.sourceState.confirmRevokedInstallation(installation);
       await this.updateCleanupSummary();
     }
     await this.authorization.forget(() => {
@@ -1461,7 +1259,7 @@ export class RivalHubConnection {
     const intent = await this.sourceState.beginClaim(
       scope,
       priorRevisions.length ? Math.max(...priorRevisions) : null,
-      this.captureLifecycle?.createReference(snapshot.cursor),
+      undefined,
       claimRecoveryVersion,
     );
     this.business('business_claim', snapshot, {
@@ -1553,32 +1351,11 @@ export class RivalHubConnection {
             throw error;
           }
         };
-        if (this.captureLifecycle) {
-          await guardStaleClaim('数据采集区间启用未确认。', async () => {
-            const reference = await this.confirmedCapture(identity);
-            if (!reference) throw new Error('source_capture_legacy_coverage_unknown');
-            await this.captureLifecycle!.arm(identity, reference);
-          });
-          if (generation !== this.bindingGeneration || !isCurrent()) {
-            await this.handoffStaleClaim(identity, claimedFrom, installation);
-            throw new Error('比赛已变化，原数据源待释放。');
-          }
-        }
-        // An accepted claim has no capture interval until arm completes.
-        // Do not publish that transient absence as unknown historical coverage.
         await guardStaleClaim('数据源交接未确认。', () => this.updateCleanupSummary());
-        // Exit can invalidate the claim while the summary is read.
         if (generation !== this.bindingGeneration || !isCurrent()) {
           await this.handoffStaleClaim(identity, claimedFrom, installation);
           throw new Error('比赛已变化，原数据源待释放。');
         }
-        if (this.captureLifecycle) {
-          // No await between this actual capture-start cut and source publication.
-          await guardStaleClaim('数据采集区间启用未确认。', () =>
-            this.captureLifecycle!.activate(identity),
-          );
-        }
-        this.resumeSource?.(scope);
         this.stoppedMatchId = null;
         this.eventTransport.resetForNewClaim();
         this.claimRevision += 1;
@@ -1655,8 +1432,6 @@ export class RivalHubConnection {
     return this.handoffCommits.run(async () => {
       this.requireSourceState();
       const key = this.trackExitHandoff(identity, cause);
-      await this.restoreConfirmedCapture(identity);
-      this.sealCapture(identity);
       await this.persistTrackedHandoffs(key);
     });
   }
@@ -1667,7 +1442,6 @@ export class RivalHubConnection {
     if (this.source) {
       this.source.draining = true;
       this.source.paused = true;
-      this.sealCapture(this.sourceIdentity(this.source));
     }
     return this.sourceCommands.run(() => this.releaseLocked());
   }
@@ -1713,36 +1487,7 @@ export class RivalHubConnection {
     return this.eventTransport.sendLive(snapshot);
   }
 
-  /** Deliver accepted work with its original durable authority, independent of the selected match. */
-  sendRetainedReliable(
-    event: ReliableEventV1,
-    identity: ExactSource,
-    current: LiveSnapshotV1 | null,
-    signal?: AbortSignal,
-    retainedLineup?: readonly string[],
-  ): Promise<ReliableDeliveryResult> {
-    return this.eventTransport.sendRetainedReliable(
-      event,
-      identity,
-      current,
-      signal,
-      retainedLineup,
-    );
-  }
-
-  sendReliable(
-    event: ReliableEventV1,
-    current: LiveSnapshotV1 | null,
-    signal?: AbortSignal,
-    retainedLineup?: readonly string[],
-    retainedIdentity?: ExactSource,
-  ): Promise<ReliableDeliveryResult> {
-    return this.eventTransport.sendReliable(
-      event,
-      current,
-      signal,
-      retainedLineup,
-      retainedIdentity,
-    );
+  sendReliableV2(event: ReliableEventV2, signal?: AbortSignal): Promise<ReliableDeliveryResult> {
+    return this.eventTransport.sendReliableV2(event, signal);
   }
 }
