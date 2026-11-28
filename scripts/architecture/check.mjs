@@ -657,9 +657,9 @@ function checkDomainImportOwnership(records, repository, report) {
       } else if (
         edge.runtime &&
         target === companion + 'output/outbox-repository.ts' &&
-        owner !== companion + 'output/outbox-worker.ts'
+        owner !== companion + 'output/reliable-outbox.ts'
       ) {
-        message = 'Only the Outbox worker owns the SQLite repository.';
+        message = 'Only ReliableOutbox owns the SQLite repository.';
       } else if (
         owner === companion + 'match-context/rivalhub-read-client.ts' &&
         (target?.startsWith(companion + 'output/') ||
@@ -670,10 +670,9 @@ function checkDomainImportOwnership(records, repository, report) {
       } else if (
         owner === companion + 'match-context/rivalhub-connection.ts' &&
         target?.startsWith(companion + 'output/') &&
-        target !== companion + 'output/reliable-delivery.ts' &&
-        (target !== companion + 'output/capture-interval.ts' || edge.runtime)
+        target !== companion + 'output/reliable-delivery.ts'
       ) {
-        message = 'RivalHub source control uses the reliable delivery and capture contracts.';
+        message = 'RivalHub source control uses the reliable delivery contract.';
       } else if (
         ['packages/broadcast-config/src/', 'packages/broadcast-pack/src/'].some(
           (prefix) =>
