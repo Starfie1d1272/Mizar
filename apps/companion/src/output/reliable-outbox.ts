@@ -12,6 +12,7 @@ export * from './reliable-delivery.js';
 
 const BASE_RETRY_BACKOFF_MS = 1_000;
 const MAX_RETRY_BACKOFF_MS = 60_000;
+const MAP_ENDED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function outboxLocalError(error: unknown): { name?: string; code?: string } {
   if (!(error instanceof Error)) return {};
@@ -84,7 +85,9 @@ export class ReliableOutbox {
       if (this.closed || this.closeAbort.signal.aborted) break;
       const nowMs = now.getTime();
       const nowIso = new Date(nowMs).toISOString();
-      if (nowMs - Date.parse(record.createdAt) >= RELIABLE_OUTBOX_RETENTION_MS) {
+      const retentionMs =
+        record.event.kind === 'map_ended' ? MAP_ENDED_RETENTION_MS : RELIABLE_OUTBOX_RETENTION_MS;
+      if (nowMs - Date.parse(record.createdAt) >= retentionMs) {
         repo.markExpired(record.event.idempotencyKey, nowIso);
         this.onJournal?.({ ...record, status: 'expired', updatedAt: nowIso }, 'expired');
         continue;

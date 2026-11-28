@@ -7,9 +7,12 @@ import type { ProjectionBundle } from '../projections/projection-coordinator.js'
 import { createLatestWinsConsumer, type LatestWinsConsumer } from '../runtime/latest-wins.js';
 import {
   buildReliableEventV2,
+  extractMapRosterSnapshot,
   liveSnapshotBlockedReason,
   projectLiveSnapshotV1,
   type LiveSnapshotBlockedReason,
+  type MapRosterSnapshot,
+  type ReliableMapResult,
 } from './projector.js';
 import type { ReliableEventSink } from './reliable-delivery.js';
 import type { ReliableOutbox, ReliableOutboxRecord } from './reliable-outbox.js';
@@ -45,6 +48,7 @@ const FLUSH_INTERVAL_MS = 2_000;
 
 export class OutputService {
   private readonly consumers = new Map<LatestWinsConsumer<LiveSnapshotV1>, boolean>();
+  private readonly mapRosterCache = new Map<string, MapRosterSnapshot>();
   private readonly outbox: ReliableOutbox | undefined;
   private readonly sink: ReliableEventSink | undefined;
   private readonly now: () => Date;
@@ -99,6 +103,10 @@ export class OutputService {
   setBinding(binding: MatchContextBinding | undefined): void {
     this.binding = binding;
     this.offerLive();
+    if (this.bundle) {
+      this.updateMapRosterCache(this.bundle, this.binding);
+      this.enqueueConfirmedMapEnded(this.bundle, this.binding, this.now().toISOString());
+    }
   }
 
   beforeRuntimeMutation(): void {
@@ -109,6 +117,10 @@ export class OutputService {
     this.bundle = bundle;
     if (binding !== undefined) this.binding = binding;
     this.offerLive();
+    if (bundle) {
+      this.updateMapRosterCache(bundle, this.binding);
+      this.enqueueConfirmedMapEnded(bundle, this.binding, this.now().toISOString());
+    }
   }
 
   afterRuntimeMutation(
@@ -122,17 +134,20 @@ export class OutputService {
     if (binding !== undefined) this.binding = binding;
     this.offerLive();
 
-    if (this.closed || this.trialQuarantined || !this.outbox?.isReady()) return;
     const activeBinding = this.binding;
-    if (!this.isEligibleForEnqueue(bundle, activeBinding)) return;
-
+    this.updateMapRosterCache(bundle, activeBinding);
     const observedAt =
       result.state.programTelemetry?.receive.receivedAt ??
       result.transitions[0]?.at.utc ??
       this.now().toISOString();
+    this.enqueueConfirmedMapEnded(bundle, activeBinding, observedAt);
+
+    if (this.closed || this.trialQuarantined || !this.outbox?.isReady()) return;
+    if (!this.isEligibleForStartEnqueue(bundle, activeBinding)) return;
+
     const authorityRevision = this.options.exactSource?.()?.authorityRevision ?? 1;
 
-    const enqueueKind = (kind: ReliableEventV2['kind']) => {
+    const enqueueKind = (kind: Exclude<ReliableEventV2['kind'], 'map_ended'>) => {
       try {
         const event = buildReliableEventV2({
           kind,
@@ -169,25 +184,136 @@ export class OutputService {
       }
     }
 
-    if (result.transitions.some((transition) => transition.kind === 'map_ended')) {
-      enqueueKind('map_ended');
-    }
-
-    if (
-      previous?.program.series?.status !== 'completed' &&
-      bundle.program.series?.status === 'completed'
-    ) {
-      enqueueKind('series_ended');
-    }
-
     void this.flushOutbox();
   }
 
-  private isEligibleForEnqueue(
+  private updateMapRosterCache(
+    bundle: ProjectionBundle,
+    binding: MatchContextBinding | undefined,
+  ): void {
+    if (
+      !binding ||
+      binding.origin !== 'online' ||
+      binding.context.competition === null ||
+      bundle.program.match?.matchId !== binding.context.matchId ||
+      bundle.program.status.identity === 'mismatch' ||
+      bundle.program.status.telemetry !== 'fresh' ||
+      !bundle.program.map.name
+    )
+      return;
+    const roster = extractMapRosterSnapshot(bundle);
+    if (!roster.lineupSteam64.length && !roster.players.length) return;
+    const key = `${binding.context.matchId}:${bundle.program.map.name}`;
+    const existing = this.mapRosterCache.get(key);
+    if (roster.lineupSteam64.length === 10 || !existing || existing.lineupSteam64.length < 10) {
+      this.mapRosterCache.delete(key);
+      this.mapRosterCache.set(key, {
+        lineupSteam64: roster.lineupSteam64.length
+          ? roster.lineupSteam64
+          : (existing?.lineupSteam64 ?? []),
+        players: roster.players.length ? roster.players : (existing?.players ?? []),
+        ...(roster.scoreCT !== undefined && roster.scoreT !== undefined
+          ? { scoreCT: roster.scoreCT, scoreT: roster.scoreT }
+          : existing?.scoreCT !== undefined && existing?.scoreT !== undefined
+            ? { scoreCT: existing.scoreCT, scoreT: existing.scoreT }
+            : {}),
+      });
+      if (this.mapRosterCache.size > 32) {
+        const oldest = this.mapRosterCache.keys().next().value;
+        if (oldest !== undefined) this.mapRosterCache.delete(oldest);
+      }
+    }
+  }
+
+  private enqueueConfirmedMapEnded(
+    bundle: ProjectionBundle,
+    binding: MatchContextBinding | undefined,
+    observedAt: string,
+  ): void {
+    if (this.closed || this.trialQuarantined || !this.outbox?.isReady()) return;
+    if (
+      !binding ||
+      binding.origin !== 'online' ||
+      binding.context.competition === null ||
+      bundle.program.match?.matchId !== binding.context.matchId ||
+      bundle.program.status.identity === 'mismatch' ||
+      bundle.program.cursor.liveSessionId === null
+    )
+      return;
+    if (this.options.isActiveOnlineBinding && !this.options.isActiveOnlineBinding(binding)) return;
+    if (this.options.isExecutionOwnedBy && !this.options.isExecutionOwnedBy(binding)) return;
+
+    const completed: ReliableMapResult[] = [];
+    for (const map of bundle.program.series?.maps ?? []) {
+      if (map.status === 'completed' && map.finalScore) {
+        completed.push({
+          mapId: map.mapId,
+          mapName: map.mapName,
+          scoreA: map.finalScore.a,
+          scoreB: map.finalScore.b,
+        });
+      }
+    }
+
+    const currentSeriesMap = bundle.program.series?.maps.find(
+      (item) => item.mapOrder === bundle.program.series?.currentMapOrder,
+    );
+    if (
+      bundle.program.map.phase === 'gameover' &&
+      currentSeriesMap &&
+      bundle.program.map.score.ct !== null &&
+      bundle.program.map.score.t !== null &&
+      !completed.some((item) => item.mapName === currentSeriesMap.mapName)
+    ) {
+      completed.push({
+        mapId: currentSeriesMap.mapId,
+        mapName: currentSeriesMap.mapName,
+        scoreA:
+          bundle.operator.identity.sideMapping.a === 'CT'
+            ? bundle.program.map.score.ct
+            : bundle.program.map.score.t,
+        scoreB:
+          bundle.operator.identity.sideMapping.b === 'CT'
+            ? bundle.program.map.score.ct
+            : bundle.program.map.score.t,
+      });
+    }
+
+    if (!completed.length) return;
+    const authorityRevision = this.options.exactSource?.()?.authorityRevision ?? 1;
+    let enqueuedAny = false;
+    for (const completedMap of completed) {
+      const cached = this.mapRosterCache.get(`${binding.context.matchId}:${completedMap.mapName}`);
+      const sameCurrentMap = bundle.program.map.name === completedMap.mapName;
+      const currentRoster = sameCurrentMap ? extractMapRosterSnapshot(bundle) : undefined;
+      const roster =
+        currentRoster && (currentRoster.lineupSteam64.length === 10 || !cached)
+          ? currentRoster
+          : (cached ?? currentRoster);
+      try {
+        const event = buildReliableEventV2({
+          kind: 'map_ended',
+          bundle,
+          binding,
+          observedAt,
+          authorityRevision,
+          completedMap,
+          ...(roster ? { roster } : {}),
+        });
+        if (event && this.outbox.enqueue(event, this.now())) enqueuedAny = true;
+      } catch {
+        this.options.onDiagnostic?.('event_projection_failed');
+      }
+    }
+    if (enqueuedAny) void this.flushOutbox();
+  }
+
+  private isEligibleForStartEnqueue(
     bundle: ProjectionBundle,
     binding: MatchContextBinding | undefined,
   ): boolean {
-    if (!binding || binding.context.competition === null) return false;
+    if (!binding || binding.origin !== 'online' || binding.context.competition === null)
+      return false;
     if (binding.freshness !== 'fresh' || bundle.program.status.context !== 'fresh') return false;
     if (bundle.program.match?.matchId !== binding.context.matchId) return false;
     if (bundle.program.status.telemetry !== 'fresh') return false;

@@ -30,6 +30,87 @@ function toRecord(row: OutboxRow): ReliableOutboxRecord {
   };
 }
 
+function migrateLegacyMapEnded(db: DatabaseSync): void {
+  try {
+    const migrated = db.prepare("SELECT value FROM metadata WHERE key = 'v2_migrated'").get();
+    if (migrated) return;
+    const active = db.prepare("SELECT value FROM metadata WHERE key = 'active'").get() as
+      { value?: string } | undefined;
+    if (!active?.value) return;
+    const parsed = JSON.parse(active.value) as { records?: unknown[] };
+    const records = Array.isArray(parsed.records) ? parsed.records : [];
+    const playersByMapEndKey = new Map<string, unknown[]>();
+    for (const r of records as Record<string, unknown>[]) {
+      const ev = r?.event as Record<string, unknown> | undefined;
+      const p = ev?.payload as Record<string, unknown> | undefined;
+      if (
+        ev?.kind === 'map_player_snapshot' &&
+        typeof p?.mapEndedKey === 'string' &&
+        Array.isArray(p.players)
+      ) {
+        playersByMapEndKey.set(p.mapEndedKey, p.players);
+      }
+    }
+    const nowIso = new Date().toISOString();
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO outbox_events_v2 (
+        idempotency_key, match_id, kind, payload_json, status,
+        attempts, next_attempt_at, created_at, updated_at, last_error
+      ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, NULL)`,
+    );
+    for (const r of records as Record<string, unknown>[]) {
+      const ev = r?.event as Record<string, unknown> | undefined;
+      if (r?.status !== 'pending' || ev?.kind !== 'map_ended') continue;
+      try {
+        const cursor = (ev.cursor ?? {}) as Record<string, unknown>;
+        const src = (r.source ?? {}) as Record<string, unknown>;
+        const p = (ev.payload ?? {}) as Record<string, unknown>;
+        const players = playersByMapEndKey.get(String(ev.idempotencyKey));
+        const v2 = parseReliableEventV2({
+          schemaVersion: 'mizar.reliable-event.v2',
+          idempotencyKey: ev.idempotencyKey,
+          kind: 'map_ended',
+          observedAt: ev.observedAt,
+          matchId: ev.matchId,
+          competitionId: ev.competitionId,
+          entryAId: ev.entryAId,
+          entryBId: ev.entryBId,
+          mapId: ev.mapId ?? null,
+          mapName: ev.mapName ?? null,
+          session: {
+            producerInstanceId: cursor.producerInstanceId,
+            liveSessionId: cursor.liveSessionId,
+            authorityRevision:
+              typeof src.authorityRevision === 'number' ? src.authorityRevision : 1,
+          },
+          payload: {
+            scoreA: p.scoreA,
+            scoreB: p.scoreB,
+            scoreCT: p.scoreCT,
+            scoreT: p.scoreT,
+            lineupSteam64: Array.isArray(r.lineupSteam64) ? r.lineupSteam64 : [],
+            ...(players ? { players } : {}),
+          },
+        });
+        insert.run(
+          v2.idempotencyKey,
+          v2.matchId,
+          v2.kind,
+          JSON.stringify(v2),
+          nowIso,
+          nowIso,
+          nowIso,
+        );
+      } catch {
+        // Ignore malformed legacy records so startup never fails.
+      }
+    }
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('v2_migrated', '1')").run();
+  } catch {
+    // Ignore when legacy metadata table does not exist or is unreadable.
+  }
+}
+
 export class OutboxRepository {
   private constructor(private readonly db: DatabaseSync) {}
 
@@ -59,6 +140,11 @@ export class OutboxRepository {
       CREATE INDEX IF NOT EXISTS idx_outbox_v2_pending
         ON outbox_events_v2(status, next_attempt_at, created_at);
     `);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      "DELETE FROM outbox_events_v2 WHERE status IN ('accepted', 'rejected', 'expired') AND updated_at < ?",
+    ).run(thirtyDaysAgo);
+    migrateLegacyMapEnded(db);
     return new OutboxRepository(db);
   }
 
@@ -141,7 +227,7 @@ export class OutboxRepository {
     this.db
       .prepare(
         `UPDATE outbox_events_v2
-         SET status = 'expired', updated_at = ?, last_error = 'expired_24h'
+         SET status = 'expired', updated_at = ?, last_error = 'expired'
          WHERE idempotency_key = ?`,
       )
       .run(nowIso, idempotencyKey);

@@ -312,12 +312,10 @@ export const parseLiveSnapshotV1 = (input: unknown): LiveSnapshotV1 =>
 export const parseReliableEventV1 = (input: unknown): ReliableEventV1 =>
   boundedParse(reliableEventV1Schema, input, 16_384);
 
-export const reliableEventKindV2Schema = z.enum([
-  'match_started',
-  'map_started',
-  'map_ended',
-  'series_ended',
-]);
+const uuid = z.uuid();
+const steam64 = z.string().regex(/^\d{17}$/);
+
+export const reliableEventKindV2Schema = z.enum(['match_started', 'map_started', 'map_ended']);
 
 export const reliableEventV2PlayerSchema = z.strictObject({
   sourcePlayerId: id,
@@ -330,7 +328,7 @@ export const reliableEventV2PlayerSchema = z.strictObject({
 const reliableEventV2Session = z.strictObject({
   producerInstanceId: id,
   liveSessionId: id,
-  authorityRevision: nonNegativeInteger,
+  authorityRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
 
 const reliableEventV2Base = z.strictObject({
@@ -338,11 +336,11 @@ const reliableEventV2Base = z.strictObject({
   idempotencyKey: id,
   kind: reliableEventKindV2Schema,
   observedAt: utc,
-  matchId: id,
-  competitionId: id,
-  entryAId: id,
-  entryBId: id,
-  mapId: nullableId,
+  matchId: uuid,
+  competitionId: uuid,
+  entryAId: uuid,
+  entryBId: uuid,
+  mapId: uuid.nullable(),
   mapName: z.string().max(128).nullable(),
   session: reliableEventV2Session,
 });
@@ -351,13 +349,13 @@ export const reliableEventV2Schema = z.discriminatedUnion('kind', [
   reliableEventV2Base.extend({
     kind: z.literal('match_started'),
     payload: z.strictObject({
-      lineupSteam64: z.array(id).max(10).optional(),
+      lineupSteam64: z.array(steam64).max(10).optional(),
     }),
   }),
   reliableEventV2Base.extend({
     kind: z.literal('map_started'),
     payload: z.strictObject({
-      lineupSteam64: z.array(id).max(10).optional(),
+      lineupSteam64: z.array(steam64).max(10).optional(),
     }),
   }),
   reliableEventV2Base.extend({
@@ -367,15 +365,8 @@ export const reliableEventV2Schema = z.discriminatedUnion('kind', [
       scoreB: nonNegativeInteger,
       scoreCT: nonNegativeInteger,
       scoreT: nonNegativeInteger,
-      lineupSteam64: z.array(id).min(0).max(10),
+      lineupSteam64: z.array(steam64).min(0).max(10),
       players: z.array(reliableEventV2PlayerSchema).max(10).optional(),
-    }),
-  }),
-  reliableEventV2Base.extend({
-    kind: z.literal('series_ended'),
-    payload: z.strictObject({
-      scoreA: nonNegativeInteger,
-      scoreB: nonNegativeInteger,
     }),
   }),
 ]);

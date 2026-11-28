@@ -46,11 +46,20 @@ export function liveSnapshotBlockedReason(
   return null;
 }
 
-interface ReliableMapResult {
+export interface ReliableMapResult {
   readonly mapId: string | null;
   readonly mapName: string;
   readonly scoreA: number;
   readonly scoreB: number;
+}
+
+export interface MapRosterSnapshot {
+  readonly lineupSteam64: string[];
+  readonly players: NonNullable<
+    Extract<ReliableEventV2, { kind: 'map_ended' }>['payload']['players']
+  >;
+  readonly scoreCT?: number;
+  readonly scoreT?: number;
 }
 
 function entrantRelativeMapResult(bundle: ProjectionBundle): ReliableMapResult | null {
@@ -212,19 +221,14 @@ export function projectLiveSnapshotV1(input: {
   return parseLiveSnapshotV1(snapshot);
 }
 
-function lineupSteam64FromBundle(bundle: ProjectionBundle): string[] {
-  return bundle.program.players
+export function extractMapRosterSnapshot(bundle: ProjectionBundle): MapRosterSnapshot {
+  const lineupSteam64 = bundle.program.players
     .filter(
       (player) => player.lineupEvidence === 'current' && /^\d{17}$/.test(player.sourcePlayerId),
     )
     .slice(0, 10)
     .map((player) => player.sourcePlayerId);
-}
-
-function playersSnapshotFromBundle(
-  bundle: ProjectionBundle,
-): NonNullable<Extract<ReliableEventV2, { kind: 'map_ended' }>['payload']['players']> {
-  return bundle.program.players
+  const players = bundle.program.players
     .filter((player) => player.lineupEvidence === 'current')
     .slice(0, 10)
     .map((player) => ({
@@ -234,6 +238,13 @@ function playersSnapshotFromBundle(
       assists: player.matchStats?.assists ?? null,
       deaths: player.matchStats?.deaths ?? null,
     }));
+  return {
+    lineupSteam64,
+    players,
+    ...(bundle.program.map.score.ct !== null && bundle.program.map.score.t !== null
+      ? { scoreCT: bundle.program.map.score.ct, scoreT: bundle.program.map.score.t }
+      : {}),
+  };
 }
 
 export function buildReliableEventV2(input: {
@@ -242,16 +253,24 @@ export function buildReliableEventV2(input: {
   readonly binding: MatchContextBinding | undefined;
   readonly observedAt: string;
   readonly authorityRevision: number;
+  readonly completedMap?: ReliableMapResult;
+  readonly roster?: MapRosterSnapshot;
 }): ReliableEventV2 | null {
   const { binding, bundle } = input;
   if (
     binding === undefined ||
+    binding.origin !== 'online' ||
     binding.context.competition === null ||
     bundle.program.match?.matchId !== binding.context.matchId ||
-    binding.freshness !== 'fresh' ||
-    bundle.program.status.context !== 'fresh' ||
-    bundle.program.status.telemetry !== 'fresh' ||
     bundle.program.status.identity === 'mismatch'
+  )
+    return null;
+
+  if (
+    input.kind !== 'map_ended' &&
+    (binding.freshness !== 'fresh' ||
+      bundle.program.status.context !== 'fresh' ||
+      bundle.program.status.telemetry !== 'fresh')
   )
     return null;
 
@@ -283,18 +302,15 @@ export function buildReliableEventV2(input: {
         }
       : null;
   const mapResult =
-    input.kind === 'map_ended' ? (observedEnd ?? entrantRelativeMapResult(bundle)) : null;
-  if (
-    input.kind === 'map_ended' &&
-    (mapResult === null ||
-      bundle.program.map.score.ct === null ||
-      bundle.program.map.score.t === null)
-  )
-    return null;
+    input.kind === 'map_ended'
+      ? (input.completedMap ?? observedEnd ?? entrantRelativeMapResult(bundle))
+      : null;
+  if (input.kind === 'map_ended' && mapResult === null) return null;
 
   const mapId = mapResult?.mapId ?? currentMap?.mapId ?? null;
   const mapName = mapResult?.mapName ?? bundle.program.map.name;
-  const lineupSteam64 = lineupSteam64FromBundle(bundle);
+  const roster = input.roster ?? extractMapRosterSnapshot(bundle);
+  const lineupSteam64 = roster.lineupSteam64;
 
   let payloadCore: Record<string, unknown>;
   let payload: ReliableEventV2['payload'];
@@ -308,9 +324,20 @@ export function buildReliableEventV2(input: {
       payload = lineupSteam64.length ? { lineupSteam64 } : {};
       break;
     case 'map_ended': {
-      const scoreCT = bundle.program.map.score.ct!;
-      const scoreT = bundle.program.map.score.t!;
-      const players = playersSnapshotFromBundle(bundle);
+      const sameCurrentMap = bundle.program.map.name === mapResult!.mapName;
+      const scoreCT =
+        (sameCurrentMap && bundle.program.map.score.ct !== null
+          ? bundle.program.map.score.ct
+          : undefined) ??
+        roster.scoreCT ??
+        (bundle.operator.identity.sideMapping.a === 'CT' ? mapResult!.scoreA : mapResult!.scoreB);
+      const scoreT =
+        (sameCurrentMap && bundle.program.map.score.t !== null
+          ? bundle.program.map.score.t
+          : undefined) ??
+        roster.scoreT ??
+        (bundle.operator.identity.sideMapping.a === 'CT' ? mapResult!.scoreB : mapResult!.scoreA);
+      const players = roster.players;
       payloadCore = {
         scoreA: mapResult!.scoreA,
         scoreB: mapResult!.scoreB,
@@ -325,14 +352,6 @@ export function buildReliableEventV2(input: {
         lineupSteam64,
         ...(players.length ? { players } : {}),
       };
-      break;
-    }
-    case 'series_ended': {
-      const scoreA = bundle.program.series?.score.a ?? null;
-      const scoreB = bundle.program.series?.score.b ?? null;
-      if (scoreA === null || scoreB === null) return null;
-      payloadCore = { scoreA, scoreB };
-      payload = { scoreA, scoreB };
       break;
     }
   }
