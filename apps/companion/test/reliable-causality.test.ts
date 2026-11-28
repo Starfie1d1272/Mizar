@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -320,7 +321,7 @@ test('map_ended across unrelated maps and offline workbench exit delivers map_en
   );
 });
 
-test('stale binding at map end still enqueues map_ended with original map roster without next-map overwrite', async (t) => {
+test('stale binding at map end still enqueues map_ended with cached roster, and taking over map 2 never re-uploads historical map 1', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'mizar-v2-stale-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
 
@@ -329,31 +330,53 @@ test('stale binding at map end still enqueues map_ended with original map roster
   t.after(() => output.close());
   await output.start();
 
+  // Warmup on de_nuke with wrong/placeholder players must not pollute mapRosterCache.
   const freshBinding = makeBinding('rev-1', 'fresh');
-  const map1Players = makePlayers('7656119811111111', 22);
   output.setCurrent(
-    makeBundle({ mapName: 'de_ancient', mapOrder: 1, mapPhase: 'live', players: map1Players }),
+    makeBundle({
+      mapName: 'de_nuke',
+      mapOrder: 2,
+      mapPhase: 'warmup',
+      mapEpoch: 2,
+      players: makePlayers('7656119899999999', 1),
+    }),
     freshBinding,
   );
 
-  // Moment of map completion: binding is transiently stale, and map immediately switches to de_nuke with different players.
+  // Take over Map 2 (de_nuke) while Map 1 (de_ancient) is already completed in series.maps from RivalHub.
+  const map2Players = makePlayers('7656119822222222', 19);
+  output.beforeRuntimeMutation();
+  output.afterRuntimeMutation(
+    makeReduceResult('2026-11-28T10:01:00.000Z', []),
+    makeBundle({
+      mapName: 'de_nuke',
+      mapOrder: 2,
+      mapPhase: 'live',
+      mapEpoch: 2,
+      players: map2Players,
+    }),
+    freshBinding,
+  );
+  assert.equal(outbox.records().filter((r) => r.event.kind === 'map_ended').length, 0);
+
+  // Map 2 finishes while binding & telemetry are transiently stale -> map_ended still enqueues with Map 2's roster.
   const staleBinding = makeBinding('rev-1', 'stale');
-  const map2Players = makePlayers('7656119822222222', 3);
   output.beforeRuntimeMutation();
   output.afterRuntimeMutation(
     makeReduceResult('2026-11-28T10:02:00.000Z', []),
     makeBundle({
       mapName: 'de_nuke',
       mapOrder: 2,
-      mapPhase: 'warmup',
-      scoreA: 1,
+      mapPhase: 'gameover',
+      mapEpoch: 2,
+      scoreA: 2,
       scoreB: 0,
-      scoreCT: 0,
-      scoreT: 0,
+      scoreCT: 13,
+      scoreT: 8,
       telemetry: 'stale',
       context: 'stale',
       players: map2Players,
-      completedMap: { mapId: MAP_1_ID, mapName: 'de_ancient', a: 13, b: 8 },
+      completedMap: { mapId: MAP_2_ID, mapName: 'de_nuke', a: 13, b: 8 },
     }),
     staleBinding,
   );
@@ -361,14 +384,14 @@ test('stale binding at map end still enqueues map_ended with original map roster
   const mapEndedRecords = outbox.records().filter((r) => r.event.kind === 'map_ended');
   assert.equal(mapEndedRecords.length, 1);
   const ev = mapEndedRecords[0]!.event;
-  assert.equal(ev.mapName, 'de_ancient');
+  assert.equal(ev.mapName, 'de_nuke');
   if (ev.kind === 'map_ended') {
     assert.equal(ev.payload.scoreA, 13);
     assert.equal(ev.payload.scoreB, 8);
     assert.equal(ev.payload.scoreCT, 13);
     assert.equal(ev.payload.scoreT, 8);
-    assert.equal(ev.payload.lineupSteam64[0], '76561198111111110');
-    assert.equal(ev.payload.players?.[0]?.kills, 22);
+    assert.equal(ev.payload.lineupSteam64[0], '76561198222222220');
+    assert.equal(ev.payload.players?.[0]?.kills, 19);
   }
 });
 
@@ -401,7 +424,6 @@ test('legacy SQLite metadata.active migrates pending map_ended once and ignores 
       },
       {
         status: 'pending',
-        lineupSteam64: Array.from({ length: 10 }, (_, i) => `7656119800000000${i}`),
         source: { authorityRevision: 4 },
         event: {
           schemaVersion: 'mizar.reliable-event.v1',
@@ -434,15 +456,13 @@ test('legacy SQLite metadata.active migrates pending map_ended once and ignores 
           cursor: { producerInstanceId: 'prod-1', liveSessionId: 'sess-1' },
           payload: {
             mapEndedKey: 'legacy-map-end-1',
-            players: [
-              {
-                sourcePlayerId: '76561198000000000',
-                canonicalPlayerId: null,
-                kills: 20,
-                assists: 5,
-                deaths: 12,
-              },
-            ],
+            players: Array.from({ length: 10 }, (_, i) => ({
+              sourcePlayerId: `7656119800000000${i}`,
+              canonicalPlayerId: null,
+              kills: 20 + i,
+              assists: 5,
+              deaths: 12,
+            })),
           },
         },
       },
@@ -454,16 +474,32 @@ test('legacy SQLite metadata.active migrates pending map_ended once and ignores 
   );
   db.close();
 
+  const expectedKey = createHash('sha256')
+    .update(
+      JSON.stringify({
+        kind: 'map_ended',
+        matchId: MATCH_ID,
+        producerInstanceId: 'prod-1',
+        liveSessionId: 'sess-1',
+        mapId: MAP_1_ID,
+        mapName: 'de_ancient',
+        payloadCore: { scoreA: 13, scoreB: 9, scoreCT: 13, scoreT: 9 },
+      }),
+    )
+    .digest('hex');
+
   const outbox = new ReliableOutbox(outboxPath);
   t.after(() => outbox.close());
   await outbox.load();
   const records = outbox.records();
   assert.equal(records.length, 1);
-  assert.equal(records[0]!.event.idempotencyKey, 'legacy-map-end-1');
+  assert.equal(records[0]!.event.idempotencyKey, expectedKey);
+  assert.notEqual(records[0]!.event.idempotencyKey, 'legacy-map-end-1');
   assert.equal(records[0]!.event.kind, 'map_ended');
   assert.equal(records[0]!.event.session.authorityRevision, 4);
   if (records[0]!.event.kind === 'map_ended') {
     assert.equal(records[0]!.event.payload.lineupSteam64.length, 10);
+    assert.equal(records[0]!.event.payload.lineupSteam64[0], '76561198000000000');
     assert.equal(records[0]!.event.payload.players?.[0]?.kills, 20);
   }
 });
@@ -492,11 +528,11 @@ test('HTTP 400 rejection marks one event rejected without blocking subsequent ev
       mapPhase: 'gameover',
       scoreCT: 13,
       scoreT: 7,
+      completedMap: { mapId: MAP_2_ID, mapName: 'de_nuke', a: 13, b: 7 },
     }),
     binding,
     observedAt: '2026-11-28T10:30:00.000Z',
     authorityRevision: 2,
-    completedMap: { mapId: MAP_2_ID, mapName: 'de_nuke', scoreA: 13, scoreB: 7 },
   })!;
 
   assert.equal(outbox.enqueue(first, new Date('2026-11-28T10:00:00.000Z')), true);
@@ -573,11 +609,15 @@ test('map_started expires after 24h while map_ended is retained up to 7 days', a
   })!;
   const endEvent = buildReliableEventV2({
     kind: 'map_ended',
-    bundle: makeBundle({ mapName: 'de_ancient', mapOrder: 1, mapPhase: 'gameover' }),
+    bundle: makeBundle({
+      mapName: 'de_ancient',
+      mapOrder: 1,
+      mapPhase: 'gameover',
+      completedMap: { mapId: MAP_1_ID, mapName: 'de_ancient', a: 13, b: 8 },
+    }),
     binding: makeBinding(),
     observedAt: '2026-11-28T10:30:00.000Z',
     authorityRevision: 1,
-    completedMap: { mapId: MAP_1_ID, mapName: 'de_ancient', scoreA: 13, scoreB: 8 },
   })!;
   outbox.enqueue(startEvent, new Date('2026-11-28T10:00:00.000Z'));
   outbox.enqueue(endEvent, new Date('2026-11-28T10:30:00.000Z'));

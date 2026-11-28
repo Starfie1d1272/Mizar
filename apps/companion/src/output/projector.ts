@@ -253,7 +253,6 @@ export function buildReliableEventV2(input: {
   readonly binding: MatchContextBinding | undefined;
   readonly observedAt: string;
   readonly authorityRevision: number;
-  readonly completedMap?: ReliableMapResult;
   readonly roster?: MapRosterSnapshot;
 }): ReliableEventV2 | null {
   const { binding, bundle } = input;
@@ -286,6 +285,9 @@ export function buildReliableEventV2(input: {
     input.kind === 'map_ended' &&
     currentMap &&
     bundle.program.map.phase === 'gameover' &&
+    bundle.program.map.name === currentMap.mapName &&
+    bundle.operator.identity.sideMapping.a !== 'unknown' &&
+    bundle.operator.identity.sideMapping.b !== 'unknown' &&
     bundle.program.map.score.ct !== null &&
     bundle.program.map.score.t !== null
       ? {
@@ -302,14 +304,15 @@ export function buildReliableEventV2(input: {
         }
       : null;
   const mapResult =
-    input.kind === 'map_ended'
-      ? (input.completedMap ?? observedEnd ?? entrantRelativeMapResult(bundle))
-      : null;
+    input.kind === 'map_ended' ? (observedEnd ?? entrantRelativeMapResult(bundle)) : null;
   if (input.kind === 'map_ended' && mapResult === null) return null;
 
   const mapId = mapResult?.mapId ?? currentMap?.mapId ?? null;
   const mapName = mapResult?.mapName ?? bundle.program.map.name;
-  const roster = input.roster ?? extractMapRosterSnapshot(bundle);
+  const sameCurrentMap = mapResult === null || bundle.program.map.name === mapResult.mapName;
+  const roster =
+    input.roster ??
+    (sameCurrentMap ? extractMapRosterSnapshot(bundle) : { lineupSteam64: [], players: [] });
   const lineupSteam64 = roster.lineupSteam64;
 
   let payloadCore: Record<string, unknown>;

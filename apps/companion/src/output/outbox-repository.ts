@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -66,17 +67,49 @@ function migrateLegacyMapEnded(db: DatabaseSync): void {
         const src = (r.source ?? {}) as Record<string, unknown>;
         const p = (ev.payload ?? {}) as Record<string, unknown>;
         const players = playersByMapEndKey.get(String(ev.idempotencyKey));
+        const rawLineup = Array.isArray(r.lineupSteam64)
+          ? r.lineupSteam64.filter(
+              (id): id is string => typeof id === 'string' && /^\d{17}$/.test(id),
+            )
+          : [];
+        const lineupSteam64 = rawLineup.length
+          ? rawLineup.slice(0, 10)
+          : (players ?? [])
+              .map((player) => (player as Record<string, unknown>)?.sourcePlayerId)
+              .filter((id): id is string => typeof id === 'string' && /^\d{17}$/.test(id))
+              .slice(0, 10);
+        const mapId = (ev.mapId as string | null | undefined) ?? null;
+        const mapName = (ev.mapName as string | null | undefined) ?? null;
+        const payloadCore = {
+          scoreA: p.scoreA,
+          scoreB: p.scoreB,
+          scoreCT: p.scoreCT,
+          scoreT: p.scoreT,
+        };
+        const idempotencyKey = createHash('sha256')
+          .update(
+            JSON.stringify({
+              kind: 'map_ended',
+              matchId: ev.matchId,
+              producerInstanceId: cursor.producerInstanceId,
+              liveSessionId: cursor.liveSessionId,
+              mapId,
+              mapName,
+              payloadCore,
+            }),
+          )
+          .digest('hex');
         const v2 = parseReliableEventV2({
           schemaVersion: 'mizar.reliable-event.v2',
-          idempotencyKey: ev.idempotencyKey,
+          idempotencyKey,
           kind: 'map_ended',
           observedAt: ev.observedAt,
           matchId: ev.matchId,
           competitionId: ev.competitionId,
           entryAId: ev.entryAId,
           entryBId: ev.entryBId,
-          mapId: ev.mapId ?? null,
-          mapName: ev.mapName ?? null,
+          mapId,
+          mapName,
           session: {
             producerInstanceId: cursor.producerInstanceId,
             liveSessionId: cursor.liveSessionId,
@@ -88,7 +121,7 @@ function migrateLegacyMapEnded(db: DatabaseSync): void {
             scoreB: p.scoreB,
             scoreCT: p.scoreCT,
             scoreT: p.scoreT,
-            lineupSteam64: Array.isArray(r.lineupSteam64) ? r.lineupSteam64 : [],
+            lineupSteam64,
             ...(players ? { players } : {}),
           },
         });
