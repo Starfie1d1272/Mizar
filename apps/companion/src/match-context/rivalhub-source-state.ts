@@ -10,7 +10,6 @@ import {
   type DurableJsonFaultInjector,
 } from './durable-json.js';
 import { SerialCommitQueue } from './serial-commit.js';
-import { parseCaptureReference, type CaptureReference } from '../output/capture-interval.js';
 
 const MAX_RECORDS = 64;
 const MAX_BYTES = 256 * 1024;
@@ -50,7 +49,7 @@ const exactSchema = scopeSchema
   .extend({ authorityRevision: z.number().int().positive().safe() })
   .strict();
 const causeSchema = z.enum(['finish', 'switch', 'shutdown', 'recovery', 'authority_check']);
-const captureReferenceSchema = z.unknown().transform(parseCaptureReference);
+const captureReferenceSchema = z.unknown();
 const recordSchema = z
   .object({
     identity: exactSchema,
@@ -482,16 +481,7 @@ export class RivalHubSourceState {
         }
         const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
         const legacy = raw?.version === 1 || raw?.version === 2;
-        if (
-          raw?.version === 1 &&
-          ((raw.intent && typeof raw.intent === 'object' && 'captureReference' in raw.intent) ||
-            (Array.isArray(raw.records) &&
-              raw.records.some(
-                (record: unknown) =>
-                  record && typeof record === 'object' && 'captureReference' in record,
-              )))
-        )
-          throw new Error('source_legacy_capture_reference_invalid');
+
         let migrated: unknown = raw;
         if (legacy) {
           const { intent, ...rest } = legacyEnvelopeSchema.superRefine(validateRecords).parse({
@@ -550,7 +540,7 @@ export class RivalHubSourceState {
   async beginClaim(
     scope: SourceScope,
     previousAuthorityRevision: number | null,
-    captureReference?: CaptureReference,
+    _captureReference?: unknown,
     claimRecoveryVersion?: 1,
   ): Promise<ClaimIntent> {
     return this.change(async (state) => {
@@ -558,14 +548,6 @@ export class RivalHubSourceState {
       const validScope = scopeSchema.parse(scope);
       if (state.intents.some((intent) => matchKey(intent.scope) === matchKey(validScope)))
         throw new Error('source claim requires reconciliation');
-      if (captureReference) {
-        captureReference = parseCaptureReference(captureReference);
-        if (
-          captureReference.startCursor.producerInstanceId !== validScope.producerInstanceId ||
-          captureReference.startCursor.liveSessionId !== validScope.liveSessionId
-        )
-          throw new Error('source_capture_reference_mismatch');
-      }
       const quarantined = await this.evidenceForScope(validScope);
       if (quarantined.some((item) => item.kind !== 'watermark'))
         throw new Error('source requires cleanup before claim');
@@ -616,7 +598,7 @@ export class RivalHubSourceState {
         id: randomUUID(),
         ...(claimRecoveryVersion ? { claimRecoveryVersion } : {}),
         scope: validScope,
-        ...(captureReference ? { captureReference } : {}),
+
         previousAuthorityRevision: known.length ? Math.max(...known) : null,
         ...(owned &&
         sameScope(owned.identity, validScope) &&

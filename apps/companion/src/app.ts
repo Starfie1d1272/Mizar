@@ -573,7 +573,7 @@ export function buildApp(options: CompanionAppOptions = {}): FastifyInstance {
       cstvSources,
       latestInput,
       projectionCoordinator,
-      readOutboxTiming: () => outbox?.takePersistenceTiming() ?? null,
+      readOutboxTiming: () => null,
       readResourceTiming: () => readResources()?.takeRangeTiming() ?? null,
       readHosts: () => localWebTransport.getHostDiagnostics(),
     },

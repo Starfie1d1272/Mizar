@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const LIVE_SNAPSHOT_SCHEMA_VERSION = 'mizar.live-snapshot.v1' as const;
 export const RELIABLE_EVENT_SCHEMA_VERSION = 'mizar.reliable-event.v1' as const;
+export const RELIABLE_EVENT_V2_SCHEMA_VERSION = 'mizar.reliable-event.v2' as const;
+export const RELIABLE_EVENT_V2_MAX_BYTES = 32_768;
 
 const id = z.string().min(1).max(128);
 const nullableId = id.nullable();
@@ -309,3 +311,68 @@ export const parseLiveSnapshotV1 = (input: unknown): LiveSnapshotV1 =>
   boundedParse(liveSnapshotV1Schema, input, LIVE_SNAPSHOT_MAX_BYTES);
 export const parseReliableEventV1 = (input: unknown): ReliableEventV1 =>
   boundedParse(reliableEventV1Schema, input, 16_384);
+
+const uuid = z.uuid();
+const steam64 = z.string().regex(/^\d{17}$/);
+
+export const reliableEventKindV2Schema = z.enum(['match_started', 'map_started', 'map_ended']);
+
+export const reliableEventV2PlayerSchema = z.strictObject({
+  sourcePlayerId: id,
+  canonicalPlayerId: nullableId,
+  kills: count,
+  assists: count,
+  deaths: count,
+});
+
+const reliableEventV2Session = z.strictObject({
+  producerInstanceId: id,
+  liveSessionId: id,
+  authorityRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+
+const reliableEventV2Base = z.strictObject({
+  schemaVersion: z.literal(RELIABLE_EVENT_V2_SCHEMA_VERSION),
+  idempotencyKey: id,
+  kind: reliableEventKindV2Schema,
+  observedAt: utc,
+  matchId: uuid,
+  competitionId: uuid,
+  entryAId: uuid,
+  entryBId: uuid,
+  mapId: uuid.nullable(),
+  mapName: z.string().max(128).nullable(),
+  session: reliableEventV2Session,
+});
+
+export const reliableEventV2Schema = z.discriminatedUnion('kind', [
+  reliableEventV2Base.extend({
+    kind: z.literal('match_started'),
+    payload: z.strictObject({
+      lineupSteam64: z.array(steam64).max(10).optional(),
+    }),
+  }),
+  reliableEventV2Base.extend({
+    kind: z.literal('map_started'),
+    payload: z.strictObject({
+      lineupSteam64: z.array(steam64).max(10).optional(),
+    }),
+  }),
+  reliableEventV2Base.extend({
+    kind: z.literal('map_ended'),
+    payload: z.strictObject({
+      scoreA: nonNegativeInteger,
+      scoreB: nonNegativeInteger,
+      scoreCT: nonNegativeInteger,
+      scoreT: nonNegativeInteger,
+      lineupSteam64: z.array(steam64).min(0).max(10),
+      players: z.array(reliableEventV2PlayerSchema).max(10).optional(),
+    }),
+  }),
+]);
+
+export type ReliableEventV2 = z.infer<typeof reliableEventV2Schema>;
+export type ReliableEventKindV2 = z.infer<typeof reliableEventKindV2Schema>;
+
+export const parseReliableEventV2 = (input: unknown): ReliableEventV2 =>
+  boundedParse(reliableEventV2Schema, input, RELIABLE_EVENT_V2_MAX_BYTES);
